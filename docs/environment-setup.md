@@ -28,14 +28,14 @@ This repository uses environment variables to manage sensitive configuration dat
 
 ## Optional: bind-mount backend code for fast iteration
 
-The default `docker-compose.yml` builds the `api` image with the repo contents baked in (good default for an open source workflow).
+The default `docker-compose.yml` builds the `backend` image with the repo contents baked in (good default for an open source workflow).
 
 If you want to edit Python code on your host and only do `docker compose restart` (no rebuild), use the mount overlay:
 
 ```bash
 export COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml
 docker compose up -d --build
-docker compose restart api
+docker compose restart backend
 ```
 
 To revert to the default workflow: `unset COMPOSE_FILE` (then `docker compose up -d --build`).
