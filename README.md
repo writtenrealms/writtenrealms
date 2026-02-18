@@ -14,7 +14,7 @@ A text-based multiplayer game engine with real-time websocket communication, bui
 1. **Clone the repository**
    ```bash
    git clone <repository-url>
-   cd Advent
+   cd writtenrealms
    ```
 
 2. **Configure environment variables**
@@ -65,7 +65,7 @@ docker compose up -d --build
 
 ### Development: bind-mount code (fast iteration)
 
-By default the `api` container bakes the code into the image, so Python changes require a rebuild.
+By default the `backend` container bakes the code into the image, so Python changes require a rebuild.
 
 To switch to a bind-mount workflow (edit code on your host, then just `docker compose restart`):
 
@@ -74,7 +74,7 @@ export COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml
 docker compose up -d --build
 
 # after code changes
-docker compose restart api
+docker compose restart backend
 ```
 
 To go back to the default workflow: `unset COMPOSE_FILE` (then `docker compose up -d --build`).
@@ -100,7 +100,7 @@ For detailed setup instructions, environment variables reference, and troublesho
 
 ## Development
 
-Frontend runs with hot reload by default. Backend changes are picked up via `docker compose restart api` when using `docker-compose.mount.yml`.
+Frontend runs with hot reload by default. Backend changes are picked up via `docker compose restart backend` when using `docker-compose.mount.yml`.
 
 ## License
 
