@@ -1,0 +1,8 @@
+ve
+syl
+frontend
+advent/
+api/wr-import.psql
+api/cron-backup.psql
+api/error.log
+api/console.log

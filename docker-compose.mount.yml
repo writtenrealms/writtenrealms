@@ -1,0 +1,16 @@
+services:
+  backend:
+    volumes:
+      - ./backend:/code/backend
+      - ./fastapi_app:/code/fastapi_app
+  celery-worker:
+    volumes:
+      - ./backend:/code/backend
+      - ./fastapi_app:/code/fastapi_app
+  celery-beat:
+    volumes:
+      - ./backend:/code/backend
+      - ./fastapi_app:/code/fastapi_app
+  fastapi:
+    volumes:
+      - ./fastapi_app:/code/fastapi_app

@@ -1,0 +1,32 @@
+[
+{
+    "model": "lobby.featuredworld",
+    "pk": 1,
+    "fields": {
+        "created_ts": "2017-02-14T22:21:56.098Z",
+        "modified_ts": "2017-02-14T22:21:56.098Z",
+        "world": 1,
+        "order": 1
+    }
+},
+{
+    "model": "lobby.featuredworld",
+    "pk": 2,
+    "fields": {
+        "created_ts": "2017-02-14T22:22:00.261Z",
+        "modified_ts": "2017-02-14T22:22:00.261Z",
+        "world": 2,
+        "order": 2
+    }
+},
+{
+    "model": "lobby.featuredworld",
+    "pk": 3,
+    "fields": {
+        "created_ts": "2017-02-14T22:22:10.432Z",
+        "modified_ts": "2017-02-14T22:22:10.432Z",
+        "world": 3,
+        "order": 3
+    }
+}
+]

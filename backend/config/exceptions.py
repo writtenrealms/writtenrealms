@@ -1,0 +1,1 @@
+class ServiceError(Exception): pass
