@@ -1,0 +1,173 @@
+[
+    {
+        "model": "worlds.world",
+        "pk": 1,
+        "fields": {
+            "created_ts": "2017-02-14T18:21:56.689Z",
+            "modified_ts": "2017-02-14T18:21:56.689Z",
+            "name": "Tutorial World",
+            "description": "",
+            "author": 1,
+            "config": 1
+        }
+    },
+    {
+        "model": "worlds.world",
+        "pk": 2,
+        "fields": {
+            "created_ts": "2017-02-14T18:22:03.915Z",
+            "modified_ts": "2017-02-14T18:22:03.915Z",
+            "name": "Rise of the Dead",
+            "description": "",
+            "author": 1,
+            "config": 2
+        }
+    },
+    {
+        "model": "worlds.world",
+        "pk": 3,
+        "fields": {
+            "created_ts": "2017-02-14T18:22:22.880Z",
+            "modified_ts": "2017-02-14T18:22:22.880Z",
+            "name": "Thera",
+            "description": "",
+            "author": null,
+            "config": 3
+        }
+    },
+
+    {
+        "model": "worlds.worldconfig",
+        "pk": 1,
+        "fields": {
+            "created_ts": "2017-02-19T18:32:38.342Z",
+            "modified_ts": "2017-02-19T18:34:01.799Z",
+            "starting_room": 1,
+            "death_room": 1
+        }
+    },
+    {
+        "model": "worlds.worldconfig",
+        "pk": 2,
+        "fields": {
+            "created_ts": "2017-02-19T18:32:38.342Z",
+            "modified_ts": "2017-02-19T18:34:01.799Z",
+            "starting_room": 2,
+            "death_room": 2
+        }
+    },
+    {
+        "model": "worlds.worldconfig",
+        "pk": 3,
+        "fields": {
+            "created_ts": "2017-02-19T18:32:38.342Z",
+            "modified_ts": "2017-02-19T18:34:01.799Z",
+            "starting_room": 3,
+            "death_room": 3
+        }
+    },
+
+    {
+        "model": "worlds.zone",
+        "pk": 1,
+        "fields": {
+            "created_ts": "2017-02-17T15:23:54.525Z",
+            "modified_ts": "2017-02-17T15:23:54.526Z",
+            "relative_id": 1,
+            "world": 1,
+            "name": "Tutorial First Zone",
+            "description": ""
+        }
+    },
+    {
+        "model": "worlds.zone",
+        "pk": 2,
+        "fields": {
+            "created_ts": "2017-02-17T15:23:54.525Z",
+            "modified_ts": "2017-02-17T15:23:54.526Z",
+            "relative_id": 1,
+            "world": 2,
+            "name": "Rise First Zone",
+            "description": ""
+        }
+    },
+    {
+        "model": "worlds.zone",
+        "pk": 3,
+        "fields": {
+            "created_ts": "2017-02-17T15:23:54.525Z",
+            "modified_ts": "2017-02-17T15:23:54.526Z",
+            "relative_id": 1,
+            "world": 3,
+            "name": "Thera First Zone",
+            "description": ""
+        }
+    },
+
+    {
+        "model": "worlds.room",
+        "pk": 1,
+        "fields": {
+            "created_ts": "2017-02-17T15:28:31.178Z",
+            "modified_ts": "2017-02-17T15:28:31.180Z",
+            "relative_id": 1,
+            "world": 1,
+            "zone": 1,
+            "name": "Tutorial First Room",
+            "description": "",
+            "x": 0,
+            "y": 0,
+            "z": 0,
+            "north": null,
+            "east": null,
+            "south": null,
+            "west": null,
+            "up": null,
+            "down": null
+        }
+    },
+    {
+        "model": "worlds.room",
+        "pk": 2,
+        "fields": {
+            "created_ts": "2017-02-17T15:28:31.178Z",
+            "modified_ts": "2017-02-17T15:28:31.180Z",
+            "relative_id": 1,
+            "world": 2,
+            "zone": 2,
+            "name": "Rise First Room",
+            "description": "",
+            "x": 0,
+            "y": 0,
+            "z": 0,
+            "north": null,
+            "east": null,
+            "south": null,
+            "west": null,
+            "up": null,
+            "down": null
+        }
+    },
+    {
+        "model": "worlds.room",
+        "pk": 3,
+        "fields": {
+            "created_ts": "2017-02-17T15:28:31.178Z",
+            "modified_ts": "2017-02-17T15:28:31.180Z",
+            "relative_id": 1,
+            "world": 3,
+            "zone": 3,
+            "name": "Thera First Room",
+            "description": "",
+            "x": 0,
+            "y": 0,
+            "z": 0,
+            "north": null,
+            "east": null,
+            "south": null,
+            "west": null,
+            "up": null,
+            "down": null
+        }
+    }
+]

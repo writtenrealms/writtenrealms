@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+hooks_dir="${repo_root}/.git/hooks"
+
+mkdir -p "${hooks_dir}"
+ln -sf "../../scripts/pre-push" "${hooks_dir}/pre-push"
+
+echo "Installed pre-push hook."
