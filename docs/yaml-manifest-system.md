@@ -78,6 +78,33 @@ spec:
   script: /cmd room -- /echo -- The lever clicks.
 ```
 
+### Multi-line `script`
+
+`spec.script` accepts YAML block strings (multi-line).
+
+Runtime behavior details are documented in:
+
+- `docs/trigger-multiline-script-execution.md`
+
+Execution behavior:
+
+- first script line runs immediately
+- each following line runs after a fixed delay from the previous line
+- default delay is `2` seconds, configured via
+  `backend/config/game_settings.py` (`GAME_HEARTBEAT_INTERVAL_SECONDS`)
+
+```yaml
+kind: trigger
+metadata:
+  world: world.1
+  id: 42
+spec:
+  script: |
+    /cmd room -- /echo -- The lever clicks.
+    /cmd room -- /echo -- Dust falls from the ceiling.
+    /cmd room -- /echo -- A hidden door slides open.
+```
+
 ### Delete Trigger
 
 ```yaml

@@ -13,7 +13,7 @@ A text-based multiplayer game engine with real-time websocket communication, bui
 
 1. **Clone the repository**
    ```bash
-   git clone <repository-url>
+   git clone git@github.com:writtenrealms/writtenrealms.git
    cd writtenrealms
    ```
 
@@ -63,21 +63,47 @@ docker compose down
 docker compose up -d --build
 ```
 
-### Development: bind-mount code (fast iteration)
+### Optional: bind-mount code (fast iteration)
 
-By default the `backend` container bakes the code into the image, so Python changes require a rebuild.
+Default quick start is still `docker compose up -d --build`.
 
-To switch to a bind-mount workflow (edit code on your host, then just `docker compose restart`):
+If you want backend code changes from your host to be reflected after a restart (without rebuilding), use the mount overlay:
 
 ```bash
 export COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml
 docker compose up -d --build
-
-# after code changes
-docker compose restart backend
 ```
 
-To go back to the default workflow: `unset COMPOSE_FILE` (then `docker compose up -d --build`).
+Then after code changes:
+
+```bash
+# Django API changes
+docker compose restart backend
+
+# If your changes affect Celery / FastAPI too
+docker compose restart celery-worker celery-beat fastapi
+```
+
+Convenience targets:
+
+```bash
+make docker-up-mount
+make docker-restart-mount
+```
+
+If you prefer not to export `COMPOSE_FILE`, pass both files each time:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.mount.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.mount.yml restart backend
+```
+
+To go back to the default workflow:
+
+```bash
+unset COMPOSE_FILE
+docker compose up -d --build
+```
 
 ## Documentation
 
@@ -100,7 +126,7 @@ For detailed setup instructions, environment variables reference, and troublesho
 
 ## Development
 
-Frontend runs with hot reload by default. Backend changes are picked up via `docker compose restart backend` when using `docker-compose.mount.yml`.
+Frontend runs with hot reload by default. For backend/Celery/FastAPI fast iteration, use the optional bind-mount workflow above.
 
 ## License
 

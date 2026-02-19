@@ -35,10 +35,38 @@ If you want to edit Python code on your host and only do `docker compose restart
 ```bash
 export COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml
 docker compose up -d --build
-docker compose restart backend
 ```
 
-To revert to the default workflow: `unset COMPOSE_FILE` (then `docker compose up -d --build`).
+After code changes:
+
+```bash
+# Django API changes
+docker compose restart backend
+
+# If your changes affect Celery / FastAPI too
+docker compose restart celery-worker celery-beat fastapi
+```
+
+Convenience targets:
+
+```bash
+make docker-up-mount
+make docker-restart-mount
+```
+
+If you prefer not to export `COMPOSE_FILE`, pass both files each time:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.mount.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.mount.yml restart backend
+```
+
+To revert to the default workflow:
+
+```bash
+unset COMPOSE_FILE
+docker compose up -d --build
+```
 
 ## Required Environment Variables
 

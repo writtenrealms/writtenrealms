@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.contrib.contenttypes.models import ContentType
 
 from builders.models import Trigger
@@ -57,6 +59,55 @@ class TestCommandFallbackTriggers(WorldTestCase):
         self.assertIsNotNone(echo_message)
         self.assertIn("The altar hums.", echo_message.get("text", ""))
         self.assertIsNone(self._message_by_type(messages, "cmd.text.echo"))
+
+    def test_multiline_script_executes_first_line_and_schedules_followups(self):
+        self._create_room_trigger(
+            script=(
+                "/cmd room -- /echo -- First line.\n"
+                "/cmd room -- /echo -- Second line.\n"
+                "/cmd room -- /echo -- Third line."
+            ),
+        )
+
+        with patch("spawns.tasks.execute_trigger_script_segments.apply_async") as mock_apply_async:
+            with capture_game_messages() as messages:
+                dispatch_text_command(self.player.id, "touch altar")
+
+        echo_message = self._message_by_type(messages, "cmd./echo.success")
+        self.assertIsNotNone(echo_message)
+        self.assertIn("First line.", echo_message.get("text", ""))
+
+        self.assertEqual(mock_apply_async.call_count, 2)
+        self.assertEqual(
+            [call.kwargs["countdown"] for call in mock_apply_async.call_args_list],
+            [2.0, 4.0],
+        )
+        self.assertEqual(
+            [call.kwargs["kwargs"]["segments"] for call in mock_apply_async.call_args_list],
+            [
+                ["/cmd room -- /echo -- Second line."],
+                ["/cmd room -- /echo -- Third line."],
+            ],
+        )
+
+    def test_multiline_script_delay_is_configurable(self):
+        self._create_room_trigger(
+            script=(
+                "/cmd room -- /echo -- First line.\n"
+                "/cmd room -- /echo -- Second line.\n"
+                "/cmd room -- /echo -- Third line."
+            ),
+        )
+
+        with patch("config.game_settings.GAME_HEARTBEAT_INTERVAL_SECONDS", 5):
+            with patch("spawns.tasks.execute_trigger_script_segments.apply_async") as mock_apply_async:
+                dispatch_text_command(self.player.id, "touch altar")
+
+        self.assertEqual(mock_apply_async.call_count, 2)
+        self.assertEqual(
+            [call.kwargs["countdown"] for call in mock_apply_async.call_args_list],
+            [5.0, 10.0],
+        )
 
     def test_trigger_condition_failure_can_publish_detail(self):
         self._create_room_trigger(
