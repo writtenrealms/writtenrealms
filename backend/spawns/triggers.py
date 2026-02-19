@@ -9,6 +9,7 @@ from django.db.models import Q
 
 from builders.models import ItemTemplate, MobTemplate, Trigger
 from config import constants as adv_consts
+from config import game_settings as adv_config
 from core.conditions import evaluate_conditions
 from spawns.handlers.registry import (
     ActorNotFoundError,
@@ -61,14 +62,22 @@ def _actions_match(actions_text: str | None, command_text: str) -> bool:
     return command_text in _iter_action_tokens(actions_text)
 
 
-def _split_trigger_script(script: str | None) -> list[str]:
+def _split_trigger_script_line(line: str | None) -> list[str]:
     segments: list[str] = []
-    for line in str(script or "").splitlines():
-        for chunk in line.split("&&"):
-            segment = chunk.strip()
-            if segment:
-                segments.append(segment)
+    for chunk in str(line or "").split("&&"):
+        segment = chunk.strip()
+        if segment:
+            segments.append(segment)
     return segments
+
+
+def _split_trigger_script_lines(script: str | None) -> list[list[str]]:
+    script_lines: list[list[str]] = []
+    for line in str(script or "").splitlines():
+        line_segments = _split_trigger_script_line(line)
+        if line_segments:
+            script_lines.append(line_segments)
+    return script_lines
 
 
 def _first_token(cmd: str) -> str | None:
@@ -324,6 +333,80 @@ def _dispatch_trigger_script_segment(
     return _first_dispatched_error(dispatched_messages)
 
 
+def _dispatch_trigger_script_segments(
+    *,
+    actor: Player | Mob,
+    segments: list[str],
+    issuer_scope: str | None = None,
+    connection_id: str | None = None,
+) -> list[str]:
+    errors: list[str] = []
+    for segment in segments:
+        dispatched_error = _dispatch_trigger_script_segment(
+            actor=actor,
+            segment=segment,
+            issuer_scope=issuer_scope,
+            connection_id=connection_id,
+        )
+        if dispatched_error:
+            errors.append(dispatched_error)
+    return errors
+
+
+def _trigger_script_multiline_delay_seconds() -> float:
+    raw_delay = getattr(adv_config, "GAME_HEARTBEAT_INTERVAL_SECONDS", 2)
+    try:
+        delay = float(raw_delay)
+    except (TypeError, ValueError):
+        return 2.0
+    return max(delay, 0.0)
+
+
+def _schedule_trigger_script_line_segments(
+    *,
+    actor: Player | Mob,
+    line_segments: list[str],
+    line_index: int,
+    issuer_scope: str | None = None,
+    connection_id: str | None = None,
+) -> list[str]:
+    if not line_segments:
+        return []
+
+    delay_seconds = _trigger_script_multiline_delay_seconds() * max(line_index, 0)
+    if delay_seconds <= 0:
+        return _dispatch_trigger_script_segments(
+            actor=actor,
+            segments=line_segments,
+            issuer_scope=issuer_scope,
+            connection_id=connection_id,
+        )
+
+    from spawns import tasks as spawn_tasks
+
+    actor_type = _actor_kind(actor)
+    try:
+        spawn_tasks.execute_trigger_script_segments.apply_async(
+            kwargs={
+                "actor_type": actor_type,
+                "actor_id": actor.id,
+                "segments": line_segments,
+                "issuer_scope": issuer_scope,
+                "connection_id": connection_id,
+            },
+            countdown=delay_seconds,
+        )
+    except Exception:
+        return _dispatch_trigger_script_segments(
+            actor=actor,
+            segments=line_segments,
+            issuer_scope=issuer_scope,
+            connection_id=connection_id,
+        )
+
+    return []
+
+
 def _collect_display_action_labels(
     *,
     actor: Player | Mob,
@@ -481,19 +564,28 @@ def execute_command_fallback_trigger(
             return TriggerExecutionResult(handled=True, feedback=TRIGGER_GATED_TEXT)
         _consume_gate(trigger, scope_key)
 
-        script_segments = _split_trigger_script(trigger.script)
-        if not script_segments:
+        script_lines = _split_trigger_script_lines(trigger.script)
+        if not script_lines:
             executed_any = True
             continue
 
-        for segment in script_segments:
-            dispatched_error = _dispatch_trigger_script_segment(
+        first_line_segments = script_lines[0]
+        for dispatched_error in _dispatch_trigger_script_segments(
+            actor=actor,
+            segments=first_line_segments,
+            issuer_scope=trigger.scope,
+            connection_id=connection_id,
+        ):
+            script_errors.append(dispatched_error)
+
+        for line_index, line_segments in enumerate(script_lines[1:], start=1):
+            for dispatched_error in _schedule_trigger_script_line_segments(
                 actor=actor,
-                segment=segment,
+                line_segments=line_segments,
+                line_index=line_index,
                 issuer_scope=trigger.scope,
                 connection_id=connection_id,
-            )
-            if dispatched_error:
+            ):
                 script_errors.append(dispatched_error)
         executed_any = True
 

@@ -7,6 +7,7 @@ from spawns.services import WorldGate
 from spawns.models import Player
 from spawns.serializers import PlayerConfigSerializer
 from spawns.handlers import (
+    ActorNotFoundError,
     dispatch_command,
     HandlerNotFoundError,
     PlayerNotFoundError,
@@ -148,6 +149,42 @@ def _publish_game_error(player_key: str | None, command_type: str, text: str, co
         },
         connection_id=connection_id,
     )
+
+
+@shared_task
+def execute_trigger_script_segments(
+    actor_type: str,
+    actor_id: int,
+    segments: list[str],
+    issuer_scope: str | None = None,
+    connection_id: str | None = None,
+):
+    """
+    Execute scripted trigger segments as a delayed trigger line.
+    """
+    for segment in segments or []:
+        segment_text = str(segment or "").strip()
+        if not segment_text:
+            continue
+
+        payload: dict[str, object] = {
+            "text": segment_text,
+            "skip_triggers": True,
+            "__trigger_source": True,
+        }
+        if issuer_scope:
+            payload["issuer_scope"] = issuer_scope
+
+        try:
+            dispatch_command(
+                command_type="text",
+                actor_type=actor_type,
+                actor_id=actor_id,
+                payload=payload,
+                connection_id=connection_id,
+            )
+        except (ActorNotFoundError, HandlerNotFoundError, ValueError):
+            return
 
 
 @shared_task

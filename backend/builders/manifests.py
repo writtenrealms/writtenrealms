@@ -306,7 +306,10 @@ def room_trigger_template_manifest(*, world: World, room: Room) -> dict[str, Any
                 "name": room.name or "",
             },
             "actions": "pull lever",
-            "script": "/cmd room -- /echo -- Something happens.",
+            "script": (
+                "/cmd room -- /echo *CLICK*.\n"
+                "/cmd room -- /echo Something happens.\n"
+            ),
             "conditions": "",
             "show_details_on_failure": False,
             "failure_message": "",

@@ -21,6 +21,8 @@ IS_CLUSTER = pick({
 # ==== Game settings used by backend ====
 
 MOVEMENT_COST = 2
+# Shared cadence for heartbeat/tick-like async behavior across WR2 systems.
+GAME_HEARTBEAT_INTERVAL_SECONDS = 2
 
 LEVEL_EXPERIENCE = [
     0,      # 1
