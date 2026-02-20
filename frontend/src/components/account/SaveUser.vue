@@ -46,13 +46,15 @@
       <a href="/conduct">Code of Conduct</a>.
     </p>
 
-    <div class="or-separator">
-      <span class="separator-line"></span>
-      <span class="separator-text">OR</span>
-      <span class="separator-line"></span>
-    </div>
+    <template v-if="googleAuthEnabled">
+      <div class="or-separator">
+        <span class="separator-line"></span>
+        <span class="separator-text">OR</span>
+        <span class="separator-line"></span>
+      </div>
 
-    <GoogleLogin :callback="googleLoginCallback" />
+      <GoogleLogin :callback="googleLoginCallback" />
+    </template>
   </form>
 </template>
 
@@ -60,12 +62,14 @@
 import { onMounted, ref } from "vue";
 import { useStore } from "vuex";
 import { GoogleLogin } from 'vue3-google-login';
+import { GOOGLE_AUTH_ENABLED } from "@/config";
 
 const store = useStore();
 
 const email = ref("");
 const send_newsletter = ref(false);
 const username = ref("");
+const googleAuthEnabled = GOOGLE_AUTH_ENABLED;
 
 const saveuser = async () => {
   const payload = {

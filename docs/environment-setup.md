@@ -16,9 +16,14 @@ This repository uses environment variables to manage sensitive configuration dat
 4. **For frontend development:**
    ```bash
    cd frontend
-   cp .env .env.local  # if you need to override defaults
-   # Edit .env.local with your values
+   # For npm run dev-local (and the docker-compose frontend service):
+   # .env.localBackend is committed defaults for local backend URLs.
+   # Use .env.localBackend.local for your machine-specific overrides.
+   cat > .env.localBackend.local <<'EOF'
+   VITE_GOOGLE_CLIENT_ID=your_google_oauth_client_id_here
+   EOF
    ```
+   `VITE_GOOGLE_CLIENT_ID` is optional. If not set, Google login is hidden and email login/signup still works.
 
 5. **Run with docker-compose:**
    ```bash
@@ -98,7 +103,7 @@ docker compose up -d --build
 ### Frontend Configuration (Vite)
 - `VITE_API_BASE` - Backend API base URL
 - `VITE_FORGE_WS_URI` - WebSocket URI
-- `VITE_GOOGLE_CLIENT_ID` - Google OAuth client ID for frontend
+- `VITE_GOOGLE_CLIENT_ID` - Google OAuth client ID for frontend (optional)
 
 ## File Structure
 
@@ -107,8 +112,10 @@ docker compose up -d --build
 ├── .env.example          # Template with placeholder values (committed)
 ├── .env                  # Your actual credentials (gitignored, for local dev)
 ├── frontend/
-│   ├── .env              # Frontend defaults (committed)
-│   └── .env.local        # Frontend local overrides (gitignored)
+│   ├── .env.localBackend        # Frontend defaults for dev-local mode (committed)
+│   ├── .env.localBackend.local  # Frontend local overrides for dev-local mode (gitignored)
+│   ├── .env                     # Frontend defaults for default Vite mode (optional, if present)
+│   └── .env.local               # Frontend local overrides for default Vite mode (gitignored)
 └── docker-compose.yml    # Configured to use .env
 ```
 
@@ -155,4 +162,7 @@ Make sure `.env` exists and contains all required variables.
 Ensure `.env` is in the same directory as `docker-compose.yml`. Docker Compose automatically loads `.env` files.
 
 ### Frontend can't connect to backend
-Check `VITE_API_BASE` and `VITE_FORGE_WS_URI` in `frontend/.env.local`.
+For `npm run dev-local`, check `VITE_API_BASE` and `VITE_FORGE_WS_URI` in `frontend/.env.localBackend` (or overrides in `frontend/.env.localBackend.local`).
+
+### Google login button missing
+Set `VITE_GOOGLE_CLIENT_ID` in `frontend/.env.localBackend.local` (for `dev-local`) or `frontend/.env.local` (for default `npm run dev` mode).

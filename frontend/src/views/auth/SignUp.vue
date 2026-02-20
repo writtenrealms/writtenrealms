@@ -52,13 +52,15 @@
       </p>
     </template>
 
-    <div class="or-separator">
-      <span class="separator-line"></span>
-      <span class="separator-text">OR</span>
-      <span class="separator-line"></span>
-    </div>
+    <template v-if="googleAuthEnabled">
+      <div class="or-separator">
+        <span class="separator-line"></span>
+        <span class="separator-text">OR</span>
+        <span class="separator-line"></span>
+      </div>
 
-    <GoogleLogin :callback="googleLoginCallback" />
+      <GoogleLogin :callback="googleLoginCallback" />
+    </template>
   </form>
 </template>
 
@@ -67,6 +69,7 @@ import { ref, onMounted } from 'vue';
 import { useStore } from 'vuex';
 import { useRouter } from 'vue-router';
 import { GoogleLogin } from 'vue3-google-login';
+import { GOOGLE_AUTH_ENABLED } from '@/config';
 
 const store = useStore();
 const router = useRouter();
@@ -74,6 +77,7 @@ const email = ref('');
 const send_newsletter = ref(false);
 const username = ref('');
 const sent = ref(false);
+const googleAuthEnabled = GOOGLE_AUTH_ENABLED;
 
 onMounted(() => {
   const emailInput = document.getElementById('field-email') as HTMLElement;
