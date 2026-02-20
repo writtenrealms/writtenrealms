@@ -120,11 +120,6 @@ const disableStop = (instance) => {
   return true;
 };
 
-const disableKill = (instance) => {
-  if (instance.lifecycle == 'running') return false;
-  return true;
-};
-
 const onStart = async (instance) => {
   action_submitted.value[instance.id] = true;
   store.commit('ui/notification_set', {
@@ -150,25 +145,6 @@ const onStop = async (instance) => {
   await store.dispatch('forge/send', {
     'type': 'job',
     'job': 'stop_world',
-    'world_id': instance.id,
-  });
-  action_submitted.value[instance.id] = false;
-};
-
-
-const onKill = async (instance) => {
-  const c = confirm(`This could result in data loss if you still have connected players. Proceed?`);
-  if (!c) return;
-
-  action_submitted.value[instance.id] = true;
-  store.commit('ui/notification_set', {
-    text: "Killing...",
-    expires: false
-  });
-
-  await store.dispatch('forge/send', {
-    'type': 'job',
-    'job': 'kill_world',
     'world_id': instance.id,
   });
   action_submitted.value[instance.id] = false;

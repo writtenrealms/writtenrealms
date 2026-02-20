@@ -76,6 +76,13 @@ const rooms_filter_index = computed(() => {
 
 const has_room_filter = computed(() => Boolean(props.rooms_filter && props.rooms_filter.length));
 
+const getRoomKey = (roomRef: any) => {
+  if (!roomRef) return null;
+  if (typeof roomRef === "string") return roomRef;
+  if (typeof roomRef === "object") return roomRef.key || null;
+  return null;
+};
+
 
 const onClick = (event) => {
   const room = mapRenderer.value.findByCoords({
@@ -170,14 +177,16 @@ const renderMap = () => {
   for (const room_key in rooms) {
     const room = rooms[room_key];
     for (let direction of directions) {
-      let exitRoom = { ...room[direction] };
+      const exitRoomKey = getRoomKey(room[direction]);
       // There is an exit room, but it is not in the showed rooms, so we create
       // a connection exit room
-      if (exitRoom.key && !rooms[exitRoom.key]) {
+      if (exitRoomKey && !rooms[exitRoomKey]) {
         // Set the exit room to its definition from the map, which includes things
         // like back exits
-        exitRoom = { ...props.map[exitRoom.key] };
-        exitRoom.key = exitRoom.key + "-exit-" + room.key;
+        let exitRoom = props.map[exitRoomKey]
+          ? { ...props.map[exitRoomKey] }
+          : {};
+        exitRoom.key = exitRoomKey + "-exit-" + room.key;
         exitRoom.type = "exit";
         exitRoom.z = room.z;
         if (direction == "north") {
@@ -197,7 +206,7 @@ const renderMap = () => {
         // If there is an actual room at the connected spot (which can happen
         // for example with the bridge effect)
 
-        for (let dir in directions) exitRoom[dir] = null;
+        for (const dir of directions) exitRoom[dir] = null;
         //exitRoom[REVERSE_DIRECTIONS[direction]] = { key: room.key };
         connectedExits[exitRoom.key] = exitRoom;
       }

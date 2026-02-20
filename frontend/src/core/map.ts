@@ -240,11 +240,14 @@ export default class Map {
 
   drawConnection(room, dir) {
     const revDir = INVERSE_DIRECTIONS[dir];
-    const exitRoomAttrs = room[dir];
-    if (!exitRoomAttrs) return;
+    const exitRoomRef = room[dir];
+    const exitRoomKey = this.getRoomKey(exitRoomRef);
+    if (!exitRoomKey) return;
 
     const fromCoords = this.getExitCoord(room, dir);
     let toCoords;
+    const visibleExitRoom = this.renderRooms[exitRoomKey];
+    const fullExitRoom = this.rooms[exitRoomKey];
 
     if (
       room[`${dir}_door_state`] == "closed" ||
@@ -253,10 +256,19 @@ export default class Map {
       return;
     }
 
-    var exitRoom = this.renderRooms[exitRoomAttrs];
-    if (exitRoom && exitRoom.z === room.z) {
+    if (visibleExitRoom && visibleExitRoom.z === room.z) {
       // exit room is in the map, and on the same z-axis
-      toCoords = this.getExitCoord(exitRoom, revDir);
+      toCoords = this.getExitCoord(visibleExitRoom, revDir);
+    } else if (
+      fullExitRoom &&
+      fullExitRoom.z === room.z &&
+      fullExitRoom.x != null &&
+      fullExitRoom.y != null
+    ) {
+      // The room exists in the map payload but may be outside of the
+      // rendered radius; project from world coords so long-distance links
+      // still draw end-to-end.
+      toCoords = this.getProjectedExitCoord(room, fullExitRoom, revDir);
     } else {
       // exit room not in the map
       toCoords = [fromCoords[0], fromCoords[1]];
@@ -275,8 +287,7 @@ export default class Map {
 
     // Room going under another room, we shorten the connection by
     // half.
-    var exitRoom = this.rooms[exitRoomAttrs];
-    if (exitRoom && exitRoom.z !== room.z) {
+    if (fullExitRoom && fullExitRoom.z !== room.z) {
       if (dir === "south") {
         toCoords[1] -= this.unit / 2;
       } else if (dir === "north") {
@@ -295,13 +306,28 @@ export default class Map {
     this.ctx.lineWidth = 2;
     this.ctx.stroke();
 
-    if (exitRoom) {
+    if (fullExitRoom) {
       // get the room attrs at the exit of the reverse of the exit room
-      var revRoomAttrs = exitRoom[revDir];
-      if (!revRoomAttrs || revRoomAttrs != room.key) {
+      const revRoomKey = this.getRoomKey(fullExitRoom[revDir]);
+      if (!revRoomKey || revRoomKey !== room.key) {
         this.drawOneWay(toCoords, dir);
       }
     }
+  }
+
+  getRoomKey(roomRef) {
+    if (!roomRef) return null;
+    if (typeof roomRef === "string") return roomRef;
+    if (typeof roomRef === "object") return roomRef.key || null;
+    return null;
+  }
+
+  getProjectedExitCoord(fromRoom, toRoom, revDir) {
+    const projectedRoom = {
+      cx: fromRoom.cx + 3 * this.unit * (toRoom.x - fromRoom.x),
+      cy: fromRoom.cy - 3 * this.unit * (toRoom.y - fromRoom.y)
+    };
+    return this.getExitCoord(projectedRoom, revDir);
   }
 
   drawOneWay(toCoords, dir) {
