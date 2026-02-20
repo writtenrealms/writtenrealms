@@ -2476,6 +2476,29 @@ class MobReactionTests(BuilderTestCase):
             target_id=self.mob_template.id,
         ).order_by('id')
 
+    def test_reaction_list_includes_trigger_yaml_and_template(self):
+        self._reaction_triggers().delete()
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_WORLD,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(MobTemplate),
+            target_id=self.mob_template.id,
+            event=adv_consts.MOB_REACTION_EVENT_SAYING,
+            option='hello',
+            script='say Greetings.',
+            display_action_in_room=False,
+        )
+
+        resp = self.client.get(self.ep, format='json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('new_trigger_template', resp.data)
+        self.assertIn('triggers', resp.data)
+        self.assertEqual(len(resp.data['triggers']), 1)
+        self.assertIn('yaml', resp.data['triggers'][0])
+        self.assertIn('delete_yaml', resp.data['triggers'][0])
+        self.assertIn('kind: trigger', resp.data['new_trigger_template']['yaml'])
+
     def test_add_mob_reaction(self):
         resp = self.client.post(self.ep, {
             'event': 'enter',

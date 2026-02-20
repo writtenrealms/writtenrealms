@@ -2317,15 +2317,28 @@ class MobTemplateViewSet(BaseWorldBuilderViewSet):
     def reactions(self, request, pk, world_pk):
         mob_template = self.get_object()
         mob_template_ct = ContentType.objects.get_for_model(MobTemplate)
+        reaction_triggers = Trigger.objects.filter(
+            world=self.world,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=mob_template_ct,
+            target_id=mob_template.id,
+        ).order_by('order', 'created_ts', 'id')
         serializer = builder_serializers.MobReactionSerializer(
-            Trigger.objects.filter(
-                world=self.world,
-                kind=adv_consts.TRIGGER_KIND_EVENT,
-                target_type=mob_template_ct,
-                target_id=mob_template.id,
-            ).order_by('order', 'created_ts', 'id'),
+            reaction_triggers,
             many=True)
-        return Response({'data': serializer.data})
+        return Response(
+            {
+                'data': serializer.data,
+                'new_trigger_template': builder_manifests.serialize_mob_trigger_template(
+                    world=self.world,
+                    mob_template=mob_template,
+                ),
+                'triggers': [
+                    builder_manifests.serialize_trigger_manifest(trigger)
+                    for trigger in reaction_triggers
+                ],
+            }
+        )
 
     def add_reaction(self, request, world_pk, pk):
         mob_template = self.get_object()

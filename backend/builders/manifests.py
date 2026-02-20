@@ -8,7 +8,7 @@ from django.contrib.contenttypes.models import ContentType
 from rest_framework import serializers
 
 from builders import serializers as builder_serializers
-from builders.models import Trigger
+from builders.models import MobTemplate, Trigger
 from config import constants as adv_consts
 from spawns import trigger_matcher
 from worlds.models import Room, World, Zone
@@ -335,6 +335,45 @@ def room_trigger_template_manifest(*, world: World, room: Room) -> dict[str, Any
 
 def serialize_room_trigger_template(*, world: World, room: Room) -> dict[str, Any]:
     manifest = room_trigger_template_manifest(world=world, room=room)
+    return {
+        "manifest": manifest,
+        "yaml": manifest_to_yaml(manifest),
+    }
+
+
+def mob_trigger_template_manifest(*, world: World, mob_template: MobTemplate) -> dict[str, Any]:
+    template_name = mob_template.name or f"Mob {mob_template.id}"
+    return {
+        "kind": TRIGGER_MANIFEST_KIND,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, world.id),
+            "name": f"{template_name} Reaction",
+        },
+        "spec": {
+            "scope": adv_consts.TRIGGER_SCOPE_WORLD,
+            "kind": adv_consts.TRIGGER_KIND_EVENT,
+            "target": {
+                "type": "mobtemplate",
+                "key": _entity_key("mobtemplate", mob_template.id),
+                "name": template_name,
+            },
+            "event": adv_consts.MOB_REACTION_EVENT_SAYING,
+            "option": "hello and (traveler or friend)",
+            "actions": "",
+            "script": "say Welcome, traveler.",
+            "conditions": "",
+            "show_details_on_failure": False,
+            "failure_message": "",
+            "display_action_in_room": False,
+            "gate_delay": 10,
+            "order": 0,
+            "is_active": True,
+        },
+    }
+
+
+def serialize_mob_trigger_template(*, world: World, mob_template: MobTemplate) -> dict[str, Any]:
+    manifest = mob_trigger_template_manifest(world=world, mob_template=mob_template)
     return {
         "manifest": manifest,
         "yaml": manifest_to_yaml(manifest),
