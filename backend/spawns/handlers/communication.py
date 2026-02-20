@@ -1,13 +1,11 @@
 """
 Communication command handlers (say, yell, emote).
 """
-from config import constants as adv_consts
 from spawns.actions.base import ActionError
 from spawns.actions.communication import EmoteAction, SayAction, YellAction
 from spawns.events import publish_events
 from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.registry import register_handler
-from spawns.triggers import execute_mob_event_triggers
 
 
 def _resolve_message_text(ctx: CommandContext) -> str | None:
@@ -65,15 +63,6 @@ class SayHandler(CommandHandler):
             actor_key=ctx.actor_key,
             connection_id=ctx.connection_id,
         )
-
-        if not ctx.payload.get("__trigger_source"):
-            execute_mob_event_triggers(
-                event=adv_consts.MOB_REACTION_EVENT_SAYING,
-                actor=ctx.actor,
-                room=getattr(ctx.actor, "room_id", None),
-                option_text=text,
-                connection_id=ctx.connection_id,
-            )
 
 
 @register_handler

@@ -10,6 +10,7 @@ from rest_framework import serializers
 from builders import serializers as builder_serializers
 from builders.models import Trigger
 from config import constants as adv_consts
+from spawns import trigger_matcher
 from worlds.models import Room, World, Zone
 
 
@@ -32,6 +33,11 @@ _SCOPE_TO_TARGET_TYPE = {
     adv_consts.TRIGGER_SCOPE_ROOM: "room",
     adv_consts.TRIGGER_SCOPE_ZONE: "zone",
     adv_consts.TRIGGER_SCOPE_WORLD: "world",
+}
+
+_EVENT_TARGET_TYPES = {
+    "mobtemplate": ("builders", "mobtemplate"),
+    "mob_template": ("builders", "mobtemplate"),
 }
 
 
@@ -420,6 +426,70 @@ def _resolve_target(
     return ContentType.objects.get_for_model(model_cls), target_obj.id
 
 
+def _resolve_event_target(
+    *,
+    world: World,
+    target_data: Any,
+    trigger: Trigger | None,
+) -> tuple[ContentType, int]:
+    if target_data is None:
+        if not trigger or not trigger.target_type_id or not trigger.target_id:
+            raise serializers.ValidationError("spec.target is required.")
+
+        model_name = trigger.target_type.model
+        if model_name not in _EVENT_TARGET_TYPES:
+            raise serializers.ValidationError(
+                "Event triggers must target one of: "
+                + ", ".join(sorted(_EVENT_TARGET_TYPES.keys()))
+                + "."
+            )
+
+        model_cls = trigger.target_type.model_class()
+        if not model_cls:
+            raise serializers.ValidationError("Existing trigger target type is invalid.")
+
+        exists = model_cls.objects.filter(world=world, pk=trigger.target_id).exists()
+        if not exists:
+            raise serializers.ValidationError("Existing trigger target does not exist in this world.")
+        return trigger.target_type, trigger.target_id
+
+    if not isinstance(target_data, dict):
+        raise serializers.ValidationError("spec.target must be a mapping.")
+
+    target_type = str(target_data.get("type") or "").strip().lower()
+    if target_type not in _EVENT_TARGET_TYPES:
+        raise serializers.ValidationError(
+            "spec.target.type must be one of: "
+            + ", ".join(sorted(_EVENT_TARGET_TYPES.keys()))
+            + "."
+        )
+
+    target_ref = target_data.get("key", target_data.get("id"))
+    if target_ref is None:
+        raise serializers.ValidationError("spec.target.key is required.")
+
+    target_id = _parse_entity_ref(
+        target_ref,
+        expected_type=target_type,
+        field_name="spec.target.key",
+    )
+
+    app_label, model_name = _EVENT_TARGET_TYPES[target_type]
+    try:
+        target_ct = ContentType.objects.get(app_label=app_label, model=model_name)
+    except ContentType.DoesNotExist:
+        raise serializers.ValidationError("spec.target.type is not available.")
+
+    model_cls = target_ct.model_class()
+    if not model_cls:
+        raise serializers.ValidationError("spec.target.type could not be resolved.")
+
+    target_obj = model_cls.objects.filter(world=world, pk=target_id).first()
+    if not target_obj:
+        raise serializers.ValidationError("Trigger target does not exist in this world.")
+    return target_ct, target_obj.id
+
+
 def _resolve_trigger_reference(*, world: World, metadata: dict[str, Any]) -> tuple[Trigger | None, int | None]:
     trigger_key = metadata.get("key")
     trigger_id_raw = metadata.get("id")
@@ -498,21 +568,42 @@ def parse_trigger_manifest(
         field_name="spec.kind",
     )
     kind = _canonical_trigger_kind(kind)
-    target_type, target_id = _resolve_target(
-        world=world,
-        scope=scope,
-        target_data=spec.get("target"),
-        trigger=trigger,
-    )
+    if kind == adv_consts.TRIGGER_KIND_EVENT and scope != adv_consts.TRIGGER_SCOPE_WORLD:
+        raise serializers.ValidationError("Event triggers must use scope 'world'.")
+
+    if kind == adv_consts.TRIGGER_KIND_EVENT:
+        target_type, target_id = _resolve_event_target(
+            world=world,
+            target_data=spec.get("target"),
+            trigger=trigger,
+        )
+    else:
+        target_type, target_id = _resolve_target(
+            world=world,
+            scope=scope,
+            target_data=spec.get("target"),
+            trigger=trigger,
+        )
 
     name = _coerce_text(metadata.get("name", trigger.name if trigger else ""))
 
-    if is_create and scope != adv_consts.TRIGGER_SCOPE_WORLD and spec.get("target") is None:
+    if (
+        is_create
+        and spec.get("target") is None
+        and (kind == adv_consts.TRIGGER_KIND_EVENT or scope != adv_consts.TRIGGER_SCOPE_WORLD)
+    ):
         raise serializers.ValidationError("spec.target is required when creating a trigger.")
 
     conditions = _coerce_text(spec.get("conditions", trigger.conditions if trigger else ""))
     if "conditions" in spec:
         builder_serializers.validate_conditions(None, conditions)
+
+    actions = _coerce_text(spec.get("actions", trigger.actions if trigger else ""))
+    if kind == adv_consts.TRIGGER_KIND_COMMAND and actions:
+        try:
+            trigger_matcher.validate_match_expression(actions)
+        except trigger_matcher.MatchExpressionError as err:
+            raise serializers.ValidationError(f"Invalid spec.actions matcher expression: {err}")
 
     event = _coerce_text(spec.get("event", trigger.event if trigger else "")).strip().lower()
     if kind == adv_consts.TRIGGER_KIND_EVENT:
@@ -530,6 +621,13 @@ def parse_trigger_manifest(
             field_name="spec.event",
         )
 
+    option = _coerce_text(spec.get("option", trigger.option if trigger else ""))
+    if option:
+        try:
+            trigger_matcher.validate_match_expression(option)
+        except trigger_matcher.MatchExpressionError as err:
+            raise serializers.ValidationError(f"Invalid spec.option matcher expression: {err}")
+
     return ParsedTriggerManifest(
         world=world,
         trigger=trigger,
@@ -539,11 +637,11 @@ def parse_trigger_manifest(
         kind=kind,
         target_type=target_type,
         target_id=target_id,
-        actions=_coerce_text(spec.get("actions", trigger.actions if trigger else "")),
+        actions=actions,
         script=_coerce_text(spec.get("script", trigger.script if trigger else "")),
         conditions=conditions,
         event=event,
-        option=_coerce_text(spec.get("option", trigger.option if trigger else "")),
+        option=option,
         show_details_on_failure=_coerce_bool(
             spec.get(
                 "show_details_on_failure",

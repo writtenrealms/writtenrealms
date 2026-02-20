@@ -59,6 +59,29 @@ spec:
   is_active: true
 ```
 
+### Create Mob Event Trigger
+
+```yaml
+kind: trigger
+metadata:
+  world: world.1
+  name: Greeter Reaction
+spec:
+  scope: world
+  kind: event
+  target:
+    type: mobtemplate
+    key: mobtemplate.22
+  event: say
+  option: hello and (traveler or friend)
+  script: say Welcome to the archive.
+  conditions: ""
+  display_action_in_room: false
+  gate_delay: 10
+  order: 0
+  is_active: true
+```
+
 ### Update Trigger
 
 ```yaml
@@ -85,6 +108,8 @@ spec:
 Runtime behavior details are documented in:
 
 - `docs/trigger-multiline-script-execution.md`
+- `docs/trigger-event-subscriptions.md`
+- `docs/trigger-matching-dsl.md`
 
 Execution behavior:
 
@@ -169,10 +194,15 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 - `metadata.world` (if present) must match the selected world.
   - `metadata.world` accepts either integer id (`1`) or key form (`world.1`).
 - `spec.scope`, `spec.kind`, booleans, and integers are validated.
+- `spec.actions` / `spec.option` matcher syntax is validated using the Trigger Matching DSL.
 - For create:
   - `spec.scope` is required.
   - `spec.target` is required for room/zone scope.
-- `spec.target` must match scope type (`room`, `zone`, `world`) and exist in world.
+- For `spec.kind: event`:
+  - `spec.event` is required.
+  - `spec.event` must be one of the supported mob reaction event codes.
+- For command triggers, `spec.target` must match scope type (`room`, `zone`, `world`) and exist in world.
+- For event triggers, `spec.target.type` is currently `mobtemplate` and must exist in world.
 - `conditions` are validated through the WR2 conditions parser in `backend/core/conditions.py`.
 
 Permission checks are applied when editing via manifest:

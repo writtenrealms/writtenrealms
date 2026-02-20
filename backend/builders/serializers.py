@@ -48,6 +48,7 @@ from builders.models import (
 from core.db import qs_by_pks
 from core.serializers import KeyNameSerializer, ReferenceField, AuthorField
 from spawns import serializers as spawn_serializers
+from spawns import trigger_matcher
 from spawns.models import Player, DoorState, PlayerConfig
 from system.models import Nexus
 from system.policies import get_platform_policy
@@ -1768,6 +1769,14 @@ def validate_reaction(self, validated_data):
             msg += "enter how often to react"
 
         raise serializers.ValidationError(msg)
+
+    if option:
+        try:
+            trigger_matcher.validate_match_expression(option)
+        except trigger_matcher.MatchExpressionError as err:
+            raise serializers.ValidationError(
+                f"Invalid option matcher expression: {err}"
+            )
     return validated_data
 
 class MobReactionSerializer(serializers.ModelSerializer):

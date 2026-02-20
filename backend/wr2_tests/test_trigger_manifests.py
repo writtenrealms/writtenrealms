@@ -4,7 +4,7 @@ from django.contrib.contenttypes.models import ContentType
 
 from rest_framework.reverse import reverse
 
-from builders.models import BuilderAssignment, Trigger, WorldBuilder
+from builders.models import BuilderAssignment, MobTemplate, Trigger, WorldBuilder
 from config import constants as adv_consts
 from tests.base import WorldTestCase
 from worlds.models import Room
@@ -278,6 +278,64 @@ metadata:
         self.assertEqual(resp.data["kind"], "trigger")
         self.assertEqual(resp.data["operation"], "deleted")
         self.assertFalse(Trigger.objects.filter(pk=self.trigger.id).exists())
+
+    def test_apply_trigger_manifest_can_create_mob_event_trigger(self):
+        mob_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Lorekeeper",
+        )
+
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  name: Lorekeeper Reaction
+spec:
+  scope: world
+  kind: event
+  target:
+    type: mobtemplate
+    key: mobtemplate.{mob_template.id}
+  event: say
+  option: hello and (traveler or friend)
+  script: say Welcome, seeker.
+  display_action_in_room: false
+  gate_delay: 10
+  order: 0
+  is_active: true
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["operation"], "created")
+
+        created_trigger = Trigger.objects.get(pk=resp.data["trigger"]["id"])
+        self.assertEqual(created_trigger.kind, adv_consts.TRIGGER_KIND_EVENT)
+        self.assertEqual(created_trigger.scope, adv_consts.TRIGGER_SCOPE_WORLD)
+        self.assertEqual(created_trigger.target_type, ContentType.objects.get_for_model(MobTemplate))
+        self.assertEqual(created_trigger.target_id, mob_template.id)
+        self.assertEqual(created_trigger.event, adv_consts.MOB_REACTION_EVENT_SAYING)
+        self.assertEqual(created_trigger.option, "hello and (traveler or friend)")
+
+    def test_apply_trigger_manifest_rejects_invalid_matcher_expression(self):
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  actions: touch altar and (pray or
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("matcher expression", str(resp.data).lower())
 
     def test_rank_2_builder_needs_assignment_to_apply_room_trigger_manifest(self):
         builder_user = self.create_user("builder@example.com")

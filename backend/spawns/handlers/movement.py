@@ -8,7 +8,6 @@ Command -> Action -> Event:
 """
 from django.db import transaction
 
-from config import constants as adv_consts
 from spawns.actions.base import ActionError
 from spawns.actions.movement import (
     AdjustStaminaAction,
@@ -20,7 +19,6 @@ from spawns.events import publish_events
 from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.registry import register_handler
 from spawns.models import Player
-from spawns.triggers import execute_mob_event_triggers
 
 
 @register_handler
@@ -69,12 +67,5 @@ class MoveHandler(CommandHandler):
         publish_events(
             events_result.events,
             actor_key=ctx.player.key,
-            connection_id=ctx.connection_id,
-        )
-
-        execute_mob_event_triggers(
-            event=adv_consts.MOB_REACTION_EVENT_ENTERING,
-            actor=ctx.player,
-            room=context.dest_room_id,
             connection_id=ctx.connection_id,
         )

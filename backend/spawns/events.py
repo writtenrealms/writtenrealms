@@ -48,3 +48,13 @@ def publish_events(
                 message,
                 connection_id=recipient_connection_id,
             )
+
+        # Late import avoids trigger/state payload import cycles during app bootstrap.
+        from spawns.trigger_subscriptions import dispatch_trigger_subscriptions_for_event
+
+        dispatch_trigger_subscriptions_for_event(
+            event_type=event.type,
+            event_data=event.data,
+            actor_key=actor_key,
+            connection_id=connection_id,
+        )

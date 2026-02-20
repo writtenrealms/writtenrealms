@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from django.contrib.contenttypes.models import ContentType
@@ -18,12 +17,17 @@ from spawns.handlers.registry import (
     resolve_text_handler,
 )
 from spawns.models import Item, Mob, Player
+from spawns.trigger_matcher import (
+    evaluate_match_expression,
+    exact_term_match,
+    first_match_term,
+    phrase_term_match,
+)
 from worlds.models import Room, World, Zone
 
 
 TRIGGER_GATED_TEXT = "More time is needed."
 DEFAULT_CONDITION_FAILURE_TEXT = "Action could not be completed."
-TRIGGER_ACTION_SPLIT_RE = re.compile(r"\s+or\s+")
 TRIGGER_SCOPE_PRIORITY = {
     adv_consts.TRIGGER_SCOPE_ROOM: 0,
     adv_consts.TRIGGER_SCOPE_ZONE: 1,
@@ -42,24 +46,18 @@ def _normalized_text(value: str | None) -> str:
     return str(value or "").strip().lower()
 
 
-def _iter_action_tokens(actions_text: str | None) -> list[str]:
-    actions = _normalized_text(actions_text)
-    if not actions:
-        return []
-    return [token.strip() for token in TRIGGER_ACTION_SPLIT_RE.split(actions) if token.strip()]
-
-
 def _first_action_label(actions_text: str | None) -> str | None:
-    tokens = _iter_action_tokens(actions_text)
-    if tokens:
-        return tokens[0]
-    return None
+    return first_match_term(actions_text)
 
 
 def _actions_match(actions_text: str | None, command_text: str) -> bool:
     if not command_text:
         return False
-    return command_text in _iter_action_tokens(actions_text)
+    return evaluate_match_expression(
+        actions_text,
+        term_matcher=lambda term: phrase_term_match(command_text, term),
+        empty_expression=False,
+    )
 
 
 def _split_trigger_script_line(line: str | None) -> list[str]:
@@ -265,19 +263,21 @@ def _event_option_matches(
         return True
 
     if normalized_event == adv_consts.MOB_REACTION_EVENT_SAYING:
-        candidate = _normalized_text(option_text)
-        if not candidate:
-            return False
-        option_tokens = _iter_action_tokens(trigger_option)
-        if not option_tokens:
-            option_tokens = [trigger_option]
-        return any(token in candidate for token in option_tokens)
+        return evaluate_match_expression(
+            trigger_option,
+            term_matcher=lambda term: phrase_term_match(option_text, term),
+            empty_expression=True,
+        )
 
     if normalized_event in (
         adv_consts.MOB_REACTION_EVENT_RECEIVE,
         adv_consts.MOB_REACTION_EVENT_PERIODIC,
     ):
-        return _normalized_text(option_text) == trigger_option
+        return evaluate_match_expression(
+            trigger_option,
+            term_matcher=lambda term: exact_term_match(option_text, term),
+            empty_expression=True,
+        )
 
     return True
 

@@ -4,6 +4,7 @@ from django.contrib.contenttypes.models import ContentType
 
 from builders.models import MobTemplate, Trigger
 from config import constants as adv_consts
+from spawns.events import GameEvent, publish_events
 from spawns.handlers import dispatch_command
 from spawns.models import Item, Mob
 from tests.base import WorldTestCase
@@ -33,6 +34,19 @@ class TestCommandFallbackTriggers(WorldTestCase):
         data.update(overrides)
         return Trigger.objects.create(**data)
 
+    def _mob_notification_message(self, messages, mob_key):
+        return next(
+            (
+                msg["message"]
+                for msg in messages
+                if (
+                    msg["message"].get("type") == "notification.cmd.say.success"
+                    and msg["message"].get("data", {}).get("actor", {}).get("key") == mob_key
+                )
+            ),
+            None,
+        )
+
     def test_room_look_includes_matching_trigger_action(self):
         self._create_room_trigger(actions="touch altar or touch stone")
 
@@ -59,6 +73,25 @@ class TestCommandFallbackTriggers(WorldTestCase):
         self.assertIsNotNone(echo_message)
         self.assertIn("The altar hums.", echo_message.get("text", ""))
         self.assertIsNone(self._message_by_type(messages, "cmd.text.echo"))
+
+    def test_command_trigger_actions_support_dsl_with_parentheses(self):
+        self._create_room_trigger(
+            actions="touch altar and (pray or kneel)",
+            script="/cmd room -- /echo -- The altar awakens.",
+        )
+
+        with capture_game_messages() as matching_messages:
+            dispatch_text_command(self.player.id, "touch altar pray")
+
+        matching_echo = self._message_by_type(matching_messages, "cmd./echo.success")
+        self.assertIsNotNone(matching_echo)
+        self.assertIn("The altar awakens.", matching_echo.get("text", ""))
+
+        with capture_game_messages() as non_matching_messages:
+            dispatch_text_command(self.player.id, "touch altar bow")
+
+        self.assertIsNotNone(self._message_by_type(non_matching_messages, "cmd.text.echo"))
+        self.assertIsNone(self._message_by_type(non_matching_messages, "cmd./echo.success"))
 
     def test_multiline_script_executes_first_line_and_schedules_followups(self):
         self._create_room_trigger(
@@ -237,25 +270,15 @@ class TestCommandFallbackTriggers(WorldTestCase):
             target_type=ContentType.objects.get_for_model(MobTemplate),
             target_id=mob_template.id,
             event=adv_consts.MOB_REACTION_EVENT_SAYING,
-            option="hello",
+            option="hello and (traveler or friend)",
             script="say Greetings, traveler.",
             display_action_in_room=False,
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "say hello there")
+            dispatch_text_command(self.player.id, "say hello traveler")
 
-        notification = next(
-            (
-                msg["message"]
-                for msg in messages
-                if (
-                    msg["message"].get("type") == "notification.cmd.say.success"
-                    and msg["message"].get("data", {}).get("actor", {}).get("key") == mob.key
-                )
-            ),
-            None,
-        )
+        notification = self._mob_notification_message(messages, mob.key)
         self.assertIsNotNone(
             notification,
             [msg["message"] for msg in messages],
@@ -304,19 +327,55 @@ class TestCommandFallbackTriggers(WorldTestCase):
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "north")
 
-        notification = next(
-            (
-                msg["message"]
-                for msg in messages
-                if (
-                    msg["message"].get("type") == "notification.cmd.say.success"
-                    and msg["message"].get("data", {}).get("actor", {}).get("key") == mob.key
-                )
-            ),
-            None,
-        )
+        notification = self._mob_notification_message(messages, mob.key)
         self.assertIsNotNone(
             notification,
             [msg["message"] for msg in messages],
         )
         self.assertEqual(notification["data"]["text"], "You are expected.")
+
+    def test_trigger_subscriptions_dispatch_from_emitted_events(self):
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+
+        mob_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Archivist",
+        )
+        mob = self.create_mob(
+            "Archivist",
+            template=mob_template,
+        )
+        Trigger.objects.create(
+            world=self.world,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            scope=adv_consts.TRIGGER_SCOPE_WORLD,
+            target_type=ContentType.objects.get_for_model(MobTemplate),
+            target_id=mob_template.id,
+            event=adv_consts.MOB_REACTION_EVENT_SAYING,
+            option="archive or ledger",
+            script="say Records are eternal.",
+            display_action_in_room=False,
+        )
+
+        event = GameEvent(
+            type="cmd.say.success",
+            recipients=[self.player.key],
+            data={
+                "actor": {"key": self.player.key, "name": self.player.name},
+                "text": "show me the archive ledger",
+            },
+            text="synthetic say event",
+        )
+        with capture_game_messages() as messages:
+            publish_events(
+                [event],
+                actor_key=self.player.key,
+            )
+
+        notification = self._mob_notification_message(messages, mob.key)
+        self.assertIsNotNone(
+            notification,
+            [msg["message"] for msg in messages],
+        )
+        self.assertEqual(notification["data"]["text"], "Records are eternal.")
