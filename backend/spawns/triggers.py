@@ -245,6 +245,167 @@ def _targeted_command_fallback_triggers(
     return _ordered_triggers(triggers)
 
 
+def _coerce_room(room: Room | int | None) -> Room | None:
+    if isinstance(room, Room):
+        return room
+    if isinstance(room, int):
+        return Room.objects.select_related("zone", "world").filter(pk=room).first()
+    return None
+
+
+def _event_option_matches(
+    *,
+    trigger: Trigger,
+    event: str,
+    option_text: str | None,
+) -> bool:
+    trigger_option = _normalized_text(trigger.option)
+    normalized_event = _normalized_text(event)
+    if not trigger_option:
+        return True
+
+    if normalized_event == adv_consts.MOB_REACTION_EVENT_SAYING:
+        candidate = _normalized_text(option_text)
+        if not candidate:
+            return False
+        option_tokens = _iter_action_tokens(trigger_option)
+        if not option_tokens:
+            option_tokens = [trigger_option]
+        return any(token in candidate for token in option_tokens)
+
+    if normalized_event in (
+        adv_consts.MOB_REACTION_EVENT_RECEIVE,
+        adv_consts.MOB_REACTION_EVENT_PERIODIC,
+    ):
+        return _normalized_text(option_text) == trigger_option
+
+    return True
+
+
+def _resolve_room_world(room: Room | None) -> World | None:
+    if not room:
+        return None
+
+    room_world = getattr(room, "world", None)
+    if not room_world:
+        return None
+
+    context_world = getattr(room_world, "context", None)
+    if context_world:
+        return getattr(context_world, "instance_of", None) or context_world
+
+    return getattr(room_world, "instance_of", None) or room_world
+
+
+def execute_mob_event_triggers(
+    *,
+    event: str,
+    actor: Player | Mob | None = None,
+    room: Room | int | None = None,
+    option_text: str | None = None,
+    connection_id: str | None = None,
+) -> None:
+    normalized_event = _normalized_text(event)
+    if normalized_event not in adv_consts.MOB_REACTION_EVENTS:
+        return
+
+    resolved_room = _coerce_room(room) or getattr(actor, "room", None)
+    if not resolved_room:
+        return
+
+    trigger_world = _resolve_trigger_world(actor, resolved_room) if actor else _resolve_room_world(resolved_room)
+    if not trigger_world:
+        return
+
+    mobs = list(
+        Mob.objects.filter(room_id=resolved_room.id)
+        .select_related("template")
+        .order_by("id")
+    )
+    if not mobs:
+        return
+
+    cts = _scope_content_types()
+    mob_ct = cts[Mob]
+    mob_template_ct = cts[MobTemplate]
+
+    target_filter = Q()
+    for mob in mobs:
+        target_filter |= Q(target_type=mob_ct, target_id=mob.id)
+        if mob.template_id:
+            target_filter |= Q(target_type=mob_template_ct, target_id=mob.template_id)
+
+    triggers = list(
+        Trigger.objects.filter(
+            world_id=trigger_world.id,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            event=normalized_event,
+            is_active=True,
+        )
+        .filter(target_filter)
+        .order_by("order", "created_ts", "id")
+    )
+    if not triggers:
+        return
+
+    trigger_by_target: dict[tuple[int, int], list[Trigger]] = {}
+    for trigger in _ordered_triggers(triggers):
+        if not trigger.target_type_id or not trigger.target_id:
+            continue
+        target_key = (trigger.target_type_id, trigger.target_id)
+        trigger_by_target.setdefault(target_key, []).append(trigger)
+
+    for mob in mobs:
+        mob_trigger_list: list[Trigger] = []
+        mob_trigger_list.extend(trigger_by_target.get((mob_ct.id, mob.id), []))
+        if mob.template_id:
+            mob_trigger_list.extend(
+                trigger_by_target.get((mob_template_ct.id, mob.template_id), [])
+            )
+        if not mob_trigger_list:
+            continue
+
+        evaluator = actor or mob
+        for trigger in mob_trigger_list:
+            if not _event_option_matches(
+                trigger=trigger,
+                event=normalized_event,
+                option_text=option_text,
+            ):
+                continue
+
+            if trigger.conditions:
+                evaluated = evaluate_conditions(evaluator, trigger.conditions)
+                if not evaluated.get("result"):
+                    continue
+
+            scope_key = f"mob:{mob.id}"
+            if not _is_gate_allowed(trigger, scope_key):
+                continue
+            _consume_gate(trigger, scope_key)
+
+            script_lines = _split_trigger_script_lines(trigger.script)
+            if not script_lines:
+                continue
+
+            first_line_segments = script_lines[0]
+            _dispatch_trigger_script_segments(
+                actor=mob,
+                segments=first_line_segments,
+                issuer_scope=trigger.scope,
+                connection_id=connection_id,
+            )
+
+            for line_index, line_segments in enumerate(script_lines[1:], start=1):
+                _schedule_trigger_script_line_segments(
+                    actor=mob,
+                    line_segments=line_segments,
+                    line_index=line_index,
+                    issuer_scope=trigger.scope,
+                    connection_id=connection_id,
+                )
+
+
 def _trigger_scope_key(
     trigger: Trigger,
     *,

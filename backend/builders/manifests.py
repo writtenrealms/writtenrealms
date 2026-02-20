@@ -61,6 +61,8 @@ class ParsedTriggerManifest:
     actions: str
     script: str
     conditions: str
+    event: str
+    option: str
     show_details_on_failure: bool
     failure_message: str
     display_action_in_room: bool
@@ -245,6 +247,8 @@ def trigger_to_manifest(trigger: Trigger) -> dict[str, Any]:
             "actions": trigger.actions or "",
             "script": trigger.script or "",
             "conditions": trigger.conditions or "",
+            "event": trigger.event or "",
+            "option": trigger.option or "",
             "show_details_on_failure": bool(trigger.show_details_on_failure),
             "failure_message": trigger.failure_message or "",
             "display_action_in_room": bool(trigger.display_action_in_room),
@@ -278,6 +282,8 @@ def serialize_trigger_manifest(trigger: Trigger) -> dict[str, Any]:
         "name": trigger.name or "",
         "scope": trigger.scope,
         "kind": _canonical_trigger_kind(trigger.kind),
+        "event": trigger.event or "",
+        "option": trigger.option or "",
         "target": {
             "type": target_data.get("type", ""),
             "key": target_data.get("key", ""),
@@ -508,6 +514,22 @@ def parse_trigger_manifest(
     if "conditions" in spec:
         builder_serializers.validate_conditions(None, conditions)
 
+    event = _coerce_text(spec.get("event", trigger.event if trigger else "")).strip().lower()
+    if kind == adv_consts.TRIGGER_KIND_EVENT:
+        if not event:
+            raise serializers.ValidationError("spec.event is required for kind 'event'.")
+        event = _coerce_choice(
+            event,
+            choices=adv_consts.MOB_REACTION_EVENTS,
+            field_name="spec.event",
+        )
+    elif event:
+        event = _coerce_choice(
+            event,
+            choices=adv_consts.MOB_REACTION_EVENTS,
+            field_name="spec.event",
+        )
+
     return ParsedTriggerManifest(
         world=world,
         trigger=trigger,
@@ -520,6 +542,8 @@ def parse_trigger_manifest(
         actions=_coerce_text(spec.get("actions", trigger.actions if trigger else "")),
         script=_coerce_text(spec.get("script", trigger.script if trigger else "")),
         conditions=conditions,
+        event=event,
+        option=_coerce_text(spec.get("option", trigger.option if trigger else "")),
         show_details_on_failure=_coerce_bool(
             spec.get(
                 "show_details_on_failure",
@@ -611,6 +635,8 @@ def apply_trigger_manifest(parsed: ParsedTriggerManifest) -> Trigger:
             actions=parsed.actions,
             script=parsed.script,
             conditions=parsed.conditions,
+            event=parsed.event,
+            option=parsed.option,
             show_details_on_failure=parsed.show_details_on_failure,
             failure_message=parsed.failure_message,
             display_action_in_room=parsed.display_action_in_room,
@@ -627,6 +653,8 @@ def apply_trigger_manifest(parsed: ParsedTriggerManifest) -> Trigger:
     trigger.actions = parsed.actions
     trigger.script = parsed.script
     trigger.conditions = parsed.conditions
+    trigger.event = parsed.event
+    trigger.option = parsed.option
     trigger.show_details_on_failure = parsed.show_details_on_failure
     trigger.failure_message = parsed.failure_message
     trigger.display_action_in_room = parsed.display_action_in_room

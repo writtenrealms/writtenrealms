@@ -36,6 +36,7 @@ from builders.models import (
     Reward,
     RoomCheck,
     RoomAction,
+    Trigger,
     RandomItemProfile,
     MerchantInventory,
     WorldBuilder,
@@ -2467,13 +2468,25 @@ class MobReactionTests(BuilderTestCase):
         self.ep = reverse('builder-mob-template-reactions',
                           args=[self.world.pk, self.mob_template.key])
 
+    def _reaction_triggers(self):
+        return Trigger.objects.filter(
+            world=self.world,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(MobTemplate),
+            target_id=self.mob_template.id,
+        ).order_by('id')
+
     def test_add_mob_reaction(self):
         resp = self.client.post(self.ep, {
             'event': 'enter',
             'reaction': 'say hi!',
         }, format='json')
         self.assertEqual(resp.status_code, 201)
-        self.assertEqual(self.mob_template.reactions.count(), 1)
+        self.assertEqual(self._reaction_triggers().count(), 1)
+        trigger = self._reaction_triggers().first()
+        self.assertEqual(trigger.kind, adv_consts.TRIGGER_KIND_EVENT)
+        self.assertEqual(trigger.event, adv_consts.MOB_REACTION_EVENT_ENTERING)
+        self.assertEqual(trigger.script, 'say hi!')
 
         # Test that passing blank option works too
         resp = self.client.post(self.ep, {
@@ -2482,7 +2495,7 @@ class MobReactionTests(BuilderTestCase):
             'option': '',
         }, format='json')
         self.assertEqual(resp.status_code, 201)
-        self.assertEqual(self.mob_template.reactions.count(), 2)
+        self.assertEqual(self._reaction_triggers().count(), 2)
 
     def test_add_mob_reaction_with_condition(self):
         "Regression test for adding a mob reaction that has a condition."
@@ -2492,7 +2505,7 @@ class MobReactionTests(BuilderTestCase):
             'conditions': 'is_mob',
         }, format='json')
         self.assertEqual(resp.status_code, 201)
-        self.assertEqual(self.mob_template.reactions.first().conditions,
+        self.assertEqual(self._reaction_triggers().first().conditions,
                          'is_mob')
 
     def test_option_is_required_for_say(self):

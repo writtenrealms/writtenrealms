@@ -25,7 +25,6 @@ from builders.models import (
     MobTemplate,
     MobTemplateInventory,
     MerchantInventory,
-    MobReaction,
     TransformationTemplate,
     Faction,
     FactionAssignment,
@@ -1737,7 +1736,17 @@ class MobFactionAssignmentSerializer(serializers.ModelSerializer):
 
 
 def validate_reaction(self, validated_data):
-    event = validated_data['event']
+    event = validated_data.get('event')
+    if event is None and getattr(self, 'instance', None) is not None:
+        event = self.instance.event
+    if event is None:
+        raise serializers.ValidationError("Event is required.")
+
+    option = validated_data.get('option')
+    if option is None and getattr(self, 'instance', None) is not None:
+        option = self.instance.option
+    option = option or ''
+
     if (event not in (adv_consts.MOB_REACTION_EVENT_ENTERING,
                       adv_consts.MOB_REACTION_EVENT_CONNECT,
                       adv_consts.MOB_REACTION_EVENT_LOAD,
@@ -1745,7 +1754,7 @@ def validate_reaction(self, validated_data):
                       adv_consts.MOB_REACTION_EVENT_COMBAT_ENTER,
                       adv_consts.MOB_REACTION_EVENT_COMBAT_EXIT,
                       adv_consts.MOB_REACTION_EVENT_NEW_ROOM)
-        and not validated_data.get('option', '')):
+        and not option):
 
         msg = "Option is required: "
 
@@ -1763,15 +1772,25 @@ def validate_reaction(self, validated_data):
 
 class MobReactionSerializer(serializers.ModelSerializer):
 
-    template = KeyNameSerializer(read_only=True)
+    template = serializers.SerializerMethodField()
     option = serializers.CharField(required=False, allow_blank=True)
+    reaction = serializers.CharField(source='script')
 
     class Meta:
-        model = MobReaction
+        model = Trigger
         fields = [
             'key', 'id',
             'template', 'event', 'option', 'reaction', 'conditions'
         ]
+
+    def get_template(self, trigger):
+        if not trigger.target_type_id:
+            return None
+        if trigger.target_type.model_class() != MobTemplate:
+            return None
+        if not trigger.target:
+            return None
+        return KeyNameSerializer(trigger.target).data
 
     validate = validate_reaction
 
@@ -1788,9 +1807,18 @@ class AddMobReactionSerializer(serializers.Serializer):
         self.template = template
 
     def create(self, validated_data):
-        return MobReaction.objects.create(
-            template=self.template,
-            **validated_data)
+        return Trigger.objects.create(
+            world=self.template.world,
+            scope=adv_consts.TRIGGER_SCOPE_WORLD,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(MobTemplate),
+            target_id=self.template.id,
+            event=validated_data['event'],
+            option=validated_data.get('option', ''),
+            script=validated_data['reaction'],
+            conditions=validated_data.get('conditions', ''),
+            display_action_in_room=False,
+        )
 
     validate = validate_reaction
 

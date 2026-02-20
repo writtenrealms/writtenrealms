@@ -2,10 +2,10 @@ from unittest.mock import patch
 
 from django.contrib.contenttypes.models import ContentType
 
-from builders.models import Trigger
+from builders.models import MobTemplate, Trigger
 from config import constants as adv_consts
 from spawns.handlers import dispatch_command
-from spawns.models import Item
+from spawns.models import Item, Mob
 from tests.base import WorldTestCase
 from worlds.models import Room
 from wr2_tests.utils import capture_game_messages, dispatch_text_command
@@ -217,3 +217,106 @@ class TestCommandFallbackTriggers(WorldTestCase):
         payload_mob = next((entry for entry in chars if entry["key"] == mob.key), None)
         self.assertIsNotNone(payload_mob)
         self.assertIn("greet guide", payload_mob["actions"])
+
+    def test_say_event_trigger_runs_mob_reaction_script(self):
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+
+        mob_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Sage",
+        )
+        mob = self.create_mob(
+            "Sage",
+            template=mob_template,
+        )
+        Trigger.objects.create(
+            world=self.world,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            scope=adv_consts.TRIGGER_SCOPE_WORLD,
+            target_type=ContentType.objects.get_for_model(MobTemplate),
+            target_id=mob_template.id,
+            event=adv_consts.MOB_REACTION_EVENT_SAYING,
+            option="hello",
+            script="say Greetings, traveler.",
+            display_action_in_room=False,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "say hello there")
+
+        notification = next(
+            (
+                msg["message"]
+                for msg in messages
+                if (
+                    msg["message"].get("type") == "notification.cmd.say.success"
+                    and msg["message"].get("data", {}).get("actor", {}).get("key") == mob.key
+                )
+            ),
+            None,
+        )
+        self.assertIsNotNone(
+            notification,
+            [msg["message"] for msg in messages],
+        )
+        self.assertEqual(notification["data"]["text"], "Greetings, traveler.")
+
+    def test_enter_event_trigger_runs_when_player_enters_room(self):
+        self.player.in_game = True
+        self.player.stamina = 100
+        self.player.save(update_fields=["in_game", "stamina"])
+
+        next_room = Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Sanctum",
+            x=self.room.x + 1,
+            y=self.room.y,
+            z=self.room.z,
+        )
+        self.room.north = next_room
+        self.room.save(update_fields=["north"])
+        next_room.south = self.room
+        next_room.save(update_fields=["south"])
+
+        mob_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Watcher",
+        )
+        mob = Mob.objects.create(
+            name="Watcher",
+            world=self.world,
+            room=next_room,
+            template=mob_template,
+        )
+        Trigger.objects.create(
+            world=self.world,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            scope=adv_consts.TRIGGER_SCOPE_WORLD,
+            target_type=ContentType.objects.get_for_model(MobTemplate),
+            target_id=mob_template.id,
+            event=adv_consts.MOB_REACTION_EVENT_ENTERING,
+            script="say You are expected.",
+            display_action_in_room=False,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "north")
+
+        notification = next(
+            (
+                msg["message"]
+                for msg in messages
+                if (
+                    msg["message"].get("type") == "notification.cmd.say.success"
+                    and msg["message"].get("data", {}).get("actor", {}).get("key") == mob.key
+                )
+            ),
+            None,
+        )
+        self.assertIsNotNone(
+            notification,
+            [msg["message"] for msg in messages],
+        )
+        self.assertEqual(notification["data"]["text"], "You are expected.")

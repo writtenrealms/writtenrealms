@@ -32,8 +32,7 @@ from builders.models import (
     FactionAssignment,
     FactionRelationship,
     RoomAction,
-    MobReaction,
-    MobReactionCondition,
+    Trigger,
     Path,
     Procession,
     Rule)
@@ -936,8 +935,18 @@ class AnimateMobSerializer(serializers.ModelSerializer):
         #return gold if gold else adv_config.ILF(level)
 
     def get_reactions(self, mob):
+        if not mob.template_id:
+            return []
+        mob_template_ct = ContentType.objects.get_for_model(MobTemplate)
         return AnimateMobReactionSerializer(
-            mob.template.reactions.all(), many=True).data
+            Trigger.objects.filter(
+                world_id=mob.template.world_id,
+                kind=adv_consts.TRIGGER_KIND_EVENT,
+                target_type=mob_template_ct,
+                target_id=mob.template_id,
+                is_active=True,
+            ).order_by('order', 'created_ts', 'id'),
+            many=True).data
 
     def get_roams(self, mob):
         return mob.roams.key if mob.roams else None
@@ -1390,25 +1399,15 @@ class AnimateAliasSerializer(serializers.ModelSerializer):
 
 class AnimateMobReactionSerializer(serializers.ModelSerializer):
     reaction_id = serializers.CharField(source='id', read_only=True)
+    reaction = serializers.CharField(source='script')
     #conditions = serializers.SerializerMethodField()
 
     class Meta:
-        model = MobReaction
+        model = Trigger
         fields = [
             'event', 'option', 'reaction', 'reaction_id',
             'conditions',
         ]
-
-    # def get_conditions(self, reaction):
-    #     return AnimateMobReactionConditionSerializer(
-    #         reaction.conditions.all(), many=True).data
-
-
-class AnimateMobReactionConditionSerializer(serializers.ModelSerializer):
-
-    class Meta:
-        model = MobReactionCondition
-        fields = ['condition', 'argument']
 
 
 class AnimatePathSerializer(serializers.ModelSerializer):
