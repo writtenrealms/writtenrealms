@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: $0 <dump.psql.gz>" >&2
+    exit 1
+fi
+
+DUMP_FILE="$1"
+
+if [[ ! -f "$DUMP_FILE" ]]; then
+    echo "Error: file not found: $DUMP_FILE" >&2
+    exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+cd "$REPO_ROOT"
+
+echo "==> Starting db and backend services..."
+docker compose up -d db backend
+
+echo "==> Recreating local database..."
+docker compose exec -T db sh -lc 'dropdb -U "$POSTGRES_USER" --if-exists "$POSTGRES_DB" && createdb -U "$POSTGRES_USER" "$POSTGRES_DB"'
+
+echo "==> Importing dump from $DUMP_FILE..."
+gunzip -c "$DUMP_FILE" | docker compose exec -T db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+
+echo "==> Running migrations..."
+docker compose exec backend python manage.py migrate
+
+echo "==> Verifying connection..."
+docker compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT NOW();"'
+
+echo "==> Done."
