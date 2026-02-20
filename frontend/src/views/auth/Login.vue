@@ -23,14 +23,16 @@
       <button class="btn-medium">SEND LOGIN LINK</button>
     </template>
 
-    <!-- 'or' separator -->
-    <div class="or-separator">
-      <span class="separator-line"></span>
-      <span class="separator-text">OR</span>
-      <span class="separator-line"></span>
-    </div>
+    <template v-if="googleAuthEnabled">
+      <!-- 'or' separator -->
+      <div class="or-separator">
+        <span class="separator-line"></span>
+        <span class="separator-text">OR</span>
+        <span class="separator-line"></span>
+      </div>
 
-    <GoogleLogin :callback="googleLoginCallback" />
+      <GoogleLogin :callback="googleLoginCallback" />
+    </template>
   </form>
 </template>
 
@@ -39,9 +41,11 @@ import { ref, onMounted } from "vue";
 import { useStore } from "vuex";
 import { useRouter, useRoute } from "vue-router";
 import { GoogleLogin } from 'vue3-google-login';
+import { GOOGLE_AUTH_ENABLED } from "@/config";
 
 const email = ref("");
 const sent = ref(false);
+const googleAuthEnabled = GOOGLE_AUTH_ENABLED;
 
 const store = useStore();
 const router = useRouter();

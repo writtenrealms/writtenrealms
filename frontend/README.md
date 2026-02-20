@@ -15,12 +15,20 @@ npm run dev
 
 ### Development against a local backend
 
-
-If you are running a local copy of the Written Realms backend, update the API and WebSocket endpoints if necessary in `.env.dev` then run:
+If you are running a local copy of the Written Realms backend, use `dev-local` mode:
 ```
 npm install
-num run dev-local
+npm run dev-local
 ```
+
+`dev-local` uses `.env.localBackend` (committed defaults) and `.env.localBackend.local` (local overrides, gitignored).
+
+Example local override:
+```
+VITE_GOOGLE_CLIENT_ID=your_google_oauth_client_id_here
+```
+
+If `VITE_GOOGLE_CLIENT_ID` is not set, Google login is hidden and email signup/login still works.
 
 ## Docker setup
 
