@@ -25,7 +25,6 @@ from builders.models import (
     MobTemplate,
     MobTemplateInventory,
     MerchantInventory,
-    MobReaction,
     TransformationTemplate,
     Faction,
     FactionAssignment,
@@ -49,6 +48,7 @@ from builders.models import (
 from core.db import qs_by_pks
 from core.serializers import KeyNameSerializer, ReferenceField, AuthorField
 from spawns import serializers as spawn_serializers
+from spawns import trigger_matcher
 from spawns.models import Player, DoorState, PlayerConfig
 from system.models import Nexus
 from system.policies import get_platform_policy
@@ -1737,48 +1737,74 @@ class MobFactionAssignmentSerializer(serializers.ModelSerializer):
 
 
 def validate_reaction(self, validated_data):
-    event = validated_data['event']
-    if (event not in (adv_consts.MOB_REACTION_EVENT_ENTERING,
-                      adv_consts.MOB_REACTION_EVENT_CONNECT,
-                      adv_consts.MOB_REACTION_EVENT_LOAD,
-                      adv_consts.MOB_REACTION_EVENT_DEATH,
-                      adv_consts.MOB_REACTION_EVENT_COMBAT_ENTER,
-                      adv_consts.MOB_REACTION_EVENT_COMBAT_EXIT,
-                      adv_consts.MOB_REACTION_EVENT_NEW_ROOM)
-        and not validated_data.get('option', '')):
+    event = validated_data.get('event')
+    if event is None and getattr(self, 'instance', None) is not None:
+        event = self.instance.event
+    if event is None:
+        raise serializers.ValidationError("Event is required.")
 
-        msg = "Option is required: "
+    match = validated_data.get('match')
+    if match is None and getattr(self, 'instance', None) is not None:
+        match = self.instance.match
+    match = match or ''
+
+    events_requiring_match = (
+        adv_consts.MOB_REACTION_EVENT_SAYING,
+        adv_consts.MOB_REACTION_EVENT_RECEIVE,
+        adv_consts.MOB_REACTION_EVENT_PERIODIC,
+    )
+    if event in events_requiring_match and not match:
+
+        msg = "Match is required: "
 
         if event == adv_consts.MOB_REACTION_EVENT_SAYING:
-            msg += "enter the keywords to react to"
+            msg += "enter the words to react to"
 
         elif event == adv_consts.MOB_REACTION_EVENT_RECEIVE:
-            msg += "enter the template ID to look for"
+            msg += "enter the value to match for receive"
 
         elif event == adv_consts.MOB_REACTION_EVENT_PERIODIC:
-            msg += "enter how often to react"
+            msg += "enter the value to match for periodic"
 
         raise serializers.ValidationError(msg)
+
+    if match:
+        try:
+            trigger_matcher.validate_match_expression(match)
+        except trigger_matcher.MatchExpressionError as err:
+            raise serializers.ValidationError(
+                f"Invalid match matcher expression: {err}"
+            )
     return validated_data
 
 class MobReactionSerializer(serializers.ModelSerializer):
 
-    template = KeyNameSerializer(read_only=True)
-    option = serializers.CharField(required=False, allow_blank=True)
+    template = serializers.SerializerMethodField()
+    match = serializers.CharField(required=False, allow_blank=True)
+    reaction = serializers.CharField(source='script')
 
     class Meta:
-        model = MobReaction
+        model = Trigger
         fields = [
             'key', 'id',
-            'template', 'event', 'option', 'reaction', 'conditions'
+            'template', 'event', 'match', 'reaction', 'conditions'
         ]
+
+    def get_template(self, trigger):
+        if not trigger.target_type_id:
+            return None
+        if trigger.target_type.model_class() != MobTemplate:
+            return None
+        if not trigger.target:
+            return None
+        return KeyNameSerializer(trigger.target).data
 
     validate = validate_reaction
 
 
 class AddMobReactionSerializer(serializers.Serializer):
 
-    option = serializers.CharField(required=False, allow_blank=True)
+    match = serializers.CharField(required=False, allow_blank=True)
     event = serializers.ChoiceField(choices=adv_consts.MOB_REACTION_EVENTS)
     conditions = serializers.CharField(required=False, allow_blank=True)
     reaction = serializers.CharField()
@@ -1788,9 +1814,18 @@ class AddMobReactionSerializer(serializers.Serializer):
         self.template = template
 
     def create(self, validated_data):
-        return MobReaction.objects.create(
-            template=self.template,
-            **validated_data)
+        return Trigger.objects.create(
+            world=self.template.world,
+            scope=adv_consts.TRIGGER_SCOPE_WORLD,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(MobTemplate),
+            target_id=self.template.id,
+            event=validated_data['event'],
+            match=validated_data.get('match', ''),
+            script=validated_data['reaction'],
+            conditions=validated_data.get('conditions', ''),
+            display_action_in_room=False,
+        )
 
     validate = validate_reaction
 

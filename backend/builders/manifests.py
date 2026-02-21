@@ -8,8 +8,9 @@ from django.contrib.contenttypes.models import ContentType
 from rest_framework import serializers
 
 from builders import serializers as builder_serializers
-from builders.models import Trigger
+from builders.models import MobTemplate, Trigger
 from config import constants as adv_consts
+from spawns import trigger_matcher
 from worlds.models import Room, World, Zone
 
 
@@ -32,6 +33,11 @@ _SCOPE_TO_TARGET_TYPE = {
     adv_consts.TRIGGER_SCOPE_ROOM: "room",
     adv_consts.TRIGGER_SCOPE_ZONE: "zone",
     adv_consts.TRIGGER_SCOPE_WORLD: "world",
+}
+
+_EVENT_TARGET_TYPES = {
+    "mobtemplate": ("builders", "mobtemplate"),
+    "mob_template": ("builders", "mobtemplate"),
 }
 
 
@@ -58,9 +64,10 @@ class ParsedTriggerManifest:
     kind: str
     target_type: ContentType
     target_id: int
-    actions: str
+    match: str
     script: str
     conditions: str
+    event: str
     show_details_on_failure: bool
     failure_message: str
     display_action_in_room: bool
@@ -242,9 +249,10 @@ def trigger_to_manifest(trigger: Trigger) -> dict[str, Any]:
                 "type": target_type,
                 "key": target_key,
             },
-            "actions": trigger.actions or "",
+            "match": trigger.match or "",
             "script": trigger.script or "",
             "conditions": trigger.conditions or "",
+            "event": trigger.event or "",
             "show_details_on_failure": bool(trigger.show_details_on_failure),
             "failure_message": trigger.failure_message or "",
             "display_action_in_room": bool(trigger.display_action_in_room),
@@ -278,6 +286,8 @@ def serialize_trigger_manifest(trigger: Trigger) -> dict[str, Any]:
         "name": trigger.name or "",
         "scope": trigger.scope,
         "kind": _canonical_trigger_kind(trigger.kind),
+        "event": trigger.event or "",
+        "match": trigger.match or "",
         "target": {
             "type": target_data.get("type", ""),
             "key": target_data.get("key", ""),
@@ -305,7 +315,7 @@ def room_trigger_template_manifest(*, world: World, room: Room) -> dict[str, Any
                 "key": _entity_key("room", room.id),
                 "name": room.name or "",
             },
-            "actions": "pull lever",
+            "match": "pull lever",
             "script": (
                 "/cmd room -- /echo *CLICK*.\n"
                 "/cmd room -- /echo Something happens.\n"
@@ -323,6 +333,44 @@ def room_trigger_template_manifest(*, world: World, room: Room) -> dict[str, Any
 
 def serialize_room_trigger_template(*, world: World, room: Room) -> dict[str, Any]:
     manifest = room_trigger_template_manifest(world=world, room=room)
+    return {
+        "manifest": manifest,
+        "yaml": manifest_to_yaml(manifest),
+    }
+
+
+def mob_trigger_template_manifest(*, world: World, mob_template: MobTemplate) -> dict[str, Any]:
+    template_name = mob_template.name or f"Mob {mob_template.id}"
+    return {
+        "kind": TRIGGER_MANIFEST_KIND,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, world.id),
+            "name": f"{template_name} Reaction",
+        },
+        "spec": {
+            "scope": adv_consts.TRIGGER_SCOPE_WORLD,
+            "kind": adv_consts.TRIGGER_KIND_EVENT,
+            "target": {
+                "type": "mobtemplate",
+                "key": _entity_key("mobtemplate", mob_template.id),
+                "name": template_name,
+            },
+            "event": adv_consts.MOB_REACTION_EVENT_SAYING,
+            "match": "hello and (traveler or friend)",
+            "script": "say Welcome, traveler.",
+            "conditions": "",
+            "show_details_on_failure": False,
+            "failure_message": "",
+            "display_action_in_room": False,
+            "gate_delay": 10,
+            "order": 0,
+            "is_active": True,
+        },
+    }
+
+
+def serialize_mob_trigger_template(*, world: World, mob_template: MobTemplate) -> dict[str, Any]:
+    manifest = mob_trigger_template_manifest(world=world, mob_template=mob_template)
     return {
         "manifest": manifest,
         "yaml": manifest_to_yaml(manifest),
@@ -414,6 +462,70 @@ def _resolve_target(
     return ContentType.objects.get_for_model(model_cls), target_obj.id
 
 
+def _resolve_event_target(
+    *,
+    world: World,
+    target_data: Any,
+    trigger: Trigger | None,
+) -> tuple[ContentType, int]:
+    if target_data is None:
+        if not trigger or not trigger.target_type_id or not trigger.target_id:
+            raise serializers.ValidationError("spec.target is required.")
+
+        model_name = trigger.target_type.model
+        if model_name not in _EVENT_TARGET_TYPES:
+            raise serializers.ValidationError(
+                "Event triggers must target one of: "
+                + ", ".join(sorted(_EVENT_TARGET_TYPES.keys()))
+                + "."
+            )
+
+        model_cls = trigger.target_type.model_class()
+        if not model_cls:
+            raise serializers.ValidationError("Existing trigger target type is invalid.")
+
+        exists = model_cls.objects.filter(world=world, pk=trigger.target_id).exists()
+        if not exists:
+            raise serializers.ValidationError("Existing trigger target does not exist in this world.")
+        return trigger.target_type, trigger.target_id
+
+    if not isinstance(target_data, dict):
+        raise serializers.ValidationError("spec.target must be a mapping.")
+
+    target_type = str(target_data.get("type") or "").strip().lower()
+    if target_type not in _EVENT_TARGET_TYPES:
+        raise serializers.ValidationError(
+            "spec.target.type must be one of: "
+            + ", ".join(sorted(_EVENT_TARGET_TYPES.keys()))
+            + "."
+        )
+
+    target_ref = target_data.get("key", target_data.get("id"))
+    if target_ref is None:
+        raise serializers.ValidationError("spec.target.key is required.")
+
+    target_id = _parse_entity_ref(
+        target_ref,
+        expected_type=target_type,
+        field_name="spec.target.key",
+    )
+
+    app_label, model_name = _EVENT_TARGET_TYPES[target_type]
+    try:
+        target_ct = ContentType.objects.get(app_label=app_label, model=model_name)
+    except ContentType.DoesNotExist:
+        raise serializers.ValidationError("spec.target.type is not available.")
+
+    model_cls = target_ct.model_class()
+    if not model_cls:
+        raise serializers.ValidationError("spec.target.type could not be resolved.")
+
+    target_obj = model_cls.objects.filter(world=world, pk=target_id).first()
+    if not target_obj:
+        raise serializers.ValidationError("Trigger target does not exist in this world.")
+    return target_ct, target_obj.id
+
+
 def _resolve_trigger_reference(*, world: World, metadata: dict[str, Any]) -> tuple[Trigger | None, int | None]:
     trigger_key = metadata.get("key")
     trigger_id_raw = metadata.get("id")
@@ -492,21 +604,72 @@ def parse_trigger_manifest(
         field_name="spec.kind",
     )
     kind = _canonical_trigger_kind(kind)
-    target_type, target_id = _resolve_target(
-        world=world,
-        scope=scope,
-        target_data=spec.get("target"),
-        trigger=trigger,
-    )
+    if kind == adv_consts.TRIGGER_KIND_EVENT and scope != adv_consts.TRIGGER_SCOPE_WORLD:
+        raise serializers.ValidationError("Event triggers must use scope 'world'.")
+
+    if kind == adv_consts.TRIGGER_KIND_EVENT:
+        target_type, target_id = _resolve_event_target(
+            world=world,
+            target_data=spec.get("target"),
+            trigger=trigger,
+        )
+    else:
+        target_type, target_id = _resolve_target(
+            world=world,
+            scope=scope,
+            target_data=spec.get("target"),
+            trigger=trigger,
+        )
 
     name = _coerce_text(metadata.get("name", trigger.name if trigger else ""))
 
-    if is_create and scope != adv_consts.TRIGGER_SCOPE_WORLD and spec.get("target") is None:
+    if (
+        is_create
+        and spec.get("target") is None
+        and (kind == adv_consts.TRIGGER_KIND_EVENT or scope != adv_consts.TRIGGER_SCOPE_WORLD)
+    ):
         raise serializers.ValidationError("spec.target is required when creating a trigger.")
 
     conditions = _coerce_text(spec.get("conditions", trigger.conditions if trigger else ""))
     if "conditions" in spec:
         builder_serializers.validate_conditions(None, conditions)
+
+    match = _coerce_text(spec.get("match", trigger.match if trigger else ""))
+    if match:
+        try:
+            trigger_matcher.validate_match_expression(match)
+        except trigger_matcher.MatchExpressionError as err:
+            raise serializers.ValidationError(f"Invalid spec.match matcher expression: {err}")
+
+    event = _coerce_text(spec.get("event", trigger.event if trigger else "")).strip().lower()
+    if kind == adv_consts.TRIGGER_KIND_EVENT:
+        if not event:
+            raise serializers.ValidationError("spec.event is required for kind 'event'.")
+        event = _coerce_choice(
+            event,
+            choices=adv_consts.MOB_REACTION_EVENTS,
+            field_name="spec.event",
+        )
+    elif event:
+        event = _coerce_choice(
+            event,
+            choices=adv_consts.MOB_REACTION_EVENTS,
+            field_name="spec.event",
+        )
+
+    if kind == adv_consts.TRIGGER_KIND_COMMAND and not match.strip():
+        raise serializers.ValidationError("spec.match is required for kind 'command'.")
+
+    if (
+        kind == adv_consts.TRIGGER_KIND_EVENT
+        and event in (
+            adv_consts.MOB_REACTION_EVENT_SAYING,
+            adv_consts.MOB_REACTION_EVENT_RECEIVE,
+            adv_consts.MOB_REACTION_EVENT_PERIODIC,
+        )
+        and not match.strip()
+    ):
+        raise serializers.ValidationError(f"spec.match is required for event '{event}'.")
 
     return ParsedTriggerManifest(
         world=world,
@@ -517,9 +680,10 @@ def parse_trigger_manifest(
         kind=kind,
         target_type=target_type,
         target_id=target_id,
-        actions=_coerce_text(spec.get("actions", trigger.actions if trigger else "")),
+        match=match,
         script=_coerce_text(spec.get("script", trigger.script if trigger else "")),
         conditions=conditions,
+        event=event,
         show_details_on_failure=_coerce_bool(
             spec.get(
                 "show_details_on_failure",
@@ -608,9 +772,10 @@ def apply_trigger_manifest(parsed: ParsedTriggerManifest) -> Trigger:
             kind=parsed.kind,
             target_type=parsed.target_type,
             target_id=parsed.target_id,
-            actions=parsed.actions,
+            match=parsed.match,
             script=parsed.script,
             conditions=parsed.conditions,
+            event=parsed.event,
             show_details_on_failure=parsed.show_details_on_failure,
             failure_message=parsed.failure_message,
             display_action_in_room=parsed.display_action_in_room,
@@ -624,9 +789,10 @@ def apply_trigger_manifest(parsed: ParsedTriggerManifest) -> Trigger:
     trigger.kind = parsed.kind
     trigger.target_type = parsed.target_type
     trigger.target_id = parsed.target_id
-    trigger.actions = parsed.actions
+    trigger.match = parsed.match
     trigger.script = parsed.script
     trigger.conditions = parsed.conditions
+    trigger.event = parsed.event
     trigger.show_details_on_failure = parsed.show_details_on_failure
     trigger.failure_message = parsed.failure_message
     trigger.display_action_in_room = parsed.display_action_in_room

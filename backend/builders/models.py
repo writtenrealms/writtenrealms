@@ -630,9 +630,13 @@ class Trigger(AdventBaseModel):
     )
 
     name = models.TextField(**optional)
-    actions = models.TextField(**optional)
+    match = models.TextField(**optional)
     script = models.TextField(**optional)
     conditions = models.TextField(**optional)
+    event = models.TextField(
+        choices=list_to_choice(api_consts.MOB_REACTION_EVENTS),
+        **optional,
+    )
 
     show_details_on_failure = models.BooleanField(default=False)
     failure_message = models.TextField(**optional)

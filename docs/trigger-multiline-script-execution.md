@@ -4,7 +4,7 @@ This note explains what happens at runtime when a command trigger with a multi-l
 
 ## Triggering
 
-When a player/mob types a command that matches `trigger.actions` and passes conditions:
+When a player/mob types a command that matches `trigger.match` and passes conditions:
 
 1. Trigger gate is checked (`gate_delay`).
 2. Gate is consumed.

@@ -119,7 +119,7 @@
     <div class="divider"></div>
 
     <div class="related-panels">
-      <MobTemplateReactions class="reactions" />
+      <MobTriggers class="triggers" />
       <MobTemplateInventory class="inventory" />
       <MobTemplateMerchant class="merchant" />
       <MobTemplateLoads class="loads" />
@@ -139,7 +139,7 @@ import { useStore } from "vuex";
 import { useRoute } from "vue-router";
 import { BUILDER_FORMS, GET_MOB_TEMPLATE_INFO } from "@/core/forms";
 import { capfirst } from "@/core/utils";
-import MobTemplateReactions from "@/components/builder/world/MobTemplateReactions.vue";
+import MobTriggers from "@/components/builder/world/MobTriggers.vue";
 import MobTemplateStats from "@/components/builder/world/MobTemplateStats.vue";
 import MobTemplateInventory from "@/components/builder/world/MobTemplateInventory.vue";
 import MobTemplateFactions from "@/components/builder/world/MobTemplateFactions.vue";

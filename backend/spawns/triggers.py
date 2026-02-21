@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from django.contrib.contenttypes.models import ContentType
@@ -18,12 +17,17 @@ from spawns.handlers.registry import (
     resolve_text_handler,
 )
 from spawns.models import Item, Mob, Player
+from spawns.trigger_matcher import (
+    evaluate_match_expression,
+    exact_term_match,
+    first_match_term,
+    phrase_term_match,
+)
 from worlds.models import Room, World, Zone
 
 
 TRIGGER_GATED_TEXT = "More time is needed."
 DEFAULT_CONDITION_FAILURE_TEXT = "Action could not be completed."
-TRIGGER_ACTION_SPLIT_RE = re.compile(r"\s+or\s+")
 TRIGGER_SCOPE_PRIORITY = {
     adv_consts.TRIGGER_SCOPE_ROOM: 0,
     adv_consts.TRIGGER_SCOPE_ZONE: 1,
@@ -42,24 +46,18 @@ def _normalized_text(value: str | None) -> str:
     return str(value or "").strip().lower()
 
 
-def _iter_action_tokens(actions_text: str | None) -> list[str]:
-    actions = _normalized_text(actions_text)
-    if not actions:
-        return []
-    return [token.strip() for token in TRIGGER_ACTION_SPLIT_RE.split(actions) if token.strip()]
+def _first_match_label(match_text: str | None) -> str | None:
+    return first_match_term(match_text)
 
 
-def _first_action_label(actions_text: str | None) -> str | None:
-    tokens = _iter_action_tokens(actions_text)
-    if tokens:
-        return tokens[0]
-    return None
-
-
-def _actions_match(actions_text: str | None, command_text: str) -> bool:
+def _command_match_expression_matches(match_text: str | None, command_text: str) -> bool:
     if not command_text:
         return False
-    return command_text in _iter_action_tokens(actions_text)
+    return evaluate_match_expression(
+        match_text,
+        term_matcher=lambda term: phrase_term_match(command_text, term),
+        empty_expression=False,
+    )
 
 
 def _split_trigger_script_line(line: str | None) -> list[str]:
@@ -245,6 +243,169 @@ def _targeted_command_fallback_triggers(
     return _ordered_triggers(triggers)
 
 
+def _coerce_room(room: Room | int | None) -> Room | None:
+    if isinstance(room, Room):
+        return room
+    if isinstance(room, int):
+        return Room.objects.select_related("zone", "world").filter(pk=room).first()
+    return None
+
+
+def _event_match_expression_matches(
+    *,
+    trigger: Trigger,
+    event: str,
+    match_text: str | None,
+) -> bool:
+    trigger_match = _normalized_text(trigger.match)
+    normalized_event = _normalized_text(event)
+    if not trigger_match:
+        return True
+
+    if normalized_event == adv_consts.MOB_REACTION_EVENT_SAYING:
+        return evaluate_match_expression(
+            trigger_match,
+            term_matcher=lambda term: phrase_term_match(match_text, term),
+            empty_expression=True,
+        )
+
+    if normalized_event in (
+        adv_consts.MOB_REACTION_EVENT_RECEIVE,
+        adv_consts.MOB_REACTION_EVENT_PERIODIC,
+    ):
+        return evaluate_match_expression(
+            trigger_match,
+            term_matcher=lambda term: exact_term_match(match_text, term),
+            empty_expression=True,
+        )
+
+    return True
+
+
+def _resolve_room_world(room: Room | None) -> World | None:
+    if not room:
+        return None
+
+    room_world = getattr(room, "world", None)
+    if not room_world:
+        return None
+
+    context_world = getattr(room_world, "context", None)
+    if context_world:
+        return getattr(context_world, "instance_of", None) or context_world
+
+    return getattr(room_world, "instance_of", None) or room_world
+
+
+def execute_mob_event_triggers(
+    *,
+    event: str,
+    actor: Player | Mob | None = None,
+    room: Room | int | None = None,
+    match_text: str | None = None,
+    connection_id: str | None = None,
+) -> None:
+    normalized_event = _normalized_text(event)
+    if normalized_event not in adv_consts.MOB_REACTION_EVENTS:
+        return
+
+    resolved_room = _coerce_room(room) or getattr(actor, "room", None)
+    if not resolved_room:
+        return
+
+    trigger_world = _resolve_trigger_world(actor, resolved_room) if actor else _resolve_room_world(resolved_room)
+    if not trigger_world:
+        return
+
+    mobs = list(
+        Mob.objects.filter(room_id=resolved_room.id)
+        .select_related("template")
+        .order_by("id")
+    )
+    if not mobs:
+        return
+
+    cts = _scope_content_types()
+    mob_ct = cts[Mob]
+    mob_template_ct = cts[MobTemplate]
+
+    target_filter = Q()
+    for mob in mobs:
+        target_filter |= Q(target_type=mob_ct, target_id=mob.id)
+        if mob.template_id:
+            target_filter |= Q(target_type=mob_template_ct, target_id=mob.template_id)
+
+    triggers = list(
+        Trigger.objects.filter(
+            world_id=trigger_world.id,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            event=normalized_event,
+            is_active=True,
+        )
+        .filter(target_filter)
+        .order_by("order", "created_ts", "id")
+    )
+    if not triggers:
+        return
+
+    trigger_by_target: dict[tuple[int, int], list[Trigger]] = {}
+    for trigger in _ordered_triggers(triggers):
+        if not trigger.target_type_id or not trigger.target_id:
+            continue
+        target_key = (trigger.target_type_id, trigger.target_id)
+        trigger_by_target.setdefault(target_key, []).append(trigger)
+
+    for mob in mobs:
+        mob_trigger_list: list[Trigger] = []
+        mob_trigger_list.extend(trigger_by_target.get((mob_ct.id, mob.id), []))
+        if mob.template_id:
+            mob_trigger_list.extend(
+                trigger_by_target.get((mob_template_ct.id, mob.template_id), [])
+            )
+        if not mob_trigger_list:
+            continue
+
+        evaluator = actor or mob
+        for trigger in mob_trigger_list:
+            if not _event_match_expression_matches(
+                trigger=trigger,
+                event=normalized_event,
+                match_text=match_text,
+            ):
+                continue
+
+            if trigger.conditions:
+                evaluated = evaluate_conditions(evaluator, trigger.conditions)
+                if not evaluated.get("result"):
+                    continue
+
+            scope_key = f"mob:{mob.id}"
+            if not _is_gate_allowed(trigger, scope_key):
+                continue
+            _consume_gate(trigger, scope_key)
+
+            script_lines = _split_trigger_script_lines(trigger.script)
+            if not script_lines:
+                continue
+
+            first_line_segments = script_lines[0]
+            _dispatch_trigger_script_segments(
+                actor=mob,
+                segments=first_line_segments,
+                issuer_scope=trigger.scope,
+                connection_id=connection_id,
+            )
+
+            for line_index, line_segments in enumerate(script_lines[1:], start=1):
+                _schedule_trigger_script_line_segments(
+                    actor=mob,
+                    line_segments=line_segments,
+                    line_index=line_index,
+                    issuer_scope=trigger.scope,
+                    connection_id=connection_id,
+                )
+
+
 def _trigger_scope_key(
     trigger: Trigger,
     *,
@@ -422,7 +583,7 @@ def _collect_display_action_labels(
         if not trigger.display_action_in_room:
             continue
 
-        action_label = _first_action_label(trigger.actions)
+        action_label = _first_match_label(trigger.match)
         if not action_label or action_label in seen_labels:
             continue
 
@@ -539,7 +700,7 @@ def execute_command_fallback_trigger(
     script_errors: list[str] = []
 
     for trigger in triggers:
-        if not _actions_match(trigger.actions, command_text):
+        if not _command_match_expression_matches(trigger.match, command_text):
             continue
         matched_any = True
 
