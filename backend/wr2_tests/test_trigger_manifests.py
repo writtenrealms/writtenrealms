@@ -27,7 +27,7 @@ class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
             target_type=room_ct,
             target_id=self.room.id,
             name="Old Trigger Name",
-            actions="touch stone",
+            match="touch stone",
             script="/cmd room -- /echo -- Old message.",
             conditions="",
             show_details_on_failure=False,
@@ -76,7 +76,7 @@ class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
             template_manifest["spec"]["target"]["key"],
             f"room.{self.room.id}",
         )
-        self.assertIn("actions", template_manifest["spec"])
+        self.assertIn("match", template_manifest["spec"])
         self.assertIn("script", template_manifest["spec"])
 
         parsed_template_yaml = yaml.safe_load(template["yaml"])
@@ -98,7 +98,7 @@ spec:
   target:
     type: room
     key: {self.room.key}
-  actions: pull lever or pull chain
+  match: pull lever or pull chain
   script: /cmd room -- /echo -- The lever clicks.
   conditions: level 1
   show_details_on_failure: true
@@ -119,7 +119,7 @@ spec:
 
         self.trigger.refresh_from_db()
         self.assertEqual(self.trigger.name, "Pull Lever Trigger")
-        self.assertEqual(self.trigger.actions, "pull lever or pull chain")
+        self.assertEqual(self.trigger.match, "pull lever or pull chain")
         self.assertEqual(self.trigger.script, "/cmd room -- /echo -- The lever clicks.")
         self.assertEqual(self.trigger.conditions, "level 1")
         self.assertTrue(self.trigger.show_details_on_failure)
@@ -142,7 +142,7 @@ spec:
   target:
     type: room
     key: {self.room.key}
-  actions: touch statue
+  match: touch statue
   script: /cmd room -- /echo -- The statue vibrates.
   conditions: level 1
   show_details_on_failure: false
@@ -166,7 +166,7 @@ spec:
         self.assertEqual(created_trigger.kind, adv_consts.TRIGGER_KIND_COMMAND)
         self.assertEqual(created_trigger.target_type, ContentType.objects.get_for_model(Room))
         self.assertEqual(created_trigger.target_id, self.room.id)
-        self.assertEqual(created_trigger.actions, "touch statue")
+        self.assertEqual(created_trigger.match, "touch statue")
         self.assertEqual(
             created_trigger.script,
             "/cmd room -- /echo -- The statue vibrates.",
@@ -243,7 +243,7 @@ metadata:
   world: {self.world.id}
   id: {self.trigger.id}
 spec:
-  actions: inspect mural
+  match: inspect mural
 """
         resp = self.client.post(
             self.apply_ep,
@@ -254,7 +254,7 @@ spec:
         self.assertEqual(resp.data["operation"], "updated")
 
         self.trigger.refresh_from_db()
-        self.assertEqual(self.trigger.actions, "inspect mural")
+        self.assertEqual(self.trigger.match, "inspect mural")
         self.assertEqual(self.trigger.name, trigger_name)
         self.assertEqual(self.trigger.scope, trigger_scope)
         self.assertEqual(self.trigger.kind, trigger_kind)
@@ -297,7 +297,7 @@ spec:
     type: mobtemplate
     key: mobtemplate.{mob_template.id}
   event: say
-  option: hello and (traveler or friend)
+  match: hello and (traveler or friend)
   script: say Welcome, seeker.
   display_action_in_room: false
   gate_delay: 10
@@ -318,7 +318,7 @@ spec:
         self.assertEqual(created_trigger.target_type, ContentType.objects.get_for_model(MobTemplate))
         self.assertEqual(created_trigger.target_id, mob_template.id)
         self.assertEqual(created_trigger.event, adv_consts.MOB_REACTION_EVENT_SAYING)
-        self.assertEqual(created_trigger.option, "hello and (traveler or friend)")
+        self.assertEqual(created_trigger.match, "hello and (traveler or friend)")
 
     def test_apply_trigger_manifest_rejects_invalid_matcher_expression(self):
         manifest = f"""
@@ -327,7 +327,7 @@ metadata:
   world: world.{self.world.id}
   key: {self.trigger.key}
 spec:
-  actions: touch altar and (pray or
+  match: touch altar and (pray or
 """
         resp = self.client.post(
             self.apply_ep,

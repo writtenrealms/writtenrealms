@@ -1405,7 +1405,7 @@ class AnimateMobReactionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Trigger
         fields = [
-            'event', 'option', 'reaction', 'reaction_id',
+            'event', 'match', 'reaction', 'reaction_id',
             'conditions',
         ]
 

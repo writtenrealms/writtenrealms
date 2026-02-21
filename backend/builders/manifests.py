@@ -64,11 +64,10 @@ class ParsedTriggerManifest:
     kind: str
     target_type: ContentType
     target_id: int
-    actions: str
+    match: str
     script: str
     conditions: str
     event: str
-    option: str
     show_details_on_failure: bool
     failure_message: str
     display_action_in_room: bool
@@ -250,11 +249,10 @@ def trigger_to_manifest(trigger: Trigger) -> dict[str, Any]:
                 "type": target_type,
                 "key": target_key,
             },
-            "actions": trigger.actions or "",
+            "match": trigger.match or "",
             "script": trigger.script or "",
             "conditions": trigger.conditions or "",
             "event": trigger.event or "",
-            "option": trigger.option or "",
             "show_details_on_failure": bool(trigger.show_details_on_failure),
             "failure_message": trigger.failure_message or "",
             "display_action_in_room": bool(trigger.display_action_in_room),
@@ -289,7 +287,7 @@ def serialize_trigger_manifest(trigger: Trigger) -> dict[str, Any]:
         "scope": trigger.scope,
         "kind": _canonical_trigger_kind(trigger.kind),
         "event": trigger.event or "",
-        "option": trigger.option or "",
+        "match": trigger.match or "",
         "target": {
             "type": target_data.get("type", ""),
             "key": target_data.get("key", ""),
@@ -317,7 +315,7 @@ def room_trigger_template_manifest(*, world: World, room: Room) -> dict[str, Any
                 "key": _entity_key("room", room.id),
                 "name": room.name or "",
             },
-            "actions": "pull lever",
+            "match": "pull lever",
             "script": (
                 "/cmd room -- /echo *CLICK*.\n"
                 "/cmd room -- /echo Something happens.\n"
@@ -358,8 +356,7 @@ def mob_trigger_template_manifest(*, world: World, mob_template: MobTemplate) ->
                 "name": template_name,
             },
             "event": adv_consts.MOB_REACTION_EVENT_SAYING,
-            "option": "hello and (traveler or friend)",
-            "actions": "",
+            "match": "hello and (traveler or friend)",
             "script": "say Welcome, traveler.",
             "conditions": "",
             "show_details_on_failure": False,
@@ -637,12 +634,12 @@ def parse_trigger_manifest(
     if "conditions" in spec:
         builder_serializers.validate_conditions(None, conditions)
 
-    actions = _coerce_text(spec.get("actions", trigger.actions if trigger else ""))
-    if kind == adv_consts.TRIGGER_KIND_COMMAND and actions:
+    match = _coerce_text(spec.get("match", trigger.match if trigger else ""))
+    if match:
         try:
-            trigger_matcher.validate_match_expression(actions)
+            trigger_matcher.validate_match_expression(match)
         except trigger_matcher.MatchExpressionError as err:
-            raise serializers.ValidationError(f"Invalid spec.actions matcher expression: {err}")
+            raise serializers.ValidationError(f"Invalid spec.match matcher expression: {err}")
 
     event = _coerce_text(spec.get("event", trigger.event if trigger else "")).strip().lower()
     if kind == adv_consts.TRIGGER_KIND_EVENT:
@@ -660,12 +657,19 @@ def parse_trigger_manifest(
             field_name="spec.event",
         )
 
-    option = _coerce_text(spec.get("option", trigger.option if trigger else ""))
-    if option:
-        try:
-            trigger_matcher.validate_match_expression(option)
-        except trigger_matcher.MatchExpressionError as err:
-            raise serializers.ValidationError(f"Invalid spec.option matcher expression: {err}")
+    if kind == adv_consts.TRIGGER_KIND_COMMAND and not match.strip():
+        raise serializers.ValidationError("spec.match is required for kind 'command'.")
+
+    if (
+        kind == adv_consts.TRIGGER_KIND_EVENT
+        and event in (
+            adv_consts.MOB_REACTION_EVENT_SAYING,
+            adv_consts.MOB_REACTION_EVENT_RECEIVE,
+            adv_consts.MOB_REACTION_EVENT_PERIODIC,
+        )
+        and not match.strip()
+    ):
+        raise serializers.ValidationError(f"spec.match is required for event '{event}'.")
 
     return ParsedTriggerManifest(
         world=world,
@@ -676,11 +680,10 @@ def parse_trigger_manifest(
         kind=kind,
         target_type=target_type,
         target_id=target_id,
-        actions=actions,
+        match=match,
         script=_coerce_text(spec.get("script", trigger.script if trigger else "")),
         conditions=conditions,
         event=event,
-        option=option,
         show_details_on_failure=_coerce_bool(
             spec.get(
                 "show_details_on_failure",
@@ -769,11 +772,10 @@ def apply_trigger_manifest(parsed: ParsedTriggerManifest) -> Trigger:
             kind=parsed.kind,
             target_type=parsed.target_type,
             target_id=parsed.target_id,
-            actions=parsed.actions,
+            match=parsed.match,
             script=parsed.script,
             conditions=parsed.conditions,
             event=parsed.event,
-            option=parsed.option,
             show_details_on_failure=parsed.show_details_on_failure,
             failure_message=parsed.failure_message,
             display_action_in_room=parsed.display_action_in_room,
@@ -787,11 +789,10 @@ def apply_trigger_manifest(parsed: ParsedTriggerManifest) -> Trigger:
     trigger.kind = parsed.kind
     trigger.target_type = parsed.target_type
     trigger.target_id = parsed.target_id
-    trigger.actions = parsed.actions
+    trigger.match = parsed.match
     trigger.script = parsed.script
     trigger.conditions = parsed.conditions
     trigger.event = parsed.event
-    trigger.option = parsed.option
     trigger.show_details_on_failure = parsed.show_details_on_failure
     trigger.failure_message = parsed.failure_message
     trigger.display_action_in_room = parsed.display_action_in_room

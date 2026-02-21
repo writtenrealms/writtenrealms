@@ -48,7 +48,7 @@ spec:
   target:
     type: room
     key: room.10
-  actions: pull lever or pull chain
+  match: pull lever or pull chain
   script: /cmd room -- /echo -- The lever clicks.
   conditions: level 1
   show_details_on_failure: true
@@ -73,7 +73,7 @@ spec:
     type: mobtemplate
     key: mobtemplate.22
   event: say
-  option: hello and (traveler or friend)
+  match: hello and (traveler or friend)
   script: say Welcome to the archive.
   conditions: ""
   display_action_in_room: false
@@ -97,7 +97,7 @@ spec:
   target:
     type: room
     key: room.10
-  actions: pull lever or pull chain
+  match: pull lever or pull chain
   script: /cmd room -- /echo -- The lever clicks.
 ```
 
@@ -194,7 +194,7 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 - `metadata.world` (if present) must match the selected world.
   - `metadata.world` accepts either integer id (`1`) or key form (`world.1`).
 - `spec.scope`, `spec.kind`, booleans, and integers are validated.
-- `spec.actions` / `spec.option` matcher syntax is validated using the Trigger Matching DSL.
+- `spec.match` matcher syntax is validated using the Trigger Matching DSL.
 - For create:
   - `spec.scope` is required.
   - `spec.target` is required for room/zone scope.
@@ -225,7 +225,7 @@ Permission checks are applied when editing via manifest:
 1. Open room **Triggers** view.
 2. Copy YAML from an existing trigger if you want a template.
 3. In **Edit World**, paste YAML and remove `metadata.id`/`metadata.key`.
-4. Update `metadata.name`, `spec.target`, `spec.actions`, `spec.script`, etc.
+4. Update `metadata.name`, `spec.target`, `spec.match`, `spec.script`, etc.
 5. Submit manifest.
 6. Verify response indicates `operation: created`.
 7. Refresh room Triggers view and confirm new trigger appears.
@@ -247,7 +247,7 @@ metadata:
   world: 1
   id: 42
 spec:
-  actions: new action
+  match: new action
 ```
 
 ## How To Delete A Trigger

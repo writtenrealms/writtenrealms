@@ -27,7 +27,7 @@ class TestCommandFallbackTriggers(WorldTestCase):
             "kind": adv_consts.TRIGGER_KIND_COMMAND,
             "target_type": room_ct,
             "target_id": self.room.id,
-            "actions": "touch altar",
+            "match": "touch altar",
             "script": "/echo -- The altar hums.",
             "display_action_in_room": True,
         }
@@ -48,7 +48,7 @@ class TestCommandFallbackTriggers(WorldTestCase):
         )
 
     def test_room_look_includes_matching_trigger_action(self):
-        self._create_room_trigger(actions="touch altar or touch stone")
+        self._create_room_trigger(match="touch altar or touch stone")
 
         with capture_game_messages() as messages:
             dispatch_command(
@@ -76,7 +76,7 @@ class TestCommandFallbackTriggers(WorldTestCase):
 
     def test_command_trigger_actions_support_dsl_with_parentheses(self):
         self._create_room_trigger(
-            actions="touch altar and (pray or kneel)",
+            match="touch altar and (pray or kneel)",
             script="/cmd room -- /echo -- The altar awakens.",
         )
 
@@ -172,7 +172,7 @@ class TestCommandFallbackTriggers(WorldTestCase):
             scope=adv_consts.TRIGGER_SCOPE_ROOM,
             target_type=ContentType.objects.get_for_model(Item),
             target_id=item.id,
-            actions="inspect relic",
+            match="inspect relic",
             script="/echo -- The relic glows faintly.",
             display_action_in_room=True,
         )
@@ -205,7 +205,7 @@ class TestCommandFallbackTriggers(WorldTestCase):
             scope=adv_consts.TRIGGER_SCOPE_ROOM,
             target_type=ContentType.objects.get_for_model(Item),
             target_id=item.id,
-            actions="focus orb",
+            match="focus orb",
             script="/echo -- The orb hums in your hand.",
             display_action_in_room=True,
         )
@@ -232,7 +232,7 @@ class TestCommandFallbackTriggers(WorldTestCase):
             scope=adv_consts.TRIGGER_SCOPE_ROOM,
             target_type=ContentType.objects.get_for_model(mob.__class__),
             target_id=mob.id,
-            actions="greet guide",
+            match="greet guide",
             script="/echo -- Welcome, traveler.",
             display_action_in_room=True,
         )
@@ -270,7 +270,7 @@ class TestCommandFallbackTriggers(WorldTestCase):
             target_type=ContentType.objects.get_for_model(MobTemplate),
             target_id=mob_template.id,
             event=adv_consts.MOB_REACTION_EVENT_SAYING,
-            option="hello and (traveler or friend)",
+            match="hello and (traveler or friend)",
             script="say Greetings, traveler.",
             display_action_in_room=False,
         )
@@ -353,7 +353,7 @@ class TestCommandFallbackTriggers(WorldTestCase):
             target_type=ContentType.objects.get_for_model(MobTemplate),
             target_id=mob_template.id,
             event=adv_consts.MOB_REACTION_EVENT_SAYING,
-            option="archive or ledger",
+            match="archive or ledger",
             script="say Records are eternal.",
             display_action_in_room=False,
         )

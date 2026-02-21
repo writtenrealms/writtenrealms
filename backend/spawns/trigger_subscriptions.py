@@ -47,7 +47,7 @@ def _on_cmd_say_success(
         event=adv_consts.MOB_REACTION_EVENT_SAYING,
         actor=player,
         room=player.room_id,
-        option_text=str(message_text or ""),
+        match_text=str(message_text or ""),
         connection_id=connection_id,
     )
 

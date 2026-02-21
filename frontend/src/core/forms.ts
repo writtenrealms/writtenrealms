@@ -774,18 +774,15 @@ export const BUILDER_FORMS = {
              The commands should be exactly as a mob would execute them, so they should almost always start with either 'say' or 'emote'.`,
     },
     {
-      attr: "option",
-      label: "Option",
-      help: `Configuration options for certain reaction event types.
+      attr: "match",
+      label: "Match",
+      help: `Matcher expression for event payload matching.
               <br/><br/>
-              * Something is said: the spoken words that will trigger the reaction.<br/>
-              * Time has elapsed: how much time between reactions.<br/>
-              * Item is received: ID of the template of the received item.<br/>
-              * Health drops below: the percentage of health below which the reaction will trigger.
-              * Social is Received: the social that will trigger the reaction.
-              ** Mob is notified: the message that will trigger the reaction.
+              * Something is said: words to look for in speech.<br/>
+              * Time has elapsed: value to match for periodic events.<br/>
+              * Item is received: value to match for receive events.<br/>
               <br/>
-              Does nothing for other event types.
+              Uses trigger matcher syntax with and/or/not and parentheses.
               `,
     },
     CONDITIONS,

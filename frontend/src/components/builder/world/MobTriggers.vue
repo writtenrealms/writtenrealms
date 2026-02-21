@@ -1,15 +1,15 @@
 <template>
   <div class="mob-triggers">
     <h3>MOB TRIGGERS</h3>
-    <div class="color-text-60 mb-4">
-      Mob reactions are authored as event triggers. Copy YAML, tweak it, then ingest it in Edit World.
+    <div class="color-text-60 mb-6">
+      Triggers are authored event handlers scoped to this mob template. Edit them via YAML in World Edit.
     </div>
 
     <div v-if="newTriggerTemplate" class="trigger-card template-card">
       <div class="trigger-header">
         <div>
-          <div class="trigger-name">New Mob Trigger Template</div>
-          <div class="trigger-meta color-text-60">Copy this YAML, adjust event/option/script, then ingest it in Edit World.</div>
+          <div class="trigger-name">New Mob Trigger</div>
+          <div class="trigger-meta color-text-60">Copy this YAML, tweak it, then ingest it in Edit World.</div>
         </div>
         <div class="template-actions">
           <button class="btn-small template-copy-action" @click="copyTemplateYaml">COPY YAML</button>
@@ -24,14 +24,14 @@
 
     <div v-if="isLoading" class="color-text-60">Loading triggers...</div>
     <div v-else-if="triggers.length === 0" class="color-text-60">
-      No mob triggers found for this template.
+      No triggers found for this mob template.
     </div>
 
     <div v-for="trigger in triggers" :key="trigger.id" class="trigger-card">
       <div class="trigger-header">
         <div>
           <div class="trigger-name">{{ trigger.name || trigger.key }}</div>
-          <div class="trigger-meta color-text-60">{{ trigger.kind }} / {{ trigger.event || "event" }}</div>
+          <div class="trigger-meta color-text-60">{{ trigger.scope }} / {{ trigger.kind }} / {{ trigger.event || "event" }}</div>
         </div>
         <div class="trigger-actions">
           <button class="btn-thin" @click="copyYaml(trigger)">COPY YAML</button>

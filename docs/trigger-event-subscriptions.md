@@ -38,7 +38,7 @@ This avoids recursion when mobs execute scripts that emit the same event types.
 
 1. Ensure the action emits a canonical `GameEvent` in `publish_events()` flow.
 2. Add an entry in `backend/spawns/trigger_subscriptions.py` for that event type.
-3. Map event payload into trigger context (`actor`, `room`, optional option text/value).
+3. Map event payload into trigger context (`actor`, `room`, optional match text/value).
 4. Add WR2 tests proving subscription dispatch and trigger behavior.
 
 ## Failure Behavior

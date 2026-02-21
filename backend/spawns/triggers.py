@@ -46,15 +46,15 @@ def _normalized_text(value: str | None) -> str:
     return str(value or "").strip().lower()
 
 
-def _first_action_label(actions_text: str | None) -> str | None:
-    return first_match_term(actions_text)
+def _first_match_label(match_text: str | None) -> str | None:
+    return first_match_term(match_text)
 
 
-def _actions_match(actions_text: str | None, command_text: str) -> bool:
+def _command_match_expression_matches(match_text: str | None, command_text: str) -> bool:
     if not command_text:
         return False
     return evaluate_match_expression(
-        actions_text,
+        match_text,
         term_matcher=lambda term: phrase_term_match(command_text, term),
         empty_expression=False,
     )
@@ -251,21 +251,21 @@ def _coerce_room(room: Room | int | None) -> Room | None:
     return None
 
 
-def _event_option_matches(
+def _event_match_expression_matches(
     *,
     trigger: Trigger,
     event: str,
-    option_text: str | None,
+    match_text: str | None,
 ) -> bool:
-    trigger_option = _normalized_text(trigger.option)
+    trigger_match = _normalized_text(trigger.match)
     normalized_event = _normalized_text(event)
-    if not trigger_option:
+    if not trigger_match:
         return True
 
     if normalized_event == adv_consts.MOB_REACTION_EVENT_SAYING:
         return evaluate_match_expression(
-            trigger_option,
-            term_matcher=lambda term: phrase_term_match(option_text, term),
+            trigger_match,
+            term_matcher=lambda term: phrase_term_match(match_text, term),
             empty_expression=True,
         )
 
@@ -274,8 +274,8 @@ def _event_option_matches(
         adv_consts.MOB_REACTION_EVENT_PERIODIC,
     ):
         return evaluate_match_expression(
-            trigger_option,
-            term_matcher=lambda term: exact_term_match(option_text, term),
+            trigger_match,
+            term_matcher=lambda term: exact_term_match(match_text, term),
             empty_expression=True,
         )
 
@@ -302,7 +302,7 @@ def execute_mob_event_triggers(
     event: str,
     actor: Player | Mob | None = None,
     room: Room | int | None = None,
-    option_text: str | None = None,
+    match_text: str | None = None,
     connection_id: str | None = None,
 ) -> None:
     normalized_event = _normalized_text(event)
@@ -367,10 +367,10 @@ def execute_mob_event_triggers(
 
         evaluator = actor or mob
         for trigger in mob_trigger_list:
-            if not _event_option_matches(
+            if not _event_match_expression_matches(
                 trigger=trigger,
                 event=normalized_event,
-                option_text=option_text,
+                match_text=match_text,
             ):
                 continue
 
@@ -583,7 +583,7 @@ def _collect_display_action_labels(
         if not trigger.display_action_in_room:
             continue
 
-        action_label = _first_action_label(trigger.actions)
+        action_label = _first_match_label(trigger.match)
         if not action_label or action_label in seen_labels:
             continue
 
@@ -700,7 +700,7 @@ def execute_command_fallback_trigger(
     script_errors: list[str] = []
 
     for trigger in triggers:
-        if not _actions_match(trigger.actions, command_text):
+        if not _command_match_expression_matches(trigger.match, command_text):
             continue
         matched_any = True
 

@@ -1743,53 +1743,51 @@ def validate_reaction(self, validated_data):
     if event is None:
         raise serializers.ValidationError("Event is required.")
 
-    option = validated_data.get('option')
-    if option is None and getattr(self, 'instance', None) is not None:
-        option = self.instance.option
-    option = option or ''
+    match = validated_data.get('match')
+    if match is None and getattr(self, 'instance', None) is not None:
+        match = self.instance.match
+    match = match or ''
 
-    if (event not in (adv_consts.MOB_REACTION_EVENT_ENTERING,
-                      adv_consts.MOB_REACTION_EVENT_CONNECT,
-                      adv_consts.MOB_REACTION_EVENT_LOAD,
-                      adv_consts.MOB_REACTION_EVENT_DEATH,
-                      adv_consts.MOB_REACTION_EVENT_COMBAT_ENTER,
-                      adv_consts.MOB_REACTION_EVENT_COMBAT_EXIT,
-                      adv_consts.MOB_REACTION_EVENT_NEW_ROOM)
-        and not option):
+    events_requiring_match = (
+        adv_consts.MOB_REACTION_EVENT_SAYING,
+        adv_consts.MOB_REACTION_EVENT_RECEIVE,
+        adv_consts.MOB_REACTION_EVENT_PERIODIC,
+    )
+    if event in events_requiring_match and not match:
 
-        msg = "Option is required: "
+        msg = "Match is required: "
 
         if event == adv_consts.MOB_REACTION_EVENT_SAYING:
-            msg += "enter the keywords to react to"
+            msg += "enter the words to react to"
 
         elif event == adv_consts.MOB_REACTION_EVENT_RECEIVE:
-            msg += "enter the template ID to look for"
+            msg += "enter the value to match for receive"
 
         elif event == adv_consts.MOB_REACTION_EVENT_PERIODIC:
-            msg += "enter how often to react"
+            msg += "enter the value to match for periodic"
 
         raise serializers.ValidationError(msg)
 
-    if option:
+    if match:
         try:
-            trigger_matcher.validate_match_expression(option)
+            trigger_matcher.validate_match_expression(match)
         except trigger_matcher.MatchExpressionError as err:
             raise serializers.ValidationError(
-                f"Invalid option matcher expression: {err}"
+                f"Invalid match matcher expression: {err}"
             )
     return validated_data
 
 class MobReactionSerializer(serializers.ModelSerializer):
 
     template = serializers.SerializerMethodField()
-    option = serializers.CharField(required=False, allow_blank=True)
+    match = serializers.CharField(required=False, allow_blank=True)
     reaction = serializers.CharField(source='script')
 
     class Meta:
         model = Trigger
         fields = [
             'key', 'id',
-            'template', 'event', 'option', 'reaction', 'conditions'
+            'template', 'event', 'match', 'reaction', 'conditions'
         ]
 
     def get_template(self, trigger):
@@ -1806,7 +1804,7 @@ class MobReactionSerializer(serializers.ModelSerializer):
 
 class AddMobReactionSerializer(serializers.Serializer):
 
-    option = serializers.CharField(required=False, allow_blank=True)
+    match = serializers.CharField(required=False, allow_blank=True)
     event = serializers.ChoiceField(choices=adv_consts.MOB_REACTION_EVENTS)
     conditions = serializers.CharField(required=False, allow_blank=True)
     reaction = serializers.CharField()
@@ -1823,7 +1821,7 @@ class AddMobReactionSerializer(serializers.Serializer):
             target_type=ContentType.objects.get_for_model(MobTemplate),
             target_id=self.template.id,
             event=validated_data['event'],
-            option=validated_data.get('option', ''),
+            match=validated_data.get('match', ''),
             script=validated_data['reaction'],
             conditions=validated_data.get('conditions', ''),
             display_action_in_room=False,
