@@ -42,6 +42,7 @@
 - `tox` runs WR2 Django tests (`tox.ini`).
 - When running tests for this project, always use Docker and the testing settings, e.g. `docker compose exec backend python manage.py test <test> --settings=config.settings.testing`.
 - When touching frontend UI, add or update unit tests if they exist and include a screenshot in the PR.
+- WR2 transition override: place all new automated tests under `backend/wr2_tests/` (including builder-facing WR2 Trigger coverage).
 - Test placement convention:
   - Builder/editor endpoint and permission tests live with app tests (for example `backend/builders/tests.py`).
   - WR2 runtime/engine behavior tests live in `backend/wr2_tests/`.

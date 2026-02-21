@@ -36,6 +36,7 @@ from builders.models import (
     Reward,
     RoomCheck,
     RoomAction,
+    Trigger,
     RandomItemProfile,
     MerchantInventory,
     WorldBuilder,
@@ -2457,50 +2458,6 @@ class TestAddRoomLoad(BuilderTestCase):
         rule = loader.rules.get()
         self.assertEqual(rule.template, mob_template)
         self.assertEqual(rule.target, self.room)
-
-
-class MobReactionTests(BuilderTestCase):
-
-    def setUp(self):
-        super().setUp()
-        self.mob_template = MobTemplate.objects.create(world=self.world)
-        self.ep = reverse('builder-mob-template-reactions',
-                          args=[self.world.pk, self.mob_template.key])
-
-    def test_add_mob_reaction(self):
-        resp = self.client.post(self.ep, {
-            'event': 'enter',
-            'reaction': 'say hi!',
-        }, format='json')
-        self.assertEqual(resp.status_code, 201)
-        self.assertEqual(self.mob_template.reactions.count(), 1)
-
-        # Test that passing blank option works too
-        resp = self.client.post(self.ep, {
-            'event': 'enter',
-            'reaction': 'say hi!',
-            'option': '',
-        }, format='json')
-        self.assertEqual(resp.status_code, 201)
-        self.assertEqual(self.mob_template.reactions.count(), 2)
-
-    def test_add_mob_reaction_with_condition(self):
-        "Regression test for adding a mob reaction that has a condition."
-        resp = self.client.post(self.ep, {
-            'event': 'enter',
-            'reaction': 'say hi!',
-            'conditions': 'is_mob',
-        }, format='json')
-        self.assertEqual(resp.status_code, 201)
-        self.assertEqual(self.mob_template.reactions.first().conditions,
-                         'is_mob')
-
-    def test_option_is_required_for_say(self):
-        resp = self.client.post(self.ep, {
-            'event': 'say',
-            'reaction': 'say hi!',
-        }, format='json')
-        self.assertEqual(resp.status_code, 400)
 
 
 class PathTests(BuilderTestCase):
