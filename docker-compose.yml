@@ -26,6 +26,10 @@ services:
       - CHANNEL_REDIS_HOST=${CHANNEL_REDIS_HOST:-redis}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-amqp://rabbitmq:5672}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis-celery:6379/0}
+      - WR_AI_EVENT_FORWARD_URL=${WR_AI_EVENT_FORWARD_URL:-}
+      - WR_AI_EVENT_FORWARD_TOKEN=${WR_AI_EVENT_FORWARD_TOKEN:-}
+      - WR_AI_EVENT_TYPES=${WR_AI_EVENT_TYPES:-cmd.say.success,cmd.move.success}
+      - WR_CORE_AI_INGRESS_TOKEN=${WR_CORE_AI_INGRESS_TOKEN:-}
     depends_on:
       db:
         condition: service_healthy
@@ -60,6 +64,10 @@ services:
       - CHANNEL_REDIS_HOST=${CHANNEL_REDIS_HOST:-redis}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-amqp://rabbitmq:5672}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis-celery:6379/0}
+      - WR_AI_EVENT_FORWARD_URL=${WR_AI_EVENT_FORWARD_URL:-}
+      - WR_AI_EVENT_FORWARD_TOKEN=${WR_AI_EVENT_FORWARD_TOKEN:-}
+      - WR_AI_EVENT_TYPES=${WR_AI_EVENT_TYPES:-cmd.say.success,cmd.move.success}
+      - WR_CORE_AI_INGRESS_TOKEN=${WR_CORE_AI_INGRESS_TOKEN:-}
     depends_on:
       db:
         condition: service_healthy
@@ -94,6 +102,10 @@ services:
       - CHANNEL_REDIS_HOST=${CHANNEL_REDIS_HOST:-redis}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-amqp://rabbitmq:5672}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis-celery:6379/0}
+      - WR_AI_EVENT_FORWARD_URL=${WR_AI_EVENT_FORWARD_URL:-}
+      - WR_AI_EVENT_FORWARD_TOKEN=${WR_AI_EVENT_FORWARD_TOKEN:-}
+      - WR_AI_EVENT_TYPES=${WR_AI_EVENT_TYPES:-cmd.say.success,cmd.move.success}
+      - WR_CORE_AI_INGRESS_TOKEN=${WR_CORE_AI_INGRESS_TOKEN:-}
     depends_on:
       db:
         condition: service_healthy

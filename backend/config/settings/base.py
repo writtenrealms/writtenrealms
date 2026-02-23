@@ -222,3 +222,12 @@ GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
 
 # Whether to integrate with an LLM for puzzle solving.
 PUZZLE_LLM = False
+
+# Optional WR AI sidecar integration.
+WR_AI_EVENT_FORWARD_URL = os.environ.get('WR_AI_EVENT_FORWARD_URL', '')
+WR_AI_EVENT_FORWARD_TOKEN = os.environ.get('WR_AI_EVENT_FORWARD_TOKEN', '')
+WR_AI_EVENT_TYPES = os.environ.get(
+    'WR_AI_EVENT_TYPES',
+    'cmd.say.success,cmd.move.success',
+)
+WR_CORE_AI_INGRESS_TOKEN = os.environ.get('WR_CORE_AI_INGRESS_TOKEN', '')

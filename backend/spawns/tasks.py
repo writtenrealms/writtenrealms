@@ -1,8 +1,14 @@
 import os
+import json
+import uuid
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from celery import shared_task
 
 from backend.config.exceptions import ServiceError
+from django.conf import settings
+from django.utils import timezone
 from spawns.services import WorldGate
 from spawns.models import Player
 from spawns.serializers import PlayerConfigSerializer
@@ -134,6 +140,97 @@ def _parse_player_id(player_key: str | None) -> int | None:
         return int(player_key.split(".", 1)[1])
     except (IndexError, ValueError):
         return None
+
+
+def _resolve_world_key_for_player(player: Player) -> str:
+    player_world = getattr(player, "world", None)
+    if not player_world:
+        return ""
+
+    context_world = getattr(player_world, "context", None)
+    if context_world:
+        root_world = getattr(context_world, "instance_of", None) or context_world
+        return root_world.key
+
+    root_world = getattr(player_world, "instance_of", None) or player_world
+    return root_world.key
+
+
+def _build_ai_forward_payload(
+    *,
+    event_type: str,
+    event_data: dict,
+    actor_key: str,
+    player: Player,
+) -> dict:
+    return {
+        "event_id": f"evt-{uuid.uuid4()}",
+        "event_type": event_type,
+        "world_key": _resolve_world_key_for_player(player),
+        "room_key": player.room.key if player.room_id else "",
+        "timestamp": timezone.now().isoformat(),
+        "actor": {
+            "key": actor_key,
+            "name": player.name,
+            "kind": "player",
+        },
+        "payload": event_data,
+    }
+
+
+@shared_task
+def forward_event_to_ai_sidecar(
+    *,
+    event_type: str,
+    event_data: dict | None = None,
+    actor_key: str | None = None,
+) -> None:
+    """
+    Forward selected game events to the WR AI sidecar.
+
+    This task is intentionally fire-and-forget and should not raise errors
+    that could impact gameplay flows.
+    """
+    forward_url = str(getattr(settings, "WR_AI_EVENT_FORWARD_URL", "") or "").strip()
+    if not forward_url:
+        return
+
+    player_id = _parse_player_id(actor_key)
+    if not player_id:
+        return
+
+    player = (
+        Player.objects.select_related("room", "world__context__instance_of")
+        .filter(pk=player_id)
+        .first()
+    )
+    if not player:
+        return
+
+    payload = _build_ai_forward_payload(
+        event_type=str(event_type or "").strip().lower(),
+        event_data=event_data if isinstance(event_data, dict) else {},
+        actor_key=str(actor_key or ""),
+        player=player,
+    )
+    body = json.dumps(payload).encode("utf-8")
+
+    request = urllib_request.Request(
+        forward_url,
+        data=body,
+        method="POST",
+    )
+    request.add_header("Content-Type", "application/json")
+
+    forward_token = str(getattr(settings, "WR_AI_EVENT_FORWARD_TOKEN", "") or "").strip()
+    if forward_token:
+        request.add_header("Authorization", f"Bearer {forward_token}")
+
+    try:
+        with urllib_request.urlopen(request, timeout=2.0):
+            return
+    except (urllib_error.URLError, ValueError):
+        return
 
 
 def _publish_game_error(player_key: str | None, command_type: str, text: str, connection_id: str | None = None):

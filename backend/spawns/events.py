@@ -58,3 +58,12 @@ def publish_events(
             actor_key=actor_key,
             connection_id=connection_id,
         )
+
+        # Optionally forward selected events to an external AI sidecar.
+        from spawns.ai_sidecar import maybe_enqueue_ai_sidecar_event_forwarding
+
+        maybe_enqueue_ai_sidecar_event_forwarding(
+            event_type=event.type,
+            event_data=event.data,
+            actor_key=actor_key,
+        )
