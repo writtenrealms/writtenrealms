@@ -1769,3 +1769,57 @@ class ExitInstanceSerializer(serializers.Serializer):
 
     def validate_player(self, player):
         return Player.objects.get(pk=player)
+
+
+class AIIntentIngressSerializer(serializers.Serializer):
+    intent_id = serializers.CharField()
+    world_key = serializers.CharField()
+    room_key = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    mob_key = serializers.CharField()
+    intent_type = serializers.ChoiceField(choices=["say", "emote"])
+    text = serializers.CharField()
+    source_event_id = serializers.CharField()
+    metadata = serializers.DictField(required=False)
+
+    def _resolve_mob(self, mob_key: str) -> Mob:
+        tokens = str(mob_key or "").strip().split(".", 1)
+        if len(tokens) != 2 or tokens[0] != "mob" or not tokens[1].isdigit():
+            raise serializers.ValidationError("mob_key must be in format 'mob.<id>'.")
+
+        mob = Mob.objects.select_related("world__context__instance_of").filter(
+            pk=int(tokens[1])
+        ).first()
+        if not mob:
+            raise serializers.ValidationError("Mob does not exist.")
+        return mob
+
+    def validate_world_key(self, world_key: str) -> str:
+        tokens = str(world_key or "").strip().split(".", 1)
+        if len(tokens) != 2 or tokens[0] != "world" or not tokens[1].isdigit():
+            raise serializers.ValidationError("world_key must be in format 'world.<id>'.")
+        return world_key
+
+    def validate(self, validated_data):
+        mob = self._resolve_mob(validated_data["mob_key"])
+
+        world_keys = {mob.world.key}
+        context_world = getattr(mob.world, "context", None)
+        if context_world:
+            world_keys.add(context_world.key)
+            root_world = getattr(context_world, "instance_of", None)
+            if root_world:
+                world_keys.add(root_world.key)
+        root_world = getattr(mob.world, "instance_of", None)
+        if root_world:
+            world_keys.add(root_world.key)
+
+        world_key = validated_data["world_key"]
+        if world_key not in world_keys:
+            raise serializers.ValidationError("world_key does not match mob world.")
+
+        validated_data["mob"] = mob
+        validated_data["text"] = str(validated_data.get("text") or "").strip()
+        if not validated_data["text"]:
+            raise serializers.ValidationError("text is required.")
+
+        return validated_data

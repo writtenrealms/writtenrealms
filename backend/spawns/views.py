@@ -27,6 +27,7 @@ from core.db import qs_by_pks
 from core.ip import get_ip
 from core.view_mixins import RequestDataMixin
 from spawns import serializers as spawn_serializers, tasks as spawn_tasks
+from spawns.handlers import dispatch_command
 from spawns.loading import run_loaders
 from spawns.models import (
     Player, PlayerEvent, PlayerEnquire, PlayerQuest, PlayerConfig)
@@ -134,6 +135,75 @@ class GameView(APIView):
     "Game views for endpoints that return in-game information"
 
     permission_classes = (IsAuthenticated, IsPlayerInGame)
+
+
+def _extract_bearer_token(request) -> str | None:
+    raw_auth = str(request.META.get("HTTP_AUTHORIZATION", "") or "").strip()
+    if not raw_auth.startswith("Bearer "):
+        return None
+    token = raw_auth[len("Bearer "):].strip()
+    return token or None
+
+
+class AIIntentIngress(APIView):
+    """
+    Private ingress endpoint for WR AI sidecar intents.
+    """
+
+    authentication_classes = ()
+    permission_classes = ()
+
+    def post(self, request, format=None):
+        expected_token = str(getattr(settings, "WR_CORE_AI_INGRESS_TOKEN", "") or "").strip()
+        if not expected_token:
+            return Response(
+                {"detail": "AI ingress token is not configured."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        provided_token = _extract_bearer_token(request)
+        if not provided_token:
+            return Response(
+                {"detail": "Missing bearer token."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        if provided_token != expected_token:
+            return Response(
+                {"detail": "Invalid bearer token."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = spawn_serializers.AIIntentIngressSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated_data = serializer.validated_data
+
+        mob = validated_data["mob"]
+        intent_type = validated_data["intent_type"]
+        intent_text = validated_data["text"]
+        if intent_type == "say":
+            command_text = f"say {intent_text}"
+        else:
+            command_text = f"emote {intent_text}"
+
+        dispatch_command(
+            command_type="text",
+            actor_type="mob",
+            actor_id=mob.id,
+            payload={
+                "text": command_text,
+                "__ai_intent_source": True,
+            },
+        )
+
+        return Response(
+            {
+                "status": "accepted",
+                "intent_id": validated_data["intent_id"],
+                "mob_key": mob.key,
+                "command": command_text,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
 
 class Lookup(GameView):
