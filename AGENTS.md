@@ -57,3 +57,37 @@
 
 - Copy `.env.example` to `.env` and set secure secrets before running locally.
 - Use `docs/environment-setup.md` for full setup and troubleshooting details.
+
+## Cursor Cloud specific instructions
+
+### Docker-based development
+
+This project runs entirely via Docker Compose. The VM environment snapshot already has Docker installed with `fuse-overlayfs` storage driver and `iptables-legacy` configured for the nested container environment. The update script handles `docker compose build`.
+
+### Starting services
+
+Start all services: `sudo docker compose up -d`. This brings up 9 containers: `backend` (Django on :8000), `fastapi` (:8001), `frontend` (Vue/Vite on :5173), `db` (PostgreSQL :5432), `redis` (:6379), `redis-celery` (:6380), `rabbitmq` (:5672), `celery-worker`, and `celery-beat`. The backend entrypoint automatically runs `migrate` and `createcachetable` on startup.
+
+For fast iteration with bind-mounted source code (no rebuild needed after edits): `COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml sudo docker compose up -d`.
+
+### Running tests
+
+- WR2 tests (primary): `sudo docker compose exec backend python manage.py test wr2_tests --settings=config.settings.testing`
+- Full Django tests: `sudo docker compose exec backend python manage.py test --settings=config.settings.testing` (some legacy tests have pre-existing failures related to the WR1→WR2 transition)
+- Frontend type check: `sudo docker compose exec frontend npx vue-tsc --noEmit`
+- Frontend build: `sudo docker compose exec frontend npm run build`
+
+### Authentication gotcha
+
+The app uses passwordless email-based authentication. In dev, emails are not actually sent. To authenticate via the API, generate a JWT token through the Django shell:
+```
+sudo docker compose exec backend python manage.py shell -c "
+from users.models import User; from rest_framework_simplejwt.tokens import RefreshToken
+user = User.objects.get(email='YOUR_EMAIL')
+print(str(RefreshToken.for_user(user).access_token))
+"
+```
+
+### Environment file
+
+The `.env` file is not committed. If missing, copy `.env.example` to `.env` and set `POSTGRES_PASSWORD`, `DJANGO_SECRET_KEY`, and `JWT_SECRET` to any dev-safe values (min 50 chars for keys). Other variables are optional.
