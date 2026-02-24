@@ -85,7 +85,7 @@ class ResolveMoveAction:
         if door_states.get(direction) in ("closed", "locked"):
             raise ActionError("The way is blocked.", code="closed_door")
 
-        movement_cost = _movement_cost(current_room)
+        movement_cost = _movement_cost(dest_room)
         if player.stamina < movement_cost:
             raise ActionError("You are too exhausted to move.", code="exhausted")
 

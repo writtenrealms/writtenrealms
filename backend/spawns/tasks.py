@@ -1,16 +1,22 @@
 import os
 import json
+import math
 import uuid
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
 from celery import shared_task
 
+from config import constants as api_consts
+from config import game_settings as adv_config
 from backend.config.exceptions import ServiceError
+from core.computations import compute_stats
+from django.core.cache import cache
 from django.conf import settings
+from django.db.models import F, Q
 from django.utils import timezone
 from spawns.services import WorldGate
-from spawns.models import Player
+from spawns.models import Mob, Player
 from spawns.serializers import PlayerConfigSerializer
 from spawns.handlers import (
     ActorNotFoundError,
@@ -23,6 +29,227 @@ from worlds.serializers import WorldSerializer
 
 from fastapi_app.game_ws import publish_to_player
 from fastapi_app.forge_ws import complete_job, exit_world as notify_exit_world
+
+WR2_STANDING_REGEN_RATE = 2
+HEARTBEAT_REGEN_LOCK_KEY = "heartbeat_regen_lock"
+
+
+def _heartbeat_interval_seconds() -> float:
+    raw_interval = getattr(adv_config, "GAME_HEARTBEAT_INTERVAL_SECONDS", 2)
+    try:
+        interval = float(raw_interval)
+    except (TypeError, ValueError):
+        return 2.0
+    return max(interval, 1.0)
+
+
+def _heartbeat_lock_timeout_seconds() -> int:
+    return max(int(math.ceil(_heartbeat_interval_seconds() * 4)), 10)
+
+
+def _as_non_negative_int(value, default: int = 0) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(parsed, 0)
+
+
+def _regen_resource(current_value: int, max_value: int, regen_amount: int) -> int:
+    current = _as_non_negative_int(current_value)
+    cap = max(_as_non_negative_int(max_value), current)
+    amount = _as_non_negative_int(regen_amount)
+
+    if amount <= 0 or current >= cap:
+        return current
+    return min(current + amount, cap)
+
+
+def _apply_regen(
+    actor: Player | Mob,
+    *,
+    health_max: int,
+    mana_max: int,
+    stamina_max: int,
+    health_add: int,
+    mana_add: int,
+    stamina_add: int,
+) -> bool:
+    update_fields: list[str] = []
+
+    next_health = _regen_resource(actor.health, health_max, health_add)
+    if next_health != actor.health:
+        actor.health = next_health
+        update_fields.append("health")
+
+    next_mana = _regen_resource(actor.mana, mana_max, mana_add)
+    if next_mana != actor.mana:
+        actor.mana = next_mana
+        update_fields.append("mana")
+
+    next_stamina = _regen_resource(actor.stamina, stamina_max, stamina_add)
+    if next_stamina != actor.stamina:
+        actor.stamina = next_stamina
+        update_fields.append("stamina")
+
+    if not update_fields:
+        return False
+
+    actor.save(update_fields=update_fields)
+    return True
+
+
+def _regen_player(player: Player) -> dict[str, int | str] | None:
+    stats = compute_stats(player.level, player.archetype)
+
+    health_max = max(_as_non_negative_int(stats.get("health_max")), _as_non_negative_int(player.health))
+    mana_max = max(_as_non_negative_int(stats.get("mana_max")), _as_non_negative_int(player.mana))
+    stamina_max = max(_as_non_negative_int(stats.get("stamina_max")), _as_non_negative_int(player.stamina))
+    mana_base = _as_non_negative_int(stats.get("mana_base"), default=mana_max)
+
+    health_regen = _as_non_negative_int(getattr(player, "health_regen", 0)) + _as_non_negative_int(
+        stats.get("health_regen")
+    )
+    mana_regen = _as_non_negative_int(getattr(player, "mana_regen", 0)) + _as_non_negative_int(
+        stats.get("mana_regen")
+    )
+    stamina_regen = _as_non_negative_int(getattr(player, "stamina_regen", 0)) + _as_non_negative_int(
+        stats.get("stamina_regen")
+    )
+
+    health_add = math.ceil(health_max * WR2_STANDING_REGEN_RATE / 100) + health_regen
+    mana_add = math.ceil(mana_base * WR2_STANDING_REGEN_RATE / 100) + mana_regen
+    stamina_add = WR2_STANDING_REGEN_RATE + stamina_regen
+
+    changed = _apply_regen(
+        player,
+        health_max=health_max,
+        mana_max=mana_max,
+        stamina_max=stamina_max,
+        health_add=health_add,
+        mana_add=mana_add,
+        stamina_add=stamina_add,
+    )
+    if not changed:
+        return None
+
+    return {
+        "key": player.key,
+        "health": player.health,
+        "health_max": health_max,
+        "health_regen": health_regen,
+        "mana": player.mana,
+        "mana_max": mana_max,
+        "mana_regen": mana_regen,
+        "stamina": player.stamina,
+        "stamina_max": stamina_max,
+        "stamina_regen": stamina_regen,
+    }
+
+
+def _regen_mob(mob: Mob) -> bool:
+    health_max = _as_non_negative_int(getattr(mob, "health_max", mob.health), default=mob.health)
+    mana_max = _as_non_negative_int(getattr(mob, "mana_max", mob.mana), default=mob.mana)
+    stamina_max = _as_non_negative_int(getattr(mob, "stamina_max", mob.stamina), default=mob.stamina)
+    regen_rate = _as_non_negative_int(getattr(mob, "regen_rate", WR2_STANDING_REGEN_RATE))
+
+    health_add = math.ceil(health_max * regen_rate / 100) + _as_non_negative_int(
+        getattr(mob, "health_regen", 0)
+    )
+    mana_add = math.ceil(mana_max * regen_rate / 100) + _as_non_negative_int(
+        getattr(mob, "mana_regen", 0)
+    )
+    stamina_add = WR2_STANDING_REGEN_RATE + _as_non_negative_int(getattr(mob, "stamina_regen", 0))
+
+    return _apply_regen(
+        mob,
+        health_max=health_max,
+        mana_max=mana_max,
+        stamina_max=stamina_max,
+        health_add=health_add,
+        mana_add=mana_add,
+        stamina_add=stamina_add,
+    )
+
+
+def run_heartbeat_regen() -> dict[str, int]:
+    players_regenerated = 0
+    mobs_regenerated = 0
+
+    active_players = Player.objects.filter(
+        in_game=True,
+        world__lifecycle=api_consts.WORLD_LIFECYCLE_RUNNING,
+    ).only(
+        "id",
+        "world_id",
+        "level",
+        "archetype",
+        "health",
+        "mana",
+        "stamina",
+    )
+    active_world_ids = list(active_players.values_list("world_id", flat=True).distinct())
+
+    for player in active_players.iterator(chunk_size=200):
+        actor_update = _regen_player(player)
+        if actor_update:
+            players_regenerated += 1
+            publish_to_player(
+                player.key,
+                {
+                    "type": "notification.regen",
+                    "data": {
+                        "actor": actor_update,
+                    },
+                },
+            )
+
+    if active_world_ids:
+        mobs_qs = (
+            Mob.objects.filter(
+                is_pending_deletion=False,
+                world_id__in=active_world_ids,
+            )
+            .filter(
+                Q(health__lt=F("health_max"))
+                | Q(mana__lt=F("mana_max"))
+                | Q(stamina__lt=F("stamina_max"))
+            )
+            .only(
+                "id",
+                "health",
+                "mana",
+                "stamina",
+                "health_max",
+                "mana_max",
+                "stamina_max",
+                "health_regen",
+                "mana_regen",
+                "stamina_regen",
+                "regen_rate",
+                "is_pending_deletion",
+            )
+        )
+    else:
+        mobs_qs = Mob.objects.none()
+
+    for mob in mobs_qs.iterator(chunk_size=200):
+        if _regen_mob(mob):
+            mobs_regenerated += 1
+
+    return {"players": players_regenerated, "mobs": mobs_regenerated}
+
+
+@shared_task(ignore_result=True)
+def heartbeat_regen():
+    lock_timeout = _heartbeat_lock_timeout_seconds()
+    if not cache.add(HEARTBEAT_REGEN_LOCK_KEY, 1, timeout=lock_timeout):
+        return {"skipped": True}
+    try:
+        return run_heartbeat_regen()
+    finally:
+        cache.delete(HEARTBEAT_REGEN_LOCK_KEY)
+
 
 @shared_task
 def enter_world(player_id, world_id, client_id=None, ip=None):

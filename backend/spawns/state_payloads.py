@@ -13,6 +13,7 @@ from django.db.models import Prefetch
 from django.utils import timezone
 
 from config import constants as adv_consts
+from core.computations import compute_stats
 from spawns.models import DoorState, Item, Mob, Player
 from spawns.schemas import (
     Actor,
@@ -40,6 +41,21 @@ def safe_capitalize(value: Optional[str]) -> str:
     if not value:
         return ""
     return value[0].upper() + value[1:]
+
+
+def computed_player_vitals(player: Player) -> dict[str, int]:
+    stats = compute_stats(player.level, player.archetype)
+    health_max = int(stats.get("health_max") or 0)
+    mana_max = int(stats.get("mana_max") or 0)
+    stamina_max = int(stats.get("stamina_max") or 0)
+    return {
+        "health_max": max(health_max, int(getattr(player, "health", 0) or 0)),
+        "mana_max": max(mana_max, int(getattr(player, "mana", 0) or 0)),
+        "stamina_max": max(stamina_max, int(getattr(player, "stamina", 0) or 0)),
+        "health_regen": int(stats.get("health_regen") or 0),
+        "mana_regen": int(stats.get("mana_regen") or 0),
+        "stamina_regen": int(stats.get("stamina_regen") or 0),
+    }
 
 
 def get_player_with_related(player_id: int) -> Player:
@@ -455,6 +471,7 @@ def serialize_actor(player: Player, room: Optional[Room]) -> Actor:
             "factions": getattr(player, "factions", {}) or {},
             "room": None,
         }
+    actor_data.update(computed_player_vitals(player))
     actor_data["room"] = {"key": room_payload_key_for(room)} if room else None
     actor_data["equipment"] = serialize_equipment(player.equipment, viewer=player)
     actor_data["inventory"] = serialize_inventory(player.inventory.all(), viewer=player)

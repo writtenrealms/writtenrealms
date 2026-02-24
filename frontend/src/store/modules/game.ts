@@ -137,6 +137,7 @@ const receiveMessage = async ({
     "notification.shorttic",
     "notification.longtic",
     "notification.who",
+    // "notification.regen",
   ];
 
   // Echo received message to console if not short / long tic

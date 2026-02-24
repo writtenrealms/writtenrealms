@@ -1,3 +1,4 @@
+from core.computations import compute_stats
 from spawns.handlers import dispatch_command
 from django.utils import timezone
 from tests.base import WorldTestCase
@@ -87,6 +88,29 @@ class TestStateSyncText(WorldTestCase):
         self.assertIn(self.player.key, who_keys)
         self.assertIn(online_player.key, who_keys)
         self.assertNotIn(offline_player.key, who_keys)
+
+    def test_state_sync_actor_includes_computed_vital_caps(self):
+        stats = compute_stats(self.player.level, self.player.archetype)
+
+        self.player.health = max(stats["health_max"] - 10, 1)
+        self.player.mana = max(stats["mana_max"] - 1, 0)
+        self.player.stamina = max(stats["stamina_max"] - 1, 0)
+        self.player.save(update_fields=["health", "mana", "stamina"])
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="state.sync",
+                player_id=self.player.id,
+                payload={},
+            )
+
+        message = self._message_by_type(messages, "cmd.state.sync.success")
+        self.assertIsNotNone(message)
+        actor = message["data"]["actor"]
+
+        self.assertEqual(actor["health_max"], stats["health_max"])
+        self.assertEqual(actor["mana_max"], stats["mana_max"])
+        self.assertEqual(actor["stamina_max"], stats["stamina_max"])
 
 
 class TestStateSyncMapKeys(WorldTestCase):
