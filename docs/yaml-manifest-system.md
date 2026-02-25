@@ -8,11 +8,23 @@ WR2 world editing is moving toward an authored-manifest workflow inspired by Kub
 - canonical edit format is YAML
 - import/export is straightforward because authored entities can round-trip through manifests
 
-The first implemented entity is `Trigger`.
+Implemented entities currently include:
 
-## Current Trigger Flow
+- `trigger`
+- `worldconfig`
 
-### 1. Room Triggers Screen
+## Current Flows
+
+### 1. World Config Screen
+
+In **World > Config**, configuration is read-oriented:
+
+- all configurable world/world-config values are shown read-only
+- the page can reveal the current **World Config YAML**
+- the page supports **Copy Config YAML**
+- edits happen through **World > Edit World** by applying a `kind: worldconfig` manifest
+
+### 2. Room Triggers Screen
 
 In room navigation, **Triggers** now replaces **Actions**.
 
@@ -22,11 +34,13 @@ In room navigation, **Triggers** now replaces **Actions**.
 - Each trigger includes **Copy YAML** and **Copy Delete YAML** actions.
 - Recommended workflow: copy template YAML, tweak it, ingest in **Edit World**.
 
-### 2. World Edit Screen
+### 3. World Edit Screen
 
 A new world-level **Edit World** view accepts a YAML manifest textarea.
 
-- Submitting a manifest currently supports `kind: trigger`.
+- Submitting a manifest currently supports:
+  - `kind: trigger`
+  - `kind: worldconfig`
   - `kind` is case-insensitive (`trigger`, `Trigger`, `TRIGGER` all work).
 - Trigger manifests now support both:
   - **create** (no `metadata.id` / `metadata.key`)
@@ -140,9 +154,46 @@ metadata:
   id: 42
 ```
 
+## World Config Manifest Shape
+
+World config edits are update-only manifests (no create/delete mode):
+
+```yaml
+kind: worldconfig
+metadata:
+  world: world.1
+spec:
+  name: Edeus
+  short_description: Core setting text
+  description: Long world description
+  motd: Questions? Join Discord.
+  is_public: true
+  starting_gold: 0
+  starting_room: room.1
+  death_room: room.2
+  death_mode: lose_gold
+  death_route: nearest_in_zone
+  pvp_mode: zone
+  can_select_faction: true
+  auto_equip: true
+  is_narrative: false
+  players_can_set_title: true
+  allow_pvp: true
+  is_classless: false
+  non_ascii_names: false
+  globals_enabled: true
+  decay_glory: false
+  built_by: Team WR
+  small_background: https://assets.example/card.png
+  large_background: https://assets.example/banner.png
+  name_exclusions: |
+    admin
+    moderator
+```
+
 ## `apiVersion`
 
-- `apiVersion` is optional for trigger manifests.
+- `apiVersion` is optional for manifests.
 - If provided, accepted values are:
   - `v1alpha1`
   - `writtenrealms.com/v1alpha1` (legacy-compatible)
@@ -187,7 +238,8 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 
 ## Validation Rules (Current)
 
-- `kind` must resolve to `trigger` (case-insensitive).
+- `kind` must resolve to `trigger` or `worldconfig` (case-insensitive).
+- `worldconfig` aliases `world-config` and `world_config` are accepted.
 - For update: `metadata.id` or `metadata.key` must reference an existing trigger in the selected world.
 - For create: omit both `metadata.id` and `metadata.key`.
 - For delete: set `operation: delete` and include `metadata.id` or `metadata.key`.
@@ -204,21 +256,38 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 - For command triggers, `spec.target` must match scope type (`room`, `zone`, `world`) and exist in world.
 - For event triggers, `spec.target.type` is currently `mobtemplate` and must exist in world.
 - `conditions` are validated through the WR2 conditions parser in `backend/core/conditions.py`.
+- For world config manifests:
+  - only `operation: apply` is supported
+  - `spec` fields are validated against the world/world-config schema
+  - room references (`starting_room`, `death_room`) must exist in world
 
 Permission checks are applied when editing via manifest:
 
 - rank 3+ builders can edit all trigger scopes
 - rank 1-2 builders can edit room/zone targets only when assigned
 - rank 1-2 builders cannot edit world-scoped triggers
+- rank 1-2 builders cannot edit `worldconfig` manifests
 
 ## Implementation Notes
 
 - Manifest helpers live in `backend/builders/manifests.py`.
+- World config read/export endpoint:
+  - `GET /api/v1/builder/worlds/<world_pk>/config/`
 - Trigger list + YAML serialization endpoint:
   - `GET /api/v1/builder/worlds/<world_pk>/rooms/<room_pk>/triggers/`
 - Manifest apply endpoint:
   - `POST /api/v1/builder/worlds/<world_pk>/manifests/apply/`
-  - returns `operation: created`, `operation: updated`, or `operation: deleted`
+  - trigger returns `operation: created`, `operation: updated`, or `operation: deleted`
+  - world config returns `operation: updated`
+
+## How To Edit World Config
+
+1. Open **World > Config**.
+2. Click **Copy Config YAML** (or show YAML and copy manually).
+3. Open **World > Edit World**.
+4. Paste the YAML and edit desired `spec` fields.
+5. Submit manifest.
+6. Verify response indicates `kind: worldconfig` and `operation: updated`.
 
 ## How To Add A New Trigger (Builder Workflow)
 

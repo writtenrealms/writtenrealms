@@ -108,6 +108,17 @@ class NewWorldCreation(TestCase):
         self.assertEqual(world.config.death_room, room)
         self.assertEqual(world.config.configured_worlds.get(), world)
 
+    def test_new_world_uses_provided_config(self):
+        config = WorldConfig.objects.create()
+        world = World.objects.new_world(name='A world', config=config)
+        room = world.zones.all()[0].rooms.all()[0]
+        world.refresh_from_db()
+        config.refresh_from_db()
+
+        self.assertEqual(world.config_id, config.id)
+        self.assertEqual(config.starting_room, room)
+        self.assertEqual(config.death_room, room)
+
 
 class MultiplayerWorldTests(WorldTestCase):
 

@@ -5,6 +5,7 @@ from typing import Any
 
 import yaml
 from django.contrib.contenttypes.models import ContentType
+from django.db import transaction
 from rest_framework import serializers
 
 from builders import serializers as builder_serializers
@@ -17,11 +18,64 @@ from worlds.models import Room, World, Zone
 MANIFEST_API_VERSION = "v1alpha1"
 LEGACY_MANIFEST_API_VERSION = "writtenrealms.com/v1alpha1"
 TRIGGER_MANIFEST_KIND = "trigger"
+WORLD_CONFIG_MANIFEST_KIND = "worldconfig"
 TRIGGER_MANIFEST_OPERATION_APPLY = "apply"
 TRIGGER_MANIFEST_OPERATION_DELETE = "delete"
 
 _TRIGGER_KEY_PREFIX = "trigger"
 _WORLD_KEY_PREFIX = "world"
+
+_WORLD_CONFIG_MANIFEST_KIND_ALIASES = {
+    WORLD_CONFIG_MANIFEST_KIND,
+    "world-config",
+    "world_config",
+}
+
+_WORLD_CONFIG_WORLD_TEXT_FIELDS = (
+    "name",
+    "short_description",
+    "description",
+    "motd",
+)
+_WORLD_CONFIG_WORLD_BOOL_FIELDS = (
+    "is_public",
+)
+_WORLD_CONFIG_CONFIG_TEXT_FIELDS = (
+    "built_by",
+    "small_background",
+    "large_background",
+    "name_exclusions",
+)
+_WORLD_CONFIG_CONFIG_BOOL_FIELDS = (
+    "can_select_faction",
+    "auto_equip",
+    "is_narrative",
+    "players_can_set_title",
+    "allow_pvp",
+    "is_classless",
+    "non_ascii_names",
+    "decay_glory",
+    "globals_enabled",
+)
+_WORLD_CONFIG_CONFIG_INT_FIELDS = (
+    "starting_gold",
+)
+_WORLD_CONFIG_CONFIG_CHOICE_FIELDS = {
+    "death_mode": adv_consts.DEATH_MODES,
+    "death_route": adv_consts.DEATH_ROUTES,
+    "pvp_mode": adv_consts.PVP_MODES,
+}
+_WORLD_CONFIG_CONFIG_ROOM_FIELDS = (
+    "starting_room",
+    "death_room",
+)
+_WORLD_FIELDS_PROPAGATED_TO_SPAWNS = {
+    "name",
+    "short_description",
+    "description",
+    "motd",
+    "is_public",
+}
 
 _SCOPE_TO_TARGET_MODEL = {
     adv_consts.TRIGGER_SCOPE_ROOM: Room,
@@ -81,6 +135,13 @@ class ParsedTriggerDeleteManifest:
     world: World
     trigger: Trigger
     trigger_id: int
+
+
+@dataclass
+class ParsedWorldConfigManifest:
+    world: World
+    world_updates: dict[str, Any]
+    config_updates: dict[str, Any]
 
 
 def _entity_key(entity_type: str, entity_id: int) -> str:
@@ -148,6 +209,19 @@ def _validate_api_version(manifest: dict[str, Any]) -> None:
         raise serializers.ValidationError(
             f"Unsupported apiVersion '{api_version}'. Allowed: {', '.join(sorted(allowed_versions))}."
         )
+
+
+def parse_manifest_kind(manifest: dict[str, Any]) -> str:
+    _validate_api_version(manifest)
+    manifest_kind = _normalize_kind(manifest.get("kind"), "kind")
+    if manifest_kind == TRIGGER_MANIFEST_KIND:
+        return TRIGGER_MANIFEST_KIND
+    if manifest_kind in _WORLD_CONFIG_MANIFEST_KIND_ALIASES:
+        return WORLD_CONFIG_MANIFEST_KIND
+    raise serializers.ValidationError(
+        f"Unsupported manifest kind '{manifest_kind}'. "
+        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_CONFIG_MANIFEST_KIND}."
+    )
 
 
 def parse_manifest_operation(manifest: dict[str, Any]) -> str:
@@ -222,6 +296,116 @@ def load_yaml_manifest(manifest_text: str) -> dict[str, Any]:
         raise serializers.ValidationError("Manifest root must be a mapping.")
 
     return manifest
+
+
+def _serialize_room_reference(room: Room | None) -> dict[str, Any] | None:
+    if room is None:
+        return None
+    return {
+        "id": room.id,
+        "key": room.key,
+        "name": room.name or "",
+        "model_type": "room",
+    }
+
+
+def world_config_to_manifest(*, world: World) -> dict[str, Any]:
+    config = world.config
+    if not config:
+        raise serializers.ValidationError("World has no config to serialize.")
+
+    manifest = {
+        "kind": WORLD_CONFIG_MANIFEST_KIND,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, world.id),
+        },
+        "spec": {
+            "name": world.name or "",
+            "short_description": world.short_description or "",
+            "description": world.description or "",
+            "motd": world.motd or "",
+            "is_public": bool(world.is_public),
+            "starting_gold": int(config.starting_gold),
+            "starting_room": (
+                _entity_key("room", config.starting_room_id)
+                if config.starting_room_id
+                else ""
+            ),
+            "death_room": (
+                _entity_key("room", config.death_room_id)
+                if config.death_room_id
+                else ""
+            ),
+            "death_mode": config.death_mode,
+            "death_route": config.death_route,
+            "pvp_mode": config.pvp_mode,
+            "can_select_faction": bool(config.can_select_faction),
+            "auto_equip": bool(config.auto_equip),
+            "is_narrative": bool(config.is_narrative),
+            "players_can_set_title": bool(config.players_can_set_title),
+            "allow_pvp": bool(config.allow_pvp),
+            "is_classless": bool(config.is_classless),
+            "non_ascii_names": bool(config.non_ascii_names),
+            "globals_enabled": bool(config.globals_enabled),
+            "decay_glory": bool(config.decay_glory),
+            "built_by": config.built_by or "",
+            "small_background": config.small_background or "",
+            "large_background": config.large_background or "",
+            "name_exclusions": config.name_exclusions or "",
+        },
+    }
+    return manifest
+
+
+def serialize_world_config_manifest(*, world: World) -> dict[str, Any]:
+    manifest = world_config_to_manifest(world=world)
+    return {
+        "manifest": manifest,
+        "yaml": manifest_to_yaml(manifest),
+    }
+
+
+def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
+    config = world.config
+    if not config:
+        raise serializers.ValidationError("World has no config to serialize.")
+
+    manifest_data = serialize_world_config_manifest(world=world)
+    return {
+        "world": {
+            "id": world.id,
+            "key": world.key,
+            "name": world.name or "",
+            "short_description": world.short_description or "",
+            "description": world.description or "",
+            "motd": world.motd or "",
+            "is_public": bool(world.is_public),
+        },
+        "config": {
+            "starting_gold": int(config.starting_gold),
+            "starting_room": _serialize_room_reference(config.starting_room),
+            "death_room": _serialize_room_reference(config.death_room),
+            "death_mode": config.death_mode,
+            "death_route": config.death_route,
+            "small_background": config.small_background or "",
+            "large_background": config.large_background or "",
+            "can_select_faction": bool(config.can_select_faction),
+            "auto_equip": bool(config.auto_equip),
+            "allow_combat": bool(config.allow_combat),
+            "is_narrative": bool(config.is_narrative),
+            "players_can_set_title": bool(config.players_can_set_title),
+            "allow_pvp": bool(config.allow_pvp),
+            "pvp_mode": config.pvp_mode,
+            "built_by": config.built_by or "",
+            "is_classless": bool(config.is_classless),
+            "non_ascii_names": bool(config.non_ascii_names),
+            "decay_glory": bool(config.decay_glory),
+            "name_exclusions": config.name_exclusions or "",
+            "globals_enabled": bool(config.globals_enabled),
+        },
+        "manifest": manifest_data["manifest"],
+        "yaml": manifest_data["yaml"],
+    }
 
 
 def trigger_to_manifest(trigger: Trigger) -> dict[str, Any]:
@@ -760,6 +944,158 @@ def parse_trigger_delete_manifest(
         trigger=trigger,
         trigger_id=trigger_id,
     )
+
+
+def parse_world_config_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedWorldConfigManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != WORLD_CONFIG_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{WORLD_CONFIG_MANIFEST_KIND}'."
+        )
+
+    operation = str(manifest.get("operation") or TRIGGER_MANIFEST_OPERATION_APPLY).strip().lower()
+    if operation != TRIGGER_MANIFEST_OPERATION_APPLY:
+        raise serializers.ValidationError(
+            f"World config manifests only support operation '{TRIGGER_MANIFEST_OPERATION_APPLY}'."
+        )
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError(
+                "Manifest world does not match the selected world."
+            )
+
+    config = world.config
+    if not config:
+        raise serializers.ValidationError("Selected world has no world config.")
+
+    spec = manifest.get("spec") or {}
+    if not isinstance(spec, dict):
+        raise serializers.ValidationError("spec must be a mapping.")
+
+    allowed_fields = set(_WORLD_CONFIG_WORLD_TEXT_FIELDS)
+    allowed_fields.update(_WORLD_CONFIG_WORLD_BOOL_FIELDS)
+    allowed_fields.update(_WORLD_CONFIG_CONFIG_TEXT_FIELDS)
+    allowed_fields.update(_WORLD_CONFIG_CONFIG_BOOL_FIELDS)
+    allowed_fields.update(_WORLD_CONFIG_CONFIG_INT_FIELDS)
+    allowed_fields.update(_WORLD_CONFIG_CONFIG_CHOICE_FIELDS.keys())
+    allowed_fields.update(_WORLD_CONFIG_CONFIG_ROOM_FIELDS)
+
+    unknown_fields = sorted(set(spec.keys()) - allowed_fields)
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported spec field(s): {', '.join(unknown_fields)}."
+        )
+
+    world_updates: dict[str, Any] = {}
+    for field_name in _WORLD_CONFIG_WORLD_TEXT_FIELDS:
+        if field_name in spec:
+            world_updates[field_name] = _coerce_text(spec.get(field_name))
+    if "name" in world_updates and not world_updates["name"].strip():
+        raise serializers.ValidationError("spec.name cannot be empty.")
+
+    for field_name in _WORLD_CONFIG_WORLD_BOOL_FIELDS:
+        if field_name in spec:
+            world_updates[field_name] = _coerce_bool(
+                spec.get(field_name),
+                f"spec.{field_name}",
+            )
+
+    config_updates: dict[str, Any] = {}
+
+    for field_name in _WORLD_CONFIG_CONFIG_TEXT_FIELDS:
+        if field_name in spec:
+            config_updates[field_name] = _coerce_text(spec.get(field_name))
+
+    for field_name in _WORLD_CONFIG_CONFIG_BOOL_FIELDS:
+        if field_name in spec:
+            config_updates[field_name] = _coerce_bool(
+                spec.get(field_name),
+                f"spec.{field_name}",
+            )
+
+    for field_name in _WORLD_CONFIG_CONFIG_INT_FIELDS:
+        if field_name in spec:
+            value = _coerce_int(spec.get(field_name), f"spec.{field_name}")
+            if value < 0:
+                raise serializers.ValidationError(f"spec.{field_name} must be >= 0.")
+            config_updates[field_name] = value
+
+    for field_name, choices in _WORLD_CONFIG_CONFIG_CHOICE_FIELDS.items():
+        if field_name in spec:
+            config_updates[field_name] = _coerce_choice(
+                spec.get(field_name),
+                choices=choices,
+                field_name=f"spec.{field_name}",
+            )
+
+    for field_name in _WORLD_CONFIG_CONFIG_ROOM_FIELDS:
+        if field_name not in spec:
+            continue
+        room_id = _parse_entity_ref(
+            spec.get(field_name),
+            expected_type="room",
+            field_name=f"spec.{field_name}",
+        )
+        room = Room.objects.filter(world=world, pk=room_id).first()
+        if not room:
+            raise serializers.ValidationError(
+                f"Room referenced by spec.{field_name} was not found in this world."
+            )
+        config_updates[field_name] = room
+
+    return ParsedWorldConfigManifest(
+        world=world,
+        world_updates=world_updates,
+        config_updates=config_updates,
+    )
+
+
+def apply_world_config_manifest(parsed: ParsedWorldConfigManifest):
+    world = parsed.world
+    config = world.config
+    if not config:
+        raise serializers.ValidationError("Selected world has no world config.")
+
+    with transaction.atomic():
+        world_updates = parsed.world_updates
+        if world_updates:
+            for field_name, value in world_updates.items():
+                setattr(world, field_name, value)
+            world.save(update_fields=list(world_updates.keys()))
+
+            spawn_updates = {
+                field_name: value
+                for field_name, value in world_updates.items()
+                if field_name in _WORLD_FIELDS_PROPAGATED_TO_SPAWNS
+            }
+            if spawn_updates:
+                world.spawned_worlds.update(**spawn_updates)
+
+        config_updates = dict(parsed.config_updates)
+        if "is_narrative" in config_updates:
+            config_updates["allow_combat"] = not bool(config_updates["is_narrative"])
+
+        if config_updates:
+            for field_name, value in config_updates.items():
+                setattr(config, field_name, value)
+            config.save(update_fields=list(config_updates.keys()))
+
+    return config
 
 
 def apply_trigger_manifest(parsed: ParsedTriggerManifest) -> Trigger:

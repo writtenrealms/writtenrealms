@@ -24,7 +24,6 @@
       </div>
 
       <div class="settings-actions mt-4">
-        <button class="btn-small mr-4" @click="editGeneral">EDIT</button>
         <button class="btn-small" @click="deleteWorld">DELETE</button>
         <button class="btn-small ml-4" @click="submitForReview" v-if="displaySubmitReview">SUBMIT FOR REVIEW</button>
       </div>
@@ -35,51 +34,62 @@
     <div class="config-panels">
       <div class="advanced-config">
         <h3>ADVANCED CONFIG</h3>
-        <template v-if="config">
+        <template v-if="configData">
           <ul class="list">
-            <li>New characters will enter the game with {{ config.starting_gold }} gold.</li>
+            <li>World Name: {{ world.name }}</li>
+            <li>Short Description: {{ world.short_description || "(empty)" }}</li>
+            <li>Message of the Day: {{ world.motd || "(empty)" }}</li>
+            <li>World Visibility: <span v-if="world.is_public">Public</span><span v-else>Private</span></li>
 
             <li>
-              New characters will enter the game in
-              <router-link :to="room_link(config.starting_room.id)">{{ config.starting_room.name }}</router-link>.
+              Starting Gold: {{ configData.starting_gold }}
             </li>
 
             <li>
-              On death, player will be taken to
-              <router-link :to="room_link(config.death_room.id)">{{ config.death_room.name }}</router-link>.
+              Starting Room:
+              <router-link
+                v-if="configData.starting_room"
+                :to="room_link(configData.starting_room.id)"
+              >{{ configData.starting_room.name }}</router-link>
+              <span v-else>(unset)</span>
             </li>
             <li>
-              Game
-              <template v-if="!config.is_narrative">
-                allows combat, pvp mode is
-                <span v-if="config.pvp_mode === 'free_for_all'">Free for All.</span>
-                <span v-else-if="config.pvp_mode === 'zone'">PvP Zones.</span>
-                <span v-else>Disabled.</span>
-              </template>
-              <template v-else>is a narrative world, does not allow combat.</template>
+              Death Room:
+              <router-link
+                v-if="configData.death_room"
+                :to="room_link(configData.death_room.id)"
+              >{{ configData.death_room.name }}</router-link>
+              <span v-else>(unset)</span>
             </li>
-
-            <li v-if="config.small_background || config.large_background">
-              <div v-if="config.small_background">
-                General Lobby art:
-                <a
-                  :href="config.small_background"
-                  v-if="config.small_background.startsWith('http')"
-                >link</a>
-                <span v-else>{{ config.small_background }}</span>
-              </div>
-              <div v-if="config.large_background">
-                World Lobby art:
-                <a
-                  :href="config.large_background"
-                  v-if="config.large_background.startsWith('http')"
-                >link</a>
-                <span v-else>{{ config.large_background }}</span>
-              </div>
-            </li>
+            <li>Death EQ Loss: {{ deathModeLabel(configData.death_mode) }}</li>
+            <li>Death Route: {{ deathRouteLabel(configData.death_route) }}</li>
+            <li>PvP Mode: {{ pvpModeLabel(configData.pvp_mode) }}</li>
+            <li>Narrative World: {{ yesNo(configData.is_narrative) }}</li>
+            <li>Can Select Core Faction: {{ yesNo(configData.can_select_faction) }}</li>
+            <li>Auto Equip Items: {{ yesNo(configData.auto_equip) }}</li>
+            <li>Players Can Set Title: {{ yesNo(configData.players_can_set_title) }}</li>
+            <li>Allow PvP: {{ yesNo(configData.allow_pvp) }}</li>
+            <li>Classless Players: {{ yesNo(configData.is_classless) }}</li>
+            <li>Allow Non-ASCII Names: {{ yesNo(configData.non_ascii_names) }}</li>
+            <li>Enable Channels: {{ yesNo(configData.globals_enabled) }}</li>
+            <li>Decay Glory: {{ yesNo(configData.decay_glory) }}</li>
+            <li>Built By: {{ configData.built_by || "(uses world author)" }}</li>
+            <li>General Lobby Art: {{ configData.small_background || "(empty)" }}</li>
+            <li>World Lobby Art: {{ configData.large_background || "(empty)" }}</li>
           </ul>
 
-          <button class="btn-thin" @click="editAdvancedConfig">EDIT</button>
+          <div class="config-manifest mt-6">
+            <button class="btn-small" @click="copyConfigYaml">COPY CONFIG YAML</button>
+            <button class="btn-thin ml-2" @click="toggleConfigYaml">
+              {{ showConfigYaml ? "HIDE YAML" : "SHOW YAML" }}
+            </button>
+            <router-link class="ml-4" :to="edit_world_link">open Edit World</router-link>
+
+            <pre v-if="showConfigYaml" class="config-yaml mt-4"><code>{{ configYaml }}</code></pre>
+          </div>
+        </template>
+        <template v-else>
+          <div class="color-text-60">World config is unavailable for this world.</div>
         </template>
       </div>
 
@@ -185,11 +195,16 @@
         <router-link :to="world_socials_link">manage</router-link>
       </div>
 
-      <div class="world-name-exclusions" v-if="!world.instance_of.id">
+      <div class="world-name-exclusions" v-if="!world.instance_of.id && configData">
         <h3>NAME EXCLUSIONS</h3>
 
-        <div>Exclude certain names available to players at character creation.</div>
-        <button class="btn-thin" @click="editNameExclusions">EDIT</button>
+        <div v-if="nameExclusions.length">
+          {{ nameExclusions.length }} configured name exclusions.
+        </div>
+        <div v-else>No name exclusions configured.</div>
+        <div class="color-text-60 mt-2">
+          Manage exclusions through world config YAML in <router-link :to="edit_world_link">Edit World</router-link>.
+        </div>
       </div>
 
       <div class="world-currencies" v-if="!world.instance_of.id">
@@ -236,12 +251,11 @@
 </template>
 
 <script lang='ts' setup>
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useStore } from 'vuex';
 import { useRouter, useRoute, RouteLocationRaw } from 'vue-router';
 import { capfirst } from "@/core/utils.ts";
 import Help from "@/components/Help.vue";
-import { BUILDER_FORMS, FormElement } from "@/core/forms";
 import ReviewInstructions from "@/components/builder/world/ReviewInstructions.vue";
 
 const store = useStore();
@@ -249,8 +263,10 @@ const router = useRouter();
 const route = useRoute();
 
 const world = computed(() => store.state.builder.world);
-console.log(world.value);
-const config = computed(() => store.state.builder.worlds.config);
+const configPayload = computed(() => store.state.builder.worlds.config);
+const configData = computed(() => configPayload.value?.config || null);
+const configYaml = computed(() => configPayload.value?.yaml || "");
+const showConfigYaml = ref(false);
 
 const room_link = (id: number) => {
   return {
@@ -279,254 +295,44 @@ onMounted(async () => {
 
 });
 
-const editGeneral = () => {
+const yesNo = (value: boolean) => value ? "Yes" : "No";
 
-  const description = {
-    ...BUILDER_FORMS.DESCRIPTION,
-    help: `The description of the world as it will displayed to all players in the world's Lobby.`,
-  };
-
-  const modal = {
-    title: `Edit World`,
-    data: world.value,
-    schema: [
-      BUILDER_FORMS.NAME,
-      description,
-      {
-        attr: "motd",
-        label: "Message of the Day",
-        widget: "textarea",
-        help: `A message that will be displayed to players when they enter the world.`,
-      },
-      {
-        attr: "is_public",
-        label: "Is Public",
-        widget: "checkbox",
-        help: `A public world is visible and searchable to all players. A private world is only visible to players who have been given access to it.`,
-      },
-    ],
-    action: "builder/world_save",
-  };
-  store.commit('ui/modal/open_form', modal);
+const pvpModeLabel = (value?: string) => {
+  if (value === "free_for_all") return "Free for All";
+  if (value === "zone") return "PvP Zones";
+  if (value === "disabled") return "Disabled";
+  return value || "(unset)";
 };
 
-const editAdvancedConfig = () => {
-  const starting_gold: FormElement = {
-    attr: "starting_gold",
-    label: "Starting Gold",
-  };
-  const death_room: FormElement = {
-    attr: "death_room",
-    label: "Death Room",
-    widget: "reference",
-    references: "room",
-    required: true,
-  };
-  const starting_room: FormElement = {
-    attr: "starting_room",
-    label: "Starting Room",
-    widget: "reference",
-    references: "room",
-    required: true,
-    help: `Which room a new player starts in by default.<br/><br/>
-            A starting room can also be defined at the Faction level,
-            which will take precendence over this default starting room.`,
-  };
-  const death_mode: FormElement = {
-    attr: "death_mode",
-    label: "Death EQ Loss",
-    widget: "select",
-    options: [
-      {
-        value: "lose_all",
-        label: "Lose All",
-      },
-      {
-        value: "lose_none",
-        label: "Lose None",
-      },
-      {
-        value: "lose_gold",
-        label: "Lose Gold",
-      },
-      {
-        value: "lose_inv",
-        label: "Lose Inventory",
-      },
-      {
-        value: "destroy_eq",
-        label: "Destroy Equipped Items",
-      },
-    ],
-    help: `Determines what happens to the player's equipment on death.<br/><br/>
-            Lose None: player retains all of their equipment<br/>
-            Lose All: all of the player's equipment goes to their corpse<br/>
-            Lose Gold: player pays 20% of their equipment's value on death<br/>
-            Lose Inventory: all of the player's inventory goes to their corpse<br/>
-            Destroy Equipped Items: all equipped items are destroyed on death. Not for the faint of heart.`,
-  };
-  const built_by: FormElement = {
-    attr: "built_by",
-    label: "Built By",
-    help: `What to show in the 'built by' field of the World Lobby. If missing, will default to the author's username.`,
-  };
-  const death_route: FormElement = {
-    attr: "death_route",
-    label: "Death Route",
-    widget: "select",
-    options: [
-      {
-        value: "top_faction",
-        label: "Top Faction",
-      },
-      {
-        value: "near_room",
-        label: "Nearest Room",
-      },
-      {
-        value: "far_room",
-        label: "Furthest Room",
-      },
-      {
-        value: "nearest_in_zone",
-        label: "Nearest in Zone",
-      },
-    ],
-    help: `Where players go on death.<br/><br/>
-            Top Faction: the nearest procession room of the faction you have highest standing with.<br/>
-            Nearest Room: the procession room nearest where you died.<br/>
-            Furthest Room: the procession room furthest from where you died.<br/>
-            Nearest in Zone: the procession room closest to you in your current zone.`,
-  };
-  const auto_equip: FormElement = {
-    attr: "auto_equip",
-    label: "Auto Equip Items",
-    widget: "checkbox",
-    help: `If checked, items acquired to the player's inventory will
-            automatically equip if the corresponding slot is empty.`,
-  };
-
-  const pvp_mode: FormElement = {
-    attr: "pvp_mode",
-    label: "PvP Mode",
-    widget: "select",
-    options: [
-      {
-        value: "free_for_all",
-        label: "Free for All",
-      },
-      {
-        value: "disabled",
-        label: "Disabled",
-      },
-      {
-        value: "zone",
-        label: "PvP Zones",
-      },
-    ],
-    help: `In multiplayer worlds, to what extent PvP is allowed.<br/><br/>
-          Free for All - anyone can attack anyone else, unless in a peace room.<br/>
-          Disabled - no player can attack another player, ever.<br/>
-          PvP Zones - default is no PvP but certain zones can enable it.<br/>
-    `,
-  };
-  const can_select_faction: FormElement = {
-    attr: "can_select_faction",
-    label: "Can Select Core Faction",
-    widget: "checkbox",
-    help: `If unchecked, all players will always start with the default core faction.`,
-  };
-  const allow_combat: FormElement = {
-    attr: "is_narrative",
-    label: "Narrative World",
-    widget: "checkbox",
-    help: `A narrative world disables combat, and will not show combat-related UI elements.`,
-  };
-  const players_can_set_title: FormElement = {
-    attr: "players_can_set_title",
-    label: "Players Can Set Title",
-    widget: "checkbox",
-    help: `Whether players are allowed to change their own title.`,
-  };
-  const small_background: FormElement = {
-    attr: "small_background",
-    label: "740 x 332 Card URL",
-    help: `Image displayed in the general lobby`,
-  };
-  const large_background: FormElement = {
-    attr: "large_background",
-    label: "2300 x 598 Banner URL",
-    help: `Image displayed in the world lobby`,
-  };
-  const is_classless: FormElement = {
-    attr: "is_classless",
-    label: "Classless Players",
-    widget: "checkbox",
-    help: `If this option is checked, no player will have a starting archetype, or its associated skills. Builders will have to create all the skills that players can learn.`
-  };
-  const non_ascii_names: FormElement = {
-    attr: "non_ascii_names",
-    label: "Allow Non-ASCII Names",
-    widget: "checkbox",
-    help: `If this option is checked, players will be able to use non-ASCII characters in their names.`
-  };
-  const globals_enabled: FormElement = {
-    attr: "globals_enabled",
-    label: "Enable Channels",
-    widget: "checkbox",
-    help: `If this option is checked, players will be able to use global communication channels (chat, gossip, clan chat).`,
-  };
-
-  const modal = {
-      title: `Edit World Config`,
-      data: config.value,
-      schema: [
-        {
-          children: [starting_gold, starting_room],
-        },
-        {
-          children: [death_mode, death_room],
-        },
-        {
-          children: [pvp_mode, death_route],
-        },
-        {
-          children: [allow_combat, auto_equip],
-        },
-        {
-          children: [can_select_faction, players_can_set_title],
-        },
-        {
-          children: [is_classless, non_ascii_names]
-        },
-        {
-          children: [globals_enabled],
-        },
-        {
-          children: [small_background, large_background],
-        },
-        built_by,
-      ],
-      action: "builder/worlds/config_save",
-    };
-    store.commit('ui/modal/open_form', modal);
+const deathModeLabel = (value?: string) => {
+  if (value === "lose_all") return "Lose All";
+  if (value === "lose_none") return "Lose None";
+  if (value === "lose_gold") return "Lose Gold";
+  if (value === "lose_inv") return "Lose Inventory";
+  if (value === "destroy_eq") return "Destroy Equipped Items";
+  if (value === "lose_eq") return "Lose Equipped";
+  return value || "(unset)";
 };
 
-const editNameExclusions = () => {
-  const modal = {
-    class: "description-modal",
-    data: config.value,
-    schema: [
-      {
-        attr: 'name_exclusions',
-        label: 'Name Exclusions',
-        widget: 'textarea',
-        help: `A list of names that are not allowed to be used by players in this world. One name per line.`
-      }
-    ],
-    action: "builder/worlds/config_patch",
-  };
-  store.commit('ui/modal/open_form', modal);
+const deathRouteLabel = (value?: string) => {
+  if (value === "top_faction") return "Top Faction";
+  if (value === "near_room") return "Nearest Room";
+  if (value === "far_room") return "Furthest Room";
+  if (value === "nearest_in_zone") return "Nearest in Zone";
+  return value || "(unset)";
+};
+
+const toggleConfigYaml = () => {
+  showConfigYaml.value = !showConfigYaml.value;
+};
+
+const copyConfigYaml = async () => {
+  try {
+    await navigator.clipboard.writeText(configYaml.value || "");
+    store.commit("ui/notification_set", "World config YAML copied.");
+  } catch {
+    store.commit("ui/notification_set_error", "Unable to copy YAML to clipboard.");
+  }
 };
 
 const createInstance = () => {
@@ -580,6 +386,11 @@ const deleteWorld = async () => {
   router.push({ name: 'lobby' });
 };
 
+const edit_world_link = {
+  name: 'builder_world_edit',
+  params: { world_id: world.value.id },
+};
+
 const world_admin_link = {
   name: 'builder_world_admin',
   params: { world_id: world.value.id },
@@ -609,6 +420,14 @@ const world_socials_link = {
   name: 'builder_world_social_list',
   params: { world_id: world.value.id },
 };
+
+const nameExclusions = computed(() => {
+  const raw = configData.value?.name_exclusions || "";
+  return raw
+    .split(/\r?\n/g)
+    .map((name: string) => name.trim())
+    .filter((name: string) => !!name);
+});
 
 const descLines = computed(() => world.value.description.split("\n"));
 const displaySubmitReview = computed(() => world.value.review.status === "unsubmitted" || world.value.review.status == "reviewed");
@@ -697,6 +516,25 @@ const assignment_link = (assignment) => {
   .review-text {
     border: 1px solid $color-background-light-border;
     padding: 15px;
+  }
+}
+
+.config-manifest {
+  .config-yaml {
+    margin: 0;
+    padding: 0.75rem;
+    overflow-x: auto;
+    border: 1px solid $color-form-border;
+    background: $color-background;
+    white-space: pre-wrap;
+    word-break: break-word;
+
+    code {
+      border: 0;
+      padding: 0;
+      display: block;
+      background: transparent;
+    }
   }
 }
 

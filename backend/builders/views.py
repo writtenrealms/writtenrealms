@@ -339,12 +339,19 @@ class WorldViewSet(BaseWorldBuilderViewSet):
 
     def perform_update(self, serializer):
         world = serializer.save()
-        data = {}
-        if 'name' in serializer.validated_data:
-            data['name'] = serializer.validated_data['name']
-        if 'is_public' in serializer.validated_data:
-            data['is_public'] = serializer.validated_data['is_public']
-        world.spawned_worlds.update(**data)
+        propagated_fields = (
+            "name",
+            "short_description",
+            "description",
+            "motd",
+            "is_public",
+        )
+        updates_for_spawns = {}
+        for field_name in propagated_fields:
+            if field_name in serializer.validated_data:
+                updates_for_spawns[field_name] = serializer.validated_data[field_name]
+        if updates_for_spawns:
+            world.spawned_worlds.update(**updates_for_spawns)
         return world
 
 
@@ -529,6 +536,11 @@ class WorldConfigViewSet(WorldViewSet):
     def get_object(self):
         obj = super().get_object()
         return obj.config
+
+    def retrieve(self, request, *args, **kwargs):
+        return Response(
+            builder_manifests.serialize_world_config_payload(world=self.world)
+        )
 
     def perform_update(self, serializer):
         config = serializer.save()
@@ -1480,14 +1492,15 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             target_model=parsed_trigger.target_type.model_class() if parsed_trigger.target_type else None,
         )
 
-    def post(self, request, world_pk, format=None):
-        manifest_text = request.data.get("manifest")
-        if manifest_text is None:
-            raise serializers.ValidationError({"manifest": ["This field is required."]})
+    def _assert_can_edit_world_config(self):
+        if self._builder_rank >= 3:
+            return
+        raise drf_exceptions.PermissionDenied(
+            "You do not have permission to alter world configuration."
+        )
 
-        manifest = builder_manifests.load_yaml_manifest(manifest_text)
+    def _apply_trigger_manifest(self, manifest):
         operation = builder_manifests.parse_manifest_operation(manifest)
-
         if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
             parsed_delete = builder_manifests.parse_trigger_delete_manifest(
                 world=self.world,
@@ -1540,6 +1553,41 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             },
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
         )
+
+    def _apply_world_config_manifest(self, manifest):
+        self._assert_can_edit_world_config()
+        parsed_world_config = builder_manifests.parse_world_config_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        builder_manifests.apply_world_config_manifest(parsed_world_config)
+        world_config_payload = builder_manifests.serialize_world_config_payload(
+            world=self.world
+        )
+
+        return Response(
+            {
+                "kind": builder_manifests.WORLD_CONFIG_MANIFEST_KIND,
+                "operation": "updated",
+                "world_config": world_config_payload,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def post(self, request, world_pk, format=None):
+        manifest_text = request.data.get("manifest")
+        if manifest_text is None:
+            raise serializers.ValidationError({"manifest": ["This field is required."]})
+
+        manifest = builder_manifests.load_yaml_manifest(manifest_text)
+        manifest_kind = builder_manifests.parse_manifest_kind(manifest)
+
+        if manifest_kind == builder_manifests.TRIGGER_MANIFEST_KIND:
+            return self._apply_trigger_manifest(manifest)
+        if manifest_kind == builder_manifests.WORLD_CONFIG_MANIFEST_KIND:
+            return self._apply_world_config_manifest(manifest)
+
+        raise serializers.ValidationError("Unsupported manifest kind.")
 
 
 world_manifest_apply = WorldManifestApplyView.as_view()

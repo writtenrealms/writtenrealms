@@ -14,6 +14,7 @@ class WorldManager(models.Manager):
         """
         from worlds.models import Room, Zone, WorldConfig
 
+        provided_config = kwargs.pop("config", None)
         world = super().create(**kwargs)
         zone = Zone.objects.create(name='Starting Zone', world=world)
         room = Room.objects.create(
@@ -21,9 +22,26 @@ class WorldManager(models.Manager):
             world=world,
             zone=zone,
             x=0, y=0, z=0)
-        world.config = WorldConfig.objects.create(
-            starting_room=room, death_room=room)
-        world.save()
+
+        if provided_config is not None:
+            config = provided_config
+            config_update_fields = []
+            if not config.starting_room_id:
+                config.starting_room = room
+                config_update_fields.append("starting_room")
+            if not config.death_room_id:
+                config.death_room = room
+                config_update_fields.append("death_room")
+            if config_update_fields:
+                config.save(update_fields=config_update_fields)
+        else:
+            config = WorldConfig.objects.create(
+                starting_room=room,
+                death_room=room,
+            )
+
+        world.config = config
+        world.save(update_fields=["config"])
         return world
 
 

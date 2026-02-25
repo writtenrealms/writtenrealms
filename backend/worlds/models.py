@@ -142,6 +142,15 @@ class World(AdventBaseModel):
             return latest_review.status
         return api_consts.WORLD_REVIEW_STATUS_UNSUBMITTED
 
+    @property
+    def config_source_world(self):
+        return self.context or self
+
+    @property
+    def effective_config(self):
+        source_world = self.config_source_world
+        return source_world.config if source_world else None
+
     # ==== Utility functions that change state ====
 
     def set_state(self, state, rdb=None):
@@ -519,9 +528,14 @@ class World(AdventBaseModel):
             raise TypeError(
             "Cannot create more than one spawn world for a multiplayer "
             "world.")
+
+        effective_config = self.effective_config
+        if not effective_config:
+            raise ValueError("Cannot create a spawn world without a world config.")
+
         spawn_world = World.objects.create(
             name=self.name,
-            config=self.config,
+            config=effective_config,
             description=self.description,
             is_multiplayer=self.is_multiplayer,
             context=self,
