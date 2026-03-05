@@ -1,6 +1,8 @@
 import collections
+import ast
 from datetime import datetime, timedelta
 import json
+import logging
 import random
 
 from config import constants as adv_consts
@@ -12,23 +14,116 @@ from django.utils import timezone
 from backend.core.conditions import evaluate_conditions
 
 from builders.models import (
+    Loader,
     Rule,
     ItemTemplate,
     MobTemplate,
     Path)
-from spawns.extraction import extract_population
 from worlds.models import World, Room, Zone, Door
 
 
-def run_loaders(world, zone_id=None, initial=False, repopulate=False, rdb=None):
+logger = logging.getLogger(__name__)
+
+
+def _evaluate_loader_condition_expression(node, context):
+    if isinstance(node, ast.Expression):
+        return _evaluate_loader_condition_expression(node.body, context)
+
+    if isinstance(node, ast.BoolOp):
+        if isinstance(node.op, ast.And):
+            return all(
+                bool(_evaluate_loader_condition_expression(value, context))
+                for value in node.values
+            )
+        if isinstance(node.op, ast.Or):
+            return any(
+                bool(_evaluate_loader_condition_expression(value, context))
+                for value in node.values
+            )
+        raise ValueError("Unsupported boolean operator in loader_condition.")
+
+    if isinstance(node, ast.UnaryOp):
+        if isinstance(node.op, ast.Not):
+            return not bool(
+                _evaluate_loader_condition_expression(node.operand, context)
+            )
+        raise ValueError("Unsupported unary operator in loader_condition.")
+
+    if isinstance(node, ast.Compare):
+        left = _evaluate_loader_condition_expression(node.left, context)
+        comparisons = zip(node.ops, node.comparators)
+        for operator, comparator_node in comparisons:
+            right = _evaluate_loader_condition_expression(comparator_node, context)
+            if isinstance(operator, ast.Eq):
+                is_valid = left == right
+            elif isinstance(operator, ast.NotEq):
+                is_valid = left != right
+            elif isinstance(operator, ast.Lt):
+                is_valid = left < right
+            elif isinstance(operator, ast.LtE):
+                is_valid = left <= right
+            elif isinstance(operator, ast.Gt):
+                is_valid = left > right
+            elif isinstance(operator, ast.GtE):
+                is_valid = left >= right
+            elif isinstance(operator, ast.In):
+                is_valid = left in right
+            elif isinstance(operator, ast.NotIn):
+                is_valid = left not in right
+            elif isinstance(operator, ast.Is):
+                is_valid = left is right
+            elif isinstance(operator, ast.IsNot):
+                is_valid = left is not right
+            else:
+                raise ValueError("Unsupported comparison operator in loader_condition.")
+            if not is_valid:
+                return False
+            left = right
+        return True
+
+    if isinstance(node, ast.Name):
+        if node.id not in context:
+            raise ValueError(
+                "Unknown loader_condition variable: %s" % node.id)
+        return context[node.id]
+
+    if isinstance(node, ast.Constant):
+        return node.value
+
+    if isinstance(node, ast.List):
+        return [
+            _evaluate_loader_condition_expression(element, context)
+            for element in node.elts
+        ]
+
+    if isinstance(node, ast.Tuple):
+        return tuple(
+            _evaluate_loader_condition_expression(element, context)
+            for element in node.elts
+        )
+
+    if isinstance(node, ast.Set):
+        return {
+            _evaluate_loader_condition_expression(element, context)
+            for element in node.elts
+        }
+
+    raise ValueError("Unsupported expression in loader_condition.")
+
+
+def evaluate_loader_condition(text, context):
+    try:
+        parsed = ast.parse(text, mode='eval')
+    except SyntaxError as exc:
+        raise ValueError(str(exc))
+    return bool(_evaluate_loader_condition_expression(parsed, context))
+
+
+def run_loaders(world, zone_id=None, initial=False, repopulate=False):
     """
     Process all loaders in a spawn world. This method should be called over
-    using the LoaderRun object because it handles loading the world's population
-    data and processing door resets.
-
-    Loaders are RDB aware for two reasons:
-    * Fetching population data to accomodate for rule requirements
-    * Checking current facts for loader conditions
+    using the LoaderRun object because it handles rule execution and door
+    resets.
 
     The 'initial' argument determines whether we're running the loader
     against a world that is a clean state. Any time we're starting up a
@@ -60,7 +155,6 @@ def run_loaders(world, zone_id=None, initial=False, repopulate=False, rdb=None):
     if not world.context:
         raise TypeError("Can only run loaders on spawn worlds.")
 
-    rdb = rdb or world.rdb
     check = False # Whether to check for population counts
     force = True # Whether to respect respawn wait times
 
@@ -74,51 +168,39 @@ def run_loaders(world, zone_id=None, initial=False, repopulate=False, rdb=None):
         check = True
         force = False
 
-    if check:
-        game_world = rdb.fetch(world.key)
-        population_data = extract_population(game_world)
-    else:
-        population_data = None
-        game_world = None
-
-    # Update warzone data, if applicable
-    if population_data:
-        for _zone_id, zone_data in population_data['zone_data'].items():
-            if zone_data:
-                try:
-                    zone = Zone.objects.get(pk=_zone_id)
-                except Zone.DoesNotExist:
-                    continue
-                zone.zone_data = json.dumps(zone_data)
-                zone.save()
-
     output = {
         'rules': [],
         'doors': [],
     }
 
     if zone_id:
-        zones = [Zone.objects.get(pk=zone_id)]
+        zone_qs = Zone.objects.filter(pk=zone_id)
+        if world.context_id:
+            zone_qs = zone_qs.filter(world_id=world.context_id)
+        zones = [zone_qs.get()]
     else:
         zones = world.context.zones.all()
 
     # Go through each zone and run its loaders if appropriate
     for zone in zones:
 
-        # Determine if the zone is due for a reset
-        should_zone_reset = False
-        if not zone.last_respawn_ts:
-            should_zone_reset = True
-        else:
-            threshold = (
-                zone.last_respawn_ts
-                + timedelta(seconds=zone.respawn_wait))
-            if timezone.now() > threshold:
-                should_zone_reset = True
+        with transaction.atomic():
+            zone = Zone.objects.select_for_update().get(pk=zone.pk)
 
-        if should_zone_reset:
-            zone.last_respawn_ts = timezone.now()
-            zone.save()
+            # Determine if the zone is due for a reset
+            should_zone_reset = False
+            if not zone.last_respawn_ts:
+                should_zone_reset = True
+            else:
+                threshold = (
+                    zone.last_respawn_ts
+                    + timedelta(seconds=zone.respawn_wait))
+                if timezone.now() > threshold:
+                    should_zone_reset = True
+
+            if should_zone_reset:
+                zone.last_respawn_ts = timezone.now()
+                zone.save(update_fields=['last_respawn_ts'])
 
         # Reset doors for MPW
         if world.is_multiplayer and should_zone_reset:
@@ -139,11 +221,8 @@ def run_loaders(world, zone_id=None, initial=False, repopulate=False, rdb=None):
                 LoaderRun(
                     loader,
                     world,
-                    game_world=game_world,
                     check=check,
                     should_zone_reset=should_zone_reset,
-                    rdb=rdb,
-                    population_data=population_data,
                 ).execute(force=force))
 
     world.last_loader_run_ts = timezone.now()
@@ -163,19 +242,15 @@ class LoaderRun:
     })
     """
 
-    def __init__(self, loader, world, game_world=None, check=True, rdb=None,
-        population_data=None, should_zone_reset=False):
+    def __init__(self, loader, world, check=True, should_zone_reset=False):
 
         if not world.context:
             raise TypeError("Can only run loaders on spawn worlds.")
 
         self.loader = loader
         self.world = world # Spawn world
-        self.game_world = game_world
         self.check = check
-        self.population_data = population_data
         self.should_zone_reset = should_zone_reset
-        self.rdb = rdb or world.rdb if self.check else None
         self.rules_output = collections.OrderedDict()
         self.executed = False
 
@@ -183,83 +258,83 @@ class LoaderRun:
         if self.executed:
             raise RuntimeError("Runner has already been executed.")
 
-        # -- Condition check
-        # We need to support 2 Loader Condition scenarios:
-        # 1) We're loading the world and the loader is in an initial
-        #    state, in case of which we don't have a loaded spawn world
-        #    yet.
-        # 2) We're loading the world and the loader is in a reload state,
-        #    in case of which we have a loaded spawn world that has more
-        #    up to date data than the API world.
-        if self.loader.conditions:
-            if self.game_world:
-                actor = self.game_world
-            else:
-                actor = self.world
-            evaluation = evaluate_conditions(
-                actor=actor,
-                text=self.loader.conditions)
-            if evaluation['result'] == False:
+        with transaction.atomic():
+            # Acquire a row lock so concurrent loader runs do not race each
+            # other on gating fields such as last_processing_ts.
+            self.loader = Loader.objects.select_related('zone')\
+                                        .select_for_update()\
+                                        .get(pk=self.loader.pk)
+
+            # -- Condition check
+            if self.loader.conditions:
+                evaluation = evaluate_conditions(
+                    actor=self.world,
+                    text=self.loader.conditions)
+                if evaluation['result'] == False:
+                    self.executed = True
+                    return self.rules_output
+
+            # Check for conditions that could prevent the loader from running
+            # (though it would still be considered executed)
+            if not force:
+
+                # If the loader sets to inherit from zone and the zone should
+                # be reset, run the loader
+                if self.loader.inherit_zone_wait:
+                    if not self.should_zone_reset:
+                        self.executed = True
+                        return self.rules_output
+                    # Account for zone being set to never respawn
+                    if self.loader.zone.respawn_wait == -1:
+                        self.executed = True
+                        return self.rules_output
+
+                # Setting respawn wait to -1 means never respawn
+                elif self.loader.respawn_wait == -1:
+                    self.executed = True
+                    return self.rules_output
+
+                # Setting respawn wait to something other than 0 means wait
+                # the appropriate amount
+                elif self.loader.last_processing_ts and self.loader.respawn_wait:
+                    threshold = (
+                        self.loader.last_processing_ts
+                        + timedelta(seconds=self.loader.respawn_wait))
+                    if timezone.now() < threshold:
+                        self.executed = True
+                        return self.rules_output
+
+            # Process conditions if there are any
+            if (self.loader.loader_condition and
+                self.loader.zone and self.loader.zone.is_warzone):
+                zone_data = json.loads(self.loader.zone.zone_data or "{}")
+                if not isinstance(zone_data, dict):
+                    zone_data = {}
+
+                try:
+                    is_run_allowed = evaluate_loader_condition(
+                        self.loader.loader_condition,
+                        zone_data)
+                except ValueError as exc:
+                    logger.warning(
+                        "Error evaluating loader condition '%s': %s",
+                        self.loader.loader_condition,
+                        exc,
+                    )
+                    self.executed = True
+                    return self.rules_output
+                if not is_run_allowed:
+                    self.executed = True
+                    return self.rules_output
+
+            self.rules_qs = self.loader.rules.all().order_by('order')
+
+            if self.rules_qs:
+                self.process_rules()
+                self.loader.last_processing_ts = timezone.now()
+                self.loader.save(update_fields=['last_processing_ts'])
                 self.executed = True
                 return self.rules_output
-
-        # Check for conditions that could prevent the loader from running
-        # (though it would still be considered executed)
-        if not force:
-
-            # If the loader sets to inherit from zone and the zone should
-            # be reset, run the loader
-            if self.loader.inherit_zone_wait:
-                if not self.should_zone_reset:
-                    self.executed = True
-                    return self.rules_output
-                # Account for zone being set to never respawn
-                if self.loader.zone.respawn_wait == -1:
-                    self.executed = True
-                    return self.rules_output
-
-            # Setting respawn wait to -1 means never respawn
-            elif self.loader.respawn_wait == -1:
-                self.executed = True
-                return self.rules_output
-
-            # Setting respawn wait to something other than 0 means wait
-            # the appropriate amount
-            elif self.loader.last_processing_ts and self.loader.respawn_wait:
-                threshold = (
-                    self.loader.last_processing_ts
-                    + timedelta(seconds=self.loader.respawn_wait))
-                if timezone.now() < threshold:
-                    self.executed = True
-                    return self.rules_output
-
-        # Process conditions if there are any
-        if (self.loader.loader_condition and
-            self.loader.zone and self.loader.zone.is_warzone):
-            zone_data = json.loads(self.loader.zone.zone_data)
-
-            try:
-                is_run_allowed = False
-                is_run_allowed = eval(
-                    self.loader.loader_condition,
-                    {"__builtins__":None},
-                    zone_data)
-            except (NameError, SyntaxError, TypeError):
-                print("Error with loader condition: %s and data %s" % (
-                    self.loader.loader_condition,
-                    zone_data))
-                return self.rules_output
-            if not is_run_allowed:
-                return self.rules_output
-
-        self.rules_qs = self.loader.rules.all().order_by('order')
-
-        if self.rules_qs:
-            self.process_rules()
-            self.loader.last_processing_ts = timezone.now()
-            self.loader.save()
-            self.executed = True
-            return self.rules_output
 
     def process_rules(self):
         for rule in self.rules_qs:
@@ -300,41 +375,32 @@ class LoaderRun:
 
         raise ValueError("Invalid rule template: %s" % rule.template)
 
-    def get_num_from_templates_in_room(self, template, room):
-        """
-        Given a template, return the number of items or mobs in that room
-        that are from that template. This does a live check against RDB
+    def _num_loaded_for_rule(self, rule):
+        if not self.check:
+            return 0
 
-        For a given template and room, get the number of spawns of that
-        template in that room.
-        """
-        num = 0
-        game_room = self.rdb.fetch(room.get_game_key(self.world))
+        from spawns.models import Item, Mob
 
-        if isinstance(template, ItemTemplate):
-            candidates = game_room.inventory
-        elif isinstance(template, MobTemplate):
-            candidates = game_room.get_chars(mobs_only=True)
+        if isinstance(rule.template, MobTemplate):
+            return Mob.objects.filter(
+                world=self.world,
+                rule=rule,
+                is_pending_deletion=False,
+            ).count()
 
-        for candidate in candidates:
-            try:
-                if int(candidate.template_id) == template.pk:
-                    num += 1
-            except TypeError:
-                continue
+        if isinstance(rule.template, ItemTemplate):
+            return Item.objects.filter(
+                world=self.world,
+                rule=rule,
+                is_pending_deletion=False,
+            ).count()
 
-        return num
+        return 0
 
     def load_mob_template(self, rule):
 
         output = []
-
-        if self.check:
-            # Get the number of mobs in the population data that have been
-            # loaded by this rule.
-            num_loaded = len(self.population_data['rules'].get(rule.id, []))
-        else:
-            num_loaded = 0
+        num_loaded = self._num_loaded_for_rule(rule)
 
         should_load = rule.num_copies - num_loaded
 
@@ -400,7 +466,9 @@ class LoaderRun:
         output = []
 
         if isinstance(target, Rule):
-            instances = self.rules_output[target.id]
+            instances = self.rules_output.get(target.id)
+            if instances is None:
+                return []
             template = rule.template
             for instance in instances:
                 output.extend([
@@ -412,10 +480,7 @@ class LoaderRun:
                 ])
             return output
 
-        if self.check:
-            num_loaded = len(self.population_data['rules'].get(rule.id, []))
-        else:
-            num_loaded = 0
+        num_loaded = self._num_loaded_for_rule(rule)
 
         should_load = rule.num_copies - num_loaded
 

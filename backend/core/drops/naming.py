@@ -1,6 +1,7 @@
 import random
 
 from backend.config import constants
+from backend.core.utils import items as item_utils
 from backend.core.utils import roll_percentage
 
 # ===== Armor data =====

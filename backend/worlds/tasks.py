@@ -2,18 +2,35 @@ import logging
 
 from django.db import transaction
 from django.utils import timezone
+from django.core.cache import cache
 
 from celery import shared_task
 
 from config import constants as api_consts, constants
+from config import game_settings as adv_config
 from fastapi_app.forge_ws import complete_job
 from spawns.models import Player
+from spawns.loading import run_loaders
 from users.models import User
 from worlds.models import World
 from worlds.services import WorldSmith
 
 
 logger = logging.getLogger('lifecycle')
+LOADERS_TASK_LOCK_KEY = 'run_world_loaders_lock'
+
+
+def _loader_interval_seconds() -> float:
+    raw_interval = getattr(adv_config, 'GAME_LOADER_INTERVAL_SECONDS', 15)
+    try:
+        interval = float(raw_interval)
+    except (TypeError, ValueError):
+        return 15.0
+    return max(interval, 1.0)
+
+
+def _loader_lock_timeout_seconds() -> int:
+    return max(int(_loader_interval_seconds() * 4), 30)
 
 
 @shared_task
@@ -185,3 +202,35 @@ def monitor_worlds():
         # player data.
         if instance.players.count() == 0:
             instance.delete()
+
+
+@shared_task(ignore_result=True)
+def run_world_loaders():
+    lock_timeout = _loader_lock_timeout_seconds()
+    if not cache.add(LOADERS_TASK_LOCK_KEY, 1, timeout=lock_timeout):
+        return {'skipped': True}
+
+    try:
+        spawn_worlds = World.objects.filter(
+            context__isnull=False,
+            lifecycle=constants.WORLD_LIFECYCLE_RUNNING,
+        ).select_related('config')
+
+        processed = 0
+        for spawn_world in spawn_worlds.iterator(chunk_size=100):
+            if spawn_world.config and spawn_world.config.never_reload:
+                continue
+
+            try:
+                run_loaders(world=spawn_world)
+                processed += 1
+            except Exception:
+                logger.exception(
+                    "Error running loaders for world %s (%s)",
+                    spawn_world.key,
+                    spawn_world.id,
+                )
+
+        return {'processed': processed}
+    finally:
+        cache.delete(LOADERS_TASK_LOCK_KEY)

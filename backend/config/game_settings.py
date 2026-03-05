@@ -23,6 +23,8 @@ IS_CLUSTER = pick({
 MOVEMENT_COST = 2
 # Shared cadence for heartbeat/tick-like async behavior across WR2 systems.
 GAME_HEARTBEAT_INTERVAL_SECONDS = 2
+# Loader cadence for periodic world respawn processing.
+GAME_LOADER_INTERVAL_SECONDS = 15
 
 LEVEL_EXPERIENCE = [
     0,      # 1

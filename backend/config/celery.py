@@ -26,10 +26,23 @@ def _heartbeat_interval_seconds() -> float:
     return max(interval, 1.0)
 
 
+def _loader_interval_seconds() -> float:
+    raw_interval = getattr(adv_config, "GAME_LOADER_INTERVAL_SECONDS", 15)
+    try:
+        interval = float(raw_interval)
+    except (TypeError, ValueError):
+        return 15.0
+    return max(interval, 1.0)
+
+
 app.conf.beat_schedule = {
     'heartbeat-regen': {
         'task': 'spawns.tasks.heartbeat_regen',
         'schedule': _heartbeat_interval_seconds(),
+    },
+    'run-world-loaders': {
+        'task': 'worlds.tasks.run_world_loaders',
+        'schedule': _loader_interval_seconds(),
     },
     'cleanup-stale-connections': {
         'task': 'users.tasks.cleanup_stale_connections',

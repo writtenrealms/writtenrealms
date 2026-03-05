@@ -816,18 +816,12 @@ class TestLoaders(WorldTestCase):
         output = loader.run(self.spawn_world, check=False)
         self.assertEqual(len(output[rule.id]), 2)
 
-        # This time we're going to supply population data to the loader,
-        # indicating that there is already one copy of this mob loaded
-        # (but not two). So one more run should only load one.
-        # So that we can initiate the population data, we're going to use the
-        # LoaderRun object directly rather than Loader.run.
-        population_data = {'rules': {}}
-        population_data['rules'][rule.id] = [output[rule.id][0].id]
+        # One mob is already loaded and one is missing, so one more run should
+        # only load one.
         loader_run = LoaderRun(
             loader=loader,
             world=self.spawn_world,
-            check=True,
-            population_data=population_data)
+            check=True)
 
         output = loader_run.execute()
         self.assertEqual(len(output[rule.id]), 1)
@@ -848,18 +842,12 @@ class TestLoaders(WorldTestCase):
         output = loader.run(self.spawn_world, check=False)
         self.assertEqual(len(output[rule.id]), 2)
 
-        # This time we're going to supply population data to the loader,
-        # indicating that there is already one copy of this mob loaded
-        # (but not two). So one more run should only load one.
-        # So that we can initiate the population data, we're going to use the
-        # LoaderRun object directly rather than Loader.run.
-        population_data = {'rules': {}}
-        population_data['rules'][rule.id] = [output[rule.id][0].id]
+        # One mob is already loaded and one is missing, so one more run should
+        # only load one.
         loader_run = LoaderRun(
             loader=loader,
             world=self.spawn_world,
-            check=True,
-            population_data=population_data)
+            check=True)
 
         output = loader_run.execute()
         self.assertEqual(len(output[rule.id]), 1)
@@ -880,18 +868,12 @@ class TestLoaders(WorldTestCase):
         output = loader.run(self.spawn_world, check=False)
         self.assertEqual(len(output[rule.id]), 2)
 
-        # This time we're going to supply population data to the loader,
-        # indicating that there is already one copy of this mob loaded
-        # (but not two). So one more run should only load one.
-        # So that we can initiate the population data, we're going to use the
-        # LoaderRun object directly rather than Loader.run.
-        population_data = {'rules': {}}
-        population_data['rules'][rule.id] = [output[rule.id][0].id]
+        # One mob is already loaded and one is missing, so one more run should
+        # only load one.
         loader_run = LoaderRun(
             loader=loader,
             world=self.spawn_world,
-            check=True,
-            population_data=population_data)
+            check=True)
 
         output = loader_run.execute()
         self.assertEqual(len(output[rule.id]), 1)
@@ -966,6 +948,37 @@ class TestLoaders(WorldTestCase):
         bag_inventory = mob_inventory[1].inventory.all()
         self.assertEqual(len(bag_inventory), 3)
         self.assertEqual(bag_inventory[2].template, apple_template)
+
+    def test_nested_rule_target_missing_output_is_ignored(self):
+        rock_template = ItemTemplate.objects.create(
+            world=self.world,
+            name='a rock')
+        bag_template = ItemTemplate.objects.create(
+            world=self.world,
+            name='a bag',
+            type=adv_consts.ITEM_TYPE_CONTAINER)
+        loader = Loader.objects.create(
+            world=self.world,
+            zone=self.zone,
+            inherit_zone_wait=False)
+
+        parent_rule = Rule.objects.create(
+            loader=loader,
+            template=bag_template,
+            target=self.room)
+        nested_rule = Rule.objects.create(
+            loader=loader,
+            template=rock_template,
+            target=parent_rule)
+
+        # Simulate bad historical data where a nested item rule runs before
+        # its target rule has produced output.
+        nested_rule.order = 0
+        nested_rule.save(update_fields=['order'])
+
+        output = loader.run(self.spawn_world, check=False)
+        self.assertEqual(output[nested_rule.id], [])
+        self.assertEqual(len(output[parent_rule.id]), 1)
 
     def test_nested_items(self):
         """
@@ -1043,14 +1056,11 @@ class TestLoaders(WorldTestCase):
         item = item_template.spawn(self.room, self.spawn_world, rule=rule)
         self.assertEqual(Item.objects.count(), 1)
 
-        # For the actual run, pass in the population data
-        population_data = {'rules': {}}
-        population_data['rules'][rule.id] = [item.id]
+        # For the actual run, check against persisted world state.
         runner = LoaderRun(
             loader=loader,
             world=self.spawn_world,
-            check=True,
-            population_data=population_data)
+            check=True)
 
         # One more added got added, since 1 was already there.
         output = runner.execute()
@@ -1083,13 +1093,10 @@ class TestLoaders(WorldTestCase):
 
         self.room.inventory.all()[1].delete()
 
-        population_data = {'rules': {}}
-        population_data['rules'][rule.id] = [output[rule.id][0].id]
         runner = LoaderRun(
             loader,
             self.spawn_world,
-            check=True,
-            population_data=population_data)
+            check=True)
         output = runner.execute()
         self.assertEqual(len(output[rule.pk]), 1)
         self.assertEqual(len(self.room.inventory.all()), 2)
@@ -1219,6 +1226,34 @@ class TestLoaders(WorldTestCase):
         output = loader_run.execute()
         self.assertTrue(loader_run.executed)
         self.assertEqual(len(output.keys()), 1)
+
+    def test_loader_condition_invalid_expression_marks_run_executed(self):
+        self.zone.is_warzone = True
+        self.zone.zone_data = json.dumps({
+            'north_control': 'orc',
+        })
+        self.zone.save()
+
+        item_template = ItemTemplate.objects.create(
+            world=self.world,
+            name='a rock')
+        loader = Loader.objects.create(
+            world=self.world,
+            zone=self.zone,
+            inherit_zone_wait=False,
+            loader_condition="this is not valid python ???")
+        Rule.objects.create(
+            loader=loader,
+            template=item_template,
+            target=self.room)
+
+        loader_run = LoaderRun(
+            loader=loader,
+            world=self.spawn_world,
+            check=False)
+        output = loader_run.execute()
+        self.assertTrue(loader_run.executed)
+        self.assertEqual(len(output.keys()), 0)
 
     # Instance tests
 

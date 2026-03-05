@@ -8,6 +8,8 @@ from config import constants as adv_consts
 from builders.models import HousingBlock, Quest, MobTemplate
 from spawns.models import Player, Item, PlayerEnquire, Clan, ClanMembership, Mob
 from tests.base import WorldTestCase
+from system.serializers import RunLoadersSerializer
+from worlds.models import World, Zone
 
 
 # Create your tests here.
@@ -181,6 +183,31 @@ class SystemTestCase(WorldTestCase):
         self.make_system_user()
         self.client.force_authenticate(self.user)
 
+
+class RunLoadersValidationTests(SystemTestCase):
+
+    def setUp(self):
+        super().setUp()
+        self.spawn_world = self.world.create_spawn_world()
+        self.spawn_world.lifecycle = 'running'
+        self.spawn_world.save(update_fields=['lifecycle'])
+
+    def test_zone_must_belong_to_spawn_world_context(self):
+        other_world = World.objects.new_world(
+            name='Other World',
+            author=self.user)
+        other_zone = Zone.objects.create(
+            world=other_world,
+            name='Other Zone')
+
+        serializer = RunLoadersSerializer(data={
+            'world_id': self.spawn_world.id,
+            'zone_id': other_zone.id,
+        })
+        self.assertFalse(serializer.is_valid())
+        self.assertEqual(
+            serializer.errors['zone_id'][0],
+            "Zone does not belong to this world's context.")
 
 class ClanTests(SystemTestCase):
 

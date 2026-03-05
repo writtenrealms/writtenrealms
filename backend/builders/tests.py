@@ -2093,6 +2093,21 @@ class LoaderTests(BuilderTestCase):
         rule.refresh_from_db()
         self.assertEqual(rule.num_copies, 3)
 
+    def test_edit_mob_rule_without_target_field(self):
+        loader = Loader.objects.create(world=self.world, zone=self.zone)
+        mob_template = MobTemplate.objects.create(world=self.world)
+        rule = Rule.objects.create(
+            loader=loader,
+            template=mob_template,
+            target=self.room,
+            num_copies=1)
+        ep = reverse('builder-loader-rule-detail',
+                     args=[self.world.pk, loader.pk, rule.pk])
+        resp = self.client.put(ep, {'num_copies': 2}, format='json')
+        self.assertEqual(resp.status_code, 200)
+        rule.refresh_from_db()
+        self.assertEqual(rule.num_copies, 2)
+
     def test_cannot_edit_rule_with_other_world_template(self):
         loader = Loader.objects.create(world=self.world, zone=self.zone)
         item_template = ItemTemplate.objects.create(world=self.world)
@@ -2348,6 +2363,26 @@ class LoaderTests(BuilderTestCase):
                      args=[self.world.pk, loader.pk, rule.pk])
         resp = self.client.put(ep, {'target': rule.key})
         self.assertEqual(resp.status_code, 400)
+
+    def test_rule_cannot_target_later_rule(self):
+        loader = Loader.objects.create(world=self.world, zone=self.zone)
+        item_template = ItemTemplate.objects.create(world=self.world)
+        rule1 = Rule.objects.create(
+            loader=loader,
+            template=item_template,
+            target=self.room)
+        rule2 = Rule.objects.create(
+            loader=loader,
+            template=item_template,
+            target=self.room)
+
+        ep = reverse('builder-loader-rule-detail',
+                     args=[self.world.pk, loader.pk, rule1.pk])
+        resp = self.client.put(ep, {'target': rule2.key})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(
+            resp.data['target'][0],
+            "Rule target must reference an earlier rule.")
 
     def test_rule_cannot_load_mob_into_mob(self):
         """

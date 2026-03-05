@@ -1913,6 +1913,12 @@ class RuleSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 "A rule may not target itself.")
 
+        if (self.instance
+            and isinstance(target, Rule)
+            and target.order >= self.instance.order):
+            raise serializers.ValidationError(
+                "Rule target must reference an earlier rule.")
+
         return target
 
     def validate_num_copies(self, num_copies):
@@ -1926,6 +1932,10 @@ class RuleSerializer(serializers.ModelSerializer):
         "Make sure that no quest mob can be loaded twice."
 
         template = data.get('template') or self.instance.template
+        if self.instance:
+            target = data.get('target', self.instance.target)
+        else:
+            target = data.get('target')
 
         if (data.get('template')
             and isinstance(template, MobTemplate)
@@ -1943,7 +1953,7 @@ class RuleSerializer(serializers.ModelSerializer):
 
         if (data.get('template')
             and isinstance(template, TransformationTemplate)
-            and not isinstance(data['target'], Rule)):
+            and not isinstance(target, Rule)):
             raise serializers.ValidationError(
                 "Transformation Templates can only target rules.")
 
@@ -1955,7 +1965,7 @@ class RuleSerializer(serializers.ModelSerializer):
                 "Can only load 1 copy of a quest template.")
 
         if (isinstance(template, MobTemplate)
-            and isinstance(data['target'], Rule)):
+            and isinstance(target, Rule)):
             raise serializers.ValidationError(
                 "Mob template rule cannot target the output of another rule.")
 

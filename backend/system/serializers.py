@@ -58,16 +58,19 @@ class RunLoadersSerializer(RunningSpawnWorldOperation):
             zone = Zone.objects.get(pk=data)
         except Zone.DoesNotExist:
             raise serializers.ValidationError("Zone does not exist.")
+        context_world_id = getattr(self.world, 'context_id', None)
+        if context_world_id and zone.world_id != context_world_id:
+            raise serializers.ValidationError(
+                "Zone does not belong to this world's context.")
         self.zone = zone
         return data
 
-    def update_world(self, world, zone_id=None, repopulate=False, rdb=None):
+    def update_world(self, world, zone_id=None, repopulate=False):
         # Run the loaders
         loaders_output = run_loaders(
             world=self.world,
             zone_id=zone_id,
-            repopulate=repopulate,
-            rdb=rdb)
+            repopulate=repopulate)
 
         # return the mob IDs of each loaded mob
         mob_pks = []
@@ -82,13 +85,11 @@ class RunLoadersSerializer(RunningSpawnWorldOperation):
             'doors': loaders_output['doors'],
         }
 
-    def create(self, validated_data, rdb=None):
-        rdb = self.world.rdb
+    def create(self, validated_data):
         return self.update_world(
             validated_data['world_id'],
             zone_id=validated_data.get('zone_id'),
-            repopulate=validated_data.get('repopulate', False),
-            rdb=rdb)
+            repopulate=validated_data.get('repopulate', False))
 
 
 class ShutdownSerializer(serializers.Serializer):
