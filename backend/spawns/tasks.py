@@ -358,48 +358,142 @@ def exit_world(player_id, world_id,
         exit_to=world.context.id)
 
 
-def _parse_player_id(player_key: str | None) -> int | None:
-    if not player_key:
+def _normalize_event_type(event_type: str | None) -> str:
+    return str(event_type or "").strip().lower()
+
+
+def _parse_allowed_event_types(raw_types: str | None) -> set[str]:
+    values: set[str] = set()
+    for token in str(raw_types or "").split(","):
+        normalized = _normalize_event_type(token)
+        if normalized:
+            values.add(normalized)
+    return values
+
+
+def _parse_actor_ref(actor_key: str | None) -> tuple[str, int] | None:
+    actor_ref = str(actor_key or "").strip()
+    if "." not in actor_ref:
         return None
-    if not player_key.startswith("player."):
+
+    actor_kind, actor_id_str = actor_ref.split(".", 1)
+    actor_kind = actor_kind.strip().lower()
+    if actor_kind not in {"player", "mob"}:
         return None
+
     try:
-        return int(player_key.split(".", 1)[1])
-    except (IndexError, ValueError):
+        actor_id = int(actor_id_str)
+    except ValueError:
         return None
 
+    return actor_kind, actor_id
 
-def _resolve_world_key_for_player(player: Player) -> str:
-    player_world = getattr(player, "world", None)
-    if not player_world:
+
+def _parse_player_id(player_key: str | None) -> int | None:
+    parsed = _parse_actor_ref(player_key)
+    if not parsed:
+        return None
+    actor_kind, actor_id = parsed
+    if actor_kind != "player":
+        return None
+    return actor_id
+
+
+def _resolve_world_key_for_world(world: World | None) -> str:
+    if not world:
         return ""
 
-    context_world = getattr(player_world, "context", None)
+    context_world = getattr(world, "context", None)
     if context_world:
         root_world = getattr(context_world, "instance_of", None) or context_world
         return root_world.key
 
-    root_world = getattr(player_world, "instance_of", None) or player_world
+    root_world = getattr(world, "instance_of", None) or world
     return root_world.key
+
+
+def _resolve_ai_forward_actor(actor_key: str | None) -> dict | None:
+    parsed = _parse_actor_ref(actor_key)
+    if not parsed:
+        return None
+
+    actor_kind, actor_id = parsed
+    if actor_kind == "player":
+        player = (
+            Player.objects.select_related("room", "world__context__instance_of")
+            .filter(pk=actor_id)
+            .first()
+        )
+        if not player:
+            return None
+        return {
+            "key": player.key,
+            "name": player.name,
+            "kind": "player",
+            "room_key": player.room.key if player.room_id else "",
+            "world_key": _resolve_world_key_for_world(player.world),
+        }
+
+    mob = (
+        Mob.objects.select_related("room", "world__context__instance_of")
+        .filter(pk=actor_id)
+        .first()
+    )
+    if not mob:
+        return None
+    return {
+        "key": mob.key,
+        "name": mob.name,
+        "kind": "mob",
+        "room_key": mob.room.key if mob.room_id else "",
+        "world_key": _resolve_world_key_for_world(mob.world),
+    }
+
+
+def _resolve_actor_snapshot(actor_snapshot: dict | None) -> dict | None:
+    if not isinstance(actor_snapshot, dict):
+        return None
+
+    actor_key = str(actor_snapshot.get("key") or "").strip()
+    if not actor_key:
+        return None
+
+    actor_kind = str(actor_snapshot.get("kind") or "").strip().lower()
+    if actor_kind not in {"player", "mob"}:
+        parsed = _parse_actor_ref(actor_key)
+        if not parsed:
+            return None
+        actor_kind = parsed[0]
+
+    actor_name = actor_snapshot.get("name")
+    if actor_name is None:
+        actor_name = actor_key
+
+    return {
+        "key": actor_key,
+        "name": str(actor_name),
+        "kind": actor_kind,
+        "room_key": str(actor_snapshot.get("room_key") or "").strip(),
+        "world_key": str(actor_snapshot.get("world_key") or "").strip(),
+    }
 
 
 def _build_ai_forward_payload(
     *,
     event_type: str,
     event_data: dict,
-    actor_key: str,
-    player: Player,
+    actor: dict,
 ) -> dict:
     return {
         "event_id": f"evt-{uuid.uuid4()}",
         "event_type": event_type,
-        "world_key": _resolve_world_key_for_player(player),
-        "room_key": player.room.key if player.room_id else "",
+        "world_key": actor["world_key"],
+        "room_key": actor["room_key"],
         "timestamp": timezone.now().isoformat(),
         "actor": {
-            "key": actor_key,
-            "name": player.name,
-            "kind": "player",
+            "key": actor["key"],
+            "name": actor["name"],
+            "kind": actor["kind"],
         },
         "payload": event_data,
     }
@@ -411,6 +505,7 @@ def forward_event_to_ai_sidecar(
     event_type: str,
     event_data: dict | None = None,
     actor_key: str | None = None,
+    actor_snapshot: dict | None = None,
 ) -> None:
     """
     Forward selected game events to the WR AI sidecar.
@@ -422,23 +517,21 @@ def forward_event_to_ai_sidecar(
     if not forward_url:
         return
 
-    player_id = _parse_player_id(actor_key)
-    if not player_id:
+    normalized_event_type = _normalize_event_type(event_type)
+    allowed_event_types = _parse_allowed_event_types(
+        getattr(settings, "WR_AI_EVENT_TYPES", "")
+    )
+    if normalized_event_type not in allowed_event_types:
         return
 
-    player = (
-        Player.objects.select_related("room", "world__context__instance_of")
-        .filter(pk=player_id)
-        .first()
-    )
-    if not player:
+    actor = _resolve_ai_forward_actor(actor_key) or _resolve_actor_snapshot(actor_snapshot)
+    if not actor:
         return
 
     payload = _build_ai_forward_payload(
-        event_type=str(event_type or "").strip().lower(),
+        event_type=normalized_event_type,
         event_data=event_data if isinstance(event_data, dict) else {},
-        actor_key=str(actor_key or ""),
-        player=player,
+        actor=actor,
     )
     body = json.dumps(payload).encode("utf-8")
 

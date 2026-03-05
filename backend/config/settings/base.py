@@ -228,6 +228,6 @@ WR_AI_EVENT_FORWARD_URL = os.environ.get('WR_AI_EVENT_FORWARD_URL', '')
 WR_AI_EVENT_FORWARD_TOKEN = os.environ.get('WR_AI_EVENT_FORWARD_TOKEN', '')
 WR_AI_EVENT_TYPES = os.environ.get(
     'WR_AI_EVENT_TYPES',
-    'cmd.say.success,cmd.move.success',
+    'cmd.say.success,cmd.move.success,mob.spawned,mob.destroyed',
 )
 WR_CORE_AI_INGRESS_TOKEN = os.environ.get('WR_CORE_AI_INGRESS_TOKEN', '')

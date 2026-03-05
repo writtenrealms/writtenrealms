@@ -78,8 +78,10 @@ class WorldSmith:
         # if self.world.lifecycle != api_consts.WORLD_LIFECYCLE_STOPPING:
         #     raise serializers.ValidationError("Can only stop stopping worlds.")
 
-        # Placeholder for stop work
+        # Mark world as stopped before cleanup so cleanup guardrails allow run.
         self.world.set_lifecycle(api_consts.WORLD_LIFECYCLE_STOPPED)
+        # Stop should tear down transient runtime state (mobs/items/players in game).
+        self.world.cleanup()
 
         # Actually delete instances on stop
         if self.world.context.instance_of:

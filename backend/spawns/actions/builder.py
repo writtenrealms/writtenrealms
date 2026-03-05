@@ -4,10 +4,15 @@ import re
 
 from builders.models import ItemTemplate, MobTemplate
 from core.model_mixins import CharMixin, ItemMixin, MobMixin
+from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers as drf_serializers
 
+from spawns.ai_sidecar import (
+    maybe_enqueue_ai_sidecar_mob_destroyed,
+    maybe_enqueue_ai_sidecar_mob_spawned,
+)
 from spawns.actions.base import ActionError, ActionResult
 from spawns.events import GameEvent
 from spawns.handlers.registry import (
@@ -16,7 +21,7 @@ from spawns.handlers.registry import (
     dispatch_command,
     resolve_text_handler,
 )
-from spawns.models import Item, Mob, Player
+from spawns.models import Equipment, Item, Mob, Player
 from spawns.serializers import LoadTemplateSerializer
 from spawns.state_payloads import (
     door_state_lookup,
@@ -131,6 +136,44 @@ def _collect_purge_targets(player: Player, selector: str) -> list[Item | Mob]:
         return targets
 
     return [item for item in room_items if _entity_matches(item, selector)]
+
+
+def _collect_nested_item_ids(items: list[Item]) -> set[int]:
+    item_ids: set[int] = set()
+    for item in items:
+        item_ids.add(item.id)
+        item_ids.update(item.get_contained_ids())
+    return item_ids
+
+
+def _purge_mob_cleanly(
+    *,
+    mob: Mob,
+    source: str,
+    trigger_actor_key: str | None = None,
+) -> None:
+    maybe_enqueue_ai_sidecar_mob_destroyed(
+        mob=mob,
+        source=source,
+        trigger_actor_key=trigger_actor_key,
+        reason="purge",
+    )
+
+    item_ids = _collect_nested_item_ids(list(mob.inventory.all()))
+    if mob.equipment_id:
+        equipment_type = ContentType.objects.get_for_model(Equipment)
+        equipment_items = list(
+            Item.objects.filter(
+                container_type=equipment_type,
+                container_id=mob.equipment_id,
+            )
+        )
+        item_ids.update(_collect_nested_item_ids(equipment_items))
+
+    if item_ids:
+        Item.objects.filter(id__in=item_ids).delete()
+
+    Mob.objects.filter(pk=mob.id).delete()
 
 
 def _split_chained_commands(cmd: str) -> list[str]:
@@ -325,6 +368,11 @@ class LoadTemplateAction:
         elif vd["template_type"] == "mob":
             room = vd["room"] if vd["actor_type"] == "room" else vd["actor"].room
             mob = vd["template"].spawn(room, vd["spawn_world"])
+            maybe_enqueue_ai_sidecar_mob_spawned(
+                mob=mob,
+                source="builder.load_command",
+                trigger_actor_key=player.key,
+            )
             loaded_key = mob.key
             loaded_name = mob.name or (mob.template.name if mob.template else "mob")
         else:
@@ -380,7 +428,11 @@ class PurgeAction:
                 for item in items:
                     item.delete()
                 for mob in mobs:
-                    mob.delete()
+                    _purge_mob_cleanly(
+                        mob=mob,
+                        source="builder.purge_command",
+                        trigger_actor_key=player.key,
+                    )
 
                 out_text = "The world feels a little cleaner."
 
@@ -393,7 +445,11 @@ class PurgeAction:
             elif normalized_target == "mobs":
                 mobs = list(room.mobs.all())
                 for mob in mobs:
-                    mob.delete()
+                    _purge_mob_cleanly(
+                        mob=mob,
+                        source="builder.purge_command",
+                        trigger_actor_key=player.key,
+                    )
                 out_text = "You purge all mobs in the room."
 
             else:
@@ -404,7 +460,14 @@ class PurgeAction:
                 lines = []
                 for entity in targets:
                     lines.append(f"You purge {_entity_name(entity)} from this world.")
-                    entity.delete()
+                    if isinstance(entity, Mob):
+                        _purge_mob_cleanly(
+                            mob=entity,
+                            source="builder.purge_command",
+                            trigger_actor_key=player.key,
+                        )
+                    else:
+                        entity.delete()
                 out_text = "\n".join(lines)
 
         updated_player = get_player_with_related(player_id)

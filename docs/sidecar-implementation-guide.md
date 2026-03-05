@@ -30,6 +30,14 @@ WR Core exposes two integration surfaces:
 Entry point in WR Core publish path:
 
 - `backend/spawns/events.py` calls `maybe_enqueue_ai_sidecar_event_forwarding(...)`.
+- Mob-spawn entry points:
+  - `backend/spawns/actions/builder.py` for `/load mob ...`
+  - `backend/spawns/loading.py` for loader-driven spawns
+  - Both call `maybe_enqueue_ai_sidecar_mob_spawned(...)`.
+- Mob-destruction entry points:
+  - `backend/spawns/actions/builder.py` for `/purge` mob removals
+  - `backend/worlds/models.py:cleanup(...)` for world cleanup/shutdown removals
+  - Both call `maybe_enqueue_ai_sidecar_mob_destroyed(...)`.
 
 Forwarding gate logic:
 
@@ -37,7 +45,7 @@ Forwarding gate logic:
 - Event is forwarded only when all conditions pass:
   - `WR_AI_EVENT_FORWARD_URL` is configured.
   - Event type is in `WR_AI_EVENT_TYPES`.
-  - Actor resolves to a player key (`player.<id>`).
+  - Actor resolves to `player.<id>` or `mob.<id>`.
 
 Forwarding task:
 
@@ -49,7 +57,7 @@ Environment variables:
 
 - `WR_AI_EVENT_FORWARD_URL` (example: `http://host.docker.internal:8071/v1/events`)
 - `WR_AI_EVENT_FORWARD_TOKEN` (optional bearer token for sidecar endpoint)
-- `WR_AI_EVENT_TYPES` (comma-separated event types, e.g. `cmd.say.success,cmd.move.success`)
+- `WR_AI_EVENT_TYPES` (comma-separated event types, e.g. `cmd.say.success,cmd.move.success,mob.spawned,mob.destroyed`)
 
 ### 2) Inbound Intent Ingress
 
@@ -115,6 +123,68 @@ Notes:
 
 - `payload` is the original event `data` from WR Core.
 - For speech events, most sidecars should match against `payload.text`.
+- For mob lifecycle events (`event_type="mob.spawned"` / `event_type="mob.destroyed"`),
+  `actor.kind` is `mob`.
+- `payload.source` identifies the source, for example `builder.load_command`,
+  `loader`, `builder.purge_command`, or `world.cleanup`.
+
+Example mob spawn payload:
+
+```json
+{
+  "event_id": "evt-<uuid>",
+  "event_type": "mob.spawned",
+  "world_key": "world.137",
+  "room_key": "room.206990",
+  "timestamp": "2026-03-05T00:10:59.123456+00:00",
+  "actor": {
+    "key": "mob.34242860",
+    "name": "Sage",
+    "kind": "mob"
+  },
+  "payload": {
+    "source": "loader",
+    "mob": {
+      "key": "mob.34242860",
+      "name": "Sage",
+      "template_id": 456
+    },
+    "spawn_world_key": "world.137",
+    "room_key": "room.206990",
+    "loader_id": 13,
+    "rule_id": 89
+  }
+}
+```
+
+Example mob destroyed payload:
+
+```json
+{
+  "event_id": "evt-<uuid>",
+  "event_type": "mob.destroyed",
+  "world_key": "world.137",
+  "room_key": "room.206990",
+  "timestamp": "2026-03-05T00:12:01.123456+00:00",
+  "actor": {
+    "key": "mob.34242860",
+    "name": "Sage",
+    "kind": "mob"
+  },
+  "payload": {
+    "source": "builder.purge_command",
+    "reason": "purge",
+    "mob": {
+      "key": "mob.34242860",
+      "name": "Sage",
+      "template_id": 456
+    },
+    "spawn_world_key": "world.137",
+    "room_key": "room.206990",
+    "trigger_actor_key": "player.128"
+  }
+}
+```
 
 ### Sidecar -> WR Core Intent Envelope
 
@@ -188,13 +258,16 @@ WR Core behavior today:
 
 1. Configure WR Core env and restart backend + worker.
 2. Run sidecar endpoint locally (example `http://localhost:8071/v1/events`).
-3. Ensure player and test mob are in same room.
-4. Say text that should match sidecar rule (example `say archive`).
-5. Verify logs:
+3. Ensure `WR_AI_EVENT_TYPES` includes `mob.spawned,mob.destroyed`.
+4. Ensure player and test mob are in same room.
+5. Spawn a mob via `/load mob <template_id>` and confirm sidecar receives `mob.spawned`.
+6. Purge that mob via `/purge mobs` and confirm sidecar receives `mob.destroyed`.
+7. Say text that should match sidecar rule (example `say archive`).
+8. Verify logs:
    - WR Core worker receives `spawns.tasks.forward_event_to_ai_sidecar`.
    - Sidecar receives `/v1/events` and produces intent.
    - WR Core logs `POST /api/v1/internal/ai/intents/` with `202`.
-6. Verify in game console that mob speech appears.
+9. Verify in game console that mob speech appears.
 
 ## Related Docs
 

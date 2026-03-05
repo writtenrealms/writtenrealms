@@ -28,7 +28,7 @@ services:
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis-celery:6379/0}
       - WR_AI_EVENT_FORWARD_URL=${WR_AI_EVENT_FORWARD_URL:-}
       - WR_AI_EVENT_FORWARD_TOKEN=${WR_AI_EVENT_FORWARD_TOKEN:-}
-      - WR_AI_EVENT_TYPES=${WR_AI_EVENT_TYPES:-cmd.say.success,cmd.move.success}
+      - WR_AI_EVENT_TYPES=${WR_AI_EVENT_TYPES:-cmd.say.success,cmd.move.success,mob.spawned,mob.destroyed}
       - WR_CORE_AI_INGRESS_TOKEN=${WR_CORE_AI_INGRESS_TOKEN:-}
     depends_on:
       db:
@@ -66,7 +66,7 @@ services:
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis-celery:6379/0}
       - WR_AI_EVENT_FORWARD_URL=${WR_AI_EVENT_FORWARD_URL:-}
       - WR_AI_EVENT_FORWARD_TOKEN=${WR_AI_EVENT_FORWARD_TOKEN:-}
-      - WR_AI_EVENT_TYPES=${WR_AI_EVENT_TYPES:-cmd.say.success,cmd.move.success}
+      - WR_AI_EVENT_TYPES=${WR_AI_EVENT_TYPES:-cmd.say.success,cmd.move.success,mob.spawned,mob.destroyed}
       - WR_CORE_AI_INGRESS_TOKEN=${WR_CORE_AI_INGRESS_TOKEN:-}
     depends_on:
       db:
@@ -104,7 +104,7 @@ services:
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis-celery:6379/0}
       - WR_AI_EVENT_FORWARD_URL=${WR_AI_EVENT_FORWARD_URL:-}
       - WR_AI_EVENT_FORWARD_TOKEN=${WR_AI_EVENT_FORWARD_TOKEN:-}
-      - WR_AI_EVENT_TYPES=${WR_AI_EVENT_TYPES:-cmd.say.success,cmd.move.success}
+      - WR_AI_EVENT_TYPES=${WR_AI_EVENT_TYPES:-cmd.say.success,cmd.move.success,mob.spawned,mob.destroyed}
       - WR_CORE_AI_INGRESS_TOKEN=${WR_CORE_AI_INGRESS_TOKEN:-}
     depends_on:
       db:

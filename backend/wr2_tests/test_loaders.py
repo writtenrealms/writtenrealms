@@ -1,6 +1,9 @@
 import json
+from unittest.mock import patch
 
-from builders.models import ItemTemplate, Loader, Rule
+from django.test import override_settings
+
+from builders.models import ItemTemplate, Loader, MobTemplate, Rule
 from config import constants as adv_consts
 from spawns.loading import LoaderRun, run_loaders
 from spawns.models import Item
@@ -118,6 +121,45 @@ class TestLoaderRuntimeSafety(WorldTestCase):
             Item.objects.filter(world=self.spawn_world, rule=rule).count(),
             2,
         )
+
+    @override_settings(
+        WR_AI_EVENT_FORWARD_URL="http://localhost:8071/v1/events",
+        WR_AI_EVENT_TYPES="mob.spawned",
+    )
+    @patch("spawns.tasks.forward_event_to_ai_sidecar.delay")
+    def test_loader_enqueues_sidecar_spawn_signal(self, mock_forward_delay):
+        mob_template = MobTemplate.objects.create(
+            world=self.world,
+            name="a sentinel",
+        )
+        loader = Loader.objects.create(
+            world=self.world,
+            zone=self.zone,
+            inherit_zone_wait=False,
+            respawn_wait=0,
+        )
+        rule = Rule.objects.create(
+            loader=loader,
+            template=mob_template,
+            target=self.room,
+            num_copies=1,
+        )
+
+        output = LoaderRun(
+            loader=loader,
+            world=self.spawn_world,
+            check=False,
+        ).execute()
+        spawned_mob = output[rule.id][0]
+
+        mock_forward_delay.assert_called_once()
+        kwargs = mock_forward_delay.call_args.kwargs
+        self.assertEqual(kwargs["event_type"], "mob.spawned")
+        self.assertEqual(kwargs["actor_key"], spawned_mob.key)
+        self.assertEqual(kwargs["event_data"]["source"], "loader")
+        self.assertEqual(kwargs["event_data"]["loader_id"], loader.id)
+        self.assertEqual(kwargs["event_data"]["rule_id"], rule.id)
+        self.assertEqual(kwargs["event_data"]["mob"]["key"], spawned_mob.key)
 
         # Delete one copy and ensure reload adds exactly one replacement
         first_output[rule.id][0].delete()

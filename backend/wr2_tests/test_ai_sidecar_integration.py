@@ -1,3 +1,4 @@
+import json
 from unittest.mock import patch
 
 from django.test import override_settings
@@ -143,3 +144,63 @@ class TestAIEventForwarding(WorldTestCase):
         publish_events([event], actor_key=mob.key)
 
         mock_forward_delay.assert_not_called()
+
+    @override_settings(
+        WR_AI_EVENT_FORWARD_URL="http://localhost:8071/v1/events",
+        WR_AI_EVENT_TYPES="mob.spawned,mob.destroyed",
+    )
+    @patch("spawns.tasks.urllib_request.urlopen")
+    def test_forward_task_supports_mob_actor(self, mock_urlopen):
+        mob = self.create_mob("Sage")
+        mock_urlopen.return_value.__enter__.return_value = None
+
+        from spawns.tasks import forward_event_to_ai_sidecar
+
+        forward_event_to_ai_sidecar(
+            event_type="mob.spawned",
+            event_data={"source": "loader"},
+            actor_key=mob.key,
+        )
+
+        mock_urlopen.assert_called_once()
+        request_obj = mock_urlopen.call_args.args[0]
+        payload = json.loads(request_obj.data.decode("utf-8"))
+        self.assertEqual(payload["event_type"], "mob.spawned")
+        self.assertEqual(payload["actor"]["key"], mob.key)
+        self.assertEqual(payload["actor"]["kind"], "mob")
+        self.assertEqual(payload["payload"]["source"], "loader")
+
+    @override_settings(
+        WR_AI_EVENT_FORWARD_URL="http://localhost:8071/v1/events",
+        WR_AI_EVENT_TYPES="mob.destroyed",
+    )
+    @patch("spawns.tasks.urllib_request.urlopen")
+    def test_forward_task_uses_actor_snapshot_when_mob_deleted(self, mock_urlopen):
+        mob = self.create_mob("Sage")
+        actor_key = mob.key
+        actor_name = mob.name
+        mob.delete()
+        mock_urlopen.return_value.__enter__.return_value = None
+
+        from spawns.tasks import forward_event_to_ai_sidecar
+
+        forward_event_to_ai_sidecar(
+            event_type="mob.destroyed",
+            event_data={"source": "builder.purge_command", "reason": "purge"},
+            actor_key=actor_key,
+            actor_snapshot={
+                "key": actor_key,
+                "name": actor_name,
+                "kind": "mob",
+                "world_key": self.spawn_world.key,
+                "room_key": self.room.key,
+            },
+        )
+
+        mock_urlopen.assert_called_once()
+        request_obj = mock_urlopen.call_args.args[0]
+        payload = json.loads(request_obj.data.decode("utf-8"))
+        self.assertEqual(payload["event_type"], "mob.destroyed")
+        self.assertEqual(payload["actor"]["key"], actor_key)
+        self.assertEqual(payload["actor"]["kind"], "mob")
+        self.assertEqual(payload["payload"]["reason"], "purge")
