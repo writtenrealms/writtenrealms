@@ -6,6 +6,9 @@ import path from 'path'
 export default defineConfig({
   plugins: [vue()],
   logLevel: 'info',
+  optimizeDeps: {
+    include: ['gsap'],
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'), // Set the '@' alias to point to the src directory

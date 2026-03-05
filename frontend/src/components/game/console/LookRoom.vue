@@ -301,17 +301,17 @@ const motd_lines = computed(() => {
     font-weight: bold;
   }
 
-  .motd-line ::v-deep {
-  a {
-    color: $color-text-70;
+  .motd-line {
+    :deep(a) {
+      color: $color-text-70;
 
-    &:hover {
-      color: $color-text;
-      text-decoration: none;
-      border-bottom-color: #aaa;
-      cursor: pointer;
+      &:hover {
+        color: $color-text;
+        text-decoration: none;
+        border-bottom-color: #aaa;
+        cursor: pointer;
+      }
     }
   }
-}
 }
 </style>

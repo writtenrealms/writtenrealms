@@ -35,8 +35,8 @@ const lines = computed(() => {
   color: $color-primary;
   @include font-text-regular;
 }
-.line ::v-deep {
-  a {
+.line {
+  :deep(a) {
     color: $color-text-70;
 
     &:hover {
