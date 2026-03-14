@@ -8,9 +8,10 @@ from celery import shared_task
 
 from config import constants as api_consts, constants
 from config import game_settings as adv_config
-from fastapi_app.forge_ws import complete_job
+from fastapi_app.forge_ws import complete_job, exit_world as notify_exit_world
 from spawns.models import Player
 from spawns.loading import run_loaders
+from spawns.services import WorldGate
 from users.models import User
 from worlds.models import World
 from worlds.services import WorldSmith
@@ -31,6 +32,63 @@ def _loader_interval_seconds() -> float:
 
 def _loader_lock_timeout_seconds() -> int:
     return max(int(_loader_interval_seconds() * 4), 30)
+
+
+def _player_idle_timeout_seconds(player) -> int:
+    if player.is_immortal:
+        return api_consts.BUILDER_IDLE_TIMEOUT
+    return api_consts.IDLE_TIMEOUT
+
+
+def _should_idle_logout_player(player, spawn_world) -> bool:
+    if not spawn_world.is_multiplayer:
+        return True
+    if not player.config:
+        return True
+    return bool(player.config.idle_logout)
+
+
+def _disconnect_idle_player(player, spawn_world):
+    WorldGate(player=player, world=spawn_world).exit()
+    notify_exit_world(
+        player_id=player.id,
+        world_id=spawn_world.id,
+        exit_to=spawn_world.context.id,
+    )
+
+
+def _disconnect_idle_players(spawn_world) -> int:
+    now = timezone.now()
+    disconnected_players = 0
+    players_in_world = Player.objects.filter(
+        world=spawn_world,
+        in_game=True,
+    ).select_related('config')
+
+    for player in players_in_world.iterator(chunk_size=100):
+        if not _should_idle_logout_player(player, spawn_world):
+            continue
+
+        idle_timeout = _player_idle_timeout_seconds(player)
+        if player.last_action_ts:
+            delta = (now - player.last_action_ts).total_seconds()
+        else:
+            delta = idle_timeout + 1
+
+        if delta <= idle_timeout:
+            continue
+
+        logger.info(
+            "Player %s [ %s ] in world %s is idle for %s seconds, disconnecting...",
+            player.name,
+            player.id,
+            spawn_world.key,
+            delta,
+        )
+        _disconnect_idle_player(player, spawn_world)
+        disconnected_players += 1
+
+    return disconnected_players
 
 
 @shared_task
@@ -138,7 +196,14 @@ def monitor_worlds():
         lifecycle_change_ts__isnull=False,)
 
     for spawn_world in running_worlds:
-        logger.info("Examining world %s" % spawn_world.key)
+        logger.info("#### Examining world %s" % spawn_world.key)
+
+        disconnected_players = _disconnect_idle_players(spawn_world)
+        if disconnected_players:
+            spawn_world.refresh_from_db()
+
+        if spawn_world.lifecycle != constants.WORLD_LIFECYCLE_RUNNING:
+            continue
 
         # The last checks have to do with idling worlds (MPWs with no
         # connected players). We exclude tier 3 MPWs, which always run.

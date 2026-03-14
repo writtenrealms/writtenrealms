@@ -282,14 +282,11 @@ class WorldGate:
                 player = World.leave_instance(player=player)
 
         elif transfer_to and transfer_from:
-            instance = World.enter_instance(
+            World.enter_instance(
                 player=player,
                 transfer_to_id=transfer_to,
                 transfer_from_id=transfer_from,
                 ref=ref,
                 member_ids=member_ids)
-
-        game_world = self.world.game_world
-        game_player = self.player.game_player
-        if not game_world or not game_player:
-            return
+        # WR2 no longer has a live in-memory game_player/game_world to clean up
+        # here. The persisted player state changes above are the MPW exit work.
