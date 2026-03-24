@@ -55,6 +55,7 @@ from spawns.handlers import movement
 from spawns.handlers import communication
 from spawns.handlers import builder
 from spawns.handlers import items
+from spawns.handlers import quests
 
 __all__ = [
     # Base classes

@@ -59,6 +59,15 @@ def publish_events(
             connection_id=connection_id,
         )
 
+        from quests.subscriptions import dispatch_quest_subscriptions_for_event
+
+        dispatch_quest_subscriptions_for_event(
+            event_type=event.type,
+            event_data=event.data,
+            actor_key=actor_key,
+            connection_id=connection_id,
+        )
+
         # Optionally forward selected events to an external AI sidecar.
         from spawns.ai_sidecar import maybe_enqueue_ai_sidecar_event_forwarding
 

@@ -9,6 +9,115 @@ The roadmap is intentionally replacement-oriented. We do not want to spend time
 on WR1 data migration, legacy compatibility layers, or keeping the current
 quest model alive longer than necessary.
 
+Reference docs:
+
+- `docs/quest-system-endstate.md`
+- `docs/quest-manifest-playground.md`
+- `docs/quest-runtime-playground.md`
+
+## Current Status
+
+Status as of 2026-03-23:
+
+- Phase 1 backend authoring foundation is implemented.
+- Phase 1 playground and usage docs are implemented.
+- Phase 2 backend runtime slice is implemented.
+- Phase 2 runtime walkthrough docs are implemented.
+- There is no frontend builder UI yet.
+- There is no dedicated frontend quest UI yet.
+
+Implemented so far:
+
+- new app:
+  - `backend/quests/`
+- new authored models:
+  - `QuestTemplate`
+  - `QuestArcTemplate`
+- manifest validation and apply/delete support for:
+  - `kind: quest`
+  - `kind: questarc`
+- builder world manifest integration in the existing
+  `POST /builder/worlds/<world_pk>/manifests/apply/` flow
+- read endpoints for Phase 1 authoring:
+  - `GET /builder/worlds/<world_pk>/questtemplates/`
+  - `GET /builder/worlds/<world_pk>/questtemplates/<id-or-slug>/`
+  - `GET /builder/worlds/<world_pk>/questarcs/`
+  - `GET /builder/worlds/<world_pk>/questarcs/<id-or-slug>/`
+- backend playground script:
+  - `backend/scripts/quest_manifest_playground.py`
+- playground usage doc:
+  - `docs/quest-manifest-playground.md`
+- new runtime models:
+  - `QuestInstance`
+  - `QuestObjectiveState`
+  - `QuestJournalEntry`
+  - `QuestOfferState`
+- runtime services:
+  - discovery
+  - progression
+  - journal/recap
+  - quest event subscriptions
+- runtime command surface:
+  - `quest recap`
+  - `quest opportunities`
+  - `quest accept <slug>`
+  - `quest choose <slug-or-id> <choice_id>`
+  - `quest abandon <slug-or-id>`
+- runtime endpoints:
+  - `GET /game/quests/opportunities/`
+  - `POST /game/quests/opportunities/<slug>/accept/`
+  - `GET /game/quests/active/`
+  - `GET /game/quests/resolved/`
+  - `GET /game/quests/instances/<instance_id>/recap/`
+  - `POST /game/quests/instances/<instance_id>/choose/`
+  - `POST /game/quests/instances/<instance_id>/abandon/`
+- runtime playground script:
+  - `backend/scripts/quest_runtime_playground.py`
+- runtime walkthrough doc:
+  - `docs/quest-runtime-playground.md`
+- automated tests:
+  - `backend/wr2_tests/test_quest_manifests.py`
+  - `backend/wr2_tests/test_quest_runtime.py`
+
+Deliberate Phase 1 deviation from the ideal end-state:
+
+- the new read endpoints use `questtemplates/` and `questarcs/` instead of
+  taking over legacy `/quests/` routes yet
+- schema classes currently live in `backend/quests/manifests.py` instead of a
+  separate `backend/quests/schemas.py`
+- no builder frontend shipped yet
+
+Deliberate Phase 2 deviation from the ideal end-state:
+
+- runtime resolved quests currently live at `GET /game/quests/resolved/`
+  instead of taking over the legacy completed route yet
+- discovery refresh is currently driven by emitted gameplay events and quest
+  endpoints, not by `state.sync`
+- `npc_dialogue` discovery currently means "matching mob template is present in
+  the room" rather than full dialogue-tree acceptance
+- no dedicated frontend runtime quest UI shipped yet
+
+Important architectural reality today:
+
+- the smallest thing you can interact with is a `QuestTemplate` manifest
+- there is no standalone persisted `Storylet` model yet
+- storylets currently exist as step nodes inside a quest template graph
+
+Immediate next work:
+
+- Phase 1 cleanup:
+  - optional frontend builder read UI
+  - move schema classes into `backend/quests/schemas.py` if we still want the
+    module split as follow-up cleanup
+- Phase 2 polish:
+  - frontend runtime quest UI
+  - trigger quest discovery from `state.sync` / enter-world flow
+  - decide when `/game/quests/resolved/` should become canonical
+    `/game/quests/completed/`
+- Phase 3 cutover:
+  - retire legacy quest log surfaces
+  - stop reading old quest runtime models
+
 ## Current Codebase Fit
 
 The brainstorm is directionally right for this repository, with a few important
@@ -92,12 +201,12 @@ domain logic should live in `backend/quests/`, not inside `builders.models.py`.
 
 Canonical authored quest definition.
 
-Suggested fields:
+Current implementation:
 
 - `world` FK
 - `slug` unique per world
 - `name`
-- `content_type`
+- `quest_type`
   - `questlet`, `quest`, `contract`, `world_event`
 - `scope`
   - `player`, `party`, `guild`, `world`
@@ -112,7 +221,6 @@ Suggested fields:
 - `graph` JSONField
 - `reward_policy` JSONField
 - `manifest_version`
-- `source_manifest` JSONField or `manifest_hash`
 - timestamps
 
 Notes:
@@ -120,6 +228,7 @@ Notes:
 - The graph stays in structured JSON because quests are naturally graph-shaped.
 - We still keep indexable relational columns for world, slug, type, scope, and
   lifecycle.
+- `source_manifest` / `manifest_hash` are still future work.
 
 ### `QuestArcTemplate`
 
@@ -138,24 +247,19 @@ Suggested fields:
 
 Runtime state for an accepted or auto-started quest.
 
-Suggested fields:
+Current implementation:
 
 - `template` FK
-- `scope_type`
 - `player` FK nullable
-- `party_id` nullable
-- `guild_id` nullable
 - `world` FK for world-scoped instances
 - `status`
-  - `opportunity`, `active`, `resolved`
+  - `active`, `resolved`
 - `resolution`
-  - `complete`, `compromised`, `failed_forward`, `expired`, `abandoned`
+  - `complete`, `abandoned`
 - `current_step_id`
 - `slot_bindings` JSONField
 - `local_state` JSONField
 - `visible_objective_ids` JSONField
-- `started_at`
-- `updated_at`
 - `resolved_at`
 - `expires_at` nullable
 - `last_journal_entry_at`
@@ -164,15 +268,17 @@ Notes:
 
 - A quest instance is the authoritative runtime record.
 - We do not rebuild runtime state out of `PlayerQuest` timestamps.
+- Phase 2 is player-scoped only, so shared-scope fields are still future work.
 
 ### `QuestObjectiveState`
 
 Runtime progress rows for active objectives.
 
-Suggested fields:
+Current implementation:
 
 - `quest_instance` FK
 - `objective_id`
+- `text`
 - `status`
   - `active`, `complete`, `failed`, `hidden`
 - `progress_current`
@@ -189,7 +295,7 @@ graph for every event.
 
 Authored recap history for player memory.
 
-Suggested fields:
+Current implementation:
 
 - `quest_instance` FK
 - `step_id`
@@ -205,10 +311,11 @@ Suggested fields:
 
 Per-player discovery bookkeeping.
 
-Suggested fields:
+Current implementation:
 
 - `player` FK
 - `template` FK
+- `is_visible`
 - `last_seen_at`
 - `last_accepted_at`
 - `last_resolved_at`
@@ -243,11 +350,17 @@ Important rule:
   facts and marks
 - authors should not write new content in the old `conditions` DSL
 
+Current implementation note:
+
+- typed schema validation exists today
+- it currently lives inside `backend/quests/manifests.py`
+- splitting it into `backend/quests/schemas.py` is still worthwhile cleanup
+
 ## Endpoint Plan
 
 ### Builder-facing endpoints
 
-These are the main builder surfaces to add.
+End-state builder surfaces:
 
 - `GET /builder/worlds/<world_pk>/quests/`
   - list quest templates
@@ -263,6 +376,24 @@ These are the main builder surfaces to add.
 - `POST /builder/worlds/<world_pk>/manifests/apply/`
   - accept `kind: quest`
   - later accept `kind: questarc`
+
+Current Phase 1 builder surfaces:
+
+- `GET /builder/worlds/<world_pk>/questtemplates/`
+- `GET /builder/worlds/<world_pk>/questtemplates/<id-or-slug>/`
+- `GET /builder/worlds/<world_pk>/questarcs/`
+- `GET /builder/worlds/<world_pk>/questarcs/<id-or-slug>/`
+- `POST /builder/worlds/<world_pk>/manifests/apply/`
+  - accepts `kind: quest`
+  - accepts `kind: questarc`
+
+Current endpoint behavior details:
+
+- list endpoints support `?query=<text>`
+- numeric `query` values filter by id
+- non-numeric `query` values filter by `name` or `slug`
+- detail endpoints accept either numeric id or slug even though the URL
+  parameter name is still `<pk>`
 
 Manifest create/update/delete behavior should match the trigger workflow:
 
@@ -298,6 +429,10 @@ Implementation direction:
    `kind: questarc`
 4. add round-trip tests similar to existing trigger and world-config manifest
    tests
+
+Current status:
+
+- done
 
 Quest manifests should support:
 
@@ -359,6 +494,11 @@ Do not keep investing in the current:
 
 Those screens mirror the legacy model too closely.
 
+Current status:
+
+- backend read endpoints exist
+- frontend builder screens do not exist yet
+
 ## Tiered Implementation Plan
 
 ### Phase 0: Freeze Legacy Quest Work
@@ -377,6 +517,10 @@ Validation:
 
 - no new builder or runtime work lands in `builders.Quest`
 
+Status:
+
+- done
+
 ### Phase 1: Authoring Foundation
 
 Goal: make the new quest format real before runtime work starts.
@@ -393,11 +537,36 @@ Tasks:
 - add world manifest apply routing for `kind: quest`
 - build a minimal builder UI that can list quests and expose YAML
 
+Status:
+
+- done on the backend
+- frontend builder UI still pending
+
+Completed:
+
+- `backend/quests/` app exists
+- migrations for `QuestTemplate` and `QuestArcTemplate` exist
+- typed manifest validation exists
+- create/update/delete manifest flow exists
+- builder read endpoints exist
+- world manifest apply routing exists for `quest` and `questarc`
+- backend playground script exists
+- backend playground documentation exists
+- automated manifest tests exist and pass
+
+Still open inside or adjacent to Phase 1:
+
+- optional frontend builder read UI
+- optional module cleanup to move schema classes out of `manifests.py`
+- deciding when the temporary `questtemplates/` and `questarcs/` routes should
+  become canonical `/quests/` and `/quest-arcs/` routes
+
 Scope limits:
 
 - no runtime quest progression yet
 - no slot query execution yet
 - no world events yet
+- no in-game playable quest experience yet
 
 Validation:
 
@@ -410,9 +579,34 @@ Recommended tests:
 - `backend/wr2_tests/test_quest_manifests.py`
 - builder permission tests in `backend/builders/tests.py`
 
+Current verification:
+
+- `wr2_tests.test_quest_manifests`
+- `wr2_tests.test_trigger_manifests`
+- `wr2_tests.test_world_config_manifests`
+- manual playground verification:
+  - `template`
+  - `list`
+  - `show`
+  - `apply`
+
+Verified command:
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
+  python manage.py test \
+    wr2_tests.test_quest_manifests \
+    wr2_tests.test_trigger_manifests \
+    wr2_tests.test_world_config_manifests \
+    --settings=config.settings.testing
+```
+
 ### Phase 2: First Playable Vertical Slice
 
 Goal: ship a small but real WR2 quest engine.
+
+This is the first phase where authored quest manifests become actually
+playable in game.
 
 Minimum supported features:
 
@@ -439,6 +633,49 @@ Minimum supported features:
 - journal entries with recap/lead/stakes
 - active/completed/opportunities endpoints
 - `quest recap` command
+
+Status:
+
+- done on the backend
+- frontend runtime quest UI still pending
+
+Completed in this pass:
+
+- runtime models exist:
+  - `QuestInstance`
+  - `QuestObjectiveState`
+  - `QuestJournalEntry`
+  - `QuestOfferState`
+- discovery works for:
+  - `auto_start`
+  - `room_prompt`
+  - `npc_dialogue`
+- runtime step kinds work for:
+  - `storylet`
+  - `objective`
+  - `resolution`
+- objective progress modes work for:
+  - `boolean`
+  - `count`
+  - `unique_count`
+- in-game command path exists:
+  - `quest recap`
+  - `quest opportunities`
+  - `quest accept`
+  - `quest choose`
+  - `quest abandon`
+- runtime endpoints exist
+- quest subscriptions are wired into `publish_events()`
+- runtime playground script exists
+- runtime walkthrough documentation exists
+- focused runtime tests exist and pass
+
+Still open inside or adjacent to Phase 2:
+
+- dedicated frontend runtime quest UI
+- discovery refresh on `state.sync` / enter-world
+- canonical completed-route cutover
+- broader builder/runtime integration polish around `npc_dialogue`
 
 Implementation tasks:
 
@@ -467,6 +704,27 @@ Recommended tests:
 - `backend/wr2_tests/test_quest_engine.py`
 - `backend/wr2_tests/test_quest_journal.py`
 - `backend/wr2_tests/test_quest_event_subscriptions.py`
+
+Current verification:
+
+- `wr2_tests.test_quest_runtime`
+- `wr2_tests.test_quest_manifests`
+- `wr2_tests.test_information`
+- `wr2_tests.test_movement`
+- `wr2_tests.test_triggers`
+
+Verified command:
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
+  python manage.py test \
+    wr2_tests.test_quest_runtime \
+    wr2_tests.test_quest_manifests \
+    wr2_tests.test_information \
+    wr2_tests.test_movement \
+    wr2_tests.test_triggers \
+    --settings=config.settings.testing
+```
 
 ### Phase 3: Cutover and Delete Legacy Quest System
 
@@ -640,9 +898,10 @@ Tests:
 - builder manifest/permission tests in `backend/builders/tests.py`
 - WR2 runtime tests in `backend/wr2_tests/`
 
-## Recommended First Deliverable
+## Recommended Next Deliverable
 
-The best first milestone is a strict vertical slice:
+Phase 1 authoring exists now. The next milestone should be a strict playable
+vertical slice:
 
 1. author one `kind: quest` manifest
 2. ingest it through the builder manifest flow

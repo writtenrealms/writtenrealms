@@ -41,6 +41,7 @@ MIGRATION_MODULES = {
 
     'core': None,
     'builders': None,
+    'quests': None,
     'worlds': None,
     'users': None,
     'lobby': None,

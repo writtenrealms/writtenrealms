@@ -37,6 +37,7 @@ from core.view_mixins import (
 from builders import manifests as builder_manifests
 from builders import permissions as builder_permissions
 from builders import serializers as builder_serializers
+from quests import manifests as quest_manifests
 from builders.models import (
     BuilderAction,
     BuilderAssignment,
@@ -1499,6 +1500,13 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             "You do not have permission to alter world configuration."
         )
 
+    def _assert_can_edit_quest_templates(self):
+        if self._builder_rank >= 3:
+            return
+        raise drf_exceptions.PermissionDenied(
+            "You do not have permission to alter quest templates."
+        )
+
     def _apply_trigger_manifest(self, manifest):
         operation = builder_manifests.parse_manifest_operation(manifest)
         if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
@@ -1574,6 +1582,86 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             status=status.HTTP_200_OK,
         )
 
+    def _apply_quest_manifest(self, manifest):
+        self._assert_can_edit_quest_templates()
+        operation = quest_manifests.parse_manifest_operation(manifest)
+        if operation == quest_manifests.MANIFEST_OPERATION_DELETE:
+            parsed_delete = quest_manifests.parse_quest_delete_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            quest = parsed_delete.quest
+            quest_payload = {
+                "id": quest.id,
+                "key": quest.key,
+                "slug": quest.slug,
+                "name": quest.name,
+            }
+            quest.delete()
+            return Response(
+                {
+                    "kind": quest_manifests.QUEST_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "quest": quest_payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        parsed_quest = quest_manifests.parse_quest_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        is_create = parsed_quest.quest is None
+        quest = quest_manifests.apply_quest_manifest(parsed_quest)
+        return Response(
+            {
+                "kind": quest_manifests.QUEST_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "quest": quest_manifests.serialize_quest_template_payload(quest),
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
+    def _apply_quest_arc_manifest(self, manifest):
+        self._assert_can_edit_quest_templates()
+        operation = quest_manifests.parse_manifest_operation(manifest)
+        if operation == quest_manifests.MANIFEST_OPERATION_DELETE:
+            parsed_delete = quest_manifests.parse_quest_arc_delete_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            quest_arc = parsed_delete.quest_arc
+            quest_arc_payload = {
+                "id": quest_arc.id,
+                "key": quest_arc.key,
+                "slug": quest_arc.slug,
+                "name": quest_arc.name,
+            }
+            quest_arc.delete()
+            return Response(
+                {
+                    "kind": quest_manifests.QUEST_ARC_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "quest_arc": quest_arc_payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        parsed_quest_arc = quest_manifests.parse_quest_arc_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        is_create = parsed_quest_arc.quest_arc is None
+        quest_arc = quest_manifests.apply_quest_arc_manifest(parsed_quest_arc)
+        return Response(
+            {
+                "kind": quest_manifests.QUEST_ARC_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "quest_arc": quest_manifests.serialize_quest_arc_payload(quest_arc),
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
     def post(self, request, world_pk, format=None):
         manifest_text = request.data.get("manifest")
         if manifest_text is None:
@@ -1586,6 +1674,10 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             return self._apply_trigger_manifest(manifest)
         if manifest_kind == builder_manifests.WORLD_CONFIG_MANIFEST_KIND:
             return self._apply_world_config_manifest(manifest)
+        if manifest_kind == builder_manifests.QUEST_MANIFEST_KIND:
+            return self._apply_quest_manifest(manifest)
+        if manifest_kind == builder_manifests.QUEST_ARC_MANIFEST_KIND:
+            return self._apply_quest_arc_manifest(manifest)
 
         raise serializers.ValidationError("Unsupported manifest kind.")
 

@@ -19,6 +19,8 @@ MANIFEST_API_VERSION = "v1alpha1"
 LEGACY_MANIFEST_API_VERSION = "writtenrealms.com/v1alpha1"
 TRIGGER_MANIFEST_KIND = "trigger"
 WORLD_CONFIG_MANIFEST_KIND = "worldconfig"
+QUEST_MANIFEST_KIND = "quest"
+QUEST_ARC_MANIFEST_KIND = "questarc"
 TRIGGER_MANIFEST_OPERATION_APPLY = "apply"
 TRIGGER_MANIFEST_OPERATION_DELETE = "delete"
 
@@ -29,6 +31,11 @@ _WORLD_CONFIG_MANIFEST_KIND_ALIASES = {
     WORLD_CONFIG_MANIFEST_KIND,
     "world-config",
     "world_config",
+}
+_QUEST_ARC_MANIFEST_KIND_ALIASES = {
+    QUEST_ARC_MANIFEST_KIND,
+    "quest-arc",
+    "quest_arc",
 }
 
 _WORLD_CONFIG_WORLD_TEXT_FIELDS = (
@@ -218,9 +225,13 @@ def parse_manifest_kind(manifest: dict[str, Any]) -> str:
         return TRIGGER_MANIFEST_KIND
     if manifest_kind in _WORLD_CONFIG_MANIFEST_KIND_ALIASES:
         return WORLD_CONFIG_MANIFEST_KIND
+    if manifest_kind == QUEST_MANIFEST_KIND:
+        return QUEST_MANIFEST_KIND
+    if manifest_kind in _QUEST_ARC_MANIFEST_KIND_ALIASES:
+        return QUEST_ARC_MANIFEST_KIND
     raise serializers.ValidationError(
         f"Unsupported manifest kind '{manifest_kind}'. "
-        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_CONFIG_MANIFEST_KIND}."
+        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_CONFIG_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
     )
 
 
