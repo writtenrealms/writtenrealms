@@ -253,3 +253,29 @@ class TestEmoteCommands(WorldTestCase):
         self.assertIsNotNone(notify_watcher)
         self.assertEqual(notify_player["message"]["text"], "Scout nods.")
         self.assertEqual(notify_watcher["message"]["text"], "Scout nods.")
+
+
+class TestTalkCommands(WorldTestCase):
+    def _message_entry(self, messages, message_type, player_key):
+        for msg in messages:
+            if msg["player_key"] != player_key:
+                continue
+            if msg["message"].get("type") == message_type:
+                return msg
+        return None
+
+    def test_talk_targets_mob(self):
+        guard = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Guard",
+            keywords="guard",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "talk guard")
+
+        actor_msg = self._message_entry(messages, "cmd.talk.success", self.player.key)
+        self.assertIsNotNone(actor_msg)
+        self.assertEqual(actor_msg["message"]["data"]["target"]["id"], guard.id)
+        self.assertEqual(actor_msg["message"]["text"], "You talk to Guard.")

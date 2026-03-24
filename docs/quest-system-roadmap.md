@@ -23,6 +23,7 @@ Status as of 2026-03-23:
 - Phase 1 playground and usage docs are implemented.
 - Phase 2 backend runtime slice is implemented.
 - Phase 2 runtime walkthrough docs are implemented.
+- Phase 2.5 common quest-loop expansion is implemented on the backend.
 - There is no frontend builder UI yet.
 - There is no dedicated frontend quest UI yet.
 
@@ -63,6 +64,17 @@ Implemented so far:
   - `quest accept <slug>`
   - `quest choose <slug-or-id> <choice_id>`
   - `quest abandon <slug-or-id>`
+- gameplay commands now available to quests:
+  - `give <item> <mob>`
+  - `talk <mob>`
+  - `kill <mob>`
+- quest progression events now available:
+  - `quest.item.delivered`
+  - `quest.mob.killed`
+- typed reward/effect execution now exists for:
+  - `grant_gold`
+  - `grant_xp`
+  - constrained mob completion commands
 - runtime endpoints:
   - `GET /game/quests/opportunities/`
   - `POST /game/quests/opportunities/<slug>/accept/`
@@ -96,6 +108,10 @@ Deliberate Phase 2 deviation from the ideal end-state:
 - `npc_dialogue` discovery currently means "matching mob template is present in
   the room" rather than full dialogue-tree acceptance
 - no dedicated frontend runtime quest UI shipped yet
+- `kill` is currently a minimal quest-enabling defeat command, not a finished
+  combat system
+- completion-time command execution is currently limited to a constrained
+  allowlist instead of a fully typed non-command effect catalog
 
 Important architectural reality today:
 
@@ -114,6 +130,7 @@ Immediate next work:
   - trigger quest discovery from `state.sync` / enter-world flow
   - decide when `/game/quests/resolved/` should become canonical
     `/game/quests/completed/`
+  - replace the temporary minimal `kill` command once real combat lands
 - Phase 3 cutover:
   - retire legacy quest log surfaces
   - stop reading old quest runtime models
@@ -167,7 +184,9 @@ These are non-negotiable.
 - No dual authoring format.
 - No new features added to legacy `builders.Quest`.
 - No new runtime behavior built on `PlayerQuest` / `PlayerEnquire`.
-- No quest manifests that embed arbitrary code or command scripts.
+- No quest manifests that embed arbitrary code.
+- Constrained quest-issued mob commands are acceptable only through an explicit
+  typed effect with a tight allowlist.
 
 ## High-level Architecture
 
@@ -723,6 +742,74 @@ COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec bac
     wr2_tests.test_information \
     wr2_tests.test_movement \
     wr2_tests.test_triggers \
+    --settings=config.settings.testing
+```
+
+### Phase 2.5: Common Quest Loops And Typed Rewards
+
+Goal: unlock the two most common authored quest patterns before the larger
+branching and cutover work:
+
+- bring `x` copies of item `y` to a mob
+- kill `x` mobs, then return to a mob
+
+Status:
+
+- done on the backend
+
+Completed in this pass:
+
+- player interaction commands:
+  - `give <item> <mob>`
+  - `talk <mob>`
+  - `kill <mob>`
+- canonical quest events:
+  - `quest.item.delivered`
+  - `quest.mob.killed`
+- typed reward effects:
+  - `grant_gold`
+  - `grant_xp`
+- constrained completion-time mob command execution:
+  - `say`
+  - `yell`
+  - `emote`
+  - `/echo`
+  - `/zecho`
+  - `/wecho`
+- runtime walkthrough docs now include:
+  - item turn-in example
+  - kill-then-report example
+
+Still open inside or adjacent to Phase 2.5:
+
+- real combat should eventually replace the temporary minimal `kill` command
+- broader typed reward catalog still needs expansion
+- item delivery currently relies on command-level delivery events rather than a
+  more general inventory/economy handoff system
+- return-to-mob flows now work best through `talk`; richer dialogue verbs are
+  still future work
+
+Validation:
+
+- a multi-objective turn-in quest can resolve from actual item hand-ins
+- a kill-and-report quest can resolve from actual kill events plus a turn-in
+  interaction
+- quest rewards and mob completion commands fire on resolution
+
+Current verification:
+
+- `wr2_tests.test_items`
+- `wr2_tests.test_communication`
+- `wr2_tests.test_quest_runtime`
+
+Verified command:
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
+  python manage.py test \
+    wr2_tests.test_items \
+    wr2_tests.test_communication \
+    wr2_tests.test_quest_runtime \
     --settings=config.settings.testing
 ```
 

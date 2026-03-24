@@ -41,6 +41,23 @@ Implemented in this pass:
   - `boolean`
   - `count`
   - `unique_count`
+- player interaction commands:
+  - `give <item> <mob>`
+  - `talk <mob>`
+  - `kill <mob>`
+- canonical quest progression events:
+  - `quest.item.delivered`
+  - `quest.mob.killed`
+- typed reward effects:
+  - `grant_gold`
+  - `grant_xp`
+- constrained completion-time mob commands:
+  - `say`
+  - `yell`
+  - `emote`
+  - `/echo`
+  - `/zecho`
+  - `/wecho`
 - quest journal entries and recap output
 - in-game `quest` command
 - runtime endpoints for:
@@ -62,6 +79,8 @@ Important current limits:
   clobbering the legacy completed endpoint before cutover
 - `npc_dialogue` currently means "the matching mob template is present in the
   room", not a full conversational UI
+- `kill` is currently a minimal quest-enabling defeat command, not a finished
+  combat system
 
 ## Prerequisites
 
@@ -482,6 +501,299 @@ Confirm the resolved quest list:
 COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
   python scripts/quest_runtime_playground.py resolved --player <player_id>
 ```
+
+## Item Turn-In Example
+
+This is the first common MMO quest loop now supported:
+
+- bring `x` copies of item `y` to a mob
+- grant typed rewards on completion
+- let the turn-in mob execute a completion command
+
+### Step 1: Seed The Mob And Items Into The Player's Current Room
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
+  python manage.py shell -c "
+from builders.models import ItemTemplate, MobTemplate
+from spawns.models import Player
+player = Player.objects.select_related('room', 'world', 'world__context').get(pk=<player_id>)
+author_world = player.world.context or player.world
+spawn_world = player.world
+quartermaster_template, _ = MobTemplate.objects.get_or_create(
+    world=author_world,
+    name='Quartermaster',
+    defaults={'keywords': 'quartermaster'},
+)
+if not spawn_world.mobs.filter(room=player.room, template=quartermaster_template).exists():
+    quartermaster_template.spawn(player.room, spawn_world)
+pelt_template, _ = ItemTemplate.objects.get_or_create(world=author_world, name='Wolf Pelt')
+herb_template, _ = ItemTemplate.objects.get_or_create(world=author_world, name='Moonleaf')
+pelt_template.spawn(player, spawn_world)
+pelt_template.spawn(player, spawn_world)
+herb_template.spawn(player, spawn_world)
+print(quartermaster_template.id, pelt_template.id, herb_template.id)
+"
+```
+
+Treat the printed ids as:
+
+- `<quartermaster_template_id>`
+- `<pelt_template_id>`
+- `<herb_template_id>`
+
+### Step 2: Apply The Quest
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend sh -lc "cat > /tmp/quartermaster_supplies.yml <<'EOF'
+kind: quest
+metadata:
+  world: world.<world_id>
+  slug: quartermaster_supplies
+  name: Quartermaster Supplies
+spec:
+  type: quest
+  scope: player
+  status: active
+  repeatability:
+    mode: never
+    cooldown_seconds: 0
+  max_active: 1
+  discovery:
+    sources:
+      - type: auto_start
+    visible_if: {}
+    accept_if: {}
+    salience: 10
+    cooldown_seconds: 0
+  slots: {}
+  steps:
+    - id: turn_in
+      kind: objective
+      recap: The quartermaster needs pelts and moonleaf.
+      lead: Bring 2 wolf pelts and 1 moonleaf to the quartermaster.
+      stakes: The camp cannot restock without those supplies.
+      objectives:
+        - id: deliver_pelts
+          text: Deliver 2 wolf pelts.
+          tracker:
+            event: quest.item.delivered
+            where:
+              all:
+                - eq: [event.target.template_id, <quartermaster_template_id>]
+                - eq: [event.item.template_id, <pelt_template_id>]
+          progress:
+            mode: count
+            target: 2
+        - id: deliver_herb
+          text: Deliver 1 moonleaf.
+          tracker:
+            event: quest.item.delivered
+            where:
+              all:
+                - eq: [event.target.template_id, <quartermaster_template_id>]
+                - eq: [event.item.template_id, <herb_template_id>]
+          progress:
+            mode: count
+            target: 1
+      transitions:
+        - when:
+            all:
+              - objective_complete: deliver_pelts
+              - objective_complete: deliver_herb
+          goto: resolved
+    - id: resolved
+      kind: resolution
+      recap: The quartermaster signs off on the delivery.
+      lead: ''
+      stakes: ''
+  rewards:
+    complete:
+      - type: grant_gold
+        amount: 10
+      - type: grant_xp
+        amount: 50
+      - type: mob_command
+        command: /echo room Delivery accepted.
+    compromised: []
+    failed_forward: []
+    expired: []
+EOF"
+```
+
+Apply it:
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
+  python scripts/quest_manifest_playground.py apply --world <world_id> --file /tmp/quartermaster_supplies.yml
+```
+
+### Step 3: Start It And Turn It In
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
+  python scripts/quest_runtime_playground.py cmd --player <player_id> "look"
+COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
+  python scripts/quest_runtime_playground.py cmd --player <player_id> "give all.pelt quartermaster"
+COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
+  python scripts/quest_runtime_playground.py cmd --player <player_id> "give moonleaf quartermaster"
+```
+
+What should happen:
+
+- the quest objective progresses off `quest.item.delivered`
+- the quest resolves on the final hand-in
+- the player receives `10` gold and `50` experience
+- the quartermaster executes `/echo room Delivery accepted.`
+
+## Kill Then Report Example
+
+This is the second common loop now supported:
+
+- kill `x` mobs
+- return to a specific mob
+- complete by talking to that mob
+
+### Step 1: Seed The Captain And Rats
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
+  python manage.py shell -c "
+from builders.models import MobTemplate
+from spawns.models import Player
+player = Player.objects.select_related('room', 'world', 'world__context').get(pk=<player_id>)
+author_world = player.world.context or player.world
+spawn_world = player.world
+captain_template, _ = MobTemplate.objects.get_or_create(
+    world=author_world,
+    name='Captain Merrow',
+    defaults={'keywords': 'captain merrow captain'},
+)
+rat_template, _ = MobTemplate.objects.get_or_create(
+    world=author_world,
+    name='Tunnel Rat',
+    defaults={'keywords': 'rat tunnel rat'},
+)
+if not spawn_world.mobs.filter(room=player.room, template=captain_template).exists():
+    captain_template.spawn(player.room, spawn_world)
+rat_template.spawn(player.room, spawn_world)
+rat_template.spawn(player.room, spawn_world)
+print(captain_template.id, rat_template.id)
+"
+```
+
+Treat the printed ids as:
+
+- `<captain_template_id>`
+- `<rat_template_id>`
+
+### Step 2: Apply The Quest
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend sh -lc "cat > /tmp/rat_cull.yml <<'EOF'
+kind: quest
+metadata:
+  world: world.<world_id>
+  slug: rat_cull
+  name: Rat Cull
+spec:
+  type: quest
+  scope: player
+  status: active
+  repeatability:
+    mode: never
+    cooldown_seconds: 0
+  max_active: 1
+  discovery:
+    sources:
+      - type: auto_start
+    visible_if: {}
+    accept_if: {}
+    salience: 10
+    cooldown_seconds: 0
+  slots: {}
+  steps:
+    - id: hunt
+      kind: objective
+      recap: Captain Merrow wants the tunnel rats culled.
+      lead: Kill 2 tunnel rats.
+      stakes: They are chewing through the camp stores.
+      objectives:
+        - id: kill_rats
+          text: Kill 2 tunnel rats.
+          tracker:
+            event: quest.mob.killed
+            where:
+              eq: [event.target.template_id, <rat_template_id>]
+          progress:
+            mode: count
+            target: 2
+      transitions:
+        - when:
+            objective_complete: kill_rats
+          goto: report
+    - id: report
+      kind: objective
+      recap: The rats are down. Report back to Captain Merrow.
+      lead: Talk to Captain Merrow.
+      stakes: The camp is waiting on your report.
+      objectives:
+        - id: report_back
+          text: Talk to Captain Merrow.
+          tracker:
+            event: cmd.talk.success
+            where:
+              eq: [event.target.template_id, <captain_template_id>]
+          progress:
+            mode: boolean
+            target: 1
+      transitions:
+        - when:
+            objective_complete: report_back
+          goto: resolved
+    - id: resolved
+      kind: resolution
+      recap: Captain Merrow confirms the camp is safe for now.
+      lead: ''
+      stakes: ''
+  rewards:
+    complete:
+      - type: grant_gold
+        amount: 8
+      - type: mob_command
+        command: say Good work.
+    compromised: []
+    failed_forward: []
+    expired: []
+EOF"
+```
+
+Apply it:
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
+  python scripts/quest_manifest_playground.py apply --world <world_id> --file /tmp/rat_cull.yml
+```
+
+### Step 3: Start It, Kill, Then Report
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
+  python scripts/quest_runtime_playground.py cmd --player <player_id> "look"
+COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
+  python scripts/quest_runtime_playground.py cmd --player <player_id> "kill rat"
+COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
+  python scripts/quest_runtime_playground.py cmd --player <player_id> "kill rat"
+COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
+  python scripts/quest_runtime_playground.py cmd --player <player_id> "talk captain"
+```
+
+What should happen:
+
+- each `kill rat` emits `quest.mob.killed`
+- after the second kill, the quest advances to the report-back step
+- `talk captain` satisfies the return objective
+- Captain Merrow executes `say Good work.` on completion
 
 ## Runtime API Surface
 

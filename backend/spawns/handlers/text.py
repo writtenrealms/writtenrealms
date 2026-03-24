@@ -99,13 +99,15 @@ class TextCommandHandler(CommandHandler):
             ctx.payload["target"] = " ".join(args)
         elif handler.command_type == "move":
             ctx.payload["direction"] = resolved_command
+        elif handler.command_type in {"kill", "talk"} and args:
+            ctx.payload["target"] = " ".join(args)
         elif handler.command_type == "drop" and args:
             ctx.payload["item"] = " ".join(args)
         elif handler.command_type == "get" and args:
             ctx.payload["selector"] = args[0]
             if len(args) > 1:
                 ctx.payload["source"] = " ".join(args[1:])
-        elif handler.command_type == "put" and args:
+        elif handler.command_type in {"put", "give"} and args:
             ctx.payload["selector"] = args[0]
             if len(args) > 1:
                 ctx.payload["target"] = " ".join(args[1:])

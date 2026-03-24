@@ -89,10 +89,40 @@ def _on_cmd_say_success(event_data: dict, actor_key: str | None, connection_id: 
     )
 
 
+def _on_cmd_talk_success(event_data: dict, actor_key: str | None, connection_id: str | None) -> None:
+    _handle_discovery_and_progress(
+        event_type="cmd.talk.success",
+        event_data=event_data,
+        actor_key=actor_key,
+        connection_id=connection_id,
+    )
+
+
+def _on_quest_item_delivered(event_data: dict, actor_key: str | None, connection_id: str | None) -> None:
+    _handle_discovery_and_progress(
+        event_type="quest.item.delivered",
+        event_data=event_data,
+        actor_key=actor_key,
+        connection_id=connection_id,
+    )
+
+
+def _on_quest_mob_killed(event_data: dict, actor_key: str | None, connection_id: str | None) -> None:
+    _handle_discovery_and_progress(
+        event_type="quest.mob.killed",
+        event_data=event_data,
+        actor_key=actor_key,
+        connection_id=connection_id,
+    )
+
+
 _EVENT_SUBSCRIPTIONS: dict[str, QuestSubscriptionHandler] = {
     "cmd.look.success": _on_cmd_look_success,
     "cmd.move.success": _on_cmd_move_success,
     "cmd.say.success": _on_cmd_say_success,
+    "cmd.talk.success": _on_cmd_talk_success,
+    "quest.item.delivered": _on_quest_item_delivered,
+    "quest.mob.killed": _on_quest_mob_killed,
 }
 
 

@@ -7,13 +7,15 @@ from django.db import transaction
 
 from config import constants as adv_consts
 from spawns.actions.base import ActionError, ActionResult
+from spawns.actions.targeting import resolve_room_mob_target
 from spawns.events import GameEvent
-from spawns.models import Item, Player
+from spawns.models import Item, Mob, Player
 from spawns.state_payloads import (
     get_player_with_related,
     room_payload_key_for,
     resolve_item_name,
     serialize_actor,
+    serialize_char_from_mob,
     serialize_char_from_player,
     serialize_item,
     serialize_room,
@@ -459,5 +461,120 @@ class PutAction:
                         text=notify_text,
                     )
                 )
+
+        return ActionResult(events=events)
+
+
+class GiveAction:
+    def execute(self, player_id: int, selector: str, target_selector: str) -> ActionResult:
+        with transaction.atomic():
+            player = Player.objects.select_for_update().get(pk=player_id)
+            if not player.room_id:
+                raise ActionError("You are nowhere. Cannot give items.", code="no_room")
+
+            room = Room.objects.get(pk=player.room_id)
+            target_mob = resolve_room_mob_target(
+                room,
+                target_selector,
+                empty_error="Give to whom?",
+                not_found_error="You don't see them here.",
+            )
+
+            inventory_items = [
+                item
+                for item in _container_items(player)
+                if item.type != adv_consts.ITEM_TYPE_CORPSE
+            ]
+            if not inventory_items:
+                raise ActionError("You aren't carrying anything.", code="empty_inventory")
+
+            selected_items = _select_items(
+                inventory_items,
+                selector,
+                empty_error="Give what?",
+                not_found_error=lambda token: f"You don't seem to have a {token}.",
+            )
+            if not selected_items:
+                raise ActionError("Give what?", code="missing_item")
+
+            item_ids = [item.id for item in selected_items]
+            locked_items = {
+                item.id: item
+                for item in Item.objects.select_for_update().filter(pk__in=item_ids)
+            }
+            moved_items = [locked_items[item_id] for item_id in item_ids if item_id in locked_items]
+
+            for item in moved_items:
+                item.container = target_mob
+                item.save(update_fields=["container_type", "container_id"])
+
+        updated_player = get_player_with_related(player_id)
+        refreshed_target_mob = Mob.objects.select_related("template").get(pk=target_mob.id)
+        actor_payload = serialize_actor(updated_player, updated_player.room)
+        room_payload = serialize_room(
+            room,
+            {room.id: room_payload_key_for(room)},
+            {},
+            viewer=updated_player,
+        )
+        item_payloads = [serialize_item(item).model_dump() for item in moved_items]
+        target_payload = serialize_char_from_mob(refreshed_target_mob, viewer=updated_player).model_dump()
+
+        data = {
+            "actor": actor_payload.model_dump(),
+            "items": item_payloads,
+            "target": target_payload,
+            "room": room_payload.model_dump(),
+        }
+        text = render_event_text("cmd.give.success", data, viewer=updated_player)
+
+        events = [
+            GameEvent(
+                type="cmd.give.success",
+                recipients=[updated_player.key],
+                data=data,
+                text=text,
+            )
+        ]
+
+        if not updated_player.is_invisible:
+            recipients = (
+                Player.objects.filter(room_id=room.id, in_game=True)
+                .exclude(pk=updated_player.id)
+                .values_list("id", flat=True)
+            )
+            if recipients:
+                notify_data = {
+                    "actor": serialize_char_from_player(updated_player).model_dump(),
+                    "items": item_payloads,
+                    "target": target_payload,
+                }
+                notify_text = render_event_text(
+                    "notification.cmd.give.success",
+                    notify_data,
+                    viewer=None,
+                )
+                events.append(
+                    GameEvent(
+                        type="notification.cmd.give.success",
+                        recipients=[f"player.{pid}" for pid in recipients],
+                        data=notify_data,
+                        text=notify_text,
+                    )
+                )
+
+        for item_payload in item_payloads:
+            events.append(
+                GameEvent(
+                    type="quest.item.delivered",
+                    recipients=[],
+                    data={
+                        "actor": actor_payload.model_dump(),
+                        "item": item_payload,
+                        "target": target_payload,
+                        "room": room_payload.model_dump(),
+                    },
+                )
+            )
 
         return ActionResult(events=events)

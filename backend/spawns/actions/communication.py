@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from spawns.actions.base import ActionError, ActionResult
+from spawns.actions.targeting import resolve_room_mob_target
 from spawns.events import GameEvent
 from spawns.models import Mob, Player
 from spawns.state_payloads import serialize_char_from_mob, serialize_char_from_player
@@ -199,3 +200,35 @@ class EmoteAction:
             )
 
         return ActionResult(events=events)
+
+
+class TalkAction:
+    def execute(self, actor: Player, target_selector: str | None) -> ActionResult:
+        if not actor.room_id or not getattr(actor, "room", None):
+            raise ActionError("You are nowhere. Cannot talk to anyone.", code="no_room")
+
+        target_mob = resolve_room_mob_target(
+            actor.room,
+            target_selector,
+            empty_error="Talk to whom?",
+            not_found_error="You don't see them here.",
+        )
+        data = {
+            "actor": _actor_payload(actor),
+            "target": serialize_char_from_mob(target_mob).model_dump(),
+        }
+        actor_text = render_event_text(
+            "cmd.talk.success",
+            data,
+            viewer=actor,
+        )
+        return ActionResult(
+            events=[
+                GameEvent(
+                    type="cmd.talk.success",
+                    recipients=[actor.key],
+                    data=data,
+                    text=actor_text,
+                )
+            ]
+        )

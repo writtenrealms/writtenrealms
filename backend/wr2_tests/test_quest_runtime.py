@@ -1,5 +1,6 @@
 from django.urls import reverse
 
+from builders.models import ItemTemplate, MobTemplate
 from quests.models import QuestInstance, QuestTemplate
 from tests.base import WorldTestCase
 from wr2_tests.utils import capture_game_messages, dispatch_text_command
@@ -21,7 +22,16 @@ class QuestRuntimeTestCase(WorldTestCase):
         self.player.in_game = True
         self.player.save(update_fields=["stamina", "in_game"])
 
-    def create_runtime_quest(self, *, slug: str, name: str, quest_type: str = "quest", discovery_policy=None, steps=None):
+    def create_runtime_quest(
+        self,
+        *,
+        slug: str,
+        name: str,
+        quest_type: str = "quest",
+        discovery_policy=None,
+        steps=None,
+        reward_policy=None,
+    ):
         return QuestTemplate.objects.create(
             world=self.world,
             slug=slug,
@@ -41,7 +51,7 @@ class QuestRuntimeTestCase(WorldTestCase):
             },
             slot_schema={},
             graph={"steps": steps or []},
-            reward_policy=_runtime_rewards(),
+            reward_policy=reward_policy or _runtime_rewards(),
         )
 
     def _message_types(self, messages):
@@ -293,3 +303,234 @@ class TestQuestRuntimeEndpoints(QuestRuntimeTestCase):
         )
         self.assertEqual(recap_resp.status_code, 200)
         self.assertIn("Campfire Note", recap_resp.data["text"])
+
+
+class TestTurnInQuestRuntime(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.quartermaster_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Quartermaster",
+            keywords="quartermaster",
+        )
+        self.quartermaster_template.spawn(self.room, self.spawn_world)
+        self.pelt_template = ItemTemplate.objects.create(world=self.world, name="Wolf Pelt")
+        self.herb_template = ItemTemplate.objects.create(world=self.world, name="Moonleaf")
+        self.pelt_template.spawn(self.player, self.spawn_world)
+        self.pelt_template.spawn(self.player, self.spawn_world)
+        self.herb_template.spawn(self.player, self.spawn_world)
+        self.gold_before = self.player.gold
+        self.exp_before = self.player.experience
+
+        self.create_runtime_quest(
+            slug="quartermaster_supplies",
+            name="Quartermaster Supplies",
+            discovery_policy={
+                "sources": [{"type": "auto_start"}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 10,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "turn_in",
+                    "kind": "objective",
+                    "recap": "The quartermaster needs pelts and moonleaf.",
+                    "lead": "Bring 2 wolf pelts and 1 moonleaf to the quartermaster.",
+                    "stakes": "The camp cannot restock without those supplies.",
+                    "objectives": [
+                        {
+                            "id": "deliver_pelts",
+                            "text": "Deliver 2 wolf pelts.",
+                            "tracker": {
+                                "event": "quest.item.delivered",
+                                "where": {
+                                    "all": [
+                                        {"eq": ["event.target.template_id", self.quartermaster_template.id]},
+                                        {"eq": ["event.item.template_id", self.pelt_template.id]},
+                                    ]
+                                },
+                            },
+                            "progress": {"mode": "count", "target": 2},
+                        },
+                        {
+                            "id": "deliver_herb",
+                            "text": "Deliver 1 moonleaf.",
+                            "tracker": {
+                                "event": "quest.item.delivered",
+                                "where": {
+                                    "all": [
+                                        {"eq": ["event.target.template_id", self.quartermaster_template.id]},
+                                        {"eq": ["event.item.template_id", self.herb_template.id]},
+                                    ]
+                                },
+                            },
+                            "progress": {"mode": "count", "target": 1},
+                        },
+                    ],
+                    "transitions": [
+                        {
+                            "when": {
+                                "all": [
+                                    {"objective_complete": "deliver_pelts"},
+                                    {"objective_complete": "deliver_herb"},
+                                ]
+                            },
+                            "goto": "resolved",
+                        }
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "The quartermaster signs off on the delivery.",
+                    "lead": "",
+                    "stakes": "",
+                },
+            ],
+            reward_policy={
+                "complete": [
+                    {"type": "grant_gold", "amount": 10},
+                    {"type": "grant_xp", "amount": 50},
+                    {"type": "mob_command", "command": "/echo room Delivery accepted."},
+                ],
+                "compromised": [],
+                "failed_forward": [],
+                "expired": [],
+            },
+        )
+
+    def test_turn_in_quest_progresses_from_give_and_grants_rewards(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "look")
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "give all.pelt quartermaster")
+
+        with capture_game_messages() as final_messages:
+            dispatch_text_command(self.player.id, "give moonleaf quartermaster")
+
+        self.player.refresh_from_db()
+        quest_instance = QuestInstance.objects.get(player=self.player, template__slug="quartermaster_supplies")
+        self.assertEqual(quest_instance.status, "resolved")
+        self.assertEqual(quest_instance.resolution, "complete")
+        self.assertEqual(self.player.gold, self.gold_before + 10)
+        self.assertEqual(self.player.experience, self.exp_before + 50)
+        self.assertIn("quest.instance.resolved", self._message_types(final_messages))
+        self.assertIn("notification./echo", self._message_types(final_messages))
+
+
+class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.captain_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Captain Merrow",
+            keywords="captain merrow captain",
+        )
+        self.rat_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Tunnel Rat",
+            keywords="rat tunnel rat",
+        )
+        self.captain_template.spawn(self.room, self.spawn_world)
+        self.rat_template.spawn(self.room, self.spawn_world)
+        self.rat_template.spawn(self.room, self.spawn_world)
+
+        self.create_runtime_quest(
+            slug="rat_cull",
+            name="Rat Cull",
+            discovery_policy={
+                "sources": [{"type": "auto_start"}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 10,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "hunt",
+                    "kind": "objective",
+                    "recap": "Captain Merrow wants the tunnel rats culled.",
+                    "lead": "Kill 2 tunnel rats.",
+                    "stakes": "They are chewing through the camp stores.",
+                    "objectives": [
+                        {
+                            "id": "kill_rats",
+                            "text": "Kill 2 tunnel rats.",
+                            "tracker": {
+                                "event": "quest.mob.killed",
+                                "where": {"eq": ["event.target.template_id", self.rat_template.id]},
+                            },
+                            "progress": {"mode": "count", "target": 2},
+                        }
+                    ],
+                    "transitions": [
+                        {
+                            "when": {"objective_complete": "kill_rats"},
+                            "goto": "report",
+                        }
+                    ],
+                },
+                {
+                    "id": "report",
+                    "kind": "objective",
+                    "recap": "The rats are down. Report back to Captain Merrow.",
+                    "lead": "Talk to Captain Merrow.",
+                    "stakes": "The camp is waiting on your report.",
+                    "objectives": [
+                        {
+                            "id": "report_back",
+                            "text": "Talk to Captain Merrow.",
+                            "tracker": {
+                                "event": "cmd.talk.success",
+                                "where": {"eq": ["event.target.template_id", self.captain_template.id]},
+                            },
+                            "progress": {"mode": "boolean", "target": 1},
+                        }
+                    ],
+                    "transitions": [
+                        {
+                            "when": {"objective_complete": "report_back"},
+                            "goto": "resolved",
+                        }
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "Captain Merrow confirms the camp is safe for now.",
+                    "lead": "",
+                    "stakes": "",
+                },
+            ],
+            reward_policy={
+                "complete": [
+                    {"type": "grant_gold", "amount": 8},
+                    {"type": "mob_command", "command": "say Good work."},
+                ],
+                "compromised": [],
+                "failed_forward": [],
+                "expired": [],
+            },
+        )
+
+    def test_kill_then_talk_quest_resolves_and_mob_responds(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "look")
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "kill rat")
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "kill rat")
+        with capture_game_messages() as final_messages:
+            dispatch_text_command(self.player.id, "talk captain")
+
+        self.player.refresh_from_db()
+        quest_instance = QuestInstance.objects.get(player=self.player, template__slug="rat_cull")
+        self.assertEqual(quest_instance.status, "resolved")
+        self.assertEqual(quest_instance.resolution, "complete")
+        self.assertEqual(self.player.gold, 8)
+        self.assertIn("quest.instance.resolved", self._message_types(final_messages))
+        self.assertIn("notification.cmd.say.success", self._message_types(final_messages))

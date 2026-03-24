@@ -196,6 +196,33 @@ def _render_put_text(event_type: str, data: dict) -> str | None:
     return "\n".join(lines) if lines else None
 
 
+def _render_give_text(event_type: str, data: dict) -> str | None:
+    items = data.get("items") or []
+    if not items:
+        return None
+
+    target = data.get("target") or {}
+    target_name = target.get("name")
+    if not target_name:
+        return None
+
+    if event_type == "cmd.give.success":
+        prefix = "You give "
+    else:
+        actor = data.get("actor") or {}
+        actor_name = _capfirst(actor.get("name"))
+        if not actor_name:
+            return None
+        prefix = f"{actor_name} gives "
+
+    lines = []
+    for item in items:
+        name = item.get("name")
+        if name:
+            lines.append(f"{prefix}{name} to {target_name}.")
+    return "\n".join(lines) if lines else None
+
+
 def _render_roll_text(event_type: str, data: dict) -> str | None:
     die = data.get("die")
     outcome = data.get("outcome")
@@ -239,6 +266,28 @@ def _render_emote_text(data: dict) -> str | None:
     if not actor_name:
         return None
     return f"{actor_name} {text}"
+
+
+def _render_talk_text(data: dict) -> str | None:
+    target = data.get("target") or {}
+    target_name = _capfirst(target.get("name"))
+    if not target_name:
+        return None
+    return f"You talk to {target_name}."
+
+
+def _render_kill_text(event_type: str, data: dict) -> str | None:
+    target = data.get("target") or {}
+    target_name = _capfirst(target.get("name"))
+    if not target_name:
+        return None
+    if event_type == "cmd.kill.success":
+        return f"You kill {target_name}."
+    actor = data.get("actor") or {}
+    actor_name = _capfirst(actor.get("name"))
+    if not actor_name:
+        return None
+    return f"{actor_name} kills {target_name}."
 
 
 def _render_notification_text(event_type: str, data: dict) -> str | None:
@@ -327,5 +376,14 @@ def render_event_text(
 
     if event_type in ("cmd.put.success", "notification.cmd.put.success"):
         return _render_put_text(event_type, data)
+
+    if event_type in ("cmd.give.success", "notification.cmd.give.success"):
+        return _render_give_text(event_type, data)
+
+    if event_type == "cmd.talk.success":
+        return _render_talk_text(data)
+
+    if event_type in ("cmd.kill.success", "notification.cmd.kill.success"):
+        return _render_kill_text(event_type, data)
 
     return None

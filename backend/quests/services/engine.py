@@ -14,6 +14,7 @@ from quests.models import (
     QuestOfferState,
     QuestTemplate,
 )
+from quests.services.effects import apply_quest_effects
 from quests.services.journal import (
     append_journal_entry,
     render_recap_text,
@@ -166,47 +167,14 @@ def _apply_effects(
     *,
     player=None,
     event_data: dict[str, Any] | None = None,
-) -> None:
-    if not effects:
-        return
-
-    state = dict(quest_instance.local_state or {})
-    changed = False
-    for effect in effects:
-        if not isinstance(effect, dict):
-            continue
-        effect_type = str(effect.get("type") or "").strip().lower()
-        if effect_type == "set_local":
-            key = str(effect.get("key") or "").strip()
-            if not key:
-                continue
-            state[key] = resolve_value(
-                effect.get("value"),
-                player=player,
-                template=quest_instance.template,
-                quest_instance=quest_instance,
-                event_data=event_data,
-            )
-            changed = True
-        elif "set_local" in effect:
-            raw_args = effect.get("set_local") or []
-            if not isinstance(raw_args, (list, tuple)) or len(raw_args) != 2:
-                continue
-            key = str(raw_args[0] or "").strip()
-            if not key:
-                continue
-            state[key] = resolve_value(
-                raw_args[1],
-                player=player,
-                template=quest_instance.template,
-                quest_instance=quest_instance,
-                event_data=event_data,
-            )
-            changed = True
-
-    if changed:
-        quest_instance.local_state = state
-        quest_instance.save(update_fields=["local_state", "modified_ts"])
+):
+    return apply_quest_effects(
+        quest_instance,
+        effects,
+        player=player,
+        template=quest_instance.template,
+        event_data=event_data,
+    )
 
 
 def _build_player_event(
@@ -423,6 +391,7 @@ def _transition_if_any(
             step_id=str(transition.get("goto") or "").strip(),
             player=player,
             entry_reason="transition",
+            event_data=event_data,
         )
     return QuestTransitionResult(quest_instance=quest_instance, events=[])
 
@@ -433,6 +402,7 @@ def enter_step(
     step_id: str,
     player,
     entry_reason: str,
+    event_data: dict[str, Any] | None = None,
 ) -> QuestTransitionResult:
     step = get_step(quest_instance.template, step_id)
     if not step:
@@ -485,6 +455,21 @@ def enter_step(
             )
 
     refreshed = QuestInstance.objects.select_related("template", "template__arc", "world", "player").prefetch_related("objective_states", "journal_entries").get(pk=quest_instance.pk)
+    step_effect_result = _apply_effects(
+        refreshed,
+        step.get("effects") or [],
+        player=player,
+        event_data=event_data,
+    )
+    reward_summaries = list(step_effect_result.reward_summaries)
+    if step_kind == "resolution":
+        reward_result = _apply_effects(
+            refreshed,
+            (refreshed.template.reward_policy or {}).get(refreshed.resolution or "complete") or [],
+            player=player,
+            event_data=event_data,
+        )
+        reward_summaries.extend(reward_result.reward_summaries)
     payload, recap_text = _recap_for_instance(refreshed, player=player)
     if step_kind == "resolution":
         event_type = "quest.instance.resolved"
@@ -495,6 +480,8 @@ def enter_step(
     else:
         event_type = "quest.instance.updated"
         text = recap_text
+    if reward_summaries:
+        text = f"{text}\nRewards: {', '.join(reward_summaries)}"
 
     return QuestTransitionResult(
         quest_instance=refreshed,
@@ -535,6 +522,7 @@ def start_quest_instance(
         step_id=str(get_start_step(template).get("id") or "").strip(),
         player=player,
         entry_reason=reason,
+        event_data=None,
     )
 
 
@@ -696,14 +684,15 @@ def progress_active_instance_for_event(
         progress_mode = str(progress_spec.get("mode") or "boolean").strip().lower()
         progress_target = _objective_target(objective_spec)
         now = timezone.now()
+        objective_updated = False
 
         if progress_mode == "boolean":
             if state.progress_current < progress_target:
                 state.progress_current = progress_target
-                updated = True
+                objective_updated = True
         elif progress_mode == "count":
             state.progress_current = min(progress_target, int(state.progress_current or 0) + 1)
-            updated = True
+            objective_updated = True
         elif progress_mode == "unique_count":
             distinct_path = str(progress_spec.get("distinct_by") or "").strip()
             distinct_value = None
@@ -722,10 +711,11 @@ def progress_active_instance_for_event(
                 distinct_values.append(distinct_value)
                 state.distinct_values = distinct_values
                 state.progress_current = min(progress_target, len(distinct_values))
-                updated = True
+                objective_updated = True
 
-        if not updated:
+        if not objective_updated:
             continue
+        updated = True
 
         state.progress_target = progress_target
         state.last_matching_event_type = event_type

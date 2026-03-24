@@ -262,3 +262,39 @@ class TestPutCommand(WorldTestCase):
         error_message = self._message_by_type(messages, "cmd.put.error")
         self.assertIsNotNone(error_message)
         self.assertIn("Put where?", error_message.get("text", ""))
+
+
+class TestGiveCommand(WorldTestCase):
+    def _message_by_type(self, messages, message_type):
+        for msg in messages:
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def test_give_moves_item_to_mob_and_notifies_room(self):
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+        watcher = self.create_player("Watcher", room=self.room)
+        watcher.in_game = True
+        watcher.save(update_fields=["in_game"])
+
+        guard = self.create_mob("Quartermaster", keywords="quartermaster guard")
+
+        item_template = ItemTemplate.objects.create(world=self.world, name="Pelt")
+        pelt = Item.objects.create(
+            world=self.spawn_world,
+            container=self.player,
+            template=item_template,
+            name=item_template.name,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "give pelt quartermaster")
+
+        pelt.refresh_from_db()
+        self.assertEqual(pelt.container_id, guard.id)
+
+        message = self._message_by_type(messages, "cmd.give.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target"]["id"], guard.id)
+        self.assertIsNotNone(self._message_by_type(messages, "notification.cmd.give.success"))
