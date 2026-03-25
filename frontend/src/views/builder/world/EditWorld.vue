@@ -2,7 +2,7 @@
   <div id="edit-world-manifest">
     <h2>{{ world.name.toUpperCase() }} EDIT WORLD</h2>
     <div class="color-text-60 mb-6">
-      Paste a YAML manifest and apply it. Supported kinds: worldconfig (update world config) and trigger (create/update/delete triggers).
+      Paste a YAML manifest and apply it. Supported kinds: worldconfig, trigger, quest, and questarc.
     </div>
 
     <textarea

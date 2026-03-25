@@ -17,14 +17,15 @@ Reference docs:
 
 ## Current Status
 
-Status as of 2026-03-23:
+Status as of 2026-03-24:
 
 - Phase 1 backend authoring foundation is implemented.
 - Phase 1 playground and usage docs are implemented.
+- Phase 1 frontend quest-template builder UI is implemented.
 - Phase 2 backend runtime slice is implemented.
 - Phase 2 runtime walkthrough docs are implemented.
 - Phase 2.5 common quest-loop expansion is implemented on the backend.
-- There is no frontend builder UI yet.
+- Quest arcs still do not have a dedicated frontend builder UI yet.
 - There is no dedicated frontend quest UI yet.
 
 Implemented so far:
@@ -48,6 +49,11 @@ Implemented so far:
   - `backend/scripts/quest_manifest_playground.py`
 - playground usage doc:
   - `docs/quest-manifest-playground.md`
+- frontend builder routes and views:
+  - `frontend/src/views/builder/world/QuestTemplateList.vue`
+  - `frontend/src/views/builder/world/QuestTemplateDetails.vue`
+- builder navigation now exposes:
+  - `World > Quests`
 - new runtime models:
   - `QuestInstance`
   - `QuestObjectiveState`
@@ -97,7 +103,7 @@ Deliberate Phase 1 deviation from the ideal end-state:
   taking over legacy `/quests/` routes yet
 - schema classes currently live in `backend/quests/manifests.py` instead of a
   separate `backend/quests/schemas.py`
-- no builder frontend shipped yet
+- quest arcs are still edited through raw YAML / `World > Edit World`
 
 Deliberate Phase 2 deviation from the ideal end-state:
 
@@ -122,7 +128,7 @@ Important architectural reality today:
 Immediate next work:
 
 - Phase 1 cleanup:
-  - optional frontend builder read UI
+  - optional quest arc builder UI
   - move schema classes into `backend/quests/schemas.py` if we still want the
     module split as follow-up cleanup
 - Phase 2 polish:
@@ -497,13 +503,25 @@ Recommended new screens:
 
 - `World > Quests`
 - `World > Quest Arcs`
-- `World > Edit World` continues to be the write surface for YAML apply
+- `World > Edit World` remains the generic escape hatch for raw manifest apply
 
 Recommended UI behavior:
 
 - show quest summaries and current manifest YAML
 - offer copy/create/update/delete manifests
 - later show graph preview and simulation output
+
+Current implemented behavior:
+
+- `World > Quests` lists world-scoped quest templates
+- the quest editor page supports:
+  - create from generated template
+  - edit YAML
+  - apply quest manifests
+  - copy quest YAML
+  - copy delete YAML
+  - delete quests through manifest apply
+- quest arcs still fall back to raw manifest editing
 
 Do not keep investing in the current:
 
@@ -516,7 +534,8 @@ Those screens mirror the legacy model too closely.
 Current status:
 
 - backend read endpoints exist
-- frontend builder screens do not exist yet
+- frontend quest template list/editor screens exist
+- quest arc builder screens do not exist yet
 
 ## Tiered Implementation Plan
 
@@ -558,8 +577,8 @@ Tasks:
 
 Status:
 
-- done on the backend
-- frontend builder UI still pending
+- done for quest templates
+- quest arc builder UI still pending
 
 Completed:
 
@@ -571,11 +590,13 @@ Completed:
 - world manifest apply routing exists for `quest` and `questarc`
 - backend playground script exists
 - backend playground documentation exists
+- frontend quest template list/editor views exist
+- builder navigation exposes the new quest editor
 - automated manifest tests exist and pass
 
 Still open inside or adjacent to Phase 1:
 
-- optional frontend builder read UI
+- optional quest arc builder UI
 - optional module cleanup to move schema classes out of `manifests.py`
 - deciding when the temporary `questtemplates/` and `questarcs/` routes should
   become canonical `/quests/` and `/quest-arcs/` routes
