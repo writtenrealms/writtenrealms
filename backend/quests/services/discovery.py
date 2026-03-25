@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from django.utils import timezone
 
+from quests.entity_refs import resolve_template_ref_id
 from spawns.events import GameEvent
 from quests.models import QuestOfferState, QuestTemplate
 from quests.services.engine import (
@@ -57,9 +58,10 @@ def _source_matches_player(player, template: QuestTemplate, source: dict) -> boo
         return player.room_id == room_id
 
     if source_type == "npc_dialogue":
-        mob_template_id = _parse_entity_id(
-            source.get("mob_template") or source.get("mob_template_id"),
-            "mobtemplate",
+        mob_template_id = resolve_template_ref_id(
+            world=template.world,
+            value=source.get("mob_template") or source.get("mob_template_id"),
+            expected_type="mobtemplate",
         )
         if not mob_template_id or not player.room_id:
             return False

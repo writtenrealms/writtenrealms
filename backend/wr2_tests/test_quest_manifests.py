@@ -2,7 +2,7 @@ import yaml
 
 from rest_framework.reverse import reverse
 
-from builders.models import WorldBuilder
+from builders.models import ItemTemplate, MobTemplate, WorldBuilder
 from quests.models import QuestArcTemplate, QuestTemplate
 from tests.base import WorldTestCase
 
@@ -41,6 +41,17 @@ class TestQuestManifests(AuthenticatedBuilderWorldTestCase):
         manifest = yaml.safe_load(template["yaml"])
         self.assertEqual(manifest["kind"], "quest")
         self.assertEqual(manifest["metadata"]["world"], f"world.{self.world.id}")
+
+    def test_item_and_mob_templates_generate_unique_world_slugs(self):
+        mob_one = MobTemplate.objects.create(world=self.world, name="Quartermaster")
+        mob_two = MobTemplate.objects.create(world=self.world, name="Quartermaster")
+        item_one = ItemTemplate.objects.create(world=self.world, name="Wolf Pelt")
+        item_two = ItemTemplate.objects.create(world=self.world, name="Wolf Pelt")
+
+        self.assertEqual(mob_one.slug, "quartermaster")
+        self.assertEqual(mob_two.slug, "quartermaster-2")
+        self.assertEqual(item_one.slug, "wolf-pelt")
+        self.assertEqual(item_two.slug, "wolf-pelt-2")
 
     def test_apply_quest_manifest_can_create_quest_template(self):
         manifest = f"""
@@ -100,6 +111,94 @@ spec:
         self.assertEqual(quest.scope, "player")
         self.assertEqual(quest.status, "active")
         self.assertEqual(quest.graph["steps"][0]["id"], "offer")
+
+    def test_apply_quest_manifest_accepts_mob_and_item_template_slugs(self):
+        quartermaster = MobTemplate.objects.create(
+            world=self.world,
+            name="Quartermaster",
+        )
+        wolf_pelt = ItemTemplate.objects.create(
+            world=self.world,
+            name="Wolf Pelt",
+        )
+
+        manifest = f"""
+kind: quest
+metadata:
+  world: world.{self.world.id}
+  slug: supply_delivery
+  name: Supply Delivery
+spec:
+  type: quest
+  scope: player
+  status: active
+  repeatability:
+    mode: never
+    cooldown_seconds: 0
+  max_active: 1
+  discovery:
+    sources:
+      - type: npc_dialogue
+        mob_template: {quartermaster.slug}
+    salience: 80
+  slots: {{}}
+  steps:
+    - id: turn_in
+      kind: objective
+      recap: Deliver supplies.
+      lead: Bring the pelt to the quartermaster.
+      stakes: The camp needs stock.
+      objectives:
+        - id: deliver_pelt
+          text: Deliver the pelt.
+          tracker:
+            event: quest.item.delivered
+            where:
+              all:
+                - eq: [event.target.template_id, mobtemplate.{quartermaster.slug}]
+                - eq: [event.item.template_id, {wolf_pelt.slug}]
+          progress:
+            mode: count
+            target: 1
+      transitions:
+        - when:
+            objective_complete: deliver_pelt
+          goto: resolved
+    - id: resolved
+      kind: resolution
+      recap: Delivered.
+      lead: ""
+      stakes: ""
+  rewards:
+    complete:
+      - type: mob_command
+        mob_template: {quartermaster.slug}
+        command: say Good.
+    compromised: []
+    failed_forward: []
+    expired: []
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+
+        quest = QuestTemplate.objects.get(slug="supply_delivery")
+        self.assertEqual(
+            quest.discovery_policy["sources"][0]["mob_template"],
+            quartermaster.slug,
+        )
+        objective_where = quest.graph["steps"][0]["objectives"][0]["tracker"]["where"]["all"]
+        self.assertEqual(
+            objective_where[0]["eq"][1],
+            f"mobtemplate.{quartermaster.slug}",
+        )
+        self.assertEqual(
+            objective_where[1]["eq"][1],
+            wolf_pelt.slug,
+        )
 
     def test_apply_quest_manifest_supports_partial_nested_update(self):
         quest = QuestTemplate.objects.create(

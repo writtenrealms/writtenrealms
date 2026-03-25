@@ -305,6 +305,55 @@ class TestQuestRuntimeEndpoints(QuestRuntimeTestCase):
         self.assertIn("Campfire Note", recap_resp.data["text"])
 
 
+class TestNpcDialogueSlugDiscovery(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.quartermaster_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Quartermaster",
+            keywords="quartermaster",
+        )
+        self.quartermaster_template.spawn(self.room, self.spawn_world)
+        self.create_runtime_quest(
+            slug="quartermaster_request",
+            name="Quartermaster Request",
+            discovery_policy={
+                "sources": [{"type": "npc_dialogue", "mob_template": self.quartermaster_template.slug}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 10,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "The quartermaster has work for you.",
+                    "lead": "Hear them out.",
+                    "stakes": "Camp stock is running low.",
+                    "choices": [
+                        {"id": "accept", "text": "Listen.", "goto": "resolved"},
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "You heard the quartermaster out.",
+                    "lead": "",
+                    "stakes": "",
+                },
+            ],
+        )
+
+    def test_npc_dialogue_discovery_accepts_mob_template_slug(self):
+        with capture_game_messages() as discovery_messages:
+            dispatch_text_command(self.player.id, "look")
+
+        self.assertIn("quest.opportunity.available", self._message_types(discovery_messages))
+        opportunity_message = self._message_by_type(discovery_messages, "quest.opportunity.available")
+        self.assertIn("Quartermaster Request", opportunity_message["text"])
+
+
 class TestTurnInQuestRuntime(QuestRuntimeTestCase):
     def setUp(self):
         super().setUp()
@@ -347,8 +396,8 @@ class TestTurnInQuestRuntime(QuestRuntimeTestCase):
                                 "event": "quest.item.delivered",
                                 "where": {
                                     "all": [
-                                        {"eq": ["event.target.template_id", self.quartermaster_template.id]},
-                                        {"eq": ["event.item.template_id", self.pelt_template.id]},
+                                        {"eq": ["event.target.template_id", self.quartermaster_template.slug]},
+                                        {"eq": ["event.item.template_id", self.pelt_template.slug]},
                                     ]
                                 },
                             },
@@ -361,8 +410,8 @@ class TestTurnInQuestRuntime(QuestRuntimeTestCase):
                                 "event": "quest.item.delivered",
                                 "where": {
                                     "all": [
-                                        {"eq": ["event.target.template_id", self.quartermaster_template.id]},
-                                        {"eq": ["event.item.template_id", self.herb_template.id]},
+                                        {"eq": ["event.target.template_id", self.quartermaster_template.slug]},
+                                        {"eq": ["event.item.template_id", self.herb_template.slug]},
                                     ]
                                 },
                             },
@@ -393,7 +442,11 @@ class TestTurnInQuestRuntime(QuestRuntimeTestCase):
                 "complete": [
                     {"type": "grant_gold", "amount": 10},
                     {"type": "grant_xp", "amount": 50},
-                    {"type": "mob_command", "command": "/echo room Delivery accepted."},
+                    {
+                        "type": "mob_command",
+                        "mob_template": self.quartermaster_template.slug,
+                        "command": "/echo room Delivery accepted.",
+                    },
                 ],
                 "compromised": [],
                 "failed_forward": [],

@@ -19,6 +19,7 @@
             {{ item_template.type }}
           </div>
           <div class="mb-2">ID: {{ item_template.id }}</div>
+          <div class="mb-2">Slug: {{ item_template.slug || "auto-generated" }}</div>
 
           <div class="notes" v-if="item_template.notes">
             <span class="color-text-70">Notes:</span> {{ item_template.notes }}

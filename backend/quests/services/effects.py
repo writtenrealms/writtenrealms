@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Any
 
+from quests.entity_refs import resolve_template_ref_id
 from spawns.actions.base import ActionError
 from spawns.actions.targeting import first_room_mob_with_template, resolve_room_mob_target
 from spawns.models import Mob
@@ -80,7 +81,14 @@ def _command_list(effect: dict[str, Any], *, player=None, template=None, quest_i
     return commands
 
 
-def _resolve_effect_mob(effect: dict[str, Any], *, player=None, event_data: dict[str, Any] | None = None) -> Mob | None:
+def _resolve_effect_mob(
+    effect: dict[str, Any],
+    *,
+    player=None,
+    template=None,
+    quest_instance=None,
+    event_data: dict[str, Any] | None = None,
+) -> Mob | None:
     room = getattr(player, "room", None)
     if not room:
         return None
@@ -89,7 +97,17 @@ def _resolve_effect_mob(effect: dict[str, Any], *, player=None, event_data: dict
     if mob_id:
         return room.mobs.select_related("template").filter(pk=mob_id).first()
 
-    template_id = _parse_entity_id(effect.get("mob_template"), "mobtemplate")
+    template_id = resolve_template_ref_id(
+        world=getattr(template, "world", None) or getattr(getattr(player, "world", None), "context", None) or getattr(player, "world", None),
+        value=resolve_value(
+            effect.get("mob_template"),
+            player=player,
+            template=template,
+            quest_instance=quest_instance,
+            event_data=event_data,
+        ),
+        expected_type="mobtemplate",
+    )
     if template_id:
         return first_room_mob_with_template(room, template_id)
 
@@ -129,7 +147,13 @@ def _run_allowed_mob_commands(
     quest_instance=None,
     event_data: dict[str, Any] | None = None,
 ) -> None:
-    mob = _resolve_effect_mob(effect, player=player, event_data=event_data)
+    mob = _resolve_effect_mob(
+        effect,
+        player=player,
+        template=template,
+        quest_instance=quest_instance,
+        event_data=event_data,
+    )
     if not mob:
         return
     dispatch_command = import_module("spawns.handlers.registry").dispatch_command

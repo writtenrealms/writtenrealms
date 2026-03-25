@@ -4204,6 +4204,47 @@ class BuilderMobTemplatePermissionTests(BuilderPermissionsBase):
         assignment = BuilderAssignment.objects.get()
         self.assertEqual(assignment.builder, self.builder)
 
+    def test_edit_mob_template_slug(self):
+        mob_template = MobTemplate.objects.create(
+            world=self.world,
+            name='a soldier')
+        endpoint = reverse('builder-mob-template-detail',
+                           args=[self.world.pk, mob_template.pk])
+
+        self.builder.builder_rank = 3
+        self.builder.save()
+        resp = self.client.put(endpoint, {
+            'name': mob_template.name,
+            'slug': 'camp-quartermaster',
+        }, format='json')
+        self.assertEqual(resp.status_code, 200)
+
+        mob_template.refresh_from_db()
+        self.assertEqual(mob_template.slug, 'camp-quartermaster')
+
+    def test_duplicate_mob_template_slug_is_rejected(self):
+        MobTemplate.objects.create(
+            world=self.world,
+            name='quartermaster',
+            slug='camp-quartermaster')
+        mob_template = MobTemplate.objects.create(
+            world=self.world,
+            name='a soldier')
+        endpoint = reverse('builder-mob-template-detail',
+                           args=[self.world.pk, mob_template.pk])
+
+        self.builder.builder_rank = 3
+        self.builder.save()
+        resp = self.client.put(endpoint, {
+            'name': mob_template.name,
+            'slug': 'camp-quartermaster',
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(
+            resp.data['slug'][0],
+            'Mob template slug is already in use in this world.',
+        )
+
     def test_delete_mob_template(self):
         # Rank 3 and above can delete any mob template
         mob_template = MobTemplate.objects.create(
@@ -4322,6 +4363,38 @@ class BuilderItemTemplatePermissionTests(BuilderPermissionsBase):
         self.assertEqual(BuilderAssignment.objects.count(), 1)
         assignment = BuilderAssignment.objects.get()
         self.assertEqual(assignment.builder, self.builder)
+
+    def test_create_item_template_with_custom_slug(self):
+        self.builder.builder_rank = 3
+        self.builder.save()
+        endpoint = reverse('builder-item-template-list', args=[self.world.pk])
+        resp = self.client.post(endpoint, {
+            'name': 'a sword',
+            'slug': 'starter-blade',
+        }, format='json')
+        self.assertEqual(resp.status_code, 201)
+
+        item_template = ItemTemplate.objects.get(pk=resp.data['id'])
+        self.assertEqual(item_template.slug, 'starter-blade')
+
+    def test_duplicate_item_template_slug_is_rejected(self):
+        ItemTemplate.objects.create(
+            world=self.world,
+            name='a sword',
+            slug='starter-blade')
+
+        self.builder.builder_rank = 3
+        self.builder.save()
+        endpoint = reverse('builder-item-template-list', args=[self.world.pk])
+        resp = self.client.post(endpoint, {
+            'name': 'a dagger',
+            'slug': 'starter-blade',
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(
+            resp.data['slug'][0],
+            'Item template slug is already in use in this world.',
+        )
 
     def test_delete_item_template(self):
         # Rank 3 and above can delete any item template

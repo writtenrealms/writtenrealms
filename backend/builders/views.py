@@ -4,7 +4,7 @@ import json
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 
@@ -100,9 +100,11 @@ class BaseWorldBuilderViewSet(RequestDataMixin,
                 query = int(query)
                 qs = qs.filter(pk=query)
             except ValueError:
-                lookup = '%s__icontains'    % field_name
-                kwargs = {lookup: query}
-                qs = qs.filter(**kwargs)
+                lookup = '%s__icontains' % field_name
+                query_filter = Q(**{lookup: query})
+                if any(field.name == 'slug' for field in qs.model._meta.concrete_fields):
+                    query_filter |= Q(slug__icontains=query)
+                qs = qs.filter(query_filter)
 
         # Sorting. Possibly doesn't belong here but rather in some other
         # method like 'apply_sort_by' or something.

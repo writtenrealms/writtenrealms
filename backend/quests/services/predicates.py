@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from quests.entity_refs import canonical_template_type, resolve_template_ref_id
+
 
 def _walk_value(value: Any, segments: list[str]) -> Any:
     current = value
@@ -73,6 +75,42 @@ def resolve_value(
                 quest_instance=quest_instance,
                 event_data=event_data,
             )
+    return value
+
+
+def _template_ref_type_for_path(path: str, value: Any = None) -> str | None:
+    if isinstance(value, str):
+        prefix, sep, _ = value.strip().partition(".")
+        if sep == ".":
+            explicit_type = canonical_template_type(prefix)
+            if explicit_type:
+                return explicit_type
+
+    path = str(path or "").strip()
+    if not path.endswith(".template_id"):
+        return None
+    if ".item.template_id" in path:
+        return "itemtemplate"
+    return "mobtemplate"
+
+
+def _resolve_comparison_value(
+    path: str,
+    value: Any,
+    *,
+    player=None,
+    template=None,
+) -> Any:
+    expected_type = _template_ref_type_for_path(path, value)
+    world = getattr(template, "world", None) or getattr(player, "world", None)
+    if expected_type and world:
+        resolved_id = resolve_template_ref_id(
+            world=world,
+            value=value,
+            expected_type=expected_type,
+        )
+        if resolved_id is not None:
+            return resolved_id
     return value
 
 
@@ -172,12 +210,17 @@ def evaluate_condition(
             quest_instance=quest_instance,
             event_data=event_data,
         )
-        right = resolve_value(
-            raw_args[1],
+        right = _resolve_comparison_value(
+            str(raw_args[0]),
+            resolve_value(
+                raw_args[1],
+                player=player,
+                template=template,
+                quest_instance=quest_instance,
+                event_data=event_data,
+            ),
             player=player,
             template=template,
-            quest_instance=quest_instance,
-            event_data=event_data,
         )
         return predicate(left, right)
 
@@ -201,6 +244,15 @@ def evaluate_condition(
         )
         if not isinstance(candidates, (list, tuple, set)):
             return False
-        return left in candidates
+        resolved_candidates = [
+            _resolve_comparison_value(
+                str(raw_args[0]),
+                candidate,
+                player=player,
+                template=template,
+            )
+            for candidate in candidates
+        ]
+        return left in resolved_candidates
 
     return False

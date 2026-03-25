@@ -9,6 +9,11 @@ from django.utils.text import slugify
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from rest_framework import serializers
 
+from quests.entity_refs import (
+    canonical_template_type,
+    is_dynamic_reference,
+    resolve_template_ref_id,
+)
 from quests.models import (
     QUEST_REPEATABILITY_MODES,
     QUEST_SCOPES,
@@ -174,6 +179,217 @@ def _slug_or_error(value: str, field_name: str) -> str:
     if not slug:
         raise serializers.ValidationError(f"{field_name} must contain at least one slug-safe character.")
     return slug
+
+
+def _template_ref_error(expected_type: str, field_name: str) -> str:
+    return (
+        f"{field_name} must be an integer id, a '{expected_type}.<id>' key, "
+        f"a '{expected_type}.<slug>' key, or a bare slug."
+    )
+
+
+def _validate_template_ref(world: World, value: Any, expected_type: str, field_name: str) -> None:
+    expected = canonical_template_type(expected_type)
+    if not expected or value in (None, ""):
+        return
+    if isinstance(value, bool):
+        raise serializers.ValidationError(_template_ref_error(expected, field_name))
+    if isinstance(value, int) or is_dynamic_reference(value):
+        return
+
+    text = str(value or "").strip()
+    if not text or text.isdigit():
+        return
+
+    prefix, sep, raw = text.partition(".")
+    if sep == ".":
+        canonical_prefix = canonical_template_type(prefix)
+        if not canonical_prefix or canonical_prefix != expected:
+            raise serializers.ValidationError(_template_ref_error(expected, field_name))
+        if raw.isdigit():
+            return
+
+    resolved_id = resolve_template_ref_id(
+        world=world,
+        value=value,
+        expected_type=expected,
+    )
+    if resolved_id is None:
+        raise serializers.ValidationError(f"{field_name} references an unknown {expected}.")
+
+
+def _condition_expected_template_type(left_path: Any, right_value: Any = None) -> str | None:
+    if isinstance(right_value, str):
+        prefix, sep, _ = right_value.strip().partition(".")
+        if sep == ".":
+            explicit_type = canonical_template_type(prefix)
+            if explicit_type:
+                return explicit_type
+
+    path = str(left_path or "").strip()
+    if not path.endswith(".template_id"):
+        return None
+    if ".item.template_id" in path:
+        return "itemtemplate"
+    return "mobtemplate"
+
+
+def _validate_condition_template_refs(world: World, condition: Any, field_name: str) -> None:
+    if condition in (None, {}, []):
+        return
+    if isinstance(condition, list):
+        for index, item in enumerate(condition):
+            _validate_condition_template_refs(world, item, f"{field_name}[{index}]")
+        return
+    if not isinstance(condition, dict):
+        return
+
+    if "all" in condition:
+        _validate_condition_template_refs(world, condition.get("all"), f"{field_name}.all")
+    if "any" in condition:
+        _validate_condition_template_refs(world, condition.get("any"), f"{field_name}.any")
+    if "not" in condition:
+        _validate_condition_template_refs(world, condition.get("not"), f"{field_name}.not")
+
+    for operator in ("eq", "ne", "gte", "lte", "in"):
+        raw_args = condition.get(operator)
+        if not isinstance(raw_args, (list, tuple)) or len(raw_args) != 2:
+            continue
+
+        left_path = raw_args[0]
+        right_value = raw_args[1]
+        base_expected_type = _condition_expected_template_type(left_path)
+
+        if operator == "in" and isinstance(right_value, (list, tuple, set)):
+            for index, candidate in enumerate(right_value):
+                expected_type = _condition_expected_template_type(left_path, candidate) or base_expected_type
+                if expected_type:
+                    _validate_template_ref(
+                        world,
+                        candidate,
+                        expected_type,
+                        f"{field_name}.{operator}[1][{index}]",
+                    )
+            continue
+
+        expected_type = _condition_expected_template_type(left_path, right_value) or base_expected_type
+        if expected_type:
+            _validate_template_ref(
+                world,
+                right_value,
+                expected_type,
+                f"{field_name}.{operator}[1]",
+            )
+
+
+def _validate_effect_template_refs(world: World, effects: list[dict[str, Any]] | None, field_name: str) -> None:
+    if not effects:
+        return
+    for index, effect in enumerate(effects):
+        if not isinstance(effect, dict):
+            continue
+        if "mob_template" in effect:
+            _validate_template_ref(
+                world,
+                effect.get("mob_template"),
+                "mobtemplate",
+                f"{field_name}[{index}].mob_template",
+            )
+
+
+def _validate_slot_schema_template_refs(world: World, slot_schema: dict[str, Any]) -> None:
+    for slot_name, slot_spec in (slot_schema or {}).items():
+        if not isinstance(slot_spec, dict):
+            continue
+        resolve_spec = slot_spec.get("resolve") if isinstance(slot_spec.get("resolve"), dict) else slot_spec
+        if not isinstance(resolve_spec, dict):
+            continue
+        raw_value = resolve_spec.get("entity")
+        if raw_value is None:
+            raw_value = resolve_spec.get("value")
+        if not isinstance(raw_value, str):
+            continue
+        prefix, sep, _ = raw_value.strip().partition(".")
+        expected_type = canonical_template_type(prefix) if sep == "." else None
+        if expected_type:
+            _validate_template_ref(
+                world,
+                raw_value,
+                expected_type,
+                f"spec.slots.{slot_name}",
+            )
+
+
+def _validate_quest_template_refs(
+    *,
+    world: World,
+    discovery_policy: dict[str, Any],
+    slot_schema: dict[str, Any],
+    steps: list[dict[str, Any]],
+    reward_policy: dict[str, Any],
+) -> None:
+    for index, source in enumerate(discovery_policy.get("sources", []) or []):
+        if not isinstance(source, dict):
+            continue
+        source_type = str(source.get("type") or "").strip().lower()
+        if source_type == "npc_dialogue":
+            _validate_template_ref(
+                world,
+                source.get("mob_template") or source.get("mob_template_id"),
+                "mobtemplate",
+                f"spec.discovery.sources[{index}].mob_template",
+            )
+
+    _validate_condition_template_refs(world, discovery_policy.get("visible_if"), "spec.discovery.visible_if")
+    _validate_condition_template_refs(world, discovery_policy.get("accept_if"), "spec.discovery.accept_if")
+    _validate_slot_schema_template_refs(world, slot_schema)
+
+    for step_index, step in enumerate(steps):
+        if not isinstance(step, dict):
+            continue
+        _validate_effect_template_refs(world, step.get("effects"), f"spec.steps[{step_index}].effects")
+        for objective_index, objective in enumerate(step.get("objectives") or []):
+            if not isinstance(objective, dict):
+                continue
+            tracker = objective.get("tracker") or {}
+            _validate_condition_template_refs(
+                world,
+                tracker.get("where"),
+                f"spec.steps[{step_index}].objectives[{objective_index}].tracker.where",
+            )
+        for choice_index, choice in enumerate(step.get("choices") or []):
+            if not isinstance(choice, dict):
+                continue
+            _validate_condition_template_refs(
+                world,
+                choice.get("if"),
+                f"spec.steps[{step_index}].choices[{choice_index}].if",
+            )
+            _validate_effect_template_refs(
+                world,
+                choice.get("effects"),
+                f"spec.steps[{step_index}].choices[{choice_index}].effects",
+            )
+        for transition_index, transition in enumerate(step.get("transitions") or []):
+            if not isinstance(transition, dict):
+                continue
+            _validate_condition_template_refs(
+                world,
+                transition.get("when"),
+                f"spec.steps[{step_index}].transitions[{transition_index}].when",
+            )
+            _validate_effect_template_refs(
+                world,
+                transition.get("effects"),
+                f"spec.steps[{step_index}].transitions[{transition_index}].effects",
+            )
+
+    for resolution_key, effects in (reward_policy or {}).items():
+        _validate_effect_template_refs(
+            world,
+            effects,
+            f"spec.rewards.{resolution_key}",
+        )
 
 
 class QuestRepeatabilitySpec(BaseModel):
@@ -685,6 +901,18 @@ def parse_quest_manifest(*, world: World, manifest: dict[str, Any]) -> ParsedQue
         if not arc:
             raise serializers.ValidationError(f"Quest arc '{arc_slug}' was not found in this world.")
 
+    discovery_policy = validated_spec.discovery.model_dump()
+    slot_schema = validated_spec.slots
+    steps = [step.model_dump() for step in validated_spec.steps]
+    reward_policy = validated_spec.rewards.model_dump()
+    _validate_quest_template_refs(
+        world=world,
+        discovery_policy=discovery_policy,
+        slot_schema=slot_schema,
+        steps=steps,
+        reward_policy=reward_policy,
+    )
+
     return ParsedQuestManifest(
         world=world,
         quest=quest,
@@ -698,10 +926,10 @@ def parse_quest_manifest(*, world: World, manifest: dict[str, Any]) -> ParsedQue
         repeatability_mode=validated_spec.repeatability.mode,
         repeatability_cooldown_seconds=validated_spec.repeatability.cooldown_seconds,
         max_active=validated_spec.max_active,
-        discovery_policy=validated_spec.discovery.model_dump(),
-        slot_schema=validated_spec.slots,
-        graph={"steps": [step.model_dump() for step in validated_spec.steps]},
-        reward_policy=validated_spec.rewards.model_dump(),
+        discovery_policy=discovery_policy,
+        slot_schema=slot_schema,
+        graph={"steps": steps},
+        reward_policy=reward_policy,
         manifest_version=manifest_version,
     )
 

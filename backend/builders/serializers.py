@@ -6,6 +6,7 @@ from django.db import transaction
 from django.db.models import F
 from django.db.utils import IntegrityError
 from django.utils import timezone
+from django.utils.text import slugify
 
 from config import constants as adv_consts
 from core.utils.mobs import suggest_stats
@@ -87,6 +88,30 @@ def validate_conditions(self, conditions):
                 raise serializers.ValidationError(
                     "Insufficient number of arguments to '%s'" % condition_name)
         return conditions
+
+
+def _normalize_template_slug(serializer, value, *, model_cls, field_label):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    normalized = slugify(text)
+    if not normalized:
+        raise serializers.ValidationError(
+            f"{field_label} slug must contain letters or numbers."
+        )
+
+    world = getattr(serializer.instance, "world", None) or serializer.context.get("world")
+    if world:
+        existing = model_cls.objects.filter(world=world, slug=normalized)
+        if serializer.instance:
+            existing = existing.exclude(pk=serializer.instance.pk)
+        if existing.exists():
+            raise serializers.ValidationError(
+                f"{field_label} slug is already in use in this world."
+            )
+
+    return normalized
 
 
 class WorldSerializer(serializers.ModelSerializer):
@@ -1262,7 +1287,7 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
     class Meta:
         model = ItemTemplate
         fields = [
-            'id', 'key', 'name', 'model_type', 'is_persistent',
+            'id', 'key', 'slug', 'name', 'model_type', 'is_persistent',
             'level', 'description', 'ground_description', 'notes',
             'keywords', 'empty_keywords',
             'type', 'quality', 'power', 'is_boat', 'is_pickable',
@@ -1277,6 +1302,14 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
             'has_assignment',
             'on_use_cmd', 'on_use_description', 'on_use_equipped',
         ]
+
+    def validate_slug(self, value):
+        return _normalize_template_slug(
+            self,
+            value,
+            model_cls=ItemTemplate,
+            field_label="Item template",
+        )
 
     def create(self, validated_data):
         # Null out equipment type if the item is not of type equipment
@@ -1488,7 +1521,7 @@ class MobTemplateSerializer(serializers.ModelSerializer):
     class Meta:
         model = MobTemplate
         fields = [
-            'id', 'key', 'name', 'model_type',
+            'id', 'key', 'slug', 'name', 'model_type',
             'level', 'description', 'room_description',
             'keywords', 'empty_keywords',
             'notes', 'gold',
@@ -1515,6 +1548,14 @@ class MobTemplateSerializer(serializers.ModelSerializer):
             'upgrade_success_cmd', 'upgrade_failure_cmd',
             'merchant_profit',
         ]
+
+    def validate_slug(self, value):
+        return _normalize_template_slug(
+            self,
+            value,
+            model_cls=MobTemplate,
+            field_label="Mob template",
+        )
 
     def get_core_faction(self, mob_template):
         return mob_template.factions.get('core')
