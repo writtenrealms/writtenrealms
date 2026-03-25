@@ -167,6 +167,41 @@ def _has_room_assignment(*, user, room):
     ).exists()
 
 
+def _has_item_template_assignment(*, user, item_template):
+    return BuilderAssignment.objects.filter(
+        builder__user=user,
+        assignment_id=item_template.id,
+        assignment_type=ContentType.objects.get_for_model(ItemTemplate),
+    ).exists()
+
+
+def _delete_item_template_or_error(instance):
+    if instance.template_items.count():
+        raise serializers.ValidationError(
+            "Cannot delete a template that has loaded items."
+        )
+    if Reward.objects.filter(
+        profile_type=ContentType.objects.get_for_model(instance),
+        profile_id=instance.id,
+    ).count():
+        raise serializers.ValidationError(
+            "Cannot delete a template used for a quest reward."
+        )
+    if Objective.objects.filter(
+        template_type=ContentType.objects.get_for_model(instance),
+        template_id=instance.id,
+        qty__gte=1,
+    ).count():
+        raise serializers.ValidationError(
+            "Cannot delete a template used for a quest objective."
+        )
+    BuilderAssignment.objects.filter(
+        assignment_id=instance.id,
+        assignment_type=ContentType.objects.get_for_model(ItemTemplate),
+    ).delete()
+    instance.delete()
+
+
 def _has_room_or_zone_assignment(*, user, room):
     if _has_zone_assignment(user=user, zone=room.zone):
         return True
@@ -1509,6 +1544,20 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             "You do not have permission to alter quest templates."
         )
 
+    def _assert_can_edit_item_template(self, item_template=None):
+        if item_template is None:
+            return
+        if self._builder_rank >= 3:
+            return
+        if _has_item_template_assignment(
+            user=self.request.user,
+            item_template=item_template,
+        ):
+            return
+        raise drf_exceptions.PermissionDenied(
+            "You do not have permission to alter this item template."
+        )
+
     def _apply_trigger_manifest(self, manifest):
         operation = builder_manifests.parse_manifest_operation(manifest)
         if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
@@ -1624,6 +1673,59 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
         )
 
+    def _apply_item_template_manifest(self, manifest):
+        operation = builder_manifests.parse_manifest_operation(manifest)
+        if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+            parsed_delete = builder_manifests.parse_item_template_delete_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            item_template = parsed_delete.item_template
+            self._assert_can_edit_item_template(item_template)
+            item_template_payload = {
+                "id": item_template.id,
+                "key": item_template.key,
+                "slug": item_template.slug,
+                "name": item_template.name,
+            }
+            _delete_item_template_or_error(item_template)
+            return Response(
+                {
+                    "kind": builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "item_template": item_template_payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        parsed_item_template = builder_manifests.parse_item_template_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        self._assert_can_edit_item_template(parsed_item_template.item_template)
+        is_create = parsed_item_template.item_template is None
+        item_template = builder_manifests.apply_item_template_manifest(parsed_item_template)
+
+        if is_create and self._builder_rank <= 2:
+            builder = WorldBuilder.objects.get(
+                user=self.request.user,
+                world=self.world,
+            )
+            BuilderAssignment.objects.get_or_create(
+                builder=builder,
+                assignment_type=ContentType.objects.get_for_model(ItemTemplate),
+                assignment_id=item_template.id,
+            )
+
+        return Response(
+            {
+                "kind": builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "item_template": builder_manifests.serialize_item_template_payload(item_template),
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
     def _apply_quest_arc_manifest(self, manifest):
         self._assert_can_edit_quest_templates()
         operation = quest_manifests.parse_manifest_operation(manifest)
@@ -1676,6 +1778,8 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             return self._apply_trigger_manifest(manifest)
         if manifest_kind == builder_manifests.WORLD_CONFIG_MANIFEST_KIND:
             return self._apply_world_config_manifest(manifest)
+        if manifest_kind == builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND:
+            return self._apply_item_template_manifest(manifest)
         if manifest_kind == builder_manifests.QUEST_MANIFEST_KIND:
             return self._apply_quest_manifest(manifest)
         if manifest_kind == builder_manifests.QUEST_ARC_MANIFEST_KIND:
@@ -1976,6 +2080,9 @@ room_clear_door = RoomClearDoor.as_view()
 class ItemTemplateViewSet(BaseWorldBuilderViewSet):
     serializer_class = builder_serializers.ItemTemplateSerializer
 
+    def _serialize_item_template_response(self, item_template):
+        return builder_manifests.serialize_item_template_payload(item_template)
+
     def get_queryset(self):
         context = self.world
         if context.instance_of:
@@ -2051,6 +2158,28 @@ class ItemTemplateViewSet(BaseWorldBuilderViewSet):
         context['world'] = self.world  # Add world to the context
         return context
 
+    def retrieve(self, request, *args, **kwargs):
+        item_template = self.get_object()
+        return Response(self._serialize_item_template_response(item_template))
+
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+        item_template = ItemTemplate.objects.get(pk=response.data["id"])
+        response.data = self._serialize_item_template_response(item_template)
+        return response
+
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        item_template = ItemTemplate.objects.get(pk=response.data["id"])
+        response.data = self._serialize_item_template_response(item_template)
+        return response
+
+    def partial_update(self, request, *args, **kwargs):
+        response = super().partial_update(request, *args, **kwargs)
+        item_template = ItemTemplate.objects.get(pk=response.data["id"])
+        response.data = self._serialize_item_template_response(item_template)
+        return response
+
     def perform_create(self, serializer):
         item_template = serializer.save(world=self.world)
 
@@ -2063,26 +2192,7 @@ class ItemTemplateViewSet(BaseWorldBuilderViewSet):
                 assignment=item_template)
 
     def perform_destroy(self, instance):
-        if instance.template_items.count():
-            raise serializers.ValidationError(
-                "Cannot delete a template that has loaded items.")
-        if Reward.objects.filter(
-            profile_type=ContentType.objects.get_for_model(instance),
-            profile_id=instance.id).count():
-            raise serializers.ValidationError(
-                "Cannot delete a template used for a quest reward.")
-        if Objective.objects.filter(
-            template_type=ContentType.objects.get_for_model(instance),
-            template_id=instance.id,
-            qty__gte=1).count():
-            raise serializers.ValidationError(
-                "Cannot delete a template used for a quest objective.")
-        # Delete related builder assignments
-        BuilderAssignment.objects.filter(
-            assignment_id=instance.id,
-            assignment_type=ContentType.objects.get_for_model(ItemTemplate)
-        ).delete()
-        instance.delete()
+        _delete_item_template_or_error(instance)
 
     @action(detail=False)
     def inventory(self, request, pk, world_pk):

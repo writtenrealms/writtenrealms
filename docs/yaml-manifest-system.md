@@ -12,6 +12,7 @@ Implemented entities currently include:
 
 - `trigger`
 - `worldconfig`
+- `itemtemplate`
 
 ## Current Flows
 
@@ -34,13 +35,25 @@ In room navigation, **Triggers** now replaces **Actions**.
 - Each trigger includes **Copy YAML** and **Copy Delete YAML** actions.
 - Recommended workflow: copy template YAML, tweak it, ingest in **Edit World**.
 
-### 3. World Edit Screen
+### 3. Item Template Details Screen
+
+In **World > Items > Item Template**, the detail screen can expose the current
+item template as YAML.
+
+- It includes **Copy YAML** for the selected item template.
+- The manifest excludes legacy `ItemAction` data because item actions are being
+  retired in favor of the Trigger system.
+- Recommended workflow: copy the YAML, edit it, then ingest it in
+  **World > Edit World**.
+
+### 4. World Edit Screen
 
 A new world-level **Edit World** view accepts a YAML manifest textarea.
 
 - Submitting a manifest currently supports:
   - `kind: trigger`
   - `kind: worldconfig`
+  - `kind: itemtemplate`
   - `kind` is case-insensitive (`trigger`, `Trigger`, `TRIGGER` all work).
 - Trigger manifests now support both:
   - **create** (no `metadata.id` / `metadata.key`)

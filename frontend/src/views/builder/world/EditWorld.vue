@@ -2,7 +2,7 @@
   <div id="edit-world-manifest">
     <h2>{{ world.name.toUpperCase() }} EDIT WORLD</h2>
     <div class="color-text-60 mb-6">
-      Paste a YAML manifest and apply it. Supported kinds: worldconfig, trigger, quest, and questarc.
+      Paste a YAML manifest and apply it. Supported kinds: worldconfig, trigger, itemtemplate, quest, and questarc.
     </div>
 
     <textarea
@@ -30,6 +30,9 @@
       <template v-else-if="appliedKind === 'worldconfig'">
         Updated world config for {{ world.name }}.
       </template>
+      <template v-else-if="appliedKind === 'itemtemplate' && appliedItemTemplate">
+        {{ capfirst(lastOperation) }} {{ appliedItemTemplate.slug || appliedItemTemplate.name }}.
+      </template>
       <template v-else>
         {{ capfirst(lastOperation) }} manifest.
       </template>
@@ -52,6 +55,7 @@ const manifestText = ref("");
 const isSubmitting = ref(false);
 const appliedKind = ref<string>("");
 const appliedTrigger = ref<any | null>(null);
+const appliedItemTemplate = ref<any | null>(null);
 const lastOperation = ref<string>("");
 
 const endpoint = computed(() => `/builder/worlds/${route.params.world_id}/manifests/apply/`);
@@ -81,9 +85,11 @@ const submitManifest = async () => {
 
     if (appliedKind.value === "trigger") {
       appliedTrigger.value = resp.data.trigger || null;
+      appliedItemTemplate.value = null;
       manifestText.value = resp.data.trigger?.yaml || manifestText.value;
     } else if (appliedKind.value === "worldconfig") {
       appliedTrigger.value = null;
+      appliedItemTemplate.value = null;
       manifestText.value = resp.data.world_config?.yaml || manifestText.value;
       await Promise.all([
         store.dispatch("builder/fetch_world", route.params.world_id),
@@ -91,8 +97,13 @@ const submitManifest = async () => {
           world_id: route.params.world_id,
         }),
       ]);
+    } else if (appliedKind.value === "itemtemplate") {
+      appliedTrigger.value = null;
+      appliedItemTemplate.value = resp.data.item_template || null;
+      manifestText.value = resp.data.item_template?.yaml || manifestText.value;
     } else {
       appliedTrigger.value = null;
+      appliedItemTemplate.value = null;
     }
 
     const manifestLabel = appliedKind.value ? `${appliedKind.value} manifest` : "manifest";

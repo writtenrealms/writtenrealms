@@ -4303,6 +4303,23 @@ class BuilderItemTemplatePermissionTests(BuilderPermissionsBase):
         resp = self.client.get(endpoint)
         self.assertEqual(resp.status_code, 200)
 
+    def test_view_item_template_details_includes_manifest_yaml(self):
+        item_template = ItemTemplate.objects.create(
+            world=self.world,
+            name='a sword')
+        endpoint = reverse('builder-item-template-detail',
+                           args=[self.world.pk, item_template.pk])
+
+        self.builder.builder_rank = 3
+        self.builder.save()
+        resp = self.client.get(endpoint)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('manifest', resp.data)
+        self.assertIn('yaml', resp.data)
+        self.assertEqual(resp.data['manifest']['kind'], 'itemtemplate')
+        self.assertEqual(resp.data['manifest']['metadata']['slug'], item_template.slug)
+        self.assertIn('kind: itemtemplate', resp.data['yaml'])
+
     def test_edit_item_template(self):
         item_template = ItemTemplate.objects.create(
             world=self.world,

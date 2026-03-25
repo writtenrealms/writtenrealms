@@ -6,10 +6,11 @@ from typing import Any
 import yaml
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
+from django.utils.text import slugify
 from rest_framework import serializers
 
 from builders import serializers as builder_serializers
-from builders.models import MobTemplate, Trigger
+from builders.models import Currency, ItemTemplate, MobTemplate, Trigger
 from config import constants as adv_consts
 from spawns import trigger_matcher
 from worlds.models import Room, World, Zone
@@ -21,6 +22,7 @@ TRIGGER_MANIFEST_KIND = "trigger"
 WORLD_CONFIG_MANIFEST_KIND = "worldconfig"
 QUEST_MANIFEST_KIND = "quest"
 QUEST_ARC_MANIFEST_KIND = "questarc"
+ITEM_TEMPLATE_MANIFEST_KIND = "itemtemplate"
 TRIGGER_MANIFEST_OPERATION_APPLY = "apply"
 TRIGGER_MANIFEST_OPERATION_DELETE = "delete"
 
@@ -36,6 +38,11 @@ _QUEST_ARC_MANIFEST_KIND_ALIASES = {
     QUEST_ARC_MANIFEST_KIND,
     "quest-arc",
     "quest_arc",
+}
+_ITEM_TEMPLATE_MANIFEST_KIND_ALIASES = {
+    ITEM_TEMPLATE_MANIFEST_KIND,
+    "item-template",
+    "item_template",
 }
 
 _WORLD_CONFIG_WORLD_TEXT_FIELDS = (
@@ -101,6 +108,49 @@ _EVENT_TARGET_TYPES = {
     "mob_template": ("builders", "mobtemplate"),
 }
 
+_ITEM_TEMPLATE_SPEC_FIELDS = (
+    "level",
+    "description",
+    "ground_description",
+    "notes",
+    "keywords",
+    "type",
+    "is_persistent",
+    "capacity",
+    "quality",
+    "is_boat",
+    "is_pickable",
+    "cost",
+    "currency",
+    "food_value",
+    "food_type",
+    "equipment_type",
+    "armor_class",
+    "weapon_grip",
+    "weapon_type",
+    "skill_modifier",
+    "hit_msg_first",
+    "hit_msg_third",
+    "on_use_cmd",
+    "on_use_description",
+    "on_use_equipped",
+    "health_max",
+    "health_regen",
+    "mana_max",
+    "mana_regen",
+    "stamina_max",
+    "stamina_regen",
+    "strength",
+    "constitution",
+    "dexterity",
+    "intelligence",
+    "attack_power",
+    "spell_power",
+    "resilience",
+    "dodge",
+    "crit",
+)
+
 
 class _ManifestDumper(yaml.SafeDumper):
     pass
@@ -151,6 +201,23 @@ class ParsedWorldConfigManifest:
     config_updates: dict[str, Any]
 
 
+@dataclass
+class ParsedItemTemplateManifest:
+    world: World
+    item_template: ItemTemplate | None
+    item_template_id: int | None
+    slug: str
+    name: str
+    serializer_data: dict[str, Any]
+
+
+@dataclass
+class ParsedItemTemplateDeleteManifest:
+    world: World
+    item_template: ItemTemplate
+    item_template_id: int
+
+
 def _entity_key(entity_type: str, entity_id: int) -> str:
     return f"{entity_type}.{entity_id}"
 
@@ -198,6 +265,27 @@ def _coerce_text(value: Any) -> str:
     return str(value)
 
 
+def _deep_merge(base: Any, patch: Any) -> Any:
+    if not isinstance(base, dict) or not isinstance(patch, dict):
+        return patch
+    merged = dict(base)
+    for key, value in patch.items():
+        if key in merged:
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _slug_or_error(value: str, field_name: str) -> str:
+    slug = slugify(value or "")
+    if not slug:
+        raise serializers.ValidationError(
+            f"{field_name} must contain at least one slug-safe character."
+        )
+    return slug
+
+
 def _normalize_kind(value: Any, field_name: str = "kind") -> str:
     text = str(value or "").strip()
     if not text:
@@ -225,13 +313,15 @@ def parse_manifest_kind(manifest: dict[str, Any]) -> str:
         return TRIGGER_MANIFEST_KIND
     if manifest_kind in _WORLD_CONFIG_MANIFEST_KIND_ALIASES:
         return WORLD_CONFIG_MANIFEST_KIND
+    if manifest_kind in _ITEM_TEMPLATE_MANIFEST_KIND_ALIASES:
+        return ITEM_TEMPLATE_MANIFEST_KIND
     if manifest_kind == QUEST_MANIFEST_KIND:
         return QUEST_MANIFEST_KIND
     if manifest_kind in _QUEST_ARC_MANIFEST_KIND_ALIASES:
         return QUEST_ARC_MANIFEST_KIND
     raise serializers.ValidationError(
         f"Unsupported manifest kind '{manifest_kind}'. "
-        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_CONFIG_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
+        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_CONFIG_MANIFEST_KIND}, {ITEM_TEMPLATE_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
     )
 
 
@@ -417,6 +507,88 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
         "manifest": manifest_data["manifest"],
         "yaml": manifest_data["yaml"],
     }
+
+
+def _serialize_currency_reference(currency: Currency | None) -> str:
+    if currency is None:
+        return ""
+    return currency.code or ""
+
+
+def _item_template_spec_from_instance(item_template: ItemTemplate) -> dict[str, Any]:
+    spec: dict[str, Any] = {}
+    for field_name in _ITEM_TEMPLATE_SPEC_FIELDS:
+        if field_name == "currency":
+            spec[field_name] = _serialize_currency_reference(item_template.currency)
+            continue
+
+        value = getattr(item_template, field_name, "")
+        if value is None:
+            spec[field_name] = ""
+        else:
+            spec[field_name] = value
+    return spec
+
+
+def _new_item_template_defaults(*, world: World) -> ItemTemplate:
+    item_template = ItemTemplate(world=world)
+    item_template.currency = Currency.objects.filter(
+        world=world,
+        is_default=True,
+    ).first()
+    return item_template
+
+
+def item_template_manifest_template(*, world: World) -> dict[str, Any]:
+    item_template = _new_item_template_defaults(world=world)
+    return {
+        "kind": ITEM_TEMPLATE_MANIFEST_KIND,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, world.id),
+            "slug": "new-item-template",
+            "name": "New Item Template",
+        },
+        "spec": _item_template_spec_from_instance(item_template),
+    }
+
+
+def item_template_to_manifest(item_template: ItemTemplate) -> dict[str, Any]:
+    return {
+        "kind": ITEM_TEMPLATE_MANIFEST_KIND,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, item_template.world_id),
+            "id": item_template.id,
+            "key": item_template.key,
+            "slug": item_template.slug,
+            "name": item_template.name or "",
+        },
+        "spec": _item_template_spec_from_instance(item_template),
+    }
+
+
+def item_template_delete_manifest(item_template: ItemTemplate) -> dict[str, Any]:
+    return {
+        "kind": ITEM_TEMPLATE_MANIFEST_KIND,
+        "operation": TRIGGER_MANIFEST_OPERATION_DELETE,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, item_template.world_id),
+            "id": item_template.id,
+            "key": item_template.key,
+            "slug": item_template.slug,
+            "name": item_template.name or "",
+        },
+    }
+
+
+def serialize_item_template_payload(item_template: ItemTemplate) -> dict[str, Any]:
+    payload = builder_serializers.ItemTemplateSerializer(item_template).data
+    manifest = item_template_to_manifest(item_template)
+    delete_manifest = item_template_delete_manifest(item_template)
+    payload["manifest"] = manifest
+    payload["yaml"] = manifest_to_yaml(manifest)
+    payload["delete_manifest"] = delete_manifest
+    payload["delete_yaml"] = manifest_to_yaml(delete_manifest)
+    return payload
 
 
 def trigger_to_manifest(trigger: Trigger) -> dict[str, Any]:
@@ -957,6 +1129,276 @@ def parse_trigger_delete_manifest(
     )
 
 
+def _parse_item_template_reference(value: Any, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or an item template key."
+        )
+    if isinstance(value, int):
+        return value
+
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or an item template key."
+        )
+    if text.isdigit():
+        return int(text)
+
+    entity_type, sep, raw_id = text.partition(".")
+    if sep != "." or not raw_id.isdigit():
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or an item template key."
+        )
+    if entity_type not in {"itemtemplate", "item_template"}:
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or an item template key."
+        )
+    return int(raw_id)
+
+
+def _resolve_item_template_reference(
+    *,
+    world: World,
+    metadata: dict[str, Any],
+) -> tuple[ItemTemplate | None, int | None]:
+    template_id = metadata.get("id")
+    template_key = metadata.get("key")
+    template_slug = str(metadata.get("slug") or "").strip()
+
+    resolved_by_id = None
+    if template_id is not None:
+        parsed_id = _parse_item_template_reference(template_id, "metadata.id")
+        resolved_by_id = ItemTemplate.objects.filter(world=world, pk=parsed_id).first()
+        if not resolved_by_id:
+            raise serializers.ValidationError(
+                "Item template referenced by metadata.id was not found."
+            )
+
+    resolved_by_key = None
+    if template_key not in (None, ""):
+        parsed_key_id = _parse_item_template_reference(template_key, "metadata.key")
+        resolved_by_key = ItemTemplate.objects.filter(world=world, pk=parsed_key_id).first()
+        if not resolved_by_key:
+            raise serializers.ValidationError(
+                "Item template referenced by metadata.key was not found."
+            )
+
+    resolved_by_slug = None
+    if template_slug:
+        resolved_by_slug = ItemTemplate.objects.filter(world=world, slug=template_slug).first()
+
+    resolved = [item for item in (resolved_by_id, resolved_by_key, resolved_by_slug) if item]
+    if len({item.pk for item in resolved}) > 1:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, and metadata.slug refer to different item templates."
+        )
+
+    item_template = resolved_by_id or resolved_by_key or resolved_by_slug
+    if item_template is None:
+        return None, None
+    return item_template, item_template.id
+
+
+def _resolve_currency_reference(*, world: World, value: Any, field_name: str) -> Currency | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise serializers.ValidationError(
+            f"{field_name} must be a currency id, 'currency.<id>', or currency code."
+        )
+    if isinstance(value, int):
+        currency = Currency.objects.filter(world=world, pk=value).first()
+        if currency:
+            return currency
+        raise serializers.ValidationError(f"{field_name} references an unknown currency.")
+
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        currency = Currency.objects.filter(world=world, pk=int(text)).first()
+        if currency:
+            return currency
+        raise serializers.ValidationError(f"{field_name} references an unknown currency.")
+
+    prefix, sep, raw = text.partition(".")
+    if sep == ".":
+        if prefix != "currency":
+            raise serializers.ValidationError(
+                f"{field_name} must be a currency id, 'currency.<id>', or currency code."
+            )
+        text = raw
+        if text.isdigit():
+            currency = Currency.objects.filter(world=world, pk=int(text)).first()
+            if currency:
+                return currency
+            raise serializers.ValidationError(f"{field_name} references an unknown currency.")
+
+    currency = Currency.objects.filter(world=world, code=text).first()
+    if currency:
+        return currency
+    raise serializers.ValidationError(f"{field_name} references an unknown currency.")
+
+
+def parse_item_template_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedItemTemplateManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != ITEM_TEMPLATE_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{ITEM_TEMPLATE_MANIFEST_KIND}'."
+        )
+
+    operation = parse_manifest_operation(manifest)
+    if operation != TRIGGER_MANIFEST_OPERATION_APPLY:
+        raise serializers.ValidationError(
+            f"Item template manifests only support operation '{TRIGGER_MANIFEST_OPERATION_APPLY}' in this parser."
+        )
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError("Manifest world does not match the selected world.")
+
+    item_template, item_template_id = _resolve_item_template_reference(
+        world=world,
+        metadata=metadata,
+    )
+
+    spec_patch = manifest.get("spec") or {}
+    if not isinstance(spec_patch, dict):
+        raise serializers.ValidationError("spec must be a mapping.")
+    if item_template is None and not spec_patch:
+        raise serializers.ValidationError("spec is required when creating an item template.")
+
+    base_spec = item_template_manifest_template(world=world)["spec"]
+    if item_template is not None:
+        base_spec = item_template_to_manifest(item_template)["spec"]
+    merged_spec = _deep_merge(base_spec, spec_patch)
+
+    unknown_fields = sorted(set(merged_spec.keys()) - set(_ITEM_TEMPLATE_SPEC_FIELDS))
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported spec field(s): {', '.join(unknown_fields)}."
+        )
+
+    slug_source = metadata.get("slug")
+    if slug_source is None:
+        slug_source = item_template.slug if item_template else metadata.get("name")
+    slug = _slug_or_error(str(slug_source or ""), "metadata.slug")
+    if ItemTemplate.objects.filter(world=world, slug=slug).exclude(pk=item_template_id).exists():
+        raise serializers.ValidationError(
+            "metadata.slug is already used by another item template."
+        )
+
+    default_name = item_template.name if item_template else slug.replace("-", " ").title()
+    name = _coerce_text(metadata.get("name", default_name))
+    if not name.strip():
+        raise serializers.ValidationError("metadata.name cannot be empty.")
+
+    serializer_data: dict[str, Any] = {
+        "name": name,
+        "slug": slug,
+    }
+
+    for field_name in _ITEM_TEMPLATE_SPEC_FIELDS:
+        if field_name not in merged_spec:
+            continue
+        value = merged_spec.get(field_name)
+        if field_name == "currency":
+            if value == "":
+                if item_template is not None:
+                    serializer_data[field_name] = None
+                continue
+            serializer_data[field_name] = (
+                _resolve_currency_reference(
+                    world=world,
+                    value=value,
+                    field_name="spec.currency",
+                ).id
+                if value is not None else None
+            )
+            continue
+        serializer_data[field_name] = value
+
+    serializer = builder_serializers.ItemTemplateSerializer(
+        instance=item_template,
+        data=serializer_data,
+        context={"world": world},
+    )
+    serializer.is_valid(raise_exception=True)
+
+    return ParsedItemTemplateManifest(
+        world=world,
+        item_template=item_template,
+        item_template_id=item_template_id,
+        slug=slug,
+        name=name,
+        serializer_data=serializer_data,
+    )
+
+
+def parse_item_template_delete_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedItemTemplateDeleteManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != ITEM_TEMPLATE_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{ITEM_TEMPLATE_MANIFEST_KIND}'."
+        )
+
+    operation = parse_manifest_operation(manifest)
+    if operation != TRIGGER_MANIFEST_OPERATION_DELETE:
+        raise serializers.ValidationError("Delete parser requires operation: delete.")
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError("Manifest world does not match the selected world.")
+
+    item_template, item_template_id = _resolve_item_template_reference(
+        world=world,
+        metadata=metadata,
+    )
+    if item_template is None or item_template_id is None:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, or metadata.slug is required for operation: delete."
+        )
+
+    spec = manifest.get("spec")
+    if spec not in (None, {}):
+        raise serializers.ValidationError("spec is not allowed for operation: delete.")
+
+    return ParsedItemTemplateDeleteManifest(
+        world=world,
+        item_template=item_template,
+        item_template_id=item_template_id,
+    )
+
+
 def parse_world_config_manifest(
     *,
     world: World,
@@ -1107,6 +1549,18 @@ def apply_world_config_manifest(parsed: ParsedWorldConfigManifest):
             config.save(update_fields=list(config_updates.keys()))
 
     return config
+
+
+def apply_item_template_manifest(parsed: ParsedItemTemplateManifest) -> ItemTemplate:
+    serializer = builder_serializers.ItemTemplateSerializer(
+        instance=parsed.item_template,
+        data=parsed.serializer_data,
+        context={"world": parsed.world},
+    )
+    serializer.is_valid(raise_exception=True)
+    if parsed.item_template is None:
+        return serializer.save(world=parsed.world)
+    return serializer.save()
 
 
 def apply_trigger_manifest(parsed: ParsedTriggerManifest) -> Trigger:
