@@ -39,9 +39,13 @@ def resolve_room_mob_target(
     *,
     empty_error: str,
     not_found_error: str,
+    allow_single_match_when_empty: bool = False,
 ) -> Mob:
     normalized = str(selector or "").strip().lower()
+    room_mobs = list(room.mobs.select_related("template"))
     if not normalized:
+        if allow_single_match_when_empty and len(room_mobs) == 1:
+            return room_mobs[0]
         raise ActionError(empty_error, code="missing_target")
 
     if normalized.startswith("mob."):
@@ -54,7 +58,6 @@ def resolve_room_mob_target(
             raise ActionError(not_found_error, code="target_not_found")
         return mob
 
-    room_mobs = list(room.mobs.select_related("template"))
     for mob in room_mobs:
         if mob_matches_selector(mob, normalized):
             return mob

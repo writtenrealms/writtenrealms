@@ -202,8 +202,6 @@ def _build_step_payload(quest_instance: QuestInstance, *, player) -> dict[str, A
         "id": str(step.get("id") or ""),
         "kind": str(step.get("kind") or ""),
         "recap": str(step.get("recap") or ""),
-        "lead": str(step.get("lead") or ""),
-        "stakes": str(step.get("stakes") or ""),
         "text": step.get("text") or {},
         "choices": visible_choices(step, player=player, quest_instance=quest_instance),
         "objectives": objective_states,
@@ -220,8 +218,6 @@ def serialize_opportunity(template: QuestTemplate, *, player) -> dict[str, Any]:
         "quest_type": template.quest_type,
         "scope": template.scope,
         "recap": str(start_step.get("recap") or ""),
-        "lead": str(start_step.get("lead") or ""),
-        "stakes": str(start_step.get("stakes") or ""),
         "text": start_step.get("text") or {},
     }
 
@@ -248,8 +244,6 @@ def serialize_instance(quest_instance: QuestInstance, *, player) -> dict[str, An
                 "id": latest_entry.id,
                 "entry_type": latest_entry.entry_type,
                 "recap": latest_entry.recap or "",
-                "lead": latest_entry.lead or "",
-                "stakes": latest_entry.stakes or "",
                 "created_ts": _serialize_dt(latest_entry.created_ts),
             }
             if latest_entry else None
@@ -266,8 +260,6 @@ def _recap_for_instance(quest_instance: QuestInstance, *, player) -> tuple[dict[
         title=quest_instance.template.name,
         status=quest_instance.status if quest_instance.status != "resolved" else (quest_instance.resolution or "resolved"),
         recap=current_step.get("recap") or "",
-        lead=current_step.get("lead") or "",
-        stakes=current_step.get("stakes") or "",
         objectives=current_step.get("objectives") or [],
         choices=current_step.get("choices") or [],
         latest_entry=latest_entry,
@@ -433,8 +425,6 @@ def enter_step(
             entry_type=entry_type,
             step_id=str(step.get("id") or "").strip(),
             recap=str(step.get("recap") or ""),
-            lead=str(step.get("lead") or ""),
-            stakes=str(step.get("stakes") or ""),
             payload={"reason": entry_reason},
         )
 
@@ -597,8 +587,6 @@ def abandon_instance(player, identity: str) -> QuestTransitionResult:
             entry_type="resolved",
             step_id=quest_instance.current_step_id or "",
             recap=f"You abandoned {quest_instance.template.name}.",
-            lead="",
-            stakes="",
             payload={"reason": "abandoned"},
         )
         offer_state, _ = QuestOfferState.objects.get_or_create(
@@ -728,8 +716,6 @@ def progress_active_instance_for_event(
             entry_type="objective_updated",
             step_id=str(step.get("id") or ""),
             recap=str(step.get("recap") or ""),
-            lead=str(step.get("lead") or ""),
-            stakes=str(step.get("stakes") or ""),
             payload={
                 "objective_id": objective_id,
                 "progress_current": int(state.progress_current or 0),

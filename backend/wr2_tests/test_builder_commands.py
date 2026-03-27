@@ -68,6 +68,16 @@ class TestBuilderLoad(WorldTestCase):
         )
         self.assertTrue(message.get("text"))
 
+    def test_load_accepts_unambiguous_template_type_prefix(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/load i {self.item_template.id}")
+
+        loaded_item = self.player.inventory.get(template=self.item_template)
+        self.assertEqual(loaded_item.name, self.item_template.name)
+        message = self._message_by_type(messages, "cmd./load.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message.get("data", {}).get("loaded", {}).get("name"), self.item_template.name)
+
     @override_settings(
         WR_AI_EVENT_FORWARD_URL="http://localhost:8071/v1/events",
         WR_AI_EVENT_TYPES="mob.spawned",
@@ -423,6 +433,30 @@ class TestBuilderResync(WorldTestCase):
         self.assertEqual(message["data"]["template"]["id"], template.id)
         self.assertEqual(message["data"]["updated"], 1)
 
+    def test_resync_accepts_unambiguous_template_type_prefix(self):
+        template = ItemTemplate.objects.create(
+            world=self.world,
+            name="a sword",
+            description="A plain blade.",
+            keywords="sword",
+        )
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, f"/load item {template.id}")
+
+        spawned_item = self.player.inventory.get(template=template)
+        template.name = "a magic sword"
+        template.save(update_fields=["name"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/resync i {template.id}")
+
+        spawned_item.refresh_from_db()
+        self.assertEqual(spawned_item.name, "a magic sword")
+        message = self._message_by_type(messages, "cmd./resync.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target_type"], "item")
+
     def test_resync_mob_template_updates_existing_instances(self):
         template = MobTemplate.objects.create(
             world=self.world,
@@ -624,6 +658,32 @@ class TestBuilderEcho(WorldTestCase):
         self.assertEqual(len(zone_notify), 1)
         self.assertEqual(zone_notify[0]["message"].get("data", {}).get("scope"), "zone")
         self.assertEqual(zone_notify[0]["message"].get("text"), "The bells ring.")
+
+        outside_notify = self._messages_for_key_and_type(messages, outside_watcher.key, "notification./echo")
+        self.assertEqual(outside_notify, [])
+
+    def test_echo_accepts_unambiguous_scope_prefix(self):
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+
+        zone_room = self.room.create_at("east")
+        zone_watcher = self.create_player("Zone Watcher", room=zone_room)
+        zone_watcher.in_game = True
+        zone_watcher.save(update_fields=["in_game"])
+
+        outside_room = self.room.create_at("north")
+        outside_room.zone = None
+        outside_room.save(update_fields=["zone"])
+        outside_watcher = self.create_player("Outside Watcher", room=outside_room)
+        outside_watcher.in_game = True
+        outside_watcher.save(update_fields=["in_game"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/echo z The bells ring.")
+
+        zone_notify = self._messages_for_key_and_type(messages, zone_watcher.key, "notification./echo")
+        self.assertEqual(len(zone_notify), 1)
+        self.assertEqual(zone_notify[0]["message"].get("data", {}).get("scope"), "zone")
 
         outside_notify = self._messages_for_key_and_type(messages, outside_watcher.key, "notification./echo")
         self.assertEqual(outside_notify, [])

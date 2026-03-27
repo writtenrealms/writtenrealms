@@ -432,13 +432,23 @@ class QuestStepSpec(BaseModel):
     id: str
     kind: str
     recap: str = ""
-    lead: str = ""
-    stakes: str = ""
     text: dict[str, Any] = Field(default_factory=dict)
     objectives: list[dict[str, Any]] = Field(default_factory=list)
     choices: list[dict[str, Any]] = Field(default_factory=list)
     transitions: list[dict[str, Any]] = Field(default_factory=list)
     effects: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_removed_fields(cls, data):
+        if not isinstance(data, dict):
+            return data
+        unsupported = [field for field in ("lead", "stakes") if field in data]
+        if unsupported:
+            raise ValueError(
+                f"{', '.join(unsupported)} are no longer supported on quest steps; use recap/text instead"
+            )
+        return data
 
     @model_validator(mode="after")
     def validate_values(self):
@@ -561,6 +571,21 @@ class ParsedQuestArcDeleteManifest:
     quest_arc_id: int
 
 
+def _sanitize_step_payloads(steps: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    sanitized_steps: list[dict[str, Any]] = []
+    for step in steps or []:
+        if not isinstance(step, dict):
+            continue
+        sanitized_steps.append(
+            {
+                key: value
+                for key, value in step.items()
+                if key not in {"lead", "stakes"}
+            }
+        )
+    return sanitized_steps
+
+
 def parse_manifest_kind(manifest: dict[str, Any]) -> str:
     _validate_api_version(manifest)
     manifest_kind = _normalize_kind(manifest.get("kind"), "kind")
@@ -662,7 +687,7 @@ def quest_template_to_manifest(quest: QuestTemplate) -> dict[str, Any]:
             "max_active": int(quest.max_active),
             "discovery": quest.discovery_policy or {},
             "slots": quest.slot_schema or {},
-            "steps": (quest.graph or {}).get("steps", []),
+            "steps": _sanitize_step_payloads((quest.graph or {}).get("steps", [])),
             "rewards": quest.reward_policy or {
                 key: [] for key in RESOLUTION_KEYS
             },
@@ -743,8 +768,6 @@ def quest_template_manifest_template(*, world: World) -> dict[str, Any]:
                     "id": "offer",
                     "kind": "storylet",
                     "recap": "A new quest opportunity appears.",
-                    "lead": "Decide what to do next.",
-                    "stakes": "",
                     "text": {
                         "body": "Replace this with authored prose.",
                     },
@@ -760,8 +783,6 @@ def quest_template_manifest_template(*, world: World) -> dict[str, Any]:
                     "id": "resolved",
                     "kind": "resolution",
                     "recap": "The quest resolves.",
-                    "lead": "",
-                    "stakes": "",
                 },
             ],
             "rewards": {
@@ -903,7 +924,7 @@ def parse_quest_manifest(*, world: World, manifest: dict[str, Any]) -> ParsedQue
 
     discovery_policy = validated_spec.discovery.model_dump()
     slot_schema = validated_spec.slots
-    steps = [step.model_dump() for step in validated_spec.steps]
+    steps = _sanitize_step_payloads([step.model_dump() for step in validated_spec.steps])
     reward_policy = validated_spec.rewards.model_dump()
     _validate_quest_template_refs(
         world=world,

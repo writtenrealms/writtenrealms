@@ -1,6 +1,7 @@
 from django.urls import reverse
 
 from builders.models import ItemTemplate, MobTemplate
+from spawns.handlers import dispatch_command
 from quests.models import QuestInstance, QuestTemplate
 from tests.base import WorldTestCase
 from wr2_tests.utils import capture_game_messages, dispatch_text_command
@@ -92,8 +93,6 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
                     "id": "offer",
                     "kind": "storylet",
                     "recap": "You notice a strange scrap of paper.",
-                    "lead": "Read the note and move on.",
-                    "stakes": "",
                     "text": {"body": "A minimal authored quest beat."},
                     "choices": [
                         {"id": "continue", "text": "Continue.", "goto": "resolved"},
@@ -103,8 +102,6 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
                     "id": "resolved",
                     "kind": "resolution",
                     "recap": "The note tells you nothing useful, but the system works.",
-                    "lead": "",
-                    "stakes": "",
                 },
             ],
         )
@@ -119,6 +116,37 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
         quest_instance = QuestInstance.objects.get(player=self.player, template__slug="tiny_hello")
         self.assertEqual(quest_instance.status, "active")
         self.assertEqual(quest_instance.current_step_id, "offer")
+
+    def test_state_sync_auto_starts_minimal_questlet(self):
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="state.sync",
+                player_id=self.player.id,
+                payload={},
+            )
+
+        self.assertIn("cmd.state.sync.success", self._message_types(messages))
+        self.assertIn("quest.instance.started", self._message_types(messages))
+
+        quest_instance = QuestInstance.objects.get(player=self.player, template__slug="tiny_hello")
+        self.assertEqual(quest_instance.status, "active")
+        self.assertEqual(quest_instance.current_step_id, "offer")
+
+    def test_say_does_not_trigger_auto_start(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "say hello")
+
+        self.assertIn("cmd.say.success", self._message_types(messages))
+        self.assertNotIn("quest.instance.started", self._message_types(messages))
+        self.assertFalse(QuestInstance.objects.filter(player=self.player, template__slug="tiny_hello").exists())
+
+    def test_listing_opportunities_does_not_trigger_auto_start(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "quest opportunities")
+
+        self.assertIn("cmd.quest.success", self._message_types(messages))
+        self.assertNotIn("quest.instance.started", self._message_types(messages))
+        self.assertFalse(QuestInstance.objects.filter(player=self.player, template__slug="tiny_hello").exists())
 
     def test_quest_recap_and_choice_complete_minimal_questlet(self):
         with capture_game_messages():
@@ -139,6 +167,28 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
         quest_instance = QuestInstance.objects.get(player=self.player, template__slug="tiny_hello")
         self.assertEqual(quest_instance.status, "resolved")
         self.assertEqual(quest_instance.resolution, "complete")
+
+    def test_quest_re_prefix_resolves_to_recap(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "look")
+
+        with capture_game_messages() as recap_messages:
+            dispatch_text_command(self.player.id, "quest re")
+
+        recap_message = self._message_by_type(recap_messages, "cmd.quest.success")
+        self.assertIsNotNone(recap_message)
+        self.assertIn("Tiny Hello", recap_message["text"])
+
+    def test_quest_a_prefix_is_rejected_as_ambiguous(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "quest a")
+
+        error_message = self._message_by_type(messages, "cmd.quest.error")
+        self.assertIsNotNone(error_message)
+        self.assertEqual(error_message["data"]["code"], "ambiguous_subcommand")
+        self.assertIn("accept", error_message["text"])
+        self.assertIn("active", error_message["text"])
+        self.assertIn("abandon", error_message["text"])
 
 
 class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
@@ -161,8 +211,6 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
                     "id": "offer",
                     "kind": "storylet",
                     "recap": "A weathered placard asks you to survey the shrines ahead.",
-                    "lead": "Decide whether to take the survey.",
-                    "stakes": "The route will stay dangerous if nobody checks it.",
                     "choices": [
                         {"id": "begin", "text": "Take the survey.", "goto": "survey"},
                     ],
@@ -171,8 +219,6 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
                     "id": "survey",
                     "kind": "objective",
                     "recap": "You accepted the survey route.",
-                    "lead": "Look around at both shrines to confirm they are intact.",
-                    "stakes": "If either shrine has collapsed, travelers need warning.",
                     "objectives": [
                         {
                             "id": "inspect_shrines",
@@ -204,8 +250,6 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
                     "id": "resolved",
                     "kind": "resolution",
                     "recap": "You surveyed both shrines and the route is safe enough to report.",
-                    "lead": "",
-                    "stakes": "",
                 },
             ],
         )
@@ -241,6 +285,15 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
         self.assertEqual(quest_instance.status, "resolved")
         self.assertEqual(quest_instance.resolution, "complete")
 
+    def test_quest_opp_prefix_lists_opportunities(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "quest opp")
+
+        list_message = self._message_by_type(messages, "cmd.quest.success")
+        self.assertIsNotNone(list_message)
+        self.assertIn("Opportunities:", list_message["text"])
+        self.assertIn("shrine_survey", list_message["text"])
+
 
 class TestQuestRuntimeEndpoints(QuestRuntimeTestCase):
     def setUp(self):
@@ -262,8 +315,6 @@ class TestQuestRuntimeEndpoints(QuestRuntimeTestCase):
                     "id": "offer",
                     "kind": "storylet",
                     "recap": "A note lies beside the fire.",
-                    "lead": "Read it or leave it alone.",
-                    "stakes": "",
                     "choices": [
                         {"id": "read", "text": "Read the note.", "goto": "resolved"},
                     ],
@@ -272,8 +323,6 @@ class TestQuestRuntimeEndpoints(QuestRuntimeTestCase):
                     "id": "resolved",
                     "kind": "resolution",
                     "recap": "The note is brief, but useful.",
-                    "lead": "",
-                    "stakes": "",
                 },
             ],
         )
@@ -338,8 +387,6 @@ class TestNpcDialogueSlugDiscovery(QuestRuntimeTestCase):
                     "id": "offer",
                     "kind": "storylet",
                     "recap": "The quartermaster has work for you.",
-                    "lead": "Hear them out.",
-                    "stakes": "Camp stock is running low.",
                     "choices": [
                         {"id": "accept", "text": "Listen.", "goto": "resolved"},
                     ],
@@ -348,8 +395,6 @@ class TestNpcDialogueSlugDiscovery(QuestRuntimeTestCase):
                     "id": "resolved",
                     "kind": "resolution",
                     "recap": "You heard the quartermaster out.",
-                    "lead": "",
-                    "stakes": "",
                 },
             ],
         )
@@ -397,8 +442,6 @@ class TestTurnInQuestRuntime(QuestRuntimeTestCase):
                     "id": "turn_in",
                     "kind": "objective",
                     "recap": "The quartermaster needs pelts and moonleaf.",
-                    "lead": "Bring 2 wolf pelts and 1 moonleaf to the quartermaster.",
-                    "stakes": "The camp cannot restock without those supplies.",
                     "objectives": [
                         {
                             "id": "deliver_pelts",
@@ -445,8 +488,6 @@ class TestTurnInQuestRuntime(QuestRuntimeTestCase):
                     "id": "resolved",
                     "kind": "resolution",
                     "recap": "The quartermaster signs off on the delivery.",
-                    "lead": "",
-                    "stakes": "",
                 },
             ],
             reward_policy={
@@ -516,8 +557,6 @@ class TestQuestDiscoverability(QuestRuntimeTestCase):
                     "id": "deliver",
                     "kind": "objective",
                     "recap": "The bartender needs a fresh keg from the back room.",
-                    "lead": "Bring the saloon keg to the bartender.",
-                    "stakes": "He refuses to leave the bar unattended.",
                     "text": {
                         "body": (
                             '"Could you grab a keg from the back for me?" the bartender asks. '
@@ -551,8 +590,6 @@ class TestQuestDiscoverability(QuestRuntimeTestCase):
                     "id": "resolved",
                     "kind": "resolution",
                     "recap": "The bartender rolls the fresh keg into place.",
-                    "lead": "",
-                    "stakes": "",
                 },
             ],
         )
@@ -603,6 +640,82 @@ class TestQuestDiscoverability(QuestRuntimeTestCase):
         self.assertIn("A Keg for the Bar", hint_message["text"])
         self.assertIn("give <item> bartender", hint_message["text"])
 
+    def test_quest_accept_without_slug_uses_single_visible_opportunity(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "quest accept")
+
+        self.assertIn("quest.instance.started", self._message_types(messages))
+        quest_instance = QuestInstance.objects.get(player=self.player, template__slug="saloon_keg_run")
+        self.assertEqual(quest_instance.status, "active")
+
+
+class TestQuestAcceptCommand(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.bartender_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Saloon Bartender",
+            keywords="saloon bartender bartender",
+        )
+        self.bartender_template.spawn(self.room, self.spawn_world)
+        self.create_runtime_quest(
+            slug="first_round",
+            name="First Round",
+            discovery_policy={
+                "sources": [{"type": "npc_dialogue", "mob_template": self.bartender_template.id}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 10,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "The bartender has a small job.",
+                    "choices": [{"id": "continue", "text": "Continue.", "goto": "resolved"}],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "Done.",
+                },
+            ],
+        )
+        self.create_runtime_quest(
+            slug="second_round",
+            name="Second Round",
+            discovery_policy={
+                "sources": [{"type": "npc_dialogue", "mob_template": self.bartender_template.id}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 10,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "The bartender has another job.",
+                    "choices": [{"id": "continue", "text": "Continue.", "goto": "resolved"}],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "Done.",
+                },
+            ],
+        )
+
+    def test_quest_accept_without_slug_errors_when_multiple_opportunities_are_visible(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "quest accept")
+
+        error_message = self._message_by_type(messages, "cmd.quest.error")
+        self.assertIsNotNone(error_message)
+        self.assertEqual(error_message["data"]["code"], "ambiguous_opportunity")
+        self.assertIn("quest accept <slug>", error_message["text"])
+
 
 class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
     def setUp(self):
@@ -636,8 +749,6 @@ class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
                     "id": "hunt",
                     "kind": "objective",
                     "recap": "Captain Merrow wants the tunnel rats culled.",
-                    "lead": "Kill 2 tunnel rats.",
-                    "stakes": "They are chewing through the camp stores.",
                     "objectives": [
                         {
                             "id": "kill_rats",
@@ -660,8 +771,6 @@ class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
                     "id": "report",
                     "kind": "objective",
                     "recap": "The rats are down. Report back to Captain Merrow.",
-                    "lead": "Talk to Captain Merrow.",
-                    "stakes": "The camp is waiting on your report.",
                     "objectives": [
                         {
                             "id": "report_back",
@@ -684,8 +793,6 @@ class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
                     "id": "resolved",
                     "kind": "resolution",
                     "recap": "Captain Merrow confirms the camp is safe for now.",
-                    "lead": "",
-                    "stakes": "",
                 },
             ],
             reward_policy={

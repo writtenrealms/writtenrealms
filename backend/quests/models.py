@@ -207,8 +207,6 @@ class QuestJournalEntry(AdventBaseModel):
         default='step_entered',
     )
     recap = models.TextField(**optional)
-    lead = models.TextField(**optional)
-    stakes = models.TextField(**optional)
     payload = models.JSONField(default=dict)
 
     class Meta(AdventBaseModel.Meta):

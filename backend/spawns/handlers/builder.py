@@ -14,7 +14,12 @@ from spawns.actions.builder import (
     ResyncMobTemplatesAction,
 )
 from spawns.events import publish_events
-from spawns.handlers.base import CommandContext, CommandHandler
+from spawns.handlers.base import (
+    ChoiceResolutionError,
+    CommandContext,
+    CommandHandler,
+    resolve_unambiguous_choice,
+)
 from spawns.handlers.permissions import has_builder_access
 from spawns.handlers.registry import register_handler
 
@@ -71,10 +76,17 @@ def _parse_echo_scope_and_message(ctx: CommandContext) -> tuple[str | None, str 
         return None, None
 
     first = str(args[0]).strip().lower()
-    if first in ("room", "zone", "world"):
+    try:
+        resolved_scope = resolve_unambiguous_choice(
+            first,
+            choices=("room", "zone", "world"),
+        )
+    except ChoiceResolutionError:
+        resolved_scope = None
+    if resolved_scope:
         if len(args) < 2:
             return None, None
-        return first, " ".join(args[1:]).strip()
+        return resolved_scope, " ".join(args[1:]).strip()
 
     inherited_scope = str(ctx.payload.get("issuer_scope") or "").strip().lower()
     return inherited_scope or "room", " ".join(args).strip()
@@ -146,7 +158,13 @@ class LoadHandler(CommandHandler):
             if len(args) > 2:
                 cmd = " ".join(args[2:])
 
-        template_type = str(template_type).lower()
+        try:
+            template_type = resolve_unambiguous_choice(
+                str(template_type).lower(),
+                choices=("item", "mob"),
+            )
+        except ChoiceResolutionError:
+            template_type = str(template_type).lower()
         try:
             template_id_int = int(template_id)
         except (TypeError, ValueError):
@@ -496,6 +514,13 @@ class ResyncHandler(CommandHandler):
 
         target_type = str(args[0]).lower()
         target_selector = str(args[1]).lower()
+        try:
+            target_type = resolve_unambiguous_choice(
+                target_type,
+                choices=("item", "mob"),
+            )
+        except ChoiceResolutionError:
+            pass
         if target_type not in ("item", "mob"):
             ctx.publish(
                 {

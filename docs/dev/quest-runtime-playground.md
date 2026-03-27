@@ -74,13 +74,22 @@ Implemented in this pass:
 Important current limits:
 
 - no dedicated frontend quest UI yet
-- no state-sync-triggered quest refresh yet
 - the runtime `completed` list currently lives at `resolved/` to avoid
   clobbering the legacy completed endpoint before cutover
 - `npc_dialogue` currently means "the matching mob template is present in the
   room", not a full conversational UI
 - `kill` is currently a minimal quest-enabling defeat command, not a finished
   combat system
+
+Auto-start qualifying events currently are:
+
+- `cmd.state.sync.success`
+- `cmd.look.success`
+- `cmd.move.success`
+
+Other commands such as `say`, `talk`, `give`, `kill`, and `quest
+opportunities` may still refresh discovery or progress active quests, but they
+do not trigger `auto_start`.
 
 ## Prerequisites
 
@@ -209,8 +218,6 @@ spec:
     - id: offer
       kind: storylet
       recap: You notice a strange scrap of paper.
-      lead: Read the note and move on.
-      stakes: ''
       text:
         body: A minimal authored quest beat.
       choices:
@@ -220,8 +227,6 @@ spec:
     - id: resolved
       kind: resolution
       recap: The note tells you nothing useful, but the system works.
-      lead: ''
-      stakes: ''
   rewards:
     complete: []
     compromised: []
@@ -274,7 +279,7 @@ COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec bac
 You should see:
 
 - title: `Tiny Hello`
-- the current recap and lead
+- the current recap
 - one visible choice:
   - `continue`
 
@@ -377,8 +382,6 @@ spec:
     - id: offer
       kind: storylet
       recap: A weathered placard asks you to survey the shrines ahead.
-      lead: Decide whether to take the survey.
-      stakes: The route will stay dangerous if nobody checks it.
       choices:
         - id: begin
           text: Take the survey.
@@ -386,8 +389,6 @@ spec:
     - id: survey
       kind: objective
       recap: You accepted the survey route.
-      lead: Look around at both shrines to confirm they are intact.
-      stakes: If either shrine has collapsed, travelers need warning.
       objectives:
         - id: inspect_shrines
           text: Inspect both shrines.
@@ -408,8 +409,6 @@ spec:
     - id: resolved
       kind: resolution
       recap: You surveyed both shrines and the route is safe enough to report.
-      lead: ''
-      stakes: ''
   rewards:
     complete: []
     compromised: []
@@ -571,8 +570,6 @@ spec:
     - id: turn_in
       kind: objective
       recap: The quartermaster needs pelts and moonleaf.
-      lead: Bring 2 wolf pelts and 1 moonleaf to the quartermaster.
-      stakes: The camp cannot restock without those supplies.
       objectives:
         - id: deliver_pelts
           text: Deliver 2 wolf pelts.
@@ -605,8 +602,6 @@ spec:
     - id: resolved
       kind: resolution
       recap: The quartermaster signs off on the delivery.
-      lead: ''
-      stakes: ''
   rewards:
     complete:
       - type: grant_gold
@@ -716,8 +711,6 @@ spec:
     - id: hunt
       kind: objective
       recap: Captain Merrow wants the tunnel rats culled.
-      lead: Kill 2 tunnel rats.
-      stakes: They are chewing through the camp stores.
       objectives:
         - id: kill_rats
           text: Kill 2 tunnel rats.
@@ -735,8 +728,6 @@ spec:
     - id: report
       kind: objective
       recap: The rats are down. Report back to Captain Merrow.
-      lead: Talk to Captain Merrow.
-      stakes: The camp is waiting on your report.
       objectives:
         - id: report_back
           text: Talk to Captain Merrow.
@@ -754,8 +745,6 @@ spec:
     - id: resolved
       kind: resolution
       recap: Captain Merrow confirms the camp is safe for now.
-      lead: ''
-      stakes: ''
   rewards:
     complete:
       - type: grant_gold

@@ -212,6 +212,7 @@ class TalkAction:
             target_selector,
             empty_error="Talk to whom?",
             not_found_error="You don't see them here.",
+            allow_single_match_when_empty=True,
         )
         data = {
             "actor": _actor_payload(actor),

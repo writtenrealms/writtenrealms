@@ -12,13 +12,13 @@ quest model alive longer than necessary.
 Reference docs:
 
 - `docs/quest-system-endstate.md`
-- `docs/quest-builder-guide.md`
-- `docs/quest-manifest-playground.md`
-- `docs/quest-runtime-playground.md`
+- `docs/guides/quest-builder-guide.md`
+- `docs/dev/quest-manifest-playground.md`
+- `docs/dev/quest-runtime-playground.md`
 
 ## Current Status
 
-Status as of 2026-03-25:
+Status as of 2026-03-26:
 
 - Phase 1 backend authoring foundation is implemented.
 - Phase 1 playground and usage docs are implemented.
@@ -28,6 +28,9 @@ Status as of 2026-03-25:
 - Phase 2.5 common quest-loop expansion is implemented on the backend.
 - Phase 2.6 discoverability polish is implemented for room NPC indicators and
   talk-time quest guidance.
+- Phase 2.7 auto-start qualification is implemented:
+  - `auto_start` now qualifies on `state.sync`, `look`, and `move`
+  - non-qualifying discovery refreshes no longer auto-start quests
 - Quest arcs still do not have a dedicated frontend builder UI yet.
 - There is no dedicated frontend quest UI yet.
 
@@ -67,6 +70,10 @@ Implemented so far:
   - progression
   - journal/recap
   - quest event subscriptions
+- auto-start qualifying events:
+  - `cmd.state.sync.success`
+  - `cmd.look.success`
+  - `cmd.move.success`
 - runtime command surface:
   - `quest recap`
   - `quest opportunities`
@@ -101,9 +108,9 @@ Implemented so far:
 - runtime playground script:
   - `backend/scripts/quest_runtime_playground.py`
 - runtime walkthrough doc:
-  - `docs/quest-runtime-playground.md`
+  - `docs/dev/quest-runtime-playground.md`
 - builder interaction guide:
-  - `docs/quest-builder-guide.md`
+  - `docs/guides/quest-builder-guide.md`
 - automated tests:
   - `backend/wr2_tests/test_quest_manifests.py`
   - `backend/wr2_tests/test_quest_runtime.py`
@@ -120,8 +127,6 @@ Deliberate Phase 2 deviation from the ideal end-state:
 
 - runtime resolved quests currently live at `GET /game/quests/resolved/`
   instead of taking over the legacy completed route yet
-- discovery refresh is currently driven by emitted gameplay events and quest
-  endpoints, not by `state.sync`
 - `npc_dialogue` discovery currently means "matching mob template is present in
   the room" rather than full dialogue-tree acceptance
 - quest acceptance still happens through `quest accept <slug>` after dialogue
@@ -151,6 +156,8 @@ Immediate next work:
     conversation-aware shortcut for single visible NPC offers
   - decide whether room UI should expose action affordances for `Accept`,
     `Give`, or `Talk` when `!` / `?` is present
+  - decide whether the `look` fallback should remain an auto-start qualifying
+    event long-term once `state.sync` and room-entry coverage feel sufficient
   - decide when `/game/quests/resolved/` should become canonical
     `/game/quests/completed/`
   - replace the temporary minimal `kill` command once real combat lands
@@ -344,8 +351,6 @@ Current implementation:
 - `entry_type`
   - `step_entered`, `objective_updated`, `resolved`, `system`
 - `recap`
-- `lead`
-- `stakes`
 - `payload` JSONField nullable
 - `created_at`
 
@@ -687,7 +692,7 @@ Minimum supported features:
   - `complete`
   - `abandoned`
 - fixed slots only
-- journal entries with recap/lead/stakes
+- journal entries with recap
 - active/completed/opportunities endpoints
 - `quest recap` command
 

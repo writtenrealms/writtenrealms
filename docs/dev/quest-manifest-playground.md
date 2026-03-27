@@ -176,8 +176,6 @@ spec:
     - id: offer
       kind: storylet
       recap: You notice a strange scrap of paper.
-      lead: Read the note and move on.
-      stakes: ''
       text:
         body: A minimal authored quest beat.
       choices:
@@ -187,8 +185,6 @@ spec:
     - id: resolved
       kind: resolution
       recap: The note tells you nothing useful, but the system works.
-      lead: ''
-      stakes: ''
   rewards:
     complete: []
     compromised: []
@@ -321,8 +317,6 @@ spec:
     - id: offer
       kind: storylet
       recap: You notice a strange scrap of paper.
-      lead: Read the note and move on.
-      stakes: ''
       text:
         body: A minimal authored quest beat.
       choices:
@@ -332,8 +326,6 @@ spec:
     - id: resolved
       kind: resolution
       recap: The note tells you nothing useful, but the system works.
-      lead: ''
-      stakes: ''
   rewards:
     complete: []
     compromised: []
@@ -439,8 +431,6 @@ spec:
     - id: offer
       kind: storylet
       recap: A healer asks for help.
-      lead: Investigate the poisoned well.
-      stakes: The village is in danger.
       choices:
         - id: accept
           text: Help.
@@ -448,8 +438,6 @@ spec:
     - id: resolved
       kind: resolution
       recap: The quest is complete.
-      lead: ''
-      stakes: ''
   rewards:
     complete: []
     compromised: []

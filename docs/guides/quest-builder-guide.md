@@ -14,6 +14,25 @@ author the common quest loops that are already supported in game.
 Today, builders author `kind: quest` manifests and players interact with them
 through normal game verbs plus a few `quest` subcommands.
 
+## Auto-Start Qualifying Events
+
+`auto_start` quests do not start on every discovery refresh.
+
+They currently auto-start only when one of these qualifying events happens:
+
+- `cmd.state.sync.success`
+- `cmd.look.success`
+- `cmd.move.success`
+
+That means:
+
+- connecting or reconnecting can now start an `auto_start` quest immediately
+- looking around can start one
+- entering a new room can start one
+- `say`, `talk`, `give`, `kill`, and `quest opportunities` do not auto-start
+  quests, even though some of those flows still refresh quest discovery or
+  progression for other reasons
+
 ## Player Interaction Contract
 
 This is the intended player loop right now:
@@ -137,8 +156,6 @@ spec:
     - id: deliver
       kind: objective
       recap: The bartender needs a fresh keg from the back room.
-      lead: Bring the saloon keg to the bartender.
-      stakes: He refuses to leave the bar unattended.
       text:
         body: |
           "Could you grab a keg from the back for me?" the bartender asks.
@@ -162,8 +179,6 @@ spec:
     - id: resolved
       kind: resolution
       recap: The bartender rolls the fresh keg into place.
-      lead: ""
-      stakes: ""
   rewards:
     complete:
       - type: grant_gold
@@ -227,7 +242,7 @@ The authoring pattern is:
 - If the player should commit to the quest, keep acceptance explicit with
   `quest accept <slug>`.
 - Put the NPC’s actual ask in the first step’s `text.body`.
-- Put the memory aid in `recap` and the actionable instruction in `lead`.
+- Put the memory aid and immediate player-facing summary in `recap`.
 - For item turn-ins, progress from `quest.item.delivered`.
 - For report-back steps, progress from `cmd.talk.success`.
 - Use slugs for mob and item template references whenever possible. The runtime

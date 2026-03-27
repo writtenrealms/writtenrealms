@@ -38,12 +38,16 @@ def _refresh_and_progress(
     event_type: str,
     event_data: dict,
     actor_key: str | None,
+    allow_auto_start: bool = False,
 ):
     player = _resolve_player(_extract_actor_key(event_data, actor_key))
     if not player:
         return None, None, None
 
-    refresh_result = refresh_player_quests(player)
+    refresh_result = refresh_player_quests(
+        player,
+        allow_auto_start=allow_auto_start,
+    )
     progress_result = progress_player_quests_for_event(
         player,
         event_type=event_type,
@@ -77,6 +81,7 @@ def _on_cmd_look_success(event_data: dict, actor_key: str | None, connection_id:
         event_type="cmd.look.success",
         event_data=event_data,
         actor_key=actor_key,
+        allow_auto_start=True,
     )
     _publish_player_events(
         player,
@@ -90,6 +95,7 @@ def _on_cmd_move_success(event_data: dict, actor_key: str | None, connection_id:
         event_type="cmd.move.success",
         event_data=event_data,
         actor_key=actor_key,
+        allow_auto_start=True,
     )
     _publish_player_events(
         player,
@@ -157,7 +163,22 @@ def _on_quest_mob_killed(event_data: dict, actor_key: str | None, connection_id:
     )
 
 
+def _on_cmd_state_sync_success(event_data: dict, actor_key: str | None, connection_id: str | None) -> None:
+    player, refresh_result, progress_result = _refresh_and_progress(
+        event_type="cmd.state.sync.success",
+        event_data=event_data,
+        actor_key=actor_key,
+        allow_auto_start=True,
+    )
+    _publish_player_events(
+        player,
+        [*(refresh_result.events if refresh_result else []), *(progress_result.events if progress_result else [])],
+        connection_id=connection_id,
+    )
+
+
 _EVENT_SUBSCRIPTIONS: dict[str, QuestSubscriptionHandler] = {
+    "cmd.state.sync.success": _on_cmd_state_sync_success,
     "cmd.look.success": _on_cmd_look_success,
     "cmd.move.success": _on_cmd_move_success,
     "cmd.say.success": _on_cmd_say_success,

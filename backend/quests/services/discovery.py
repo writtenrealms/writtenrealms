@@ -200,7 +200,7 @@ def available_npc_dialogue_opportunities_for_mob_template(
     )
 
 
-def refresh_player_quests(player) -> DiscoveryRefreshResult:
+def refresh_player_quests(player, *, allow_auto_start: bool = True) -> DiscoveryRefreshResult:
     now = timezone.now()
     result = DiscoveryRefreshResult()
     previously_visible_ids = set(
@@ -215,7 +215,10 @@ def refresh_player_quests(player) -> DiscoveryRefreshResult:
             continue
 
         offer_state = _offer_state(player, template)
-        auto_start = any(_source_type(source) == "auto_start" for source in matched_sources)
+        auto_start = allow_auto_start and any(
+            _source_type(source) == "auto_start"
+            for source in matched_sources
+        )
         if auto_start:
             try:
                 transition = accept_template(player, template)
@@ -240,7 +243,7 @@ def refresh_player_quests(player) -> DiscoveryRefreshResult:
                     type="quest.opportunity.available",
                     recipients=[player.key],
                     data={"opportunity": opportunity_payload},
-                    text=f"New opportunity: {template.name}\n{opportunity_payload.get('lead') or opportunity_payload.get('recap') or ''}".strip(),
+                    text=f"New opportunity: {template.name}\n{opportunity_payload.get('recap') or ''}".strip(),
                 )
             )
 
@@ -254,7 +257,7 @@ def refresh_player_quests(player) -> DiscoveryRefreshResult:
 
 def list_opportunities(player, *, refresh: bool = True) -> list[dict]:
     if refresh:
-        return refresh_player_quests(player).opportunities
+        return refresh_player_quests(player, allow_auto_start=False).opportunities
 
     qs = (
         QuestOfferState.objects.filter(player=player, is_visible=True)

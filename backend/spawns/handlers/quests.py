@@ -13,8 +13,27 @@ from quests.services.engine import (
     resolve_template_for_player,
 )
 from spawns.events import publish_events
-from spawns.handlers.base import CommandContext, CommandHandler
+from spawns.handlers.base import (
+    ChoiceResolutionError,
+    CommandContext,
+    CommandHandler,
+    resolve_unambiguous_choice,
+)
 from spawns.handlers.registry import register_handler
+
+QUEST_SUBCOMMANDS = (
+    "opportunities",
+    "active",
+    "completed",
+    "accept",
+    "choose",
+    "abandon",
+    "recap",
+)
+QUEST_SUBCOMMAND_ALIASES = {
+    "offers": "opportunities",
+    "resolved": "completed",
+}
 
 
 def _render_quest_list(title: str, quests: list[dict]) -> str:
@@ -26,10 +45,10 @@ def _render_quest_list(title: str, quests: list[dict]) -> str:
         template = quest.get("template") or quest
         slug = template.get("slug") or "quest"
         name = template.get("name") or slug
-        lead = ((quest.get("current_step") or {}).get("lead") or quest.get("lead") or "").strip()
+        recap = ((quest.get("current_step") or {}).get("recap") or quest.get("recap") or "").strip()
         line = f"- {slug}: {name}"
-        if lead:
-            line += f" - {lead}"
+        if recap:
+            line += f" - {recap}"
         lines.append(line)
     return "\n".join(lines)
 
@@ -54,6 +73,26 @@ class QuestCommandHandler(CommandHandler):
     def _args(self, ctx: CommandContext) -> list[str]:
         return list(ctx.payload.get("args") or [])
 
+    def _resolve_subcommand(self, raw_subcommand: str | None) -> str:
+        if raw_subcommand is None:
+            return "recap"
+        try:
+            return resolve_unambiguous_choice(
+                raw_subcommand,
+                choices=QUEST_SUBCOMMANDS,
+                aliases=QUEST_SUBCOMMAND_ALIASES,
+            )
+        except ChoiceResolutionError as exc:
+            if exc.code == "ambiguous_choice":
+                raise QuestRuntimeError(
+                    f"Ambiguous quest subcommand: {exc.token}. Matches: {', '.join(exc.matches)}",
+                    code="ambiguous_subcommand",
+                )
+            raise QuestRuntimeError(
+                f"Unknown quest subcommand: {exc.token}",
+                code="unknown_subcommand",
+            )
+
     def _publish_text(self, ctx: CommandContext, text: str, *, data: dict | None = None) -> None:
         ctx.publish(
             {
@@ -74,10 +113,10 @@ class QuestCommandHandler(CommandHandler):
 
     def handle(self, ctx: CommandContext) -> None:
         args = self._args(ctx)
-        subcommand = (args[0].lower() if args else "recap")
 
         try:
-            if subcommand in {"opportunities", "offers"}:
+            subcommand = self._resolve_subcommand(args[0] if args else None)
+            if subcommand == "opportunities":
                 opportunities = list_opportunities(ctx.player, refresh=True)
                 self._publish_text(
                     ctx,
@@ -95,7 +134,7 @@ class QuestCommandHandler(CommandHandler):
                 )
                 return
 
-            if subcommand in {"completed", "resolved"}:
+            if subcommand == "completed":
                 quests = list_completed_instances(ctx.player)
                 self._publish_text(
                     ctx,
@@ -105,10 +144,22 @@ class QuestCommandHandler(CommandHandler):
                 return
 
             if subcommand == "accept":
-                if len(args) < 2:
-                    raise QuestRuntimeError("Usage: quest accept <slug>", code="usage")
-                opportunities = {op["slug"]: op for op in list_opportunities(ctx.player, refresh=True)}
-                slug = args[1]
+                opportunities_list = list_opportunities(ctx.player, refresh=True)
+                opportunities = {op["slug"]: op for op in opportunities_list}
+                slug = args[1] if len(args) > 1 else None
+                if not slug:
+                    if len(opportunities_list) == 1:
+                        slug = opportunities_list[0]["slug"]
+                    elif not opportunities_list:
+                        raise QuestRuntimeError(
+                            "You have no quest opportunities to accept.",
+                            code="opportunity_not_found",
+                        )
+                    else:
+                        raise QuestRuntimeError(
+                            "Multiple quest opportunities are available. Use: quest accept <slug>",
+                            code="ambiguous_opportunity",
+                        )
                 if slug not in opportunities:
                     raise QuestRuntimeError("Quest opportunity was not found.", code="opportunity_not_found")
                 template = resolve_template_for_player(ctx.player, slug)

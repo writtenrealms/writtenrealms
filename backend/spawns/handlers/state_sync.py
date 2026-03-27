@@ -3,6 +3,7 @@ State synchronization handler.
 
 Handles the initial state sync when a player connects or reconnects to a world.
 """
+from spawns.events import GameEvent, publish_events
 from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.registry import register_handler
 from spawns.state_payloads import build_state_sync, get_player_with_related
@@ -26,4 +27,15 @@ class StateSyncHandler(CommandHandler):
         state = build_state_sync(player)
         payload = state.model_dump()
         text = render_event_text("cmd.state.sync.success", payload, viewer=player)
-        ctx.publish_success("state.sync", payload, text=text)
+        publish_events(
+            [
+                GameEvent(
+                    type="cmd.state.sync.success",
+                    recipients=[player.key],
+                    data=payload,
+                    text=text,
+                )
+            ],
+            actor_key=player.key,
+            connection_id=ctx.connection_id,
+        )

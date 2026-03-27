@@ -13,8 +13,6 @@ def append_journal_entry(
     entry_type: str,
     step_id: str | None = None,
     recap: str = "",
-    lead: str = "",
-    stakes: str = "",
     payload: dict[str, Any] | None = None,
 ):
     entry = QuestJournalEntry.objects.create(
@@ -22,8 +20,6 @@ def append_journal_entry(
         step_id=step_id or "",
         entry_type=entry_type,
         recap=recap or "",
-        lead=lead or "",
-        stakes=stakes or "",
         payload=payload or {},
     )
     quest_instance.last_journal_entry_at = entry.created_ts or timezone.now()
@@ -46,8 +42,6 @@ def render_recap_text(
     title: str,
     status: str,
     recap: str,
-    lead: str,
-    stakes: str,
     objectives: list[dict[str, Any]] | None = None,
     choices: list[dict[str, Any]] | None = None,
     latest_entry: QuestJournalEntry | None = None,
@@ -55,10 +49,6 @@ def render_recap_text(
     lines = [title, f"Status: {status}"]
     if recap:
         lines.append(f"Recap: {recap}")
-    if lead:
-        lines.append(f"Lead: {lead}")
-    if stakes:
-        lines.append(f"Stakes: {stakes}")
 
     visible_objectives = [obj for obj in (objectives or []) if obj.get("status") != "hidden"]
     if visible_objectives:

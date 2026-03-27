@@ -41,6 +41,8 @@ class TestQuestManifests(AuthenticatedBuilderWorldTestCase):
         manifest = yaml.safe_load(template["yaml"])
         self.assertEqual(manifest["kind"], "quest")
         self.assertEqual(manifest["metadata"]["world"], f"world.{self.world.id}")
+        self.assertNotIn("lead", template["yaml"])
+        self.assertNotIn("stakes", template["yaml"])
 
     def test_item_and_mob_templates_generate_unique_world_slugs(self):
         mob_one = MobTemplate.objects.create(world=self.world, name="Quartermaster")
@@ -78,8 +80,6 @@ spec:
     - id: offer
       kind: storylet
       recap: A healer asks for help.
-      lead: Investigate the poisoned well.
-      stakes: The village is in danger.
       choices:
         - id: accept
           text: Help.
@@ -87,8 +87,6 @@ spec:
     - id: resolved
       kind: resolution
       recap: The quest is complete.
-      lead: ""
-      stakes: ""
   rewards:
     complete: []
     compromised: []
@@ -146,8 +144,6 @@ spec:
     - id: turn_in
       kind: objective
       recap: Deliver supplies.
-      lead: Bring the pelt to the quartermaster.
-      stakes: The camp needs stock.
       objectives:
         - id: deliver_pelt
           text: Deliver the pelt.
@@ -167,8 +163,6 @@ spec:
     - id: resolved
       kind: resolution
       recap: Delivered.
-      lead: ""
-      stakes: ""
   rewards:
     complete:
       - type: mob_command
@@ -200,6 +194,75 @@ spec:
             wolf_pelt.slug,
         )
 
+    def test_apply_quest_manifest_rejects_removed_lead_and_stakes_fields(self):
+        manifest = f"""
+kind: quest
+metadata:
+  world: world.{self.world.id}
+  slug: deprecated_fields
+  name: Deprecated Fields
+spec:
+  type: quest
+  scope: player
+  status: draft
+  repeatability:
+    mode: never
+    cooldown_seconds: 0
+  max_active: 1
+  discovery:
+    sources: []
+    salience: 0
+  slots: {{}}
+  steps:
+    - id: offer
+      kind: storylet
+      recap: Deprecated.
+      lead: Old lead.
+      stakes: Old stakes.
+  rewards:
+    complete: []
+    compromised: []
+    failed_forward: []
+    expired: []
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("no longer supported", str(resp.data).lower())
+
+    def test_existing_quest_yaml_strips_removed_lead_and_stakes_fields(self):
+        quest = QuestTemplate.objects.create(
+            world=self.world,
+            slug="old_shape",
+            name="Old Shape",
+            quest_type="quest",
+            scope="player",
+            status="draft",
+            graph={
+                "steps": [
+                    {
+                        "id": "offer",
+                        "kind": "storylet",
+                        "recap": "Old recap",
+                        "lead": "Old lead",
+                        "stakes": "Old stakes",
+                    }
+                ]
+            },
+        )
+        detail_ep = reverse(
+            "builder-quest-template-detail",
+            args=[self.world.pk, quest.slug],
+        )
+
+        resp = self.client.get(detail_ep)
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn("lead", resp.data["yaml"])
+        self.assertNotIn("stakes", resp.data["yaml"])
+
     def test_apply_quest_manifest_supports_partial_nested_update(self):
         quest = QuestTemplate.objects.create(
             world=self.world,
@@ -221,8 +284,6 @@ spec:
                         "id": "offer",
                         "kind": "storylet",
                         "recap": "Old recap",
-                        "lead": "Old lead",
-                        "stakes": "",
                         "choices": [
                             {"id": "continue", "text": "Continue", "goto": "resolved"}
                         ],
@@ -231,8 +292,6 @@ spec:
                         "id": "resolved",
                         "kind": "resolution",
                         "recap": "Resolved",
-                        "lead": "",
-                        "stakes": "",
                     },
                 ]
             },
@@ -334,8 +393,6 @@ spec:
     - id: offer
       kind: storylet
       recap: Offer
-      lead: Lead
-      stakes: Stakes
       choices:
         - id: accept
           text: Accept
@@ -343,8 +400,6 @@ spec:
     - id: resolved
       kind: resolution
       recap: Resolved
-      lead: ""
-      stakes: ""
   rewards:
     complete: []
     compromised: []
@@ -399,8 +454,6 @@ spec:
     - id: resolved
       kind: resolution
       recap: Resolved
-      lead: ""
-      stakes: ""
   rewards:
     complete: []
     compromised: []

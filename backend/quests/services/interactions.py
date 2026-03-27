@@ -351,11 +351,8 @@ def _active_item_turn_in_hint(
 
         lines = [quest_instance.template.name]
         recap = str(step.get("recap") or "").strip()
-        lead = str(step.get("lead") or "").strip()
         if recap:
             lines.append(recap)
-        if lead:
-            lines.append(lead)
         if objective_lines:
             lines.append("Objectives:")
             lines.extend(objective_lines)
@@ -432,14 +429,11 @@ def build_talk_guidance_events(player, event_data: dict[str, Any] | None) -> lis
             title = str(opportunity.get("name") or opportunity.get("slug") or "Quest").strip()
             body = str(((opportunity.get("text") or {}).get("body")) or "").strip()
             recap = str(opportunity.get("recap") or "").strip()
-            lead = str(opportunity.get("lead") or "").strip()
             lines = [f"Quest available: {title}"]
             if body:
                 lines.append(body)
             elif recap:
                 lines.append(recap)
-            if lead:
-                lines.append(lead)
             lines.append(f"Accept with: quest accept {opportunity.get('slug')}")
             blocks.append("\n".join(lines))
         return [

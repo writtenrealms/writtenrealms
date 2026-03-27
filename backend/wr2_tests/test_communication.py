@@ -279,3 +279,41 @@ class TestTalkCommands(WorldTestCase):
         self.assertIsNotNone(actor_msg)
         self.assertEqual(actor_msg["message"]["data"]["target"]["id"], guard.id)
         self.assertEqual(actor_msg["message"]["text"], "You talk to Guard.")
+
+    def test_talk_without_target_uses_only_mob_in_room(self):
+        guard = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Guard",
+            keywords="guard",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "talk")
+
+        actor_msg = self._message_entry(messages, "cmd.talk.success", self.player.key)
+        self.assertIsNotNone(actor_msg)
+        self.assertEqual(actor_msg["message"]["data"]["target"]["id"], guard.id)
+        self.assertEqual(actor_msg["message"]["text"], "You talk to Guard.")
+
+    def test_talk_without_target_stays_ambiguous_with_multiple_mobs(self):
+        Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Guard",
+            keywords="guard",
+        )
+        Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Scout",
+            keywords="scout",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "talk")
+
+        error_msg = self._message_entry(messages, "cmd.talk.error", self.player.key)
+        self.assertIsNotNone(error_msg)
+        self.assertEqual(error_msg["message"]["data"]["code"], "missing_target")
+        self.assertEqual(error_msg["message"]["text"], "Talk to whom?")
