@@ -136,7 +136,6 @@ metadata:
   slug: saloon_keg_run
   name: A Keg for the Bar
 spec:
-  type: quest
   scope: player
   status: active
   repeatability:
@@ -200,6 +199,46 @@ Notes:
 - The quest pitch text lives in the first step’s `text.body`.
 - The player still accepts explicitly with `quest accept saloon_keg_run`.
 - Turn-in happens with `give keg bartender`, not with `quest complete`.
+- Picking up the keg does not change the journal, because this quest progresses
+  from `quest.item.delivered`, not from `get`.
+
+## How Journal Entries Work
+
+Builders do not author quest journal entries directly today. The runtime writes
+them automatically from quest state changes.
+
+What creates a journal entry:
+
+- entering a new step writes a journal entry using that step's `recap`
+- updating objective progress writes another journal entry using the current
+  step's `recap`
+- resolving a quest writes a journal entry using the resolution step's `recap`
+- abandoning a quest writes a journal entry with `You abandoned <quest name>.`
+
+What the player sees in `quest recap`:
+
+- `Recap` is the current step's `recap`
+- `Objectives` come from the current step's visible objectives
+- `Choices` come from the current step's visible choices
+- `Last change` is the newest journal entry's `recap`
+
+This has two important consequences for authors:
+
+- if an objective updates but the quest stays on the same step, `Recap` and
+  `Last change` may be identical because both are driven by that step's
+  `recap`
+- if you want the journal to feel meaningfully different after progress, split
+  the flow into more steps with new `recap` text instead of expecting a
+  separate per-objective journal message
+
+Applied to the bartender example above:
+
+- `quest accept saloon_keg_run` creates a journal entry with `The bartender
+  needs a fresh keg from the back room.`
+- `get keg` does not create a journal entry
+- `give keg bartender` completes the objective and immediately transitions to
+  `resolved`, so the newest journal entry becomes `The bartender rolls the
+  fresh keg into place.`
 
 ## Kill Then Return Example
 

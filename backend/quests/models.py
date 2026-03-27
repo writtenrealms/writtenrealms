@@ -4,7 +4,6 @@ from core.db import AdventBaseModel, optional, list_to_choice
 
 
 QUEST_TEMPLATE_TYPES = [
-    'questlet',
     'quest',
     'contract',
     'world_event',

@@ -23,7 +23,7 @@ from quests.services.journal import (
 from quests.services.predicates import evaluate_condition, resolve_value
 
 
-RUNTIME_TEMPLATE_TYPES = {"questlet", "quest"}
+RUNTIME_TEMPLATE_TYPES = {"quest"}
 RUNTIME_STEP_KINDS = {"storylet", "objective", "resolution"}
 
 

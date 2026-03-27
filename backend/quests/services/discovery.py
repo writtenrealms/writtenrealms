@@ -97,7 +97,7 @@ def _offer_state(player, template: QuestTemplate) -> QuestOfferState:
 def _template_available(player, template: QuestTemplate) -> bool:
     if template.status != "active" or template.scope != "player":
         return False
-    if template.quest_type not in {"questlet", "quest"}:
+    if template.quest_type != "quest":
         return False
     if active_instances_qs(player).filter(template=template).exists():
         return False

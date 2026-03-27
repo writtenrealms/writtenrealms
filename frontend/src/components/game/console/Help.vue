@@ -10,6 +10,13 @@
 
         <div class="description">{{ topicHelp.description }}</div>
 
+        <template v-if="topicHelp.details && topicHelp.details.length">
+          <div>Details:</div>
+          <div class="details editable-box">
+            <div class="detail" v-for="(detail, index) in topicHelp.details" :key="index">{{ detail }}</div>
+          </div>
+        </template>
+
         <template v-if="topicHelp.examples && topicHelp.examples.length">
           <div>Examples:</div>
           <div class="examples editable-box">
@@ -352,6 +359,11 @@ const cmdHelp = (cmd) => {
 
     .examples {
       margin-top: 3px;
+    }
+
+    .details {
+      margin-top: 3px;
+      margin-bottom: 8px;
     }
   }
 

@@ -49,6 +49,7 @@ import LookItem from "@/components/game/console/LookItem.vue";
 import LookRoom from "@/components/game/console/LookRoom.vue";
 import Message from "@/components/game/console/Message.vue";
 import OfferInventory from "@/components/game/console/OfferInventory.vue";
+import QuestMessage from "@/components/game/console/QuestMessage.vue";
 import ScrollTool from "@/components/game/console/ScrollTool.vue";
 import Stats from "@/components/game/console/Stats.vue";
 import Upgrade from "@/components/game/console/Upgrade.vue";
@@ -85,6 +86,10 @@ const consoleMessage = (message) => {
   };
 
   if (type_mapping[type]) return type_mapping[type];
+
+  if (type === "cmd.quest.success" || type === "cmd.quest.error" || type.startsWith("quest.")) {
+    return QuestMessage;
+  }
 
   if (type === "cmd.look.success" && message.data.target_type === "item") return LookItem;
   if (type === "cmd.look.success" && message.data.target_type === "char") return LookChar;

@@ -63,7 +63,6 @@ Not every opportunity becomes an active quest.
 An authored quest definition stored in WR2 YAML and validated by schema. It is
 world-scoped authored content and may represent:
 
-- `questlet`
 - `quest`
 - `contract`
 - `world_event`
@@ -210,7 +209,6 @@ metadata:
   name: The Bitter Well
 
 spec:
-  type: quest
   scope: player
   arc: ashwick_outbreak
   repeatability:
@@ -365,7 +363,6 @@ metadata:
   name: Read the Notice
 
 spec:
-  type: questlet
   scope: player
   repeatability:
     mode: never
@@ -421,7 +418,6 @@ metadata:
   name: The Bitter Well
 
 spec:
-  type: quest
   scope: player
   arc: ashwick_outbreak
   repeatability:

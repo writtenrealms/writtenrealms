@@ -65,7 +65,6 @@ metadata:
   slug: tiny_hello
   name: Tiny Hello
 spec:
-  type: questlet
   scope: player
   status: active
   repeatability:
@@ -120,7 +119,7 @@ Why this example matters:
 - it shows `auto_start`
 - it shows how `storylet` choices work
 - it shows the smallest end-to-end quest instance lifecycle
-- it shows the only quest type that can begin on connect, look, or move
+- it shows the simplest quest shape that can begin on connect, look, or move
 
 ## 2. NPC Asks For An Item
 
@@ -136,7 +135,6 @@ metadata:
   slug: blacksmith_ore
   name: Ore For The Forge
 spec:
-  type: quest
   scope: player
   status: active
   repeatability:
@@ -238,7 +236,6 @@ metadata:
   slug: rat_cull
   name: Rat Cull
 spec:
-  type: quest
   scope: player
   status: active
   repeatability:
@@ -384,7 +381,6 @@ metadata:
   slug: clerk_seal_delivery
   name: Seal Delivery
 spec:
-  type: questlet
   scope: player
   status: active
   repeatability:
@@ -431,7 +427,6 @@ metadata:
   slug: clerk_archives_cleanup
   name: Archives Cleanup
 spec:
-  type: questlet
   scope: player
   status: active
   repeatability:
@@ -509,7 +504,6 @@ metadata:
   slug: shrine_survey
   name: Shrine Survey
 spec:
-  type: quest
   scope: player
   status: active
   repeatability:
@@ -622,7 +616,6 @@ metadata:
   slug: guildmaster_favor
   name: The Guildmaster's Favor
 spec:
-  type: questlet
   scope: player
   status: active
   repeatability:

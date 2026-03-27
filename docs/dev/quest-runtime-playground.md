@@ -12,7 +12,7 @@ The key distinction is:
 
 The smallest working interaction is intentionally tiny:
 
-1. author one questlet manifest
+1. author one minimal quest manifest
 2. apply it
 3. create or reuse a dev player
 4. issue one in-game command that discovers or starts the quest
@@ -27,7 +27,6 @@ Implemented in this pass:
 
 - player-scoped quests only
 - runtime content types:
-  - `questlet`
   - `quest`
 - discovery sources:
   - `auto_start`
@@ -187,7 +186,7 @@ same text commands work there too:
 
 This is the smallest possible in-game interaction with the new quest runtime.
 
-### Step 1: Apply the Minimal Questlet
+### Step 1: Apply the Minimal Quest
 
 Create `/tmp/tiny_hello.yml` inside the backend container:
 
@@ -199,7 +198,6 @@ metadata:
   slug: tiny_hello
   name: Tiny Hello
 spec:
-  type: questlet
   scope: player
   status: active
   repeatability:
@@ -362,7 +360,6 @@ metadata:
   slug: shrine_survey
   name: Shrine Survey
 spec:
-  type: quest
   scope: player
   status: active
   repeatability:
@@ -551,7 +548,6 @@ metadata:
   slug: quartermaster_supplies
   name: Quartermaster Supplies
 spec:
-  type: quest
   scope: player
   status: active
   repeatability:
@@ -692,7 +688,6 @@ metadata:
   slug: rat_cull
   name: Rat Cull
 spec:
-  type: quest
   scope: player
   status: active
   repeatability:

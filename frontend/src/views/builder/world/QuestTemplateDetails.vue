@@ -2,37 +2,8 @@
   <div id="quest-template-details">
     <div v-if="isLoading" class="color-text-60">Loading quest editor...</div>
     <template v-else>
-      <h2>{{ title }}</h2>
-      <div class="color-text-60 mb-6">
-        Edit the quest manifest directly. Applying this YAML creates or updates the world-scoped quest template used by the new quest runtime.
-      </div>
 
-      <div v-if="quest" class="quest-summary-grid mb-6">
-        <div>
-          <div class="summary-label color-text-60">Slug</div>
-          <div>{{ quest.slug }}</div>
-        </div>
-        <div>
-          <div class="summary-label color-text-60">Type</div>
-          <div>{{ quest.quest_type }}</div>
-        </div>
-        <div>
-          <div class="summary-label color-text-60">Status</div>
-          <div>{{ quest.status }}</div>
-        </div>
-        <div>
-          <div class="summary-label color-text-60">Scope</div>
-          <div>{{ quest.scope }}</div>
-        </div>
-        <div>
-          <div class="summary-label color-text-60">Arc</div>
-          <div>{{ quest.arc?.name || "(none)" }}</div>
-        </div>
-        <div>
-          <div class="summary-label color-text-60">Steps</div>
-          <div>{{ stepCount }}</div>
-        </div>
-      </div>
+      <QuestTemplateCard v-if="quest" :quest="quest" class="mb-6" />
 
       <div class="editor-actions mb-4">
         <button class="btn-small" :disabled="isSubmitting || !manifestText.trim()" @click="submitManifest">
@@ -67,6 +38,7 @@ import axios from "axios";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useStore } from "vuex";
+import QuestTemplateCard from "@/components/builder/world/QuestTemplateCard.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -88,11 +60,6 @@ const title = computed(() => {
     return quest.value.name.toUpperCase();
   }
   return "NEW QUEST";
-});
-
-const stepCount = computed(() => {
-  if (!quest.value?.manifest?.spec?.steps) return 0;
-  return quest.value.manifest.spec.steps.length;
 });
 
 const extractError = (error: any): string => {
@@ -256,19 +223,6 @@ watch(
 @import "@/styles/colors.scss";
 
 #quest-template-details {
-  .quest-summary-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 1rem;
-    padding: 0.9rem;
-    border: 1px solid $color-form-border;
-    background: $color-background-light-border;
-  }
-
-  .summary-label {
-    font-size: 0.9rem;
-  }
-
   .editor-actions {
     display: flex;
     flex-wrap: wrap;

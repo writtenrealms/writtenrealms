@@ -181,6 +181,18 @@ def _slug_or_error(value: str, field_name: str) -> str:
     return slug
 
 
+def _canonical_manifest_quest_type(value: Any) -> str:
+    quest_type = str(value or "quest").strip().lower()
+    if quest_type == "questlet":
+        return "quest"
+    return quest_type or "quest"
+
+
+def _manifest_spec_for_quest_type(quest_type: str) -> dict[str, Any]:
+    canonical_type = _canonical_manifest_quest_type(quest_type)
+    return {"type": canonical_type} if canonical_type != "quest" else {}
+
+
 def _template_ref_error(expected_type: str, field_name: str) -> str:
     return (
         f"{field_name} must be an integer id, a '{expected_type}.<id>' key, "
@@ -485,6 +497,11 @@ class QuestSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_values(self):
+        self.type = str(self.type or "quest").strip().lower() or "quest"
+        self.scope = str(self.scope or "player").strip().lower() or "player"
+        self.status = str(self.status or "draft").strip().lower() or "draft"
+        if self.type == "questlet":
+            raise ValueError("type 'questlet' is no longer supported; use 'quest'")
         if self.type not in QUEST_TEMPLATE_TYPES:
             raise ValueError(f"type must be one of: {', '.join(QUEST_TEMPLATE_TYPES)}")
         if self.scope not in QUEST_SCOPES:
@@ -666,6 +683,23 @@ def _resolve_quest_arc_reference(
 
 
 def quest_template_to_manifest(quest: QuestTemplate) -> dict[str, Any]:
+    spec = {
+        **_manifest_spec_for_quest_type(quest.quest_type),
+        "scope": quest.scope,
+        "status": quest.status,
+        "arc": quest.arc.slug if quest.arc else "",
+        "repeatability": {
+            "mode": quest.repeatability_mode,
+            "cooldown_seconds": int(quest.repeatability_cooldown_seconds),
+        },
+        "max_active": int(quest.max_active),
+        "discovery": quest.discovery_policy or {},
+        "slots": quest.slot_schema or {},
+        "steps": _sanitize_step_payloads((quest.graph or {}).get("steps", [])),
+        "rewards": quest.reward_policy or {
+            key: [] for key in RESOLUTION_KEYS
+        },
+    }
     manifest = {
         "kind": QUEST_MANIFEST_KIND,
         "metadata": {
@@ -675,23 +709,7 @@ def quest_template_to_manifest(quest: QuestTemplate) -> dict[str, Any]:
             "slug": quest.slug,
             "name": quest.name,
         },
-        "spec": {
-            "type": quest.quest_type,
-            "scope": quest.scope,
-            "status": quest.status,
-            "arc": quest.arc.slug if quest.arc else "",
-            "repeatability": {
-                "mode": quest.repeatability_mode,
-                "cooldown_seconds": int(quest.repeatability_cooldown_seconds),
-            },
-            "max_active": int(quest.max_active),
-            "discovery": quest.discovery_policy or {},
-            "slots": quest.slot_schema or {},
-            "steps": _sanitize_step_payloads((quest.graph or {}).get("steps", [])),
-            "rewards": quest.reward_policy or {
-                key: [] for key in RESOLUTION_KEYS
-            },
-        },
+        "spec": spec,
     }
     return manifest
 
@@ -718,7 +736,7 @@ def serialize_quest_template_payload(quest: QuestTemplate) -> dict[str, Any]:
         "key": quest.key,
         "slug": quest.slug,
         "name": quest.name,
-        "quest_type": quest.quest_type,
+        "quest_type": _canonical_manifest_quest_type(quest.quest_type),
         "scope": quest.scope,
         "status": quest.status,
         "arc": (
@@ -747,7 +765,6 @@ def quest_template_manifest_template(*, world: World) -> dict[str, Any]:
             "name": "New Quest",
         },
         "spec": {
-            "type": "quest",
             "scope": "player",
             "status": "draft",
             "repeatability": {

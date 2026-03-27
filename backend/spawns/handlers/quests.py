@@ -59,11 +59,23 @@ class QuestCommandHandler(CommandHandler):
     text_commands = ("quest", "quests")
     help = {
         "name": "Quest",
-        "format": "quest <subcommand>",
-        "description": "Inspect and advance WR2 quests.",
+        "format": "quest [subcommand]",
+        "description": "Review your quests, quest opportunities, and quest choices.",
+        "details": [
+            "If you omit the subcommand, `quest` defaults to `quest recap`.",
+            "`recap [slug-or-id]`: Show a recap for all active quests, or one specific quest.",
+            "`opportunities`: List quests you can currently accept.",
+            "`active`: List your active quests.",
+            "`completed`: List quests you have already finished.",
+            "`accept <slug>`: Accept an available quest opportunity.",
+            "`choose <slug-or-id> <choice_id>`: Make a quest choice for an active quest.",
+            "`abandon <slug-or-id>`: Abandon an active quest.",
+        ],
         "examples": [
-            "quest recap",
+            "quest",
             "quest opportunities",
+            "quest active",
+            "quest completed",
             "quest accept shrine_survey",
             "quest choose tiny_hello continue",
             "quest abandon tiny_hello",

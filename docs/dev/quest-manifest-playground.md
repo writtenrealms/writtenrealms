@@ -141,7 +141,7 @@ Architecturally, the smallest authored narrative beat is a `storylet` step.
 Practically, the smallest thing you can store and inspect today is a minimal
 `kind: quest` manifest with:
 
-- `spec.type: questlet`
+- no explicit `spec.type` line for a normal quest
 - one `storylet` step
 - one `resolution` step
 
@@ -157,7 +157,6 @@ metadata:
   slug: tiny_hello
   name: Tiny Hello
 spec:
-  type: questlet
   scope: player
   status: draft
   repeatability:
@@ -286,7 +285,7 @@ The script uses the same validation/apply code as the builder manifest flow.
 
 This section gives you a concrete sequence you can run today.
 
-## Example 0: Create The Minimal Questlet
+## Example 0: Create The Minimal Quest
 
 Create `/tmp/tiny_hello.yml`:
 
@@ -298,7 +297,6 @@ metadata:
   slug: tiny_hello
   name: Tiny Hello
 spec:
-  type: questlet
   scope: player
   status: draft
   repeatability:
@@ -410,7 +408,6 @@ metadata:
   slug: bitter_well
   name: The Bitter Well
 spec:
-  type: quest
   scope: player
   status: active
   arc: ashwick_arc
@@ -647,7 +644,7 @@ manifest endpoint remains the HTTP entry point for real editor integration.
 Validation currently enforced by the schema layer includes:
 
 - `spec.type` must be one of:
-  - `questlet`, `quest`, `contract`, `world_event`
+  - `quest`, `contract`, `world_event`
 - `spec.scope` must be one of:
   - `player`, `party`, `guild`, `world`
 - `spec.status` must be one of:

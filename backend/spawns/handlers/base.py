@@ -122,6 +122,10 @@ class CommandHandler(ABC):
         description = help_data.get("description")
         if description:
             lines.append(f"Description: {description}")
+        details = help_data.get("details") or []
+        if details:
+            lines.append("Details:")
+            lines.extend(str(detail) for detail in details)
         examples = help_data.get("examples") or []
         if examples:
             lines.append("Examples:")

@@ -80,7 +80,7 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
         self.create_runtime_quest(
             slug="tiny_hello",
             name="Tiny Hello",
-            quest_type="questlet",
+            quest_type="quest",
             discovery_policy={
                 "sources": [{"type": "auto_start"}],
                 "visible_if": {},
@@ -106,7 +106,7 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
             ],
         )
 
-    def test_look_auto_starts_minimal_questlet(self):
+    def test_look_auto_starts_minimal_quest(self):
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "look")
 
@@ -117,7 +117,7 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
         self.assertEqual(quest_instance.status, "active")
         self.assertEqual(quest_instance.current_step_id, "offer")
 
-    def test_state_sync_auto_starts_minimal_questlet(self):
+    def test_state_sync_auto_starts_minimal_quest(self):
         with capture_game_messages() as messages:
             dispatch_command(
                 command_type="state.sync",
@@ -148,7 +148,7 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
         self.assertNotIn("quest.instance.started", self._message_types(messages))
         self.assertFalse(QuestInstance.objects.filter(player=self.player, template__slug="tiny_hello").exists())
 
-    def test_quest_recap_and_choice_complete_minimal_questlet(self):
+    def test_quest_recap_and_choice_complete_minimal_quest(self):
         with capture_game_messages():
             dispatch_text_command(self.player.id, "look")
 
@@ -302,7 +302,7 @@ class TestQuestRuntimeEndpoints(QuestRuntimeTestCase):
         self.quest = self.create_runtime_quest(
             slug="campfire_note",
             name="Campfire Note",
-            quest_type="questlet",
+            quest_type="quest",
             discovery_policy={
                 "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
                 "visible_if": {},

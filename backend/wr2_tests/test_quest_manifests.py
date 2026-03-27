@@ -41,6 +41,7 @@ class TestQuestManifests(AuthenticatedBuilderWorldTestCase):
         manifest = yaml.safe_load(template["yaml"])
         self.assertEqual(manifest["kind"], "quest")
         self.assertEqual(manifest["metadata"]["world"], f"world.{self.world.id}")
+        self.assertNotIn("type", manifest["spec"])
         self.assertNotIn("lead", template["yaml"])
         self.assertNotIn("stakes", template["yaml"])
 
@@ -63,7 +64,6 @@ metadata:
   slug: bitter_well
   name: The Bitter Well
 spec:
-  type: quest
   scope: player
   status: active
   repeatability:
@@ -194,6 +194,35 @@ spec:
             wolf_pelt.slug,
         )
 
+    def test_apply_quest_manifest_rejects_removed_questlet_type(self):
+        manifest = f"""
+kind: quest
+metadata:
+  world: world.{self.world.id}
+  slug: old_questlet
+  name: Old Questlet
+spec:
+  type: questlet
+  status: draft
+  steps:
+    - id: offer
+      kind: storylet
+      recap: Deprecated type.
+  rewards:
+    complete: []
+    compromised: []
+    failed_forward: []
+    expired: []
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("no longer supported", str(resp.data).lower())
+        self.assertIn("use 'quest'", str(resp.data).lower())
+
     def test_apply_quest_manifest_rejects_removed_lead_and_stakes_fields(self):
         manifest = f"""
 kind: quest
@@ -262,6 +291,26 @@ spec:
         self.assertEqual(resp.status_code, 200)
         self.assertNotIn("lead", resp.data["yaml"])
         self.assertNotIn("stakes", resp.data["yaml"])
+
+    def test_existing_questlet_yaml_serializes_as_default_quest(self):
+        quest = QuestTemplate.objects.create(
+            world=self.world,
+            slug="legacy_questlet",
+            name="Legacy Questlet",
+            quest_type="questlet",
+            scope="player",
+            status="draft",
+            graph={"steps": [{"id": "offer", "kind": "storylet", "recap": "Old shape"}]},
+        )
+        detail_ep = reverse(
+            "builder-quest-template-detail",
+            args=[self.world.pk, quest.slug],
+        )
+
+        resp = self.client.get(detail_ep)
+        self.assertEqual(resp.status_code, 200)
+        manifest = yaml.safe_load(resp.data["yaml"])
+        self.assertNotIn("type", manifest["spec"])
 
     def test_apply_quest_manifest_supports_partial_nested_update(self):
         quest = QuestTemplate.objects.create(

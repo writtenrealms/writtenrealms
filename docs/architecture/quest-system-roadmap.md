@@ -256,7 +256,7 @@ Current implementation:
 - `slug` unique per world
 - `name`
 - `quest_type`
-  - `questlet`, `quest`, `contract`, `world_event`
+  - `quest`, `contract`, `world_event`
 - `scope`
   - `player`, `party`, `guild`, `world`
 - `status`
@@ -674,7 +674,6 @@ Minimum supported features:
 
 - player-scoped quests only
 - content types:
-  - `questlet`
   - `quest`
 - discovery sources:
   - `npc_dialogue`
@@ -756,7 +755,7 @@ Implementation tasks:
 
 Validation:
 
-- a simple authored questlet works end to end
+- a simple authored quest works end to end
 - a normal multi-step quest can be accepted, progressed by events, and resolved
 - journal output remains readable after reconnects
 
