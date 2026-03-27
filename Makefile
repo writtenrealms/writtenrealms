@@ -71,16 +71,6 @@ install:
 	if [ ! -d ve ] ; then virtualenv ve -p python3 ; fi
 	ve/bin/pip install -r requirements.txt
 
-build_docs:
-	if [ -d static ]; then mkdir -p static/docs ; fi
-	ve/bin/sphinx-build docs static/docs
-
-doc_loop:
-	bash -c "while [ true ] ; do make build_docs; done"
-
-testreadme:
-	ve/bin/python -m doctest README.rst
-
 test:
 	docker compose exec backend python manage.py test --settings=config.settings.testing
 
