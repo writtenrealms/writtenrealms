@@ -12,12 +12,13 @@ quest model alive longer than necessary.
 Reference docs:
 
 - `docs/quest-system-endstate.md`
+- `docs/quest-builder-guide.md`
 - `docs/quest-manifest-playground.md`
 - `docs/quest-runtime-playground.md`
 
 ## Current Status
 
-Status as of 2026-03-24:
+Status as of 2026-03-25:
 
 - Phase 1 backend authoring foundation is implemented.
 - Phase 1 playground and usage docs are implemented.
@@ -25,6 +26,8 @@ Status as of 2026-03-24:
 - Phase 2 backend runtime slice is implemented.
 - Phase 2 runtime walkthrough docs are implemented.
 - Phase 2.5 common quest-loop expansion is implemented on the backend.
+- Phase 2.6 discoverability polish is implemented for room NPC indicators and
+  talk-time quest guidance.
 - Quest arcs still do not have a dedicated frontend builder UI yet.
 - There is no dedicated frontend quest UI yet.
 
@@ -74,6 +77,12 @@ Implemented so far:
   - `give <item> <mob>`
   - `talk <mob>`
   - `kill <mob>`
+- room mob quest discoverability now feeds frontend `quest_data`:
+  - `[ ! ]` for available `npc_dialogue` opportunities
+  - `[ ? ]` for ready report-back / hand-in NPCs
+- `talk <mob>` now emits quest guidance when appropriate:
+  - visible NPC quest pitch plus `quest accept <slug>`
+  - active item turn-in reminder text when the NPC is a hand-in target
 - quest progression events now available:
   - `quest.item.delivered`
   - `quest.mob.killed`
@@ -93,6 +102,8 @@ Implemented so far:
   - `backend/scripts/quest_runtime_playground.py`
 - runtime walkthrough doc:
   - `docs/quest-runtime-playground.md`
+- builder interaction guide:
+  - `docs/quest-builder-guide.md`
 - automated tests:
   - `backend/wr2_tests/test_quest_manifests.py`
   - `backend/wr2_tests/test_quest_runtime.py`
@@ -113,6 +124,9 @@ Deliberate Phase 2 deviation from the ideal end-state:
   endpoints, not by `state.sync`
 - `npc_dialogue` discovery currently means "matching mob template is present in
   the room" rather than full dialogue-tree acceptance
+- quest acceptance still happens through `quest accept <slug>` after dialogue
+  discoverability; NPC talk currently surfaces the authored pitch and the
+  accept hint, but does not directly commit the quest
 - no dedicated frontend runtime quest UI shipped yet
 - `kill` is currently a minimal quest-enabling defeat command, not a finished
   combat system
@@ -133,7 +147,10 @@ Immediate next work:
     module split as follow-up cleanup
 - Phase 2 polish:
   - frontend runtime quest UI
-  - trigger quest discovery from `state.sync` / enter-world flow
+  - decide whether `quest accept` should gain a no-arg or
+    conversation-aware shortcut for single visible NPC offers
+  - decide whether room UI should expose action affordances for `Accept`,
+    `Give`, or `Talk` when `!` / `?` is present
   - decide when `/game/quests/resolved/` should become canonical
     `/game/quests/completed/`
   - replace the temporary minimal `kill` command once real combat lands

@@ -4,6 +4,7 @@ from typing import Callable
 
 from spawns.models import Player
 from quests.services.discovery import refresh_player_quests
+from quests.services.interactions import build_talk_guidance_events
 from quests.services.progress import progress_player_quests_for_event
 
 
@@ -32,16 +33,15 @@ def _resolve_player(actor_ref: str | None) -> Player | None:
     return Player.objects.filter(pk=int(player_id_text)).first()
 
 
-def _handle_discovery_and_progress(
+def _refresh_and_progress(
     *,
     event_type: str,
     event_data: dict,
     actor_key: str | None,
-    connection_id: str | None,
-) -> None:
+):
     player = _resolve_player(_extract_actor_key(event_data, actor_key))
     if not player:
-        return
+        return None, None, None
 
     refresh_result = refresh_player_quests(player)
     progress_result = progress_player_quests_for_event(
@@ -49,7 +49,17 @@ def _handle_discovery_and_progress(
         event_type=event_type,
         event_data=event_data,
     )
-    events = [*refresh_result.events, *progress_result.events]
+    return player, refresh_result, progress_result
+
+
+def _publish_player_events(
+    player: Player | None,
+    events: list,
+    *,
+    connection_id: str | None,
+) -> None:
+    if not player:
+        return
     if not events:
         return
 
@@ -63,55 +73,86 @@ def _handle_discovery_and_progress(
 
 
 def _on_cmd_look_success(event_data: dict, actor_key: str | None, connection_id: str | None) -> None:
-    _handle_discovery_and_progress(
+    player, refresh_result, progress_result = _refresh_and_progress(
         event_type="cmd.look.success",
         event_data=event_data,
         actor_key=actor_key,
+    )
+    _publish_player_events(
+        player,
+        [*(refresh_result.events if refresh_result else []), *(progress_result.events if progress_result else [])],
         connection_id=connection_id,
     )
 
 
 def _on_cmd_move_success(event_data: dict, actor_key: str | None, connection_id: str | None) -> None:
-    _handle_discovery_and_progress(
+    player, refresh_result, progress_result = _refresh_and_progress(
         event_type="cmd.move.success",
         event_data=event_data,
         actor_key=actor_key,
+    )
+    _publish_player_events(
+        player,
+        [*(refresh_result.events if refresh_result else []), *(progress_result.events if progress_result else [])],
         connection_id=connection_id,
     )
 
 
 def _on_cmd_say_success(event_data: dict, actor_key: str | None, connection_id: str | None) -> None:
-    _handle_discovery_and_progress(
+    player, refresh_result, progress_result = _refresh_and_progress(
         event_type="cmd.say.success",
         event_data=event_data,
         actor_key=actor_key,
+    )
+    _publish_player_events(
+        player,
+        [*(refresh_result.events if refresh_result else []), *(progress_result.events if progress_result else [])],
         connection_id=connection_id,
     )
 
 
 def _on_cmd_talk_success(event_data: dict, actor_key: str | None, connection_id: str | None) -> None:
-    _handle_discovery_and_progress(
+    player, refresh_result, progress_result = _refresh_and_progress(
         event_type="cmd.talk.success",
         event_data=event_data,
         actor_key=actor_key,
+    )
+    extra_events = []
+    if player and progress_result and not progress_result.events:
+        extra_events = build_talk_guidance_events(player, event_data)
+    _publish_player_events(
+        player,
+        [
+            *(refresh_result.events if refresh_result else []),
+            *(progress_result.events if progress_result else []),
+            *extra_events,
+        ],
         connection_id=connection_id,
     )
 
 
 def _on_quest_item_delivered(event_data: dict, actor_key: str | None, connection_id: str | None) -> None:
-    _handle_discovery_and_progress(
+    player, refresh_result, progress_result = _refresh_and_progress(
         event_type="quest.item.delivered",
         event_data=event_data,
         actor_key=actor_key,
+    )
+    _publish_player_events(
+        player,
+        [*(refresh_result.events if refresh_result else []), *(progress_result.events if progress_result else [])],
         connection_id=connection_id,
     )
 
 
 def _on_quest_mob_killed(event_data: dict, actor_key: str | None, connection_id: str | None) -> None:
-    _handle_discovery_and_progress(
+    player, refresh_result, progress_result = _refresh_and_progress(
         event_type="quest.mob.killed",
         event_data=event_data,
         actor_key=actor_key,
+    )
+    _publish_player_events(
+        player,
+        [*(refresh_result.events if refresh_result else []), *(progress_result.events if progress_result else [])],
         connection_id=connection_id,
     )
 

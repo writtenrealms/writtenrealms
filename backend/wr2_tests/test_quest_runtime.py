@@ -63,6 +63,15 @@ class QuestRuntimeTestCase(WorldTestCase):
                 return msg["message"]
         return None
 
+    def _room_char_by_name(self, message, name):
+        if not message:
+            return None
+        target = message.get("data", {}).get("target") or message.get("data", {}).get("room") or {}
+        for char in target.get("chars", []):
+            if char.get("name") == name:
+                return char
+        return None
+
 
 class TestMinimalQuestRuntime(QuestRuntimeTestCase):
     def setUp(self):
@@ -345,13 +354,15 @@ class TestNpcDialogueSlugDiscovery(QuestRuntimeTestCase):
             ],
         )
 
-    def test_npc_dialogue_discovery_accepts_mob_template_slug(self):
+    def test_npc_dialogue_discovery_accepts_mob_template_slug_without_room_entry_spam(self):
         with capture_game_messages() as discovery_messages:
             dispatch_text_command(self.player.id, "look")
 
-        self.assertIn("quest.opportunity.available", self._message_types(discovery_messages))
-        opportunity_message = self._message_by_type(discovery_messages, "quest.opportunity.available")
-        self.assertIn("Quartermaster Request", opportunity_message["text"])
+        self.assertNotIn("quest.opportunity.available", self._message_types(discovery_messages))
+        look_message = self._message_by_type(discovery_messages, "cmd.look.success")
+        quartermaster = self._room_char_by_name(look_message, "Quartermaster")
+        self.assertIsNotNone(quartermaster)
+        self.assertTrue(quartermaster["quest_data"]["enquire"])
 
 
 class TestTurnInQuestRuntime(QuestRuntimeTestCase):
@@ -474,6 +485,125 @@ class TestTurnInQuestRuntime(QuestRuntimeTestCase):
         self.assertIn("notification./echo", self._message_types(final_messages))
 
 
+class TestQuestDiscoverability(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.bartender_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Saloon Bartender",
+            keywords="saloon bartender bartender",
+            slug="saloon_bartender",
+        )
+        self.keg_template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Saloon Keg",
+            keywords="saloon keg keg",
+            slug="saloon_keg",
+        )
+        self.bartender_template.spawn(self.room, self.spawn_world)
+        self.create_runtime_quest(
+            slug="saloon_keg_run",
+            name="A Keg for the Bar",
+            discovery_policy={
+                "sources": [{"type": "npc_dialogue", "mob_template": self.bartender_template.slug}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 25,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "deliver",
+                    "kind": "objective",
+                    "recap": "The bartender needs a fresh keg from the back room.",
+                    "lead": "Bring the saloon keg to the bartender.",
+                    "stakes": "He refuses to leave the bar unattended.",
+                    "text": {
+                        "body": (
+                            '"Could you grab a keg from the back for me?" the bartender asks. '
+                            '"I can\'t leave the bar unattended."'
+                        )
+                    },
+                    "objectives": [
+                        {
+                            "id": "deliver_keg",
+                            "text": "Bring the saloon keg to the bartender.",
+                            "tracker": {
+                                "event": "quest.item.delivered",
+                                "where": {
+                                    "all": [
+                                        {"eq": ["event.target.template_id", self.bartender_template.slug]},
+                                        {"eq": ["event.item.template_id", self.keg_template.slug]},
+                                    ]
+                                },
+                            },
+                            "progress": {"mode": "count", "target": 1},
+                        }
+                    ],
+                    "transitions": [
+                        {
+                            "when": {"objective_complete": "deliver_keg"},
+                            "goto": "resolved",
+                        }
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "The bartender rolls the fresh keg into place.",
+                    "lead": "",
+                    "stakes": "",
+                },
+            ],
+        )
+
+    def test_look_marks_npc_dialogue_offer_with_exclamation_indicator(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "look")
+
+        look_message = self._message_by_type(messages, "cmd.look.success")
+        bartender = self._room_char_by_name(look_message, "Saloon Bartender")
+        self.assertIsNotNone(bartender)
+        self.assertTrue(bartender["quest_data"]["enquire"])
+        self.assertFalse(bartender["quest_data"]["complete"])
+
+    def test_talk_to_offer_npc_shows_pitch_and_accept_command(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "talk bartender")
+
+        guidance_message = self._message_by_type(messages, "quest.opportunity.presented")
+        self.assertIsNotNone(guidance_message)
+        self.assertIn("A Keg for the Bar", guidance_message["text"])
+        self.assertIn("grab a keg from the back", guidance_message["text"].lower())
+        self.assertIn("quest accept saloon_keg_run", guidance_message["text"])
+
+    def test_return_npc_shows_question_indicator_when_turn_in_is_ready(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest accept saloon_keg_run")
+        self.keg_template.spawn(self.player, self.spawn_world)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "look")
+
+        look_message = self._message_by_type(messages, "cmd.look.success")
+        bartender = self._room_char_by_name(look_message, "Saloon Bartender")
+        self.assertIsNotNone(bartender)
+        self.assertFalse(bartender["quest_data"]["enquire"])
+        self.assertTrue(bartender["quest_data"]["complete"])
+
+    def test_talk_to_turn_in_npc_without_giving_item_shows_handoff_hint(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest accept saloon_keg_run")
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "talk bartender")
+
+        hint_message = self._message_by_type(messages, "quest.interaction.hint")
+        self.assertIsNotNone(hint_message)
+        self.assertIn("A Keg for the Bar", hint_message["text"])
+        self.assertIn("give <item> bartender", hint_message["text"])
+
+
 class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
     def setUp(self):
         super().setUp()
@@ -587,3 +717,19 @@ class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
         self.assertEqual(self.player.gold, 8)
         self.assertIn("quest.instance.resolved", self._message_types(final_messages))
         self.assertIn("notification.cmd.say.success", self._message_types(final_messages))
+
+    def test_return_to_captain_shows_question_indicator_after_kills(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "look")
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "kill rat")
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "kill rat")
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "look")
+
+        look_message = self._message_by_type(messages, "cmd.look.success")
+        captain = self._room_char_by_name(look_message, "Captain Merrow")
+        self.assertIsNotNone(captain)
+        self.assertTrue(captain["quest_data"]["complete"])

@@ -14,6 +14,7 @@ from django.utils import timezone
 
 from config import constants as adv_consts
 from core.computations import compute_stats
+from quests.services.interactions import room_mob_quest_indicator_map
 from spawns.models import DoorState, Item, Mob, Player
 from spawns.schemas import (
     Actor,
@@ -21,6 +22,7 @@ from spawns.schemas import (
     Equipment as EquipmentSchema,
     Item as ItemSchema,
     MapRoom,
+    QuestData,
     Room as RoomSchema,
     StateSyncData,
     WhoListEntry,
@@ -214,7 +216,12 @@ def serialize_char_from_player(player: Player) -> Char:
     )
 
 
-def serialize_char_from_mob(mob: Mob, *, viewer: Player | Mob | None = None) -> Char:
+def serialize_char_from_mob(
+    mob: Mob,
+    *,
+    viewer: Player | Mob | None = None,
+    quest_indicator_map: dict[int, dict[str, bool]] | None = None,
+) -> Char:
     name = mob.name or (mob.template.name if mob.template else "Unnamed Mob")
     title = mob.title
     if not title and mob.template:
@@ -227,6 +234,7 @@ def serialize_char_from_mob(mob: Mob, *, viewer: Player | Mob | None = None) -> 
         room_desc = mob.template.room_description
     factions = mob.template.factions if mob.template else mob.factions
     actions = get_char_action_labels_for_actor(viewer, mob)
+    quest_indicator = (quest_indicator_map or {}).get(mob.id, {})
     return Char(
         id=mob.id,
         key=mob.key,
@@ -249,6 +257,10 @@ def serialize_char_from_mob(mob: Mob, *, viewer: Player | Mob | None = None) -> 
         is_elite=getattr(mob, "is_elite", False),
         is_invisible=getattr(mob, "is_invisible", False),
         actions=actions,
+        quest_data=QuestData(
+            enquire=bool(quest_indicator.get("enquire")),
+            complete=bool(quest_indicator.get("complete")),
+        ),
     )
 
 
@@ -402,11 +414,21 @@ def serialize_room(
     )
 
     room_players = room.players.filter(in_game=True).select_related("user", "equipment")
-    room_mobs = room.mobs.select_related("template")
+    room_mobs = list(room.mobs.select_related("template"))
+    quest_indicator_map: dict[int, dict[str, bool]] = {}
+    if isinstance(viewer, Player):
+        quest_indicator_map = room_mob_quest_indicator_map(viewer, room_mobs)
 
     chars: List[Char] = []
     chars.extend(serialize_char_from_player(p) for p in room_players)
-    chars.extend(serialize_char_from_mob(m, viewer=viewer) for m in room_mobs)
+    chars.extend(
+        serialize_char_from_mob(
+            m,
+            viewer=viewer,
+            quest_indicator_map=quest_indicator_map,
+        )
+        for m in room_mobs
+    )
 
     zone = ZoneSchema(key=room.zone.key, name=room.zone.name) if room.zone else None
     details = list(room.details.filter(is_hidden=False).values_list("description", flat=True))

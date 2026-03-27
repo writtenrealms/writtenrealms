@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import SimpleNamespace
+from typing import Iterable
 
 from django.utils import timezone
 
@@ -46,7 +48,23 @@ def _source_type(source: dict) -> str:
     return str(source.get("type") or "").strip().lower()
 
 
-def _source_matches_player(player, template: QuestTemplate, source: dict) -> bool:
+def _npc_dialogue_source_mob_template_id(template: QuestTemplate, source: dict) -> int | None:
+    if _source_type(source) != "npc_dialogue":
+        return None
+    return resolve_template_ref_id(
+        world=template.world,
+        value=source.get("mob_template") or source.get("mob_template_id"),
+        expected_type="mobtemplate",
+    )
+
+
+def _source_matches_player(
+    player,
+    template: QuestTemplate,
+    source: dict,
+    *,
+    room_mob_template_ids: set[int] | None = None,
+) -> bool:
     source_type = _source_type(source)
     if source_type == "auto_start":
         return True
@@ -58,13 +76,11 @@ def _source_matches_player(player, template: QuestTemplate, source: dict) -> boo
         return player.room_id == room_id
 
     if source_type == "npc_dialogue":
-        mob_template_id = resolve_template_ref_id(
-            world=template.world,
-            value=source.get("mob_template") or source.get("mob_template_id"),
-            expected_type="mobtemplate",
-        )
+        mob_template_id = _npc_dialogue_source_mob_template_id(template, source)
         if not mob_template_id or not player.room_id:
             return False
+        if room_mob_template_ids is not None:
+            return mob_template_id in room_mob_template_ids
         return player.room.mobs.filter(template_id=mob_template_id).exists()
 
     return False
@@ -108,6 +124,82 @@ def _template_available(player, template: QuestTemplate) -> bool:
     return True
 
 
+def _matching_sources_for_template(
+    player,
+    template: QuestTemplate,
+    *,
+    room_mob_template_ids: set[int] | None = None,
+) -> list[dict]:
+    if not _template_available(player, template):
+        return []
+    return [
+        source
+        for source in (template.discovery_policy or {}).get("sources", [])
+        if (
+            isinstance(source, dict)
+            and _source_matches_player(
+                player,
+                template,
+                source,
+                room_mob_template_ids=room_mob_template_ids,
+            )
+        )
+    ]
+
+
+def _should_emit_available_event(matched_sources: list[dict]) -> bool:
+    if not matched_sources:
+        return False
+    return any(_source_type(source) != "npc_dialogue" for source in matched_sources)
+
+
+def available_npc_dialogue_opportunities_for_room_mobs(player, room_mobs: Iterable) -> dict[int, list[dict]]:
+    room_mob_template_ids = {
+        int(mob.template_id)
+        for mob in room_mobs
+        if getattr(mob, "template_id", None)
+    }
+    opportunities_by_template_id: dict[int, list[dict]] = {}
+    if not room_mob_template_ids:
+        return opportunities_by_template_id
+
+    templates = list(runtime_templates_qs(player))
+    for template in templates:
+        matched_sources = _matching_sources_for_template(
+            player,
+            template,
+            room_mob_template_ids=room_mob_template_ids,
+        )
+        if not matched_sources:
+            continue
+        opportunity_payload = serialize_opportunity(template, player=player)
+        for source in matched_sources:
+            mob_template_id = _npc_dialogue_source_mob_template_id(template, source)
+            if not mob_template_id:
+                continue
+            opportunities_by_template_id.setdefault(mob_template_id, []).append(opportunity_payload)
+
+    for template_id in list(opportunities_by_template_id.keys()):
+        opportunities_by_template_id[template_id].sort(
+            key=lambda opportunity: (opportunity.get("name") or "").lower()
+        )
+    return opportunities_by_template_id
+
+
+def available_npc_dialogue_opportunities_for_mob_template(
+    player,
+    mob_template_id: int | None,
+) -> list[dict]:
+    if not mob_template_id:
+        return []
+    return list(
+        available_npc_dialogue_opportunities_for_room_mobs(
+            player,
+            [SimpleNamespace(template_id=mob_template_id)],
+        ).get(int(mob_template_id), [])
+    )
+
+
 def refresh_player_quests(player) -> DiscoveryRefreshResult:
     now = timezone.now()
     result = DiscoveryRefreshResult()
@@ -118,14 +210,7 @@ def refresh_player_quests(player) -> DiscoveryRefreshResult:
 
     templates = list(runtime_templates_qs(player))
     for template in templates:
-        if not _template_available(player, template):
-            continue
-
-        matched_sources = [
-            source
-            for source in (template.discovery_policy or {}).get("sources", [])
-            if isinstance(source, dict) and _source_matches_player(player, template, source)
-        ]
+        matched_sources = _matching_sources_for_template(player, template)
         if not matched_sources:
             continue
 
@@ -149,7 +234,7 @@ def refresh_player_quests(player) -> DiscoveryRefreshResult:
 
         opportunity_payload = serialize_opportunity(template, player=player)
         result.opportunities.append(opportunity_payload)
-        if template.id not in previously_visible_ids:
+        if template.id not in previously_visible_ids and _should_emit_available_event(matched_sources):
             result.events.append(
                 GameEvent(
                     type="quest.opportunity.available",

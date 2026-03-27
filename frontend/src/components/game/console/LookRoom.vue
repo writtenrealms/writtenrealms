@@ -190,8 +190,9 @@ const exits = computed(() => {
 
 const chars = computed(() => {
   let chars: Char[] = [];
+  const playerKey = `player.${store.state.game.player_id}`;
   for (let char of room.value.chars) {
-    if (char.id != store.state.game.player_id) {
+    if (char.key !== playerKey) {
       chars.push(char);
     }
   }

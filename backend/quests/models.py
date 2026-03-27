@@ -115,9 +115,13 @@ class QuestTemplate(AdventBaseModel):
     )
     repeatability_cooldown_seconds = models.PositiveIntegerField(default=0)
     max_active = models.PositiveIntegerField(default=1)
+    # Schema: quests.manifests.QuestDiscoverySpec (QuestSpec.discovery).
     discovery_policy = models.JSONField(default=dict)
+    # Schema: quests.manifests.QuestSpec.slots (arbitrary per-slot dicts; validated with the quest).
     slot_schema = models.JSONField(default=dict)
+    # Schema: {"steps": [...]} where each step matches quests.manifests.QuestStepSpec (QuestSpec.steps).
     graph = models.JSONField(default=dict)
+    # Schema: quests.manifests.QuestRewardsSpec (QuestSpec.rewards).
     reward_policy = models.JSONField(default=dict)
     manifest_version = models.TextField(default='v1alpha1')
 
