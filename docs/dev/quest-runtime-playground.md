@@ -16,7 +16,7 @@ The smallest working interaction is intentionally tiny:
 2. apply it
 3. create or reuse a dev player
 4. issue one in-game command that discovers or starts the quest
-5. inspect it with `quest recap`
+5. inspect it with `quest info`
 6. choose one option and watch it resolve
 
 That is the minimal proof that the runtime slice is real.
@@ -57,7 +57,7 @@ Implemented in this pass:
   - `/echo`
   - `/zecho`
   - `/wecho`
-- quest journal entries and recap output
+- quest journal entries and info output
 - in-game `quest` command
 - runtime endpoints for:
   - opportunities
@@ -165,18 +165,18 @@ COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec bac
   python scripts/quest_runtime_playground.py opportunities --player <player_id>
 ```
 
-Show current quest recap:
+Show current quest info:
 
 ```bash
 COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
-  python scripts/quest_runtime_playground.py recap --player <player_id>
+  python scripts/quest_runtime_playground.py info --player <player_id>
 ```
 
 If you are using the actual game frontend instead of the playground script, the
 same text commands work there too:
 
 - `look`
-- `quest recap`
+- `quest info`
 - `quest opportunities`
 - `quest accept <slug>`
 - `quest choose <slug-or-id> <choice_id>`
@@ -788,7 +788,7 @@ playground script, the Phase 2 runtime currently exposes:
 - `POST /api/v1/game/quests/opportunities/<slug>/accept/`
 - `GET /api/v1/game/quests/active/`
 - `GET /api/v1/game/quests/resolved/`
-- `GET /api/v1/game/quests/instances/<instance_id>/recap/`
+- `GET /api/v1/game/quests/instances/<instance_id>/info/`
 - `POST /api/v1/game/quests/instances/<instance_id>/choose/`
 - `POST /api/v1/game/quests/instances/<instance_id>/abandon/`
 

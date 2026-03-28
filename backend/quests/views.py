@@ -16,9 +16,9 @@ from quests.services.engine import (
     abandon_instance,
     accept_template,
     choose_for_instance,
+    info_for_player,
     list_active_instances,
     list_completed_instances,
-    recap_for_player,
     resolve_template_for_player,
 )
 from quests.models import QuestArcTemplate, QuestTemplate
@@ -120,11 +120,11 @@ class QuestOpportunityAcceptView(QuestRuntimeView):
         template = resolve_template_for_player(request.player, slug)
         result = accept_template(request.player, template)
         publish_events(result.events, actor_key=request.player.key)
-        payload, recap_text = recap_for_player(request.player, str(result.quest_instance.id))
+        payload, info_text = info_for_player(request.player, str(result.quest_instance.id))
         return Response(
             {
                 "quest": payload,
-                "text": recap_text,
+                "text": info_text,
             },
             status=status.HTTP_201_CREATED,
         )
@@ -140,18 +140,18 @@ class QuestResolvedListView(QuestRuntimeView):
         return Response({"quests": list_completed_instances(request.player)})
 
 
-class QuestInstanceRecapView(QuestRuntimeView):
+class QuestInstanceInfoView(QuestRuntimeView):
     def get(self, request, instance_id, format=None):
-        payload, recap_text = recap_for_player(request.player, str(instance_id))
-        return Response({"quest": payload, "text": recap_text})
+        payload, info_text = info_for_player(request.player, str(instance_id))
+        return Response({"quest": payload, "text": info_text})
 
 
 class QuestInstanceAbandonView(QuestRuntimeView):
     def post(self, request, instance_id, format=None):
         result = abandon_instance(request.player, str(instance_id))
         publish_events(result.events, actor_key=request.player.key)
-        payload, recap_text = recap_for_player(request.player, str(result.quest_instance.id))
-        return Response({"quest": payload, "text": recap_text})
+        payload, info_text = info_for_player(request.player, str(result.quest_instance.id))
+        return Response({"quest": payload, "text": info_text})
 
 
 class QuestInstanceChooseView(QuestRuntimeView):
@@ -164,14 +164,14 @@ class QuestInstanceChooseView(QuestRuntimeView):
             serializer.validated_data["choice_id"],
         )
         publish_events(result.events, actor_key=request.player.key)
-        payload, recap_text = recap_for_player(request.player, str(result.quest_instance.id))
-        return Response({"quest": payload, "text": recap_text})
+        payload, info_text = info_for_player(request.player, str(result.quest_instance.id))
+        return Response({"quest": payload, "text": info_text})
 
 
 quest_opportunity_list = QuestOpportunityListView.as_view()
 quest_opportunity_accept = QuestOpportunityAcceptView.as_view()
 quest_active_list = QuestActiveListView.as_view()
 quest_resolved_list = QuestResolvedListView.as_view()
-quest_instance_recap = QuestInstanceRecapView.as_view()
+quest_instance_info = QuestInstanceInfoView.as_view()
 quest_instance_abandon = QuestInstanceAbandonView.as_view()
 quest_instance_choose = QuestInstanceChooseView.as_view()

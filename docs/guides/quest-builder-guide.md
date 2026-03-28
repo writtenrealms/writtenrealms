@@ -30,8 +30,8 @@ That means:
 - looking around can start one
 - entering a new room can start one
 - `say`, `talk`, `give`, `kill`, and `quest opportunities` do not auto-start
-  quests, even though some of those flows still refresh quest discovery or
-  progression for other reasons
+quests, even though some of those flows still refresh quest discovery or
+progression for other reasons
 
 ## Player Interaction Contract
 
@@ -41,12 +41,12 @@ This is the intended player loop right now:
 2. If the source is an NPC dialogue offer, the room UI shows `[ ! ]`.
 3. The player uses an in-world verb like `talk bartender`.
 4. The game shows the authored pitch text and an explicit accept command:
-   `quest accept <quest-slug>`.
+  `quest accept <quest-slug>`.
 5. Once accepted, quest progress happens through world actions:
-   `look`, `move`, `say`, `talk`, `give`, `kill`.
+  `look`, `move`, `say`, `talk`, `give`, `kill`.
 6. When an NPC is ready for report-back or a hand-in, the room UI shows `[ ? ]`.
 7. Completion still happens through the world verb that matches the objective:
-   `talk captain`, `give keg bartender`, and so on.
+  `talk captain`, `give keg bartender`, and so on.
 
 There is intentionally no `quest complete` command right now.
 
@@ -57,9 +57,9 @@ out-of-band completion verb.
 ## What `!` And `?` Mean
 
 - `[ ! ]` means this mob currently has a visible `npc_dialogue` opportunity the
-  player can enquire about.
+player can enquire about.
 - `[ ? ]` means this mob is currently a ready hand-in or report-back point for
-  an active quest.
+an active quest.
 
 For item turn-ins, `[ ? ]` appears when the player already has what they need
 to finish the current quest step at that NPC.
@@ -90,6 +90,254 @@ Builders can rely on these pieces today:
   - `grant_gold`
   - `grant_xp`
   - constrained `mob_command`
+
+## Quest Manifest Field Reference
+
+This section documents the current quest manifest shape as it exists in code
+today. Where the manifest schema accepts more values than the runtime actually
+supports, that difference is called out explicitly.
+
+### Top-Level Fields
+
+
+| Field        | Required             | Values                                   | Notes                                                        |
+| ------------ | -------------------- | ---------------------------------------- | ------------------------------------------------------------ |
+| `apiVersion` | no                   | `v1alpha1`, `writtenrealms.com/v1alpha1` | Optional. Exported quest YAML currently omits it by default. |
+| `kind`       | yes                  | `quest`                                  | Case-insensitive on ingest.                                  |
+| `operation`  | no                   | `apply`, `delete`                        | Defaults to `apply`. Use `delete` for delete manifests.      |
+| `metadata`   | yes                  | mapping                                  | Quest identity and display metadata.                         |
+| `spec`       | yes for create/apply | mapping                                  | Omit for `operation: delete`.                                |
+
+
+### `metadata`
+
+
+| Field   | Values                                   | Notes                                                                                                                        |
+| ------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `world` | integer world id or `world.<id>`         | If present, it must match the selected world in the builder.                                                                 |
+| `id`    | integer quest id or `questtemplate.<id>` | Optional. Used to target an existing quest on update/delete.                                                                 |
+| `key`   | `questtemplate.<id>`                     | Exported for reference, but quest ingest currently resolves updates by `metadata.id` or `metadata.slug`, not `metadata.key`. |
+| `slug`  | bare slug                                | Required for create. Also accepted as an update/delete identifier. Must be unique within the world.                          |
+| `name`  | free text                                | Optional on update. If omitted on create, it is derived from the slug.                                                       |
+
+
+### `spec`
+
+
+| Field                            | Values                              | Notes                                                                                                                   |
+| -------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `type`                           | `quest`, `contract`, `world_event`  | The runtime currently only runs `quest`.                                                                                |
+| `scope`                          | `player`, `party`, `guild`, `world` | The runtime currently only runs `player`.                                                                               |
+| `status`                         | `draft`, `active`, `archived`       | Only `active` quests appear in runtime discovery.                                                                       |
+| `arc`                            | blank/omitted or quest arc slug     | The referenced arc must already exist in the same world.                                                                |
+| `repeatability.mode`             | `never`, `cooldown`, `always`       | See the repeatability rules below.                                                                                      |
+| `repeatability.cooldown_seconds` | integer `>= 0`                      | Only valid when `repeatability.mode: cooldown`.                                                                         |
+| `max_active`                     | integer `>= 0`                      | Stored on the template, but the current runtime still effectively enforces one active instance per player per template. |
+| `discovery`                      | mapping                             | Controls how the quest becomes visible or starts.                                                                       |
+| `slots`                          | mapping                             | Current runtime support is limited; see slot notes below.                                                               |
+| `steps`                          | non-empty list                      | Step ids must be unique. The first step is the entry step.                                                              |
+| `rewards`                        | mapping                             | Reward bucket keys are `complete`, `compromised`, `failed_forward`, `expired`.                                          |
+
+
+### Repeatability Rules
+
+
+| `repeatability.mode` | Behavior                                                                                                          |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `never`              | The player may resolve the quest once in a non-abandoned state. A later `abandon` does not consume the quest.     |
+| `cooldown`           | After a non-abandoned resolution, the quest stays unavailable until `repeatability.cooldown_seconds` has elapsed. |
+| `always`             | The quest can be reacquired immediately whenever its discovery rules match and it is not currently active.        |
+
+
+Important runtime details:
+
+- `quest abandon <slug-or-id>` marks the current instance as `abandoned`, but it
+does not count as a completed run for repeatability.
+- Abandoned quests are not shown in the player-facing completed quest list.
+- A non-repeatable quest becomes available again after abandon if its discovery
+conditions still match.
+
+### `spec.discovery`
+
+
+| Field              | Values                            | Notes                                                                                   |
+| ------------------ | --------------------------------- | --------------------------------------------------------------------------------------- |
+| `sources`          | list of discovery source mappings | Supported source types are listed below.                                                |
+| `visible_if`       | condition DSL mapping             | Evaluated for opportunity visibility.                                                   |
+| `accept_if`        | condition DSL mapping             | Evaluated at accept time. A quest can be visible but still reject acceptance.           |
+| `salience`         | integer                           | Stored in the manifest, but not currently used by the runtime for ordering or priority. |
+| `cooldown_seconds` | integer `>= 0`                    | Stored and validated, but not currently enforced by the runtime.                        |
+
+
+Supported discovery source shapes:
+
+
+| `type`         | Required fields                     | Behavior                                                                                                                      |
+| -------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `auto_start`   | none                                | Starts automatically on `cmd.state.sync.success`, `cmd.look.success`, or `cmd.move.success`.                                  |
+| `room_prompt`  | `room` or `room_id`                 | Shows as an opportunity when the player is in that room. The room reference can be an integer id or `room.<id>`.              |
+| `npc_dialogue` | `mob_template` or `mob_template_id` | Shows through NPC dialogue and room UI markers. Mob refs can be ids, `mobtemplate.<id>`, `mobtemplate.<slug>`, or bare slugs. |
+
+
+### Condition DSL
+
+These operators are used by `visible_if`, `accept_if`, objective tracker
+`where`, choice `if`, and transition `when`.
+
+
+| Operator             | Shape                                  | Meaning                                                       |
+| -------------------- | -------------------------------------- | ------------------------------------------------------------- |
+| `always`             | `{always: true}`                       | Always true or false.                                         |
+| `all`                | `{all: [<condition>, ...]}`            | Logical AND.                                                  |
+| `any`                | `{any: [<condition>, ...]}`            | Logical OR.                                                   |
+| `not`                | `{not: <condition>}`                   | Logical negation.                                             |
+| `objective_complete` | `{objective_complete: <objective_id>}` | True when that objective is complete on the current instance. |
+| `eq`                 | `{eq: [<path>, <value>]}`              | Equality.                                                     |
+| `ne`                 | `{ne: [<path>, <value>]}`              | Inequality.                                                   |
+| `gte`                | `{gte: [<path>, <value>]}`             | Greater than or equal.                                        |
+| `lte`                | `{lte: [<path>, <value>]}`             | Less than or equal.                                           |
+| `in`                 | `{in: [<path>, [<value>, ...]]}`       | Membership in a candidate list.                               |
+
+
+Supported path prefixes today:
+
+- `player.<field>`
+- `template.<field>`
+- `event.<field>`
+- `quest.local_state.<key>`
+- `quest.slot_bindings.<slot_name>`
+- `quest.current_step_id`
+
+Template-id comparisons in conditions can use integer ids, typed keys like
+`mobtemplate.42`, typed slug refs like `mobtemplate.saloon_bartender`, or bare
+slugs where the runtime can infer the template type.
+
+### `spec.slots`
+
+`spec.slots` is a mapping of slot names to slot definitions. Current runtime
+support is limited to fixed bindings resolved at quest start.
+
+Supported shape today:
+
+```yaml
+slots:
+  bartender:
+    resolve:
+      type: fixed
+      entity: saloon_bartender
+```
+
+You can also use `value:` instead of `entity:`. Resolved slot bindings can be
+read later through condition paths like `quest.slot_bindings.bartender`.
+
+### `spec.steps`
+
+Common step fields:
+
+
+| Field     | Values                                | Notes                                                                                        |
+| --------- | ------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `id`      | non-empty string                      | Must be unique within the quest.                                                             |
+| `kind`    | `storylet`, `objective`, `resolution` | The manifest schema also accepts `branch` and `timer`, but the current runtime rejects them. |
+| `recap`   | string                                | Used heavily in quest info output and journal output.                                        |
+| `text`    | mapping                               | `text.body` is the common authored field for player-facing pitch/body text.                  |
+| `effects` | list of effect mappings               | Applied when the step is entered, including resolution steps.                                |
+
+
+Fields commonly used on specific step kinds:
+
+
+| Step kind    | Common extra fields              | Notes                                                                                                     |
+| ------------ | -------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `storylet`   | `choices`                        | Used for explicit player choice branches.                                                                 |
+| `objective`  | `objectives`, `transitions`      | Objectives progress from runtime events, then transitions move to the next step.                          |
+| `resolution` | optional `resolution`, `effects` | `resolution` defaults to `complete`. Matching reward bucket effects are then applied from `spec.rewards`. |
+
+
+### Objective Specs
+
+Each item in `step.objectives` is a mapping with these common fields:
+
+
+| Field                  | Values                             | Notes                                                                                                                                        |
+| ---------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                   | non-empty string                   | Should be unique within the step.                                                                                                            |
+| `text`                 | string                             | Displayed to the player as the objective label.                                                                                              |
+| `tracker.event`        | event type string                  | Common values are `cmd.look.success`, `cmd.move.success`, `cmd.say.success`, `cmd.talk.success`, `quest.item.delivered`, `quest.mob.killed`. |
+| `tracker.where`        | condition DSL mapping              | Optional filter on the triggering event.                                                                                                     |
+| `progress.mode`        | `boolean`, `count`, `unique_count` | See progress behavior below.                                                                                                                 |
+| `progress.target`      | integer `>= 1`                     | Defaults to `1` when omitted.                                                                                                                |
+| `progress.distinct_by` | path string                        | Used by `unique_count` to dedupe progress values.                                                                                            |
+
+
+Progress mode behavior:
+
+
+| `progress.mode` | Behavior                                                                              |
+| --------------- | ------------------------------------------------------------------------------------- |
+| `boolean`       | Marks the objective complete on the first matching event.                             |
+| `count`         | Increments by 1 per matching event until `target` is reached.                         |
+| `unique_count`  | Tracks unique values using `distinct_by` and counts distinct matches toward `target`. |
+
+
+### Choice Specs
+
+Each item in `step.choices` is a mapping with these common fields:
+
+
+| Field     | Values                  | Notes                                                  |
+| --------- | ----------------------- | ------------------------------------------------------ |
+| `id`      | non-empty string        | Referenced by `quest choose <slug-or-id> <choice_id>`. |
+| `text`    | string                  | Player-facing label.                                   |
+| `goto`    | step id                 | Required for a meaningful branch.                      |
+| `if`      | condition DSL mapping   | Optional visibility gate for the choice.               |
+| `effects` | list of effect mappings | Applied before the branch moves to `goto`.             |
+
+
+### Transition Specs
+
+Each item in `step.transitions` is a mapping with these common fields:
+
+
+| Field     | Values                  | Notes                                                     |
+| --------- | ----------------------- | --------------------------------------------------------- |
+| `when`    | condition DSL mapping   | Transition condition.                                     |
+| `goto`    | step id                 | Destination step when `when` evaluates true.              |
+| `effects` | list of effect mappings | Applied immediately before entering the destination step. |
+
+
+### Effects and Rewards
+
+Use canonical effect `type` values when authoring new manifests:
+
+
+| `type`        | Fields                                      | Behavior                                            |
+| ------------- | ------------------------------------------- | --------------------------------------------------- |
+| `set_local`   | `key`, `value` or `set_local: [key, value]` | Writes quest-local state under `quest.local_state`. |
+| `grant_gold`  | `amount`                                    | Adds gold to the player immediately.                |
+| `grant_xp`    | `amount`                                    | Adds experience to the player immediately.          |
+| `mob_command` | `mob_template` and `command` or `commands`  | Runs a constrained mob speech/emote/echo command.   |
+
+
+Allowed `mob_command` verbs today:
+
+- `say`
+- `yell`
+- `emote`
+- `/echo`
+- `/zecho`
+- `/wecho`
+
+`spec.rewards` is a mapping from resolution key to a list of effects:
+
+- `complete`
+- `compromised`
+- `failed_forward`
+- `expired`
+
+The runtime picks the reward bucket whose key matches the final resolution
+string on the resolution step. If you omit `resolution:` on that step, it
+defaults to `complete`.
 
 ## Bartender Example
 
@@ -200,7 +448,7 @@ Notes:
 - The player still accepts explicitly with `quest accept saloon_keg_run`.
 - Turn-in happens with `give keg bartender`, not with `quest complete`.
 - Picking up the keg does not change the journal, because this quest progresses
-  from `quest.item.delivered`, not from `get`.
+from `quest.item.delivered`, not from `get`.
 
 ## How Journal Entries Work
 
@@ -211,11 +459,11 @@ What creates a journal entry:
 
 - entering a new step writes a journal entry using that step's `recap`
 - updating objective progress writes another journal entry using the current
-  step's `recap`
+step's `recap`
 - resolving a quest writes a journal entry using the resolution step's `recap`
 - abandoning a quest writes a journal entry with `You abandoned <quest name>.`
 
-What the player sees in `quest recap`:
+What the player sees in `quest info`:
 
 - `Recap` is the current step's `recap`
 - `Objectives` come from the current step's visible objectives
@@ -225,20 +473,18 @@ What the player sees in `quest recap`:
 This has two important consequences for authors:
 
 - if an objective updates but the quest stays on the same step, `Recap` and
-  `Last change` may be identical because both are driven by that step's
-  `recap`
+`Last change` may be identical because both are driven by that step's
+`recap`
 - if you want the journal to feel meaningfully different after progress, split
-  the flow into more steps with new `recap` text instead of expecting a
-  separate per-objective journal message
+the flow into more steps with new `recap` text instead of expecting a
+separate per-objective journal message
 
 Applied to the bartender example above:
 
-- `quest accept saloon_keg_run` creates a journal entry with `The bartender
-  needs a fresh keg from the back room.`
+- `quest accept saloon_keg_run` creates a journal entry with `The bartender needs a fresh keg from the back room.`
 - `get keg` does not create a journal entry
 - `give keg bartender` completes the objective and immediately transitions to
-  `resolved`, so the newest journal entry becomes `The bartender rolls the
-  fresh keg into place.`
+`resolved`, so the newest journal entry becomes `The bartender rolls the fresh keg into place.`
 
 ## Kill Then Return Example
 
@@ -277,15 +523,15 @@ The authoring pattern is:
 ## Builder Rules Of Thumb
 
 - If the player should notice a quest by talking to an NPC, use
-  `discovery.sources: [{type: npc_dialogue, mob_template: <slug>}]`.
+`discovery.sources: [{type: npc_dialogue, mob_template: <slug>}]`.
 - If the player should commit to the quest, keep acceptance explicit with
-  `quest accept <slug>`.
+`quest accept <slug>`.
 - Put the NPC’s actual ask in the first step’s `text.body`.
 - Put the memory aid and immediate player-facing summary in `recap`.
 - For item turn-ins, progress from `quest.item.delivered`.
 - For report-back steps, progress from `cmd.talk.success`.
 - Use slugs for mob and item template references whenever possible. The runtime
-  accepts ids too, but slugs are much easier to read.
+accepts ids too, but slugs are much easier to read.
 
 ## Testing Your Quest
 
@@ -299,8 +545,8 @@ Recommended smoke-test loop:
 6. Perform the required world actions.
 7. Return and `look` again for `[ ? ]`.
 8. Use the relevant world verb to finish:
-   `talk <mob>` or `give <item> <mob>`.
-9. `quest recap` if the flow feels unclear at any point.
+  `talk <mob>` or `give <item> <mob>`.
+9. `quest info` if the flow feels unclear at any point.
 
 ## Current Limitation To Remember
 

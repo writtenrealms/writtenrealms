@@ -37,7 +37,7 @@ def serialize_objective_state(objective_state: QuestObjectiveState) -> dict[str,
     }
 
 
-def render_recap_text(
+def render_info_text(
     *,
     title: str,
     status: str,

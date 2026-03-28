@@ -1,3 +1,6 @@
+from datetime import timedelta
+
+from django.utils import timezone
 from django.urls import reverse
 
 from builders.models import ItemTemplate, MobTemplate
@@ -29,6 +32,9 @@ class QuestRuntimeTestCase(WorldTestCase):
         slug: str,
         name: str,
         quest_type: str = "quest",
+        repeatability_mode: str = "never",
+        repeatability_cooldown_seconds: int = 0,
+        max_active: int = 1,
         discovery_policy=None,
         steps=None,
         reward_policy=None,
@@ -40,9 +46,9 @@ class QuestRuntimeTestCase(WorldTestCase):
             quest_type=quest_type,
             scope="player",
             status="active",
-            repeatability_mode="never",
-            repeatability_cooldown_seconds=0,
-            max_active=1,
+            repeatability_mode=repeatability_mode,
+            repeatability_cooldown_seconds=repeatability_cooldown_seconds,
+            max_active=max_active,
             discovery_policy=discovery_policy or {
                 "sources": [],
                 "visible_if": {},
@@ -148,17 +154,17 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
         self.assertNotIn("quest.instance.started", self._message_types(messages))
         self.assertFalse(QuestInstance.objects.filter(player=self.player, template__slug="tiny_hello").exists())
 
-    def test_quest_recap_and_choice_complete_minimal_quest(self):
+    def test_quest_info_and_choice_complete_minimal_quest(self):
         with capture_game_messages():
             dispatch_text_command(self.player.id, "look")
 
-        with capture_game_messages() as recap_messages:
-            dispatch_text_command(self.player.id, "quest recap")
+        with capture_game_messages() as info_messages:
+            dispatch_text_command(self.player.id, "quest info")
 
-        recap_message = self._message_by_type(recap_messages, "cmd.quest.success")
-        self.assertIsNotNone(recap_message)
-        self.assertIn("Tiny Hello", recap_message["text"])
-        self.assertIn("continue", recap_message["text"])
+        info_message = self._message_by_type(info_messages, "cmd.quest.success")
+        self.assertIsNotNone(info_message)
+        self.assertIn("Tiny Hello", info_message["text"])
+        self.assertIn("continue", info_message["text"])
 
         with capture_game_messages() as choice_messages:
             dispatch_text_command(self.player.id, "quest choose tiny_hello continue")
@@ -168,16 +174,38 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
         self.assertEqual(quest_instance.status, "resolved")
         self.assertEqual(quest_instance.resolution, "complete")
 
-    def test_quest_re_prefix_resolves_to_recap(self):
+    def test_quest_abandon_resolves_active_quest_without_arc(self):
         with capture_game_messages():
             dispatch_text_command(self.player.id, "look")
 
-        with capture_game_messages() as recap_messages:
-            dispatch_text_command(self.player.id, "quest re")
+        with capture_game_messages() as abandon_messages:
+            dispatch_text_command(self.player.id, "quest abandon tiny_hello")
 
-        recap_message = self._message_by_type(recap_messages, "cmd.quest.success")
-        self.assertIsNotNone(recap_message)
-        self.assertIn("Tiny Hello", recap_message["text"])
+        self.assertIn("quest.instance.resolved", self._message_types(abandon_messages))
+
+        quest_instance = QuestInstance.objects.get(player=self.player, template__slug="tiny_hello")
+        self.assertEqual(quest_instance.status, "resolved")
+        self.assertEqual(quest_instance.resolution, "abandoned")
+
+    def test_quest_i_prefix_resolves_to_info(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "look")
+
+        with capture_game_messages() as info_messages:
+            dispatch_text_command(self.player.id, "quest i")
+
+        info_message = self._message_by_type(info_messages, "cmd.quest.success")
+        self.assertIsNotNone(info_message)
+        self.assertIn("Tiny Hello", info_message["text"])
+
+    def test_quest_recap_subcommand_is_no_longer_supported(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "quest recap")
+
+        error_message = self._message_by_type(messages, "cmd.quest.error")
+        self.assertIsNotNone(error_message)
+        self.assertEqual(error_message["data"]["code"], "unknown_subcommand")
+        self.assertIn("recap", error_message["text"])
 
     def test_quest_a_prefix_is_rejected_as_ambiguous(self):
         with capture_game_messages() as messages:
@@ -294,6 +322,115 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
         self.assertIn("Opportunities:", list_message["text"])
         self.assertIn("shrine_survey", list_message["text"])
 
+    def test_abandoned_non_repeatable_quest_can_be_reaccepted(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest accept shrine_survey")
+
+        with capture_game_messages() as abandon_messages:
+            dispatch_text_command(self.player.id, "quest abandon shrine_survey")
+
+        self.assertIn("quest.instance.resolved", self._message_types(abandon_messages))
+
+        abandoned_instance = QuestInstance.objects.get(
+            player=self.player,
+            template__slug="shrine_survey",
+            status="resolved",
+        )
+        self.assertEqual(abandoned_instance.resolution, "abandoned")
+
+        with capture_game_messages() as completed_messages:
+            dispatch_text_command(self.player.id, "quest completed")
+
+        completed_message = self._message_by_type(completed_messages, "cmd.quest.success")
+        self.assertIsNotNone(completed_message)
+        self.assertNotIn("shrine_survey", completed_message["text"])
+
+        with capture_game_messages() as opportunities_messages:
+            dispatch_text_command(self.player.id, "quest opportunities")
+
+        opportunities_message = self._message_by_type(opportunities_messages, "cmd.quest.success")
+        self.assertIsNotNone(opportunities_message)
+        self.assertIn("shrine_survey", opportunities_message["text"])
+
+        with capture_game_messages() as accept_again_messages:
+            dispatch_text_command(self.player.id, "quest accept shrine_survey")
+
+        self.assertIn("quest.instance.started", self._message_types(accept_again_messages))
+        self.assertEqual(
+            QuestInstance.objects.filter(player=self.player, template__slug="shrine_survey").count(),
+            2,
+        )
+        self.assertEqual(
+            QuestInstance.objects.filter(
+                player=self.player,
+                template__slug="shrine_survey",
+                status="active",
+            ).count(),
+            1,
+        )
+
+
+class TestQuestRepeatabilityRuntime(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.create_runtime_quest(
+            slug="cooldown_trial",
+            name="Cooldown Trial",
+            repeatability_mode="cooldown",
+            repeatability_cooldown_seconds=60,
+            discovery_policy={
+                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 15,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "You can run the trial again after a short delay.",
+                    "choices": [
+                        {"id": "finish", "text": "Finish the trial.", "goto": "resolved"},
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "The trial is complete.",
+                },
+            ],
+        )
+
+    def test_completed_cooldown_quest_is_hidden_until_cooldown_expires(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest accept cooldown_trial")
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest choose cooldown_trial finish")
+
+        with capture_game_messages() as cooldown_messages:
+            dispatch_text_command(self.player.id, "quest opportunities")
+
+        cooldown_message = self._message_by_type(cooldown_messages, "cmd.quest.success")
+        self.assertIsNotNone(cooldown_message)
+        self.assertNotIn("cooldown_trial", cooldown_message["text"])
+
+        quest_instance = QuestInstance.objects.get(
+            player=self.player,
+            template__slug="cooldown_trial",
+            status="resolved",
+        )
+        quest_instance.resolved_at = timezone.now() - timedelta(seconds=61)
+        quest_instance.save(update_fields=["resolved_at", "modified_ts"])
+
+        with capture_game_messages() as expired_messages:
+            dispatch_text_command(self.player.id, "quest opportunities")
+
+        expired_message = self._message_by_type(expired_messages, "cmd.quest.success")
+        self.assertIsNotNone(expired_message)
+        self.assertIn("cooldown_trial", expired_message["text"])
+
 
 class TestQuestRuntimeEndpoints(QuestRuntimeTestCase):
     def setUp(self):
@@ -327,7 +464,7 @@ class TestQuestRuntimeEndpoints(QuestRuntimeTestCase):
             ],
         )
 
-    def test_runtime_endpoints_cover_opportunity_accept_choose_and_recap(self):
+    def test_runtime_endpoints_cover_opportunity_accept_choose_and_info(self):
         headers = {"HTTP_X_PLAYER_ID": str(self.player.id)}
 
         opportunities_resp = self.client.get(
@@ -355,12 +492,12 @@ class TestQuestRuntimeEndpoints(QuestRuntimeTestCase):
         self.assertEqual(choose_resp.status_code, 200)
         self.assertEqual(choose_resp.data["quest"]["resolution"], "complete")
 
-        recap_resp = self.client.get(
-            reverse("game-quest-instance-recap", args=[instance_id]),
+        info_resp = self.client.get(
+            reverse("game-quest-instance-info", args=[instance_id]),
             **headers,
         )
-        self.assertEqual(recap_resp.status_code, 200)
-        self.assertIn("Campfire Note", recap_resp.data["text"])
+        self.assertEqual(info_resp.status_code, 200)
+        self.assertIn("Campfire Note", info_resp.data["text"])
 
 
 class TestNpcDialogueSlugDiscovery(QuestRuntimeTestCase):

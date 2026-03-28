@@ -1,9 +1,26 @@
 <template>
   <div class="quest-message indented" :class="[variantClass, { actionable: isLastMessage }]">
     <div class="quest-shell">
-      <div class="quest-kicker">{{ kicker }}</div>
 
-      <div v-if="cards.length" class="quest-cards">
+      <!-- quest.instance.started -->
+      <div v-if="startedQuest" class="quest-inline quest-inline-started">
+        <span class="quest-inline-text">
+          Quest <span class="color-secondary">{{ startedQuest.name }}</span> has started.
+        </span>
+        <button
+          v-if="isLastMessage && startedQuest.infoCommand"
+          class="btn-small secondary"
+          @click="runCommand(startedQuest.infoCommand)"
+        >
+          INFO
+        </button>
+      </div>
+
+      <template v-else>
+        <div class="quest-kicker">{{ kicker }}</div>
+
+        <div v-if="cards.length" class="quest-cards">
+
         <article v-for="card in cards" :key="card.key" class="quest-card">
           <div class="quest-card-header">
             <div>
@@ -82,11 +99,12 @@
             </button>
           </div>
         </article>
-      </div>
+        </div>
 
-      <div v-else class="quest-fallback">
-        <div v-for="(line, index) in fallbackLines" :key="index">{{ line }}</div>
-      </div>
+        <div v-else class="quest-fallback">
+          <div v-for="(line, index) in fallbackLines" :key="index">{{ line }}</div>
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -113,6 +131,12 @@ const isLastMessage = computed(() => {
 });
 
 const questPayload = computed(() => props.message?.data?.quest || null);
+const questTemplate = computed(() => questPayload.value?.template || null);
+const questName = computed(() => {
+  const template = questTemplate.value || {};
+  return template.name || template.slug || "Quest";
+});
+const questSlug = computed(() => questTemplate.value?.slug || "");
 const opportunities = computed(() => {
   const data = props.message?.data || {};
   if (Array.isArray(data.opportunities)) return data.opportunities;
@@ -151,6 +175,16 @@ const variantClass = computed(() => {
 
 const rewardLines = computed(() => {
   return splitLines(props.message.text).filter((line) => line.startsWith("Rewards:"));
+});
+
+const startedQuest = computed(() => {
+  if (props.message.type !== "quest.instance.started" || !questPayload.value) return null;
+
+  return {
+    name: questName.value,
+    slug: questSlug.value,
+    infoCommand: questSlug.value ? `quest info ${questSlug.value}` : "",
+  };
 });
 
 const buildBadges = (questType: string | null, status: string | null, resolution: string | null) => {
@@ -224,7 +258,7 @@ const cards = computed(() => {
         metaLines: [],
         rewardLines: rewardLines.value,
         actions: quest.status === "active" && template.slug
-          ? [{ label: "RECAP", command: `quest recap ${template.slug}`, tone: "secondary" }]
+          ? [{ label: "INFO", command: `quest info ${template.slug}`, tone: "secondary" }]
           : [],
       },
     ];
@@ -246,7 +280,7 @@ const cards = computed(() => {
         metaLines: [],
         rewardLines: [],
         actions: template.slug
-          ? [{ label: "RECAP", command: `quest recap ${template.slug}`, tone: "secondary" }]
+          ? [{ label: "INFO", command: `quest info ${template.slug}`, tone: "secondary" }]
           : [],
       };
     });
@@ -289,11 +323,6 @@ const runCommand = (command: string) => {
 .quest-message {
   // margin-top: 1rem;
 
-  .quest-shell {
-    // border-left: 2px solid $color-background-border;
-    // padding-left: 14px;
-  }
-
   .quest-kicker {
     @include font-title-regular;
     color: $color-secondary;
@@ -301,6 +330,23 @@ const runCommand = (command: string) => {
     letter-spacing: 1.6px;
     margin-bottom: 0.65rem;
     text-transform: uppercase;
+  }
+
+  .quest-inline {
+    align-items: center;
+    color: $color-text;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+  }
+
+  .quest-inline-text {
+    color: $color-text;
+  }
+
+  .quest-inline-name {
+    @include font-title-regular;
+    color: $color-text;
   }
 
   .quest-cards {

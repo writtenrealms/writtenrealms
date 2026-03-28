@@ -75,7 +75,7 @@ Implemented so far:
   - `cmd.look.success`
   - `cmd.move.success`
 - runtime command surface:
-  - `quest recap`
+  - `quest info`
   - `quest opportunities`
   - `quest accept <slug>`
   - `quest choose <slug-or-id> <choice_id>`
@@ -102,7 +102,7 @@ Implemented so far:
   - `POST /game/quests/opportunities/<slug>/accept/`
   - `GET /game/quests/active/`
   - `GET /game/quests/resolved/`
-  - `GET /game/quests/instances/<instance_id>/recap/`
+  - `GET /game/quests/instances/<instance_id>/info/`
   - `POST /game/quests/instances/<instance_id>/choose/`
   - `POST /game/quests/instances/<instance_id>/abandon/`
 - runtime playground script:
@@ -458,9 +458,9 @@ The player runtime surface should be explicit and service-backed.
 - `GET /api/v1/game/quests/completed/`
 - `GET /api/v1/game/quests/arcs/`
 - `POST /api/v1/game/quests/instances/<instance_id>/abandon/`
-- `GET /api/v1/game/quests/instances/<instance_id>/recap/`
+- `GET /api/v1/game/quests/instances/<instance_id>/info/`
 
-We should also add a command handler for `quest recap` so the text-game flow is
+We should also add a command handler for `quest info` so the text-game flow is
 not dependent on dedicated frontend pages.
 
 ## YAML Ingestion Integration
@@ -693,7 +693,7 @@ Minimum supported features:
 - fixed slots only
 - journal entries with recap
 - active/completed/opportunities endpoints
-- `quest recap` command
+- `quest info` command
 
 Status:
 
@@ -720,7 +720,7 @@ Completed in this pass:
   - `count`
   - `unique_count`
 - in-game command path exists:
-  - `quest recap`
+  - `quest info`
   - `quest opportunities`
   - `quest accept`
   - `quest choose`
@@ -1014,7 +1014,7 @@ Runtime integration:
 
 - `backend/spawns/events.py`
 - new `backend/quests/subscriptions.py`
-- command handler for `quest recap`
+- command handler for `quest info`
 
 Frontend:
 
@@ -1039,7 +1039,7 @@ vertical slice:
 5. progress it from a canonical game event
 6. write journal entries
 7. resolve it as `complete`
-8. render it in `quest recap`
+8. render it in `quest info`
 
 That is enough to validate the architecture before adding contracts, world
 events, and advanced slot resolution.

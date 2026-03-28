@@ -666,7 +666,7 @@ These are the important ones.
 - `discovery.sources` are stored but not surfaced to players yet.
 - there is no `QuestInstance`
 - there is no objective event subscription
-- there is no journal or `quest recap`
+- there is no journal or `quest info`
 - there is no frontend builder page yet
 - the current read endpoints use `questtemplates/` and `questarcs/` to avoid
   clobbering legacy `/quests/` routes before cutover

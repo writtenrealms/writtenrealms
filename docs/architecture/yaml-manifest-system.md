@@ -13,6 +13,8 @@ Implemented entities currently include:
 - `trigger`
 - `worldconfig`
 - `itemtemplate`
+- `quest`
+- `questarc`
 
 ## Current Flows
 
@@ -54,11 +56,19 @@ A new world-level **Edit World** view accepts a YAML manifest textarea.
   - `kind: trigger`
   - `kind: worldconfig`
   - `kind: itemtemplate`
+  - `kind: quest`
+  - `kind: questarc`
   - `kind` is case-insensitive (`trigger`, `Trigger`, `TRIGGER` all work).
 - Trigger manifests now support both:
   - **create** (no `metadata.id` / `metadata.key`)
   - **update** (include `metadata.id` or `metadata.key`)
   - **delete** (`operation: delete` with `metadata.id` or `metadata.key`)
+
+Quest authoring details, including field-by-field manifest docs and current
+runtime behavior notes, live in:
+
+- [docs/guides/quest-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/quest-builder-guide.md)
+- [docs/guides/quest-reference.md](/Users/teebes/code/writtenrealms/docs/guides/quest-reference.md)
 
 ## Trigger Manifest Shapes
 

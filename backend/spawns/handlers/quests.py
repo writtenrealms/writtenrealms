@@ -7,9 +7,9 @@ from quests.services.engine import (
     abandon_instance,
     accept_template,
     choose_for_instance,
+    info_for_player,
     list_active_instances,
     list_completed_instances,
-    recap_for_player,
     resolve_template_for_player,
 )
 from spawns.events import publish_events
@@ -28,7 +28,7 @@ QUEST_SUBCOMMANDS = (
     "accept",
     "choose",
     "abandon",
-    "recap",
+    "info",
 )
 QUEST_SUBCOMMAND_ALIASES = {
     "offers": "opportunities",
@@ -62,8 +62,8 @@ class QuestCommandHandler(CommandHandler):
         "format": "quest [subcommand]",
         "description": "Review your quests, quest opportunities, and quest choices.",
         "details": [
-            "If you omit the subcommand, `quest` defaults to `quest recap`.",
-            "`recap [slug-or-id]`: Show a recap for all active quests, or one specific quest.",
+            "If you omit the subcommand, `quest` defaults to `quest info`.",
+            "`info [slug-or-id]`: Show quest information for all active quests, or one specific quest.",
             "`opportunities`: List quests you can currently accept.",
             "`active`: List your active quests.",
             "`completed`: List quests you have already finished.",
@@ -73,6 +73,7 @@ class QuestCommandHandler(CommandHandler):
         ],
         "examples": [
             "quest",
+            "quest info",
             "quest opportunities",
             "quest active",
             "quest completed",
@@ -87,7 +88,7 @@ class QuestCommandHandler(CommandHandler):
 
     def _resolve_subcommand(self, raw_subcommand: str | None) -> str:
         if raw_subcommand is None:
-            return "recap"
+            return "info"
         try:
             return resolve_unambiguous_choice(
                 raw_subcommand,
@@ -205,10 +206,10 @@ class QuestCommandHandler(CommandHandler):
                 )
                 return
 
-            if subcommand == "recap":
+            if subcommand == "info":
                 identity = args[1] if len(args) > 1 else None
-                payload, recap_text = recap_for_player(ctx.player, identity)
-                self._publish_text(ctx, recap_text, data=payload)
+                payload, info_text = info_for_player(ctx.player, identity)
+                self._publish_text(ctx, info_text, data=payload)
                 return
 
             raise QuestRuntimeError(f"Unknown quest subcommand: {subcommand}", code="unknown_subcommand")

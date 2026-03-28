@@ -12,8 +12,7 @@ from quests.models import QuestOfferState, QuestTemplate
 from quests.services.engine import (
     QuestRuntimeError,
     accept_template,
-    active_instances_qs,
-    completed_instances_qs,
+    can_start_template,
     runtime_templates_qs,
     serialize_opportunity,
 )
@@ -99,11 +98,7 @@ def _template_available(player, template: QuestTemplate) -> bool:
         return False
     if template.quest_type != "quest":
         return False
-    if active_instances_qs(player).filter(template=template).exists():
-        return False
-
-    completed = completed_instances_qs(player).filter(template=template)
-    if template.repeatability_mode == "never" and completed.exists():
+    if not can_start_template(player, template):
         return False
 
     offer_state = _offer_state(player, template)

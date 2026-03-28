@@ -26,9 +26,9 @@ application = get_wsgi_application()
 from quests.services.discovery import list_opportunities
 from quests.services.engine import (
     QuestRuntimeError,
+    info_for_player,
     list_active_instances,
     list_completed_instances,
-    recap_for_player,
 )
 from spawns.handlers import dispatch_command
 from spawns.models import Player
@@ -157,10 +157,10 @@ def cmd_resolved(args):
     _print_json({"quests": list_completed_instances(player)})
 
 
-def cmd_recap(args):
+def cmd_info(args):
     player = _player(args.player)
     try:
-        _, text = recap_for_player(player, args.identity)
+        _, text = info_for_player(player, args.identity)
     except QuestRuntimeError as exc:
         raise SystemExit(f"{exc.code}: {exc.message}")
     print(text)
@@ -197,10 +197,10 @@ def main():
     resolved_parser.add_argument("--player", type=int, required=True)
     resolved_parser.set_defaults(func=cmd_resolved)
 
-    recap_parser = subparsers.add_parser("recap", help="Print quest recap")
-    recap_parser.add_argument("--player", type=int, required=True)
-    recap_parser.add_argument("identity", nargs="?")
-    recap_parser.set_defaults(func=cmd_recap)
+    info_parser = subparsers.add_parser("info", help="Print quest info")
+    info_parser.add_argument("--player", type=int, required=True)
+    info_parser.add_argument("identity", nargs="?")
+    info_parser.set_defaults(func=cmd_info)
 
     args = parser.parse_args()
     args.func(args)

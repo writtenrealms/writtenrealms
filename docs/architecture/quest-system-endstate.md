@@ -157,7 +157,7 @@ The journal should read like a strong memory aid, not a debug dump.
 
 ### Recap Command
 
-WR2 should expose a `quest recap` command backed by the same quest service used
+WR2 should expose a `quest info` command backed by the same quest service used
 by HTTP endpoints. The output should be short and contain:
 
 - current recap

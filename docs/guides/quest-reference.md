@@ -8,6 +8,11 @@ For the overall mental model and player interaction contract, read
 first. This document is more concrete: a set of typical quest manifests you can
 copy, tweak, and ingest through `World > Edit World`.
 
+For the field-by-field manifest contract, accepted enum values, and current
+runtime behavior notes for settings like repeatability, read the `Quest
+Manifest Field Reference` section in
+[quest-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/quest-builder-guide.md).
+
 All examples here assume:
 
 - `metadata.world` should be replaced with your real world key

@@ -55,13 +55,6 @@ const quest = ref<any | null>(null);
 const manifestText = ref("");
 const loadedYaml = ref("");
 
-const title = computed(() => {
-  if (quest.value?.name) {
-    return quest.value.name.toUpperCase();
-  }
-  return "NEW QUEST";
-});
-
 const extractError = (error: any): string => {
   const data = error?.response?.data;
   if (!data) return "Could not apply quest manifest.";

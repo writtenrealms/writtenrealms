@@ -17,7 +17,7 @@ from quests.models import (
 from quests.services.effects import apply_quest_effects
 from quests.services.journal import (
     append_journal_entry,
-    render_recap_text,
+    render_info_text,
     serialize_objective_state,
 )
 from quests.services.predicates import evaluate_condition, resolve_value
@@ -252,11 +252,11 @@ def serialize_instance(quest_instance: QuestInstance, *, player) -> dict[str, An
     }
 
 
-def _recap_for_instance(quest_instance: QuestInstance, *, player) -> tuple[dict[str, Any], str]:
+def _info_for_instance(quest_instance: QuestInstance, *, player) -> tuple[dict[str, Any], str]:
     serialized = serialize_instance(quest_instance, player=player)
     current_step = serialized["current_step"]
     latest_entry = quest_instance.journal_entries.order_by("-created_ts").first()
-    text = render_recap_text(
+    text = render_info_text(
         title=quest_instance.template.name,
         status=quest_instance.status if quest_instance.status != "resolved" else (quest_instance.resolution or "resolved"),
         recap=current_step.get("recap") or "",
@@ -279,6 +279,7 @@ def active_instances_qs(player):
 def completed_instances_qs(player):
     return (
         QuestInstance.objects.filter(player=player, status="resolved")
+        .exclude(resolution="abandoned")
         .select_related("template", "template__arc", "world", "player")
         .prefetch_related("objective_states", "journal_entries")
         .order_by("-resolved_at", "-modified_ts", "-created_ts")
@@ -317,7 +318,7 @@ def resolve_template_for_player(player, slug: str) -> QuestTemplate:
     return template
 
 
-def _can_start_template(player, template: QuestTemplate) -> bool:
+def can_start_template(player, template: QuestTemplate) -> bool:
     if active_instances_qs(player).filter(template=template).exists():
         return False
 
@@ -460,16 +461,16 @@ def enter_step(
             event_data=event_data,
         )
         reward_summaries.extend(reward_result.reward_summaries)
-    payload, recap_text = _recap_for_instance(refreshed, player=player)
+    payload, info_text = _info_for_instance(refreshed, player=player)
     if step_kind == "resolution":
         event_type = "quest.instance.resolved"
-        text = f"Quest resolved: {refreshed.template.name}\n{recap_text}"
+        text = f"Quest resolved: {refreshed.template.name}\n{info_text}"
     elif entry_reason in {"started", "auto_start"}:
         event_type = "quest.instance.started"
-        text = f"Quest started: {refreshed.template.name}\n{recap_text}"
+        text = f"Quest started: {refreshed.template.name}\n{info_text}"
     else:
         event_type = "quest.instance.updated"
-        text = recap_text
+        text = info_text
     if reward_summaries:
         text = f"{text}\nRewards: {', '.join(reward_summaries)}"
 
@@ -485,7 +486,7 @@ def start_quest_instance(
     *,
     reason: str,
 ) -> QuestTransitionResult:
-    if not _can_start_template(player, template):
+    if not can_start_template(player, template):
         raise QuestRuntimeError("Quest cannot be started right now.", code="cannot_start")
 
     with transaction.atomic():
@@ -574,10 +575,11 @@ def choose_for_instance(player, identity: str, choice_id: str) -> QuestTransitio
 
 
 def abandon_instance(player, identity: str) -> QuestTransitionResult:
+    resolved_instance = resolve_instance_identity(player, identity, status="active")
+    template = resolved_instance.template
+
     with transaction.atomic():
-        quest_instance = QuestInstance.objects.select_for_update().select_related("template", "template__arc", "world", "player").get(
-            pk=resolve_instance_identity(player, identity, status="active").pk
-        )
+        quest_instance = QuestInstance.objects.select_for_update().get(pk=resolved_instance.pk)
         quest_instance.status = "resolved"
         quest_instance.resolution = "abandoned"
         quest_instance.resolved_at = timezone.now()
@@ -586,36 +588,36 @@ def abandon_instance(player, identity: str) -> QuestTransitionResult:
             quest_instance,
             entry_type="resolved",
             step_id=quest_instance.current_step_id or "",
-            recap=f"You abandoned {quest_instance.template.name}.",
+            recap=f"You abandoned {template.name}.",
             payload={"reason": "abandoned"},
         )
         offer_state, _ = QuestOfferState.objects.get_or_create(
             player=player,
-            template=quest_instance.template,
+            template=template,
         )
         offer_state.is_visible = False
         offer_state.last_resolved_at = quest_instance.resolved_at
         offer_state.save(update_fields=["is_visible", "last_resolved_at", "modified_ts"])
 
     quest_instance = QuestInstance.objects.select_related("template", "template__arc", "world", "player").prefetch_related("objective_states", "journal_entries").get(pk=quest_instance.pk)
-    payload, recap_text = _recap_for_instance(quest_instance, player=player)
+    payload, info_text = _info_for_instance(quest_instance, player=player)
     return QuestTransitionResult(
         quest_instance=quest_instance,
         events=[
             _build_player_event(
                 player,
                 event_type="quest.instance.resolved",
-                text=f"Quest abandoned: {quest_instance.template.name}\n{recap_text}",
+                text=f"Quest abandoned: {quest_instance.template.name}\n{info_text}",
                 data={"quest": payload},
             )
         ],
     )
 
 
-def recap_for_player(player, identity: str | None = None) -> tuple[dict[str, Any], str]:
+def info_for_player(player, identity: str | None = None) -> tuple[dict[str, Any], str]:
     if identity:
         quest_instance = resolve_instance_identity(player, identity)
-        return _recap_for_instance(quest_instance, player=player)
+        return _info_for_instance(quest_instance, player=player)
 
     active_instances = list(active_instances_qs(player)[:2])
     if not active_instances:
@@ -628,7 +630,7 @@ def recap_for_player(player, identity: str | None = None) -> tuple[dict[str, Any
             payload["quests"].append(serialized)
             lines.append(f"- {serialized['template']['slug']}: {serialized['template']['name']}")
         return payload, "\n".join(lines)
-    return _recap_for_instance(active_instances[0], player=player)
+    return _info_for_instance(active_instances[0], player=player)
 
 
 def progress_active_instance_for_event(
@@ -740,14 +742,14 @@ def progress_active_instance_for_event(
     if transition_result.events:
         return transition_result
 
-    payload, recap_text = _recap_for_instance(refreshed_instance, player=player)
+    payload, info_text = _info_for_instance(refreshed_instance, player=player)
     return QuestTransitionResult(
         quest_instance=refreshed_instance,
         events=[
             _build_player_event(
                 player,
                 event_type="quest.instance.updated",
-                text=recap_text,
+                text=info_text,
                 data={"quest": payload},
             )
         ],
