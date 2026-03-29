@@ -1,19 +1,71 @@
 <template>
-  <div class="quest-message indented" :class="[variantClass, { actionable: isLastMessage }]">
+  <div
+    class="quest-message mt-4"
+    :class="[
+      variantClass,
+      {
+        actionable: isLastMessage,
+        indented: !abandonedQuest && !startedQuest,
+      },
+    ]"
+  >
     <div class="quest-shell">
 
+      <div v-if="message.type === 'cmd.quest.success'">
+        <div v-if="message.data.subcommand === 'info'">
+
+          <!-- Info List -->
+          <div v-if="message.data.quests">
+            <div v-if="message.data.quests.length > 0">
+              <div class="text-sm mb-1">Active Quests:</div>
+              <div v-for="quest in message.data.quests" :key="quest.id">
+                <span @click="runCommand(`quest info ${quest.template.slug}`)" class="cursor-pointer hover:font-bold">
+                  <span class="color-secondary">{{ quest.template.name }}</span>
+                  <span class="color-text-50 ml-2">[ {{ quest.template.slug }} ]</span>
+                </span>
+              </div>
+            </div>
+            <div v-else>
+              No active quests.
+            </div>
+          </div>
+
+          <!-- Info Single -->
+           <div v-else>
+            <h3 class="my-2 color-text">{{ message.data.quest.template.name.toUpperCase() }}</h3>
+            <div class="mb-2">{{ message.data.quest.current_step.text.body }}</div>
+            <div class="mb-2 py-2 current-step-recap">{{ message.data.quest.current_step.recap }}</div>
+            <div v-for="objective in message.data.quest.current_step.objectives" :key="objective.id">
+              <div>
+                {{ objective.text }}
+                [
+                  <span
+                    :class="{
+                      'color-red': Number(objective.progress_current) < Number(objective.progress_target),
+                      'color-green': Number(objective.progress_current) >= Number(objective.progress_target)
+                    }"
+                  >
+                    {{ objective.progress_current }}/{{ objective.progress_target }}
+                  </span>
+                ]
+              </div>
+            </div>
+           </div>
+
+        </div>
+      </div>
+
       <!-- quest.instance.started -->
-      <div v-if="startedQuest" class="quest-inline quest-inline-started">
+      <div v-else-if="startedQuest" class="quest-inline quest-inline-started mt-2">
         <span class="quest-inline-text">
-          Quest <span class="color-secondary">{{ startedQuest.name }}</span> has started.
+          Quest <span class="quest-link" @click="runCommand(startedQuest.infoCommand)">{{ startedQuest.name }}</span> has started.
         </span>
-        <button
-          v-if="isLastMessage && startedQuest.infoCommand"
-          class="btn-small secondary"
-          @click="runCommand(startedQuest.infoCommand)"
-        >
-          INFO
-        </button>
+      </div>
+
+      <div v-else-if="abandonedQuest">
+        <span>
+          You abandon <span class="quest-link">{{ abandonedQuest.name }}</span>.
+        </span>
       </div>
 
       <template v-else>
@@ -24,20 +76,10 @@
         <article v-for="card in cards" :key="card.key" class="quest-card">
           <div class="quest-card-header">
             <div>
-              <div class="quest-title">{{ card.title }}</div>
+              <h3 class="quest-title">{{ card.title.toUpperCase() }}</h3>
               <div v-if="card.slug" class="quest-slug">{{ card.slug }}</div>
             </div>
 
-            <div v-if="card.badges.length" class="quest-badges">
-              <span
-                v-for="badge in card.badges"
-                :key="badge.label"
-                class="quest-badge"
-                :class="badge.tone"
-              >
-                {{ badge.label }}
-              </span>
-            </div>
           </div>
 
           <div v-if="card.bodyLines.length" class="quest-body">
@@ -45,7 +87,6 @@
           </div>
 
           <div v-if="card.recapLines.length" class="quest-recap">
-            <div class="quest-section-label">Recap</div>
             <div v-for="(line, index) in card.recapLines" :key="index">{{ line }}</div>
           </div>
 
@@ -97,6 +138,7 @@
             >
               {{ action.label }}
             </button>
+
           </div>
         </article>
         </div>
@@ -147,6 +189,7 @@ const questList = computed(() => {
   const quests = props.message?.data?.quests;
   return Array.isArray(quests) ? quests : [];
 });
+const questSubcommand = computed(() => String(props.message?.data?.subcommand || ""));
 
 const kicker = computed(() => {
   const type = props.message.type;
@@ -157,6 +200,12 @@ const kicker = computed(() => {
   if (type === "quest.instance.updated") return "Quest Updated";
   if (type === "quest.instance.resolved") return "Quest Resolved";
   if (type === "cmd.quest.error") return "Quest Error";
+  if (type === "cmd.quest.success") {
+    if (questSubcommand.value === "opportunities") return "Quest Opportunities";
+    if (questSubcommand.value === "completed") return "Resolved Quests";
+    if (questSubcommand.value === "active") return "Active Quests";
+    if (questSubcommand.value === "info") return "Quest Info";
+  }
 
   const rawText = String(props.message.text || "").toLowerCase();
   if (rawText.startsWith("opportunities:")) return "Quest Opportunities";
@@ -184,6 +233,15 @@ const startedQuest = computed(() => {
     name: questName.value,
     slug: questSlug.value,
     infoCommand: questSlug.value ? `quest info ${questSlug.value}` : "",
+  };
+});
+
+const abandonedQuest = computed(() => {
+  if (props.message.type !== "quest.instance.resolved" || !questPayload.value) return null;
+  if (questPayload.value.resolution !== "abandoned") return null;
+
+  return {
+    name: questName.value,
   };
 });
 
@@ -323,6 +381,19 @@ const runCommand = (command: string) => {
 .quest-message {
   // margin-top: 1rem;
 
+  .current-step-recap {
+    border-bottom: 1px dashed $color-text-hex-30;
+    border-top: 1px dashed $color-text-hex-30;
+  }
+
+  .quest-link {
+    color: $color-secondary;
+    cursor: pointer;
+    &:hover {
+      border-bottom: 1px dotted $color-text-hex-50;
+    }
+  }
+
   .quest-kicker {
     @include font-title-regular;
     color: $color-secondary;
@@ -421,6 +492,13 @@ const runCommand = (command: string) => {
   .quest-rewards,
   .quest-fallback {
     margin-top: 0.8rem;
+  }
+
+  .quest-recap {
+    border-bottom: 1px dashed $color-text-hex-30;
+    border-top: 1px dashed $color-text-hex-30;
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
   }
 
   .quest-body {

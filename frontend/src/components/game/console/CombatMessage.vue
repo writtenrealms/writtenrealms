@@ -7,7 +7,7 @@
 
     <div v-else class='brief flex'>
 
-      <div class='attack flex-grow'>
+      <div class='attack grow'>
         [ {{ message_type }} ]
         {{ capfirst(message.data.actor.keyword) }}
         <span v-if="message.data.outcome === 'dodged'" class='color-text-50'>>|</span>
@@ -20,11 +20,11 @@
       <!-- Damage and healing done -->
       <div class='damage'>
 
-        <span class='nowrap' v-if="message.data.is_heal">
+        <span class='whitespace-nowrap' v-if="message.data.is_heal">
           {{ message.data.healing_done }} &nbsp;hp
         </span>
 
-        <span v-else class='nowrap'>
+        <span v-else class='whitespace-nowrap'>
           {{ message.data.damage_taken }} dmg
         </span>
       </div>

@@ -154,15 +154,17 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
         self.assertNotIn("quest.instance.started", self._message_types(messages))
         self.assertFalse(QuestInstance.objects.filter(player=self.player, template__slug="tiny_hello").exists())
 
-    def test_quest_info_and_choice_complete_minimal_quest(self):
+    def test_quest_defaults_to_info_and_choice_complete_minimal_quest(self):
         with capture_game_messages():
             dispatch_text_command(self.player.id, "look")
 
         with capture_game_messages() as info_messages:
-            dispatch_text_command(self.player.id, "quest info")
+            dispatch_text_command(self.player.id, "quest")
 
         info_message = self._message_by_type(info_messages, "cmd.quest.success")
         self.assertIsNotNone(info_message)
+        self.assertEqual(info_message["data"]["subcommand"], "info")
+        self.assertEqual(info_message["data"]["quest"]["template"]["slug"], "tiny_hello")
         self.assertIn("Tiny Hello", info_message["text"])
         self.assertIn("continue", info_message["text"])
 
@@ -197,6 +199,20 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
         info_message = self._message_by_type(info_messages, "cmd.quest.success")
         self.assertIsNotNone(info_message)
         self.assertIn("Tiny Hello", info_message["text"])
+
+    def test_quest_info_slug_returns_structured_quest_payload(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "look")
+
+        with capture_game_messages() as info_messages:
+            dispatch_text_command(self.player.id, "quest info tiny_hello")
+
+        info_message = self._message_by_type(info_messages, "cmd.quest.success")
+        self.assertIsNotNone(info_message)
+        self.assertEqual(info_message["data"]["subcommand"], "info")
+        self.assertEqual(info_message["data"]["quest"]["template"]["slug"], "tiny_hello")
+        self.assertEqual(info_message["data"]["quest"]["current_step"]["id"], "offer")
+        self.assertEqual(info_message["data"]["quest"]["current_step"]["choices"][0]["id"], "continue")
 
     def test_quest_recap_subcommand_is_no_longer_supported(self):
         with capture_game_messages() as messages:
@@ -319,6 +335,7 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
 
         list_message = self._message_by_type(messages, "cmd.quest.success")
         self.assertIsNotNone(list_message)
+        self.assertEqual(list_message["data"]["subcommand"], "opportunities")
         self.assertIn("Opportunities:", list_message["text"])
         self.assertIn("shrine_survey", list_message["text"])
 

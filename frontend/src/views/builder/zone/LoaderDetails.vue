@@ -25,7 +25,7 @@
     </div>
 
     <div class="config-and-rules flex">
-      <div class="loader-rules hlist flex-2">
+      <div class="loader-rules hlist">
         <div class="rules-top hlist-header">
           <h3>RULES</h3>
           <div>

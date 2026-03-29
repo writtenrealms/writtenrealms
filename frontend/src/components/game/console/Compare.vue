@@ -11,7 +11,7 @@
           {{ slot }}
         </div>
       </div>
-      <div class="slot-options ml-4 flex-grow">
+      <div class="slot-options ml-4 grow">
         <div v-if="selectedSlot">
           <div v-if="message.data[selectedSlot] && message.data[selectedSlot].length">
             <div v-for="item in message.data[selectedSlot]" :key="item.key">

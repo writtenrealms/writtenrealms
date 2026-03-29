@@ -1,5 +1,5 @@
 <template>
-  <div id="augmented-game-mobile" class="game-frame flex flex-grow flex-col">
+  <div id="augmented-game-mobile" class="game-frame flex grow flex-col">
     <component
       :is="mainComponent"
       class="mobile-main"

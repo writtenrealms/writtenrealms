@@ -106,12 +106,22 @@ class QuestCommandHandler(CommandHandler):
                 code="unknown_subcommand",
             )
 
-    def _publish_text(self, ctx: CommandContext, text: str, *, data: dict | None = None) -> None:
+    def _publish_text(
+        self,
+        ctx: CommandContext,
+        text: str,
+        *,
+        subcommand: str,
+        data: dict | None = None,
+    ) -> None:
+        payload = {"subcommand": subcommand}
+        if data:
+            payload.update(data)
         ctx.publish(
             {
                 "type": "cmd.quest.success",
                 "text": text,
-                "data": data or {},
+                "data": payload,
             }
         )
 
@@ -134,6 +144,7 @@ class QuestCommandHandler(CommandHandler):
                 self._publish_text(
                     ctx,
                     _render_quest_list("Opportunities:", opportunities),
+                    subcommand=subcommand,
                     data={"opportunities": opportunities},
                 )
                 return
@@ -143,6 +154,7 @@ class QuestCommandHandler(CommandHandler):
                 self._publish_text(
                     ctx,
                     _render_quest_list("Active quests:", quests),
+                    subcommand=subcommand,
                     data={"quests": quests},
                 )
                 return
@@ -152,6 +164,7 @@ class QuestCommandHandler(CommandHandler):
                 self._publish_text(
                     ctx,
                     _render_quest_list("Resolved quests:", quests),
+                    subcommand=subcommand,
                     data={"quests": quests},
                 )
                 return
@@ -209,7 +222,8 @@ class QuestCommandHandler(CommandHandler):
             if subcommand == "info":
                 identity = args[1] if len(args) > 1 else None
                 payload, info_text = info_for_player(ctx.player, identity)
-                self._publish_text(ctx, info_text, data=payload)
+                data = payload if "quests" in payload else {"quest": payload}
+                self._publish_text(ctx, info_text, subcommand=subcommand, data=data)
                 return
 
             raise QuestRuntimeError(f"Unknown quest subcommand: {subcommand}", code="unknown_subcommand")

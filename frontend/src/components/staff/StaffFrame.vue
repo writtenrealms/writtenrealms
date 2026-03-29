@@ -9,7 +9,7 @@
       <router-link :to="{ name: 'staff_reviews' }">Reviews</router-link>
     </div>
 
-    <div class="staff-contents flex-grow">
+    <div class="staff-contents grow">
       <router-view></router-view>
     </div>
   </div>
