@@ -153,6 +153,65 @@ Responsibilities:
 
 This prevents room/quest logic from directly crafting ad hoc command calls.
 
+## Legacy Room Check Replacement Requirement
+
+WR1-style `RoomCheck` and `RoomCommandCheck` are legacy authored concepts and
+should not remain a permanent parallel system in WR2.
+
+This ambient issuer plan must account for replacing them with the trigger and
+command-policy model, not merely coexisting with them.
+
+Why this matters:
+- Room checks currently represent pre-action veto logic, especially for
+  movement and command gating.
+- The current WR2 command trigger path is not sufficient on its own because it
+  only runs as a fallback for otherwise unresolved text commands.
+- To retire room checks cleanly, WR2 needs first-class pre-action policy hooks,
+  not only script execution after a command has already been resolved.
+
+Required runtime hooks:
+- `before_command`: runs after command parsing and resolution, but before the
+  resolved handler executes.
+- `before_move_exit`: runs before leaving the current room.
+- `before_move_enter`: runs before entering the destination room.
+- `after_command` or equivalent event hooks: remain useful for side effects,
+  but they are not a substitute for veto-capable checks.
+
+Required behavior:
+- Hooks must be able to veto execution with authored feedback text.
+- Hooks must support room, zone, world, and ambient issuer context.
+- Hooks must support the same practical gating predicates room checks were used
+  for, such as inventory, equipment, room occupancy, faction standing, health,
+  and quest state.
+- Hooks must define how legacy `track_state`-style behavior maps into WR2,
+  whether by durable trigger state, quest facts, world facts, or explicit
+  policy state tables.
+
+Migration direction:
+- Do not keep investing in `RoomCheck` and `RoomCommandCheck` as first-class
+  builder-facing end-state models.
+- Introduce trigger or policy authoring that can represent equivalent pre-action
+  rules.
+- Add a migration path from legacy room checks into the new authored model.
+- Remove legacy builder UI and runtime reliance only after the new policy path
+  is proven by tests.
+
+Open TODOs for this plan:
+- Design the authored contract for veto-capable trigger or policy hooks,
+  including hook names and scope rules.
+- Update command planning or handler dispatch so recognized commands consult
+  pre-action hooks before normal execution.
+- Define issuer and subject semantics for `before_move_exit` and
+  `before_move_enter`.
+- Decide whether these hooks live inside `Trigger` with additional kinds or
+  phases, or in a sibling policy model that shares the same runtime pipeline.
+- Audit current condition coverage and close gaps needed for room-check
+  migration, especially quest-related predicates.
+- Decide how legacy `failure_msg`, `hint_msg`, and tracked pass or fail state
+  map into WR2 behavior.
+- Define builder export, manifest, and migration tooling for converting legacy
+  room checks into the new authored format.
+
 ## Safety Requirements
 
 Ambient scripting can create loops quickly. Add guardrails early:
@@ -203,7 +262,20 @@ Exit criteria:
 - At least one room trigger path executes commands via runner in WR2.
 - Traceable issuer metadata appears in logs/errors.
 
-### Phase 5: Safety and hardening
+### Phase 5: Pre-action policy hooks and room-check replacement
+
+1. Add veto-capable pre-action hooks for resolved commands and movement.
+2. Ensure hooks execute before domain handlers mutate state.
+3. Support authored failure text and policy outcomes in standard publish paths.
+4. Prove one migrated legacy room-check flow end to end.
+
+Exit criteria:
+- A migrated room-check scenario can block command or movement execution
+  without relying on legacy room-check runtime code.
+- Builder-authored pre-action rules work for at least room and zone scope.
+- Movement gating and command gating are both covered by tests.
+
+### Phase 6: Safety and hardening
 
 1. Add recursion/depth/rate protections.
 2. Add structured telemetry for ambient command execution.
@@ -213,14 +285,17 @@ Exit criteria:
 - Looping scripts are contained and observable.
 - Failures produce actionable diagnostics.
 
-### Phase 6: Cleanup
+### Phase 7: Cleanup
 
 1. Remove temporary actor-only compatibility fields once migrated.
 2. Update docs and developer references.
-3. Expand command coverage as needed.
+3. Remove or fully deprecate legacy room-check models and UI once replacement
+   coverage is complete.
+4. Expand command coverage as needed.
 
 Exit criteria:
 - No core path depends on legacy actor-only API.
+- No core gameplay path depends on legacy room-check models.
 
 ## Testing Strategy
 
@@ -228,7 +303,9 @@ Required test layers:
 - Unit tests for context resolution and capability checks
 - Handler tests for issuer/subject enforcement
 - Integration tests for room/zone/world script execution
+- Integration tests for pre-action command and movement veto hooks
 - Regression tests for player/mob command behavior
+- Migration regressions for legacy room-check replacement cases
 - Loop safety tests (depth and dedupe guards)
 
 ## Recommended First Vertical Slice
