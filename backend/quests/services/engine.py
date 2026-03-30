@@ -276,7 +276,7 @@ def active_instances_qs(player):
     )
 
 
-def completed_instances_qs(player):
+def resolved_instances_qs(player):
     return (
         QuestInstance.objects.filter(player=player, status="resolved")
         .exclude(resolution="abandoned")
@@ -290,8 +290,8 @@ def list_active_instances(player) -> list[dict[str, Any]]:
     return [serialize_instance(instance, player=player) for instance in active_instances_qs(player)]
 
 
-def list_completed_instances(player) -> list[dict[str, Any]]:
-    return [serialize_instance(instance, player=player) for instance in completed_instances_qs(player)]
+def list_resolved_instances(player) -> list[dict[str, Any]]:
+    return [serialize_instance(instance, player=player) for instance in resolved_instances_qs(player)]
 
 
 def resolve_instance_identity(player, identity: str, *, status: str | None = None) -> QuestInstance:
@@ -322,7 +322,7 @@ def can_start_template(player, template: QuestTemplate) -> bool:
     if active_instances_qs(player).filter(template=template).exists():
         return False
 
-    resolved_qs = completed_instances_qs(player).filter(template=template)
+    resolved_qs = resolved_instances_qs(player).filter(template=template)
     if template.repeatability_mode == "never" and resolved_qs.exists():
         return False
     if template.repeatability_mode == "cooldown":
@@ -614,23 +614,9 @@ def abandon_instance(player, identity: str) -> QuestTransitionResult:
     )
 
 
-def info_for_player(player, identity: str | None = None) -> tuple[dict[str, Any], str]:
-    if identity:
-        quest_instance = resolve_instance_identity(player, identity)
-        return _info_for_instance(quest_instance, player=player)
-
-    active_instances = list(active_instances_qs(player)[:2])
-    if not active_instances:
-        raise QuestRuntimeError("You have no active quests.", code="no_active_quests")
-    if len(active_instances) > 1:
-        lines = ["Active quests:"]
-        payload = {"quests": []}
-        for quest_instance in active_instances_qs(player):
-            serialized = serialize_instance(quest_instance, player=player)
-            payload["quests"].append(serialized)
-            lines.append(f"- {serialized['template']['slug']}: {serialized['template']['name']}")
-        return payload, "\n".join(lines)
-    return _info_for_instance(active_instances[0], player=player)
+def info_for_player(player, identity: str) -> tuple[dict[str, Any], str]:
+    quest_instance = resolve_instance_identity(player, identity)
+    return _info_for_instance(quest_instance, player=player)
 
 
 def progress_active_instance_for_event(

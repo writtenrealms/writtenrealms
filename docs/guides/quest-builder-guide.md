@@ -153,7 +153,7 @@ Important runtime details:
 
 - `quest abandon <slug-or-id>` marks the current instance as `abandoned`, but it
 does not count as a completed run for repeatability.
-- Abandoned quests are not shown in the player-facing completed quest list.
+- Abandoned quests are not shown in the player-facing resolved quest list.
 - A non-repeatable quest becomes available again after abandon if its discovery
 conditions still match.
 
@@ -463,7 +463,7 @@ step's `recap`
 - resolving a quest writes a journal entry using the resolution step's `recap`
 - abandoning a quest writes a journal entry with `You abandoned <quest name>.`
 
-What the player sees in `quest info`:
+What the player sees in `quest info <slug>`:
 
 - `Recap` is the current step's `recap`
 - `Objectives` come from the current step's visible objectives
@@ -546,7 +546,7 @@ Recommended smoke-test loop:
 7. Return and `look` again for `[ ? ]`.
 8. Use the relevant world verb to finish:
   `talk <mob>` or `give <item> <mob>`.
-9. `quest info` if the flow feels unclear at any point.
+9. `quest info <slug>` if the flow feels unclear at any point.
 
 ## Current Limitation To Remember
 

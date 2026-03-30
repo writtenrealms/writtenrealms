@@ -18,7 +18,7 @@ from quests.services.engine import (
     choose_for_instance,
     info_for_player,
     list_active_instances,
-    list_completed_instances,
+    list_resolved_instances,
     resolve_template_for_player,
 )
 from quests.models import QuestArcTemplate, QuestTemplate
@@ -137,7 +137,7 @@ class QuestActiveListView(QuestRuntimeView):
 
 class QuestResolvedListView(QuestRuntimeView):
     def get(self, request, format=None):
-        return Response({"quests": list_completed_instances(request.player)})
+        return Response({"quests": list_resolved_instances(request.player)})
 
 
 class QuestInstanceInfoView(QuestRuntimeView):

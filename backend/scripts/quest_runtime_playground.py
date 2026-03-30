@@ -28,7 +28,7 @@ from quests.services.engine import (
     QuestRuntimeError,
     info_for_player,
     list_active_instances,
-    list_completed_instances,
+    list_resolved_instances,
 )
 from spawns.handlers import dispatch_command
 from spawns.models import Player
@@ -147,14 +147,14 @@ def cmd_opportunities(args):
     _print_json({"opportunities": list_opportunities(player, refresh=True)})
 
 
-def cmd_active(args):
+def cmd_list(args):
     player = _player(args.player)
     _print_json({"quests": list_active_instances(player)})
 
 
 def cmd_resolved(args):
     player = _player(args.player)
-    _print_json({"quests": list_completed_instances(player)})
+    _print_json({"quests": list_resolved_instances(player)})
 
 
 def cmd_info(args):
@@ -189,17 +189,17 @@ def main():
     opp_parser.add_argument("--player", type=int, required=True)
     opp_parser.set_defaults(func=cmd_opportunities)
 
-    active_parser = subparsers.add_parser("active", help="List active quests")
-    active_parser.add_argument("--player", type=int, required=True)
-    active_parser.set_defaults(func=cmd_active)
+    list_parser = subparsers.add_parser("list", help="List active quests")
+    list_parser.add_argument("--player", type=int, required=True)
+    list_parser.set_defaults(func=cmd_list)
 
     resolved_parser = subparsers.add_parser("resolved", help="List resolved quests")
     resolved_parser.add_argument("--player", type=int, required=True)
     resolved_parser.set_defaults(func=cmd_resolved)
 
-    info_parser = subparsers.add_parser("info", help="Print quest info")
+    info_parser = subparsers.add_parser("info", help="Print detailed quest info")
     info_parser.add_argument("--player", type=int, required=True)
-    info_parser.add_argument("identity", nargs="?")
+    info_parser.add_argument("identity")
     info_parser.set_defaults(func=cmd_info)
 
     args = parser.parse_args()

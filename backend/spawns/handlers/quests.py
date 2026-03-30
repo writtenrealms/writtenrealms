@@ -9,7 +9,7 @@ from quests.services.engine import (
     choose_for_instance,
     info_for_player,
     list_active_instances,
-    list_completed_instances,
+    list_resolved_instances,
     resolve_template_for_player,
 )
 from spawns.events import publish_events
@@ -23,8 +23,8 @@ from spawns.handlers.registry import register_handler
 
 QUEST_SUBCOMMANDS = (
     "opportunities",
-    "active",
-    "completed",
+    "list",
+    "resolved",
     "accept",
     "choose",
     "abandon",
@@ -32,7 +32,6 @@ QUEST_SUBCOMMANDS = (
 )
 QUEST_SUBCOMMAND_ALIASES = {
     "offers": "opportunities",
-    "resolved": "completed",
 }
 
 
@@ -60,23 +59,23 @@ class QuestCommandHandler(CommandHandler):
     help = {
         "name": "Quest",
         "format": "quest [subcommand]",
-        "description": "Review your quests, quest opportunities, and quest choices.",
+        "description": "Review your active quests, resolved quests, opportunities, and quest choices.",
         "details": [
-            "If you omit the subcommand, `quest` defaults to `quest info`.",
-            "`info [slug-or-id]`: Show quest information for all active quests, or one specific quest.",
+            "If you omit the subcommand, `quest` defaults to `quest list`.",
+            "`list`: List your active quests.",
+            "`info <slug-or-id>`: Show detailed information for one specific quest.",
+            "`resolved`: List your resolved quests.",
             "`opportunities`: List quests you can currently accept.",
-            "`active`: List your active quests.",
-            "`completed`: List quests you have already finished.",
             "`accept <slug>`: Accept an available quest opportunity.",
             "`choose <slug-or-id> <choice_id>`: Make a quest choice for an active quest.",
             "`abandon <slug-or-id>`: Abandon an active quest.",
         ],
         "examples": [
             "quest",
-            "quest info",
+            "quest list",
+            "quest info tiny_hello",
+            "quest resolved",
             "quest opportunities",
-            "quest active",
-            "quest completed",
             "quest accept shrine_survey",
             "quest choose tiny_hello continue",
             "quest abandon tiny_hello",
@@ -88,7 +87,7 @@ class QuestCommandHandler(CommandHandler):
 
     def _resolve_subcommand(self, raw_subcommand: str | None) -> str:
         if raw_subcommand is None:
-            return "info"
+            return "list"
         try:
             return resolve_unambiguous_choice(
                 raw_subcommand,
@@ -149,7 +148,7 @@ class QuestCommandHandler(CommandHandler):
                 )
                 return
 
-            if subcommand == "active":
+            if subcommand == "list":
                 quests = list_active_instances(ctx.player)
                 self._publish_text(
                     ctx,
@@ -159,8 +158,8 @@ class QuestCommandHandler(CommandHandler):
                 )
                 return
 
-            if subcommand == "completed":
-                quests = list_completed_instances(ctx.player)
+            if subcommand == "resolved":
+                quests = list_resolved_instances(ctx.player)
                 self._publish_text(
                     ctx,
                     _render_quest_list("Resolved quests:", quests),
@@ -220,10 +219,11 @@ class QuestCommandHandler(CommandHandler):
                 return
 
             if subcommand == "info":
-                identity = args[1] if len(args) > 1 else None
+                if len(args) < 2:
+                    raise QuestRuntimeError("Usage: quest info <slug-or-id>", code="usage")
+                identity = args[1]
                 payload, info_text = info_for_player(ctx.player, identity)
-                data = payload if "quests" in payload else {"quest": payload}
-                self._publish_text(ctx, info_text, subcommand=subcommand, data=data)
+                self._publish_text(ctx, info_text, subcommand=subcommand, data={"quest": payload})
                 return
 
             raise QuestRuntimeError(f"Unknown quest subcommand: {subcommand}", code="unknown_subcommand")

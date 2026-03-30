@@ -1,10 +1,10 @@
 <template>
   <div class="quest-shell">
 
-    <!-- Quest Info List-->
-    <div v-if="message.type == 'cmd.quest.success' && message.data.subcommand === 'info' && message.data.quests">
+    <!-- Quest List -->
+    <div v-if="questListSuccessMessage">
       <div v-if="message.data.quests.length > 0">
-        <div class="text-sm mb-1">Active Quests:</div>
+        <div class="text-sm mb-1">{{ questListHeading }}</div>
         <div v-for="quest in message.data.quests" :key="quest.id">
           <span>
             <span class="quest-link" @click="runCommand(`quest info ${quest.template.slug}`)">{{ quest.template.name }}</span>
@@ -13,7 +13,7 @@
         </div>
       </div>
       <div v-else>
-        No active quests.
+        {{ questListEmptyText }}
       </div>
     </div>
 
@@ -157,6 +157,17 @@ const questList = computed(() => {
   return Array.isArray(quests) ? quests : [];
 });
 const questSubcommand = computed(() => String(props.message?.data?.subcommand || ""));
+const questListSuccessMessage = computed(() => {
+  if (props.message.type !== "cmd.quest.success") return false;
+  if (!Array.isArray(props.message?.data?.quests)) return false;
+  return questSubcommand.value === "list" || questSubcommand.value === "resolved";
+});
+const questListHeading = computed(() => {
+  return questSubcommand.value === "resolved" ? "Resolved Quests:" : "Active Quests:";
+});
+const questListEmptyText = computed(() => {
+  return questSubcommand.value === "resolved" ? "No resolved quests." : "No active quests.";
+});
 
 const kicker = computed(() => {
   const type = props.message.type;
@@ -169,8 +180,8 @@ const kicker = computed(() => {
   if (type === "cmd.quest.error") return "Quest Error";
   if (type === "cmd.quest.success") {
     if (questSubcommand.value === "opportunities") return "Quest Opportunities";
-    if (questSubcommand.value === "completed") return "Resolved Quests";
-    if (questSubcommand.value === "active") return "Active Quests";
+    if (questSubcommand.value === "resolved") return "Resolved Quests";
+    if (questSubcommand.value === "list") return "Active Quests";
     if (questSubcommand.value === "info") return "Quest Info";
   }
 

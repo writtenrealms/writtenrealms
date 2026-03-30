@@ -16,7 +16,7 @@ The smallest working interaction is intentionally tiny:
 2. apply it
 3. create or reuse a dev player
 4. issue one in-game command that discovers or starts the quest
-5. inspect it with `quest info`
+5. inspect it with `quest list` or `quest info <slug>`
 6. choose one option and watch it resolve
 
 That is the minimal proof that the runtime slice is real.
@@ -63,7 +63,7 @@ Implemented in this pass:
   - opportunities
   - active quests
   - resolved quests
-  - recap
+  - info
   - accept
   - choose
   - abandon
@@ -165,18 +165,28 @@ COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec bac
   python scripts/quest_runtime_playground.py opportunities --player <player_id>
 ```
 
-Show current quest info:
+Show current active quest list:
 
 ```bash
 COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
-  python scripts/quest_runtime_playground.py info --player <player_id>
+  python scripts/quest_runtime_playground.py list --player <player_id>
+```
+
+Show detailed info for one quest:
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
+  python scripts/quest_runtime_playground.py info --player <player_id> <slug-or-id>
 ```
 
 If you are using the actual game frontend instead of the playground script, the
 same text commands work there too:
 
 - `look`
-- `quest info`
+- `quest`
+- `quest list`
+- `quest info <slug-or-id>`
+- `quest resolved`
 - `quest opportunities`
 - `quest accept <slug>`
 - `quest choose <slug-or-id> <choice_id>`
