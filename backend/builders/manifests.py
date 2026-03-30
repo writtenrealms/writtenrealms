@@ -30,6 +30,7 @@ _TRIGGER_KEY_PREFIX = "trigger"
 _WORLD_KEY_PREFIX = "world"
 
 _WORLD_CONFIG_MANIFEST_KIND_ALIASES = {
+    "world",
     WORLD_CONFIG_MANIFEST_KIND,
     "world-config",
     "world_config",
@@ -376,7 +377,7 @@ def _coerce_int(value: Any, field_name: str) -> int:
         raise serializers.ValidationError(f"{field_name} must be an integer.")
 
 
-def load_yaml_manifest(manifest_text: str) -> dict[str, Any]:
+def load_yaml_documents(manifest_text: str) -> list[dict[str, Any]]:
     if not isinstance(manifest_text, str):
         raise serializers.ValidationError("Manifest must be a YAML string.")
     if not manifest_text.strip():
@@ -389,14 +390,20 @@ def load_yaml_manifest(manifest_text: str) -> dict[str, Any]:
 
     if not docs:
         raise serializers.ValidationError("Manifest is empty.")
-    if len(docs) > 1:
+
+    manifests = []
+    for document in docs:
+        if not isinstance(document, dict):
+            raise serializers.ValidationError("Manifest root must be a mapping.")
+        manifests.append(document)
+    return manifests
+
+
+def load_yaml_manifest(manifest_text: str) -> dict[str, Any]:
+    manifests = load_yaml_documents(manifest_text)
+    if len(manifests) > 1:
         raise serializers.ValidationError("Only a single YAML document is supported.")
-
-    manifest = docs[0]
-    if not isinstance(manifest, dict):
-        raise serializers.ValidationError("Manifest root must be a mapping.")
-
-    return manifest
+    return manifests[0]
 
 
 def _serialize_room_reference(room: Room | None) -> dict[str, Any] | None:

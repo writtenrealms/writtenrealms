@@ -1290,7 +1290,7 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
             'id', 'key', 'slug', 'name', 'model_type', 'is_persistent',
             'level', 'description', 'ground_description', 'notes',
             'keywords', 'empty_keywords',
-            'type', 'quality', 'power', 'is_boat', 'is_pickable',
+            'type', 'capacity', 'quality', 'power', 'is_boat', 'is_pickable',
             'cost', 'currency',
             'equipment_type', 'armor_class',
             'weapon_type', 'hit_msg_first', 'hit_msg_third',

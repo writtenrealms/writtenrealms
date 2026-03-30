@@ -58,6 +58,11 @@
             :to="{name: 'builder_world_edit', params: {world_id: route.params.world_id}}"
           >Edit World</router-link>
 
+          <router-link
+            v-if="world?.builder_info?.builder_rank > 2"
+            :to="{name: 'builder_world_export', params: {world_id: route.params.world_id}}"
+          >Export</router-link>
+
           <div class="mobile-hidden">
             <div class="line-divider my-2"></div>
             <router-link :to="world_admin_link" :class="{ 'router-link-active' :isWorldAdminRoute }">Admin</router-link>

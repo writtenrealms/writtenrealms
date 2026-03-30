@@ -138,6 +138,7 @@ api_v1_urls = [
     path('builder/worlds/', builder_views.world_list, name='builder-world-list'),
     path('builder/worlds/<pk>/', builder_views.world_detail, name='builder-world-detail'),
     path('builder/worlds/<pk>/config/', builder_views.world_config, name='builder-world-config'),
+    path('builder/worlds/<pk>/export/', builder_views.world_export, name='builder-world-export'),
     path('builder/worlds/<pk>/explore/', builder_views.world_explore, name='builder-world-explore'),
     path('builder/worlds/<pk>/map/', builder_views.world_map, name='builder-world-map'),
     path('builder/worlds/<world_pk>/manifests/apply/', builder_views.world_manifest_apply, name='builder-world-manifest-apply'),

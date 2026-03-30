@@ -76,6 +76,7 @@ const routes = [
       { path: 'questtemplates/:quest_template_id', name: 'builder_world_quest_template_details', component: () => import('@/views/builder/world/QuestTemplateDetails.vue') },
       { path: 'config', name: 'builder_world_config', component: () => import('@/views/builder/world/Config.vue') },
       { path: 'edit', name: 'builder_world_edit', component: () => import('@/views/builder/world/EditWorld.vue') },
+      { path: 'export', name: 'builder_world_export', component: () => import('@/views/builder/world/ExportWorld.vue') },
       { path: 'admin', name: 'builder_world_admin', component: () => import('@/views/builder/world/Admin.vue') },
       { path: 'admin/:instance_id', name: 'builder_world_admin_instance', component: () => import('@/views/builder/world/AdminInstance.vue') },
       { path: 'randomprofiles', name: 'builder_world_random_profile_list', component: () => import('@/views/builder/world/RandomProfileList.vue') },

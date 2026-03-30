@@ -25,7 +25,7 @@ In **World > Config**, configuration is read-oriented:
 - all configurable world/world-config values are shown read-only
 - the page can reveal the current **World Config YAML**
 - the page supports **Copy Config YAML**
-- edits happen through **World > Edit World** by applying a `kind: worldconfig` manifest
+- edits happen through **World > Edit World** by applying one or more YAML manifests
 
 ### 2. Room Triggers Screen
 
@@ -52,12 +52,17 @@ item template as YAML.
 
 A new world-level **Edit World** view accepts a YAML manifest textarea.
 
-- Submitting a manifest currently supports:
-  - `kind: trigger`
-  - `kind: worldconfig`
+- Submitting YAML currently supports one or more YAML documents in sequence.
+- Supported kinds:
+  - `kind: world` (`worldconfig` remains accepted as an alias)
+  - `kind: currency`
+  - `kind: zone`
+  - `kind: room`
   - `kind: itemtemplate`
+  - `kind: mobtemplate`
   - `kind: quest`
   - `kind: questarc`
+  - `kind: trigger`
   - `kind` is case-insensitive (`trigger`, `Trigger`, `TRIGGER` all work).
 - Trigger manifests now support both:
   - **create** (no `metadata.id` / `metadata.key`)
@@ -179,7 +184,7 @@ metadata:
 
 ## World Config Manifest Shape
 
-World config edits are update-only manifests (no create/delete mode):
+World config edits are update-only manifests (no create/delete mode). Exported world docs use `kind: world`, and `kind: worldconfig` is still accepted for compatibility:
 
 ```yaml
 kind: worldconfig
