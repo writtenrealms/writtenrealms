@@ -77,7 +77,7 @@ test:
 test-wr2:
 	docker compose exec backend python manage.py test wr2_tests --settings=config.settings.testing
 
-.PHONY: docker-up docker-up-mount docker-restart docker-restart-mount
+.PHONY: docker-up docker-up-mount docker-restart docker-restart-mount reset-dev-db reset-dev-db-mount
 
 docker-up:
 	docker compose up -d --build
@@ -91,3 +91,9 @@ docker-restart:
 
 docker-restart-mount:
 	COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose restart
+
+reset-dev-db:
+	./scripts/reset-dev-db
+
+reset-dev-db-mount:
+	./scripts/reset-dev-db --mount

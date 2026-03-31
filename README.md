@@ -61,6 +61,9 @@ docker compose down
 
 # Rebuild after code changes
 docker compose up -d --build
+
+# Reset local DB to a fresh install
+make reset-dev-db
 ```
 
 ### Optional: bind-mount code (fast iteration)
@@ -89,7 +92,10 @@ Convenience targets:
 ```bash
 make docker-up-mount
 make docker-restart-mount
+make reset-dev-db-mount
 ```
+
+For a true local fresh install, `scripts/reset-dev-db` stops the stack, clears `./data/db`, and starts it again so migrations rebuild the schema. Add `--build` if you also want to rebuild images.
 
 If you prefer not to export `COMPOSE_FILE`, pass both files each time:
 
