@@ -78,6 +78,33 @@ class TestBuilderLoad(WorldTestCase):
         self.assertIsNotNone(message)
         self.assertEqual(message.get("data", {}).get("loaded", {}).get("name"), self.item_template.name)
 
+    def test_load_item_accepts_template_slug(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/load item {self.item_template.slug}")
+
+        loaded_item = self.player.inventory.get(template=self.item_template)
+        self.assertEqual(loaded_item.name, self.item_template.name)
+        message = self._message_by_type(messages, "cmd./load.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message.get("data", {}).get("loaded", {}).get("name"), self.item_template.name)
+
+    def test_load_mob_accepts_template_slug(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/load mob {self.mob_template.slug}")
+
+        loaded_mob = Mob.objects.get(
+            template=self.mob_template,
+            room=self.room,
+            world=self.spawn_world,
+        )
+        self.assertEqual(loaded_mob.name, self.mob_template.name)
+        message = self._message_by_type(messages, "cmd./load.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(
+            message.get("data", {}).get("loaded", {}).get("name"),
+            self.mob_template.name,
+        )
+
     @override_settings(
         WR_AI_EVENT_FORWARD_URL="http://localhost:8071/v1/events",
         WR_AI_EVENT_TYPES="mob.spawned",

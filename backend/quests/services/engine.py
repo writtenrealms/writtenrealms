@@ -125,6 +125,12 @@ def _objective_target(objective_spec: dict[str, Any]) -> int:
     return max(target, 1)
 
 
+def _objective_progress_label(objective_state: QuestObjectiveState) -> str:
+    current = int(objective_state.progress_current or 0)
+    target = int(objective_state.progress_target or 0)
+    return f"{current}/{target}" if target > 0 else f"{current}"
+
+
 def _sync_objective_state_for_step(quest_instance: QuestInstance, step: dict[str, Any]) -> None:
     existing = {
         state.objective_id: state
@@ -159,6 +165,12 @@ def _sync_objective_state_for_step(quest_instance: QuestInstance, step: dict[str
     quest_instance.objective_states.exclude(objective_id__in=current_ids).delete()
     quest_instance.visible_objective_ids = current_ids
     quest_instance.save(update_fields=["visible_objective_ids", "modified_ts"])
+
+
+def _serialize_updated_objective(objective_state: QuestObjectiveState) -> dict[str, Any]:
+    payload = serialize_objective_state(objective_state)
+    payload["progress"] = _objective_progress_label(objective_state)
+    return payload
 
 
 def _apply_effects(
@@ -632,6 +644,7 @@ def progress_active_instance_for_event(
         return QuestTransitionResult(quest_instance=quest_instance, events=[])
 
     updated = False
+    updated_objective_payload: dict[str, Any] | None = None
     objective_state_map = {
         state.objective_id: state
         for state in quest_instance.objective_states.all()
@@ -699,6 +712,7 @@ def progress_active_instance_for_event(
         if int(state.progress_current or 0) >= progress_target:
             state.status = "complete"
         state.save()
+        updated_objective_payload = _serialize_updated_objective(state)
         append_journal_entry(
             quest_instance,
             entry_type="objective_updated",
@@ -736,7 +750,10 @@ def progress_active_instance_for_event(
                 player,
                 event_type="quest.instance.updated",
                 text=info_text,
-                data={"quest": payload},
+                data={
+                    "quest": payload,
+                    "updated_objective": updated_objective_payload,
+                },
             )
         ],
     )

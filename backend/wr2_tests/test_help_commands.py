@@ -17,7 +17,7 @@ class TestHelpCommands(WorldTestCase):
         self.assertIsNotNone(message)
         self.assertIn("Commands:", message.get("text", ""))
         self.assertIn("look | look <target>", message.get("text", ""))
-        self.assertIn("/load <item|mob> <template_id> [cmd]", message.get("text", ""))
+        self.assertIn("/load <item|mob> <template_id|slug> [cmd]", message.get("text", ""))
         self.assertIn("/resync <item|mob> <template_id|all>", message.get("text", ""))
 
         commands = message["data"]["commands"]
@@ -54,7 +54,7 @@ class TestHelpCommands(WorldTestCase):
 
         message = self._message_by_type(messages, "cmd.help.success")
         self.assertIsNotNone(message)
-        self.assertNotIn("/load <item|mob> <template_id> [cmd]", message.get("text", ""))
+        self.assertNotIn("/load <item|mob> <template_id|slug> [cmd]", message.get("text", ""))
         self.assertNotIn("/resync <item|mob> <template_id|all>", message.get("text", ""))
 
     def test_help_supports_partial_builder_command_lookup(self):
@@ -64,7 +64,7 @@ class TestHelpCommands(WorldTestCase):
         message = self._message_by_type(messages, "cmd.help.success")
         self.assertIsNotNone(message)
         self.assertEqual(message["data"]["command"]["command"], "/load")
-        self.assertIn("/load <item|mob> <template_id> [cmd]", message.get("text", ""))
+        self.assertIn("/load <item|mob> <template_id|slug> [cmd]", message.get("text", ""))
 
     def test_help_supports_resync_builder_command_lookup(self):
         with capture_game_messages() as messages:

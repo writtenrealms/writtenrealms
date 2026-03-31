@@ -115,14 +115,16 @@ class LoadHandler(CommandHandler):
     builder_only = True
     help = {
         "name": "Load",
-        "format": "/load <item|mob> <template_id> [cmd]",
+        "format": "/load <item|mob> <template_id|slug> [cmd]",
         "description": (
             "Load an item or mob template into your current room. "
             "An optional trailing command is attached to the loaded entity."
         ),
         "examples": [
             "/load item 123",
+            "/load item starter-blade",
             "/load mob 456",
+            "/load mob camp-quartermaster",
             "/load mob 456 say Hello there!",
         ],
     }
@@ -148,7 +150,7 @@ class LoadHandler(CommandHandler):
                 ctx.publish(
                     {
                         "type": "cmd./load.error",
-                        "text": "Usage: /load <item|mob> <template_id> [cmd]",
+                        "text": "Usage: /load <item|mob> <template_id|slug> [cmd]",
                         "data": {"error": "Missing arguments.", "code": "invalid_args"},
                     }
                 )
@@ -165,17 +167,6 @@ class LoadHandler(CommandHandler):
             )
         except ChoiceResolutionError:
             template_type = str(template_type).lower()
-        try:
-            template_id_int = int(template_id)
-        except (TypeError, ValueError):
-            ctx.publish(
-                {
-                    "type": "cmd./load.error",
-                    "text": "Template ID must be a number.",
-                    "data": {"error": "Invalid template ID.", "code": "invalid_id"},
-                }
-            )
-            return
 
         if template_type not in ("item", "mob"):
             ctx.publish(
@@ -191,7 +182,7 @@ class LoadHandler(CommandHandler):
             result = LoadTemplateAction().execute(
                 player_id=ctx.player.id,
                 template_type=template_type,
-                template_id=template_id_int,
+                template_id=template_id,
                 cmd=cmd,
             )
         except ActionError as err:

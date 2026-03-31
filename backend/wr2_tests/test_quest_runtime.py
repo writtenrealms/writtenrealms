@@ -341,6 +341,29 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
         self.assertEqual(quest_instance.status, "resolved")
         self.assertEqual(quest_instance.resolution, "complete")
 
+    def test_objective_progress_update_includes_updated_objective_payload(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest accept shrine_survey")
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest choose shrine_survey begin")
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "east")
+
+        with capture_game_messages() as progress_messages:
+            dispatch_text_command(self.player.id, "look")
+
+        update_message = self._message_by_type(progress_messages, "quest.instance.updated")
+        self.assertIsNotNone(update_message)
+        self.assertEqual(update_message["data"]["quest"]["template"]["slug"], "shrine_survey")
+        self.assertEqual(update_message["data"]["updated_objective"]["id"], "inspect_shrines")
+        self.assertEqual(update_message["data"]["updated_objective"]["text"], "Inspect both shrines.")
+        self.assertEqual(update_message["data"]["updated_objective"]["progress_current"], 1)
+        self.assertEqual(update_message["data"]["updated_objective"]["progress_target"], 2)
+        self.assertEqual(update_message["data"]["updated_objective"]["progress"], "1/2")
+        self.assertEqual(update_message["data"]["updated_objective"]["status"], "active")
+
     def test_quest_opp_prefix_lists_opportunities(self):
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "quest opp")

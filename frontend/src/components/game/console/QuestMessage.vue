@@ -2,7 +2,7 @@
   <div class="quest-shell">
 
     <!-- Quest List -->
-    <div v-if="questListSuccessMessage">
+    <div v-if="questListSuccessMessage" class="indented">
       <div v-if="message.data.quests.length > 0">
         <div class="text-sm mb-1">{{ questListHeading }}</div>
         <div v-for="quest in message.data.quests" :key="quest.id">
@@ -19,9 +19,18 @@
 
 
     <!-- quest.instance.started -->
-    <div v-else-if="startedQuest" class="quest-inline quest-inline-started">
+    <div v-else-if="startedQuest" class="quest-inline quest-inline-started mt-2">
       <span class="quest-inline-text">
         Quest <span class="quest-link" @click="runCommand(startedQuest.infoCommand)">{{ startedQuest.name }}</span> has started.
+      </span>
+    </div>
+
+    <div v-else-if="updatedQuest" class="quest-inline quest-inline-updated mt-2">
+      <span class="quest-inline-text">
+        Quest <span class="quest-link" @click="runCommand(updatedQuest.infoCommand)">{{ updatedQuest.name }}</span> updated: {{ updatedQuest.objective.text }}
+      </span>
+      <span class="quest-inline-progress ml-2 color-text-50" :class="{ complete: updatedQuest.objective.status === 'complete' }">
+        [ {{ updatedQuest.objective.progress }} ]
       </span>
     </div>
 
@@ -31,13 +40,17 @@
       </span>
     </div>
 
+    <div v-else-if="syntaxQuestError">
+      {{ message.text }}
+    </div>
+
     <div v-else
       class="indented quest-message mt-4"
       :class="[
         variantClass,
         { actionable: isLastMessage, },
       ]">
-      <div class="quest-kicker">{{ kicker }}</div>
+      <div v-if="!singleQuestInfoMessage" class="quest-kicker">{{ kicker }}</div>
 
       <div v-if="cards.length" class="quest-cards">
 
@@ -46,6 +59,17 @@
           <div>
             <h3 class="quest-title">{{ card.title.toUpperCase() }}</h3>
             <div v-if="card.slug" class="quest-slug">{{ card.slug }}</div>
+          </div>
+
+          <div v-if="card.badges.length" class="quest-badges">
+            <span
+              v-for="badge in card.badges"
+              :key="badge.label"
+              class="quest-badge"
+              :class="badge.tone"
+            >
+              {{ badge.label }}
+            </span>
           </div>
 
         </div>
@@ -68,9 +92,10 @@
           >
             <div class="quest-objective-copy">
               <div class="quest-objective-text">{{ objective.text }}</div>
-              <div class="quest-objective-progress">{{ objective.progress }}</div>
             </div>
-            <span class="quest-objective-status">{{ objective.statusLabel }}</span>
+            <span class="quest-objective-status" :class="{ complete: objective.status === 'complete' }">
+              {{ objective.progress }}
+            </span>
           </div>
         </div>
 
@@ -162,11 +187,21 @@ const questListSuccessMessage = computed(() => {
   if (!Array.isArray(props.message?.data?.quests)) return false;
   return questSubcommand.value === "list" || questSubcommand.value === "resolved";
 });
+const singleQuestInfoMessage = computed(() => {
+  if (props.message.type !== "cmd.quest.success") return false;
+  if (questSubcommand.value !== "info") return false;
+  return Boolean(questPayload.value);
+});
 const questListHeading = computed(() => {
   return questSubcommand.value === "resolved" ? "Resolved Quests:" : "Active Quests:";
 });
 const questListEmptyText = computed(() => {
   return questSubcommand.value === "resolved" ? "No resolved quests." : "No active quests.";
+});
+const syntaxQuestError = computed(() => {
+  if (props.message.type !== "cmd.quest.error") return false;
+  const code = String(props.message?.data?.code || "");
+  return code === "usage" || code === "unknown_subcommand" || code === "ambiguous_subcommand";
 });
 
 const kicker = computed(() => {
@@ -214,6 +249,23 @@ const startedQuest = computed(() => {
   };
 });
 
+const updatedQuest = computed(() => {
+  if (props.message.type !== "quest.instance.updated" || !questPayload.value) return null;
+  const updatedObjective = props.message?.data?.updated_objective;
+  if (!updatedObjective) return null;
+
+  return {
+    name: questName.value,
+    slug: questSlug.value,
+    infoCommand: questSlug.value ? `quest info ${questSlug.value}` : "",
+    objective: {
+      text: String(updatedObjective.text || updatedObjective.id || "Objective"),
+      progress: String(updatedObjective.progress || ""),
+      status: String(updatedObjective.status || "active"),
+    },
+  };
+});
+
 const abandonedQuest = computed(() => {
   if (props.message.type !== "quest.instance.resolved" || !questPayload.value) return null;
   if (questPayload.value.resolution !== "abandoned") return null;
@@ -223,16 +275,16 @@ const abandonedQuest = computed(() => {
   };
 });
 
-const buildBadges = (questType: string | null, status: string | null, resolution: string | null) => {
+const buildBadges = (questType: string | null, status: string | null) => {
   const badges: any[] = [];
-  if (questType) {
+  if (questType && questType !== "quest") {
     badges.push({ label: questType, tone: "tone-type" });
   }
   if (status === "active") {
     badges.push({ label: "active", tone: "tone-active" });
   }
   if (status === "resolved") {
-    badges.push({ label: resolution || "resolved", tone: "tone-resolved" });
+    badges.push({ label: "resolved", tone: "tone-resolved" });
   }
   return badges;
 };
@@ -249,7 +301,6 @@ const buildObjectives = (objectives: any[] | undefined) => {
         text: objective.text || objective.id || "Objective",
         progress: target > 0 ? `${current}/${target}` : `${current}`,
         status,
-        statusLabel: status.replace(/_/g, " "),
       };
     });
 };
@@ -260,7 +311,7 @@ const cards = computed(() => {
       key: `opportunity-${opportunity.slug || opportunity.id}`,
       title: opportunity.name || opportunity.slug || "Quest Opportunity",
       slug: opportunity.slug || "",
-      badges: buildBadges(opportunity.quest_type || null, null, null),
+      badges: buildBadges(opportunity.quest_type || null, null),
       bodyLines: splitLines(opportunity?.text?.body),
       recapLines: splitLines(opportunity.recap),
       objectives: [],
@@ -282,7 +333,7 @@ const cards = computed(() => {
         key: `quest-${quest.id || template.slug || "current"}`,
         title: template.name || template.slug || "Quest",
         slug: template.slug || "",
-        badges: buildBadges(template.quest_type || null, quest.status || null, quest.resolution || null),
+        badges: buildBadges(template.quest_type || null, quest.status || null),
         bodyLines: splitLines(currentStep?.text?.body),
         recapLines: splitLines(currentStep.recap),
         objectives: buildObjectives(currentStep.objectives),
@@ -293,7 +344,7 @@ const cards = computed(() => {
         })),
         metaLines: [],
         rewardLines: rewardLines.value,
-        actions: quest.status === "active" && template.slug
+        actions: quest.status === "active" && template.slug && !singleQuestInfoMessage.value
           ? [{ label: "INFO", command: `quest info ${template.slug}`, tone: "secondary" }]
           : [],
       },
@@ -308,7 +359,7 @@ const cards = computed(() => {
         key: `quest-list-${quest.id || template.slug || template.name}`,
         title: template.name || template.slug || "Quest",
         slug: template.slug || "",
-        badges: buildBadges(template.quest_type || null, quest.status || null, quest.resolution || null),
+        badges: buildBadges(template.quest_type || null, quest.status || null),
         bodyLines: [],
         recapLines: splitLines(currentStep.recap),
         objectives: buildObjectives(currentStep.objectives),
@@ -393,6 +444,17 @@ const runCommand = (command: string) => {
 
   .quest-inline-text {
     color: $color-text;
+  }
+
+  .quest-inline-progress {
+    @include font-mono;
+    color: $color-text-hex-60;
+    font-size: 0.84rem;
+    white-space: nowrap;
+
+    &.complete {
+      color: $color-green;
+    }
   }
 
   .quest-inline-name {
@@ -533,15 +595,13 @@ const runCommand = (command: string) => {
   }
 
   .quest-objective-status {
-    @include font-title-regular;
+    @include font-mono;
     color: $color-text-hex-60;
-    font-size: 0.68rem;
-    letter-spacing: 1px;
-    text-transform: uppercase;
+    font-size: 0.84rem;
     white-space: nowrap;
   }
 
-  .quest-objective.complete .quest-objective-status {
+  .quest-objective-status.complete {
     color: $color-green;
   }
 

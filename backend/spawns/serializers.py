@@ -1544,7 +1544,7 @@ class LoadTemplateSerializer(serializers.Serializer):
 
     world_id = serializers.IntegerField()
     template_type = serializers.ChoiceField(choices=['item', 'mob'])
-    template_id = serializers.IntegerField()
+    template_id = serializers.CharField()
     actor_type = serializers.ChoiceField(choices=['player', 'mob', 'room'])
     actor_id = serializers.IntegerField()
     room = serializers.IntegerField()
@@ -1577,18 +1577,20 @@ class LoadTemplateSerializer(serializers.Serializer):
             context = world.context.instance_of
         else:
             context = world.context
-        try:
-            if data['template_type'] == 'item':
-                template = ItemTemplate.objects.get(
-                    pk=data['template_id'],
-                    #world=world.context)
-                    world=context)
-            else:
-                template = MobTemplate.objects.get(
-                    pk=data['template_id'],
-                    #world=world.context)
-                    world=context)
-        except ObjectDoesNotExist:
+        template_ref = str(data['template_id']).strip()
+        template_model = ItemTemplate if data['template_type'] == 'item' else MobTemplate
+        template = None
+        if template_ref.isdigit():
+            template = template_model.objects.filter(
+                pk=int(template_ref),
+                world=context,
+            ).first()
+        if template is None:
+            template = template_model.objects.filter(
+                slug=template_ref,
+                world=context,
+            ).first()
+        if template is None:
             raise serializers.ValidationError(
                 "Template does not belong to this world")
         data['template'] = template
