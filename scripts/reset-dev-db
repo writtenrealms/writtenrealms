@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage: scripts/reset-dev-db [--mount] [--build] [--no-start] [--yes]
+
+Reset the local Docker-backed Postgres database to a fresh install.
+
+This will:
+  1. Stop the local Docker Compose stack
+  2. Delete ./data/db
+  3. Recreate ./data/db
+  4. Start the stack again so Django migrations rebuild the schema
+
+Options:
+  --mount     Use docker-compose.mount.yml for the bind-mount workflow.
+  --build     Rebuild images when starting the stack again.
+  --no-start  Reset the database files but leave the stack stopped.
+  --yes       Skip the confirmation prompt.
+  --help      Show this help text.
+EOF
+}
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/.." && pwd)"
+db_dir="$repo_root/data/db"
+
+use_mount=0
+build_after=0
+start_after=1
+skip_confirm=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --mount)
+            use_mount=1
+            ;;
+        --build)
+            build_after=1
+            ;;
+        --no-start)
+            start_after=0
+            ;;
+        --yes)
+            skip_confirm=1
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            echo >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+compose_cmd=(docker compose)
+compose_desc="${COMPOSE_FILE:-docker-compose.yml}"
+if [[ $use_mount -eq 1 ]]; then
+    compose_cmd=(docker compose -f docker-compose.yml -f docker-compose.mount.yml)
+    compose_desc="docker-compose.yml + docker-compose.mount.yml"
+fi
+
+if [[ $skip_confirm -ne 1 ]]; then
+    if [[ ! -t 0 ]]; then
+        echo "Refusing to reset without confirmation in a non-interactive shell. Re-run with --yes." >&2
+        exit 1
+    fi
+
+    echo "This will permanently delete local database files in:"
+    echo "  $db_dir"
+    echo "Compose config:"
+    echo "  $compose_desc"
+    echo
+    read -r -p "Continue? [y/N] " reply
+    case "$reply" in
+        y|Y|yes|YES)
+            ;;
+        *)
+            echo "Cancelled."
+            exit 0
+            ;;
+    esac
+fi
+
+cd "$repo_root"
+
+echo "==> Stopping Docker Compose stack..."
+"${compose_cmd[@]}" down --remove-orphans
+
+echo "==> Removing database files from $db_dir..."
+rm -rf "$db_dir"
+mkdir -p "$db_dir"
+chmod 700 "$db_dir"
+
+if [[ $start_after -eq 0 ]]; then
+    echo "==> Database files reset. Stack left stopped because --no-start was provided."
+    exit 0
+fi
+
+up_args=(up -d)
+if [[ $build_after -eq 1 ]]; then
+    up_args+=(--build)
+fi
+
+echo "==> Starting Docker Compose stack..."
+"${compose_cmd[@]}" "${up_args[@]}"
+
+echo
+echo "Reset complete. The backend will rerun migrations on startup."
+echo "Tail logs with:"
+echo "  ${compose_cmd[*]} logs -f backend"
