@@ -4,7 +4,9 @@ from django.utils import timezone
 from django.urls import reverse
 
 from builders.models import ItemTemplate, MobTemplate
+from config import constants as adv_consts
 from spawns.handlers import dispatch_command
+from spawns.models import Item
 from quests.models import QuestInstance, QuestTemplate
 from tests.base import WorldTestCase
 from wr2_tests.utils import capture_game_messages, dispatch_text_command
@@ -430,6 +432,195 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
         self.assertIsNotNone(error_message)
         self.assertEqual(error_message["data"]["code"], "unknown_subcommand")
         self.assertIn("completed", error_message["text"])
+
+
+class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.survey_token_template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Survey Token",
+            keywords="survey token token",
+        )
+        self.satchel_template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Satchel",
+            keywords="satchel",
+            type=adv_consts.ITEM_TYPE_CONTAINER,
+        )
+        self.coin_template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Coin",
+            keywords="coin",
+        )
+        self.guide_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Trail Guide",
+            keywords="trail guide guide",
+        )
+        self.guide_template.spawn(self.room, self.spawn_world)
+
+        self.create_runtime_quest(
+            slug="survey_route",
+            name="Survey Route",
+            discovery_policy={
+                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 15,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "A survey token is issued for the route ahead.",
+                    "effects": [
+                        {"type": "grant_item", "item_template": self.survey_token_template.slug},
+                    ],
+                    "choices": [
+                        {"id": "continue", "text": "Continue.", "goto": "resolved"},
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "Done.",
+                },
+            ],
+            reward_policy={
+                "complete": [
+                    {"type": "grant_item", "item_template": self.coin_template.slug},
+                ],
+                "compromised": [],
+                "failed_forward": [],
+                "expired": [],
+            },
+        )
+        self.create_runtime_quest(
+            slug="guide_assignment",
+            name="Guide Assignment",
+            discovery_policy={
+                "sources": [{"type": "npc_dialogue", "mob_template": self.guide_template.slug}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 15,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "The trail guide presses a spare survey token into your hand.",
+                    "effects": [
+                        {"type": "grant_item", "item_template": self.survey_token_template.slug},
+                    ],
+                    "choices": [
+                        {"id": "continue", "text": "Continue.", "goto": "resolved"},
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "Done.",
+                },
+            ],
+        )
+
+    def test_room_prompt_accept_grants_item_on_start_step(self):
+        with capture_game_messages() as accept_messages:
+            dispatch_text_command(self.player.id, "quest accept survey_route")
+
+        self.assertEqual(
+            self.player.inventory.filter(template=self.survey_token_template).count(),
+            1,
+        )
+        start_message = self._message_by_type(accept_messages, "quest.instance.started")
+        self.assertIsNotNone(start_message)
+        self.assertIn("Survey Token", start_message["text"])
+
+        quest_instance = QuestInstance.objects.get(player=self.player, template__slug="survey_route")
+        self.assertTrue(quest_instance.local_state.get("granted_item_ids"))
+
+    def test_npc_dialogue_accept_grants_item_on_start_step(self):
+        with capture_game_messages() as accept_messages:
+            dispatch_text_command(self.player.id, "quest accept guide_assignment")
+
+        self.assertEqual(
+            self.player.inventory.filter(template=self.survey_token_template).count(),
+            1,
+        )
+        start_message = self._message_by_type(accept_messages, "quest.instance.started")
+        self.assertIsNotNone(start_message)
+        self.assertIn("Survey Token", start_message["text"])
+
+    def test_abandon_removes_granted_item_from_nested_player_bag(self):
+        satchel = Item.objects.create(
+            world=self.spawn_world,
+            container=self.player,
+            template=self.satchel_template,
+            name=self.satchel_template.name,
+            type=adv_consts.ITEM_TYPE_CONTAINER,
+        )
+        coin = Item.objects.create(
+            world=self.spawn_world,
+            container=satchel,
+            template=self.coin_template,
+            name=self.coin_template.name,
+        )
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest accept survey_route")
+
+        granted_item = self.player.inventory.get(template=self.survey_token_template)
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "put token satchel")
+
+        granted_item.refresh_from_db()
+        self.assertEqual(granted_item.container_id, satchel.id)
+
+        with capture_game_messages() as abandon_messages:
+            dispatch_text_command(self.player.id, "quest abandon survey_route")
+
+        self.assertFalse(Item.objects.filter(pk=granted_item.id).exists())
+        satchel.refresh_from_db()
+        coin.refresh_from_db()
+        self.assertEqual(coin.container_id, satchel.id)
+        self.assertIn("quest.instance.resolved", self._message_types(abandon_messages))
+        resolved_message = self._message_by_type(abandon_messages, "quest.instance.resolved")
+        self.assertIsNotNone(resolved_message)
+        self.assertIn("Removed quest item", resolved_message["text"])
+
+    def test_completion_removes_granted_item_and_keeps_completion_reward_item(self):
+        satchel = Item.objects.create(
+            world=self.spawn_world,
+            container=self.player,
+            template=self.satchel_template,
+            name=self.satchel_template.name,
+            type=adv_consts.ITEM_TYPE_CONTAINER,
+        )
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest accept survey_route")
+
+        granted_item = self.player.inventory.get(template=self.survey_token_template)
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "put token satchel")
+
+        with capture_game_messages() as resolve_messages:
+            dispatch_text_command(self.player.id, "quest choose survey_route continue")
+
+        self.assertFalse(Item.objects.filter(pk=granted_item.id).exists())
+        self.assertEqual(
+            self.player.inventory.filter(template=self.coin_template).count(),
+            1,
+        )
+        resolved_message = self._message_by_type(resolve_messages, "quest.instance.resolved")
+        self.assertIsNotNone(resolved_message)
+        self.assertIn("Coin", resolved_message["text"])
+        self.assertIn("Removed quest item", resolved_message["text"])
 
 
 class TestQuestRepeatabilityRuntime(QuestRuntimeTestCase):

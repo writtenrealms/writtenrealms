@@ -49,6 +49,7 @@ Implemented in this pass:
   - `quest.mob.killed`
 - typed reward effects:
   - `grant_gold`
+  - `grant_item`
   - `grant_xp`
 - constrained completion-time mob commands:
   - `say`

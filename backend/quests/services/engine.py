@@ -14,7 +14,10 @@ from quests.models import (
     QuestOfferState,
     QuestTemplate,
 )
-from quests.services.effects import apply_quest_effects
+from quests.services.effects import (
+    apply_quest_effects,
+    cleanup_player_owned_granted_items,
+)
 from quests.services.journal import (
     append_journal_entry,
     render_info_text,
@@ -458,6 +461,12 @@ def enter_step(
             )
 
     refreshed = QuestInstance.objects.select_related("template", "template__arc", "world", "player").prefetch_related("objective_states", "journal_entries").get(pk=quest_instance.pk)
+    removed_item_count = 0
+    if step_kind == "resolution":
+        removed_item_count = cleanup_player_owned_granted_items(
+            refreshed,
+            player=player,
+        )
     step_effect_result = _apply_effects(
         refreshed,
         step.get("effects") or [],
@@ -485,6 +494,11 @@ def enter_step(
         text = info_text
     if reward_summaries:
         text = f"{text}\nRewards: {', '.join(reward_summaries)}"
+    if removed_item_count:
+        text = (
+            f"{text}\nRemoved quest item{'s' if removed_item_count != 1 else ''}: "
+            f"{removed_item_count}"
+        )
 
     return QuestTransitionResult(
         quest_instance=refreshed,
@@ -589,9 +603,14 @@ def choose_for_instance(player, identity: str, choice_id: str) -> QuestTransitio
 def abandon_instance(player, identity: str) -> QuestTransitionResult:
     resolved_instance = resolve_instance_identity(player, identity, status="active")
     template = resolved_instance.template
+    removed_item_count = 0
 
     with transaction.atomic():
         quest_instance = QuestInstance.objects.select_for_update().get(pk=resolved_instance.pk)
+        removed_item_count = cleanup_player_owned_granted_items(
+            quest_instance,
+            player=player,
+        )
         quest_instance.status = "resolved"
         quest_instance.resolution = "abandoned"
         quest_instance.resolved_at = timezone.now()
@@ -613,6 +632,11 @@ def abandon_instance(player, identity: str) -> QuestTransitionResult:
 
     quest_instance = QuestInstance.objects.select_related("template", "template__arc", "world", "player").prefetch_related("objective_states", "journal_entries").get(pk=quest_instance.pk)
     payload, info_text = _info_for_instance(quest_instance, player=player)
+    if removed_item_count:
+        info_text = (
+            f"{info_text}\nRemoved quest item{'s' if removed_item_count != 1 else ''}: "
+            f"{removed_item_count}"
+        )
     return QuestTransitionResult(
         quest_instance=quest_instance,
         events=[

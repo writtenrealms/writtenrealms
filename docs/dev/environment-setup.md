@@ -57,6 +57,7 @@ Convenience targets:
 ```bash
 make docker-up-mount
 make docker-restart-mount
+make reset-dev-db-mount
 ```
 
 If you prefer not to export `COMPOSE_FILE`, pass both files each time:
@@ -72,6 +73,22 @@ To revert to the default workflow:
 unset COMPOSE_FILE
 docker compose up -d --build
 ```
+
+## Reset the local database
+
+For a clean local onboarding pass, reset the Docker-backed Postgres data and let the app rebuild from migrations:
+
+```bash
+make reset-dev-db
+```
+
+If you are using the bind-mount workflow instead of the default compose setup:
+
+```bash
+make reset-dev-db-mount
+```
+
+The underlying script is `scripts/reset-dev-db`. It stops the stack, deletes `./data/db`, recreates it, and starts the stack again. Add `--build` if you also want to rebuild images as part of the reset.
 
 ## Required Environment Variables
 

@@ -40,6 +40,7 @@ At the time of writing, the runtime supports:
   - `quest.mob.killed`
 - current typed rewards/effects:
   - `grant_gold`
+  - `grant_item`
   - `grant_xp`
   - constrained `mob_command`
 
@@ -126,10 +127,18 @@ Why this example matters:
 - it shows the smallest end-to-end quest instance lifecycle
 - it shows the simplest quest shape that can begin on connect, look, or move
 
-## 2. NPC Asks For An Item
+## 2. Room Prompt Gives You A Delivery Item
 
-This is the standard hand-in quest: talk to an NPC, accept the quest, then
-bring them an item.
+This is the standard "deliver this item to that mob" quest, but discovered
+through the room instead of the NPC.
+
+The important runtime behavior this example shows is:
+
+- the quest opportunity comes from `room_prompt`
+- `quest accept <slug>` immediately grants the item through `grant_item`
+- the quest advances when the player uses `give <item> <mob>`
+- if the player abandons before finishing, the granted item is cleaned up as
+  long as it is still player-owned, including inside bags
 
 Manifest:
 
@@ -137,8 +146,8 @@ Manifest:
 kind: quest
 metadata:
   world: world.<world_id>
-  slug: blacksmith_ore
-  name: Ore For The Forge
+  slug: shrine_packet
+  name: Shrine Packet
 spec:
   scope: player
   status: active
@@ -148,44 +157,47 @@ spec:
   max_active: 1
   discovery:
     sources:
-      - type: npc_dialogue
-        mob_template: village_blacksmith
+      - type: room_prompt
+        room: room.<courier_room_id>
     visible_if: {}
     accept_if: {}
     salience: 20
     cooldown_seconds: 0
   slots: {}
   steps:
-    - id: deliver_ore
+    - id: deliver_packet
       kind: objective
-      recap: The blacksmith needs a lump of bog iron for the next batch of tools.
+      recap: You took the sealed packet and now need to hand it to the shrine keeper.
       text:
         body: |
-          "If you're heading past the marsh, bring me a clean lump of bog iron,"
-          the blacksmith says. "I'm short on metal and the forge can't wait."
+          A placard tied to the wall reads:
+          "Courier needed. Take the sealed packet and deliver it to the shrine keeper."
+      effects:
+        - type: grant_item
+          item_template: sealed_packet
       objectives:
-        - id: hand_in_ore
-          text: Bring bog iron to the blacksmith.
+        - id: hand_in_packet
+          text: Deliver the sealed packet to the shrine keeper.
           tracker:
             event: quest.item.delivered
             where:
               all:
-                - eq: [event.target.template_id, village_blacksmith]
-                - eq: [event.item.template_id, bog_iron]
+                - eq: [event.target.template_id, shrine_keeper]
+                - eq: [event.item.template_id, sealed_packet]
           progress:
             mode: count
             target: 1
       transitions:
         - when:
-            objective_complete: hand_in_ore
+            objective_complete: hand_in_packet
           goto: resolved
     - id: resolved
       kind: resolution
-      recap: The blacksmith drops the ore beside the anvil and gets back to work.
+      recap: The shrine keeper accepts the packet and breaks the wax seal.
       effects:
         - type: mob_command
-          mob_template: village_blacksmith
-          command: say Good. That'll keep the forge fed for a while.
+          mob_template: shrine_keeper
+          command: say Good. I have been waiting for this packet.
   rewards:
     complete:
       - type: grant_gold
@@ -200,33 +212,30 @@ spec:
 Simulated log:
 
 ```text
-The blacksmith sorts tools on a bench. [ ! ]
+look
+New opportunity: Shrine Packet
+A courier placard asks someone to carry a packet to the shrine keeper.
 
-talk blacksmith
-Quest available: Ore For The Forge
-"If you're heading past the marsh, bring me a clean lump of bog iron," the blacksmith says. "I'm short on metal and the forge can't wait."
-Bring bog_iron to the village blacksmith.
-Accept with: quest accept blacksmith_ore
-
-quest accept blacksmith_ore
-Quest started: Ore For The Forge
-The blacksmith needs a lump of bog iron for the next batch of tools.
+quest accept shrine_packet
+Quest started: Shrine Packet
+You took the sealed packet and now need to hand it to the shrine keeper.
+Rewards: Sealed Packet
 
 look
-The blacksmith sorts tools on a bench. [ ? ]
+The shrine keeper waits beside the old altar. [ ? ]
 
-give bog_iron blacksmith
-Quest resolved: Ore For The Forge
-The blacksmith drops the ore beside the anvil and gets back to work.
+give sealed_packet shrine_keeper
+Quest resolved: Shrine Packet
+The shrine keeper accepts the packet and breaks the wax seal.
 Rewards: 8 gold, 25 experience
 ```
 
 What this teaches:
 
-- `npc_dialogue` discovery
-- explicit acceptance via `quest accept <slug>`
+- `room_prompt` discovery for a delivery quest
+- immediate item issuance on accept via `grant_item`
 - item hand-in progression through `quest.item.delivered`
-- `?` as a ready turn-in indicator
+- the return NPC can still show `?` as a ready turn-in indicator
 
 ## 3. NPC Asks For Two Mob Kills
 

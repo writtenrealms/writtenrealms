@@ -144,6 +144,9 @@ spec:
     - id: turn_in
       kind: objective
       recap: Deliver supplies.
+      effects:
+        - type: grant_item
+          item_template: {wolf_pelt.slug}
       objectives:
         - id: deliver_pelt
           text: Deliver the pelt.
@@ -191,6 +194,10 @@ spec:
         )
         self.assertEqual(
             objective_where[1]["eq"][1],
+            wolf_pelt.slug,
+        )
+        self.assertEqual(
+            quest.graph["steps"][0]["effects"][0]["item_template"],
             wolf_pelt.slug,
         )
 

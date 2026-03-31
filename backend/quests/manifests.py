@@ -307,6 +307,13 @@ def _validate_effect_template_refs(world: World, effects: list[dict[str, Any]] |
                 "mobtemplate",
                 f"{field_name}[{index}].mob_template",
             )
+        if "item_template" in effect or "item_template_id" in effect:
+            _validate_template_ref(
+                world,
+                effect.get("item_template", effect.get("item_template_id")),
+                "itemtemplate",
+                f"{field_name}[{index}].item_template",
+            )
 
 
 def _validate_slot_schema_template_refs(world: World, slot_schema: dict[str, Any]) -> None:
