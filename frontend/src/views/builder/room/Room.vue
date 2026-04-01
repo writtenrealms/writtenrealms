@@ -98,14 +98,27 @@ const key_link = (key: any) => {
   };
 };
 
+const isEditableTarget = (target: EventTarget | null) => {
+  return target instanceof HTMLElement && (
+    ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) ||
+    target.isContentEditable
+  );
+};
+
 const onTypeE = (e: KeyboardEvent) => {
-  if (store.state.ui.modal.isOpen) return;
-  const key = String.fromCharCode(e.keyCode).toLowerCase();
-  if (key === "e") editInfo();
+  if (store.state.ui.modal.isOpen || store.state.ui.editingField) return;
+  if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (isEditableTarget(e.target)) return;
+
+  if (e.key.toLowerCase() === "e") {
+    e.preventDefault();
+    e.stopPropagation();
+    editInfo();
+  }
 };
 
 onMounted(async () => {
-  window.addEventListener("keypress", onTypeE);
+  window.addEventListener("keydown", onTypeE);
   if (!store.state.builder.room || store.state.builder.room != route.params.room_id) {
     const room = await store.dispatch("builder/room_fetch", {
       world_id: route.params.world_id,
@@ -122,7 +135,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  window.removeEventListener("keypress", onTypeE);
+  window.removeEventListener("keydown", onTypeE);
 });
 
 const editInfo = () => {
