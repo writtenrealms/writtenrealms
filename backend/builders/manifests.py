@@ -417,16 +417,29 @@ def _serialize_room_reference(room: Room | None) -> dict[str, Any] | None:
     }
 
 
-def world_config_to_manifest(*, world: World) -> dict[str, Any]:
+def _serialize_world_room_reference(*, room: Room | None, mode: str) -> str:
+    if room is None:
+        return ""
+    if mode == "key":
+        return _entity_key("room", room.id)
+    if mode == "coords":
+        return f"room@{room.x},{room.y},{room.z}"
+    raise ValueError(f"Unsupported world room reference mode '{mode}'.")
+
+
+def world_config_to_manifest(
+    *,
+    world: World,
+    manifest_kind: str = WORLD_CONFIG_MANIFEST_KIND,
+    include_metadata: bool = True,
+    room_reference_mode: str = "key",
+) -> dict[str, Any]:
     config = world.config
     if not config:
         raise serializers.ValidationError("World has no config to serialize.")
 
     manifest = {
-        "kind": WORLD_CONFIG_MANIFEST_KIND,
-        "metadata": {
-            "world": _entity_key(_WORLD_KEY_PREFIX, world.id),
-        },
+        "kind": manifest_kind,
         "spec": {
             "name": world.name or "",
             "short_description": world.short_description or "",
@@ -434,15 +447,13 @@ def world_config_to_manifest(*, world: World) -> dict[str, Any]:
             "motd": world.motd or "",
             "is_public": bool(world.is_public),
             "starting_gold": int(config.starting_gold),
-            "starting_room": (
-                _entity_key("room", config.starting_room_id)
-                if config.starting_room_id
-                else ""
+            "starting_room": _serialize_world_room_reference(
+                room=config.starting_room,
+                mode=room_reference_mode,
             ),
-            "death_room": (
-                _entity_key("room", config.death_room_id)
-                if config.death_room_id
-                else ""
+            "death_room": _serialize_world_room_reference(
+                room=config.death_room,
+                mode=room_reference_mode,
             ),
             "death_mode": config.death_mode,
             "death_route": config.death_route,
@@ -462,11 +473,26 @@ def world_config_to_manifest(*, world: World) -> dict[str, Any]:
             "name_exclusions": config.name_exclusions or "",
         },
     }
+    if include_metadata:
+        manifest["metadata"] = {
+            "world": _entity_key(_WORLD_KEY_PREFIX, world.id),
+        }
     return manifest
 
 
-def serialize_world_config_manifest(*, world: World) -> dict[str, Any]:
-    manifest = world_config_to_manifest(world=world)
+def serialize_world_config_manifest(
+    *,
+    world: World,
+    manifest_kind: str = WORLD_CONFIG_MANIFEST_KIND,
+    include_metadata: bool = True,
+    room_reference_mode: str = "key",
+) -> dict[str, Any]:
+    manifest = world_config_to_manifest(
+        world=world,
+        manifest_kind=manifest_kind,
+        include_metadata=include_metadata,
+        room_reference_mode=room_reference_mode,
+    )
     return {
         "manifest": manifest,
         "yaml": manifest_to_yaml(manifest),
@@ -478,7 +504,12 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
     if not config:
         raise serializers.ValidationError("World has no config to serialize.")
 
-    manifest_data = serialize_world_config_manifest(world=world)
+    manifest_data = serialize_world_config_manifest(
+        world=world,
+        manifest_kind="world",
+        include_metadata=False,
+        room_reference_mode="coords",
+    )
     return {
         "world": {
             "id": world.id,

@@ -20,27 +20,38 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
             "builder-world-config",
             args=[self.world.pk],
         )
+        self.export_ep = reverse(
+            "builder-world-export",
+            args=[self.world.pk],
+        )
         self.apply_ep = reverse(
             "builder-world-manifest-apply",
             args=[self.world.pk],
         )
 
-    def test_world_config_endpoint_includes_manifest_yaml(self):
-        resp = self.client.get(self.config_ep)
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("world", resp.data)
-        self.assertIn("config", resp.data)
-        self.assertIn("manifest", resp.data)
-        self.assertIn("yaml", resp.data)
-        self.assertEqual(resp.data["world"]["id"], self.world.id)
-        self.assertEqual(resp.data["world"]["name"], self.world.name)
-        self.assertEqual(resp.data["config"]["starting_room"]["id"], self.room.id)
+    def test_world_config_endpoint_matches_export_world_document(self):
+        config_resp = self.client.get(self.config_ep)
+        self.assertEqual(config_resp.status_code, 200)
+        self.assertIn("world", config_resp.data)
+        self.assertIn("config", config_resp.data)
+        self.assertIn("manifest", config_resp.data)
+        self.assertIn("yaml", config_resp.data)
+        self.assertEqual(config_resp.data["world"]["id"], self.world.id)
+        self.assertEqual(config_resp.data["world"]["name"], self.world.name)
+        self.assertEqual(config_resp.data["config"]["starting_room"]["id"], self.room.id)
 
-        manifest = yaml.safe_load(resp.data["yaml"])
-        self.assertEqual(manifest["kind"], "worldconfig")
-        self.assertEqual(manifest["metadata"]["world"], f"world.{self.world.id}")
-        self.assertEqual(manifest["spec"]["name"], self.world.name)
-        self.assertEqual(manifest["spec"]["starting_room"], f"room.{self.room.id}")
+        export_resp = self.client.get(self.export_ep)
+        self.assertEqual(export_resp.status_code, 200)
+        export_docs = [doc for doc in yaml.safe_load_all(export_resp.data["yaml"]) if doc is not None]
+        world_manifest = export_docs[-1]
+
+        self.assertEqual(config_resp.data["manifest"], world_manifest)
+        self.assertEqual(yaml.safe_load(config_resp.data["yaml"]), world_manifest)
+        self.assertEqual(world_manifest["kind"], "world")
+        self.assertNotIn("metadata", world_manifest)
+        self.assertEqual(world_manifest["spec"]["name"], self.world.name)
+        self.assertEqual(world_manifest["spec"]["starting_room"], "room@0,0,0")
+        self.assertEqual(world_manifest["spec"]["death_room"], "room@0,0,0")
 
     def test_apply_world_config_manifest_updates_world_and_config(self):
         spawn_world = self.world.spawned_worlds.first()

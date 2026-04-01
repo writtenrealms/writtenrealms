@@ -576,14 +576,12 @@ def _serialize_trigger_manifest(trigger: Trigger) -> dict[str, Any]:
 
 
 def _serialize_world_manifest(world: World) -> dict[str, Any]:
-    config_manifest = builder_manifests.world_config_to_manifest(world=world)
-    spec = copy.deepcopy(config_manifest["spec"])
-    spec["starting_room"] = _room_ref(world.config.starting_room)
-    spec["death_room"] = _room_ref(world.config.death_room)
-    return {
-        "kind": WORLD_MANIFEST_KIND,
-        "spec": spec,
-    }
+    return builder_manifests.world_config_to_manifest(
+        world=world,
+        manifest_kind=WORLD_MANIFEST_KIND,
+        include_metadata=False,
+        room_reference_mode="coords",
+    )
 
 
 def serialize_world_documents(world: World) -> list[dict[str, Any]]:

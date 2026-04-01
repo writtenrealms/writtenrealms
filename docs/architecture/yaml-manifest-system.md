@@ -184,12 +184,10 @@ metadata:
 
 ## World Config Manifest Shape
 
-World config edits are update-only manifests (no create/delete mode). Exported world docs use `kind: world`, and `kind: worldconfig` is still accepted for compatibility:
+World config edits are update-only manifests (no create/delete mode). The config screen and the full world export now emit the same single world document shape, and `kind: worldconfig` is still accepted for compatibility:
 
 ```yaml
-kind: worldconfig
-metadata:
-  world: world.1
+kind: world
 spec:
   name: Edeus
   short_description: Core setting text
@@ -197,8 +195,8 @@ spec:
   motd: Questions? Join Discord.
   is_public: true
   starting_gold: 0
-  starting_room: room.1
-  death_room: room.2
+  starting_room: room@0,0,0
+  death_room: room@10,0,0
   death_mode: lose_gold
   death_route: nearest_in_zone
   pvp_mode: zone
@@ -266,7 +264,7 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 
 ## Validation Rules (Current)
 
-- `kind` must resolve to `trigger` or `worldconfig` (case-insensitive).
+- `kind` must resolve to `trigger`, `world`, or `worldconfig` (case-insensitive).
 - `worldconfig` aliases `world-config` and `world_config` are accepted.
 - For update: `metadata.id` or `metadata.key` must reference an existing trigger in the selected world.
 - For create: omit both `metadata.id` and `metadata.key`.
@@ -287,14 +285,14 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 - For world config manifests:
   - only `operation: apply` is supported
   - `spec` fields are validated against the world/world-config schema
-  - room references (`starting_room`, `death_room`) must exist in world
+  - room references (`starting_room`, `death_room`) must resolve to rooms in the selected world
 
 Permission checks are applied when editing via manifest:
 
 - rank 3+ builders can edit all trigger scopes
 - rank 1-2 builders can edit room/zone targets only when assigned
 - rank 1-2 builders cannot edit world-scoped triggers
-- rank 1-2 builders cannot edit `worldconfig` manifests
+- rank 1-2 builders cannot edit world config manifests (`world` / `worldconfig`)
 
 ## Implementation Notes
 
@@ -315,7 +313,7 @@ Permission checks are applied when editing via manifest:
 3. Open **World > Edit World**.
 4. Paste the YAML and edit desired `spec` fields.
 5. Submit manifest.
-6. Verify response indicates `kind: worldconfig` and `operation: updated`.
+6. Verify response indicates `kind: world` and `operation: updated`.
 
 ## How To Add A New Trigger (Builder Workflow)
 
