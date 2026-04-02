@@ -175,7 +175,7 @@ Supported discovery source shapes:
 | `type`         | Required fields                     | Behavior                                                                                                                      |
 | -------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `auto_start`   | none                                | Starts automatically on `cmd.state.sync.success`, `cmd.look.success`, or `cmd.move.success`.                                  |
-| `room_prompt`  | `room` or `room_id`                 | Shows as an opportunity when the player is in that room. The room reference can be an integer id or `room.<id>`.              |
+| `room_prompt`  | `room` or `room_id`                 | Shows as an opportunity when the player is in that room. The room reference can be an integer id, `room.<id>`, or portable `room@x,y,z`. |
 | `npc_dialogue` | `mob_template` or `mob_template_id` | Shows through NPC dialogue and room UI markers. Mob refs can be ids, `mobtemplate.<id>`, `mobtemplate.<slug>`, or bare slugs. |
 
 

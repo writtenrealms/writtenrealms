@@ -3,6 +3,7 @@ import collections
 
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.utils import timezone
 
 from rest_framework import serializers
 from rest_framework.reverse import reverse
@@ -44,7 +45,7 @@ from builders.models import (
 from builders import serializers as builder_serializers
 from tests.base import WorldTestCase
 from spawns import serializers as spawn_serializers
-from spawns.models import Player, Mob, DoorState
+from spawns.models import Player, Mob, DoorState, Item
 from users.models import User
 from worlds.models import World, Zone, Room, RoomFlag, RoomDetail, Door
 
@@ -181,6 +182,170 @@ class TestEditWorld(WorldTestCase):
         self.world.refresh_from_db()
         self.assertTrue(self.world.maintenance_mode)
         self.assertEqual(self.world.maintenance_msg, msg)
+
+
+class TestWorldAdminInstanceEndpoint(BuilderTestCase):
+
+    def setUp(self):
+        super().setUp()
+        self.endpoint = reverse(
+            'builder-world-admin-instance',
+            args=[self.world.pk, self.spawn_world.pk],
+        )
+        self.reset_endpoint = reverse(
+            'builder-world-admin-instance-reset',
+            args=[self.world.pk, self.spawn_world.pk],
+        )
+
+    def test_returns_wr2_spawn_dashboard_metrics(self):
+        now = timezone.now()
+
+        self.player.world = self.spawn_world
+        self.player.room = self.room
+        self.player.in_game = True
+        self.player.last_connection_ts = now
+        self.player.last_action_ts = now
+        self.player.save(update_fields=[
+            'world',
+            'room',
+            'in_game',
+            'last_connection_ts',
+            'last_action_ts',
+        ])
+
+        offline_player = self.create_player(
+            'Offline Joe',
+            world=self.spawn_world,
+            room=self.room,
+        )
+        offline_player.in_game = False
+        offline_player.save(update_fields=['in_game'])
+
+        Mob.objects.create(
+            name='Live Wolf',
+            world=self.spawn_world,
+            room=self.room,
+        )
+        Mob.objects.create(
+            name='Pending Wolf',
+            world=self.spawn_world,
+            room=self.room,
+            is_pending_deletion=True,
+        )
+
+        ground_item = Item.objects.create(
+            name='Ground Rock',
+            world=self.spawn_world,
+            container=self.room,
+        )
+        chest = Item.objects.create(
+            name='Travel Chest',
+            type=adv_consts.ITEM_TYPE_CONTAINER,
+            world=self.spawn_world,
+            container=self.room,
+        )
+        Item.objects.create(
+            name='Nested Gem',
+            world=self.spawn_world,
+            container=chest,
+        )
+        Item.objects.create(
+            name='Lantern',
+            world=self.spawn_world,
+            container=self.player,
+        )
+        Item.objects.create(
+            name='Pending Dust',
+            world=self.spawn_world,
+            container=ground_item,
+            is_pending_deletion=True,
+        )
+
+        self.spawn_world.last_loader_run_ts = now
+        self.spawn_world.last_extraction_ts = now
+        self.spawn_world.last_entered_ts = now
+        self.spawn_world.last_played_ts = now
+        self.spawn_world.save(update_fields=[
+            'last_loader_run_ts',
+            'last_extraction_ts',
+            'last_entered_ts',
+            'last_played_ts',
+        ])
+
+        resp = self.client.get(self.endpoint)
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['id'], self.spawn_world.id)
+        self.assertEqual(resp.data['lifecycle_details']['current'], self.spawn_world.lifecycle)
+        self.assertEqual(resp.data['counts']['mobs_loaded'], 1)
+        self.assertEqual(resp.data['counts']['mobs_pending_deletion'], 1)
+        self.assertEqual(resp.data['counts']['items_total'], 4)
+        self.assertEqual(resp.data['counts']['items_on_ground'], 2)
+        self.assertEqual(resp.data['counts']['items_pending_deletion'], 1)
+        self.assertEqual(resp.data['counts']['players_logged_in'], 1)
+        self.assertEqual(resp.data['counts']['player_records'], 2)
+        self.assertEqual(resp.data['counts']['items_by_container_type']['rooms'], 2)
+        self.assertEqual(resp.data['counts']['items_by_container_type']['players'], 1)
+        self.assertEqual(resp.data['counts']['items_by_container_type']['inside_items'], 1)
+        self.assertEqual(resp.data['counts']['items_by_container_type']['without_container'], 0)
+        self.assertEqual(len(resp.data['active_players']), 1)
+        self.assertEqual(resp.data['active_players'][0]['name'], self.player.name)
+        self.assertEqual(resp.data['active_players'][0]['room']['name'], self.room.name)
+
+    def test_rejects_spawn_world_from_another_template_world(self):
+        other_world = World.objects.new_world(
+            name='Elsewhere',
+            author=self.user,
+        )
+        other_spawn = other_world.create_spawn_world()
+
+        resp = self.client.get(
+            reverse(
+                'builder-world-admin-instance',
+                args=[self.world.pk, other_spawn.pk],
+            )
+        )
+
+        self.assertEqual(resp.status_code, 404)
+
+    def test_reset_cleans_stopped_spawn_world(self):
+        self.spawn_world.set_lifecycle(api_consts.WORLD_LIFECYCLE_STOPPED)
+
+        mob = Mob.objects.create(
+            name='Live Wolf',
+            world=self.spawn_world,
+            room=self.room,
+        )
+        rock = Item.objects.create(
+            name='Ground Rock',
+            world=self.spawn_world,
+            container=self.room,
+        )
+        apple = Item.objects.create(
+            name='Apple',
+            world=self.spawn_world,
+            container=self.player,
+        )
+
+        resp = self.client.post(self.reset_endpoint)
+
+        self.assertEqual(resp.status_code, 200)
+        self.spawn_world.refresh_from_db()
+        self.assertEqual(self.spawn_world.lifecycle, api_consts.WORLD_LIFECYCLE_STOPPED)
+        self.assertTrue(self.spawn_world.is_clean)
+        self.assertFalse(Mob.objects.filter(pk=mob.pk).exists())
+        self.assertFalse(Item.objects.filter(pk=rock.pk).exists())
+        self.assertTrue(Item.objects.filter(pk=apple.pk).exists())
+        self.assertEqual(resp.data['counts']['mobs_loaded'], 0)
+        self.assertEqual(resp.data['counts']['items_on_ground'], 0)
+        self.assertEqual(resp.data['counts']['items_total'], 1)
+
+    def test_reset_requires_stopped_lifecycle(self):
+        self.spawn_world.set_lifecycle(api_consts.WORLD_LIFECYCLE_RUNNING)
+
+        resp = self.client.post(self.reset_endpoint)
+
+        self.assertEqual(resp.status_code, 400)
 
 
 class TestZoneEndpoints(BuilderTestCase):

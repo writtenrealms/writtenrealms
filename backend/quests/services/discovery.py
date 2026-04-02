@@ -6,7 +6,7 @@ from typing import Iterable
 
 from django.utils import timezone
 
-from quests.entity_refs import resolve_template_ref_id
+from quests.entity_refs import resolve_room_ref_id, resolve_template_ref_id
 from spawns.events import GameEvent
 from quests.models import QuestOfferState, QuestTemplate
 from quests.services.engine import (
@@ -23,24 +23,6 @@ from quests.services.predicates import evaluate_condition
 class DiscoveryRefreshResult:
     opportunities: list[dict] = field(default_factory=list)
     events: list[GameEvent] = field(default_factory=list)
-
-
-def _parse_entity_id(value, expected_prefix: str) -> int | None:
-    if value is None or value == "":
-        return None
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    text = str(value).strip()
-    if not text:
-        return None
-    if text.isdigit():
-        return int(text)
-    prefix, sep, raw_id = text.partition(".")
-    if sep != "." or prefix != expected_prefix or not raw_id.isdigit():
-        return None
-    return int(raw_id)
 
 
 def _source_type(source: dict) -> str:
@@ -69,7 +51,10 @@ def _source_matches_player(
         return True
 
     if source_type == "room_prompt":
-        room_id = _parse_entity_id(source.get("room") or source.get("room_id"), "room")
+        room_id = resolve_room_ref_id(
+            world=template.world,
+            value=source.get("room") or source.get("room_id"),
+        )
         if room_id is None:
             return False
         return player.room_id == room_id

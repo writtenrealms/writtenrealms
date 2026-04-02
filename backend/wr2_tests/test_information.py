@@ -112,6 +112,24 @@ class TestStateSyncText(WorldTestCase):
         self.assertEqual(actor["mana_max"], stats["mana_max"])
         self.assertEqual(actor["stamina_max"], stats["stamina_max"])
 
+    def test_state_sync_room_chars_include_primary_keyword(self):
+        mob = self.create_mob("Gus Tone", keywords="gus tone")
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="state.sync",
+                player_id=self.player.id,
+                payload={},
+            )
+
+        message = self._message_by_type(messages, "cmd.state.sync.success")
+        self.assertIsNotNone(message)
+
+        room_chars = message["data"]["room"]["chars"]
+        mob_payload = next(char for char in room_chars if char["key"] == mob.key)
+        self.assertEqual(mob_payload["keywords"], "gus tone")
+        self.assertEqual(mob_payload["keyword"], "gus")
+
 
 class TestStateSyncMapKeys(WorldTestCase):
     def _message_by_type(self, messages, message_type):

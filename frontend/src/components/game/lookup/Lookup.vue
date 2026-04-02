@@ -12,6 +12,7 @@
 import { computed } from 'vue';
 import { useStore } from 'vuex';
 import _ from 'lodash';
+import { buildCharActions } from "@/core/charActions";
 import LookupItem from '@/components/game/lookup/LookupItem.vue';
 import LookupChar from '@/components/game/lookup/LookupChar.vue';
 import LookupNotFound from '@/components/game/lookup/LookupNotFound.vue';
@@ -46,19 +47,6 @@ const ITEM_ACTIONS = [
   "upgrade",
   "eat",
   "use",
-];
-
-const CHAR_ACTIONS = [
-  "kill",
-  "enquire",
-  "list",
-  "offer",
-  "complete",
-  "craft",
-  "upgrade",
-  "follow",
-  "unfollow",
-  "group",
 ];
 
 const getKeyType = (key: string) => (key ? key.split(".")[0] : "");
@@ -275,21 +263,11 @@ const normalizeLookupChar = (sourceChar: any) => {
 
   if (!char.keywords) char.keywords = "";
   if (!char.keyword) char.keyword = getKeyword(char);
-
-  const actions = actionsAsMap(char.actions, CHAR_ACTIONS);
-  const questData = char.quest_data || {};
-  if (questData.complete) actions.complete = true;
-  if (questData.enquire) actions.enquire = true;
-  if (char.is_merchant) {
-    actions.list = true;
-    actions.offer = true;
-  }
-  if (char.is_crafter) actions.craft = true;
-  if (char.is_upgrader) actions.upgrade = true;
-  if (char.completion_action && !actions.completion_action) {
-    actions.completion_action = char.completion_action;
-  }
-  char.actions = actions;
+  char.actions = buildCharActions(
+    char,
+    store.state.game.player,
+    store.state.game.world
+  );
 
   return char;
 };

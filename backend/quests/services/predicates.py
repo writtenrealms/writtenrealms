@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from quests.entity_refs import canonical_template_type, resolve_template_ref_id
+from quests.entity_refs import canonical_template_type, resolve_room_ref_id, resolve_template_ref_id
 
 
 def _walk_value(value: Any, segments: list[str]) -> Any:
@@ -94,12 +94,33 @@ def _template_ref_type_for_path(path: str, value: Any = None) -> str | None:
     return "mobtemplate"
 
 
+def _path_uses_room_ref(path: str, value: Any = None, *, event_data: dict[str, Any] | None = None) -> bool:
+    path = str(path or "").strip()
+    if path in {"player.room_id", "player.room.id"}:
+        return True
+    if path == "event.target.id" and str((event_data or {}).get("target_type") or "").strip().lower() == "room":
+        return True
+
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text:
+        return False
+    if not (
+        text.startswith("room@")
+        or (text.startswith("room.") and text.partition(".")[2].isdigit())
+    ):
+        return False
+    return path.endswith(".id") or path.endswith("_id") or path == "event.target.id"
+
+
 def _resolve_comparison_value(
     path: str,
     value: Any,
     *,
     player=None,
     template=None,
+    event_data: dict[str, Any] | None = None,
 ) -> Any:
     expected_type = _template_ref_type_for_path(path, value)
     world = getattr(template, "world", None) or getattr(player, "world", None)
@@ -111,6 +132,10 @@ def _resolve_comparison_value(
         )
         if resolved_id is not None:
             return resolved_id
+    if world and _path_uses_room_ref(path, value, event_data=event_data):
+        resolved_room_id = resolve_room_ref_id(world=world, value=value)
+        if resolved_room_id is not None:
+            return resolved_room_id
     return value
 
 
@@ -221,6 +246,7 @@ def evaluate_condition(
             ),
             player=player,
             template=template,
+            event_data=event_data,
         )
         return predicate(left, right)
 
@@ -250,6 +276,7 @@ def evaluate_condition(
                 candidate,
                 player=player,
                 template=template,
+                event_data=event_data,
             )
             for candidate in candidates
         ]

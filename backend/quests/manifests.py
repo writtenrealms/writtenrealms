@@ -12,6 +12,7 @@ from rest_framework import serializers
 from quests.entity_refs import (
     canonical_template_type,
     is_dynamic_reference,
+    resolve_room_ref_id,
     resolve_template_ref_id,
 )
 from quests.models import (
@@ -230,6 +231,26 @@ def _validate_template_ref(world: World, value: Any, expected_type: str, field_n
         raise serializers.ValidationError(f"{field_name} references an unknown {expected}.")
 
 
+def _room_ref_error(field_name: str) -> str:
+    return (
+        f"{field_name} must be an integer id, a 'room.<id>' key, "
+        "or a 'room@x,y,z' coordinate ref."
+    )
+
+
+def _validate_room_ref(world: World, value: Any, field_name: str) -> None:
+    if value in (None, ""):
+        return
+    if isinstance(value, bool):
+        raise serializers.ValidationError(_room_ref_error(field_name))
+
+    resolved_id = resolve_room_ref_id(world=world, value=value)
+    if resolved_id is None:
+        raise serializers.ValidationError(_room_ref_error(field_name))
+    if not world.rooms.filter(pk=resolved_id).exists():
+        raise serializers.ValidationError(f"{field_name} references an unknown room.")
+
+
 def _condition_expected_template_type(left_path: Any, right_value: Any = None) -> str | None:
     if isinstance(right_value, str):
         prefix, sep, _ = right_value.strip().partition(".")
@@ -244,6 +265,58 @@ def _condition_expected_template_type(left_path: Any, right_value: Any = None) -
     if ".item.template_id" in path:
         return "itemtemplate"
     return "mobtemplate"
+
+
+def _condition_sets_event_target_room(condition: Any) -> bool:
+    if not isinstance(condition, dict):
+        return False
+
+    raw_args = condition.get("eq")
+    if isinstance(raw_args, (list, tuple)) and len(raw_args) == 2:
+        if str(raw_args[0]).strip() == "event.target_type" and str(raw_args[1]).strip().lower() == "room":
+            return True
+
+    raw_args = condition.get("in")
+    if isinstance(raw_args, (list, tuple)) and len(raw_args) == 2:
+        if str(raw_args[0]).strip() != "event.target_type":
+            return False
+        candidates = raw_args[1]
+        if not isinstance(candidates, (list, tuple, set)):
+            return False
+        return any(str(candidate).strip().lower() == "room" for candidate in candidates)
+
+    return False
+
+
+def _condition_list_targets_room(conditions: Any) -> bool:
+    if not isinstance(conditions, list):
+        return False
+    return any(_condition_sets_event_target_room(condition) for condition in conditions)
+
+
+def _condition_uses_room_ref(
+    left_path: Any,
+    right_value: Any = None,
+    *,
+    event_target_is_room: bool = False,
+) -> bool:
+    path = str(left_path or "").strip()
+    if path in {"player.room_id", "player.room.id"}:
+        return True
+    if path == "event.target.id" and event_target_is_room:
+        return True
+
+    if not isinstance(right_value, str):
+        return False
+    text = right_value.strip()
+    if not text:
+        return False
+    if not (
+        text.startswith("room@")
+        or (text.startswith("room.") and text.partition(".")[2].isdigit())
+    ):
+        return False
+    return path.endswith(".id") or path.endswith("_id") or path == "event.target.id"
 
 
 def _validate_condition_template_refs(world: World, condition: Any, field_name: str) -> None:
@@ -292,6 +365,87 @@ def _validate_condition_template_refs(world: World, condition: Any, field_name: 
                 expected_type,
                 f"{field_name}.{operator}[1]",
             )
+
+
+def _validate_condition_room_refs(
+    world: World,
+    condition: Any,
+    field_name: str,
+    *,
+    event_target_is_room: bool = False,
+) -> None:
+    if condition in (None, {}, []):
+        return
+    if isinstance(condition, list):
+        for index, item in enumerate(condition):
+            _validate_condition_room_refs(
+                world,
+                item,
+                f"{field_name}[{index}]",
+                event_target_is_room=event_target_is_room,
+            )
+        return
+    if not isinstance(condition, dict):
+        return
+
+    if "all" in condition:
+        child_conditions = condition.get("all")
+        _validate_condition_room_refs(
+            world,
+            child_conditions,
+            f"{field_name}.all",
+            event_target_is_room=event_target_is_room or _condition_list_targets_room(child_conditions),
+        )
+    if "any" in condition:
+        _validate_condition_room_refs(
+            world,
+            condition.get("any"),
+            f"{field_name}.any",
+            event_target_is_room=event_target_is_room,
+        )
+    if "not" in condition:
+        _validate_condition_room_refs(
+            world,
+            condition.get("not"),
+            f"{field_name}.not",
+            event_target_is_room=event_target_is_room,
+        )
+
+    for operator in ("eq", "ne", "gte", "lte", "in"):
+        raw_args = condition.get(operator)
+        if not isinstance(raw_args, (list, tuple)) or len(raw_args) != 2:
+            continue
+
+        left_path = raw_args[0]
+        right_value = raw_args[1]
+        uses_room_ref = _condition_uses_room_ref(
+            left_path,
+            right_value,
+            event_target_is_room=event_target_is_room,
+        ) or _condition_uses_room_ref(
+            left_path,
+            None,
+            event_target_is_room=event_target_is_room,
+        )
+
+        if not uses_room_ref and operator == "in" and isinstance(right_value, (list, tuple, set)):
+            uses_room_ref = any(
+                _condition_uses_room_ref(
+                    left_path,
+                    candidate,
+                    event_target_is_room=event_target_is_room,
+                )
+                for candidate in right_value
+            )
+        if not uses_room_ref:
+            continue
+
+        if operator == "in" and isinstance(right_value, (list, tuple, set)):
+            for index, candidate in enumerate(right_value):
+                _validate_room_ref(world, candidate, f"{field_name}.{operator}[1][{index}]")
+            continue
+
+        _validate_room_ref(world, right_value, f"{field_name}.{operator}[1]")
 
 
 def _validate_effect_template_refs(world: World, effects: list[dict[str, Any]] | None, field_name: str) -> None:
@@ -351,6 +505,12 @@ def _validate_quest_template_refs(
         if not isinstance(source, dict):
             continue
         source_type = str(source.get("type") or "").strip().lower()
+        if source_type == "room_prompt":
+            _validate_room_ref(
+                world,
+                source.get("room") or source.get("room_id"),
+                f"spec.discovery.sources[{index}].room",
+            )
         if source_type == "npc_dialogue":
             _validate_template_ref(
                 world,
@@ -360,7 +520,9 @@ def _validate_quest_template_refs(
             )
 
     _validate_condition_template_refs(world, discovery_policy.get("visible_if"), "spec.discovery.visible_if")
+    _validate_condition_room_refs(world, discovery_policy.get("visible_if"), "spec.discovery.visible_if")
     _validate_condition_template_refs(world, discovery_policy.get("accept_if"), "spec.discovery.accept_if")
+    _validate_condition_room_refs(world, discovery_policy.get("accept_if"), "spec.discovery.accept_if")
     _validate_slot_schema_template_refs(world, slot_schema)
 
     for step_index, step in enumerate(steps):
@@ -376,10 +538,20 @@ def _validate_quest_template_refs(
                 tracker.get("where"),
                 f"spec.steps[{step_index}].objectives[{objective_index}].tracker.where",
             )
+            _validate_condition_room_refs(
+                world,
+                tracker.get("where"),
+                f"spec.steps[{step_index}].objectives[{objective_index}].tracker.where",
+            )
         for choice_index, choice in enumerate(step.get("choices") or []):
             if not isinstance(choice, dict):
                 continue
             _validate_condition_template_refs(
+                world,
+                choice.get("if"),
+                f"spec.steps[{step_index}].choices[{choice_index}].if",
+            )
+            _validate_condition_room_refs(
                 world,
                 choice.get("if"),
                 f"spec.steps[{step_index}].choices[{choice_index}].if",
@@ -393,6 +565,11 @@ def _validate_quest_template_refs(
             if not isinstance(transition, dict):
                 continue
             _validate_condition_template_refs(
+                world,
+                transition.get("when"),
+                f"spec.steps[{step_index}].transitions[{transition_index}].when",
+            )
+            _validate_condition_room_refs(
                 world,
                 transition.get("when"),
                 f"spec.steps[{step_index}].transitions[{transition_index}].when",

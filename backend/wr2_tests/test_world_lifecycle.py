@@ -4,11 +4,12 @@ from django.test import override_settings
 from django.utils import timezone
 
 from config import constants as api_consts
-from spawns.models import Mob
+from spawns.models import Item, Mob
 from spawns.services import WorldGate
 from tests.base import WorldTestCase
 from worlds.services import WorldSmith
 from worlds.tasks import monitor_worlds
+from rest_framework import serializers
 
 
 class TestStartWorld(WorldTestCase):
@@ -35,6 +36,43 @@ class TestStartWorld(WorldTestCase):
         self.assertEqual(spawn_world.lifecycle, api_consts.WORLD_LIFECYCLE_STOPPED)
         self.assertFalse(Mob.objects.filter(pk=mob.pk).exists())
 
+    def test_reset_world(self):
+        spawn_world = self.world.create_spawn_world()
+        spawn_world.set_lifecycle(api_consts.WORLD_LIFECYCLE_STOPPED)
+        spawn_room = spawn_world.context.config.starting_room
+
+        mob = Mob.objects.create(
+            world=spawn_world,
+            room=spawn_room,
+            name="Target",
+            keywords="target",
+        )
+        ground_item = Item.objects.create(
+            world=spawn_world,
+            container=spawn_room,
+            name="Rock",
+        )
+        held_item = Item.objects.create(
+            world=spawn_world,
+            container=self.player,
+            name="Apple",
+        )
+
+        service = WorldSmith(spawn_world)
+        service.reset()
+
+        self.assertEqual(spawn_world.lifecycle, api_consts.WORLD_LIFECYCLE_STOPPED)
+        self.assertFalse(Mob.objects.filter(pk=mob.pk).exists())
+        self.assertFalse(Item.objects.filter(pk=ground_item.pk).exists())
+        self.assertTrue(Item.objects.filter(pk=held_item.pk).exists())
+
+    def test_reset_world_requires_stopped_lifecycle(self):
+        spawn_world = self.world.create_spawn_world()
+        service = WorldSmith(spawn_world)
+
+        with self.assertRaises(serializers.ValidationError):
+            service.reset()
+
     @override_settings(
         WR_AI_EVENT_FORWARD_URL="http://localhost:8071/v1/events",
         WR_AI_EVENT_TYPES="mob.destroyed",
@@ -51,7 +89,8 @@ class TestStartWorld(WorldTestCase):
             keywords="target",
         )
 
-        spawn_world.cleanup()
+        with self.captureOnCommitCallbacks(execute=True):
+            spawn_world.cleanup()
 
         self.assertFalse(Mob.objects.filter(pk=mob.pk).exists())
         mock_forward_delay.assert_called_once()

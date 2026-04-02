@@ -35,7 +35,6 @@ import CombatMessage from '@/components/game/console/CombatMessage.vue';
 import Compare from '@/components/game/console/Compare.vue';
 import DeathMessage from '@/components/game/console//DeathMessage.vue';
 import Effect from '@/components/game/console/Effect.vue';
-import Enquire from '@/components/game/console//Enquire.vue';
 import Equipment from "@/components/game/console/Equipment.vue";
 import EventBus from "@/core/eventbus";
 import Exits from "@/components/game/console/Exits.vue";
@@ -71,7 +70,6 @@ const consoleMessage = (message) => {
     "notification.death": DeathMessage,
     "effect.start": Effect,
     "cmd.equipment.success": Equipment,
-    "cmd.enquire.success": Enquire,
     "cmd.exits.success": Exits,
     "cmd.factions.success": Factions,
     "cmd.feats.success": Feats,

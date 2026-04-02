@@ -434,6 +434,100 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
         self.assertIn("completed", error_message["text"])
 
 
+class TestPortableRoomRefsQuestRuntime(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.room_two = self.room.create_at("east")
+        self.room_three = self.room_two.create_at("east")
+        self.create_runtime_quest(
+            slug="portable_shrine_survey",
+            name="Portable Shrine Survey",
+            discovery_policy={
+                "sources": [
+                    {
+                        "type": "room_prompt",
+                        "room": f"room@{self.room.x},{self.room.y},{self.room.z}",
+                    }
+                ],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 20,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "survey",
+                    "kind": "objective",
+                    "recap": "Inspect both shrines.",
+                    "objectives": [
+                        {
+                            "id": "inspect_shrines",
+                            "text": "Inspect both shrines.",
+                            "tracker": {
+                                "event": "cmd.look.success",
+                                "where": {
+                                    "all": [
+                                        {"eq": ["event.target_type", "room"]},
+                                        {
+                                            "in": [
+                                                "event.target.id",
+                                                [
+                                                    f"room@{self.room_two.x},{self.room_two.y},{self.room_two.z}",
+                                                    f"room@{self.room_three.x},{self.room_three.y},{self.room_three.z}",
+                                                ],
+                                            ]
+                                        },
+                                    ]
+                                },
+                            },
+                            "progress": {
+                                "mode": "unique_count",
+                                "target": 2,
+                                "distinct_by": "event.target.id",
+                            },
+                        }
+                    ],
+                    "transitions": [
+                        {
+                            "when": {"objective_complete": "inspect_shrines"},
+                            "goto": "resolved",
+                        }
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "Survey complete.",
+                },
+            ],
+        )
+
+    def test_room_prompt_and_room_objectives_accept_coordinate_refs(self):
+        with capture_game_messages() as discovery_messages:
+            dispatch_text_command(self.player.id, "look")
+
+        self.assertIn("quest.opportunity.available", self._message_types(discovery_messages))
+
+        with capture_game_messages() as accept_messages:
+            dispatch_text_command(self.player.id, "quest accept portable_shrine_survey")
+
+        self.assertIn("quest.instance.started", self._message_types(accept_messages))
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "east")
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "look")
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "east")
+        with capture_game_messages() as final_messages:
+            dispatch_text_command(self.player.id, "look")
+
+        self.assertIn("quest.instance.resolved", self._message_types(final_messages))
+        quest_instance = QuestInstance.objects.get(player=self.player, template__slug="portable_shrine_survey")
+        self.assertEqual(quest_instance.status, "resolved")
+        self.assertEqual(quest_instance.resolution, "complete")
+
+
 class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
     def setUp(self):
         super().setUp()

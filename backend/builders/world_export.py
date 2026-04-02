@@ -422,22 +422,63 @@ def _canonicalize_template_ref(
     return f"{expected_type}.{template.slug}"
 
 
-def _canonicalize_condition_refs(condition: Any, *, world: World) -> Any:
+def _canonicalize_room_ref(value: Any, *, world: World) -> Any:
+    if value in (None, "", [], {}):
+        return value
+    if quest_entity_refs.is_dynamic_reference(value):
+        return value
+
+    room_id = quest_entity_refs.resolve_room_ref_id(world=world, value=value)
+    if room_id is None:
+        return value
+
+    room = Room.objects.filter(world=world, pk=room_id).first()
+    if room is None:
+        return value
+    return _room_ref(room)
+
+
+def _canonicalize_condition_refs(
+    condition: Any,
+    *,
+    world: World,
+    event_target_is_room: bool = False,
+) -> Any:
     if condition in (None, {}, []):
         return condition
     if isinstance(condition, list):
-        return [_canonicalize_condition_refs(item, world=world) for item in condition]
+        return [
+            _canonicalize_condition_refs(
+                item,
+                world=world,
+                event_target_is_room=event_target_is_room,
+            )
+            for item in condition
+        ]
     if not isinstance(condition, dict):
         return condition
 
     canonical = copy.deepcopy(condition)
 
     if "all" in canonical:
-        canonical["all"] = _canonicalize_condition_refs(canonical.get("all"), world=world)
+        child_conditions = canonical.get("all")
+        canonical["all"] = _canonicalize_condition_refs(
+            child_conditions,
+            world=world,
+            event_target_is_room=event_target_is_room or quest_manifests._condition_list_targets_room(child_conditions),
+        )
     if "any" in canonical:
-        canonical["any"] = _canonicalize_condition_refs(canonical.get("any"), world=world)
+        canonical["any"] = _canonicalize_condition_refs(
+            canonical.get("any"),
+            world=world,
+            event_target_is_room=event_target_is_room,
+        )
     if "not" in canonical:
-        canonical["not"] = _canonicalize_condition_refs(canonical.get("not"), world=world)
+        canonical["not"] = _canonicalize_condition_refs(
+            canonical.get("not"),
+            world=world,
+            event_target_is_room=event_target_is_room,
+        )
 
     for operator in ("eq", "ne", "gte", "lte", "in"):
         raw_args = canonical.get(operator)
@@ -446,6 +487,40 @@ def _canonicalize_condition_refs(condition: Any, *, world: World) -> Any:
 
         left_path = raw_args[0]
         right_value = raw_args[1]
+        uses_room_ref = quest_manifests._condition_uses_room_ref(
+            left_path,
+            right_value,
+            event_target_is_room=event_target_is_room,
+        ) or quest_manifests._condition_uses_room_ref(
+            left_path,
+            None,
+            event_target_is_room=event_target_is_room,
+        )
+        if not uses_room_ref and operator == "in" and isinstance(right_value, list):
+            uses_room_ref = any(
+                quest_manifests._condition_uses_room_ref(
+                    left_path,
+                    candidate,
+                    event_target_is_room=event_target_is_room,
+                )
+                for candidate in right_value
+            )
+        if uses_room_ref:
+            if operator == "in" and isinstance(right_value, list):
+                canonical[operator] = [
+                    left_path,
+                    [
+                        _canonicalize_room_ref(candidate, world=world)
+                        for candidate in right_value
+                    ],
+                ]
+            else:
+                canonical[operator] = [
+                    left_path,
+                    _canonicalize_room_ref(right_value, world=world),
+                ]
+            continue
+
         expected_type = quest_manifests._condition_expected_template_type(left_path, right_value)
         if expected_type is None:
             expected_type = quest_manifests._condition_expected_template_type(left_path)
@@ -481,6 +556,9 @@ def _canonicalize_quest_node(node: Any, *, world: World) -> Any:
 
     canonical = {}
     for key, value in node.items():
+        if key in {"room", "room_id"} and str(node.get("type") or "").strip().lower() == "room_prompt":
+            canonical["room"] = _canonicalize_room_ref(value, world=world)
+            continue
         if key in {"mob_template", "mob_template_id"}:
             canonical["mob_template"] = _canonicalize_template_ref(
                 value,

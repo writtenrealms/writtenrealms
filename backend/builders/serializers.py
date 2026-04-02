@@ -3,7 +3,7 @@ import re
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Q
 from django.db.utils import IntegrityError
 from django.utils import timezone
 from django.utils.text import slugify
@@ -50,7 +50,7 @@ from core.db import qs_by_pks
 from core.serializers import KeyNameSerializer, ReferenceField, AuthorField
 from spawns import serializers as spawn_serializers
 from spawns import trigger_matcher
-from spawns.models import Player, DoorState, PlayerConfig
+from spawns.models import Player, DoorState, PlayerConfig, Mob, Item, Equipment
 from system.models import Nexus
 from system.policies import get_platform_policy
 from users.models import User
@@ -404,6 +404,176 @@ class WorldAdminSpawnWorldSerializer(serializers.ModelSerializer):
             'num_mobs': 0,
             'ref': '',
         }
+
+
+class WorldAdminInstancePlayerSerializer(serializers.ModelSerializer):
+    room = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Player
+        fields = [
+            'id',
+            'name',
+            'is_immortal',
+            'last_connection_ts',
+            'last_action_ts',
+            'room',
+        ]
+
+    def get_room(self, player):
+        if not player.room_id:
+            return None
+        return {
+            'id': player.room_id,
+            'key': player.room.key,
+            'name': player.room.name,
+        }
+
+
+class WorldAdminInstanceSerializer(serializers.ModelSerializer):
+    context_world = serializers.SerializerMethodField()
+    parent_world = serializers.SerializerMethodField()
+    leader = serializers.SerializerMethodField()
+    lifecycle_details = serializers.SerializerMethodField()
+    loader_details = serializers.SerializerMethodField()
+    counts = serializers.SerializerMethodField()
+    active_players = serializers.SerializerMethodField()
+
+    class Meta:
+        model = World
+        fields = [
+            'id',
+            'key',
+            'name',
+            'is_multiplayer',
+            'instance_ref',
+            'context_world',
+            'parent_world',
+            'leader',
+            'lifecycle_details',
+            'loader_details',
+            'counts',
+            'active_players',
+        ]
+
+    def _content_type_id(self, model_cls):
+        cache_attr = f'_{model_cls.__name__.lower()}_ct_id'
+        if not hasattr(self, cache_attr):
+            setattr(self, cache_attr, ContentType.objects.get_for_model(model_cls).id)
+        return getattr(self, cache_attr)
+
+    def get_context_world(self, spawn_world):
+        if not spawn_world.context_id:
+            return None
+        return {
+            'id': spawn_world.context_id,
+            'name': spawn_world.context.name,
+        }
+
+    def get_parent_world(self, spawn_world):
+        template_world = spawn_world.context
+        if not template_world or not template_world.instance_of_id:
+            return None
+        return {
+            'id': template_world.instance_of_id,
+            'name': template_world.instance_of.name,
+        }
+
+    def get_leader(self, spawn_world):
+        if not spawn_world.leader_id:
+            return None
+        return {
+            'id': spawn_world.leader_id,
+            'name': spawn_world.leader.name,
+        }
+
+    def get_lifecycle_details(self, spawn_world):
+        cleanup_started_ts = None
+        try:
+            cleanup_started_ts = spawn_world.worldlocks.clean_start_ts
+        except WorldLocks.DoesNotExist:
+            pass
+
+        return {
+            'current': spawn_world.lifecycle,
+            'changed_at': spawn_world.lifecycle_change_ts,
+            'cleanup_started_ts': cleanup_started_ts,
+            'last_loader_run_ts': spawn_world.last_loader_run_ts,
+            'last_extraction_ts': spawn_world.last_extraction_ts,
+            'last_entered_ts': spawn_world.last_entered_ts,
+            'last_played_ts': spawn_world.last_played_ts,
+        }
+
+    def get_loader_details(self, spawn_world):
+        context_world = spawn_world.context
+        return {
+            'last_run_ts': spawn_world.last_loader_run_ts,
+            'configured_loader_count': Loader.objects.filter(
+                world=context_world
+            ).count(),
+            'configured_rule_count': Rule.objects.filter(
+                loader__world=context_world
+            ).count(),
+        }
+
+    def get_counts(self, spawn_world):
+        active_items_qs = spawn_world.items.filter(is_pending_deletion=False)
+        pending_items_qs = spawn_world.items.filter(is_pending_deletion=True)
+        active_mobs_qs = spawn_world.mobs.filter(is_pending_deletion=False)
+        pending_mobs_qs = spawn_world.mobs.filter(is_pending_deletion=True)
+        active_players_qs = spawn_world.players.filter(in_game=True)
+
+        room_ct_id = self._content_type_id(Room)
+        player_ct_id = self._content_type_id(Player)
+        mob_ct_id = self._content_type_id(Mob)
+        item_ct_id = self._content_type_id(Item)
+        equipment_ct_id = self._content_type_id(Equipment)
+
+        return {
+            'mobs_loaded': active_mobs_qs.count(),
+            'mobs_pending_deletion': pending_mobs_qs.count(),
+            'items_total': active_items_qs.count(),
+            'items_on_ground': active_items_qs.filter(
+                container_type_id=room_ct_id
+            ).count(),
+            'items_pending_deletion': pending_items_qs.count(),
+            'players_logged_in': active_players_qs.count(),
+            'player_records': spawn_world.players.count(),
+            'instance_assignments': InstanceAssignment.objects.filter(
+                instance=spawn_world
+            ).count(),
+            'items_by_container_type': {
+                'rooms': active_items_qs.filter(
+                    container_type_id=room_ct_id
+                ).count(),
+                'players': active_items_qs.filter(
+                    container_type_id=player_ct_id
+                ).count(),
+                'mobs': active_items_qs.filter(
+                    container_type_id=mob_ct_id
+                ).count(),
+                'inside_items': active_items_qs.filter(
+                    container_type_id=item_ct_id
+                ).count(),
+                'equipment': active_items_qs.filter(
+                    container_type_id=equipment_ct_id
+                ).count(),
+                'without_container': active_items_qs.filter(
+                    Q(container_type__isnull=True) | Q(container_id__isnull=True)
+                ).count(),
+            },
+        }
+
+    def get_active_players(self, spawn_world):
+        players = spawn_world.players.filter(
+            in_game=True
+        ).select_related(
+            'room',
+        ).order_by(
+            'name',
+            'id',
+        )
+        return WorldAdminInstancePlayerSerializer(players, many=True).data
 
 
 class WorldStatsSerializer(serializers.ModelSerializer):

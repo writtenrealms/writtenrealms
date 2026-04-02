@@ -438,15 +438,38 @@ class WorldAdminView(BaseWorldBuilderView):
 world_admin = WorldAdminView.as_view()
 
 
+def _get_builder_admin_spawn_world(root_world, pk):
+    return get_object_or_404(
+        World.objects.select_related(
+            'context',
+            'context__instance_of',
+            'leader',
+            'worldlocks',
+        ),
+        pk=pk,
+        context=root_world,
+    )
+
+
 class WorldAdminInstance(BaseWorldBuilderView):
     def get(self, request, world_pk, pk):
-        spawn_world = World.objects.get(pk=pk)
-        if not spawn_world.context:
-            raise self.ValidationError("World is not a spawned world.")
+        spawn_world = _get_builder_admin_spawn_world(self.world, pk)
         return Response(
             builder_serializers.WorldAdminInstanceSerializer(spawn_world).data)
 
 world_admin_instance = WorldAdminInstance.as_view()
+
+
+class WorldAdminInstanceReset(BaseWorldBuilderView):
+    def post(self, request, world_pk, pk):
+        spawn_world = _get_builder_admin_spawn_world(self.world, pk)
+        WorldSmith(spawn_world).reset()
+        return Response(
+            builder_serializers.WorldAdminInstanceSerializer(spawn_world).data
+        )
+
+
+world_admin_instance_reset = WorldAdminInstanceReset.as_view()
 
 class WorldMapView(WorldValidatorMixin, APIView):
     permission_classes = (

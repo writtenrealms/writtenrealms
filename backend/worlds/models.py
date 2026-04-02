@@ -271,15 +271,13 @@ class World(AdventBaseModel):
         destroy_reason = "world_stop" if self.lifecycle == api_consts.WORLD_STATE_STOPPED else "world_cleanup"
         for mob in mobs_qs.select_related("room", "world").only(
             "id",
-            "key",
             "name",
             "template_id",
             "room_id",
             "world_id",
             "room__id",
-            "room__key",
             "world__id",
-            "world__key",
+            "room__relative_id",
         ):
             maybe_enqueue_ai_sidecar_mob_destroyed(
                 mob=mob,

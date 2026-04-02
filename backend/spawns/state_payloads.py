@@ -45,6 +45,13 @@ def safe_capitalize(value: Optional[str]) -> str:
     return value[0].upper() + value[1:]
 
 
+def first_keyword(value: Optional[str], fallback: Optional[str] = None) -> str:
+    tokens = [token for token in str(value or "").split(" ") if token]
+    if tokens:
+        return tokens[0]
+    return str(fallback or "").strip().lower()
+
+
 def computed_player_vitals(player: Player) -> dict[str, int]:
     stats = compute_stats(player.level, player.archetype)
     health_max = int(stats.get("health_max") or 0)
@@ -194,6 +201,7 @@ def serialize_equipment(equipment, *, viewer: Player | Mob | None = None) -> Equ
 
 
 def serialize_char_from_player(player: Player) -> Char:
+    keywords = getattr(player, "keywords", "") or player.name.lower()
     return Char(
         id=player.id,
         key=player.key,
@@ -210,7 +218,8 @@ def serialize_char_from_player(player: Player) -> Char:
         mana=player.mana,
         level=player.level,
         gender=player.gender or "male",
-        keywords=getattr(player, "keywords", "") or player.name.lower(),
+        keywords=keywords,
+        keyword=first_keyword(keywords, player.name),
         char_type="player",
         display_faction=player.display_faction or None,
     )
@@ -223,6 +232,7 @@ def serialize_char_from_mob(
     quest_indicator_map: dict[int, dict[str, bool]] | None = None,
 ) -> Char:
     name = mob.name or (mob.template.name if mob.template else "Unnamed Mob")
+    keywords = mob.keywords or name.lower()
     title = mob.title
     if not title and mob.template:
         title = mob.template.title
@@ -251,7 +261,8 @@ def serialize_char_from_mob(
         mana=mob.mana,
         level=mob.level,
         gender=mob.gender or "male",
-        keywords=mob.keywords or name.lower(),
+        keywords=keywords,
+        keyword=first_keyword(keywords, name),
         template_id=mob.template_id,
         char_type="mob",
         is_elite=getattr(mob, "is_elite", False),

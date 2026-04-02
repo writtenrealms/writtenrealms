@@ -237,6 +237,82 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
                 "expired": [],
             },
         )
+        self.room_survey_quest = QuestTemplate.objects.create(
+            world=self.world,
+            arc=self.quest_arc,
+            slug="harbor_survey",
+            name="Harbor Survey",
+            quest_type="quest",
+            scope="player",
+            status="active",
+            repeatability_mode="never",
+            repeatability_cooldown_seconds=0,
+            max_active=1,
+            discovery_policy={
+                "sources": [
+                    {
+                        "type": "room_prompt",
+                        "room": f"room.{self.start_room.id}",
+                    }
+                ],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 40,
+                "cooldown_seconds": 0,
+            },
+            slot_schema={},
+            graph={
+                "steps": [
+                    {
+                        "id": "survey",
+                        "kind": "objective",
+                        "recap": "Inspect the old gate and the harbor square.",
+                        "objectives": [
+                            {
+                                "id": "inspect_harbor",
+                                "text": "Inspect both harbor rooms.",
+                                "tracker": {
+                                    "event": "cmd.look.success",
+                                    "where": {
+                                        "all": [
+                                            {"eq": ["event.target_type", "room"]},
+                                            {
+                                                "in": [
+                                                    "event.target.id",
+                                                    [self.start_room.id, self.harbor_room.id],
+                                                ]
+                                            },
+                                        ]
+                                    },
+                                },
+                                "progress": {
+                                    "mode": "unique_count",
+                                    "target": 2,
+                                    "distinct_by": "event.target.id",
+                                },
+                            }
+                        ],
+                        "transitions": [
+                            {
+                                "when": {"objective_complete": "inspect_harbor"},
+                                "goto": "resolved",
+                            }
+                        ],
+                    },
+                    {
+                        "id": "resolved",
+                        "kind": "resolution",
+                        "recap": "The harbor route has been checked.",
+                    },
+                ]
+            },
+            reward_policy={
+                "complete": [],
+                "compromised": [],
+                "failed_forward": [],
+                "expired": [],
+            },
+        )
 
         room_ct = ContentType.objects.get_for_model(Room)
         mob_ct = ContentType.objects.get_for_model(MobTemplate)
@@ -326,3 +402,23 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         target_docs = [doc for doc in yaml.safe_load_all(target_export_resp.data["yaml"]) if doc is not None]
 
         self.assertEqual(source_docs, target_docs)
+
+    def test_world_export_serializes_portable_room_refs_inside_quests(self):
+        resp = self.client.get(self.export_ep)
+        self.assertEqual(resp.status_code, 200)
+
+        exported_docs = [doc for doc in yaml.safe_load_all(resp.data["yaml"]) if doc is not None]
+        survey_manifest = next(doc for doc in exported_docs if doc["kind"] == "quest" and doc["metadata"]["slug"] == "harbor_survey")
+
+        expected_start_ref = f"room@{self.start_room.x},{self.start_room.y},{self.start_room.z}"
+        expected_harbor_ref = f"room@{self.harbor_room.x},{self.harbor_room.y},{self.harbor_room.z}"
+
+        self.assertEqual(
+            survey_manifest["spec"]["discovery"]["sources"][0]["room"],
+            expected_start_ref,
+        )
+        tracker_conditions = survey_manifest["spec"]["steps"][0]["objectives"][0]["tracker"]["where"]["all"]
+        self.assertEqual(
+            tracker_conditions[1]["in"][1],
+            [expected_start_ref, expected_harbor_ref],
+        )

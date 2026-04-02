@@ -22,6 +22,7 @@
 import { computed } from "vue";
 import { useStore } from "vuex";
 import CharInfo from "@/components/game/CharInfo.vue";
+import { buildCharActions } from "@/core/charActions";
 import { getTargetInGroup } from "@/core/utils.ts";
 
 const store = useStore();
@@ -30,48 +31,9 @@ const props = defineProps<{ entity: any }>();
 
 const char = computed(() => props.entity);
 
-const actionsMap = computed(() => {
-  const actions = {
-    complete: false,
-    completion_action: "",
-    craft: false,
-    upgrade: false,
-    follow: false,
-    unfollow: false,
-    group: false,
-    list: false,
-    offer: false,
-    enquire: false,
-    kill: false,
-  };
-
-  const sourceActions = char.value && char.value.actions;
-  if (Array.isArray(sourceActions)) {
-    for (const action of sourceActions) {
-      actions[action] = true;
-    }
-  } else if (sourceActions && typeof sourceActions === "object") {
-    for (const [action, value] of Object.entries(sourceActions)) {
-      actions[action] = value as any;
-    }
-  }
-
-  if (char.value && char.value.quest_data) {
-    if (char.value.quest_data.complete) actions.complete = true;
-    if (char.value.quest_data.enquire) actions.enquire = true;
-  }
-  if (char.value && char.value.is_merchant) {
-    actions.list = true;
-    actions.offer = true;
-  }
-  if (char.value && char.value.is_crafter) actions.craft = true;
-  if (char.value && char.value.is_upgrader) actions.upgrade = true;
-  if (char.value && char.value.completion_action && !actions.completion_action) {
-    actions.completion_action = char.value.completion_action;
-  }
-
-  return actions;
-});
+const actionsMap = computed(() =>
+  buildCharActions(char.value, store.state.game.player, store.state.game.world)
+);
 
 const doAction = (char: any, action: string) => {
   const rawAction = String(action || "").trim();
@@ -81,11 +43,11 @@ const doAction = (char: any, action: string) => {
     store.commit("ui/modal/close");
     return;
   }
-  if (action === 'craft' || action === 'upgrade') {
-    store.dispatch('game/cmd', `${action}`);
+  if (rawAction === 'craft' || rawAction === 'upgrade') {
+    store.dispatch('game/cmd', rawAction);
   } else {
     const target = getTargetInGroup(char, store.state.game.room.chars) || char.keyword || char.name;
-    store.dispatch("game/cmd", `${action} ${target}`);
+    store.dispatch("game/cmd", `${rawAction} ${target}`);
   }
   store.commit("game/lookup_clear");
   store.commit("ui/modal/close");
@@ -100,7 +62,7 @@ const actionsData = computed(() => {
     ACTIONS_COUNT = 3,
     actionsPriority = [
       // higher the better
-      { action: "complete", label: "COMPLETE" },
+      { action: "talk", label: "TALK" },
       { action: "craft", label: "CRAFT" },
       { action: "upgrade", label: "UPGRADE"},
       { action: "follow", label: "FOLLOW" },
@@ -108,29 +70,16 @@ const actionsData = computed(() => {
       { action: "group", label: "GROUP" },
       { action: "list", label: "LIST" },
       { action: "offer", label: "OFFER" },
-      { action: "enquire", label: "ENQUIRE" },
     ];
   const knownActionSet = new Set(actionsPriority.map(action => action.action));
 
-  if (store.state.game.world.allow_combat) {
+  if (store.state.game.world && store.state.game.world.allow_combat) {
     actionsPriority.push({ action: "kill", label: "KILL" });
     knownActionSet.add("kill");
   }
 
   for (let action of actionsPriority) {
     if (actionsMap.value[action.action]) {
-      // If a completion action is provided, replace the complete
-      // entry with it.
-      if (
-        action.action == "complete" &&
-        actionsMap.value.completion_action
-      ) {
-        var completion_action = actionsMap.value.completion_action;
-        action = {
-          action: completion_action.toLowerCase(),
-          label: completion_action.toUpperCase()
-        };
-      }
       actions.push(action);
     }
     if (actions.length >= ACTIONS_COUNT) {
@@ -139,7 +88,6 @@ const actionsData = computed(() => {
   }
 
   for (const [actionCode, value] of Object.entries(actionsMap.value || {})) {
-    if (actionCode === "completion_action") continue;
     if (knownActionSet.has(actionCode)) continue;
     if (!value) continue;
     actions.push({
