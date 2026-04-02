@@ -104,7 +104,29 @@ def _render_char_text(char: dict | None) -> str | None:
     if not char:
         return None
     name = char.get("name")
-    return _capfirst(name) if name else None
+    if not name:
+        return None
+
+    lines = [_capfirst(name)]
+    description = char.get("description") or ""
+    if description:
+        lines.extend(line for line in str(description).splitlines() if line)
+
+    equipment = char.get("equipment") or {}
+    equipped_items = []
+    for slot_name, item in equipment.items():
+        if not item:
+            continue
+        item_name = item.get("name")
+        if not item_name:
+            continue
+        equipped_items.append(f"{_capfirst(slot_name)}: {item_name}")
+
+    if equipped_items:
+        lines.append(f"{_capfirst(name)} is using:")
+        lines.extend(equipped_items)
+
+    return "\n".join(lines) if lines else None
 
 
 def _render_room_detail_text(detail: object) -> str | None:

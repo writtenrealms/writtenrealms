@@ -2,17 +2,21 @@ from __future__ import annotations
 
 from core.utils import roll_die
 from spawns.actions.base import ActionError, ActionResult
+from spawns.actions.targeting import find_accessible_item_target, find_room_char_target
 from spawns.events import GameEvent
-from spawns.models import Player
+from spawns.models import Mob, Player
 from spawns.state_payloads import (
     build_map_payload,
     collect_map_room_ids,
     door_state_lookup,
     get_player_with_related,
     serialize_actor,
+    serialize_char_from_mob,
     serialize_char_from_player,
+    serialize_item,
     serialize_room,
 )
+from quests.services.interactions import room_mob_quest_indicator_map
 from spawns.text_output import render_event_text
 
 
@@ -26,13 +30,63 @@ def _normalize_roll_target(target: str | None) -> str:
 
 
 class LookAction:
-    def execute(self, player_id: int) -> ActionResult:
+    def execute(self, player_id: int, target_selector: str | None = None) -> ActionResult:
         player = get_player_with_related(player_id)
         world = player.world
         room = player.room
 
         if room is None:
             raise ActionError("You are nowhere. Cannot look around.", code="no_room")
+
+        actor_payload = serialize_actor(player, room)
+        normalized_target = str(target_selector or "").strip()
+
+        if normalized_target:
+            char_target = find_room_char_target(room, normalized_target, viewer=player)
+            if char_target is not None:
+                target_payload = self._serialize_char_target(player, char_target)
+                data = {
+                    "actor": actor_payload.model_dump(),
+                    "target": target_payload.model_dump(),
+                    "target_type": "char",
+                }
+                text = render_event_text("cmd.look.success", data, viewer=player)
+                return ActionResult(
+                    events=[
+                        GameEvent(
+                            type="cmd.look.success",
+                            recipients=[player.key],
+                            data=data,
+                            text=text,
+                        )
+                    ]
+                )
+
+            item_target = find_accessible_item_target(player, room, normalized_target)
+            if item_target is not None:
+                target_payload = serialize_item(
+                    item_target,
+                    viewer=player,
+                    include_inventory=True,
+                )
+                data = {
+                    "actor": actor_payload.model_dump(),
+                    "target": target_payload.model_dump(),
+                    "target_type": "item",
+                }
+                text = render_event_text("cmd.look.success", data, viewer=player)
+                return ActionResult(
+                    events=[
+                        GameEvent(
+                            type="cmd.look.success",
+                            recipients=[player.key],
+                            data=data,
+                            text=text,
+                        )
+                    ]
+                )
+
+            raise ActionError("You don't see that here.", code="target_not_found")
 
         room_world = room.world or (world.context or world)
         room_ids, _ = collect_map_room_ids(player, room_world, room)
@@ -45,7 +99,6 @@ class LookAction:
             door_states,
             viewer=player,
         )
-        actor_payload = serialize_actor(player, room)
         data = {
             "actor": actor_payload.model_dump(),
             "target": room_payload.model_dump(),
@@ -63,6 +116,22 @@ class LookAction:
                     text=text,
                 )
             ]
+        )
+
+    def _serialize_char_target(self, viewer: Player, target: Player | Mob):
+        if isinstance(target, Player):
+            return serialize_char_from_player(
+                target,
+                viewer=viewer,
+                include_equipment=True,
+            )
+
+        quest_indicator_map = room_mob_quest_indicator_map(viewer, [target])
+        return serialize_char_from_mob(
+            target,
+            viewer=viewer,
+            quest_indicator_map=quest_indicator_map,
+            include_equipment=True,
         )
 
 

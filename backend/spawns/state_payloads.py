@@ -117,7 +117,12 @@ def resolve_item_name(item: Item) -> str:
     return "Unnamed item"
 
 
-def serialize_item(item: Item, *, viewer: Player | Mob | None = None) -> ItemSchema:
+def serialize_item(
+    item: Item,
+    *,
+    viewer: Player | Mob | None = None,
+    include_inventory: bool = False,
+) -> ItemSchema:
     """Serialize an item into the WR2 Item schema."""
     name = resolve_item_name(item)
     currency = item.currency.code if item.currency else "gold"
@@ -130,15 +135,34 @@ def serialize_item(item: Item, *, viewer: Player | Mob | None = None) -> ItemSch
     if armor_value is None:
         armor_value = 0
     actions = get_item_action_labels_for_actor(viewer, item)
+    keywords = item.keywords or ""
+    if not keywords and item.template:
+        keywords = item.template.keywords or ""
+    if not keywords:
+        keywords = name.lower()
+    item_type = item.type or (item.template.type if item.template else None)
+    inventory = []
+    if include_inventory and item_type in (
+        adv_consts.ITEM_TYPE_CONTAINER,
+        adv_consts.ITEM_TYPE_CORPSE,
+        adv_consts.ITEM_TYPE_TRASH,
+    ):
+        inventory = serialize_inventory(
+            item.inventory.filter(is_pending_deletion=False)
+            .select_related("template", "currency")
+            .order_by("id"),
+            viewer=viewer,
+            include_inventory=True,
+        )
 
     return ItemSchema(
         key=item.key,
         name=name,
         cf_name=safe_capitalize(name),
-        type=item.type,
+        type=item_type,
         armor_class=item.armor_class,
         description=description,
-        ground_description=item.ground_description,
+        ground_description=item.ground_description or (item.template.ground_description if item.template else None),
         level=item.level,
         quality=item.quality,
         is_magic=getattr(item, "is_magic", False),
@@ -163,8 +187,17 @@ def serialize_item(item: Item, *, viewer: Player | Mob | None = None) -> ItemSch
         is_pickable=item.is_pickable,
         cost=item.cost,
         currency=currency,
-        keywords=item.keywords or "",
+        keywords=keywords,
+        keyword=first_keyword(keywords, name),
+        label=item.label,
+        upgrade_count=item.upgrade_count,
         weapon_type=item.weapon_type,
+        is_container=item_type in (
+            adv_consts.ITEM_TYPE_CONTAINER,
+            adv_consts.ITEM_TYPE_CORPSE,
+            adv_consts.ITEM_TYPE_TRASH,
+        ),
+        inventory=inventory,
         actions=actions,
     )
 
@@ -173,8 +206,16 @@ def serialize_inventory(
     items: Iterable[Item],
     *,
     viewer: Player | Mob | None = None,
+    include_inventory: bool = False,
 ) -> List[ItemSchema]:
-    return [serialize_item(item, viewer=viewer) for item in items]
+    return [
+        serialize_item(
+            item,
+            viewer=viewer,
+            include_inventory=include_inventory,
+        )
+        for item in items
+    ]
 
 
 def serialize_equipment(equipment, *, viewer: Player | Mob | None = None) -> EquipmentSchema:
@@ -200,8 +241,13 @@ def serialize_equipment(equipment, *, viewer: Player | Mob | None = None) -> Equ
     return EquipmentSchema(**slots)
 
 
-def serialize_char_from_player(player: Player) -> Char:
-    keywords = getattr(player, "keywords", "") or player.name.lower()
+def serialize_char_from_player(
+    player: Player,
+    *,
+    viewer: Player | Mob | None = None,
+    include_equipment: bool = False,
+) -> Char:
+    keywords = getattr(player, "keywords", "") or f"{player.name.lower()} player {player.key}"
     return Char(
         id=player.id,
         key=player.key,
@@ -222,6 +268,7 @@ def serialize_char_from_player(player: Player) -> Char:
         keyword=first_keyword(keywords, player.name),
         char_type="player",
         display_faction=player.display_faction or None,
+        equipment=serialize_equipment(player.equipment, viewer=viewer) if include_equipment else None,
     )
 
 
@@ -230,6 +277,7 @@ def serialize_char_from_mob(
     *,
     viewer: Player | Mob | None = None,
     quest_indicator_map: dict[int, dict[str, bool]] | None = None,
+    include_equipment: bool = False,
 ) -> Char:
     name = mob.name or (mob.template.name if mob.template else "Unnamed Mob")
     keywords = mob.keywords or name.lower()
@@ -267,6 +315,7 @@ def serialize_char_from_mob(
         char_type="mob",
         is_elite=getattr(mob, "is_elite", False),
         is_invisible=getattr(mob, "is_invisible", False),
+        equipment=serialize_equipment(mob.equipment, viewer=viewer) if include_equipment else None,
         actions=actions,
         quest_data=QuestData(
             enquire=bool(quest_indicator.get("enquire")),
