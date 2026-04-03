@@ -111,8 +111,9 @@ class TestBuilderLoad(WorldTestCase):
     )
     @patch("spawns.tasks.forward_event_to_ai_sidecar.delay")
     def test_load_mob_enqueues_sidecar_spawn_signal(self, mock_forward_delay):
-        with capture_game_messages():
-            dispatch_text_command(self.player.id, f"/lo mob {self.mob_template.id}")
+        with self.captureOnCommitCallbacks(execute=True):
+            with capture_game_messages():
+                dispatch_text_command(self.player.id, f"/lo mob {self.mob_template.id}")
 
         loaded_mob = Mob.objects.get(
             template=self.mob_template,
@@ -217,9 +218,8 @@ class TestBuilderPurge(WorldTestCase):
 
         self.assertFalse(Mob.objects.filter(pk=mob.pk).exists())
         self.assertFalse(
-            Item.objects.filter(
+            self.room.inventory.filter(
                 world=self.spawn_world,
-                container=self.room,
                 type=api_consts.ITEM_TYPE_CORPSE,
             ).exists()
         )
@@ -237,8 +237,9 @@ class TestBuilderPurge(WorldTestCase):
             keywords="guard",
         )
 
-        with capture_game_messages():
-            dispatch_text_command(self.player.id, "/purge mobs")
+        with self.captureOnCommitCallbacks(execute=True):
+            with capture_game_messages():
+                dispatch_text_command(self.player.id, "/purge mobs")
 
         mock_forward_delay.assert_called_once()
         kwargs = mock_forward_delay.call_args.kwargs

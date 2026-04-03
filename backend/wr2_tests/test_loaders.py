@@ -6,7 +6,7 @@ from django.test import override_settings
 from builders.models import ItemTemplate, Loader, MobTemplate, Rule
 from config import constants as adv_consts
 from spawns.loading import LoaderRun, run_loaders
-from spawns.models import Item
+from spawns.models import Item, Mob
 from tests.base import WorldTestCase
 
 
@@ -145,11 +145,12 @@ class TestLoaderRuntimeSafety(WorldTestCase):
             num_copies=1,
         )
 
-        output = LoaderRun(
-            loader=loader,
-            world=self.spawn_world,
-            check=False,
-        ).execute()
+        with self.captureOnCommitCallbacks(execute=True):
+            output = LoaderRun(
+                loader=loader,
+                world=self.spawn_world,
+                check=False,
+            ).execute()
         spawned_mob = output[rule.id][0]
 
         mock_forward_delay.assert_called_once()
@@ -162,10 +163,10 @@ class TestLoaderRuntimeSafety(WorldTestCase):
         self.assertEqual(kwargs["event_data"]["mob"]["key"], spawned_mob.key)
 
         # Delete one copy and ensure reload adds exactly one replacement
-        first_output[rule.id][0].delete()
+        output[rule.id][0].delete()
         self.assertEqual(
-            Item.objects.filter(world=self.spawn_world, rule=rule).count(),
-            1,
+            Mob.objects.filter(world=self.spawn_world, rule=rule).count(),
+            0,
         )
 
         second_output = LoaderRun(
@@ -175,6 +176,6 @@ class TestLoaderRuntimeSafety(WorldTestCase):
         ).execute()
         self.assertEqual(len(second_output[rule.id]), 1)
         self.assertEqual(
-            Item.objects.filter(world=self.spawn_world, rule=rule).count(),
-            2,
+            Mob.objects.filter(world=self.spawn_world, rule=rule).count(),
+            1,
         )
