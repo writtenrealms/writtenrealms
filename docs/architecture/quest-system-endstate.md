@@ -63,7 +63,6 @@ Not every opportunity becomes an active quest.
 An authored quest definition stored in WR2 YAML and validated by schema. It is
 world-scoped authored content and may represent:
 
-- `questlet`
 - `quest`
 - `contract`
 - `world_event`
@@ -153,18 +152,15 @@ The player-facing quest UX should have three buckets:
 Each major step owns:
 
 - `recap`: what happened
-- `lead`: what to do next
-- `stakes`: why it matters
 
 The journal should read like a strong memory aid, not a debug dump.
 
 ### Recap Command
 
-WR2 should expose a `quest recap` command backed by the same quest service used
+WR2 should expose a `quest info` command backed by the same quest service used
 by HTTP endpoints. The output should be short and contain:
 
 - current recap
-- current lead
 - visible objectives
 - latest major journal entry
 
@@ -213,7 +209,6 @@ metadata:
   name: The Bitter Well
 
 spec:
-  type: quest
   scope: player
   arc: ashwick_outbreak
   repeatability:
@@ -368,7 +363,6 @@ metadata:
   name: Read the Notice
 
 spec:
-  type: questlet
   scope: player
   repeatability:
     mode: never
@@ -390,8 +384,6 @@ spec:
     - id: offer
       kind: storylet
       recap: "A fresh notice has been pinned to the market board."
-      lead: "Read the notice."
-      stakes: "It might point you toward paying work."
       text:
         body: |
           A town clerk has posted a simple message:
@@ -410,8 +402,6 @@ spec:
       kind: resolution
       resolution: complete
       recap: "You read the notice and learned the granary is hiring help."
-      lead: ""
-      stakes: ""
 ```
 
 ## Example 2: Typical Quest
@@ -428,7 +418,6 @@ metadata:
   name: The Bitter Well
 
 spec:
-  type: quest
   scope: player
   arc: ashwick_outbreak
   repeatability:
@@ -463,8 +452,6 @@ spec:
     - id: offer
       kind: storylet
       recap: "Healer Toma believes someone poisoned Ashwick's well."
-      lead: "Search the well and tannery district for evidence."
-      stakes: "Another outbreak could cripple the village."
       text:
         body: |
           Toma keeps his voice low. "Someone did this on purpose. If you can
@@ -481,14 +468,10 @@ spec:
       kind: resolution
       resolution: abandoned
       recap: "You left Toma without an answer."
-      lead: ""
-      stakes: ""
 
     - id: investigate
       kind: objective
       recap: "You agreed to investigate the poisoning."
-      lead: "Find two useful clues."
-      stakes: "Without evidence, any accusation will be guesswork."
       objectives:
         - id: find_clues
           text: "Find two clues tied to the poisoning."
@@ -513,8 +496,6 @@ spec:
     - id: accuse
       kind: storylet
       recap: "You have enough evidence to name a suspect."
-      lead: "Decide whether to accuse {suspect.name}."
-      stakes: "A false accusation will still change Ashwick."
       choices:
         - id: accuse_suspect
           text: "Accuse {suspect.name}."
@@ -527,8 +508,6 @@ spec:
       kind: resolution
       resolution: complete
       recap: "You helped Toma expose the poisoner before panic took hold."
-      lead: ""
-      stakes: ""
       effects:
         - type: set_fact
           scope: world
@@ -543,8 +522,6 @@ spec:
       kind: resolution
       resolution: compromised
       recap: "You accused the wrong person. The sickness slows, but the village remembers the injustice."
-      lead: "Ashwick may yet demand an atonement."
-      stakes: ""
       effects:
         - type: add_faction
           scope: player
@@ -628,8 +605,6 @@ spec:
     - id: offer
       kind: storylet
       recap: "{client.name} posts a Rangers' Guild contract about a murder in the marsh."
-      lead: "Speak to witnesses and find the killer."
-      stakes: "If the murderer escapes, the marsh routes become lawless."
       choices:
         - id: accept
           text: "Take the contract."
@@ -642,8 +617,6 @@ spec:
     - id: investigate
       kind: objective
       recap: "You accepted the contract and began questioning locals."
-      lead: "Speak to two witnesses and recover proof if possible."
-      stakes: "The trail will go cold within the hour."
       objectives:
         - id: question_witnesses
           text: "Question two witnesses."
@@ -683,8 +656,6 @@ spec:
     - id: confront
       kind: storylet
       recap: "The witnesses point toward {hideout.name}, and suspicion falls on {suspect.name}."
-      lead: "Decide how to handle {suspect.name}."
-      stakes: "A clean arrest pays well. A messy solution still changes who controls the marsh."
       choices:
         - id: arrest
           text: "Arrest {suspect.name} and seize the ledger."
@@ -703,8 +674,6 @@ spec:
     - id: ambush
       kind: storylet
       recap: "You took too long. The marsh gang set an ambush and scattered."
-      lead: "Return to {client.name} with whatever truth you have."
-      stakes: "Someone will own the failure."
       choices:
         - id: report_back
           text: "Report back."
@@ -714,8 +683,6 @@ spec:
       kind: resolution
       resolution: complete
       recap: "You closed the case cleanly and delivered both culprit and proof."
-      lead: ""
-      stakes: ""
       effects:
         - type: grant_currency
           scope: player
@@ -730,8 +697,6 @@ spec:
       kind: resolution
       resolution: compromised
       recap: "You named the right killer, but the case remains politically messy."
-      lead: "Some in Reedbank doubt the guild's judgement."
-      stakes: ""
       effects:
         - type: grant_currency
           scope: player
@@ -746,8 +711,6 @@ spec:
       kind: resolution
       resolution: failed_forward
       recap: "You took the bribe. The murder fades, but a smuggling ring hardens around Reedbank."
-      lead: "The marsh will deal with you again."
-      stakes: ""
       effects:
         - type: set_fact
           scope: world
@@ -760,8 +723,6 @@ spec:
       kind: resolution
       resolution: expired
       recap: "The trail went cold and the guild marks the contract unresolved."
-      lead: ""
-      stakes: ""
       effects:
         - type: add_faction
           scope: player
@@ -775,7 +736,7 @@ These rules should remain true even after the system grows:
 
 - no inline code in quest manifests
 - named steps, never numeric stages
-- recap and lead text on every major step
+- recap text on every major step
 - fail-forward or compromise path for almost every non-trivial quest
 - sparse facts and marks
 - one shared engine for authored quests, contracts, and world events

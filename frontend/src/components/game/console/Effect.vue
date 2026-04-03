@@ -2,12 +2,12 @@
   <div class='effect' :class="{ friendly: isFriendly, hostile: isHostile}">
     <div v-if="store.state.game.player_config.combat_brief" class='brief flex'>
 
-      <div class='effect-code flex-grow'>
+      <div class='effect-code grow'>
         [ {{ effectLabel }} ]
         <span v-if="message.data.target === player_key">Effect Start</span>
         <span v-else>{{ capfirst(message.data.target_data.keyword) }} Effect Start</span>
       </div>
-      <div class='duration nowrap mr-2'>{{ message.data.duration}} sec</div>
+      <div class='duration whitespace-nowrap mr-2'>{{ message.data.duration}} sec</div>
     </div>
     <div class='effect' v-else>
         {{ message.text }}

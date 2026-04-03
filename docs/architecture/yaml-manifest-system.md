@@ -12,6 +12,9 @@ Implemented entities currently include:
 
 - `trigger`
 - `worldconfig`
+- `itemtemplate`
+- `quest`
+- `questarc`
 
 ## Current Flows
 
@@ -22,7 +25,7 @@ In **World > Config**, configuration is read-oriented:
 - all configurable world/world-config values are shown read-only
 - the page can reveal the current **World Config YAML**
 - the page supports **Copy Config YAML**
-- edits happen through **World > Edit World** by applying a `kind: worldconfig` manifest
+- edits happen through **World > Edit World** by applying one or more YAML manifests
 
 ### 2. Room Triggers Screen
 
@@ -34,18 +37,43 @@ In room navigation, **Triggers** now replaces **Actions**.
 - Each trigger includes **Copy YAML** and **Copy Delete YAML** actions.
 - Recommended workflow: copy template YAML, tweak it, ingest in **Edit World**.
 
-### 3. World Edit Screen
+### 3. Item Template Details Screen
+
+In **World > Items > Item Template**, the detail screen can expose the current
+item template as YAML.
+
+- It includes **Copy YAML** for the selected item template.
+- The manifest excludes legacy `ItemAction` data because item actions are being
+  retired in favor of the Trigger system.
+- Recommended workflow: copy the YAML, edit it, then ingest it in
+  **World > Edit World**.
+
+### 4. World Edit Screen
 
 A new world-level **Edit World** view accepts a YAML manifest textarea.
 
-- Submitting a manifest currently supports:
+- Submitting YAML currently supports one or more YAML documents in sequence.
+- Supported kinds:
+  - `kind: world` (`worldconfig` remains accepted as an alias)
+  - `kind: currency`
+  - `kind: zone`
+  - `kind: room`
+  - `kind: itemtemplate`
+  - `kind: mobtemplate`
+  - `kind: quest`
+  - `kind: questarc`
   - `kind: trigger`
-  - `kind: worldconfig`
   - `kind` is case-insensitive (`trigger`, `Trigger`, `TRIGGER` all work).
 - Trigger manifests now support both:
   - **create** (no `metadata.id` / `metadata.key`)
   - **update** (include `metadata.id` or `metadata.key`)
   - **delete** (`operation: delete` with `metadata.id` or `metadata.key`)
+
+Quest authoring details, including field-by-field manifest docs and current
+runtime behavior notes, live in:
+
+- [docs/guides/quest-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/quest-builder-guide.md)
+- [docs/guides/quest-reference.md](/Users/teebes/code/writtenrealms/docs/guides/quest-reference.md)
 
 ## Trigger Manifest Shapes
 
@@ -156,12 +184,10 @@ metadata:
 
 ## World Config Manifest Shape
 
-World config edits are update-only manifests (no create/delete mode):
+World config edits are update-only manifests (no create/delete mode). The config screen and the full world export now emit the same single world document shape, and `kind: worldconfig` is still accepted for compatibility:
 
 ```yaml
-kind: worldconfig
-metadata:
-  world: world.1
+kind: world
 spec:
   name: Edeus
   short_description: Core setting text
@@ -169,8 +195,8 @@ spec:
   motd: Questions? Join Discord.
   is_public: true
   starting_gold: 0
-  starting_room: room.1
-  death_room: room.2
+  starting_room: room@0,0,0
+  death_room: room@10,0,0
   death_mode: lose_gold
   death_route: nearest_in_zone
   pvp_mode: zone
@@ -238,7 +264,7 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 
 ## Validation Rules (Current)
 
-- `kind` must resolve to `trigger` or `worldconfig` (case-insensitive).
+- `kind` must resolve to `trigger`, `world`, or `worldconfig` (case-insensitive).
 - `worldconfig` aliases `world-config` and `world_config` are accepted.
 - For update: `metadata.id` or `metadata.key` must reference an existing trigger in the selected world.
 - For create: omit both `metadata.id` and `metadata.key`.
@@ -259,14 +285,14 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 - For world config manifests:
   - only `operation: apply` is supported
   - `spec` fields are validated against the world/world-config schema
-  - room references (`starting_room`, `death_room`) must exist in world
+  - room references (`starting_room`, `death_room`) must resolve to rooms in the selected world
 
 Permission checks are applied when editing via manifest:
 
 - rank 3+ builders can edit all trigger scopes
 - rank 1-2 builders can edit room/zone targets only when assigned
 - rank 1-2 builders cannot edit world-scoped triggers
-- rank 1-2 builders cannot edit `worldconfig` manifests
+- rank 1-2 builders cannot edit world config manifests (`world` / `worldconfig`)
 
 ## Implementation Notes
 
@@ -287,7 +313,7 @@ Permission checks are applied when editing via manifest:
 3. Open **World > Edit World**.
 4. Paste the YAML and edit desired `spec` fields.
 5. Submit manifest.
-6. Verify response indicates `kind: worldconfig` and `operation: updated`.
+6. Verify response indicates `kind: world` and `operation: updated`.
 
 ## How To Add A New Trigger (Builder Workflow)
 

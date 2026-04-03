@@ -53,6 +53,9 @@ export const getTargetInGroup = (entity, group, actor?) => {
   // we start at 1.
   let duplicateCount = 1,
     found = false;
+  const entityKeyword = entity && entity.keyword
+    ? entity.keyword
+    : ((entity && entity.keywords) ? entity.keywords.split(" ")[0] : "");
 
   for (const thing of group) {
     if (actor && thing.key === actor.key) {
@@ -66,7 +69,7 @@ export const getTargetInGroup = (entity, group, actor?) => {
       }
       break;
     }
-    const foundIndex = thing.keywords.split(" ").indexOf(entity.keyword);
+    const foundIndex = thing.keywords.split(" ").indexOf(entityKeyword);
     if (foundIndex !== -1) {
       duplicateCount += 1;
     }
@@ -75,7 +78,7 @@ export const getTargetInGroup = (entity, group, actor?) => {
     return 0;
   }
 
-  let target = entity.keyword;
+  let target = entityKeyword;
   if (duplicateCount > 1) {
     target = `${duplicateCount}.${target}`;
   }

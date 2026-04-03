@@ -2,7 +2,7 @@
   <div id="edit-world-manifest">
     <h2>{{ world.name.toUpperCase() }} EDIT WORLD</h2>
     <div class="color-text-60 mb-6">
-      Paste a YAML manifest and apply it. Supported kinds: worldconfig (update world config) and trigger (create/update/delete triggers).
+      Paste one or more YAML manifests. Each YAML document is applied in order. Supported kinds: world, currency, zone, room, itemtemplate, mobtemplate, quest, questarc, and trigger.
     </div>
 
     <textarea
@@ -19,7 +19,10 @@
     </div>
 
     <div v-if="appliedKind && lastOperation" class="manifest-result mt-6 color-text-60">
-      <template v-if="appliedKind === 'trigger' && appliedTrigger">
+      <template v-if="appliedKind === 'batch' && appliedBatchSummary">
+        Applied {{ appliedBatchSummary.documents }} documents<span v-if="batchSummaryText">: {{ batchSummaryText }}</span>.
+      </template>
+      <template v-else-if="appliedKind === 'trigger' && appliedTrigger">
         <template v-if="lastOperation === 'deleted'">
           Deleted {{ appliedTrigger.key }}.
         </template>
@@ -27,8 +30,11 @@
           {{ capfirst(lastOperation) }} {{ appliedTrigger.key }} ({{ appliedTrigger.scope }} / {{ appliedTrigger.kind }}).
         </template>
       </template>
-      <template v-else-if="appliedKind === 'worldconfig'">
+      <template v-else-if="appliedKind === 'world' || appliedKind === 'worldconfig'">
         Updated world config for {{ world.name }}.
+      </template>
+      <template v-else-if="appliedKind === 'itemtemplate' && appliedItemTemplate">
+        {{ capfirst(lastOperation) }} {{ appliedItemTemplate.slug || appliedItemTemplate.name }}.
       </template>
       <template v-else>
         {{ capfirst(lastOperation) }} manifest.
@@ -52,9 +58,19 @@ const manifestText = ref("");
 const isSubmitting = ref(false);
 const appliedKind = ref<string>("");
 const appliedTrigger = ref<any | null>(null);
+const appliedItemTemplate = ref<any | null>(null);
+const appliedBatchSummary = ref<any | null>(null);
 const lastOperation = ref<string>("");
 
 const endpoint = computed(() => `/builder/worlds/${route.params.world_id}/manifests/apply/`);
+const batchSummaryText = computed(() => {
+  const kinds = appliedBatchSummary.value?.kinds || {};
+  const labels = Object.entries(kinds).map(([kind, count]) => {
+    const suffix = Number(count) === 1 ? "" : "s";
+    return `${count} ${kind}${suffix}`;
+  });
+  return labels.join(", ");
+});
 
 const extractError = (error: any): string => {
   const data = error?.response?.data;
@@ -78,25 +94,45 @@ const submitManifest = async () => {
     });
     appliedKind.value = String(resp.data.kind || "").toLowerCase();
     lastOperation.value = String(resp.data.operation || "updated");
+    appliedBatchSummary.value = appliedKind.value === "batch" ? resp.data.summary || null : null;
 
     if (appliedKind.value === "trigger") {
       appliedTrigger.value = resp.data.trigger || null;
-      manifestText.value = resp.data.trigger?.yaml || manifestText.value;
-    } else if (appliedKind.value === "worldconfig") {
+      appliedItemTemplate.value = null;
+    } else if (appliedKind.value === "world" || appliedKind.value === "worldconfig") {
       appliedTrigger.value = null;
-      manifestText.value = resp.data.world_config?.yaml || manifestText.value;
-      await Promise.all([
-        store.dispatch("builder/fetch_world", route.params.world_id),
-        store.dispatch("builder/worlds/config_fetch", {
-          world_id: route.params.world_id,
-        }),
-      ]);
+      appliedItemTemplate.value = null;
+    } else if (appliedKind.value === "itemtemplate") {
+      appliedTrigger.value = null;
+      appliedItemTemplate.value = resp.data.item_template || null;
+    } else if (appliedKind.value === "batch") {
+      appliedTrigger.value = null;
+      appliedItemTemplate.value = null;
     } else {
       appliedTrigger.value = null;
+      appliedItemTemplate.value = null;
     }
 
-    const manifestLabel = appliedKind.value ? `${appliedKind.value} manifest` : "manifest";
-    store.commit("ui/notification_set", `${capfirst(manifestLabel)} ${lastOperation.value}.`);
+    const freshWorld = await store.dispatch("builder/fetch_world", route.params.world_id);
+    await Promise.all([
+      store.dispatch("builder/worlds/config_fetch", {
+        world_id: route.params.world_id,
+      }),
+      store.dispatch("builder/fetch_world_map", route.params.world_id),
+    ]);
+    if (freshWorld?.last_viewed_room) {
+      store.commit("builder/room_set", freshWorld.last_viewed_room);
+      store.commit("builder/zone_set", freshWorld.last_viewed_room.zone);
+    }
+
+    if (appliedKind.value === "batch" && appliedBatchSummary.value) {
+      store.commit("ui/notification_set", `Applied ${appliedBatchSummary.value.documents} manifests.`);
+    } else {
+      const manifestLabel = appliedKind.value
+        ? `${appliedKind.value} manifest`
+        : "manifest";
+      store.commit("ui/notification_set", `${capfirst(manifestLabel)} ${lastOperation.value}.`);
+    }
   } catch (error: any) {
     store.commit("ui/notification_set_error", extractError(error));
   } finally {

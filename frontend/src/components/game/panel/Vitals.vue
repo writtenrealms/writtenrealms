@@ -1,5 +1,5 @@
 <template>
-  <div class="vitals-view flex flex-grow flex-col">
+  <div class="vitals-view flex grow flex-col">
     <div class="vitals-region">
       <div class="vitals">
         <div class="vital health">
@@ -35,7 +35,7 @@
     </div>
 
     <Status />
-    <div v-if="is_mobile" class="flex-grow flex flex-col justify-center">
+    <div v-if="is_mobile" class="grow flex flex-col justify-center">
       <Combat @taplook="$emit('taplook')" />
     </div>
     <div v-if="is_mobile" class="mobile-cast-region">

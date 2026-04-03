@@ -19,6 +19,7 @@
             {{ item_template.type }}
           </div>
           <div class="mb-2">ID: {{ item_template.id }}</div>
+          <div class="mb-2">Slug: {{ item_template.slug || "auto-generated" }}</div>
 
           <div class="notes" v-if="item_template.notes">
             <span class="color-text-70">Notes:</span> {{ item_template.notes }}
@@ -30,6 +31,7 @@
 
           <div class="info-actions mt-4">
             <button class="btn-small edit-mob" @click="editInfo">EDIT INFO</button>
+            <button class="btn-small ml-2" :disabled="!item_template.yaml" @click="copyYaml">COPY YAML</button>
             <button class="btn-small delete-mob delete-template" @click="deleteItem">DELETE ITEM</button>
           </div>
         </div>
@@ -292,6 +294,15 @@ const deleteItem = async () => {
   if (!c) return;
   await store.dispatch("builder/worlds/item_template_delete");
   store.commit("ui/notification_set", `Deleted Item Template ${item_template_id}`);
+};
+
+const copyYaml = async () => {
+  try {
+    await navigator.clipboard.writeText(item_template.value?.yaml || "");
+    store.commit("ui/notification_set", "Item template YAML copied.");
+  } catch {
+    store.commit("ui/notification_set_error", "Unable to copy YAML to clipboard.");
+  }
 };
 
 const editLookDesc = () => {

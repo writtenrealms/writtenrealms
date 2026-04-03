@@ -25,6 +25,7 @@
       <textarea
         v-if="elementSchema.widget == 'textarea'"
         :id="'field-' + elementSchema.attr"
+        ref="focusEl"
         :placeholder="elementSchema.label"
         :autofocus="elementSchema.autofocus === true"
         v-model="internalValue"
@@ -35,8 +36,8 @@
 
       <!-- Select -->
       <template v-else-if="elementSchema.options">
-        <input v-if="readonly" :readonly="true" :value="internalValue" :autofocus="elementSchema.autofocus === true" />
-        <select :id="'field-' + elementSchema.attr" v-model="internalValue" :autofocus="elementSchema.autofocus === true" v-else>
+        <input v-if="readonly" ref="focusEl" :readonly="true" :value="internalValue" :autofocus="elementSchema.autofocus === true" />
+        <select :id="'field-' + elementSchema.attr" ref="focusEl" v-model="internalValue" :autofocus="elementSchema.autofocus === true" v-else>
           <option v-for="option in elementSchema.options" :key="option.value" :value="option.value">
             {{ option.label }}
           </option>
@@ -55,6 +56,7 @@
       <input
         v-else
         :id="'field-' + elementSchema.attr"
+        ref="focusEl"
         :placeholder="elementSchema.label"
         :autofocus="elementSchema.autofocus === true"
         v-model="internalValue"
@@ -68,7 +70,7 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, watch, computed } from 'vue';
+import { ref, watch, computed, onMounted, nextTick } from 'vue';
 import ReferenceField from "./ReferenceField.vue";
 import { useStore } from 'vuex';
 import Help from "@/components/Help.vue";
@@ -83,6 +85,7 @@ const props = withDefaults(defineProps<{
 const store = useStore();
 // const internalValue = ref(props.value);
 const internalValue = ref(props.modelValue);
+const focusEl = ref<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null>(null);
 const hasFieldError = computed(() => props.elementSchema.attr in props.formErrors);
 
 const emit = defineEmits(['input', 'update:modelValue', 'update']);
@@ -95,6 +98,14 @@ watch(internalValue, (newValue) => {
 });
 watch(() => props.modelValue, (newValue) => {
   internalValue.value = newValue;
+});
+
+onMounted(() => {
+  if (!props.elementSchema.autofocus) return;
+
+  nextTick(() => {
+    focusEl.value?.focus();
+  });
 });
 
 const onFocus = () => { store.commit("ui/editing_field_set"); }

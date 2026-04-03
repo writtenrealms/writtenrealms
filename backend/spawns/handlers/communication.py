@@ -2,7 +2,7 @@
 Communication command handlers (say, yell, emote).
 """
 from spawns.actions.base import ActionError
-from spawns.actions.communication import EmoteAction, SayAction, YellAction
+from spawns.actions.communication import EmoteAction, SayAction, TalkAction, YellAction
 from spawns.events import publish_events
 from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.registry import register_handler
@@ -124,6 +124,45 @@ class EmoteHandler(CommandHandler):
             ctx.publish(
                 {
                     "type": "cmd.emote.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.actor_key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class TalkHandler(CommandHandler):
+    command_type = "talk"
+    text_commands = ("talk",)
+    supported_actor_types = ("player",)
+    help = {
+        "name": "Talk",
+        "format": "talk <mob>",
+        "description": "Speak directly with a mob in your room.",
+        "examples": [
+            "talk guard",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        args = ctx.payload.get("args", [])
+        target = ctx.payload.get("target")
+        if not target and args:
+            target = " ".join(args)
+
+        try:
+            result = TalkAction().execute(ctx.player, target)
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd.talk.error",
                     "text": err.message,
                     "data": {"error": err.message, "code": err.code, **err.data},
                 }

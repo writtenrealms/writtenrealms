@@ -14,7 +14,7 @@
         <Exits />
       </div>
     </div>
-    <Console class="flex-grow" />
+    <Console class="grow" />
     <Hint v-if="hint && hint.split(':')[0] === '9'" />
     <Exits v-if="hasExits && selectedTab === 'look' && mapDisplay === 'mini'" />
     <Hint v-if="hint && hint.split(':')[0] !== '9'" />

@@ -1,5 +1,5 @@
 <template>
-  <div class="flex-grow flex flex-col console-wrapper">
+  <div class="grow flex flex-col console-wrapper">
     <div id="console" ref="console" class="testing">
       <div class="message" v-for="message in messages" :key="message.request_id">
         <div v-if="message" class="mt-4">

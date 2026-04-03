@@ -47,12 +47,21 @@
           >Items</router-link>
 
           <router-link
+            :to="{name: 'builder_world_quest_template_list', params: {world_id: route.params.world_id}}" :class="{ 'router-link-active': isWorldQuestRoute }"
+          >Quests</router-link>
+
+          <router-link
             :to="{name: 'builder_world_config', params: {world_id: route.params.world_id}}" :class="{ 'router-link-active': isWorldConfigRoute }"
           >Config</router-link>
 
           <router-link
             :to="{name: 'builder_world_edit', params: {world_id: route.params.world_id}}"
           >Edit World</router-link>
+
+          <router-link
+            v-if="world?.builder_info?.builder_rank > 2"
+            :to="{name: 'builder_world_export', params: {world_id: route.params.world_id}}"
+          >Export</router-link>
 
           <div class="mobile-hidden">
             <div class="line-divider my-2"></div>
@@ -210,6 +219,14 @@ const viewType = computed(() => {
 // World
 const isWorldItemsRoute = computed(() => { return route.name === 'builder_item_template_details'; });
 const isWorldMobsRoute = computed(() => { return route.name === 'builder_mob_template_details'; });
+const isWorldQuestRoute = computed(() => {
+  const routes = [
+    'builder_world_quest_template_list',
+    'builder_world_quest_template_new',
+    'builder_world_quest_template_details',
+  ];
+  return routes.includes(route.name as string);
+});
 const isWorldConfigRoute = computed(() => {
   const routes = [
     'builder_world_random_profile_list',

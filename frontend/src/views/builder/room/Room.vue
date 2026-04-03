@@ -66,6 +66,7 @@ import Map from "@/components/ui/Map.vue";
 import { DIRECTIONS } from "@/constants";
 import RoomDirActions from "@/components/builder/room/RoomDirActions.vue";
 import { BUILDER_FORMS } from "@/core/forms";
+import { getMovementDirectionFromArrowKey } from "@/core/keyboard";
 import RoomDescription from "@/components/builder/room/RoomDescription.vue";
 
 const store = useStore();
@@ -98,14 +99,60 @@ const key_link = (key: any) => {
   };
 };
 
-const onTypeE = (e: KeyboardEvent) => {
-  if (store.state.ui.modal.isOpen) return;
-  const key = String.fromCharCode(e.keyCode).toLowerCase();
-  if (key === "e") editInfo();
+const isEditableTarget = (target: EventTarget | null) => {
+  return target instanceof HTMLElement && (
+    ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) ||
+    target.isContentEditable
+  );
+};
+
+const goToRoom = (nextRoom) => {
+  if (!nextRoom?.id) return;
+
+  if (nextRoom.zone) {
+    store.dispatch("builder/room_select", nextRoom);
+  }
+
+  router.push({
+    name: 'builder_room_index',
+    params: {
+      world_id: route.params.world_id,
+      zone_id: route.params.zone_id,
+      room_id: nextRoom.id
+    }
+  });
+};
+
+const moveToDirection = (direction: string) => {
+  const exitRoomRef = room.value?.[direction];
+  if (!exitRoomRef) return;
+
+  const nextRoom = map.value?.[exitRoomRef.key] || exitRoomRef;
+  goToRoom(nextRoom);
+};
+
+const onKeyDown = (e: KeyboardEvent) => {
+  if (store.state.ui.modal.isOpen || store.state.ui.editingField) return;
+  if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (isEditableTarget(e.target)) return;
+
+  const direction = getMovementDirectionFromArrowKey(e);
+  if (direction) {
+    e.preventDefault();
+    e.stopPropagation();
+    moveToDirection(direction);
+    return;
+  }
+
+  if (e.key.toLowerCase() === "e") {
+    e.preventDefault();
+    e.stopPropagation();
+    editInfo();
+  }
 };
 
 onMounted(async () => {
-  window.addEventListener("keypress", onTypeE);
+  window.addEventListener("keydown", onKeyDown);
   if (!store.state.builder.room || store.state.builder.room != route.params.room_id) {
     const room = await store.dispatch("builder/room_fetch", {
       world_id: route.params.world_id,
@@ -122,7 +169,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  window.removeEventListener("keypress", onTypeE);
+  window.removeEventListener("keydown", onKeyDown);
 });
 
 const editInfo = () => {
@@ -153,15 +200,7 @@ const onEditDescription = () => {
 };
 
 const onMapClickRoom = (room) => {
-  store.dispatch("builder/room_select", room);
-  router.push({
-    name: 'builder_room_index',
-    params: {
-      world_id: route.params.world_id,
-      zone_id: route.params.zone_id,
-      room_id: room.id
-    }
-  });
+  goToRoom(room);
 };
 </script>
 

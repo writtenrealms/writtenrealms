@@ -49,6 +49,7 @@ INSTALLED_APPS = [
 
     'builders.apps.BuildersConfig',
     'lobby.apps.LobbyConfig',
+    'quests.apps.QuestsConfig',
     'spawns.apps.SpawnsConfig',
     'system.apps.SystemConfig',
     'users.apps.UsersConfig',

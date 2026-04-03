@@ -87,6 +87,14 @@ class WorldSmith:
         if self.world.context.instance_of:
             self.world.delete()
 
+    def reset(self):
+        if self.world.lifecycle != api_consts.WORLD_LIFECYCLE_STOPPED:
+            raise serializers.ValidationError("Can only reset stopped worlds.")
+
+        self.world.cleanup()
+        self.world.update_builder_admin()
+        return self.world
+
     def stop_spw(self, player=None, player_data_id=None):
         spawn_world = self.world
         spawn_world.set_state(api_consts.WORLD_STATE_STOPPING)

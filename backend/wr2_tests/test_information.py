@@ -1,8 +1,11 @@
+from builders.models import ItemTemplate
+from config import constants as adv_consts
 from core.computations import compute_stats
 from spawns.handlers import dispatch_command
+from spawns.models import Item
 from django.utils import timezone
 from tests.base import WorldTestCase
-from wr2_tests.utils import capture_game_messages
+from wr2_tests.utils import capture_game_messages, dispatch_text_command
 
 
 class TestLookCommandText(WorldTestCase):
@@ -28,6 +31,101 @@ class TestLookCommandText(WorldTestCase):
         self.assertTrue(message.get("text"))
         self.assertIn(self.room.name, message["text"])
         self.assertIn("A test room.", message["text"])
+
+    def test_look_target_mob_returns_char_payload(self):
+        mob = self.create_mob(
+            "Sam",
+            description="A watchful scout studies the room.",
+            keywords="sam scout",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "look sam")
+
+        message = self._message_by_type(messages, "cmd.look.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target_type"], "char")
+        self.assertEqual(message["data"]["target"]["key"], mob.key)
+        self.assertEqual(message["data"]["target"]["char_type"], "mob")
+        self.assertEqual(
+            message["data"]["target"]["description"],
+            "A watchful scout studies the room.",
+        )
+        self.assertIn("Sam", message["text"])
+        self.assertIn("watchful scout", message["text"].lower())
+
+    def test_look_target_room_item_returns_item_payload(self):
+        template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Lantern",
+            description="A brass lantern with a warm flame.",
+            keywords="lantern",
+        )
+        item = Item.objects.create(
+            world=self.spawn_world,
+            container=self.room,
+            template=template,
+            name=template.name,
+            description=template.description,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "look lantern")
+
+        message = self._message_by_type(messages, "cmd.look.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target_type"], "item")
+        self.assertEqual(message["data"]["target"]["key"], item.key)
+        self.assertEqual(
+            message["data"]["target"]["description"],
+            "A brass lantern with a warm flame.",
+        )
+        self.assertIn("Lantern", message["text"])
+
+    def test_look_target_inventory_container_includes_contents(self):
+        bag_template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Bag",
+            type=adv_consts.ITEM_TYPE_CONTAINER,
+            keywords="bag",
+        )
+        bag = Item.objects.create(
+            world=self.spawn_world,
+            container=self.player,
+            template=bag_template,
+            name=bag_template.name,
+            type=adv_consts.ITEM_TYPE_CONTAINER,
+        )
+        apple_template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Apple",
+            keywords="apple",
+        )
+        apple = Item.objects.create(
+            world=self.spawn_world,
+            container=bag,
+            template=apple_template,
+            name=apple_template.name,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "look bag")
+
+        message = self._message_by_type(messages, "cmd.look.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target_type"], "item")
+        self.assertEqual(message["data"]["target"]["key"], bag.key)
+        self.assertEqual(len(message["data"]["target"]["inventory"]), 1)
+        self.assertEqual(message["data"]["target"]["inventory"][0]["key"], apple.key)
+        self.assertIn("Apple", message["text"])
+
+    def test_look_target_not_found_returns_error(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "look sam")
+
+        message = self._message_by_type(messages, "cmd.look.error")
+        self.assertIsNotNone(message)
+        self.assertIn("don't see that here", message["text"].lower())
 
 
 class TestStateSyncText(WorldTestCase):
@@ -111,6 +209,24 @@ class TestStateSyncText(WorldTestCase):
         self.assertEqual(actor["health_max"], stats["health_max"])
         self.assertEqual(actor["mana_max"], stats["mana_max"])
         self.assertEqual(actor["stamina_max"], stats["stamina_max"])
+
+    def test_state_sync_room_chars_include_primary_keyword(self):
+        mob = self.create_mob("Gus Tone", keywords="gus tone")
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="state.sync",
+                player_id=self.player.id,
+                payload={},
+            )
+
+        message = self._message_by_type(messages, "cmd.state.sync.success")
+        self.assertIsNotNone(message)
+
+        room_chars = message["data"]["room"]["chars"]
+        mob_payload = next(char for char in room_chars if char["key"] == mob.key)
+        self.assertEqual(mob_payload["keywords"], "gus tone")
+        self.assertEqual(mob_payload["keyword"], "gus")
 
 
 class TestStateSyncMapKeys(WorldTestCase):

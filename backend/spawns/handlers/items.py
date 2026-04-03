@@ -2,7 +2,7 @@
 Item command handlers.
 """
 from spawns.actions.base import ActionError
-from spawns.actions.items import DropAction, GetAction, PutAction
+from spawns.actions.items import DropAction, GetAction, GiveAction, PutAction
 from spawns.events import publish_events
 from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.registry import register_handler
@@ -165,6 +165,70 @@ class PutHandler(CommandHandler):
             ctx.publish(
                 {
                     "type": "cmd.put.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.player.key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class GiveHandler(CommandHandler):
+    command_type = "give"
+    text_commands = ("give",)
+    help = {
+        "name": "Give",
+        "format": "give <item> <mob>",
+        "description": "Hand an inventory item to a mob in the current room.",
+        "examples": [
+            "give apple guard",
+            "give 2.pelt quartermaster",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        selector = ctx.payload.get("selector")
+        target = ctx.payload.get("target")
+
+        if not selector or not target:
+            args = ctx.payload.get("args", [])
+            if args:
+                selector = args[0]
+            if len(args) > 1:
+                target = " ".join(args[1:])
+
+        if not selector:
+            ctx.publish(
+                {
+                    "type": "cmd.give.error",
+                    "text": "Give what?",
+                    "data": {"error": "Missing item.", "code": "missing_item"},
+                }
+            )
+            return
+
+        if not target:
+            ctx.publish(
+                {
+                    "type": "cmd.give.error",
+                    "text": "Give to whom?",
+                    "data": {"error": "Missing target.", "code": "missing_target"},
+                }
+            )
+            return
+
+        try:
+            result = GiveAction().execute(ctx.player.id, selector, target)
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd.give.error",
                     "text": err.message,
                     "data": {"error": err.message, "code": err.code, **err.data},
                 }

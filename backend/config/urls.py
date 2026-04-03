@@ -4,6 +4,7 @@ from rest_framework.urlpatterns import format_suffix_patterns
 
 from builders import views as builder_views
 from lobby import views as lobby_views
+from quests import views as quest_views
 from spawns import views as spawn_views
 from system import views as system_views
 from users import views as user_views
@@ -78,6 +79,13 @@ api_v1_urls = [
     path('game/enter/', spawn_views.EnterGame.as_view(), name='enter-game'),
     path('game/play/', spawn_views.PlayGame.as_view(), name='game-play'),
     path('game/lookup/<key>/', spawn_views.Lookup.as_view(), name='game-lookup'),
+    path('game/quests/opportunities/', quest_views.quest_opportunity_list, name='game-quest-opportunity-list'),
+    path('game/quests/opportunities/<slug:slug>/accept/', quest_views.quest_opportunity_accept, name='game-quest-opportunity-accept'),
+    path('game/quests/active/', quest_views.quest_active_list, name='game-quest-active-list'),
+    path('game/quests/resolved/', quest_views.quest_resolved_list, name='game-quest-resolved-list'),
+    path('game/quests/instances/<instance_id>/info/', quest_views.quest_instance_info, name='game-quest-instance-info'),
+    path('game/quests/instances/<instance_id>/abandon/', quest_views.quest_instance_abandon, name='game-quest-instance-abandon'),
+    path('game/quests/instances/<instance_id>/choose/', quest_views.quest_instance_choose, name='game-quest-instance-choose'),
     path('game/enquiredquests/', spawn_views.EnquiredQuests.as_view(), name='enquired-quests'),
     path('game/quests/open/', spawn_views.OpenQuests.as_view(), name='quests-open'),
     path('game/quests/repeatable/', spawn_views.RepeatableQuests.as_view(), name='quests-repetable'),
@@ -130,6 +138,7 @@ api_v1_urls = [
     path('builder/worlds/', builder_views.world_list, name='builder-world-list'),
     path('builder/worlds/<pk>/', builder_views.world_detail, name='builder-world-detail'),
     path('builder/worlds/<pk>/config/', builder_views.world_config, name='builder-world-config'),
+    path('builder/worlds/<pk>/export/', builder_views.world_export, name='builder-world-export'),
     path('builder/worlds/<pk>/explore/', builder_views.world_explore, name='builder-world-explore'),
     path('builder/worlds/<pk>/map/', builder_views.world_map, name='builder-world-map'),
     path('builder/worlds/<world_pk>/manifests/apply/', builder_views.world_manifest_apply, name='builder-world-manifest-apply'),
@@ -156,6 +165,7 @@ api_v1_urls = [
     # World admin
     path('builder/worlds/<pk>/admin/', builder_views.world_admin, name='builder-world-admin'),
     path('builder/worlds/<world_pk>/admin/instance/<pk>/', builder_views.world_admin_instance, name='builder-world-admin-instance'),
+    path('builder/worlds/<world_pk>/admin/instance/<pk>/reset/', builder_views.world_admin_instance_reset, name='builder-world-admin-instance-reset'),
 
 
     # Zones
@@ -234,6 +244,10 @@ api_v1_urls = [
     path('builder/worlds/<world_pk>/objectives/<pk>/', builder_views.objective_detail, name='builder-objective-detail'),
     path('builder/worlds/<world_pk>/quests/<pk>/rewards/', builder_views.reward_list, name='builder-reward-list'),
     path('builder/worlds/<world_pk>/rewards/<pk>/', builder_views.reward_detail, name='builder-reward-detail'),
+    path('builder/worlds/<world_pk>/questtemplates/', quest_views.quest_template_list, name='builder-quest-template-list'),
+    path('builder/worlds/<world_pk>/questtemplates/<pk>/', quest_views.quest_template_detail, name='builder-quest-template-detail'),
+    path('builder/worlds/<world_pk>/questarcs/', quest_views.quest_arc_template_list, name='builder-quest-arc-template-list'),
+    path('builder/worlds/<world_pk>/questarcs/<pk>/', quest_views.quest_arc_template_detail, name='builder-quest-arc-template-detail'),
 
     # World Config
     path('builder/worlds/<world_pk>/randomitemprofiles/', builder_views.random_item_profile_list, name='builder-random-item-profile-list'),

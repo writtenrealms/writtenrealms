@@ -14,6 +14,7 @@ from django.utils import timezone
 
 from config import constants as adv_consts
 from core.computations import compute_stats
+from quests.services.interactions import room_mob_quest_indicator_map
 from spawns.models import DoorState, Item, Mob, Player
 from spawns.schemas import (
     Actor,
@@ -21,6 +22,7 @@ from spawns.schemas import (
     Equipment as EquipmentSchema,
     Item as ItemSchema,
     MapRoom,
+    QuestData,
     Room as RoomSchema,
     StateSyncData,
     WhoListEntry,
@@ -41,6 +43,13 @@ def safe_capitalize(value: Optional[str]) -> str:
     if not value:
         return ""
     return value[0].upper() + value[1:]
+
+
+def first_keyword(value: Optional[str], fallback: Optional[str] = None) -> str:
+    tokens = [token for token in str(value or "").split(" ") if token]
+    if tokens:
+        return tokens[0]
+    return str(fallback or "").strip().lower()
 
 
 def computed_player_vitals(player: Player) -> dict[str, int]:
@@ -108,7 +117,12 @@ def resolve_item_name(item: Item) -> str:
     return "Unnamed item"
 
 
-def serialize_item(item: Item, *, viewer: Player | Mob | None = None) -> ItemSchema:
+def serialize_item(
+    item: Item,
+    *,
+    viewer: Player | Mob | None = None,
+    include_inventory: bool = False,
+) -> ItemSchema:
     """Serialize an item into the WR2 Item schema."""
     name = resolve_item_name(item)
     currency = item.currency.code if item.currency else "gold"
@@ -121,15 +135,34 @@ def serialize_item(item: Item, *, viewer: Player | Mob | None = None) -> ItemSch
     if armor_value is None:
         armor_value = 0
     actions = get_item_action_labels_for_actor(viewer, item)
+    keywords = item.keywords or ""
+    if not keywords and item.template:
+        keywords = item.template.keywords or ""
+    if not keywords:
+        keywords = name.lower()
+    item_type = item.type or (item.template.type if item.template else None)
+    inventory = []
+    if include_inventory and item_type in (
+        adv_consts.ITEM_TYPE_CONTAINER,
+        adv_consts.ITEM_TYPE_CORPSE,
+        adv_consts.ITEM_TYPE_TRASH,
+    ):
+        inventory = serialize_inventory(
+            item.inventory.filter(is_pending_deletion=False)
+            .select_related("template", "currency")
+            .order_by("id"),
+            viewer=viewer,
+            include_inventory=True,
+        )
 
     return ItemSchema(
         key=item.key,
         name=name,
         cf_name=safe_capitalize(name),
-        type=item.type,
+        type=item_type,
         armor_class=item.armor_class,
         description=description,
-        ground_description=item.ground_description,
+        ground_description=item.ground_description or (item.template.ground_description if item.template else None),
         level=item.level,
         quality=item.quality,
         is_magic=getattr(item, "is_magic", False),
@@ -154,8 +187,17 @@ def serialize_item(item: Item, *, viewer: Player | Mob | None = None) -> ItemSch
         is_pickable=item.is_pickable,
         cost=item.cost,
         currency=currency,
-        keywords=item.keywords or "",
+        keywords=keywords,
+        keyword=first_keyword(keywords, name),
+        label=item.label,
+        upgrade_count=item.upgrade_count,
         weapon_type=item.weapon_type,
+        is_container=item_type in (
+            adv_consts.ITEM_TYPE_CONTAINER,
+            adv_consts.ITEM_TYPE_CORPSE,
+            adv_consts.ITEM_TYPE_TRASH,
+        ),
+        inventory=inventory,
         actions=actions,
     )
 
@@ -164,8 +206,16 @@ def serialize_inventory(
     items: Iterable[Item],
     *,
     viewer: Player | Mob | None = None,
+    include_inventory: bool = False,
 ) -> List[ItemSchema]:
-    return [serialize_item(item, viewer=viewer) for item in items]
+    return [
+        serialize_item(
+            item,
+            viewer=viewer,
+            include_inventory=include_inventory,
+        )
+        for item in items
+    ]
 
 
 def serialize_equipment(equipment, *, viewer: Player | Mob | None = None) -> EquipmentSchema:
@@ -191,7 +241,13 @@ def serialize_equipment(equipment, *, viewer: Player | Mob | None = None) -> Equ
     return EquipmentSchema(**slots)
 
 
-def serialize_char_from_player(player: Player) -> Char:
+def serialize_char_from_player(
+    player: Player,
+    *,
+    viewer: Player | Mob | None = None,
+    include_equipment: bool = False,
+) -> Char:
+    keywords = getattr(player, "keywords", "") or f"{player.name.lower()} player {player.key}"
     return Char(
         id=player.id,
         key=player.key,
@@ -208,14 +264,23 @@ def serialize_char_from_player(player: Player) -> Char:
         mana=player.mana,
         level=player.level,
         gender=player.gender or "male",
-        keywords=getattr(player, "keywords", "") or player.name.lower(),
+        keywords=keywords,
+        keyword=first_keyword(keywords, player.name),
         char_type="player",
         display_faction=player.display_faction or None,
+        equipment=serialize_equipment(player.equipment, viewer=viewer) if include_equipment else None,
     )
 
 
-def serialize_char_from_mob(mob: Mob, *, viewer: Player | Mob | None = None) -> Char:
+def serialize_char_from_mob(
+    mob: Mob,
+    *,
+    viewer: Player | Mob | None = None,
+    quest_indicator_map: dict[int, dict[str, bool]] | None = None,
+    include_equipment: bool = False,
+) -> Char:
     name = mob.name or (mob.template.name if mob.template else "Unnamed Mob")
+    keywords = mob.keywords or name.lower()
     title = mob.title
     if not title and mob.template:
         title = mob.template.title
@@ -227,6 +292,7 @@ def serialize_char_from_mob(mob: Mob, *, viewer: Player | Mob | None = None) -> 
         room_desc = mob.template.room_description
     factions = mob.template.factions if mob.template else mob.factions
     actions = get_char_action_labels_for_actor(viewer, mob)
+    quest_indicator = (quest_indicator_map or {}).get(mob.id, {})
     return Char(
         id=mob.id,
         key=mob.key,
@@ -243,12 +309,18 @@ def serialize_char_from_mob(mob: Mob, *, viewer: Player | Mob | None = None) -> 
         mana=mob.mana,
         level=mob.level,
         gender=mob.gender or "male",
-        keywords=mob.keywords or name.lower(),
+        keywords=keywords,
+        keyword=first_keyword(keywords, name),
         template_id=mob.template_id,
         char_type="mob",
         is_elite=getattr(mob, "is_elite", False),
         is_invisible=getattr(mob, "is_invisible", False),
+        equipment=serialize_equipment(mob.equipment, viewer=viewer) if include_equipment else None,
         actions=actions,
+        quest_data=QuestData(
+            enquire=bool(quest_indicator.get("enquire")),
+            complete=bool(quest_indicator.get("complete")),
+        ),
     )
 
 
@@ -402,11 +474,21 @@ def serialize_room(
     )
 
     room_players = room.players.filter(in_game=True).select_related("user", "equipment")
-    room_mobs = room.mobs.select_related("template")
+    room_mobs = list(room.mobs.select_related("template"))
+    quest_indicator_map: dict[int, dict[str, bool]] = {}
+    if isinstance(viewer, Player):
+        quest_indicator_map = room_mob_quest_indicator_map(viewer, room_mobs)
 
     chars: List[Char] = []
     chars.extend(serialize_char_from_player(p) for p in room_players)
-    chars.extend(serialize_char_from_mob(m, viewer=viewer) for m in room_mobs)
+    chars.extend(
+        serialize_char_from_mob(
+            m,
+            viewer=viewer,
+            quest_indicator_map=quest_indicator_map,
+        )
+        for m in room_mobs
+    )
 
     zone = ZoneSchema(key=room.zone.key, name=room.zone.name) if room.zone else None
     details = list(room.details.filter(is_hidden=False).values_list("description", flat=True))

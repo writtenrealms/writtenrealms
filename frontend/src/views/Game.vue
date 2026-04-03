@@ -12,11 +12,11 @@
             </div>
         </div>
   </div>
-  <div id="game" v-else-if="loaded" class="flex flex-grow">
+  <div id="game" v-else-if="loaded" class="flex grow">
     <component
       :is="gameComponent"
       :width="width"
-      class="flex-grow"
+      class="grow"
       v-if="store.state.game.is_connected"
     ></component>
   </div>

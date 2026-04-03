@@ -4,17 +4,8 @@
     <div v-if="isLastMessage && isInRoom && hasAction" class='mt-4'>
       <button
         class="btn-small mr-2"
-        v-if="targetActions.enquire"
-        @click="doAction(message.data.target, 'enquire')">ENQUIRE</button>
-      <button
-        class="btn-small mr-2"
-        v-if="targetActions.completion_action"
-        @click="doAction(message.data.target, targetActions.completion_action)"
-      >{{ targetActions.completion_action.toUpperCase() }}</button>
-      <button
-        class="btn-small mr-2"
-        v-else-if="targetActions.complete"
-        @click="doAction(message.data.target, 'complete')">COMPLETE QUEST</button>
+        v-if="targetActions.talk"
+        @click="doAction(message.data.target, 'talk')">TALK</button>
       <button
         class="btn-small mr-2"
         v-if="targetActions.list"
@@ -49,13 +40,12 @@
 import { computed, } from "vue";
 import { useStore } from "vuex";
 import CharInfo from "@/components/game/console/CharInfo.vue"
+import { buildCharActions } from "@/core/charActions";
 import { getTargetInGroup } from "@/core/utils.ts";
 
 const store = useStore();
 const KNOWN_ACTIONS = new Set([
-  "enquire",
-  "completion_action",
-  "complete",
+  "talk",
   "list",
   "offer",
   "craft",
@@ -67,56 +57,22 @@ const props = defineProps<{
   message: any;
 }>();
 
-const targetActions = computed(() => {
-  const actions = {
-    enquire: false,
-    completion_action: "",
-    complete: false,
-    list: false,
-    offer: false,
-    craft: false,
-    follow: false,
-    unfollow: false,
-  };
-
-  const sourceActions = props.message.data.target.actions;
-  if (Array.isArray(sourceActions)) {
-    for (const action of sourceActions) {
-      actions[action] = true;
-    }
-  } else if (sourceActions && typeof sourceActions === "object") {
-    for (const [action, value] of Object.entries(sourceActions)) {
-      actions[action] = value as any;
-    }
-  }
-
-  if (props.message.data.target.quest_data) {
-    if (props.message.data.target.quest_data.complete) actions.complete = true;
-    if (props.message.data.target.quest_data.enquire) actions.enquire = true;
-  }
-
-  if (props.message.data.target.is_merchant) {
-    actions.list = true;
-    actions.offer = true;
-  }
-  if (props.message.data.target.is_crafter) actions.craft = true;
-
-  if (props.message.data.target.completion_action && !actions.completion_action) {
-    actions.completion_action = props.message.data.target.completion_action;
-  }
-
-  return actions;
-});
+const targetActions = computed(() =>
+  buildCharActions(
+    props.message.data.target,
+    store.state.game.player,
+    store.state.game.world
+  )
+);
 
 const hasAction = computed(() => {
   const hasKnownAction = Boolean(
-    targetActions.value.complete ||
-    targetActions.value.completion_action ||
+    targetActions.value.talk ||
+    targetActions.value.craft ||
     targetActions.value.list ||
     targetActions.value.offer ||
     targetActions.value.follow ||
-    targetActions.value.unfollow ||
-    targetActions.value.enquire
+    targetActions.value.unfollow
   );
   if (hasKnownAction) return true;
   return Object.entries(targetActions.value || {}).some(([actionCode, value]) => {
@@ -126,18 +82,19 @@ const hasAction = computed(() => {
 });
 
 const doAction = (char, action) => {
-  if (String(action || "").includes(" ")) {
-    store.dispatch("game/cmd", String(action));
+  const rawAction = String(action || "").trim();
+  if (rawAction.includes(" ")) {
+    store.dispatch("game/cmd", rawAction);
     store.commit("game/lookup_clear");
     store.commit("ui/modal_clear");
     return;
   }
   const target = getTargetInGroup(char, store.state.game.room.chars) || char.keyword || char.name;
-  if (action === 'follow' || action === 'unfollow') {
-    store.dispatch("game/cmd", `${action} ${target}`)
-  } else if (target && target.indexOf(".") === -1)
-    store.dispatch("game/cmd", `${action}`);
-  else store.dispatch("game/cmd", `${action} ${target}`);
+  if (rawAction === 'craft' || rawAction === 'upgrade') {
+    store.dispatch("game/cmd", rawAction);
+  } else {
+    store.dispatch("game/cmd", `${rawAction} ${target}`);
+  }
 
   store.commit("game/lookup_clear");
   store.commit("ui/modal_clear");

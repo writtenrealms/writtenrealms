@@ -228,6 +228,11 @@ export const GET_MOB_TEMPLATE_INFO = () => {
               auto-capitalized when needed.`,
         },
         {
+          attr: "slug",
+          label: "Slug",
+          help: `Stable builder-facing identifier used by quest manifests. Leave blank to auto-generate one. If you change it later, update any manifests that reference it.`,
+        },
+        {
           attr: "notes",
           label: "Notes",
         },
@@ -798,6 +803,11 @@ export const BUILDER_FORMS = {
                  for example 'a sword', rather than something like 'Big Sword'.
                  This ensures that the game generates correct sentences with the
                  item like 'You get a sword from the ground.'`,
+        },
+        {
+          attr: "slug",
+          label: "Slug",
+          help: `Stable builder-facing identifier used by quest manifests. Leave blank to auto-generate one. If you change it later, update any manifests that reference it.`,
         },
         {
           attr: "level",

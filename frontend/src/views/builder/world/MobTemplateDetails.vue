@@ -22,6 +22,7 @@
           </div>
 
           <div class="mb-2">ID: {{ template.id }}</div>
+          <div class="mb-2">Slug: {{ template.slug || "auto-generated" }}</div>
 
           <div v-if="template.notes" class="mob-note">Notes: {{ template.notes }}</div>
 

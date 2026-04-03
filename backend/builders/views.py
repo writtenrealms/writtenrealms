@@ -1,10 +1,11 @@
+import copy
 import collections
 import json
 
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 
@@ -37,6 +38,8 @@ from core.view_mixins import (
 from builders import manifests as builder_manifests
 from builders import permissions as builder_permissions
 from builders import serializers as builder_serializers
+from builders import world_export as builder_world_export
+from quests import manifests as quest_manifests
 from builders.models import (
     BuilderAction,
     BuilderAssignment,
@@ -99,9 +102,11 @@ class BaseWorldBuilderViewSet(RequestDataMixin,
                 query = int(query)
                 qs = qs.filter(pk=query)
             except ValueError:
-                lookup = '%s__icontains'    % field_name
-                kwargs = {lookup: query}
-                qs = qs.filter(**kwargs)
+                lookup = '%s__icontains' % field_name
+                query_filter = Q(**{lookup: query})
+                if any(field.name == 'slug' for field in qs.model._meta.concrete_fields):
+                    query_filter |= Q(slug__icontains=query)
+                qs = qs.filter(query_filter)
 
         # Sorting. Possibly doesn't belong here but rather in some other
         # method like 'apply_sort_by' or something.
@@ -162,6 +167,49 @@ def _has_room_assignment(*, user, room):
         assignment_id=room.id,
         assignment_type=ContentType.objects.get_for_model(Room),
     ).exists()
+
+
+def _has_item_template_assignment(*, user, item_template):
+    return BuilderAssignment.objects.filter(
+        builder__user=user,
+        assignment_id=item_template.id,
+        assignment_type=ContentType.objects.get_for_model(ItemTemplate),
+    ).exists()
+
+
+def _has_mob_template_assignment(*, user, mob_template):
+    return BuilderAssignment.objects.filter(
+        builder__user=user,
+        assignment_id=mob_template.id,
+        assignment_type=ContentType.objects.get_for_model(MobTemplate),
+    ).exists()
+
+
+def _delete_item_template_or_error(instance):
+    if instance.template_items.count():
+        raise serializers.ValidationError(
+            "Cannot delete a template that has loaded items."
+        )
+    if Reward.objects.filter(
+        profile_type=ContentType.objects.get_for_model(instance),
+        profile_id=instance.id,
+    ).count():
+        raise serializers.ValidationError(
+            "Cannot delete a template used for a quest reward."
+        )
+    if Objective.objects.filter(
+        template_type=ContentType.objects.get_for_model(instance),
+        template_id=instance.id,
+        qty__gte=1,
+    ).count():
+        raise serializers.ValidationError(
+            "Cannot delete a template used for a quest objective."
+        )
+    BuilderAssignment.objects.filter(
+        assignment_id=instance.id,
+        assignment_type=ContentType.objects.get_for_model(ItemTemplate),
+    ).delete()
+    instance.delete()
 
 
 def _has_room_or_zone_assignment(*, user, room):
@@ -390,15 +438,38 @@ class WorldAdminView(BaseWorldBuilderView):
 world_admin = WorldAdminView.as_view()
 
 
+def _get_builder_admin_spawn_world(root_world, pk):
+    return get_object_or_404(
+        World.objects.select_related(
+            'context',
+            'context__instance_of',
+            'leader',
+            'worldlocks',
+        ),
+        pk=pk,
+        context=root_world,
+    )
+
+
 class WorldAdminInstance(BaseWorldBuilderView):
     def get(self, request, world_pk, pk):
-        spawn_world = World.objects.get(pk=pk)
-        if not spawn_world.context:
-            raise self.ValidationError("World is not a spawned world.")
+        spawn_world = _get_builder_admin_spawn_world(self.world, pk)
         return Response(
             builder_serializers.WorldAdminInstanceSerializer(spawn_world).data)
 
 world_admin_instance = WorldAdminInstance.as_view()
+
+
+class WorldAdminInstanceReset(BaseWorldBuilderView):
+    def post(self, request, world_pk, pk):
+        spawn_world = _get_builder_admin_spawn_world(self.world, pk)
+        WorldSmith(spawn_world).reset()
+        return Response(
+            builder_serializers.WorldAdminInstanceSerializer(spawn_world).data
+        )
+
+
+world_admin_instance_reset = WorldAdminInstanceReset.as_view()
 
 class WorldMapView(WorldValidatorMixin, APIView):
     permission_classes = (
@@ -1446,6 +1517,19 @@ class RoomTriggerListView(BaseWorldBuilderView):
 room_triggers = RoomTriggerListView.as_view()
 
 
+class WorldExportView(BaseWorldBuilderView):
+
+    def get(self, request, pk, format=None):
+        if self._builder_rank < 3:
+            raise drf_exceptions.PermissionDenied(
+                "You do not have permission to export this world."
+            )
+        return Response(builder_world_export.serialize_world_export_payload(self.world))
+
+
+world_export = WorldExportView.as_view()
+
+
 class WorldManifestApplyView(BaseWorldBuilderView):
 
     def _assert_can_edit_trigger_scope_target(
@@ -1499,6 +1583,77 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             "You do not have permission to alter world configuration."
         )
 
+    def _assert_can_edit_quest_templates(self):
+        if self._builder_rank >= 3:
+            return
+        raise drf_exceptions.PermissionDenied(
+            "You do not have permission to alter quest templates."
+        )
+
+    def _assert_can_edit_item_template(self, item_template=None):
+        if item_template is None:
+            return
+        if self._builder_rank >= 3:
+            return
+        if _has_item_template_assignment(
+            user=self.request.user,
+            item_template=item_template,
+        ):
+            return
+        raise drf_exceptions.PermissionDenied(
+            "You do not have permission to alter this item template."
+        )
+
+    def _assert_can_edit_mob_template(self, mob_template=None):
+        if mob_template is None:
+            return
+        if self._builder_rank >= 3:
+            return
+        if _has_mob_template_assignment(
+            user=self.request.user,
+            mob_template=mob_template,
+        ):
+            return
+        raise drf_exceptions.PermissionDenied(
+            "You do not have permission to alter this mob."
+        )
+
+    def _assert_can_edit_zone_manifest(self, manifest):
+        metadata = manifest.get("metadata") or {}
+        zone_name = str(metadata.get("name") or "").strip()
+        zone = Zone.objects.filter(world=self.world, name=zone_name).first() if zone_name else None
+        if zone is None:
+            if self._builder_rank >= 3:
+                return
+            raise drf_exceptions.PermissionDenied(
+                "You do not have permission to create zones via manifests."
+            )
+        if self._builder_rank >= 3:
+            return
+        if _has_zone_assignment(user=self.request.user, zone=zone):
+            return
+        raise drf_exceptions.PermissionDenied(
+            "You do not have permission to alter this zone."
+        )
+
+    def _assert_can_edit_room_manifest(self, manifest):
+        metadata = manifest.get("metadata") or {}
+        room_ref = str(metadata.get("ref") or "").strip()
+        if not room_ref:
+            return
+        try:
+            x, y, z = builder_world_export._parse_room_ref(room_ref)
+        except serializers.ValidationError:
+            return
+        room = Room.objects.filter(world=self.world, x=x, y=y, z=z).first()
+        if room is None:
+            if self._builder_rank >= 3:
+                return
+            raise drf_exceptions.PermissionDenied(
+                "You do not have permission to create rooms via manifests."
+            )
+        _assert_can_edit_room(view=self, room=room)
+
     def _apply_trigger_manifest(self, manifest):
         operation = builder_manifests.parse_manifest_operation(manifest)
         if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
@@ -1529,6 +1684,10 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                 status=status.HTTP_200_OK,
             )
 
+        manifest = builder_world_export.normalize_trigger_manifest_for_import(
+            world=self.world,
+            manifest=manifest,
+        )
         parsed_trigger = builder_manifests.parse_trigger_manifest(
             world=self.world,
             manifest=manifest,
@@ -1554,40 +1713,335 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
         )
 
-    def _apply_world_config_manifest(self, manifest):
+    def _apply_world_manifest(self, manifest):
         self._assert_can_edit_world_config()
-        parsed_world_config = builder_manifests.parse_world_config_manifest(
+        builder_world_export.apply_world_manifest(world=self.world, manifest=manifest)
+        raw_kind = str(manifest.get("kind") or "").strip().lower()
+        is_legacy_world_config = raw_kind != builder_world_export.WORLD_MANIFEST_KIND
+        payload = {
+            "kind": (
+                builder_manifests.WORLD_CONFIG_MANIFEST_KIND
+                if is_legacy_world_config
+                else builder_world_export.WORLD_MANIFEST_KIND
+            ),
+            "operation": "updated",
+        }
+        if is_legacy_world_config:
+            payload["world_config"] = builder_manifests.serialize_world_config_payload(
+                world=self.world
+            )
+
+        return Response(
+            payload,
+            status=status.HTTP_200_OK,
+        )
+
+    def _apply_quest_manifest(self, manifest):
+        self._assert_can_edit_quest_templates()
+        operation = quest_manifests.parse_manifest_operation(manifest)
+        if operation == quest_manifests.MANIFEST_OPERATION_DELETE:
+            parsed_delete = quest_manifests.parse_quest_delete_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            quest = parsed_delete.quest
+            quest_payload = {
+                "id": quest.id,
+                "key": quest.key,
+                "slug": quest.slug,
+                "name": quest.name,
+            }
+            quest.delete()
+            return Response(
+                {
+                    "kind": quest_manifests.QUEST_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "quest": quest_payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        parsed_quest = quest_manifests.parse_quest_manifest(
             world=self.world,
             manifest=manifest,
         )
-        builder_manifests.apply_world_config_manifest(parsed_world_config)
-        world_config_payload = builder_manifests.serialize_world_config_payload(
-            world=self.world
+        is_create = parsed_quest.quest is None
+        quest = quest_manifests.apply_quest_manifest(parsed_quest)
+        return Response(
+            {
+                "kind": quest_manifests.QUEST_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "quest": quest_manifests.serialize_quest_template_payload(quest),
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
         )
+
+    def _apply_item_template_manifest(self, manifest):
+        operation = builder_manifests.parse_manifest_operation(manifest)
+        if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+            parsed_delete = builder_manifests.parse_item_template_delete_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            item_template = parsed_delete.item_template
+            self._assert_can_edit_item_template(item_template)
+            item_template_payload = {
+                "id": item_template.id,
+                "key": item_template.key,
+                "slug": item_template.slug,
+                "name": item_template.name,
+            }
+            _delete_item_template_or_error(item_template)
+            return Response(
+                {
+                    "kind": builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "item_template": item_template_payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        normalized_manifest = copy.deepcopy(manifest)
+        normalized_spec = normalized_manifest.get("spec") or {}
+        if isinstance(normalized_spec, dict):
+            normalized_spec = copy.deepcopy(normalized_spec)
+            normalized_spec.pop("inventory", None)
+            normalized_manifest["spec"] = normalized_spec
+
+        parsed_item_template = builder_manifests.parse_item_template_manifest(
+            world=self.world,
+            manifest=normalized_manifest,
+        )
+        self._assert_can_edit_item_template(parsed_item_template.item_template)
+        item_template, is_create = builder_world_export.apply_item_template_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+
+        if is_create and self._builder_rank <= 2:
+            builder = WorldBuilder.objects.get(
+                user=self.request.user,
+                world=self.world,
+            )
+            BuilderAssignment.objects.get_or_create(
+                builder=builder,
+                assignment_type=ContentType.objects.get_for_model(ItemTemplate),
+                assignment_id=item_template.id,
+            )
 
         return Response(
             {
-                "kind": builder_manifests.WORLD_CONFIG_MANIFEST_KIND,
-                "operation": "updated",
-                "world_config": world_config_payload,
+                "kind": builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "item_template": builder_manifests.serialize_item_template_payload(item_template),
             },
-            status=status.HTTP_200_OK,
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
         )
+
+    def _apply_quest_arc_manifest(self, manifest):
+        self._assert_can_edit_quest_templates()
+        operation = quest_manifests.parse_manifest_operation(manifest)
+        if operation == quest_manifests.MANIFEST_OPERATION_DELETE:
+            parsed_delete = quest_manifests.parse_quest_arc_delete_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            quest_arc = parsed_delete.quest_arc
+            quest_arc_payload = {
+                "id": quest_arc.id,
+                "key": quest_arc.key,
+                "slug": quest_arc.slug,
+                "name": quest_arc.name,
+            }
+            quest_arc.delete()
+            return Response(
+                {
+                    "kind": quest_manifests.QUEST_ARC_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "quest_arc": quest_arc_payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        parsed_quest_arc = quest_manifests.parse_quest_arc_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        is_create = parsed_quest_arc.quest_arc is None
+        quest_arc = quest_manifests.apply_quest_arc_manifest(parsed_quest_arc)
+        return Response(
+            {
+                "kind": quest_manifests.QUEST_ARC_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "quest_arc": quest_manifests.serialize_quest_arc_payload(quest_arc),
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
+    def _apply_currency_manifest(self, manifest):
+        currency, is_create = builder_world_export.apply_currency_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        return Response(
+            {
+                "kind": builder_world_export.CURRENCY_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "currency": {
+                    "code": currency.code,
+                    "name": currency.name,
+                    "is_default": bool(currency.is_default),
+                },
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
+    def _apply_zone_manifest(self, manifest):
+        self._assert_can_edit_zone_manifest(manifest)
+        zone, is_create = builder_world_export.apply_zone_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        return Response(
+            {
+                "kind": builder_world_export.ZONE_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "zone": {
+                    "id": zone.id,
+                    "key": zone.key,
+                    "name": zone.name,
+                },
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
+    def _apply_room_manifest(self, manifest):
+        self._assert_can_edit_room_manifest(manifest)
+        room, is_create = builder_world_export.apply_room_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        room.update_live_instances()
+        return Response(
+            {
+                "kind": builder_world_export.ROOM_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "room": {
+                    "id": room.id,
+                    "key": room.key,
+                    "name": room.name,
+                    "ref": builder_world_export._room_ref(room),
+                },
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
+    def _apply_mob_template_manifest(self, manifest):
+        metadata = manifest.get("metadata") or {}
+        slug = str(metadata.get("slug") or "").strip()
+        mob_template = MobTemplate.objects.filter(world=self.world, slug=slug).first() if slug else None
+        self._assert_can_edit_mob_template(mob_template)
+
+        mob_template, is_create = builder_world_export.apply_mob_template_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+
+        if is_create and self._builder_rank <= 2:
+            builder = WorldBuilder.objects.get(
+                user=self.request.user,
+                world=self.world,
+            )
+            BuilderAssignment.objects.get_or_create(
+                builder=builder,
+                assignment_type=ContentType.objects.get_for_model(MobTemplate),
+                assignment_id=mob_template.id,
+            )
+
+        return Response(
+            {
+                "kind": builder_world_export.MOB_TEMPLATE_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "mob_template": {
+                    "id": mob_template.id,
+                    "key": mob_template.key,
+                    "slug": mob_template.slug,
+                    "name": mob_template.name,
+                },
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
+    def _dispatch_manifest(self, manifest):
+        manifest_kind = builder_world_export.parse_document_kind(manifest)
+
+        if manifest_kind == builder_world_export.WORLD_MANIFEST_KIND:
+            return self._apply_world_manifest(manifest)
+        if manifest_kind == builder_world_export.CURRENCY_MANIFEST_KIND:
+            return self._apply_currency_manifest(manifest)
+        if manifest_kind == builder_world_export.ZONE_MANIFEST_KIND:
+            return self._apply_zone_manifest(manifest)
+        if manifest_kind == builder_world_export.ROOM_MANIFEST_KIND:
+            return self._apply_room_manifest(manifest)
+        if manifest_kind == builder_manifests.TRIGGER_MANIFEST_KIND:
+            return self._apply_trigger_manifest(manifest)
+        if manifest_kind == builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND:
+            return self._apply_item_template_manifest(manifest)
+        if manifest_kind == builder_world_export.MOB_TEMPLATE_MANIFEST_KIND:
+            return self._apply_mob_template_manifest(manifest)
+        if manifest_kind == quest_manifests.QUEST_MANIFEST_KIND:
+            return self._apply_quest_manifest(manifest)
+        if manifest_kind == quest_manifests.QUEST_ARC_MANIFEST_KIND:
+            return self._apply_quest_arc_manifest(manifest)
+
+        raise serializers.ValidationError("Unsupported manifest kind.")
+
+    def _batch_summary(self, results):
+        summary = {
+            "documents": len(results),
+            "kinds": {},
+        }
+        for result in results:
+            kind = str(result.get("kind") or "").strip().lower()
+            if not kind:
+                continue
+            summary["kinds"][kind] = summary["kinds"].get(kind, 0) + 1
+        return summary
 
     def post(self, request, world_pk, format=None):
         manifest_text = request.data.get("manifest")
         if manifest_text is None:
             raise serializers.ValidationError({"manifest": ["This field is required."]})
 
-        manifest = builder_manifests.load_yaml_manifest(manifest_text)
-        manifest_kind = builder_manifests.parse_manifest_kind(manifest)
+        manifests = builder_manifests.load_yaml_documents(manifest_text)
+        if len(manifests) == 1:
+            return self._dispatch_manifest(manifests[0])
 
-        if manifest_kind == builder_manifests.TRIGGER_MANIFEST_KIND:
-            return self._apply_trigger_manifest(manifest)
-        if manifest_kind == builder_manifests.WORLD_CONFIG_MANIFEST_KIND:
-            return self._apply_world_config_manifest(manifest)
+        results = []
+        for index, manifest in enumerate(manifests, start=1):
+            try:
+                response = self._dispatch_manifest(manifest)
+            except drf_exceptions.PermissionDenied as exc:
+                kind = str((manifest.get("kind") or "manifest")).strip().lower() or "manifest"
+                raise drf_exceptions.PermissionDenied(
+                    f"Document {index} ({kind}) failed: {exc.detail}"
+                )
+            except serializers.ValidationError as exc:
+                kind = str((manifest.get("kind") or "manifest")).strip().lower() or "manifest"
+                raise serializers.ValidationError(
+                    f"Document {index} ({kind}) failed: {exc.detail}"
+                )
+            results.append(response.data)
 
-        raise serializers.ValidationError("Unsupported manifest kind.")
+        return Response(
+            {
+                "kind": "batch",
+                "operation": "applied",
+                "summary": self._batch_summary(results),
+                "results": results,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 world_manifest_apply = WorldManifestApplyView.as_view()
@@ -1882,6 +2336,9 @@ room_clear_door = RoomClearDoor.as_view()
 class ItemTemplateViewSet(BaseWorldBuilderViewSet):
     serializer_class = builder_serializers.ItemTemplateSerializer
 
+    def _serialize_item_template_response(self, item_template):
+        return builder_manifests.serialize_item_template_payload(item_template)
+
     def get_queryset(self):
         context = self.world
         if context.instance_of:
@@ -1957,6 +2414,28 @@ class ItemTemplateViewSet(BaseWorldBuilderViewSet):
         context['world'] = self.world  # Add world to the context
         return context
 
+    def retrieve(self, request, *args, **kwargs):
+        item_template = self.get_object()
+        return Response(self._serialize_item_template_response(item_template))
+
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+        item_template = ItemTemplate.objects.get(pk=response.data["id"])
+        response.data = self._serialize_item_template_response(item_template)
+        return response
+
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        item_template = ItemTemplate.objects.get(pk=response.data["id"])
+        response.data = self._serialize_item_template_response(item_template)
+        return response
+
+    def partial_update(self, request, *args, **kwargs):
+        response = super().partial_update(request, *args, **kwargs)
+        item_template = ItemTemplate.objects.get(pk=response.data["id"])
+        response.data = self._serialize_item_template_response(item_template)
+        return response
+
     def perform_create(self, serializer):
         item_template = serializer.save(world=self.world)
 
@@ -1969,26 +2448,7 @@ class ItemTemplateViewSet(BaseWorldBuilderViewSet):
                 assignment=item_template)
 
     def perform_destroy(self, instance):
-        if instance.template_items.count():
-            raise serializers.ValidationError(
-                "Cannot delete a template that has loaded items.")
-        if Reward.objects.filter(
-            profile_type=ContentType.objects.get_for_model(instance),
-            profile_id=instance.id).count():
-            raise serializers.ValidationError(
-                "Cannot delete a template used for a quest reward.")
-        if Objective.objects.filter(
-            template_type=ContentType.objects.get_for_model(instance),
-            template_id=instance.id,
-            qty__gte=1).count():
-            raise serializers.ValidationError(
-                "Cannot delete a template used for a quest objective.")
-        # Delete related builder assignments
-        BuilderAssignment.objects.filter(
-            assignment_id=instance.id,
-            assignment_type=ContentType.objects.get_for_model(ItemTemplate)
-        ).delete()
-        instance.delete()
+        _delete_item_template_or_error(instance)
 
     @action(detail=False)
     def inventory(self, request, pk, world_pk):

@@ -1,16 +1,16 @@
 <template>
-  <div id="augmented-game-desktop" class="flex flex-grow flex-row game-frame">
+  <div id="augmented-game-desktop" class="flex grow flex-row game-frame">
     <Panel />
 
-    <div class="flex flex-grow">
-      <div class="flex-grow flex flex-col">
-        <Console :messages="messages" class="flex-grow" />
-        <Hint v-if="hint" class="flex-shrink-0" />
-        <Input @input="onInput" class="flex-shrink-0" />
+    <div class="flex grow">
+      <div class="grow flex flex-col">
+        <Console :messages="messages" class="grow" />
+        <Hint v-if="hint" class="shrink-0" />
+        <Input @input="onInput" class="shrink-0" />
       </div>
     </div>
 
-    <Sidebar v-if="width > 1000" class="flex-shrink-0" />
+    <Sidebar v-if="width > 1000" class="shrink-0" />
 
     <!-- <div
       class="desktop-lookup"

@@ -71,23 +71,13 @@ install:
 	if [ ! -d ve ] ; then virtualenv ve -p python3 ; fi
 	ve/bin/pip install -r requirements.txt
 
-build_docs:
-	if [ -d static ]; then mkdir -p static/docs ; fi
-	ve/bin/sphinx-build docs static/docs
-
-doc_loop:
-	bash -c "while [ true ] ; do make build_docs; done"
-
-testreadme:
-	ve/bin/python -m doctest README.rst
-
 test:
 	docker compose exec backend python manage.py test --settings=config.settings.testing
 
 test-wr2:
 	docker compose exec backend python manage.py test wr2_tests --settings=config.settings.testing
 
-.PHONY: docker-up docker-up-mount docker-restart docker-restart-mount
+.PHONY: docker-up docker-up-mount docker-restart docker-restart-mount reset-dev-db reset-dev-db-mount
 
 docker-up:
 	docker compose up -d --build
@@ -101,3 +91,9 @@ docker-restart:
 
 docker-restart-mount:
 	COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose restart
+
+reset-dev-db:
+	./scripts/reset-dev-db
+
+reset-dev-db-mount:
+	./scripts/reset-dev-db --mount

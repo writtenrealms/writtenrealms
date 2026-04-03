@@ -33,8 +33,14 @@ class LookHandler(CommandHandler):
     }
 
     def handle(self, ctx: CommandContext) -> None:
+        target = ctx.payload.get("target")
+        if target is None:
+            args = ctx.payload.get("args", [])
+            if args:
+                target = " ".join(args)
+
         try:
-            result = LookAction().execute(ctx.player.id)
+            result = LookAction().execute(ctx.player.id, target_selector=target)
         except ActionError as err:
             ctx.publish_error("look", err.message)
             return

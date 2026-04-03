@@ -44,7 +44,7 @@
           </div>
           <div class="world ml-4">{{ timing.world }}</div>
           <div class="age ml-4">{{ timing.age }}</div>
-          <div class="type ml-4 flex-grow">{{ timing.type }}</div>
+          <div class="type ml-4 grow">{{ timing.type }}</div>
         </div>
           <pre v-if="expanded[timing.expires]" class="mt-2 mb-4">{{ timing }}</pre>
       </template>

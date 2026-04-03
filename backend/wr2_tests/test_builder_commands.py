@@ -68,14 +68,52 @@ class TestBuilderLoad(WorldTestCase):
         )
         self.assertTrue(message.get("text"))
 
+    def test_load_accepts_unambiguous_template_type_prefix(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/load i {self.item_template.id}")
+
+        loaded_item = self.player.inventory.get(template=self.item_template)
+        self.assertEqual(loaded_item.name, self.item_template.name)
+        message = self._message_by_type(messages, "cmd./load.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message.get("data", {}).get("loaded", {}).get("name"), self.item_template.name)
+
+    def test_load_item_accepts_template_slug(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/load item {self.item_template.slug}")
+
+        loaded_item = self.player.inventory.get(template=self.item_template)
+        self.assertEqual(loaded_item.name, self.item_template.name)
+        message = self._message_by_type(messages, "cmd./load.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message.get("data", {}).get("loaded", {}).get("name"), self.item_template.name)
+
+    def test_load_mob_accepts_template_slug(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/load mob {self.mob_template.slug}")
+
+        loaded_mob = Mob.objects.get(
+            template=self.mob_template,
+            room=self.room,
+            world=self.spawn_world,
+        )
+        self.assertEqual(loaded_mob.name, self.mob_template.name)
+        message = self._message_by_type(messages, "cmd./load.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(
+            message.get("data", {}).get("loaded", {}).get("name"),
+            self.mob_template.name,
+        )
+
     @override_settings(
         WR_AI_EVENT_FORWARD_URL="http://localhost:8071/v1/events",
         WR_AI_EVENT_TYPES="mob.spawned",
     )
     @patch("spawns.tasks.forward_event_to_ai_sidecar.delay")
     def test_load_mob_enqueues_sidecar_spawn_signal(self, mock_forward_delay):
-        with capture_game_messages():
-            dispatch_text_command(self.player.id, f"/lo mob {self.mob_template.id}")
+        with self.captureOnCommitCallbacks(execute=True):
+            with capture_game_messages():
+                dispatch_text_command(self.player.id, f"/lo mob {self.mob_template.id}")
 
         loaded_mob = Mob.objects.get(
             template=self.mob_template,
@@ -180,9 +218,8 @@ class TestBuilderPurge(WorldTestCase):
 
         self.assertFalse(Mob.objects.filter(pk=mob.pk).exists())
         self.assertFalse(
-            Item.objects.filter(
+            self.room.inventory.filter(
                 world=self.spawn_world,
-                container=self.room,
                 type=api_consts.ITEM_TYPE_CORPSE,
             ).exists()
         )
@@ -200,8 +237,9 @@ class TestBuilderPurge(WorldTestCase):
             keywords="guard",
         )
 
-        with capture_game_messages():
-            dispatch_text_command(self.player.id, "/purge mobs")
+        with self.captureOnCommitCallbacks(execute=True):
+            with capture_game_messages():
+                dispatch_text_command(self.player.id, "/purge mobs")
 
         mock_forward_delay.assert_called_once()
         kwargs = mock_forward_delay.call_args.kwargs
@@ -423,6 +461,30 @@ class TestBuilderResync(WorldTestCase):
         self.assertEqual(message["data"]["template"]["id"], template.id)
         self.assertEqual(message["data"]["updated"], 1)
 
+    def test_resync_accepts_unambiguous_template_type_prefix(self):
+        template = ItemTemplate.objects.create(
+            world=self.world,
+            name="a sword",
+            description="A plain blade.",
+            keywords="sword",
+        )
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, f"/load item {template.id}")
+
+        spawned_item = self.player.inventory.get(template=template)
+        template.name = "a magic sword"
+        template.save(update_fields=["name"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/resync i {template.id}")
+
+        spawned_item.refresh_from_db()
+        self.assertEqual(spawned_item.name, "a magic sword")
+        message = self._message_by_type(messages, "cmd./resync.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target_type"], "item")
+
     def test_resync_mob_template_updates_existing_instances(self):
         template = MobTemplate.objects.create(
             world=self.world,
@@ -624,6 +686,32 @@ class TestBuilderEcho(WorldTestCase):
         self.assertEqual(len(zone_notify), 1)
         self.assertEqual(zone_notify[0]["message"].get("data", {}).get("scope"), "zone")
         self.assertEqual(zone_notify[0]["message"].get("text"), "The bells ring.")
+
+        outside_notify = self._messages_for_key_and_type(messages, outside_watcher.key, "notification./echo")
+        self.assertEqual(outside_notify, [])
+
+    def test_echo_accepts_unambiguous_scope_prefix(self):
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+
+        zone_room = self.room.create_at("east")
+        zone_watcher = self.create_player("Zone Watcher", room=zone_room)
+        zone_watcher.in_game = True
+        zone_watcher.save(update_fields=["in_game"])
+
+        outside_room = self.room.create_at("north")
+        outside_room.zone = None
+        outside_room.save(update_fields=["zone"])
+        outside_watcher = self.create_player("Outside Watcher", room=outside_room)
+        outside_watcher.in_game = True
+        outside_watcher.save(update_fields=["in_game"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/echo z The bells ring.")
+
+        zone_notify = self._messages_for_key_and_type(messages, zone_watcher.key, "notification./echo")
+        self.assertEqual(len(zone_notify), 1)
+        self.assertEqual(zone_notify[0]["message"].get("data", {}).get("scope"), "zone")
 
         outside_notify = self._messages_for_key_and_type(messages, outside_watcher.key, "notification./echo")
         self.assertEqual(outside_notify, [])

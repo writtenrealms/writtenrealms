@@ -1,0 +1,1326 @@
+from datetime import timedelta
+
+from django.utils import timezone
+from django.urls import reverse
+
+from builders.models import ItemTemplate, MobTemplate
+from config import constants as adv_consts
+from spawns.handlers import dispatch_command
+from spawns.models import Item
+from quests.models import QuestInstance, QuestTemplate
+from tests.base import WorldTestCase
+from wr2_tests.utils import capture_game_messages, dispatch_text_command
+
+
+def _runtime_rewards():
+    return {
+        "complete": [],
+        "compromised": [],
+        "failed_forward": [],
+        "expired": [],
+    }
+
+
+class QuestRuntimeTestCase(WorldTestCase):
+    def setUp(self):
+        super().setUp()
+        self.player.stamina = 20
+        self.player.in_game = True
+        self.player.save(update_fields=["stamina", "in_game"])
+
+    def create_runtime_quest(
+        self,
+        *,
+        slug: str,
+        name: str,
+        quest_type: str = "quest",
+        repeatability_mode: str = "never",
+        repeatability_cooldown_seconds: int = 0,
+        max_active: int = 1,
+        discovery_policy=None,
+        steps=None,
+        reward_policy=None,
+    ):
+        return QuestTemplate.objects.create(
+            world=self.world,
+            slug=slug,
+            name=name,
+            quest_type=quest_type,
+            scope="player",
+            status="active",
+            repeatability_mode=repeatability_mode,
+            repeatability_cooldown_seconds=repeatability_cooldown_seconds,
+            max_active=max_active,
+            discovery_policy=discovery_policy or {
+                "sources": [],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 0,
+                "cooldown_seconds": 0,
+            },
+            slot_schema={},
+            graph={"steps": steps or []},
+            reward_policy=reward_policy or _runtime_rewards(),
+        )
+
+    def _message_types(self, messages):
+        return [msg["message"].get("type") for msg in messages]
+
+    def _message_by_type(self, messages, message_type):
+        for msg in messages:
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def _room_char_by_name(self, message, name):
+        if not message:
+            return None
+        target = message.get("data", {}).get("target") or message.get("data", {}).get("room") or {}
+        for char in target.get("chars", []):
+            if char.get("name") == name:
+                return char
+        return None
+
+
+class TestMinimalQuestRuntime(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.create_runtime_quest(
+            slug="tiny_hello",
+            name="Tiny Hello",
+            quest_type="quest",
+            discovery_policy={
+                "sources": [{"type": "auto_start"}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 1,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "You notice a strange scrap of paper.",
+                    "text": {"body": "A minimal authored quest beat."},
+                    "choices": [
+                        {"id": "continue", "text": "Continue.", "goto": "resolved"},
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "The note tells you nothing useful, but the system works.",
+                },
+            ],
+        )
+
+    def test_look_auto_starts_minimal_quest(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "look")
+
+        self.assertIn("cmd.look.success", self._message_types(messages))
+        self.assertIn("quest.instance.started", self._message_types(messages))
+
+        quest_instance = QuestInstance.objects.get(player=self.player, template__slug="tiny_hello")
+        self.assertEqual(quest_instance.status, "active")
+        self.assertEqual(quest_instance.current_step_id, "offer")
+
+    def test_state_sync_auto_starts_minimal_quest(self):
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="state.sync",
+                player_id=self.player.id,
+                payload={},
+            )
+
+        self.assertIn("cmd.state.sync.success", self._message_types(messages))
+        self.assertIn("quest.instance.started", self._message_types(messages))
+
+        quest_instance = QuestInstance.objects.get(player=self.player, template__slug="tiny_hello")
+        self.assertEqual(quest_instance.status, "active")
+        self.assertEqual(quest_instance.current_step_id, "offer")
+
+    def test_say_does_not_trigger_auto_start(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "say hello")
+
+        self.assertIn("cmd.say.success", self._message_types(messages))
+        self.assertNotIn("quest.instance.started", self._message_types(messages))
+        self.assertFalse(QuestInstance.objects.filter(player=self.player, template__slug="tiny_hello").exists())
+
+    def test_listing_opportunities_does_not_trigger_auto_start(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "quest opportunities")
+
+        self.assertIn("cmd.quest.success", self._message_types(messages))
+        self.assertNotIn("quest.instance.started", self._message_types(messages))
+        self.assertFalse(QuestInstance.objects.filter(player=self.player, template__slug="tiny_hello").exists())
+
+    def test_quest_defaults_to_list_and_choice_complete_minimal_quest(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "look")
+
+        with capture_game_messages() as info_messages:
+            dispatch_text_command(self.player.id, "quest")
+
+        info_message = self._message_by_type(info_messages, "cmd.quest.success")
+        self.assertIsNotNone(info_message)
+        self.assertEqual(info_message["data"]["subcommand"], "list")
+        self.assertEqual(len(info_message["data"]["quests"]), 1)
+        self.assertEqual(info_message["data"]["quests"][0]["template"]["slug"], "tiny_hello")
+        self.assertNotIn("quest", info_message["data"])
+        self.assertIn("Active quests:", info_message["text"])
+        self.assertIn("Tiny Hello", info_message["text"])
+        self.assertIn("tiny_hello", info_message["text"])
+
+        with capture_game_messages() as choice_messages:
+            dispatch_text_command(self.player.id, "quest choose tiny_hello continue")
+
+        self.assertIn("quest.instance.resolved", self._message_types(choice_messages))
+        quest_instance = QuestInstance.objects.get(player=self.player, template__slug="tiny_hello")
+        self.assertEqual(quest_instance.status, "resolved")
+        self.assertEqual(quest_instance.resolution, "complete")
+
+    def test_quest_abandon_resolves_active_quest_without_arc(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "look")
+
+        with capture_game_messages() as abandon_messages:
+            dispatch_text_command(self.player.id, "quest abandon tiny_hello")
+
+        self.assertIn("quest.instance.resolved", self._message_types(abandon_messages))
+
+        quest_instance = QuestInstance.objects.get(player=self.player, template__slug="tiny_hello")
+        self.assertEqual(quest_instance.status, "resolved")
+        self.assertEqual(quest_instance.resolution, "abandoned")
+
+    def test_quest_i_prefix_resolves_to_info_with_slug(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "look")
+
+        with capture_game_messages() as info_messages:
+            dispatch_text_command(self.player.id, "quest i tiny_hello")
+
+        info_message = self._message_by_type(info_messages, "cmd.quest.success")
+        self.assertIsNotNone(info_message)
+        self.assertEqual(info_message["data"]["subcommand"], "info")
+        self.assertIn("Tiny Hello", info_message["text"])
+
+    def test_quest_info_slug_returns_structured_quest_payload(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "look")
+
+        with capture_game_messages() as info_messages:
+            dispatch_text_command(self.player.id, "quest info tiny_hello")
+
+        info_message = self._message_by_type(info_messages, "cmd.quest.success")
+        self.assertIsNotNone(info_message)
+        self.assertEqual(info_message["data"]["subcommand"], "info")
+        self.assertEqual(info_message["data"]["quest"]["template"]["slug"], "tiny_hello")
+        self.assertEqual(info_message["data"]["quest"]["current_step"]["id"], "offer")
+        self.assertEqual(info_message["data"]["quest"]["current_step"]["choices"][0]["id"], "continue")
+
+    def test_quest_info_requires_slug(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "quest info")
+
+        error_message = self._message_by_type(messages, "cmd.quest.error")
+        self.assertIsNotNone(error_message)
+        self.assertEqual(error_message["data"]["code"], "usage")
+        self.assertEqual(error_message["text"], "Usage: quest info <slug-or-id>")
+
+    def test_quest_recap_subcommand_is_no_longer_supported(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "quest recap")
+
+        error_message = self._message_by_type(messages, "cmd.quest.error")
+        self.assertIsNotNone(error_message)
+        self.assertEqual(error_message["data"]["code"], "unknown_subcommand")
+        self.assertIn("recap", error_message["text"])
+
+    def test_quest_a_prefix_is_rejected_as_ambiguous(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "quest a")
+
+        error_message = self._message_by_type(messages, "cmd.quest.error")
+        self.assertIsNotNone(error_message)
+        self.assertEqual(error_message["data"]["code"], "ambiguous_subcommand")
+        self.assertIn("accept", error_message["text"])
+        self.assertIn("abandon", error_message["text"])
+
+
+class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.room_two = self.room.create_at("east")
+        self.room_three = self.room_two.create_at("east")
+        self.create_runtime_quest(
+            slug="shrine_survey",
+            name="Shrine Survey",
+            discovery_policy={
+                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 20,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "A weathered placard asks you to survey the shrines ahead.",
+                    "choices": [
+                        {"id": "begin", "text": "Take the survey.", "goto": "survey"},
+                    ],
+                },
+                {
+                    "id": "survey",
+                    "kind": "objective",
+                    "recap": "You accepted the survey route.",
+                    "objectives": [
+                        {
+                            "id": "inspect_shrines",
+                            "text": "Inspect both shrines.",
+                            "tracker": {
+                                "event": "cmd.look.success",
+                                "where": {
+                                    "all": [
+                                        {"eq": ["event.target_type", "room"]},
+                                        {"in": ["event.target.id", [self.room_two.id, self.room_three.id]]},
+                                    ]
+                                },
+                            },
+                            "progress": {
+                                "mode": "unique_count",
+                                "target": 2,
+                                "distinct_by": "event.target.id",
+                            },
+                        }
+                    ],
+                    "transitions": [
+                        {
+                            "when": {"objective_complete": "inspect_shrines"},
+                            "goto": "resolved",
+                        }
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "You surveyed both shrines and the route is safe enough to report.",
+                },
+            ],
+        )
+
+    def test_room_prompt_accepts_and_progresses_via_move_and_look(self):
+        with capture_game_messages() as discovery_messages:
+            dispatch_text_command(self.player.id, "look")
+
+        self.assertIn("quest.opportunity.available", self._message_types(discovery_messages))
+        self.assertFalse(QuestInstance.objects.filter(player=self.player, template__slug="shrine_survey").exists())
+
+        with capture_game_messages() as accept_messages:
+            dispatch_text_command(self.player.id, "quest accept shrine_survey")
+
+        self.assertIn("quest.instance.started", self._message_types(accept_messages))
+
+        with capture_game_messages() as begin_messages:
+            dispatch_text_command(self.player.id, "quest choose shrine_survey begin")
+
+        self.assertIn("quest.instance.updated", self._message_types(begin_messages))
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "east")
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "look")
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "east")
+        with capture_game_messages() as final_messages:
+            dispatch_text_command(self.player.id, "look")
+
+        self.assertIn("quest.instance.resolved", self._message_types(final_messages))
+        quest_instance = QuestInstance.objects.get(player=self.player, template__slug="shrine_survey")
+        self.assertEqual(quest_instance.status, "resolved")
+        self.assertEqual(quest_instance.resolution, "complete")
+
+    def test_objective_progress_update_includes_updated_objective_payload(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest accept shrine_survey")
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest choose shrine_survey begin")
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "east")
+
+        with capture_game_messages() as progress_messages:
+            dispatch_text_command(self.player.id, "look")
+
+        update_message = self._message_by_type(progress_messages, "quest.instance.updated")
+        self.assertIsNotNone(update_message)
+        self.assertEqual(update_message["data"]["quest"]["template"]["slug"], "shrine_survey")
+        self.assertEqual(update_message["data"]["updated_objective"]["id"], "inspect_shrines")
+        self.assertEqual(update_message["data"]["updated_objective"]["text"], "Inspect both shrines.")
+        self.assertEqual(update_message["data"]["updated_objective"]["progress_current"], 1)
+        self.assertEqual(update_message["data"]["updated_objective"]["progress_target"], 2)
+        self.assertEqual(update_message["data"]["updated_objective"]["progress"], "1/2")
+        self.assertEqual(update_message["data"]["updated_objective"]["status"], "active")
+
+    def test_quest_opp_prefix_lists_opportunities(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "quest opp")
+
+        list_message = self._message_by_type(messages, "cmd.quest.success")
+        self.assertIsNotNone(list_message)
+        self.assertEqual(list_message["data"]["subcommand"], "opportunities")
+        self.assertIn("Opportunities:", list_message["text"])
+        self.assertIn("shrine_survey", list_message["text"])
+
+    def test_abandoned_non_repeatable_quest_can_be_reaccepted(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest accept shrine_survey")
+
+        with capture_game_messages() as abandon_messages:
+            dispatch_text_command(self.player.id, "quest abandon shrine_survey")
+
+        self.assertIn("quest.instance.resolved", self._message_types(abandon_messages))
+
+        abandoned_instance = QuestInstance.objects.get(
+            player=self.player,
+            template__slug="shrine_survey",
+            status="resolved",
+        )
+        self.assertEqual(abandoned_instance.resolution, "abandoned")
+
+        with capture_game_messages() as resolved_messages:
+            dispatch_text_command(self.player.id, "quest resolved")
+
+        resolved_message = self._message_by_type(resolved_messages, "cmd.quest.success")
+        self.assertIsNotNone(resolved_message)
+        self.assertEqual(resolved_message["data"]["subcommand"], "resolved")
+        self.assertNotIn("shrine_survey", resolved_message["text"])
+
+        with capture_game_messages() as opportunities_messages:
+            dispatch_text_command(self.player.id, "quest opportunities")
+
+        opportunities_message = self._message_by_type(opportunities_messages, "cmd.quest.success")
+        self.assertIsNotNone(opportunities_message)
+        self.assertIn("shrine_survey", opportunities_message["text"])
+
+        with capture_game_messages() as accept_again_messages:
+            dispatch_text_command(self.player.id, "quest accept shrine_survey")
+
+        self.assertIn("quest.instance.started", self._message_types(accept_again_messages))
+        self.assertEqual(
+            QuestInstance.objects.filter(player=self.player, template__slug="shrine_survey").count(),
+            2,
+        )
+        self.assertEqual(
+            QuestInstance.objects.filter(
+                player=self.player,
+                template__slug="shrine_survey",
+                status="active",
+            ).count(),
+            1,
+        )
+
+    def test_quest_completed_subcommand_is_no_longer_supported(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "quest completed")
+
+        error_message = self._message_by_type(messages, "cmd.quest.error")
+        self.assertIsNotNone(error_message)
+        self.assertEqual(error_message["data"]["code"], "unknown_subcommand")
+        self.assertIn("completed", error_message["text"])
+
+
+class TestPortableRoomRefsQuestRuntime(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.room_two = self.room.create_at("east")
+        self.room_three = self.room_two.create_at("east")
+        self.create_runtime_quest(
+            slug="portable_shrine_survey",
+            name="Portable Shrine Survey",
+            discovery_policy={
+                "sources": [
+                    {
+                        "type": "room_prompt",
+                        "room": f"room@{self.room.x},{self.room.y},{self.room.z}",
+                    }
+                ],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 20,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "survey",
+                    "kind": "objective",
+                    "recap": "Inspect both shrines.",
+                    "objectives": [
+                        {
+                            "id": "inspect_shrines",
+                            "text": "Inspect both shrines.",
+                            "tracker": {
+                                "event": "cmd.look.success",
+                                "where": {
+                                    "all": [
+                                        {"eq": ["event.target_type", "room"]},
+                                        {
+                                            "in": [
+                                                "event.target.id",
+                                                [
+                                                    f"room@{self.room_two.x},{self.room_two.y},{self.room_two.z}",
+                                                    f"room@{self.room_three.x},{self.room_three.y},{self.room_three.z}",
+                                                ],
+                                            ]
+                                        },
+                                    ]
+                                },
+                            },
+                            "progress": {
+                                "mode": "unique_count",
+                                "target": 2,
+                                "distinct_by": "event.target.id",
+                            },
+                        }
+                    ],
+                    "transitions": [
+                        {
+                            "when": {"objective_complete": "inspect_shrines"},
+                            "goto": "resolved",
+                        }
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "Survey complete.",
+                },
+            ],
+        )
+
+    def test_room_prompt_and_room_objectives_accept_coordinate_refs(self):
+        with capture_game_messages() as discovery_messages:
+            dispatch_text_command(self.player.id, "look")
+
+        self.assertIn("quest.opportunity.available", self._message_types(discovery_messages))
+
+        with capture_game_messages() as accept_messages:
+            dispatch_text_command(self.player.id, "quest accept portable_shrine_survey")
+
+        self.assertIn("quest.instance.started", self._message_types(accept_messages))
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "east")
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "look")
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "east")
+        with capture_game_messages() as final_messages:
+            dispatch_text_command(self.player.id, "look")
+
+        self.assertIn("quest.instance.resolved", self._message_types(final_messages))
+        quest_instance = QuestInstance.objects.get(player=self.player, template__slug="portable_shrine_survey")
+        self.assertEqual(quest_instance.status, "resolved")
+        self.assertEqual(quest_instance.resolution, "complete")
+
+
+class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.survey_token_template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Survey Token",
+            keywords="survey token token",
+        )
+        self.satchel_template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Satchel",
+            keywords="satchel",
+            type=adv_consts.ITEM_TYPE_CONTAINER,
+        )
+        self.coin_template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Coin",
+            keywords="coin",
+        )
+        self.guide_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Trail Guide",
+            keywords="trail guide guide",
+        )
+        self.guide_template.spawn(self.room, self.spawn_world)
+
+        self.create_runtime_quest(
+            slug="survey_route",
+            name="Survey Route",
+            discovery_policy={
+                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 15,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "A survey token is issued for the route ahead.",
+                    "effects": [
+                        {"type": "grant_item", "item_template": self.survey_token_template.slug},
+                    ],
+                    "choices": [
+                        {"id": "continue", "text": "Continue.", "goto": "resolved"},
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "Done.",
+                },
+            ],
+            reward_policy={
+                "complete": [
+                    {"type": "grant_item", "item_template": self.coin_template.slug},
+                ],
+                "compromised": [],
+                "failed_forward": [],
+                "expired": [],
+            },
+        )
+        self.create_runtime_quest(
+            slug="guide_assignment",
+            name="Guide Assignment",
+            discovery_policy={
+                "sources": [{"type": "npc_dialogue", "mob_template": self.guide_template.slug}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 15,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "The trail guide presses a spare survey token into your hand.",
+                    "effects": [
+                        {"type": "grant_item", "item_template": self.survey_token_template.slug},
+                    ],
+                    "choices": [
+                        {"id": "continue", "text": "Continue.", "goto": "resolved"},
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "Done.",
+                },
+            ],
+        )
+
+    def test_room_prompt_accept_grants_item_on_start_step(self):
+        with capture_game_messages() as accept_messages:
+            dispatch_text_command(self.player.id, "quest accept survey_route")
+
+        self.assertEqual(
+            self.player.inventory.filter(template=self.survey_token_template).count(),
+            1,
+        )
+        start_message = self._message_by_type(accept_messages, "quest.instance.started")
+        self.assertIsNotNone(start_message)
+        self.assertIn("Survey Token", start_message["text"])
+
+        quest_instance = QuestInstance.objects.get(player=self.player, template__slug="survey_route")
+        self.assertTrue(quest_instance.local_state.get("granted_item_ids"))
+
+    def test_npc_dialogue_accept_grants_item_on_start_step(self):
+        with capture_game_messages() as accept_messages:
+            dispatch_text_command(self.player.id, "quest accept guide_assignment")
+
+        self.assertEqual(
+            self.player.inventory.filter(template=self.survey_token_template).count(),
+            1,
+        )
+        start_message = self._message_by_type(accept_messages, "quest.instance.started")
+        self.assertIsNotNone(start_message)
+        self.assertIn("Survey Token", start_message["text"])
+
+    def test_abandon_removes_granted_item_from_nested_player_bag(self):
+        satchel = Item.objects.create(
+            world=self.spawn_world,
+            container=self.player,
+            template=self.satchel_template,
+            name=self.satchel_template.name,
+            type=adv_consts.ITEM_TYPE_CONTAINER,
+        )
+        coin = Item.objects.create(
+            world=self.spawn_world,
+            container=satchel,
+            template=self.coin_template,
+            name=self.coin_template.name,
+        )
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest accept survey_route")
+
+        granted_item = self.player.inventory.get(template=self.survey_token_template)
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "put token satchel")
+
+        granted_item.refresh_from_db()
+        self.assertEqual(granted_item.container_id, satchel.id)
+
+        with capture_game_messages() as abandon_messages:
+            dispatch_text_command(self.player.id, "quest abandon survey_route")
+
+        self.assertFalse(Item.objects.filter(pk=granted_item.id).exists())
+        satchel.refresh_from_db()
+        coin.refresh_from_db()
+        self.assertEqual(coin.container_id, satchel.id)
+        self.assertIn("quest.instance.resolved", self._message_types(abandon_messages))
+        resolved_message = self._message_by_type(abandon_messages, "quest.instance.resolved")
+        self.assertIsNotNone(resolved_message)
+        self.assertIn("Removed quest item", resolved_message["text"])
+
+    def test_completion_removes_granted_item_and_keeps_completion_reward_item(self):
+        satchel = Item.objects.create(
+            world=self.spawn_world,
+            container=self.player,
+            template=self.satchel_template,
+            name=self.satchel_template.name,
+            type=adv_consts.ITEM_TYPE_CONTAINER,
+        )
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest accept survey_route")
+
+        granted_item = self.player.inventory.get(template=self.survey_token_template)
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "put token satchel")
+
+        with capture_game_messages() as resolve_messages:
+            dispatch_text_command(self.player.id, "quest choose survey_route continue")
+
+        self.assertFalse(Item.objects.filter(pk=granted_item.id).exists())
+        self.assertEqual(
+            self.player.inventory.filter(template=self.coin_template).count(),
+            1,
+        )
+        resolved_message = self._message_by_type(resolve_messages, "quest.instance.resolved")
+        self.assertIsNotNone(resolved_message)
+        self.assertIn("Coin", resolved_message["text"])
+        self.assertIn("Removed quest item", resolved_message["text"])
+
+
+class TestQuestRepeatabilityRuntime(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.create_runtime_quest(
+            slug="cooldown_trial",
+            name="Cooldown Trial",
+            repeatability_mode="cooldown",
+            repeatability_cooldown_seconds=60,
+            discovery_policy={
+                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 15,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "You can run the trial again after a short delay.",
+                    "choices": [
+                        {"id": "finish", "text": "Finish the trial.", "goto": "resolved"},
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "The trial is complete.",
+                },
+            ],
+        )
+
+    def test_completed_cooldown_quest_is_hidden_until_cooldown_expires(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest accept cooldown_trial")
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest choose cooldown_trial finish")
+
+        with capture_game_messages() as cooldown_messages:
+            dispatch_text_command(self.player.id, "quest opportunities")
+
+        cooldown_message = self._message_by_type(cooldown_messages, "cmd.quest.success")
+        self.assertIsNotNone(cooldown_message)
+        self.assertNotIn("cooldown_trial", cooldown_message["text"])
+
+        quest_instance = QuestInstance.objects.get(
+            player=self.player,
+            template__slug="cooldown_trial",
+            status="resolved",
+        )
+        quest_instance.resolved_at = timezone.now() - timedelta(seconds=61)
+        quest_instance.save(update_fields=["resolved_at", "modified_ts"])
+
+        with capture_game_messages() as expired_messages:
+            dispatch_text_command(self.player.id, "quest opportunities")
+
+        expired_message = self._message_by_type(expired_messages, "cmd.quest.success")
+        self.assertIsNotNone(expired_message)
+        self.assertIn("cooldown_trial", expired_message["text"])
+
+
+class TestQuestRuntimeEndpoints(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_authenticate(self.user)
+        self.quest = self.create_runtime_quest(
+            slug="campfire_note",
+            name="Campfire Note",
+            quest_type="quest",
+            discovery_policy={
+                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 10,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "A note lies beside the fire.",
+                    "choices": [
+                        {"id": "read", "text": "Read the note.", "goto": "resolved"},
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "The note is brief, but useful.",
+                },
+            ],
+        )
+
+    def test_runtime_endpoints_cover_opportunity_accept_choose_and_info(self):
+        headers = {"HTTP_X_PLAYER_ID": str(self.player.id)}
+
+        opportunities_resp = self.client.get(
+            reverse("game-quest-opportunity-list"),
+            **headers,
+        )
+        self.assertEqual(opportunities_resp.status_code, 200)
+        self.assertEqual(opportunities_resp.data["opportunities"][0]["slug"], "campfire_note")
+
+        accept_resp = self.client.post(
+            reverse("game-quest-opportunity-accept", args=["campfire_note"]),
+            {},
+            format="json",
+            **headers,
+        )
+        self.assertEqual(accept_resp.status_code, 201)
+        instance_id = accept_resp.data["quest"]["id"]
+
+        choose_resp = self.client.post(
+            reverse("game-quest-instance-choose", args=[instance_id]),
+            {"choice_id": "read"},
+            format="json",
+            **headers,
+        )
+        self.assertEqual(choose_resp.status_code, 200)
+        self.assertEqual(choose_resp.data["quest"]["resolution"], "complete")
+
+        info_resp = self.client.get(
+            reverse("game-quest-instance-info", args=[instance_id]),
+            **headers,
+        )
+        self.assertEqual(info_resp.status_code, 200)
+        self.assertIn("Campfire Note", info_resp.data["text"])
+
+
+class TestNpcDialogueSlugDiscovery(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.quartermaster_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Quartermaster",
+            keywords="quartermaster",
+        )
+        self.quartermaster_template.spawn(self.room, self.spawn_world)
+        self.create_runtime_quest(
+            slug="quartermaster_request",
+            name="Quartermaster Request",
+            discovery_policy={
+                "sources": [{"type": "npc_dialogue", "mob_template": self.quartermaster_template.slug}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 10,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "The quartermaster has work for you.",
+                    "choices": [
+                        {"id": "accept", "text": "Listen.", "goto": "resolved"},
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "You heard the quartermaster out.",
+                },
+            ],
+        )
+
+    def test_npc_dialogue_discovery_accepts_mob_template_slug_without_room_entry_spam(self):
+        with capture_game_messages() as discovery_messages:
+            dispatch_text_command(self.player.id, "look")
+
+        self.assertNotIn("quest.opportunity.available", self._message_types(discovery_messages))
+        look_message = self._message_by_type(discovery_messages, "cmd.look.success")
+        quartermaster = self._room_char_by_name(look_message, "Quartermaster")
+        self.assertIsNotNone(quartermaster)
+        self.assertTrue(quartermaster["quest_data"]["enquire"])
+
+
+class TestTurnInQuestRuntime(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.quartermaster_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Quartermaster",
+            keywords="quartermaster",
+        )
+        self.quartermaster_template.spawn(self.room, self.spawn_world)
+        self.pelt_template = ItemTemplate.objects.create(world=self.world, name="Wolf Pelt")
+        self.herb_template = ItemTemplate.objects.create(world=self.world, name="Moonleaf")
+        self.pelt_template.spawn(self.player, self.spawn_world)
+        self.pelt_template.spawn(self.player, self.spawn_world)
+        self.herb_template.spawn(self.player, self.spawn_world)
+        self.gold_before = self.player.gold
+        self.exp_before = self.player.experience
+
+        self.create_runtime_quest(
+            slug="quartermaster_supplies",
+            name="Quartermaster Supplies",
+            discovery_policy={
+                "sources": [{"type": "auto_start"}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 10,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "turn_in",
+                    "kind": "objective",
+                    "recap": "The quartermaster needs pelts and moonleaf.",
+                    "objectives": [
+                        {
+                            "id": "deliver_pelts",
+                            "text": "Deliver 2 wolf pelts.",
+                            "tracker": {
+                                "event": "quest.item.delivered",
+                                "where": {
+                                    "all": [
+                                        {"eq": ["event.target.template_id", self.quartermaster_template.slug]},
+                                        {"eq": ["event.item.template_id", self.pelt_template.slug]},
+                                    ]
+                                },
+                            },
+                            "progress": {"mode": "count", "target": 2},
+                        },
+                        {
+                            "id": "deliver_herb",
+                            "text": "Deliver 1 moonleaf.",
+                            "tracker": {
+                                "event": "quest.item.delivered",
+                                "where": {
+                                    "all": [
+                                        {"eq": ["event.target.template_id", self.quartermaster_template.slug]},
+                                        {"eq": ["event.item.template_id", self.herb_template.slug]},
+                                    ]
+                                },
+                            },
+                            "progress": {"mode": "count", "target": 1},
+                        },
+                    ],
+                    "transitions": [
+                        {
+                            "when": {
+                                "all": [
+                                    {"objective_complete": "deliver_pelts"},
+                                    {"objective_complete": "deliver_herb"},
+                                ]
+                            },
+                            "goto": "resolved",
+                        }
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "The quartermaster signs off on the delivery.",
+                },
+            ],
+            reward_policy={
+                "complete": [
+                    {"type": "grant_gold", "amount": 10},
+                    {"type": "grant_xp", "amount": 50},
+                    {
+                        "type": "mob_command",
+                        "mob_template": self.quartermaster_template.slug,
+                        "command": "/echo room Delivery accepted.",
+                    },
+                ],
+                "compromised": [],
+                "failed_forward": [],
+                "expired": [],
+            },
+        )
+
+    def test_turn_in_quest_progresses_from_give_and_grants_rewards(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "look")
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "give all.pelt quartermaster")
+
+        with capture_game_messages() as final_messages:
+            dispatch_text_command(self.player.id, "give moonleaf quartermaster")
+
+        self.player.refresh_from_db()
+        quest_instance = QuestInstance.objects.get(player=self.player, template__slug="quartermaster_supplies")
+        self.assertEqual(quest_instance.status, "resolved")
+        self.assertEqual(quest_instance.resolution, "complete")
+        self.assertEqual(self.player.gold, self.gold_before + 10)
+        self.assertEqual(self.player.experience, self.exp_before + 50)
+        self.assertIn("quest.instance.resolved", self._message_types(final_messages))
+        self.assertIn("notification./echo", self._message_types(final_messages))
+
+
+class TestQuestDiscoverability(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.bartender_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Saloon Bartender",
+            keywords="saloon bartender bartender",
+            slug="saloon_bartender",
+        )
+        self.keg_template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Saloon Keg",
+            keywords="saloon keg keg",
+            slug="saloon_keg",
+        )
+        self.bartender_template.spawn(self.room, self.spawn_world)
+        self.create_runtime_quest(
+            slug="saloon_keg_run",
+            name="A Keg for the Bar",
+            discovery_policy={
+                "sources": [{"type": "npc_dialogue", "mob_template": self.bartender_template.slug}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 25,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "deliver",
+                    "kind": "objective",
+                    "recap": "The bartender needs a fresh keg from the back room.",
+                    "text": {
+                        "body": (
+                            '"Could you grab a keg from the back for me?" the bartender asks. '
+                            '"I can\'t leave the bar unattended."'
+                        )
+                    },
+                    "objectives": [
+                        {
+                            "id": "deliver_keg",
+                            "text": "Bring the saloon keg to the bartender.",
+                            "tracker": {
+                                "event": "quest.item.delivered",
+                                "where": {
+                                    "all": [
+                                        {"eq": ["event.target.template_id", self.bartender_template.slug]},
+                                        {"eq": ["event.item.template_id", self.keg_template.slug]},
+                                    ]
+                                },
+                            },
+                            "progress": {"mode": "count", "target": 1},
+                        }
+                    ],
+                    "transitions": [
+                        {
+                            "when": {"objective_complete": "deliver_keg"},
+                            "goto": "resolved",
+                        }
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "The bartender rolls the fresh keg into place.",
+                },
+            ],
+        )
+
+    def test_look_marks_npc_dialogue_offer_with_exclamation_indicator(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "look")
+
+        look_message = self._message_by_type(messages, "cmd.look.success")
+        bartender = self._room_char_by_name(look_message, "Saloon Bartender")
+        self.assertIsNotNone(bartender)
+        self.assertTrue(bartender["quest_data"]["enquire"])
+        self.assertFalse(bartender["quest_data"]["complete"])
+
+    def test_talk_to_offer_npc_shows_pitch_and_accept_command(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "talk bartender")
+
+        guidance_message = self._message_by_type(messages, "quest.opportunity.presented")
+        self.assertIsNotNone(guidance_message)
+        self.assertIn("A Keg for the Bar", guidance_message["text"])
+        self.assertIn("grab a keg from the back", guidance_message["text"].lower())
+        self.assertIn("quest accept saloon_keg_run", guidance_message["text"])
+
+    def test_return_npc_shows_question_indicator_when_turn_in_is_ready(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest accept saloon_keg_run")
+        self.keg_template.spawn(self.player, self.spawn_world)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "look")
+
+        look_message = self._message_by_type(messages, "cmd.look.success")
+        bartender = self._room_char_by_name(look_message, "Saloon Bartender")
+        self.assertIsNotNone(bartender)
+        self.assertFalse(bartender["quest_data"]["enquire"])
+        self.assertTrue(bartender["quest_data"]["complete"])
+
+    def test_talk_to_turn_in_npc_without_giving_item_shows_handoff_hint(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest accept saloon_keg_run")
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "talk bartender")
+
+        hint_message = self._message_by_type(messages, "quest.interaction.hint")
+        self.assertIsNotNone(hint_message)
+        self.assertIn("A Keg for the Bar", hint_message["text"])
+        self.assertIn("give <item> bartender", hint_message["text"])
+
+    def test_quest_accept_without_slug_uses_single_visible_opportunity(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "quest accept")
+
+        self.assertIn("quest.instance.started", self._message_types(messages))
+        quest_instance = QuestInstance.objects.get(player=self.player, template__slug="saloon_keg_run")
+        self.assertEqual(quest_instance.status, "active")
+
+
+class TestQuestAcceptCommand(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.bartender_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Saloon Bartender",
+            keywords="saloon bartender bartender",
+        )
+        self.bartender_template.spawn(self.room, self.spawn_world)
+        self.create_runtime_quest(
+            slug="first_round",
+            name="First Round",
+            discovery_policy={
+                "sources": [{"type": "npc_dialogue", "mob_template": self.bartender_template.id}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 10,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "The bartender has a small job.",
+                    "choices": [{"id": "continue", "text": "Continue.", "goto": "resolved"}],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "Done.",
+                },
+            ],
+        )
+        self.create_runtime_quest(
+            slug="second_round",
+            name="Second Round",
+            discovery_policy={
+                "sources": [{"type": "npc_dialogue", "mob_template": self.bartender_template.id}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 10,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "The bartender has another job.",
+                    "choices": [{"id": "continue", "text": "Continue.", "goto": "resolved"}],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "Done.",
+                },
+            ],
+        )
+
+    def test_quest_accept_without_slug_errors_when_multiple_opportunities_are_visible(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "quest accept")
+
+        error_message = self._message_by_type(messages, "cmd.quest.error")
+        self.assertIsNotNone(error_message)
+        self.assertEqual(error_message["data"]["code"], "ambiguous_opportunity")
+        self.assertIn("quest accept <slug>", error_message["text"])
+
+
+class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.captain_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Captain Merrow",
+            keywords="captain merrow captain",
+        )
+        self.rat_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Tunnel Rat",
+            keywords="rat tunnel rat",
+        )
+        self.captain_template.spawn(self.room, self.spawn_world)
+        self.rat_template.spawn(self.room, self.spawn_world)
+        self.rat_template.spawn(self.room, self.spawn_world)
+
+        self.create_runtime_quest(
+            slug="rat_cull",
+            name="Rat Cull",
+            discovery_policy={
+                "sources": [{"type": "auto_start"}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 10,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "hunt",
+                    "kind": "objective",
+                    "recap": "Captain Merrow wants the tunnel rats culled.",
+                    "objectives": [
+                        {
+                            "id": "kill_rats",
+                            "text": "Kill 2 tunnel rats.",
+                            "tracker": {
+                                "event": "quest.mob.killed",
+                                "where": {"eq": ["event.target.template_id", self.rat_template.id]},
+                            },
+                            "progress": {"mode": "count", "target": 2},
+                        }
+                    ],
+                    "transitions": [
+                        {
+                            "when": {"objective_complete": "kill_rats"},
+                            "goto": "report",
+                        }
+                    ],
+                },
+                {
+                    "id": "report",
+                    "kind": "objective",
+                    "recap": "The rats are down. Report back to Captain Merrow.",
+                    "objectives": [
+                        {
+                            "id": "report_back",
+                            "text": "Talk to Captain Merrow.",
+                            "tracker": {
+                                "event": "cmd.talk.success",
+                                "where": {"eq": ["event.target.template_id", self.captain_template.id]},
+                            },
+                            "progress": {"mode": "boolean", "target": 1},
+                        }
+                    ],
+                    "transitions": [
+                        {
+                            "when": {"objective_complete": "report_back"},
+                            "goto": "resolved",
+                        }
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "Captain Merrow confirms the camp is safe for now.",
+                },
+            ],
+            reward_policy={
+                "complete": [
+                    {"type": "grant_gold", "amount": 8},
+                    {"type": "mob_command", "command": "say Good work."},
+                ],
+                "compromised": [],
+                "failed_forward": [],
+                "expired": [],
+            },
+        )
+
+    def test_kill_then_talk_quest_resolves_and_mob_responds(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "look")
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "kill rat")
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "kill rat")
+        with capture_game_messages() as final_messages:
+            dispatch_text_command(self.player.id, "talk captain")
+
+        self.player.refresh_from_db()
+        quest_instance = QuestInstance.objects.get(player=self.player, template__slug="rat_cull")
+        self.assertEqual(quest_instance.status, "resolved")
+        self.assertEqual(quest_instance.resolution, "complete")
+        self.assertEqual(self.player.gold, 8)
+        self.assertIn("quest.instance.resolved", self._message_types(final_messages))
+        self.assertIn("notification.cmd.say.success", self._message_types(final_messages))
+
+    def test_return_to_captain_shows_question_indicator_after_kills(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "look")
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "kill rat")
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "kill rat")
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "look")
+
+        look_message = self._message_by_type(messages, "cmd.look.success")
+        captain = self._room_char_by_name(look_message, "Captain Merrow")
+        self.assertIsNotNone(captain)
+        self.assertTrue(captain["quest_data"]["complete"])

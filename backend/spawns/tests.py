@@ -1597,6 +1597,23 @@ class TestLoadTemplate(WorldTestCase):
         #self.assertEqual(data[1]['key'], item.key)
         self.assertEqual(data['key'], item.key)
 
+    def test_load_item_by_slug(self):
+        rock_template = ItemTemplate.objects.create(
+            world=self.world,
+            name='a rock')
+
+        resp = self.client.post(reverse('load-template'), {
+            'world_id': self.spawn_world.id,
+            'template_type': 'item',
+            'template_id': rock_template.slug,
+            'actor_type': 'player',
+            'actor_id': self.user.id,
+            'player': self.player.id,
+            'room': self.player.room.id,
+        })
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data['name'], rock_template.name)
+
     def test_load_mob(self):
         wolf_template = MobTemplate.objects.create(
             world=self.world, name='a wolf')
@@ -1615,6 +1632,22 @@ class TestLoadTemplate(WorldTestCase):
         # a mob got created
         mob = Mob.objects.first()
         self.assertEqual(mob.key, mob.key)
+
+    def test_load_mob_by_slug(self):
+        wolf_template = MobTemplate.objects.create(
+            world=self.world, name='a wolf')
+
+        resp = self.client.post(reverse('load-template'), {
+            'world_id': self.spawn_world.id,
+            'template_type': 'mob',
+            'template_id': wolf_template.slug,
+            'actor_type': 'player',
+            'actor_id': self.user.id,
+            'player': self.player.id,
+            'room': self.player.room.id,
+        })
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data['name'], wolf_template.name)
 
     # Failure tests
 

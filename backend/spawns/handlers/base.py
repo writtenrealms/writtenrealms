@@ -6,7 +6,7 @@ Each handler processes a specific command type and publishes results via WebSock
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 from spawns.models import Mob, Player
 from fastapi_app.game_ws import publish_to_player
@@ -122,6 +122,10 @@ class CommandHandler(ABC):
         description = help_data.get("description")
         if description:
             lines.append(f"Description: {description}")
+        details = help_data.get("details") or []
+        if details:
+            lines.append("Details:")
+            lines.extend(str(detail) for detail in details)
         examples = help_data.get("examples") or []
         if examples:
             lines.append("Examples:")
@@ -133,3 +137,42 @@ class CommandHandler(ABC):
         # Ensure subclasses define command_type
         if not getattr(cls, 'command_type', None) and not getattr(cls, '__abstractmethods__', None):
             raise TypeError(f"{cls.__name__} must define 'command_type' class attribute")
+
+
+class ChoiceResolutionError(ValueError):
+    def __init__(self, token: str, *, code: str, matches: Sequence[str] | None = None):
+        self.token = token
+        self.code = code
+        self.matches = list(matches or [])
+        super().__init__(token)
+
+
+def resolve_unambiguous_choice(
+    token: str | None,
+    *,
+    choices: Sequence[str],
+    aliases: Mapping[str, str] | None = None,
+) -> str:
+    normalized = str(token or "").strip().lower()
+    if not normalized:
+        raise ChoiceResolutionError(normalized, code="missing_choice")
+
+    canonical = {str(choice).strip().lower(): str(choice).strip().lower() for choice in choices if str(choice).strip()}
+    alias_map = {
+        str(alias).strip().lower(): str(target).strip().lower()
+        for alias, target in (aliases or {}).items()
+        if str(alias).strip() and str(target).strip()
+    }
+
+    if normalized in canonical:
+        return canonical[normalized]
+    if normalized in alias_map:
+        return alias_map[normalized]
+
+    matches = [choice for choice in canonical.values() if choice.startswith(normalized)]
+    matches = list(dict.fromkeys(matches))
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ChoiceResolutionError(normalized, code="ambiguous_choice", matches=matches)
+    raise ChoiceResolutionError(normalized, code="unknown_choice")

@@ -11,6 +11,7 @@ from django.contrib.contenttypes.fields import (
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.utils import timezone
+from django.utils.text import slugify
 
 from jinja2 import Template
 from jinja2.exceptions import TemplateSyntaxError
@@ -31,6 +32,25 @@ from core.db import (
     list_to_choice,
     optional)
 from core.model_mixins import CharMixin, ItemMixin, MobMixin
+
+
+def _generate_unique_world_slug(instance, *, fallback_prefix: str) -> str:
+    base_text = getattr(instance, "name", "") or fallback_prefix
+    base_slug = slugify(base_text) or fallback_prefix
+    model_cls = instance.__class__
+    world_id = getattr(instance, "world_id", None)
+    if not world_id:
+        return base_slug
+
+    slug = base_slug
+    counter = 2
+    qs = model_cls.objects.filter(world_id=world_id)
+    if instance.pk:
+        qs = qs.exclude(pk=instance.pk)
+    while qs.filter(slug=slug).exists():
+        slug = f"{base_slug}-{counter}"
+        counter += 1
+    return slug
 
 
 class LastViewedRoom(BaseModel):
@@ -93,7 +113,19 @@ class ItemTemplate(ItemMixin, AdventBaseModel):
         'worlds.World',
         on_delete=models.CASCADE,
         related_name='item_templates')
+    slug = models.SlugField(max_length=120, blank=True)
     notes = models.TextField(**optional)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('world', 'slug')]
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = _generate_unique_world_slug(
+                self,
+                fallback_prefix="item-template",
+            )
+        super().save(*args, **kwargs)
 
     def spawn(self, target, spawn_world, rule=None):
         """
@@ -179,6 +211,7 @@ class MobTemplate(CharMixin, MobMixin, AdventBaseModel):
         'worlds.World',
         on_delete=models.CASCADE,
         related_name='mob_templates')
+    slug = models.SlugField(max_length=120, blank=True)
 
     level = models.PositiveIntegerField(default=1)
     name = models.TextField(default='Unnamed Mob')
@@ -215,6 +248,17 @@ class MobTemplate(CharMixin, MobMixin, AdventBaseModel):
     # If True, this mob will be set to be automatically updated when there
     # are changes to suggested stats.
     default_stats = models.BooleanField(default=False)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('world', 'slug')]
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = _generate_unique_world_slug(
+                self,
+                fallback_prefix="mob-template",
+            )
+        super().save(*args, **kwargs)
 
     def spawn(self, target, spawn_world, roams=None, rule=None):
         """
