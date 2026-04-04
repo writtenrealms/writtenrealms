@@ -7,6 +7,7 @@ from typing import Any
 from django.db import transaction
 from django.utils import timezone
 
+from core.utils import format_actor_msg
 from spawns.events import GameEvent
 from quests.models import (
     QuestInstance,
@@ -88,10 +89,59 @@ def get_step(template: QuestTemplate, step_id: str | None) -> dict[str, Any] | N
     return None
 
 
-def serialize_choice(choice: dict[str, Any]) -> dict[str, Any]:
+def _render_quest_string(
+    value: Any,
+    *,
+    player,
+    quest_instance=None,
+) -> Any:
+    if not isinstance(value, str):
+        return value
+    return str(
+        format_actor_msg(
+            value,
+            player,
+            character=player,
+            quest_instance=quest_instance,
+        )
+        or value
+    )
+
+
+def _render_text_mapping(
+    payload: dict[str, Any] | None,
+    *,
+    player,
+    quest_instance=None,
+) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    rendered: dict[str, Any] = {}
+    for key, value in payload.items():
+        if isinstance(value, str):
+            rendered[key] = _render_quest_string(
+                value,
+                player=player,
+                quest_instance=quest_instance,
+            )
+        else:
+            rendered[key] = value
+    return rendered
+
+
+def serialize_choice(
+    choice: dict[str, Any],
+    *,
+    player,
+    quest_instance,
+) -> dict[str, Any]:
     return {
         "id": str(choice.get("id") or "").strip(),
-        "text": str(choice.get("text") or "").strip(),
+        "text": _render_quest_string(
+            str(choice.get("text") or "").strip(),
+            player=player,
+            quest_instance=quest_instance,
+        ),
         "goto": str(choice.get("goto") or "").strip(),
     }
 
@@ -111,7 +161,9 @@ def visible_choices(step: dict[str, Any], *, player, quest_instance) -> list[dic
             event_data=None,
         ):
             continue
-        visible.append(serialize_choice(choice))
+        visible.append(
+            serialize_choice(choice, player=player, quest_instance=quest_instance)
+        )
     return visible
 
 
@@ -213,11 +265,25 @@ def _build_step_payload(quest_instance: QuestInstance, *, player) -> dict[str, A
         serialize_objective_state(state)
         for state in quest_instance.objective_states.all().order_by("created_ts")
     ]
+    for objective_state in objective_states:
+        objective_state["text"] = _render_quest_string(
+            objective_state.get("text") or "",
+            player=player,
+            quest_instance=quest_instance,
+        )
     return {
         "id": str(step.get("id") or ""),
         "kind": str(step.get("kind") or ""),
-        "recap": str(step.get("recap") or ""),
-        "text": step.get("text") or {},
+        "recap": _render_quest_string(
+            str(step.get("recap") or ""),
+            player=player,
+            quest_instance=quest_instance,
+        ),
+        "text": _render_text_mapping(
+            step.get("text") or {},
+            player=player,
+            quest_instance=quest_instance,
+        ),
         "choices": visible_choices(step, player=player, quest_instance=quest_instance),
         "objectives": objective_states,
     }
@@ -232,8 +298,14 @@ def serialize_opportunity(template: QuestTemplate, *, player) -> dict[str, Any]:
         "name": template.name,
         "quest_type": template.quest_type,
         "scope": template.scope,
-        "recap": str(start_step.get("recap") or ""),
-        "text": start_step.get("text") or {},
+        "recap": _render_quest_string(
+            str(start_step.get("recap") or ""),
+            player=player,
+        ),
+        "text": _render_text_mapping(
+            start_step.get("text") or {},
+            player=player,
+        ),
     }
 
 
@@ -275,6 +347,7 @@ def _info_for_instance(quest_instance: QuestInstance, *, player) -> tuple[dict[s
         title=quest_instance.template.name,
         status=quest_instance.status if quest_instance.status != "resolved" else (quest_instance.resolution or "resolved"),
         recap=current_step.get("recap") or "",
+        body=(current_step.get("text") or {}).get("body") or "",
         objectives=current_step.get("objectives") or [],
         choices=current_step.get("choices") or [],
         latest_entry=latest_entry,
@@ -440,7 +513,11 @@ def enter_step(
             quest_instance,
             entry_type=entry_type,
             step_id=str(step.get("id") or "").strip(),
-            recap=str(step.get("recap") or ""),
+            recap=_render_quest_string(
+                str(step.get("recap") or ""),
+                player=player,
+                quest_instance=quest_instance,
+            ),
             payload={"reason": entry_reason},
         )
 
@@ -619,7 +696,11 @@ def abandon_instance(player, identity: str) -> QuestTransitionResult:
             quest_instance,
             entry_type="resolved",
             step_id=quest_instance.current_step_id or "",
-            recap=f"You abandoned {template.name}.",
+            recap=_render_quest_string(
+                f"You abandoned {template.name}.",
+                player=player,
+                quest_instance=quest_instance,
+            ),
             payload={"reason": "abandoned"},
         )
         offer_state, _ = QuestOfferState.objects.get_or_create(
@@ -741,7 +822,11 @@ def progress_active_instance_for_event(
             quest_instance,
             entry_type="objective_updated",
             step_id=str(step.get("id") or ""),
-            recap=str(step.get("recap") or ""),
+            recap=_render_quest_string(
+                str(step.get("recap") or ""),
+                player=player,
+                quest_instance=quest_instance,
+            ),
             payload={
                 "objective_id": objective_id,
                 "progress_current": int(state.progress_current or 0),

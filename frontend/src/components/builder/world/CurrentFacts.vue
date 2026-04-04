@@ -2,7 +2,7 @@
     <table class='facts-table my-4'>
     <thead>
       <tr>
-        <th>Fact</th>
+        <th>State Key</th>
         <th>Value</th>
       </tr>
     </thead>
@@ -15,7 +15,7 @@
       </template>
       <template v-else>
         <tr>
-          <td colspan=2>No facts set</td>
+          <td colspan=2>No state set</td>
         </tr>
       </template>
     </tbody>

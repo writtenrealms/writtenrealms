@@ -51,7 +51,7 @@
       <div v-else class="emptymap">Loading...</div>
 
       <div class="zone-data" v-if="zone.zone_data && Object.keys(zone.zone_data).length">
-        <h3>ZONE DATA</h3>
+        <h3>ZONE STATE</h3>
         <div v-for="attr of Object.keys(zone.zone_data).sort()" :key="attr">
           <dl>
             <dt>{{attr}}</dt>

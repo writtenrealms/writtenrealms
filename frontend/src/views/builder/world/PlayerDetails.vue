@@ -39,7 +39,7 @@
         </div>
 
         <div class="facts" v-if="!player.world.is_multiplayer">
-          <h3>Facts</h3>
+          <h3>World State</h3>
           <CurrentFacts :world_id="player.world.id"/>
         </div>
 
@@ -84,7 +84,7 @@
         </div>
 
         <div class="marks">
-          <h3>Marks</h3>
+          <h3>Character State</h3>
           <div v-for="mark in player.marks" :key="mark.name">{{ mark.name }}: {{ mark.value }}</div>
         </div>
       </div>

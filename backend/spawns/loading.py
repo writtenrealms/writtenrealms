@@ -12,6 +12,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from backend.core.conditions import evaluate_conditions
+from core.scoped_state import STATE_SCOPE_ZONE, get_state_snapshot
 
 from builders.models import (
     Loader,
@@ -307,9 +308,7 @@ class LoaderRun:
             # Process conditions if there are any
             if (self.loader.loader_condition and
                 self.loader.zone and self.loader.zone.is_warzone):
-                zone_data = json.loads(self.loader.zone.zone_data or "{}")
-                if not isinstance(zone_data, dict):
-                    zone_data = {}
+                zone_data = get_state_snapshot(STATE_SCOPE_ZONE, self.loader.zone)
 
                 try:
                     is_run_allowed = evaluate_loader_condition(

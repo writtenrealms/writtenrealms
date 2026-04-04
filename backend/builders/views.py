@@ -29,6 +29,7 @@ from core.utils.mobs import suggest_stats
 
 from config import constants as api_consts
 from config import game_settings as adv_config
+from core.scoped_state import STATE_SCOPE_WORLD, get_state_snapshot
 from core.serializers import KeyNameSerializer, ReferenceField
 from core.view_mixins import (
     KeyedRetrieveMixin,
@@ -3824,10 +3825,7 @@ class FactList(APIView):
         if not world.context:
             world = world.spawned_worlds.first()
 
-        try:
-            world_facts = json.loads(world.facts) or {}
-        except TypeError:
-            world_facts = {}
+        world_facts = get_state_snapshot(STATE_SCOPE_WORLD, world)
 
         facts = [
             {

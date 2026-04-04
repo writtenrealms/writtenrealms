@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any
 
 import yaml
@@ -656,7 +657,7 @@ def trigger_to_manifest(trigger: Trigger) -> dict[str, Any]:
             },
             "match": trigger.match or "",
             "script": trigger.script or "",
-            "conditions": trigger.conditions or "",
+            "conditions": _deserialize_conditions_payload(trigger.conditions),
             "event": trigger.event or "",
             "show_details_on_failure": bool(trigger.show_details_on_failure),
             "failure_message": trigger.failure_message or "",
@@ -679,6 +680,34 @@ def manifest_to_yaml(manifest: dict[str, Any]) -> str:
         sort_keys=False,
         default_flow_style=False,
     )
+
+
+def _deserialize_conditions_payload(raw_conditions: str | None) -> Any:
+    text = str(raw_conditions or "").strip()
+    if not text:
+        return ""
+    if not (
+        (text.startswith("{") and text.endswith("}"))
+        or (text.startswith("[") and text.endswith("]"))
+    ):
+        return raw_conditions or ""
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return raw_conditions or ""
+    if isinstance(parsed, (dict, list)):
+        return parsed
+    return raw_conditions or ""
+
+
+def _coerce_conditions_payload(raw_conditions: Any) -> str:
+    if isinstance(raw_conditions, (dict, list)):
+        builder_serializers.validate_conditions(None, raw_conditions)
+        return json.dumps(raw_conditions)
+    conditions = _coerce_text(raw_conditions)
+    if conditions:
+        builder_serializers.validate_conditions(None, conditions)
+    return conditions
 
 
 def serialize_trigger_manifest(trigger: Trigger) -> dict[str, Any]:
@@ -1035,9 +1064,9 @@ def parse_trigger_manifest(
     ):
         raise serializers.ValidationError("spec.target is required when creating a trigger.")
 
-    conditions = _coerce_text(spec.get("conditions", trigger.conditions if trigger else ""))
-    if "conditions" in spec:
-        builder_serializers.validate_conditions(None, conditions)
+    conditions = _coerce_conditions_payload(
+        spec.get("conditions", trigger.conditions if trigger else ""),
+    )
 
     match = _coerce_text(spec.get("match", trigger.match if trigger else ""))
     if match:

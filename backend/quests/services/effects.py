@@ -5,6 +5,15 @@ from importlib import import_module
 from typing import Any
 
 from builders.models import ItemTemplate
+from core.scoped_state import (
+    STATE_SCOPE_QUEST,
+    clear_state_value,
+    increment_state_value,
+    normalize_state_scope,
+    resolve_scope_owner,
+    set_state_value,
+)
+from core.utils import format_actor_msg
 from quests.entity_refs import resolve_template_ref_id
 from spawns.actions.base import ActionError
 from spawns.actions.targeting import first_room_mob_with_template, resolve_room_mob_target
@@ -291,6 +300,18 @@ def _run_allowed_mob_commands(
         quest_instance=quest_instance,
         event_data=event_data,
     ):
+        command_text = str(
+            format_actor_msg(
+                command_text,
+                mob,
+                character=player,
+                quest_instance=quest_instance,
+                extra_context={"event": event_data or {}},
+            )
+            or command_text
+        ).strip()
+        if not command_text:
+            continue
         command_token = command_text.split()[0].lower()
         if command_token not in ALLOWED_MOB_COMMAND_TOKENS:
             continue
@@ -341,6 +362,97 @@ def apply_quest_effects(
                     event_data=event_data,
                 )
                 state_changed = True
+            continue
+
+        if effect_type == "set_state":
+            key = str(effect.get("key") or "").strip()
+            if not key:
+                continue
+            resolved_scope = str(effect.get("scope") or STATE_SCOPE_QUEST).strip().lower() or STATE_SCOPE_QUEST
+            resolved_value = resolve_value(
+                effect.get("value"),
+                player=player,
+                template=template,
+                quest_instance=quest_instance,
+                event_data=event_data,
+            )
+            if resolved_scope == STATE_SCOPE_QUEST:
+                state[key] = resolved_value
+                state_changed = True
+                continue
+            try:
+                normalized_scope = normalize_state_scope(resolved_scope)
+            except ValueError:
+                continue
+            owner = resolve_scope_owner(
+                normalized_scope,
+                actor=player,
+                character=player,
+                quest_instance=quest_instance,
+            )
+            if owner is not None:
+                set_state_value(normalized_scope, owner, key, resolved_value)
+            continue
+
+        if effect_type == "increment_state":
+            key = str(effect.get("key") or "").strip()
+            if not key:
+                continue
+            resolved_scope = str(effect.get("scope") or STATE_SCOPE_QUEST).strip().lower() or STATE_SCOPE_QUEST
+            amount = resolve_value(
+                effect.get("amount", 1),
+                player=player,
+                template=template,
+                quest_instance=quest_instance,
+                event_data=event_data,
+            )
+            if resolved_scope == STATE_SCOPE_QUEST:
+                try:
+                    increment_amount = int(amount)
+                except (TypeError, ValueError):
+                    increment_amount = 1
+                try:
+                    state[key] = int(state.get(key, 0) or 0) + increment_amount
+                except (TypeError, ValueError):
+                    state[key] = increment_amount
+                state_changed = True
+                continue
+            try:
+                normalized_scope = normalize_state_scope(resolved_scope)
+            except ValueError:
+                continue
+            owner = resolve_scope_owner(
+                normalized_scope,
+                actor=player,
+                character=player,
+                quest_instance=quest_instance,
+            )
+            if owner is not None:
+                increment_state_value(normalized_scope, owner, key, amount)
+            continue
+
+        if effect_type == "clear_state":
+            key = str(effect.get("key") or "").strip()
+            if not key:
+                continue
+            resolved_scope = str(effect.get("scope") or STATE_SCOPE_QUEST).strip().lower() or STATE_SCOPE_QUEST
+            if resolved_scope == STATE_SCOPE_QUEST:
+                if key in state:
+                    state.pop(key, None)
+                    state_changed = True
+                continue
+            try:
+                normalized_scope = normalize_state_scope(resolved_scope)
+            except ValueError:
+                continue
+            owner = resolve_scope_owner(
+                normalized_scope,
+                actor=player,
+                character=player,
+                quest_instance=quest_instance,
+            )
+            if owner is not None:
+                clear_state_value(normalized_scope, owner, key)
             continue
 
         if effect_type in {"grant_gold", "gold"} or "gold" in effect:

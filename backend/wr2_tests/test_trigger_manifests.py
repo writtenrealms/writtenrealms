@@ -176,6 +176,34 @@ spec:
         self.assertEqual(created_trigger.order, 12)
         self.assertTrue(created_trigger.is_active)
 
+    def test_apply_trigger_manifest_accepts_structured_conditions(self):
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  conditions:
+    eq:
+      - state.world.weather
+      - rainy
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        self.trigger.refresh_from_db()
+        self.assertIn("state.world.weather", self.trigger.conditions)
+
+        trigger_payload = resp.data["trigger"]
+        self.assertEqual(
+            trigger_payload["manifest"]["spec"]["conditions"],
+            {"eq": ["state.world.weather", "rainy"]},
+        )
+
     def test_apply_trigger_manifest_supports_multiline_script(self):
         manifest = f"""
 kind: trigger

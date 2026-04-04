@@ -1,9 +1,21 @@
 from __future__ import annotations
 
+import json
 import re
 
 from builders.models import ItemTemplate, MobTemplate
 from core.model_mixins import CharMixin, ItemMixin, MobMixin
+from core.scoped_state import (
+    clear_state_value,
+    coerce_state_command_value,
+    get_state_snapshot,
+    get_state_value,
+    increment_state_value,
+    normalize_state_scope,
+    resolve_scope_owner,
+    set_state_value,
+)
+from core.utils import format_actor_msg
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.utils import timezone
@@ -229,6 +241,22 @@ def _actor_summary(actor: Player | Mob) -> dict[str, object]:
         "name": getattr(actor, "name", "Unknown"),
         "char_type": _actor_kind(actor),
     }
+
+
+def _render_command_segment(
+    segment: str,
+    *,
+    actor: Player | Mob,
+    character: Player | None = None,
+    quest_instance=None,
+) -> str:
+    rendered = format_actor_msg(
+        segment,
+        actor,
+        character=character,
+        quest_instance=quest_instance,
+    )
+    return str(rendered or segment).strip()
 
 
 def _collect_scope_player_keys(actor: Player | Mob, scope: str) -> list[str]:
@@ -504,7 +532,7 @@ class EchoAction:
         if normalized_scope not in ECHO_SCOPES:
             raise ActionError("Scope must be room, zone, or world.", code="invalid_scope")
 
-        normalized_message = str(message or "").strip()
+        normalized_message = _render_command_segment(str(message or ""), actor=actor)
         if not normalized_message:
             raise ActionError(
                 "Usage: /echo [room|zone|world] <message>",
@@ -543,6 +571,105 @@ class EchoAction:
         return ActionResult(events=events)
 
 
+class StateAction:
+    def execute(
+        self,
+        *,
+        actor: Player | Mob,
+        operation: str,
+        scope: str,
+        key: str | None = None,
+        value: object | None = None,
+        amount: int | float | None = None,
+    ) -> ActionResult:
+        normalized_operation = str(operation or "").strip().lower()
+        normalized_scope = normalize_state_scope(scope)
+        owner = resolve_scope_owner(normalized_scope, actor=actor)
+        if owner is None:
+            raise ActionError(
+                f"There is no current {normalized_scope} state owner here.",
+                code="missing_state_owner",
+            )
+
+        data: dict[str, object] = {
+            "actor": _actor_summary(actor),
+            "scope": normalized_scope,
+            "operation": normalized_operation,
+        }
+        text = None
+
+        if normalized_operation == "show":
+            snapshot = get_state_snapshot(normalized_scope, owner)
+            data["state"] = snapshot
+            text = json.dumps(snapshot, sort_keys=True)
+        elif normalized_operation == "get":
+            if not key:
+                raise ActionError("Usage: /state get <scope> <key>", code="invalid_args")
+            current_value = get_state_value(normalized_scope, owner, key)
+            data["key"] = key
+            data["value"] = current_value
+            rendered_value = json.dumps(current_value) if isinstance(current_value, (dict, list, bool, type(None))) else str(current_value)
+            text = f"{normalized_scope}.{key} = {rendered_value}"
+        elif normalized_operation == "set":
+            if not key:
+                raise ActionError(
+                    "Usage: /state set <scope> <key> -- <value>",
+                    code="invalid_args",
+                )
+            new_value = set_state_value(
+                normalized_scope,
+                owner,
+                key,
+                coerce_state_command_value(value),
+            )
+            data["key"] = key
+            data["value"] = new_value
+            rendered_value = json.dumps(new_value) if isinstance(new_value, (dict, list, bool, type(None))) else str(new_value)
+            text = f"Set {normalized_scope}.{key} = {rendered_value}"
+        elif normalized_operation == "clear":
+            if not key:
+                raise ActionError("Usage: /state clear <scope> <key>", code="invalid_args")
+            cleared = clear_state_value(normalized_scope, owner, key)
+            data["key"] = key
+            data["cleared"] = bool(cleared)
+            text = (
+                f"Cleared {normalized_scope}.{key}"
+                if cleared
+                else f"{normalized_scope}.{key} was already unset."
+            )
+        elif normalized_operation == "add":
+            if not key:
+                raise ActionError(
+                    "Usage: /state add <scope> <key> [amount]",
+                    code="invalid_args",
+                )
+            new_value = increment_state_value(
+                normalized_scope,
+                owner,
+                key,
+                coerce_state_command_value(amount) if amount is not None else 1,
+            )
+            data["key"] = key
+            data["value"] = new_value
+            text = f"{normalized_scope}.{key} = {new_value}"
+        else:
+            raise ActionError(
+                "State operation must be get, set, clear, add, or show.",
+                code="invalid_args",
+            )
+
+        return ActionResult(
+            events=[
+                GameEvent(
+                    type="cmd./state.success",
+                    recipients=[actor.key],
+                    data=data,
+                    text=text,
+                )
+            ]
+        )
+
+
 class CmdAction:
     @staticmethod
     def _dispatch_actor_ref(actor: Player | Mob) -> tuple[str, int]:
@@ -557,7 +684,8 @@ class CmdAction:
         skip_triggers: bool = False,
         trigger_source: bool = False,
     ) -> str | None:
-        command_token = _first_token(segment)
+        rendered_segment = _render_command_segment(segment, actor=dispatch_actor)
+        command_token = _first_token(rendered_segment)
         if not command_token:
             return None
 
@@ -571,7 +699,7 @@ class CmdAction:
             return f"{dispatch_actor_type.capitalize()}s cannot execute {resolved_command}."
 
         dispatched_messages: list[dict] = []
-        payload: dict[str, object] = {"text": segment}
+        payload: dict[str, object] = {"text": rendered_segment}
         if issuer_scope:
             payload["issuer_scope"] = issuer_scope
         if skip_triggers:

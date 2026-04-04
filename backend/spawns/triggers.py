@@ -10,6 +10,7 @@ from builders.models import ItemTemplate, MobTemplate, Trigger
 from config import constants as adv_consts
 from config import game_settings as adv_config
 from core.conditions import evaluate_conditions
+from core.utils import format_actor_msg
 from spawns.handlers.registry import (
     ActorNotFoundError,
     HandlerNotFoundError,
@@ -457,7 +458,8 @@ def _dispatch_trigger_script_segment(
     issuer_scope: str | None = None,
     connection_id: str | None = None,
 ) -> str | None:
-    command_token = _first_token(segment)
+    rendered_segment = str(format_actor_msg(segment, actor) or segment).strip()
+    command_token = _first_token(rendered_segment)
     if not command_token:
         return None
 
@@ -472,7 +474,7 @@ def _dispatch_trigger_script_segment(
 
     dispatched_messages: list[dict] = []
     payload: dict[str, object] = {
-        "text": segment,
+        "text": rendered_segment,
         "skip_triggers": True,
         "__trigger_source": True,
     }

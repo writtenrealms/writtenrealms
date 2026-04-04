@@ -4,6 +4,12 @@ from django.test import override_settings
 
 from builders.models import ItemTemplate, MobTemplate
 from config import constants as api_consts
+from core.scoped_state import (
+    STATE_SCOPE_CHARACTER,
+    STATE_SCOPE_ROOM,
+    STATE_SCOPE_WORLD,
+    get_state_snapshot,
+)
 from spawns.models import Item, Mob
 from tests.base import WorldTestCase
 from wr2_tests.utils import (
@@ -766,6 +772,49 @@ class TestBuilderEcho(WorldTestCase):
         self.assertEqual(len(far_notify), 1)
         self.assertEqual(room_notify[0]["message"].get("data", {}).get("scope"), "world")
         self.assertEqual(far_notify[0]["message"].get("data", {}).get("scope"), "world")
+
+
+class TestBuilderState(WorldTestCase):
+    def _messages_by_type(self, messages, message_type):
+        return [msg for msg in messages if msg["message"].get("type") == message_type]
+
+    def test_state_set_get_add_and_clear_updates_scoped_state(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/state set world weather -- rainy")
+            dispatch_text_command(self.player.id, "/state set room lever_pulled true")
+            dispatch_text_command(self.player.id, "/state add character rumor_count 2")
+            dispatch_text_command(self.player.id, "/state get world weather")
+            dispatch_text_command(self.player.id, "/state clear room lever_pulled")
+
+        success_messages = self._messages_by_type(messages, "cmd./state.success")
+        self.assertEqual(len(success_messages), 5)
+        self.assertIn("world.weather = rainy", success_messages[3]["message"].get("text", ""))
+
+        self.assertEqual(
+            get_state_snapshot(STATE_SCOPE_WORLD, self.spawn_world).get("weather"),
+            "rainy",
+        )
+        self.assertEqual(
+            get_state_snapshot(STATE_SCOPE_CHARACTER, self.player).get("rumor_count"),
+            2,
+        )
+        self.assertNotIn(
+            "lever_pulled",
+            get_state_snapshot(STATE_SCOPE_ROOM, self.room),
+        )
+
+    def test_echo_renders_state_template(self):
+        dispatch_text_command(self.player.id, "/state set world weather -- windy")
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/echo The weather is {{ state.world.weather }}.")
+
+        success_messages = self._messages_by_type(messages, "cmd./echo.success")
+        self.assertEqual(len(success_messages), 1)
+        self.assertEqual(
+            success_messages[0]["message"].get("text"),
+            "The weather is windy.",
+        )
 
 
 class TestBuilderCmd(WorldTestCase):

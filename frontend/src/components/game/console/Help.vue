@@ -293,13 +293,7 @@
             <div class="cmd" @click="cmdHelp('sendexcept')">/sendexcept</div>
           </div>
           <div class="cmds">
-            <div class="cmd" @click="cmdHelp('/facts')">/facts</div>
-            <div class="cmd" @click="cmdHelp('/setfact')">/setfact</div>
-            <div class="cmd" @click="cmdHelp('/clearfact')">/clearfact</div>
-            <div class="cmd" @click="cmdHelp('/incfact')">/incfact</div>
-            <div class="cmd" @click="cmdHelp('/mark')">/mark</div>
-            <div class="cmd" @click="cmdHelp('/unmark')">/unmark</div>
-            <div class="cmd" @click="cmdHelp('/incmark')">/incmark</div>
+            <div class="cmd" @click="cmdHelp('/state')">/state</div>
             <div class="cmd" @click="cmdHelp('/kill')">/kill</div>
             <div class="cmd" @click="cmdHelp('/kick')">/kick</div>
 

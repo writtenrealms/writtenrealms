@@ -42,6 +42,7 @@ def render_info_text(
     title: str,
     status: str,
     recap: str,
+    body: str = "",
     objectives: list[dict[str, Any]] | None = None,
     choices: list[dict[str, Any]] | None = None,
     latest_entry: QuestJournalEntry | None = None,
@@ -49,6 +50,8 @@ def render_info_text(
     lines = [title, f"Status: {status}"]
     if recap:
         lines.append(f"Recap: {recap}")
+    if body:
+        lines.append(body)
 
     visible_objectives = [obj for obj in (objectives or []) if obj.get("status") != "hidden"]
     if visible_objectives:

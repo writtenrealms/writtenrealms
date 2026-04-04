@@ -21,6 +21,7 @@ from builders.models import (
     Trigger,
 )
 from config import constants as adv_consts
+from core.scoped_state import STATE_SCOPE_ZONE, get_state_snapshot, replace_state_snapshot
 from quests import entity_refs as quest_entity_refs
 from quests import manifests as quest_manifests
 from quests.models import QuestArcTemplate, QuestTemplate
@@ -249,16 +250,23 @@ def _parse_json_text(value: str) -> Any:
         return text
 
 
-def _coerce_zone_data(value: Any) -> str:
+def _coerce_zone_state(value: Any) -> dict[str, Any]:
     if value in (None, ""):
-        return "{}"
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
     if isinstance(value, str):
         text = value.strip()
-        return text or "{}"
-    try:
-        return json.dumps(value)
-    except TypeError:
-        raise serializers.ValidationError("spec.zone_data must be a JSON-compatible value or string.")
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            raise serializers.ValidationError("spec.state must be a JSON object.")
+        if isinstance(parsed, dict):
+            return parsed
+        raise serializers.ValidationError("spec.state must be a JSON object.")
+    raise serializers.ValidationError("spec.state must be a JSON object.")
 
 
 def _manifest_metadata(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -298,7 +306,7 @@ def _serialize_zone_manifest(zone: Zone) -> dict[str, Any]:
             "description": zone.description or "",
             "notes": zone.notes or "",
             "is_warzone": bool(zone.is_warzone),
-            "zone_data": _parse_json_text(zone.zone_data),
+            "state": get_state_snapshot(STATE_SCOPE_ZONE, zone),
             "respawn_wait": int(zone.respawn_wait),
             "pvp_zone": bool(zone.pvp_zone),
             "center": _room_ref(zone.center),
@@ -778,7 +786,7 @@ def _find_placeholder_zone(world: World) -> Zone | None:
         return None
     if int(zone.respawn_wait) != 300:
         return None
-    if str(zone.zone_data or "{}").strip() not in {"", "{}"}:
+    if get_state_snapshot(STATE_SCOPE_ZONE, zone):
         return None
     return zone
 
@@ -994,13 +1002,26 @@ def apply_zone_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Zone
             zone.notes = str(spec.get("notes", zone.notes or ""))
         if "is_warzone" in spec or created:
             zone.is_warzone = bool(spec.get("is_warzone", zone.is_warzone if existing else False))
-        if "zone_data" in spec or created:
-            zone.zone_data = _coerce_zone_data(spec.get("zone_data", zone.zone_data if existing else "{}"))
         if "respawn_wait" in spec or created:
             zone.respawn_wait = int(spec.get("respawn_wait", zone.respawn_wait if existing else 300))
         if "pvp_zone" in spec or created:
             zone.pvp_zone = bool(spec.get("pvp_zone", zone.pvp_zone if existing else False))
         zone.save()
+
+        if "state" in spec or "zone_data" in spec or created:
+            replace_state_snapshot(
+                STATE_SCOPE_ZONE,
+                zone,
+                _coerce_zone_state(
+                    spec.get(
+                        "state",
+                        spec.get(
+                            "zone_data",
+                            get_state_snapshot(STATE_SCOPE_ZONE, zone) if existing else {},
+                        ),
+                    )
+                ),
+            )
 
         if "center" in spec:
             center_ref = str(spec.get("center") or "").strip()

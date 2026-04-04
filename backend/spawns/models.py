@@ -303,8 +303,9 @@ class Player(CharMixin, AdventBaseModel):
             self.equipment.inventory.all().delete()
             # Delete inventory
             self.inventory.all().delete()
-            # Delete marks
+            # Delete legacy marks and canonical character state
             self.marks.all().delete()
+            CharacterState.objects.filter(player=self).delete()
 
         stats = compute_stats(self.level, self.archetype)
         self.health = stats['health_max']
@@ -472,6 +473,20 @@ def post_player_save(sender, **kwargs):
         player.config = default_config
         player.save(update_fields=['config'])
 models.signals.post_save.connect(post_player_save, Player)
+
+
+class CharacterState(BaseModel):
+
+    player = models.OneToOneField(
+        'spawns.Player',
+        on_delete=models.CASCADE,
+        related_name='character_state_record',
+    )
+    data = models.JSONField(default=dict)
+    version = models.BigIntegerField(default=0)
+
+    class Meta(BaseModel.Meta):
+        ordering = ['player_id']
 
 
 class PlayerData(BaseModel):

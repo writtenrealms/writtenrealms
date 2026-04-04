@@ -1,13 +1,13 @@
 <template>
   <div class='w-screen'>
-  <h2>{{ store.state.builder.world.name.toUpperCase() }} FACTS</h2>
+  <h2>{{ store.state.builder.world.name.toUpperCase() }} STATE</h2>
 
   <CurrentFacts :world_id="world.id" v-if="world.is_multiplayer"/>
-  <div v-else>Facts values for single player worlds are displayed in the player details page.</div>
+  <div v-else>World state for single player worlds is displayed in the player details page.</div>
 
   <EditableCollection
     class='mt-8'
-    title="Fact Schedule"
+    title="State Schedule"
     registration_name="fact_schedule"
     :endpoint="endpoint"
     :display_component="display_component"
@@ -43,15 +43,15 @@ const schema = computed(() => {
 
   const fact: FormElement = {
     attr: "fact",
-    label: "Fact",
-    help: "Name of the fact.",
+    label: "State Key",
+    help: "State key to update.",
   };
 
   const value: FormElement = {
     attr: "value",
     label: "Value",
     help:
-      "Value to set the fact to. For cycle and random value selections, values should be seperated by whitespace.",
+      "Value to set on the state key. For cycle and random selections, values should be separated by whitespace.",
   };
   const selection: FormElement = {
     attr: "selection",
@@ -71,7 +71,7 @@ const schema = computed(() => {
         label: "Random",
       },
     ],
-    help: `Which value to select for the fact if multiple are provided:<br/><br/>
+    help: `Which value to select for the state key if multiple are provided:<br/><br/>
         - default: select the first value<br/>
         - cycle: select the next value in the cycle<br/>
         - random: select a random value`,
@@ -79,7 +79,7 @@ const schema = computed(() => {
   const schedule: FormElement = {
     attr: "schedule",
     label: "Schedule",
-    help: `When to update the fact. Either an interval of seconds or a cron entry, depending on the value of 'schedule_type'.`,
+    help: `When to update the state key. Either an interval of seconds or a cron entry, depending on the value of 'schedule_type'.`,
   };
   const schedule_type: FormElement = {
     attr: "schedule_type",
@@ -96,14 +96,14 @@ const schema = computed(() => {
       },
     ],
     help: `How to interpret the 'schedule' value.<br/><br/>
-      - If 'interval' is selected, fact will be updated regularly every X seconds as specified in 'schedule'.
-      - If 'cron' is selected, fact will be updated based on the cron entry in 'schedule'.`,
+      - If 'interval' is selected, the state key will be updated regularly every X seconds as specified in 'schedule'.
+      - If 'cron' is selected, the state key will be updated based on the cron entry in 'schedule'.`,
   };
 
   const change_msg: FormElement = {
     attr: "change_msg",
     label: "Change Message",
-    help: `Message to display when the fact is changed. Accepts the special variables {{ fact }}, {{ old_value }} and {{ new_value }} which will be substituted with the appropriate values.`,
+    help: `Message to display when the state key changes. Accepts the special variables {{ fact }}, {{ old_value }} and {{ new_value }} which will be substituted with the appropriate values.`,
   };
 
   const schema = [

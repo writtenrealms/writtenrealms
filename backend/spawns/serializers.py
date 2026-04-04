@@ -1,6 +1,12 @@
 import json
 import re
 from core import utils as adv_utils
+from core.scoped_state import (
+    STATE_SCOPE_CHARACTER,
+    STATE_SCOPE_WORLD,
+    STATE_SCOPE_ZONE,
+    get_state_snapshot,
+)
 
 from config import constants as adv_consts
 from core.utils import is_ascii
@@ -431,7 +437,7 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
         return {}
 
     def get_facts(self, spawn_world):
-        return json.loads(spawn_world.facts or '{}')
+        return get_state_snapshot(STATE_SCOPE_WORLD, spawn_world)
 
     def get_instance_of(self, spawn_world):
         base_context = spawn_world.context
@@ -486,7 +492,7 @@ class AnimateZoneSerializer(serializers.ModelSerializer):
         model = Zone
         fields = ['id', 'key', 'name', 'is_warzone', 'zone_data']
     def get_zone_data(self, zone):
-        return json.loads(zone.zone_data)
+        return get_state_snapshot(STATE_SCOPE_ZONE, zone)
 
 
 class AnimateRoomSerializer(serializers.ModelSerializer):
@@ -1129,10 +1135,7 @@ class AnimatePlayerSerializer(serializers.ModelSerializer):
         return ' '.join(keywords)
 
     def get_marks(self, player):
-        marks = {}
-        for mark in player.marks.all():
-            marks[mark.name] = mark.value
-        return marks
+        return get_state_snapshot(STATE_SCOPE_CHARACTER, player)
 
     def get_clan(self, player):
         return player.clan

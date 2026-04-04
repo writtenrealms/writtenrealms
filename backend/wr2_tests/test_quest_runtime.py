@@ -5,6 +5,12 @@ from django.urls import reverse
 
 from builders.models import ItemTemplate, MobTemplate
 from config import constants as adv_consts
+from core.scoped_state import (
+    STATE_SCOPE_CHARACTER,
+    STATE_SCOPE_WORLD,
+    get_state_snapshot,
+    replace_state_snapshot,
+)
 from spawns.handlers import dispatch_command
 from spawns.models import Item
 from quests.models import QuestInstance, QuestTemplate
@@ -1324,3 +1330,69 @@ class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
         captain = self._room_char_by_name(look_message, "Captain Merrow")
         self.assertIsNotNone(captain)
         self.assertTrue(captain["quest_data"]["complete"])
+
+
+class TestQuestScopedState(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        replace_state_snapshot(STATE_SCOPE_WORLD, self.spawn_world, {"weather": "stormy"})
+        self.create_runtime_quest(
+            slug="weather_watch",
+            name="Weather Watch",
+            discovery_policy={
+                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "visible_if": {"eq": ["state.world.weather", "stormy"]},
+                "accept_if": {},
+                "salience": 10,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "The sky is {{ state.world.weather }}.",
+                    "text": {"body": "Weather now: {{ state.world.weather }}."},
+                    "effects": [
+                        {
+                            "type": "set_state",
+                            "scope": "character",
+                            "key": "weather_seen",
+                            "value": "{state.world.weather}",
+                        }
+                    ],
+                    "choices": [
+                        {
+                            "id": "continue",
+                            "text": "Continue while it is {{ state.world.weather }}.",
+                            "goto": "resolved",
+                        }
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "You made note of the weather.",
+                },
+            ],
+        )
+
+    def test_quest_can_use_scoped_state_in_visibility_text_and_effects(self):
+        with capture_game_messages() as opportunities_messages:
+            dispatch_text_command(self.player.id, "quest opportunities")
+
+        opportunities_message = self._message_by_type(opportunities_messages, "cmd.quest.success")
+        self.assertIsNotNone(opportunities_message)
+        self.assertIn("weather_watch", opportunities_message.get("text", ""))
+        self.assertIn("The sky is stormy.", opportunities_message.get("text", ""))
+
+        with capture_game_messages() as accept_messages:
+            dispatch_text_command(self.player.id, "quest accept weather_watch")
+
+        started_message = self._message_by_type(accept_messages, "quest.instance.started")
+        self.assertIsNotNone(started_message)
+        self.assertIn("Weather now: stormy.", started_message.get("text", ""))
+        self.assertIn("Continue while it is stormy.", started_message.get("text", ""))
+        self.assertEqual(
+            get_state_snapshot(STATE_SCOPE_CHARACTER, self.player).get("weather_seen"),
+            "stormy",
+        )

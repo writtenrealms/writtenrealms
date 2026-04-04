@@ -13,6 +13,10 @@ runtime behavior notes for settings like repeatability, read the `Quest
 Manifest Field Reference` section in
 [quest-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/quest-builder-guide.md).
 
+For the shared `state` system that quests now use alongside triggers and
+builder commands, read
+[state-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/state-builder-guide.md).
+
 All examples here assume:
 
 - `metadata.world` should be replaced with your real world key
@@ -42,6 +46,9 @@ At the time of writing, the runtime supports:
   - `grant_gold`
   - `grant_item`
   - `grant_xp`
+  - `set_state`
+  - `increment_state`
+  - `clear_state`
   - constrained `mob_command`
 
 For `auto_start`, the qualifying events are currently:

@@ -14,6 +14,7 @@ from django.utils import timezone
 
 from config import constants as adv_consts
 from core.computations import compute_stats
+from core.scoped_state import STATE_SCOPE_WORLD, get_state_snapshot
 from quests.services.interactions import room_mob_quest_indicator_map
 from spawns.models import DoorState, Item, Mob, Player
 from spawns.schemas import (
@@ -592,7 +593,7 @@ def serialize_world(world: World) -> Dict:
             "allow_pvp": config.allow_pvp if config else False,
             "allow_combat": config.allow_combat if config else True,
             "players_can_set_title": config.players_can_set_title if config else False,
-            "facts": json.loads(world.facts or "{}"),
+            "facts": get_state_snapshot(STATE_SCOPE_WORLD, world),
             "classless": config.is_classless if config else False,
             "tier": world.tier,
             "socials": {"cmds": {}, "order": []},

@@ -165,9 +165,9 @@
       </div>
 
       <div class="world-facts">
-        <h3>Worlds Facts</h3>
+        <h3>World State</h3>
 
-        <div>Facts are data points about your world that can be set by builders, mobs and a fact schedule. Conditions can then look at those facts to determine which loaders, room actions, quests and reactions should be considered active.</div>
+        <div>State is mutable runtime data for your world. Builders, triggers, quests, mobs, and schedules can read or update it to drive dynamic behavior.</div>
 
         <router-link :to="world_facts_link">manage</router-link>
       </div>

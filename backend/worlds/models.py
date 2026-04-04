@@ -189,6 +189,11 @@ class World(AdventBaseModel):
         return world
 
     def save_data(self, game_world=None):
+        from core.scoped_state import (
+            STATE_SCOPE_WORLD,
+            get_state_snapshot,
+            replace_state_snapshot,
+        )
 
         if not self.context:
             raise RuntimeError("Can only save spawn worlds.")
@@ -201,22 +206,23 @@ class World(AdventBaseModel):
                 world.save_start_ts = timezone.now()
                 world.save(update_fields=['save_start_ts'])
 
-            # Facts
-            facts = game_world.facts or {}
+            state_snapshot = get_state_snapshot(STATE_SCOPE_WORLD, self)
+            if hasattr(game_world, 'facts'):
+                state_snapshot = dict(getattr(game_world, 'facts', {}) or {})
             fact_schedules = self.context.fact_schedules.filter(
                 Q(next_run_ts__isnull=True)
                 | (Q(next_run_ts__isnull=False) &
                 Q(next_run_ts__lt=timezone.now())))
             updated_facts = []
             for fact_schedule in fact_schedules:
-                updated_facts.append(fact_schedule.run(facts))
+                updated_facts.append(fact_schedule.run(state_snapshot))
                 try:
                     fact_schedule.set_next_run()
                 except:
                     print("Error updating fact schedule for %s:" % self.id)
                     traceback.print_exc()
             for fact_change in updated_facts:
-                facts[fact_change['fact']] = fact_change['new_value']
+                state_snapshot[fact_change['fact']] = fact_change['new_value']
                 if (fact_change['msg']
                     and fact_change['old_value'] != fact_change['new_value']):
                     # add_timing(
@@ -225,7 +231,9 @@ class World(AdventBaseModel):
                     #     data={'text': fact_change['msg']},
                     #     db=self.rdb)
                     pass
-            game_world.facts = facts
+            replace_state_snapshot(STATE_SCOPE_WORLD, self, state_snapshot)
+            if hasattr(game_world, 'facts'):
+                game_world.facts = state_snapshot
 
         finally:
             with transaction.atomic():
@@ -938,6 +946,20 @@ class WorldURL(models.Model):
     is_private = models.BooleanField(default=False)
 
 
+class WorldState(BaseModel):
+
+    world = models.OneToOneField(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='scoped_state',
+    )
+    data = models.JSONField(default=dict)
+    version = models.BigIntegerField(default=0)
+
+    class Meta(BaseModel.Meta):
+        ordering = ['world_id']
+
+
 class StartingEq(models.Model):
     worldconfig = models.ForeignKey('WorldConfig',
                                     on_delete=models.CASCADE)
@@ -1087,6 +1109,20 @@ class Zone(AdventWorldBaseModel):
             pass
 
 Zone.connect_relative_id_post_save_signal()
+
+
+class ZoneState(BaseModel):
+
+    zone = models.OneToOneField(
+        'worlds.Zone',
+        on_delete=models.CASCADE,
+        related_name='scoped_state',
+    )
+    data = models.JSONField(default=dict)
+    version = models.BigIntegerField(default=0)
+
+    class Meta(BaseModel.Meta):
+        ordering = ['zone_id']
 
 
 class RoomFlag(BaseModel):
@@ -1273,6 +1309,21 @@ class Room(AdventWorldBaseModel):
         # Update all rooms
         for spawn_world in running_worlds:
             pass
+
+
+class RoomState(BaseModel):
+
+    room = models.OneToOneField(
+        'worlds.Room',
+        on_delete=models.CASCADE,
+        related_name='scoped_state',
+    )
+    data = models.JSONField(default=dict)
+    version = models.BigIntegerField(default=0)
+
+    class Meta(BaseModel.Meta):
+        ordering = ['room_id']
+
 
 Room.connect_relative_id_post_save_signal()
 

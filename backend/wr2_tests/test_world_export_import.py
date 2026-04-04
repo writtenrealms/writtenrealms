@@ -13,6 +13,7 @@ from builders.models import (
     Trigger,
 )
 from config import constants as adv_consts
+from core.scoped_state import STATE_SCOPE_ZONE, replace_state_snapshot
 from quests.models import QuestArcTemplate, QuestTemplate
 from tests.base import WorldTestCase
 from worlds.models import Door, Room, RoomDetail, RoomFlag, WorldConfig, Zone
@@ -68,6 +69,11 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             notes="Primary arrival zone.",
             respawn_wait=120,
             pvp_zone=False,
+        )
+        replace_state_snapshot(
+            STATE_SCOPE_ZONE,
+            self.harbor_zone,
+            {"fog_level": 2, "harbor_weather": "windy"},
         )
         self.harbor_room = Room.objects.create(
             world=self.world,

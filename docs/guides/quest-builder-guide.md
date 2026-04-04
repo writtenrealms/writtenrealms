@@ -4,6 +4,10 @@ This guide is for builders authoring quests in the new WR2 manifest system.
 It explains how discovery works, what players are expected to type, and how to
 author the common quest loops that are already supported in game.
 
+For the shared mutable runtime data model used across quests, triggers, and
+builder commands, also read
+[state-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/state-builder-guide.md).
+
 ## Mental Model
 
 - A `quest template` is the authored YAML definition.
@@ -89,6 +93,9 @@ Builders can rely on these pieces today:
 - Common reward/effect types:
   - `grant_gold`
   - `grant_xp`
+  - `set_state`
+  - `increment_state`
+  - `clear_state`
   - constrained `mob_command`
 
 ## Quest Manifest Field Reference
@@ -204,9 +211,23 @@ Supported path prefixes today:
 - `player.<field>`
 - `template.<field>`
 - `event.<field>`
+- `state.world.<key>`
+- `state.zone.<key>`
+- `state.room.<key>`
+- `state.character.<key>`
+- `state.quest.<key>`
 - `quest.local_state.<key>`
 - `quest.slot_bindings.<slot_name>`
 - `quest.current_step_id`
+
+Notes:
+
+- `quest.local_state.<key>` is kept as a legacy alias. New authored content
+  should prefer `state.quest.<key>`.
+- Text fields such as `recap`, `text.body`, and choice text support Jinja-style
+  substitutions like `{{ state.world.weather }}`.
+- Effect values still use path references in brace form, for example
+  `value: "{state.world.weather}"`.
 
 Template-id comparisons in conditions can use integer ids, typed keys like
 `mobtemplate.42`, typed slug refs like `mobtemplate.saloon_bartender`, or bare

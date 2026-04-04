@@ -10,6 +10,12 @@ from django.utils.text import slugify
 
 from config import constants as adv_consts
 from core.utils.mobs import suggest_stats
+from core.scoped_state import (
+    STATE_SCOPE_CHARACTER,
+    STATE_SCOPE_WORLD,
+    STATE_SCOPE_ZONE,
+    get_state_snapshot,
+)
 
 from rest_framework import serializers
 
@@ -69,6 +75,12 @@ from worlds.models import (
 
 # Common to both RoomActionSerializer and RoomCheckSerializer
 def validate_conditions(self, conditions):
+        if isinstance(conditions, (dict, list)):
+            try:
+                json.dumps(conditions)
+            except TypeError:
+                raise serializers.ValidationError("Conditions must be JSON-serializable.")
+            return conditions
         from backend.core.conditions import (
             break_text, BREAK_TOKENS, CONDITIONS)
         for text in break_text(conditions):
@@ -175,8 +187,7 @@ class WorldSerializer(serializers.ModelSerializer):
             many=True).data
 
     def get_facts(self, world):
-        facts = world.facts or "{}"
-        return json.loads(facts)
+        return get_state_snapshot(STATE_SCOPE_WORLD, world)
 
     def get_review(self, world):
         review = WorldReview.objects.filter(
@@ -679,7 +690,7 @@ class ZoneBuilderSerializer(serializers.ModelSerializer):
         return None
 
     def get_zone_data(self, zone):
-        return json.loads(zone.zone_data)
+        return get_state_snapshot(STATE_SCOPE_ZONE, zone)
 
     def get_has_assignment(self, zone):
         try:
@@ -2745,13 +2756,15 @@ class PlayerDetailSerializer(serializers.ModelSerializer):
         return mob_counts
 
     def get_marks(self, player):
-        marks = []
-        for mark in player.marks.all():
-            marks.append({
-                'name': mark.name,
-                'value': mark.value,
-            })
-        return marks
+        return [
+            {
+                'name': name,
+                'value': value,
+            }
+            for name, value in sorted(
+                get_state_snapshot(STATE_SCOPE_CHARACTER, player).items()
+            )
+        ]
 
     def get_animation_data(self, player):
         return spawn_serializers.AnimatePlayerSerializer(player).data

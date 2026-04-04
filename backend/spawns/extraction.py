@@ -11,6 +11,11 @@ from django.utils import timezone
 from config import constants as api_consts
 from builders.models import (
     RoomCommandCheck, Quest, Faction, FactionAssignment)
+from core.scoped_state import (
+    STATE_SCOPE_CHARACTER,
+    STATE_SCOPE_WORLD,
+    replace_state_snapshot,
+)
 from spawns import serializers as spawn_serializers
 from spawns.models import (
     Player,
@@ -22,8 +27,7 @@ from spawns.models import (
     PlayerTrophy,
     PlayerFlexSkill,
     PlayerFeat,
-    Alias,
-    Mark)
+    Alias)
 from worlds.models import World, Room, Door
 
 logger = logging.getLogger('django')
@@ -429,15 +433,13 @@ class APIExtractor:
 
     def save_facts(self):
         for chunk in self.chunks.get('facts', []):
-            self.world.facts = json.dumps(chunk['facts'])
-            self.world.save()
+            replace_state_snapshot(STATE_SCOPE_WORLD, self.world, chunk['facts'])
 
     # Multi Player World
 
     def save_mpw_data(self):
         for chunk in self.chunks.get('world_data', []):
-            self.world.facts = json.dumps(chunk['facts'])
-            self.world.save()
+            replace_state_snapshot(STATE_SCOPE_WORLD, self.world, chunk['facts'])
         self.save_mobs()
 
     # Player components
@@ -515,28 +517,12 @@ class APIExtractor:
             player.save(update_fields=['skills'])
 
     def save_marks(self, player):
-        seen_marks = []
         for chunk in self.chunks.get('marks', []):
-            marks = chunk['marks']
-            for name, value in marks.items():
-                name = name.lower()
-                value = value.lower()
-                try:
-                    mark = Mark.objects.get(
-                        player=player,
-                        name=name)
-                    if mark.value != value:
-                        mark.value = value
-                        mark.save()
-                except Mark.DoesNotExist:
-                    mark = Mark.objects.create(
-                        player=player,
-                        name=name,
-                        value=value)
-                seen_marks.append(name)
-
-        # Remove all unseen marks
-        player.marks.exclude(name__in=seen_marks).delete()
+            marks = {
+                str(name or '').lower(): str(value or '').lower()
+                for name, value in (chunk.get('marks') or {}).items()
+            }
+            replace_state_snapshot(STATE_SCOPE_CHARACTER, player, marks)
 
     def save_factions(self, player):
         if self.is_instance:

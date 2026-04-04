@@ -12,6 +12,7 @@ from spawns.actions.builder import (
     PurgeAction,
     ResyncItemTemplatesAction,
     ResyncMobTemplatesAction,
+    StateAction,
 )
 from spawns.events import publish_events
 from spawns.handlers.base import (
@@ -106,6 +107,44 @@ def _parse_cmd_target_and_command(ctx: CommandContext) -> tuple[str | None, str 
         return args[0], " ".join(args[1:]).strip()
 
     return target, nested_command
+
+
+def _parse_state_args(
+    ctx: CommandContext,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    args = [str(arg).strip() for arg in list(ctx.payload.get("args", [])) if str(arg).strip()]
+    if not args:
+        return None, None, None, None
+
+    operation = args[0].lower()
+    if operation == "show":
+        if len(args) < 2:
+            return None, None, None, None
+        return operation, args[1], None, None
+
+    if operation in {"get", "clear"}:
+        if len(args) < 3:
+            return None, None, None, None
+        return operation, args[1], args[2], None
+
+    if operation == "add":
+        if len(args) < 3:
+            return None, None, None, None
+        amount = " ".join(args[3:]).strip() if len(args) > 3 else "1"
+        return operation, args[1], args[2], amount
+
+    if operation == "set":
+        lhs, rhs = _split_delimited_args(args[1:])
+        if rhs is not None:
+            lhs_tokens = [token for token in (lhs or "").split() if token]
+            if len(lhs_tokens) < 2:
+                return None, None, None, None
+            return operation, lhs_tokens[0], lhs_tokens[1], rhs
+        if len(args) < 4:
+            return None, None, None, None
+        return operation, args[1], args[2], " ".join(args[3:]).strip()
+
+    return None, None, None, None
 
 
 @register_handler
@@ -315,6 +354,81 @@ class EchoHandler(CommandHandler):
             ctx.publish(
                 {
                     "type": "cmd./echo.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.actor_key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class StateHandler(CommandHandler):
+    command_type = "/state"
+    text_commands = ("/state",)
+    builder_only = True
+    supported_actor_types = ("player", "mob")
+    help = {
+        "name": "State",
+        "format": "/state <show|get|set|clear|add> <world|zone|room|character> [key] [-- value]",
+        "description": (
+            "Inspect or mutate scoped state in the current world, zone, room, or character context. "
+            "Use -- when the value contains spaces."
+        ),
+        "examples": [
+            "/state show world",
+            "/state get world weather",
+            "/state set world weather -- rainy",
+            "/state set room lever_pulled true",
+            "/state add character rumor_count 1",
+            "/state clear room lever_pulled",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        if (
+            ctx.actor_type == "player"
+            and not has_builder_access(ctx.player)
+            and not _is_trigger_source(ctx)
+        ):
+            ctx.publish(
+                {
+                    "type": "cmd./state.error",
+                    "text": "You do not have permission to use builder commands.",
+                    "data": {"error": "Builder permissions required."},
+                }
+            )
+            return
+
+        operation, scope, key, value = _parse_state_args(ctx)
+        if not operation or not scope:
+            ctx.publish(
+                {
+                    "type": "cmd./state.error",
+                    "text": "Usage: /state <show|get|set|clear|add> <world|zone|room|character> [key] [-- value]",
+                    "data": {"error": "Missing or invalid state arguments.", "code": "invalid_args"},
+                }
+            )
+            return
+
+        try:
+            result = StateAction().execute(
+                actor=ctx.actor,
+                operation=operation,
+                scope=scope,
+                key=key,
+                value=value,
+                amount=value,
+            )
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd./state.error",
                     "text": err.message,
                     "data": {"error": err.message, "code": err.code, **err.data},
                 }

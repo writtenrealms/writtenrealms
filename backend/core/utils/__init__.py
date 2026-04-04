@@ -11,6 +11,8 @@ import traceback
 from jinja2 import Template
 from jinja2.exceptions import TemplateSyntaxError, UndefinedError
 
+from core.scoped_state import build_state_context
+
 
 def get_classes_in_module(module, base_cls):
     """
@@ -260,7 +262,17 @@ def roll_variance(value, range, strictly_positive=False):
         value * (1 + random.randrange(-range, range + 1) / 100))
 
 
-def format_actor_msg(msg, actor=None):
+def format_actor_msg(
+    msg,
+    actor=None,
+    *,
+    character=None,
+    quest_instance=None,
+    room=None,
+    zone=None,
+    world=None,
+    extra_context=None,
+):
     """
     Careful accessing 'actor' attributes here, as this can be called
     by the game engine but also by the forge (for example for the quest
@@ -273,13 +285,27 @@ def format_actor_msg(msg, actor=None):
     if actor.__class__.__name__ == 'Player':
         name = actor.name
     else:
-        name = actor.keywords.split(' ')[0]
+        keywords = getattr(actor, 'keywords', '') or getattr(actor, 'name', '') or actor.key
+        name = str(keywords).split(' ')[0]
+
+    state_context = build_state_context(
+        actor=actor,
+        world=world,
+        zone=zone,
+        room=room,
+        character=character,
+        quest_instance=quest_instance,
+    )
+    character_state = state_context.get('character') or {}
 
     message_data = {
         'actor_key': actor.key,
         'actor': name,
-        'actor_marks': {},
-        'facts': {},
+        'actor_marks': character_state,
+        'facts': state_context.get('world') or {},
+        'zone_data': state_context.get('zone') or {},
+        'quest_state': state_context.get('quest') or {},
+        'state': state_context,
         'actor_data': {},
         'actor_subject_pronoun': 'they',
         'actor_object_pronoun': 'them',
@@ -287,16 +313,6 @@ def format_actor_msg(msg, actor=None):
         'actor_possessive_pronoun': 'theirs',
         'actor_reflexive_pronoun': 'themselves',
     }
-
-    # Marks & Facts
-    if actor.__class__.__module__ == 'spawns.models':
-        actor_marks = dict(actor.marks.values_list('name', 'value'))
-        facts = json.loads(actor.world.facts or '{}')
-    else:
-        actor_marks = actor.marks or {}
-        facts = actor.world.facts or {}
-    message_data['actor_marks'] = actor_marks
-    message_data['facts'] = facts
 
     # Actor Data
     for column in ['level', 'experience']:
@@ -309,6 +325,9 @@ def format_actor_msg(msg, actor=None):
      message_data['actor_possessive_adjective'],
      message_data['actor_possessive_pronoun'],
      message_data['actor_reflexive_pronoun']) = actor.pronouns
+
+    if isinstance(extra_context, dict):
+        message_data.update(extra_context)
 
     try:
         raw_template = Template(msg, extensions=['jinja2.ext.loopcontrols'])

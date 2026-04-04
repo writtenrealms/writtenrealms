@@ -4,6 +4,7 @@ from collections import Counter
 from types import SimpleNamespace
 from typing import Any
 
+from core.utils import format_actor_msg
 from quests.entity_refs import resolve_template_ref_id
 from quests.services.discovery import (
     available_npc_dialogue_opportunities_for_mob_template,
@@ -344,13 +345,26 @@ def _active_item_turn_in_hint(
         for state in quest_instance.objective_states.all():
             if state.status == "hidden":
                 continue
-            label = state.text or state.objective_id
+            label = format_actor_msg(
+                state.text or state.objective_id,
+                player,
+                character=player,
+                quest_instance=quest_instance,
+            )
             current = int(state.progress_current or 0)
             target = int(state.progress_target or 0)
             objective_lines.append(f"- {label} ({current}/{target})")
 
         lines = [quest_instance.template.name]
-        recap = str(step.get("recap") or "").strip()
+        recap = str(
+            format_actor_msg(
+                str(step.get("recap") or "").strip(),
+                player,
+                character=player,
+                quest_instance=quest_instance,
+            )
+            or ""
+        ).strip()
         if recap:
             lines.append(recap)
         if objective_lines:

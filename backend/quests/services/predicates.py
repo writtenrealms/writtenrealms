@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.scoped_state import resolve_state_path
 from quests.entity_refs import canonical_template_type, resolve_room_ref_id, resolve_template_ref_id
 
 
@@ -46,7 +47,20 @@ def resolve_path(
         return _walk_value(template, path.split(".")[1:])
     if path.startswith("event."):
         return _walk_value(event_data or {}, path.split(".")[1:])
+    if path.startswith("state."):
+        return resolve_state_path(
+            path,
+            actor=player,
+            character=player,
+            world=getattr(player, "world", None),
+            zone=getattr(getattr(player, "room", None), "zone", None),
+            room=getattr(player, "room", None),
+            quest_instance=quest_instance,
+        )
     if path.startswith("quest.local_state."):
+        state = getattr(quest_instance, "local_state", {}) or {}
+        return _walk_value(state, path.split(".")[2:])
+    if path.startswith("quest.state."):
         state = getattr(quest_instance, "local_state", {}) or {}
         return _walk_value(state, path.split(".")[2:])
     if path.startswith("quest.slot_bindings."):

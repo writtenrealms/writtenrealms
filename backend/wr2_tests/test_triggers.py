@@ -1,9 +1,11 @@
+import json
 from unittest.mock import patch
 
 from django.contrib.contenttypes.models import ContentType
 
 from builders.models import MobTemplate, Trigger
 from config import constants as adv_consts
+from core.scoped_state import STATE_SCOPE_WORLD, replace_state_snapshot
 from spawns.events import GameEvent, publish_events
 from spawns.handlers import dispatch_command
 from spawns.models import Item, Mob
@@ -157,6 +159,33 @@ class TestCommandFallbackTriggers(WorldTestCase):
         self.assertIn("Name does not match", failure_message.get("text", ""))
         self.assertIsNone(self._message_by_type(messages, "cmd.text.echo"))
         self.assertIsNone(self._message_by_type(messages, "cmd./echo.success"))
+
+    def test_trigger_supports_structured_state_conditions(self):
+        replace_state_snapshot(STATE_SCOPE_WORLD, self.spawn_world, {"weather": "rainy"})
+        self._create_room_trigger(
+            script="/echo -- The altar hums.",
+            conditions=json.dumps({"eq": ["state.world.weather", "rainy"]}),
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "touch altar")
+
+        echo_message = self._message_by_type(messages, "cmd./echo.success")
+        self.assertIsNotNone(echo_message)
+        self.assertIn("The altar hums.", echo_message.get("text", ""))
+
+    def test_trigger_script_renders_state_template(self):
+        replace_state_snapshot(STATE_SCOPE_WORLD, self.spawn_world, {"weather": "stormy"})
+        self._create_room_trigger(
+            script="/echo -- Weather: {{ state.world.weather }}.",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "touch altar")
+
+        echo_message = self._message_by_type(messages, "cmd./echo.success")
+        self.assertIsNotNone(echo_message)
+        self.assertIn("Weather: stormy.", echo_message.get("text", ""))
 
     def test_room_inventory_item_includes_trigger_actions(self):
         item = Item.objects.create(
