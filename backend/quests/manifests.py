@@ -335,6 +335,22 @@ def _validate_condition_template_refs(world: World, condition: Any, field_name: 
         _validate_condition_template_refs(world, condition.get("any"), f"{field_name}.any")
     if "not" in condition:
         _validate_condition_template_refs(world, condition.get("not"), f"{field_name}.not")
+    if "quest_completed" in condition:
+        quest_ref = condition.get("quest_completed")
+        if quest_ref in (None, ""):
+            raise serializers.ValidationError(
+                _template_ref_error("questtemplate", f"{field_name}.quest_completed")
+            )
+        if isinstance(quest_ref, (list, tuple, set, dict)):
+            raise serializers.ValidationError(
+                f"{field_name}.quest_completed must be a single quest ref; use all/any for multiple quest prerequisites."
+            )
+        _validate_template_ref(
+            world,
+            quest_ref,
+            "questtemplate",
+            f"{field_name}.quest_completed",
+        )
 
     for operator in ("eq", "ne", "gte", "lte", "in"):
         raw_args = condition.get(operator)

@@ -4,6 +4,7 @@ from typing import Any
 
 from core.scoped_state import resolve_state_path
 from quests.entity_refs import canonical_template_type, resolve_room_ref_id, resolve_template_ref_id
+from quests.models import QuestInstance
 
 
 def _walk_value(value: Any, segments: list[str]) -> Any:
@@ -153,6 +154,47 @@ def _resolve_comparison_value(
     return value
 
 
+def _condition_world(*, player=None, template=None):
+    return (
+        getattr(template, "world", None)
+        or getattr(getattr(player, "world", None), "context", None)
+        or getattr(player, "world", None)
+    )
+
+
+def _player_completed_quest_template(
+    value: Any,
+    *,
+    player=None,
+    template=None,
+    quest_instance=None,
+    event_data: dict[str, Any] | None = None,
+) -> bool:
+    if not player:
+        return False
+
+    template_id = resolve_template_ref_id(
+        world=_condition_world(player=player, template=template),
+        value=resolve_value(
+            value,
+            player=player,
+            template=template,
+            quest_instance=quest_instance,
+            event_data=event_data,
+        ),
+        expected_type="questtemplate",
+    )
+    if not template_id:
+        return False
+
+    return QuestInstance.objects.filter(
+        player=player,
+        template_id=template_id,
+        status="resolved",
+        resolution="complete",
+    ).exists()
+
+
 def evaluate_condition(
     condition: Any,
     *,
@@ -229,6 +271,15 @@ def evaluate_condition(
             return False
         state = (objective_state_map or {}).get(objective_id)
         return bool(state and state.status == "complete")
+
+    if "quest_completed" in condition:
+        return _player_completed_quest_template(
+            condition.get("quest_completed"),
+            player=player,
+            template=template,
+            quest_instance=quest_instance,
+            event_data=event_data,
+        )
 
     comparisons = (
         ("eq", lambda left, right: left == right),

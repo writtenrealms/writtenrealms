@@ -87,6 +87,23 @@ class QuestRuntimeTestCase(WorldTestCase):
                 return char
         return None
 
+    def create_completed_quest_instance(self, quest: QuestTemplate | str, *, resolution: str = "complete"):
+        template = quest
+        if isinstance(quest, str):
+            template = QuestTemplate.objects.get(world=self.world, slug=quest)
+        return QuestInstance.objects.create(
+            world=template.world,
+            template=template,
+            player=self.player,
+            status="resolved",
+            resolution=resolution,
+            current_step_id="resolved",
+            slot_bindings={},
+            local_state={},
+            visible_objective_ids=[],
+            resolved_at=timezone.now(),
+        )
+
 
 class TestMinimalQuestRuntime(QuestRuntimeTestCase):
     def setUp(self):
@@ -1396,3 +1413,179 @@ class TestQuestScopedState(QuestRuntimeTestCase):
             get_state_snapshot(STATE_SCOPE_CHARACTER, self.player).get("weather_seen"),
             "stormy",
         )
+
+
+class TestQuestCompletionPrerequisites(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_authenticate(self.user)
+        self.headers = {"HTTP_X_PLAYER_ID": str(self.player.id)}
+        self.first_steps = self.create_runtime_quest(
+            slug="first_steps",
+            name="First Steps",
+            discovery_policy={
+                "sources": [],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 0,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "Done.",
+                },
+            ],
+        )
+        self.town_favor = self.create_runtime_quest(
+            slug="town_favor",
+            name="Town Favor",
+            discovery_policy={
+                "sources": [],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 0,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "Done.",
+                },
+            ],
+        )
+        self.create_runtime_quest(
+            slug="gated_visible",
+            name="Gated Visible",
+            discovery_policy={
+                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "visible_if": {"quest_completed": self.first_steps.slug},
+                "accept_if": {},
+                "salience": 10,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "You have enough experience now.",
+                    "choices": [
+                        {"id": "continue", "text": "Continue.", "goto": "resolved"},
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "Done.",
+                },
+            ],
+        )
+        self.create_runtime_quest(
+            slug="gated_visible_multi",
+            name="Gated Visible Multi",
+            discovery_policy={
+                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "visible_if": {
+                    "all": [
+                        {"quest_completed": self.first_steps.slug},
+                        {"quest_completed": self.town_favor.slug},
+                    ]
+                },
+                "accept_if": {},
+                "salience": 10,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "You cleared every prerequisite.",
+                    "choices": [
+                        {"id": "continue", "text": "Continue.", "goto": "resolved"},
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "Done.",
+                },
+            ],
+        )
+        self.create_runtime_quest(
+            slug="gated_accept",
+            name="Gated Accept",
+            discovery_policy={
+                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "visible_if": {},
+                "accept_if": {"quest_completed": self.first_steps.slug},
+                "salience": 10,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "Visible now, but not yet startable.",
+                    "choices": [
+                        {"id": "continue", "text": "Continue.", "goto": "resolved"},
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "Done.",
+                },
+            ],
+        )
+
+    def _opportunity_slugs(self):
+        resp = self.client.get(
+            reverse("game-quest-opportunity-list"),
+            **self.headers,
+        )
+        self.assertEqual(resp.status_code, 200)
+        return [opportunity["slug"] for opportunity in resp.data["opportunities"]]
+
+    def test_visible_if_can_require_a_completed_quest_by_slug(self):
+        self.assertNotIn("gated_visible", self._opportunity_slugs())
+
+        self.create_completed_quest_instance("first_steps")
+
+        self.assertIn("gated_visible", self._opportunity_slugs())
+
+    def test_visible_if_quest_completed_requires_complete_resolution(self):
+        self.create_completed_quest_instance("first_steps", resolution="abandoned")
+
+        self.assertNotIn("gated_visible", self._opportunity_slugs())
+
+    def test_visible_if_can_require_multiple_completed_quests(self):
+        self.create_completed_quest_instance("first_steps")
+        self.assertNotIn("gated_visible_multi", self._opportunity_slugs())
+
+        self.create_completed_quest_instance("town_favor")
+        self.assertIn("gated_visible_multi", self._opportunity_slugs())
+
+    def test_accept_if_can_require_a_completed_quest_by_slug(self):
+        self.assertIn("gated_accept", self._opportunity_slugs())
+
+        denied_resp = self.client.post(
+            reverse("game-quest-opportunity-accept", args=["gated_accept"]),
+            {},
+            format="json",
+            **self.headers,
+        )
+        self.assertEqual(denied_resp.status_code, 400)
+        self.assertEqual(denied_resp.data["code"], "cannot_accept")
+
+        self.create_completed_quest_instance("first_steps")
+
+        accepted_resp = self.client.post(
+            reverse("game-quest-opportunity-accept", args=["gated_accept"]),
+            {},
+            format="json",
+            **self.headers,
+        )
+        self.assertEqual(accepted_resp.status_code, 201)
+        self.assertEqual(accepted_resp.data["quest"]["template"]["slug"], "gated_accept")

@@ -188,8 +188,16 @@ Supported discovery source shapes:
 
 ### Condition DSL
 
-These operators are used by `visible_if`, `accept_if`, objective tracker
+These operators are shared across `visible_if`, `accept_if`, objective tracker
 `where`, choice `if`, and transition `when`.
+
+Some operators are only meaningful in certain contexts:
+
+- Discovery conditions (`visible_if`, `accept_if`) run without an active quest
+  instance and without an event payload.
+- Objective tracker `where` conditions run with event data.
+- Choice `if` and transition `when` conditions run with an active quest
+  instance.
 
 
 | Operator             | Shape                                  | Meaning                                                       |
@@ -198,6 +206,7 @@ These operators are used by `visible_if`, `accept_if`, objective tracker
 | `all`                | `{all: [<condition>, ...]}`            | Logical AND.                                                  |
 | `any`                | `{any: [<condition>, ...]}`            | Logical OR.                                                   |
 | `not`                | `{not: <condition>}`                   | Logical negation.                                             |
+| `quest_completed`    | `{quest_completed: <quest_ref>}`       | True when the player has a resolved `complete` run of that quest template. |
 | `objective_complete` | `{objective_complete: <objective_id>}` | True when that objective is complete on the current instance. |
 | `eq`                 | `{eq: [<path>, <value>]}`              | Equality.                                                     |
 | `ne`                 | `{ne: [<path>, <value>]}`              | Inequality.                                                   |
@@ -222,8 +231,43 @@ Supported path prefixes today:
 
 Notes:
 
+- `quest_completed` is the supported way to gate `visible_if` or `accept_if`
+  on prior quest completion. Use a bare quest slug in authored content when
+  possible:
+
+  ```yaml
+  visible_if:
+    quest_completed: first_steps
+  ```
+
+- For multiple quest prerequisites, compose `quest_completed` with `all`,
+  `any`, or `not`:
+
+  ```yaml
+  visible_if:
+    all:
+      - quest_completed: first_steps
+      - quest_completed: town_favor
+
+  accept_if:
+    not:
+      quest_completed: rival_path
+  ```
+
+- `quest_completed` accepts the same quest template ref styles as other typed
+  refs: integer ids, `questtemplate.<id>`, `questtemplate.<slug>`, or a bare
+  slug. Bare slugs are preferred for readability.
+- `quest_completed` currently means the player has a resolved quest instance
+  with `resolution: complete`. `abandoned` does not count.
+- `objective_complete` is only useful once the current quest instance exists.
+  It should be used in step transitions and conditional choices, not in
+  `visible_if` or `accept_if`.
 - `quest.local_state.<key>` is kept as a legacy alias. New authored content
   should prefer `state.quest.<key>`.
+- `event.<field>` paths are available for event-driven conditions such as
+  objective tracker `where`. They are not populated in discovery conditions.
+- `quest.*` paths require an active quest instance, so they are not populated in
+  `visible_if` or `accept_if`.
 - Text fields such as `recap`, `text.body`, and choice text support Jinja-style
   substitutions like `{{ state.world.weather }}`.
 - Effect values still use path references in brace form, for example

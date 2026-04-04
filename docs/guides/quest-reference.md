@@ -134,7 +134,143 @@ Why this example matters:
 - it shows the smallest end-to-end quest instance lifecycle
 - it shows the simplest quest shape that can begin on connect, look, or move
 
-## 2. Room Prompt Gives You A Delivery Item
+## 2. Smallest Prerequisite Pair
+
+This is the smallest pair of quests that shows quest prerequisites by slug.
+
+Quest A is the prerequisite. Quest B is the follow-up. The follow-up uses
+`quest_completed` in both `visible_if` and `accept_if` to keep the example
+small and explicit.
+
+In production content, you would usually do one of these:
+
+- use `visible_if` when the follow-up should stay hidden until the prerequisite
+  is done
+- use `accept_if` when the follow-up can be visible early but should reject
+  acceptance until the prerequisite is done
+
+Manifest A:
+
+```yaml
+kind: quest
+metadata:
+  world: world.<world_id>
+  slug: first_steps
+  name: First Steps
+spec:
+  scope: player
+  status: active
+  repeatability:
+    mode: never
+    cooldown_seconds: 0
+  max_active: 1
+  discovery:
+    sources:
+      - type: auto_start
+    visible_if: {}
+    accept_if: {}
+    salience: 1
+    cooldown_seconds: 0
+  slots: {}
+  steps:
+    - id: offer
+      kind: storylet
+      recap: A simple errand teaches you how the quest flow works.
+      choices:
+        - id: continue
+          text: Finish the lesson.
+          goto: resolved
+    - id: resolved
+      kind: resolution
+      recap: You finished the lesson.
+  rewards:
+    complete: []
+    compromised: []
+    failed_forward: []
+    expired: []
+```
+
+Manifest B:
+
+```yaml
+kind: quest
+metadata:
+  world: world.<world_id>
+  slug: second_steps
+  name: Second Steps
+spec:
+  scope: player
+  status: active
+  repeatability:
+    mode: never
+    cooldown_seconds: 0
+  max_active: 1
+  discovery:
+    sources:
+      - type: room_prompt
+        room: room.<training_room_id>
+    visible_if:
+      quest_completed: first_steps
+    accept_if:
+      quest_completed: first_steps
+    salience: 5
+    cooldown_seconds: 0
+  slots: {}
+  steps:
+    - id: offer
+      kind: storylet
+      recap: A second lesson appears once the first is complete.
+      choices:
+        - id: continue
+          text: Take the follow-up lesson.
+          goto: resolved
+    - id: resolved
+      kind: resolution
+      recap: You completed the follow-up lesson.
+  rewards:
+    complete: []
+    compromised: []
+    failed_forward: []
+    expired: []
+```
+
+Simulated log:
+
+```text
+look
+Quest started: First Steps
+A simple errand teaches you how the quest flow works.
+
+quest choose first_steps continue
+Quest resolved: First Steps
+You finished the lesson.
+
+quest opportunities
+Second Steps
+A second lesson appears once the first is complete.
+
+quest accept second_steps
+Quest started: Second Steps
+A second lesson appears once the first is complete.
+```
+
+What this teaches:
+
+- `quest_completed` checks quest template completion by slug
+- `visible_if` can hide a follow-up until the prerequisite resolves
+- `accept_if` can enforce the same prerequisite again at accept time
+- `quest_completed` currently requires a `complete` resolution, not `abandoned`
+
+For more than one prerequisite quest, compose the same predicate with `all`:
+
+```yaml
+visible_if:
+  all:
+    - quest_completed: first_steps
+    - quest_completed: town_favor
+```
+
+## 3. Room Prompt Gives You A Delivery Item
 
 This is the standard "deliver this item to that mob" quest, but discovered
 through the room instead of the NPC.
@@ -244,7 +380,7 @@ What this teaches:
 - item hand-in progression through `quest.item.delivered`
 - the return NPC can still show `?` as a ready turn-in indicator
 
-## 3. NPC Asks For Two Mob Kills
+## 4. NPC Asks For Two Mob Kills
 
 This is the standard kill-and-report-back loop.
 
@@ -361,7 +497,7 @@ What this teaches:
 - report-back steps progress from `cmd.talk.success`
 - `?` can mean “talk to finish,” not only “give item”
 
-## 4. Ground Item Starts The Quest
+## 5. Ground Item Starts The Quest
 
 This is not supported yet as a first-class discovery flow.
 
@@ -386,7 +522,7 @@ Once an item is already in the player’s inventory, a quest can absolutely ask
 the player to deliver it to an NPC. What is not there yet is item-driven quest
 discovery.
 
-## 5. One NPC Offers Two Different Quests
+## 6. One NPC Offers Two Different Quests
 
 This is useful because it shows what `talk <mob>` does when there is more than
 one visible `npc_dialogue` opportunity on the same mob.
@@ -511,7 +647,7 @@ Current behavior to be aware of:
 - builders should keep quest names and `recap` text distinct so the list reads
   cleanly
 
-## 6. Room Prompt Quest
+## 7. Room Prompt Quest
 
 This is the right pattern when the world itself should surface a quest, not an
 NPC. Think placards, ruins, shrines, warning signs, cursed rooms, and so on.
@@ -616,7 +752,7 @@ What this teaches:
 - it is the non-NPC complement to `[ ! ]`
 - room/world-authored discoverability does not need a quest-giver mob
 
-## 7. Dialogue Quest With Two Choices And Two Different Rewards
+## 8. Dialogue Quest With Two Choices And Two Different Rewards
 
 This is the best pattern for “one dialogue, two outcomes, different rewards.”
 
@@ -725,7 +861,7 @@ What this teaches:
 
 ## Good Builder Experiments After These
 
-Once you are comfortable with the seven examples above, these are good next
+Once you are comfortable with the eight examples above, these are good next
 exercises:
 
 - a passphrase quest using `cmd.say.success`

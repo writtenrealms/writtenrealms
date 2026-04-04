@@ -201,6 +201,114 @@ spec:
             wolf_pelt.slug,
         )
 
+    def test_apply_quest_manifest_accepts_quest_completed_conditions_by_slug(self):
+        prereq = QuestTemplate.objects.create(
+            world=self.world,
+            slug="first_steps",
+            name="First Steps",
+        )
+
+        manifest = f"""
+kind: quest
+metadata:
+  world: world.{self.world.id}
+  slug: veteran_work
+  name: Veteran Work
+spec:
+  type: quest
+  scope: player
+  status: active
+  repeatability:
+    mode: never
+    cooldown_seconds: 0
+  max_active: 1
+  discovery:
+    sources:
+      - type: room_prompt
+        room: room.{self.room.id}
+    visible_if:
+      quest_completed: {prereq.slug}
+    accept_if:
+      quest_completed: {prereq.slug}
+    salience: 80
+  slots: {{}}
+  steps:
+    - id: offer
+      kind: storylet
+      recap: Only veterans see this.
+      choices:
+        - id: continue
+          text: Continue.
+          goto: resolved
+    - id: resolved
+      kind: resolution
+      recap: Done.
+  rewards:
+    complete: []
+    compromised: []
+    failed_forward: []
+    expired: []
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+
+        quest = QuestTemplate.objects.get(slug="veteran_work")
+        self.assertEqual(quest.discovery_policy["visible_if"]["quest_completed"], prereq.slug)
+        self.assertEqual(quest.discovery_policy["accept_if"]["quest_completed"], prereq.slug)
+
+    def test_apply_quest_manifest_rejects_unknown_quest_completed_slug(self):
+        manifest = f"""
+kind: quest
+metadata:
+  world: world.{self.world.id}
+  slug: blocked_work
+  name: Blocked Work
+spec:
+  type: quest
+  scope: player
+  status: active
+  repeatability:
+    mode: never
+    cooldown_seconds: 0
+  max_active: 1
+  discovery:
+    sources:
+      - type: room_prompt
+        room: room.{self.room.id}
+    visible_if:
+      quest_completed: missing_prereq
+    salience: 80
+  slots: {{}}
+  steps:
+    - id: offer
+      kind: storylet
+      recap: Blocked.
+      choices:
+        - id: continue
+          text: Continue.
+          goto: resolved
+    - id: resolved
+      kind: resolution
+      recap: Done.
+  rewards:
+    complete: []
+    compromised: []
+    failed_forward: []
+    expired: []
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("quest_completed", str(resp.data))
+        self.assertIn("unknown questtemplate", str(resp.data).lower())
+
     def test_apply_quest_manifest_rejects_removed_questlet_type(self):
         manifest = f"""
 kind: quest

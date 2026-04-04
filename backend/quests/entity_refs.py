@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from builders.models import ItemTemplate, MobTemplate
+from quests.models import QuestTemplate
 from worlds.models import Room, World
 
 
@@ -11,11 +12,14 @@ _TEMPLATE_TYPE_ALIASES = {
     "item_template": "itemtemplate",
     "mobtemplate": "mobtemplate",
     "mob_template": "mobtemplate",
+    "questtemplate": "questtemplate",
+    "quest_template": "questtemplate",
 }
 
 _TEMPLATE_MODELS = {
     "itemtemplate": ItemTemplate,
     "mobtemplate": MobTemplate,
+    "questtemplate": QuestTemplate,
 }
 
 _ROOM_REF_PREFIX = "room@"
