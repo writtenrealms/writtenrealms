@@ -445,6 +445,7 @@ class WorldAdminInstanceSerializer(serializers.ModelSerializer):
     context_world = serializers.SerializerMethodField()
     parent_world = serializers.SerializerMethodField()
     leader = serializers.SerializerMethodField()
+    world_state = serializers.SerializerMethodField()
     lifecycle_details = serializers.SerializerMethodField()
     loader_details = serializers.SerializerMethodField()
     counts = serializers.SerializerMethodField()
@@ -461,6 +462,7 @@ class WorldAdminInstanceSerializer(serializers.ModelSerializer):
             'context_world',
             'parent_world',
             'leader',
+            'world_state',
             'lifecycle_details',
             'loader_details',
             'counts',
@@ -497,6 +499,9 @@ class WorldAdminInstanceSerializer(serializers.ModelSerializer):
             'id': spawn_world.leader_id,
             'name': spawn_world.leader.name,
         }
+
+    def get_world_state(self, spawn_world):
+        return get_state_snapshot(STATE_SCOPE_WORLD, spawn_world)
 
     def get_lifecycle_details(self, spawn_world):
         cleanup_started_ts = None

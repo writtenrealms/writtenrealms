@@ -12,6 +12,7 @@ from config import constants as adv_consts
 
 from config import game_settings as adv_config
 from core.utils.mobs import suggest_stats
+from core.scoped_state import STATE_SCOPE_WORLD, replace_state_snapshot
 
 from config import constants as api_consts
 from builders.models import (
@@ -200,6 +201,17 @@ class TestWorldAdminInstanceEndpoint(BuilderTestCase):
     def test_returns_wr2_spawn_dashboard_metrics(self):
         now = timezone.now()
 
+        replace_state_snapshot(
+            STATE_SCOPE_WORLD,
+            self.world,
+            {'weather': 'template-sunny'},
+        )
+        replace_state_snapshot(
+            STATE_SCOPE_WORLD,
+            self.spawn_world,
+            {'weather': 'spawn-rainy', 'lodging_base_price': 12},
+        )
+
         self.player.world = self.spawn_world
         self.player.room = self.room
         self.player.in_game = True
@@ -291,6 +303,10 @@ class TestWorldAdminInstanceEndpoint(BuilderTestCase):
         self.assertEqual(len(resp.data['active_players']), 1)
         self.assertEqual(resp.data['active_players'][0]['name'], self.player.name)
         self.assertEqual(resp.data['active_players'][0]['room']['name'], self.room.name)
+        self.assertEqual(
+            resp.data['world_state'],
+            {'weather': 'spawn-rainy', 'lodging_base_price': 12},
+        )
 
     def test_rejects_spawn_world_from_another_template_world(self):
         other_world = World.objects.new_world(

@@ -40,10 +40,13 @@ export default {
 
     // World Admin Instance actions
 
-    world_admin_instance_fetch: async ({ commit }, { world_id, instance_id }) => {
-      commit("world_admin_instance_set", null);
+    world_admin_instance_fetch: async ({ commit }, { world_id, instance_id, preserveCurrent = false }) => {
+      if (!preserveCurrent) {
+        commit("world_admin_instance_set", null);
+      }
       const resp = await axios.get(`/builder/worlds/${world_id}/admin/instance/${instance_id}/`);
       commit("world_admin_instance_set", resp.data);
+      return resp.data;
     },
 
     world_admin_instance_reset: async ({ commit, dispatch }, { world_id, instance_id }) => {

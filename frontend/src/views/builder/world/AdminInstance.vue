@@ -2,16 +2,12 @@
   <div v-if="instance" class="admin-instance">
     <div class="header-row">
       <div>
-        <div class="eyebrow color-text-50">Spawn World Dashboard</div>
         <h2>{{ root_world.name.toUpperCase() }} WORLD #{{ instance.id }}</h2>
         <div class="header-meta">
           <span class="status-pill" :class="statusClass(instance.lifecycle_details.current)">
             {{ instance.lifecycle_details.current }}
           </span>
           <span class="color-text-50">{{ worldModeLabel }}</span>
-          <span class="color-text-50">
-            Template {{ instance.context_world.name }} #{{ instance.context_world.id }}
-          </span>
           <span v-if="instance.parent_world" class="color-text-50">
             Base {{ instance.parent_world.name }} #{{ instance.parent_world.id }}
           </span>
@@ -20,6 +16,13 @@
 
       <div class="header-actions">
         <button
+          class="btn btn-small"
+          :disabled="isRefreshing"
+          @click="refreshInstance"
+        >
+          {{ isRefreshing ? "REFRESHING..." : "REFRESH" }}
+        </button>
+        <button
           v-if="canResetWorld"
           class="btn btn-small"
           :disabled="isResetting"
@@ -27,7 +30,6 @@
         >
           {{ isResetting ? "RESETTING..." : "RESET WORLD" }}
         </button>
-        <router-link class="back-link" :to="backToAdminLink">Back to admin</router-link>
       </div>
     </div>
 
@@ -180,6 +182,28 @@
           </router-link>
         </div>
       </section>
+
+      <section class="panel detail-panel state-panel">
+        <div class="section-heading">
+          <h3>Spawn World State</h3>
+          <div class="color-text-50">{{ formatNumber(stateEntries.length) }} keys</div>
+        </div>
+
+        <div class="color-text-60 section-note">
+          This is the current `world`-scope state snapshot for spawn world #{{ instance.id }}, not the template world.
+        </div>
+
+        <div v-if="!stateEntries.length" class="empty-state color-text-60">
+          No world state is currently set on this spawn world.
+        </div>
+
+        <div v-else class="state-list">
+          <div v-for="entry in stateEntries" :key="entry.key" class="state-row">
+            <div class="state-key">{{ entry.key }}</div>
+            <div class="state-value">{{ formatStateValue(entry.value) }}</div>
+          </div>
+        </div>
+      </section>
     </div>
   </div>
 
@@ -189,38 +213,39 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useStore } from 'vuex';
 import { useRoute } from 'vue-router';
 
 const store = useStore();
 const route = useRoute();
 const isResetting = ref(false);
+const isRefreshing = ref(false);
+let refreshTimer: number | null = null;
 
 const root_world: any = computed(() => store.state.builder.world);
 const instance = computed<any>(() => store.state.builder.worlds.admin.admin_instance);
 
-const fetchInstance = async () => {
-  await store.dispatch('builder/worlds/admin/world_admin_instance_fetch', {
+const fetchInstance = async ({ preserveCurrent = false } = {}) => {
+  return store.dispatch('builder/worlds/admin/world_admin_instance_fetch', {
     world_id: route.params.world_id,
     instance_id: route.params.instance_id,
+    preserveCurrent,
   });
 };
 
 watch(
-  () => route.params.instance_id,
+  () => [route.params.world_id, route.params.instance_id],
   () => {
     fetchInstance();
   },
   { immediate: true },
 );
 
-const backToAdminLink = computed(() => ({
-  name: 'builder_world_admin',
-  params: {
-    world_id: route.params.world_id,
-  },
-}));
+const shouldAutoRefresh = computed(() => {
+  const lifecycle = instance.value?.lifecycle_details?.current;
+  return ['running', 'starting', 'stopping'].includes(lifecycle);
+});
 
 const worldModeLabel = computed(() => {
   if (!instance.value) {
@@ -231,6 +256,20 @@ const worldModeLabel = computed(() => {
 
 const canResetWorld = computed(() => {
   return instance.value?.lifecycle_details?.current === 'stopped';
+});
+
+const stateEntries = computed(() => {
+  const worldState = instance.value?.world_state;
+  if (!worldState || typeof worldState !== 'object') {
+    return [];
+  }
+
+  return Object.keys(worldState)
+    .sort((left, right) => left.localeCompare(right))
+    .map((key) => ({
+      key,
+      value: worldState[key],
+    }));
 });
 
 const summaryCards = computed(() => {
@@ -282,6 +321,45 @@ const playerLink = (player: any) => {
   };
 };
 
+const refreshInstance = async () => {
+  if (isRefreshing.value || isResetting.value) {
+    return;
+  }
+
+  isRefreshing.value = true;
+  try {
+    await fetchInstance({ preserveCurrent: true });
+  } finally {
+    isRefreshing.value = false;
+  }
+};
+
+const refreshIfVisible = async () => {
+  if (document.visibilityState !== 'visible' || !shouldAutoRefresh.value) {
+    return;
+  }
+  await refreshInstance();
+};
+
+const onWindowFocus = async () => {
+  await refreshInstance();
+};
+
+onMounted(() => {
+  window.addEventListener('focus', onWindowFocus);
+  refreshTimer = window.setInterval(() => {
+    refreshIfVisible();
+  }, 5000);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('focus', onWindowFocus);
+  if (refreshTimer !== null) {
+    window.clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+});
+
 const onResetWorld = async () => {
   if (!instance.value || !canResetWorld.value || isResetting.value) {
     return;
@@ -320,6 +398,23 @@ const statusClass = (status: string) => {
 
 const formatNumber = (value: number | string | null | undefined) => {
   return Number(value || 0).toLocaleString();
+};
+
+const formatStateValue = (value: unknown) => {
+  if (value === null) {
+    return 'null';
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 };
 
 const formatTimestamp = (value: string | null | undefined) => {
@@ -467,6 +562,10 @@ const formatRelativeTime = (value: string | null | undefined) => {
   padding: 18px 20px;
 }
 
+.section-note {
+  margin: -4px 0 16px;
+}
+
 .detail-row {
   display: flex;
   justify-content: space-between;
@@ -486,6 +585,40 @@ const formatRelativeTime = (value: string | null | undefined) => {
   gap: 16px;
   align-items: baseline;
   margin-bottom: 16px;
+}
+
+.state-panel {
+  grid-column: span 2;
+}
+
+.state-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.state-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  gap: 16px;
+  padding: 11px 0;
+  border-top: 1px solid rgba($color-background-light-border-selected, 0.18);
+}
+
+.state-row:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.state-key {
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.state-value {
+  color: $color-text-70;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .player-list {
@@ -592,6 +725,15 @@ const formatRelativeTime = (value: string | null | undefined) => {
   .detail-row {
     flex-direction: column;
     gap: 4px;
+  }
+
+  .state-panel {
+    grid-column: auto;
+  }
+
+  .state-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
   }
 }
 </style>
