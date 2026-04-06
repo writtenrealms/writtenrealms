@@ -216,6 +216,11 @@ watch(
 @import "@/styles/colors.scss";
 
 #quest-template-details {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+
   .editor-actions {
     display: flex;
     flex-wrap: wrap;
@@ -223,6 +228,7 @@ watch(
   }
 
   .manifest-input {
+    box-sizing: border-box;
     width: 100%;
     min-height: 560px;
     padding: 0.75rem;
