@@ -220,6 +220,32 @@ class TestCommandFallbackTriggers(WorldTestCase):
         self.assertIsNotNone(payload_item)
         self.assertIn("inspect relic", payload_item["actions"])
 
+    def test_built_in_inspect_still_allows_specific_trigger_matches(self):
+        Item.objects.create(
+            world=self.spawn_world,
+            container=self.room,
+            name="ancient relic",
+            keywords="relic",
+            type="inert",
+        )
+        Trigger.objects.create(
+            world=self.world,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=self.room.id,
+            match="inspect relic",
+            script="/echo -- The relic glows faintly.",
+            display_action_in_room=True,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "inspect relic")
+
+        echo_message = self._message_by_type(messages, "cmd./echo.success")
+        self.assertIsNotNone(echo_message)
+        self.assertIn("The relic glows faintly.", echo_message.get("text", ""))
+
     def test_player_inventory_item_includes_trigger_actions(self):
         item = Item.objects.create(
             world=self.spawn_world,

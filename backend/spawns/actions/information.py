@@ -135,6 +135,45 @@ class LookAction:
         )
 
 
+class InspectAction:
+    def execute(self, player_id: int) -> ActionResult:
+        player = get_player_with_related(player_id)
+        world = player.world
+        room = player.room
+
+        if room is None:
+            raise ActionError("You are nowhere. Cannot inspect anything.", code="no_room")
+
+        actor_payload = serialize_actor(player, room)
+        room_world = room.world or (world.context or world)
+        room_ids, _ = collect_map_room_ids(player, room_world, room)
+        door_states = door_state_lookup(world, room_ids)
+        _, room_key_lookup = build_map_payload(room_world, room_ids, door_states)
+        room_payload = serialize_room(
+            room,
+            room_key_lookup,
+            door_states,
+            viewer=player,
+        )
+        data = {
+            "actor": actor_payload.model_dump(),
+            "target": room_payload.model_dump(),
+            "target_type": "room",
+        }
+        text = render_event_text("cmd.inspect.success", data, viewer=player)
+
+        return ActionResult(
+            events=[
+                GameEvent(
+                    type="cmd.inspect.success",
+                    recipients=[player.key],
+                    data=data,
+                    text=text,
+                )
+            ]
+        )
+
+
 class InventoryAction:
     def execute(self, player_id: int) -> ActionResult:
         player = get_player_with_related(player_id)

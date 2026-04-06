@@ -87,6 +87,12 @@ class QuestRuntimeTestCase(WorldTestCase):
                 return char
         return None
 
+    def _room_callouts(self, message):
+        if not message:
+            return []
+        target = message.get("data", {}).get("target") or message.get("data", {}).get("room") or {}
+        return target.get("quest_callouts", [])
+
     def create_completed_quest_instance(self, quest: QuestTemplate | str, *, resolution: str = "complete"):
         template = quest
         if isinstance(quest, str):
@@ -455,6 +461,76 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
         self.assertIsNotNone(error_message)
         self.assertEqual(error_message["data"]["code"], "unknown_subcommand")
         self.assertIn("completed", error_message["text"])
+
+
+class TestRoomPromptCalloutRuntime(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.create_runtime_quest(
+            slug="coat_return",
+            name="Coat Return",
+            discovery_policy={
+                "sources": [
+                    {
+                        "type": "room_prompt",
+                        "room": f"room.{self.room.id}",
+                        "callout": "A forgotten coat hangs over the back of a chair.",
+                    }
+                ],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 10,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "recap": "A coat was left behind here.",
+                    "text": {
+                        "body": "A note stitched inside reads: Property of T.J. Cooper.",
+                    },
+                    "choices": [
+                        {"id": "begin", "text": "Take responsibility for it.", "goto": "resolved"},
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "You commit to finding the coat's owner.",
+                },
+            ],
+        )
+
+    def test_look_shows_room_prompt_callout_and_skips_available_event(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "look")
+
+        self.assertNotIn("quest.opportunity.available", self._message_types(messages))
+        look_message = self._message_by_type(messages, "cmd.look.success")
+        self.assertIsNotNone(look_message)
+
+        callouts = self._room_callouts(look_message)
+        self.assertEqual(len(callouts), 1)
+        self.assertEqual(
+            callouts[0]["text"],
+            "A forgotten coat hangs over the back of a chair.",
+        )
+        self.assertEqual(callouts[0]["indicator"], "!")
+        self.assertEqual(callouts[0]["command"], "inspect")
+        self.assertIn("[ ! ]", look_message.get("text", ""))
+
+    def test_inspect_presents_room_prompt_opportunity(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "inspect")
+
+        inspect_message = self._message_by_type(messages, "cmd.inspect.success")
+        self.assertIsNotNone(inspect_message)
+        guidance_message = self._message_by_type(messages, "quest.opportunity.presented")
+        self.assertIsNotNone(guidance_message)
+        self.assertIn("Coat Return", guidance_message["text"])
+        self.assertIn("Property of T.J. Cooper", guidance_message["text"])
+        self.assertIn("quest accept coat_return", guidance_message["text"])
 
 
 class TestPortableRoomRefsQuestRuntime(QuestRuntimeTestCase):

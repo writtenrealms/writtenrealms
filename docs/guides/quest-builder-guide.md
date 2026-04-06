@@ -42,14 +42,15 @@ progression for other reasons
 This is the intended player loop right now:
 
 1. The player sees a quest source in the world.
-2. If the source is an NPC dialogue offer, the room UI shows `[ ! ]`.
-3. The player uses an in-world verb like `talk bartender`.
-4. The game shows the authored pitch text and an explicit accept command:
+2. If the source is an NPC dialogue offer, the room UI shows `[ ! ]` on that mob.
+3. If the source is a room prompt with a `callout`, the room UI shows the authored callout text with `[ ! ]`.
+4. The player uses an in-world verb like `talk bartender` or `inspect`.
+5. The game shows the authored pitch text and an explicit accept command:
   `quest accept <quest-slug>`.
-5. Once accepted, quest progress happens through world actions:
+6. Once accepted, quest progress happens through world actions:
   `look`, `move`, `say`, `talk`, `give`, `kill`.
-6. When an NPC is ready for report-back or a hand-in, the room UI shows `[ ? ]`.
-7. Completion still happens through the world verb that matches the objective:
+7. When an NPC is ready for report-back or a hand-in, the room UI shows `[ ? ]`.
+8. Completion still happens through the world verb that matches the objective:
   `talk captain`, `give keg bartender`, and so on.
 
 There is intentionally no `quest complete` command right now.
@@ -61,7 +62,9 @@ out-of-band completion verb.
 ## What `!` And `?` Mean
 
 - `[ ! ]` means this mob currently has a visible `npc_dialogue` opportunity the
-player can enquire about.
+player can follow up on with `talk <mob>`.
+- `[ ! ]` on a room callout means the current room has a visible `room_prompt`
+opportunity the player can inspect with `inspect`.
 - `[ ? ]` means this mob is currently a ready hand-in or report-back point for
 an active quest.
 
@@ -182,7 +185,7 @@ Supported discovery source shapes:
 | `type`         | Required fields                     | Behavior                                                                                                                      |
 | -------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `auto_start`   | none                                | Starts automatically on `cmd.state.sync.success`, `cmd.look.success`, or `cmd.move.success`.                                  |
-| `room_prompt`  | `room` or `room_id`                 | Shows as an opportunity when the player is in that room. The room reference can be an integer id, `room.<id>`, or portable `room@x,y,z`. |
+| `room_prompt`  | `room` or `room_id`; optional `callout` | Shows as an opportunity when the player is in that room. The room reference can be an integer id, `room.<id>`, or portable `room@x,y,z`. If `callout` is authored, the room view shows that line with `[ ! ]` and the player can use `inspect` to see the quest pitch. |
 | `npc_dialogue` | `mob_template` or `mob_template_id` | Shows through NPC dialogue and room UI markers. Mob refs can be ids, `mobtemplate.<id>`, `mobtemplate.<slug>`, or bare slugs. |
 
 

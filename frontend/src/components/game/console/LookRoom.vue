@@ -88,6 +88,18 @@
       </div>
     </div>
 
+    <div class="room-quest-callouts" v-if="room.quest_callouts && room.quest_callouts.length">
+      <div class="room-quest-callout" v-for="callout in room.quest_callouts" :key="callout.slug + '_' + callout.text">
+        <template v-if="isLastMessage">
+          <span class="interactive" @click="onInspectCallout(callout)">{{ callout.text }}</span>
+        </template>
+        <template v-else>
+          <span>{{ callout.text }}</span>
+        </template>
+        <span class="quest-indicator-wrapper">[ <span class="quest-indicator">{{ callout.indicator || "!" }}</span> ]</span>
+      </div>
+    </div>
+
     <div class="room-actions mt-2" v-if="isLastMessage && room.actions.length">
       <button class='btn-small mr-2' v-for="(action, index) in room.actions" :key="index"
         @click="onClickRoomAction(action)">{{ action.toUpperCase() }}</button>
@@ -121,6 +133,7 @@ interface Room {
   details: string[];
   actions: string[];
   houses: any[];
+  quest_callouts: any[];
 }
 
 const props = defineProps<{ message: any }>();
@@ -235,6 +248,11 @@ const onClickRoomAction = (action) => {
   store.dispatch("game/cmd", action);
 }
 
+const onInspectCallout = (callout) => {
+  const command = callout && callout.command ? callout.command : "inspect";
+  store.dispatch("game/cmd", command);
+}
+
 const showDescription = computed(() => {
   if (
     store.state.game.player_config.room_brief &&
@@ -290,6 +308,21 @@ const motd_lines = computed(() => {
 
   .room-note {
     opacity: 0.5;
+  }
+
+  .room-quest-callout {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+
+    .quest-indicator-wrapper {
+      color: $color-text-gray;
+    }
+
+    .quest-indicator {
+      color: $color-secondary;
+      font-weight: bold;
+    }
   }
 }
 

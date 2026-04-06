@@ -201,6 +201,58 @@ spec:
             wolf_pelt.slug,
         )
 
+    def test_apply_quest_manifest_accepts_room_prompt_callout(self):
+        manifest = f"""
+kind: quest
+metadata:
+  world: world.{self.world.id}
+  slug: coat_return
+  name: Coat Return
+spec:
+  type: quest
+  scope: player
+  status: active
+  repeatability:
+    mode: never
+    cooldown_seconds: 0
+  max_active: 1
+  discovery:
+    sources:
+      - type: room_prompt
+        room: room.{self.room.id}
+        callout: A forgotten coat hangs over the back of a chair.
+    salience: 80
+  slots: {{}}
+  steps:
+    - id: offer
+      kind: storylet
+      recap: A coat was left behind here.
+      choices:
+        - id: begin
+          text: Take responsibility for it.
+          goto: resolved
+    - id: resolved
+      kind: resolution
+      recap: Done.
+  rewards:
+    complete: []
+    compromised: []
+    failed_forward: []
+    expired: []
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+
+        quest = QuestTemplate.objects.get(slug="coat_return")
+        self.assertEqual(
+            quest.discovery_policy["sources"][0]["callout"],
+            "A forgotten coat hangs over the back of a chair.",
+        )
+
     def test_apply_quest_manifest_accepts_quest_completed_conditions_by_slug(self):
         prereq = QuestTemplate.objects.create(
             world=self.world,

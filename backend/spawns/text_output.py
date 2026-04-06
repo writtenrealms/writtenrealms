@@ -57,6 +57,13 @@ def _render_room_lines(
             line += " (invisible)"
         lines.append(line)
 
+    for callout in room.get("quest_callouts") or []:
+        callout_text = str(callout.get("text") or "").strip()
+        if not callout_text:
+            continue
+        indicator = str(callout.get("indicator") or "!").strip() or "!"
+        lines.append(f"{callout_text} [ {indicator} ]")
+
     actions = [action for action in (room.get("actions") or []) if action]
     if len(actions) == 1:
         lines.append("Action available: {}".format(actions[0]))
@@ -245,6 +252,13 @@ def _render_give_text(event_type: str, data: dict) -> str | None:
     return "\n".join(lines) if lines else None
 
 
+def _render_inspect_text(data: dict) -> str | None:
+    target_type = str(data.get("target_type") or "").strip().lower()
+    if target_type == "room":
+        return "You inspect the room."
+    return None
+
+
 def _render_roll_text(event_type: str, data: dict) -> str | None:
     die = data.get("die")
     outcome = data.get("outcome")
@@ -404,6 +418,9 @@ def render_event_text(
 
     if event_type == "cmd.talk.success":
         return _render_talk_text(data)
+
+    if event_type == "cmd.inspect.success":
+        return _render_inspect_text(data)
 
     if event_type in ("cmd.kill.success", "notification.cmd.kill.success"):
         return _render_kill_text(event_type, data)

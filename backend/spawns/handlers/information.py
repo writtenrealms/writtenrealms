@@ -4,7 +4,8 @@ Information / observation commands (look, inspect, etc).
 Implements information-oriented commands such as look, inventory, and help.
 """
 from spawns.actions.base import ActionError
-from spawns.actions.information import InventoryAction, LookAction, RollAction
+from quests.services.discovery import available_room_prompt_opportunities_for_room
+from spawns.actions.information import InspectAction, InventoryAction, LookAction, RollAction
 from spawns.events import publish_events
 from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.permissions import has_builder_access
@@ -13,6 +14,7 @@ from spawns.handlers.registry import (
     register_handler,
     resolve_text_handler,
 )
+from spawns.triggers import execute_command_fallback_trigger
 
 
 @register_handler
@@ -43,6 +45,77 @@ class LookHandler(CommandHandler):
             result = LookAction().execute(ctx.player.id, target_selector=target)
         except ActionError as err:
             ctx.publish_error("look", err.message)
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.player.key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class InspectHandler(CommandHandler):
+    command_type = "inspect"
+    text_commands = ("inspect",)
+    help = {
+        "name": "Inspect",
+        "format": "inspect",
+        "description": "Inspect the room for room-based quest opportunities.",
+        "details": [
+            "`inspect` is the room-side counterpart to `talk <mob>`.",
+        ],
+        "examples": [
+            "inspect",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        args = ctx.payload.get("args", [])
+        if args:
+            trigger_result = execute_command_fallback_trigger(
+                actor=ctx.actor,
+                text=ctx.payload.get("raw_text", "inspect"),
+                connection_id=ctx.connection_id,
+            )
+            if trigger_result.handled:
+                if trigger_result.feedback:
+                    ctx.publish(
+                        {
+                            "type": "cmd.text.trigger",
+                            "text": trigger_result.feedback,
+                            "data": {"text": trigger_result.feedback},
+                        }
+                    )
+                return
+
+        opportunities = available_room_prompt_opportunities_for_room(
+            ctx.player,
+            getattr(ctx.player, "room_id", None),
+        )
+        if not opportunities:
+            ctx.publish(
+                {
+                    "type": "cmd.inspect.error",
+                    "text": "You don't notice anything here worth inspecting.",
+                    "data": {
+                        "error": "You don't notice anything here worth inspecting.",
+                        "code": "nothing_to_inspect",
+                    },
+                }
+            )
+            return
+
+        try:
+            result = InspectAction().execute(ctx.player.id)
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd.inspect.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
             return
 
         publish_events(

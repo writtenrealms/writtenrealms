@@ -42,6 +42,7 @@ Implemented in this pass:
   - `unique_count`
 - player interaction commands:
   - `give <item> <mob>`
+  - `inspect`
   - `talk <mob>`
   - `kill <mob>`
 - canonical quest progression events:
@@ -87,7 +88,7 @@ Auto-start qualifying events currently are:
 - `cmd.look.success`
 - `cmd.move.success`
 
-Other commands such as `say`, `talk`, `give`, `kill`, and `quest
+Other commands such as `say`, `inspect`, `talk`, `give`, `kill`, and `quest
 opportunities` may still refresh discovery or progress active quests, but they
 do not trigger `auto_start`.
 
@@ -442,6 +443,10 @@ COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec bac
 ```
 
 You should see a `quest.opportunity.available` message.
+
+If you author a `callout` on that `room_prompt` source instead, the room view
+shows the callout line with `[ ! ]` and you use `inspect` to present the quest
+pitch instead of getting the opportunity card automatically.
 
 You can confirm it explicitly:
 

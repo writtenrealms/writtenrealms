@@ -4,7 +4,7 @@ from typing import Callable
 
 from spawns.models import Player
 from quests.services.discovery import refresh_player_quests
-from quests.services.interactions import build_talk_guidance_events
+from quests.services.interactions import build_inspect_guidance_events, build_talk_guidance_events
 from quests.services.progress import progress_player_quests_for_event
 
 
@@ -137,6 +137,31 @@ def _on_cmd_talk_success(event_data: dict, actor_key: str | None, connection_id:
     )
 
 
+def _on_cmd_inspect_success(event_data: dict, actor_key: str | None, connection_id: str | None) -> None:
+    player, refresh_result, progress_result = _refresh_and_progress(
+        event_type="cmd.inspect.success",
+        event_data=event_data,
+        actor_key=actor_key,
+    )
+    refresh_events = [
+        event
+        for event in (refresh_result.events if refresh_result else [])
+        if event.type != "quest.opportunity.available"
+    ]
+    extra_events = []
+    if player and progress_result and not progress_result.events:
+        extra_events = build_inspect_guidance_events(player, event_data)
+    _publish_player_events(
+        player,
+        [
+            *refresh_events,
+            *(progress_result.events if progress_result else []),
+            *extra_events,
+        ],
+        connection_id=connection_id,
+    )
+
+
 def _on_quest_item_delivered(event_data: dict, actor_key: str | None, connection_id: str | None) -> None:
     player, refresh_result, progress_result = _refresh_and_progress(
         event_type="quest.item.delivered",
@@ -183,6 +208,7 @@ _EVENT_SUBSCRIPTIONS: dict[str, QuestSubscriptionHandler] = {
     "cmd.move.success": _on_cmd_move_success,
     "cmd.say.success": _on_cmd_say_success,
     "cmd.talk.success": _on_cmd_talk_success,
+    "cmd.inspect.success": _on_cmd_inspect_success,
     "quest.item.delivered": _on_quest_item_delivered,
     "quest.mob.killed": _on_quest_mob_killed,
 }

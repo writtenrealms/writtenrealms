@@ -15,7 +15,7 @@ from django.utils import timezone
 from config import constants as adv_consts
 from core.computations import compute_stats
 from core.scoped_state import STATE_SCOPE_WORLD, get_state_snapshot
-from quests.services.interactions import room_mob_quest_indicator_map
+from quests.services.interactions import room_mob_quest_indicator_map, room_quest_callouts
 from spawns.models import DoorState, Item, Mob, Player
 from spawns.schemas import (
     Actor,
@@ -477,8 +477,10 @@ def serialize_room(
     room_players = room.players.filter(in_game=True).select_related("user", "equipment")
     room_mobs = list(room.mobs.select_related("template"))
     quest_indicator_map: dict[int, dict[str, bool]] = {}
+    quest_callout_data: list[dict] = []
     if isinstance(viewer, Player):
         quest_indicator_map = room_mob_quest_indicator_map(viewer, room_mobs)
+        quest_callout_data = room_quest_callouts(viewer, room.id)
 
     chars: List[Char] = []
     chars.extend(serialize_char_from_player(p) for p in room_players)
@@ -522,6 +524,7 @@ def serialize_room(
         houses=[],
         details=details,
         flags=flags,
+        quest_callouts=quest_callout_data,
         north=_exit_key(room.north_id),
         east=_exit_key(room.east_id),
         south=_exit_key(room.south_id),

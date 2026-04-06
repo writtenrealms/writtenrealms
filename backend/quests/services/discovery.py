@@ -29,6 +29,31 @@ def _source_type(source: dict) -> str:
     return str(source.get("type") or "").strip().lower()
 
 
+def _room_prompt_source_matches_room_id(
+    template: QuestTemplate,
+    source: dict,
+    *,
+    room_id: int | None,
+) -> bool:
+    if _source_type(source) != "room_prompt" or not room_id:
+        return False
+    resolved_room_id = resolve_room_ref_id(
+        world=template.world,
+        value=source.get("room") or source.get("room_id"),
+    )
+    return resolved_room_id == room_id
+
+
+def _room_prompt_source_callout(source: dict) -> str | None:
+    if _source_type(source) != "room_prompt":
+        return None
+    callout = source.get("callout")
+    if callout is None:
+        return None
+    callout_text = str(callout).strip()
+    return callout_text or None
+
+
 def _npc_dialogue_source_mob_template_id(template: QuestTemplate, source: dict) -> int | None:
     if _source_type(source) != "npc_dialogue":
         return None
@@ -51,13 +76,11 @@ def _source_matches_player(
         return True
 
     if source_type == "room_prompt":
-        room_id = resolve_room_ref_id(
-            world=template.world,
-            value=source.get("room") or source.get("room_id"),
+        return _room_prompt_source_matches_room_id(
+            template,
+            source,
+            room_id=getattr(player, "room_id", None),
         )
-        if room_id is None:
-            return False
-        return player.room_id == room_id
 
     if source_type == "npc_dialogue":
         mob_template_id = _npc_dialogue_source_mob_template_id(template, source)
@@ -130,7 +153,87 @@ def _matching_sources_for_template(
 def _should_emit_available_event(matched_sources: list[dict]) -> bool:
     if not matched_sources:
         return False
-    return any(_source_type(source) != "npc_dialogue" for source in matched_sources)
+    return any(
+        _source_type(source) != "npc_dialogue"
+        and _room_prompt_source_callout(source) is None
+        for source in matched_sources
+    )
+
+
+def available_room_prompt_opportunities_for_room(
+    player,
+    room_id: int | None,
+) -> list[dict]:
+    if not room_id:
+        return []
+
+    opportunities: list[dict] = []
+    seen_template_ids: set[int] = set()
+    templates = list(runtime_templates_qs(player))
+    for template in templates:
+        if not _template_available(player, template):
+            continue
+        matched_room_prompt = any(
+            isinstance(source, dict)
+            and _room_prompt_source_matches_room_id(
+                template,
+                source,
+                room_id=room_id,
+            )
+            for source in (template.discovery_policy or {}).get("sources", [])
+        )
+        if not matched_room_prompt or template.id in seen_template_ids:
+            continue
+        seen_template_ids.add(template.id)
+        opportunities.append(serialize_opportunity(template, player=player))
+
+    opportunities.sort(key=lambda opportunity: (opportunity.get("name") or "").lower())
+    return opportunities
+
+
+def room_prompt_callouts_for_room(
+    player,
+    room_id: int | None,
+) -> list[dict]:
+    if not room_id:
+        return []
+
+    callouts: list[dict] = []
+    seen_callouts: set[tuple[int, str]] = set()
+    templates = list(runtime_templates_qs(player))
+    for template in templates:
+        if not _template_available(player, template):
+            continue
+
+        for source in (template.discovery_policy or {}).get("sources", []):
+            if not isinstance(source, dict):
+                continue
+            if not _room_prompt_source_matches_room_id(
+                template,
+                source,
+                room_id=room_id,
+            ):
+                continue
+
+            callout_text = _room_prompt_source_callout(source)
+            if not callout_text:
+                continue
+
+            dedupe_key = (template.id, callout_text)
+            if dedupe_key in seen_callouts:
+                continue
+            seen_callouts.add(dedupe_key)
+            callouts.append(
+                {
+                    "slug": template.slug,
+                    "text": callout_text,
+                    "indicator": "!",
+                    "command": "inspect",
+                }
+            )
+
+    callouts.sort(key=lambda callout: (callout.get("text") or "").lower())
+    return callouts
 
 
 def available_npc_dialogue_opportunities_for_room_mobs(player, room_mobs: Iterable) -> dict[int, list[dict]]:

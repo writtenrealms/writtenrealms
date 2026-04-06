@@ -7,8 +7,10 @@ from typing import Any
 from core.utils import format_actor_msg
 from quests.entity_refs import resolve_template_ref_id
 from quests.services.discovery import (
+    available_room_prompt_opportunities_for_room,
     available_npc_dialogue_opportunities_for_mob_template,
     available_npc_dialogue_opportunities_for_room_mobs,
+    room_prompt_callouts_for_room,
 )
 from quests.services.engine import active_instances_qs, get_step
 from quests.services.predicates import evaluate_condition
@@ -40,6 +42,20 @@ def _event_target_template_id(event_data: dict[str, Any] | None) -> int | None:
         return None
 
 
+def _event_target_room_id(event_data: dict[str, Any] | None) -> int | None:
+    if not isinstance(event_data, dict):
+        return None
+    if str(event_data.get("target_type") or "").strip().lower() != "room":
+        return None
+    target = event_data.get("target")
+    if not isinstance(target, dict):
+        return None
+    try:
+        return int(target.get("id") or 0) or None
+    except (TypeError, ValueError):
+        return None
+
+
 def _mob_selector_from_target(target_payload: dict[str, Any] | None) -> str | None:
     if not isinstance(target_payload, dict):
         return None
@@ -51,6 +67,33 @@ def _mob_selector_from_target(target_payload: dict[str, Any] | None) -> str | No
     if name:
         return name.split()[-1]
     return None
+
+
+def _presented_opportunity_events(player, opportunities: list[dict[str, Any]]) -> list[GameEvent]:
+    if not opportunities:
+        return []
+
+    blocks: list[str] = []
+    for opportunity in opportunities:
+        title = str(opportunity.get("name") or opportunity.get("slug") or "Quest").strip()
+        body = str(((opportunity.get("text") or {}).get("body")) or "").strip()
+        recap = str(opportunity.get("recap") or "").strip()
+        lines = [f"Quest available: {title}"]
+        if body:
+            lines.append(body)
+        elif recap:
+            lines.append(recap)
+        lines.append(f"Accept with: quest accept {opportunity.get('slug')}")
+        blocks.append("\n".join(lines))
+
+    return [
+        GameEvent(
+            type="quest.opportunity.presented",
+            recipients=[player.key],
+            data={"opportunities": opportunities},
+            text="\n\n".join(blocks),
+        )
+    ]
 
 
 def _inventory_template_counts(player) -> Counter:
@@ -430,6 +473,19 @@ def room_mob_quest_indicator_map(player, room_mobs) -> dict[int, dict[str, bool]
     return indicators
 
 
+def room_quest_callouts(player, room_id: int | None = None) -> list[dict[str, Any]]:
+    return room_prompt_callouts_for_room(
+        player,
+        room_id or getattr(player, "room_id", None),
+    )
+
+
+def build_inspect_guidance_events(player, event_data: dict[str, Any] | None) -> list[GameEvent]:
+    room_id = _event_target_room_id(event_data) or getattr(player, "room_id", None)
+    opportunities = available_room_prompt_opportunities_for_room(player, room_id)
+    return _presented_opportunity_events(player, opportunities)
+
+
 def build_talk_guidance_events(player, event_data: dict[str, Any] | None) -> list[GameEvent]:
     target_payload = event_data.get("target") if isinstance(event_data, dict) else None
     mob_template_id = _event_target_template_id(event_data)
@@ -438,26 +494,7 @@ def build_talk_guidance_events(player, event_data: dict[str, Any] | None) -> lis
 
     opportunities = available_npc_dialogue_opportunities_for_mob_template(player, mob_template_id)
     if opportunities:
-        blocks: list[str] = []
-        for opportunity in opportunities:
-            title = str(opportunity.get("name") or opportunity.get("slug") or "Quest").strip()
-            body = str(((opportunity.get("text") or {}).get("body")) or "").strip()
-            recap = str(opportunity.get("recap") or "").strip()
-            lines = [f"Quest available: {title}"]
-            if body:
-                lines.append(body)
-            elif recap:
-                lines.append(recap)
-            lines.append(f"Accept with: quest accept {opportunity.get('slug')}")
-            blocks.append("\n".join(lines))
-        return [
-            GameEvent(
-                type="quest.opportunity.presented",
-                recipients=[player.key],
-                data={"opportunities": opportunities},
-                text="\n\n".join(blocks),
-            )
-        ]
+        return _presented_opportunity_events(player, opportunities)
 
     hint_text = _active_item_turn_in_hint(
         player,

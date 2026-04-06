@@ -64,6 +64,7 @@
         <div class="group-title">Information</div>
         <div class="cmds">
           <div class="cmd" @click="cmdHelp('look')">look</div>
+          <div class="cmd" @click="cmdHelp('inspect')">inspect</div>
           <div class="cmd" @click="cmdHelp('stats')">stats</div>
           <div class="cmd" @click="cmdHelp('inventory')">inventory</div>
           <div class="cmd" @click="cmdHelp('who')">who</div>

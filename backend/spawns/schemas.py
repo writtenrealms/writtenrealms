@@ -328,6 +328,14 @@ class RoomAction(BaseModel):
     display_action_in_room: bool = True
 
 
+class RoomQuestCallout(BaseModel):
+    """Quest callout shown directly in the room view."""
+    slug: str
+    text: str
+    indicator: str = "!"
+    command: str = "inspect"
+
+
 class MapRoom(BaseModel):
     """
     Simplified room data for the minimap.
@@ -387,6 +395,7 @@ class Room(BaseModel):
     houses: List[House] = Field(default_factory=list)
     details: List[str] = Field(default_factory=list)
     flags: List[str] = Field(default_factory=list)
+    quest_callouts: List[RoomQuestCallout] = Field(default_factory=list)
 
     # Exits
     north: Optional[str] = None
