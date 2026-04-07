@@ -110,6 +110,9 @@ def resolve_text_handler(
     """
     command = command.lower()
     for text_command, handler in iter_text_handlers(include_builder=include_builder):
+        if text_command == command:
+            return text_command, handler
+    for text_command, handler in iter_text_handlers(include_builder=include_builder):
         if text_command.startswith(command):
             return text_command, handler
     return None

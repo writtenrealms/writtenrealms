@@ -128,12 +128,12 @@ class InspectHandler(CommandHandler):
 @register_handler
 class InventoryHandler(CommandHandler):
     command_type = "inventory"
-    text_commands = ("inventory",)
+    text_commands = ("inventory", "inv", "i")
     help = {
         "name": "Inventory",
-        "format": "inventory",
+        "format": "inventory | inv | i",
         "description": "Show items currently carried by your character.",
-        "examples": ["inventory"],
+        "examples": ["inventory", "inv", "i"],
     }
 
     def handle(self, ctx: CommandContext) -> None:

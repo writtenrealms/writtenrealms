@@ -51,6 +51,27 @@ class TestInventoryCommand(WorldTestCase):
         self.assertIn("Steel Dagger", message["text"])
         self.assertNotIn("Unnamed Item", message["text"])
 
+    def test_inventory_short_alias_i_resolves_to_inventory_not_inspect(self):
+        template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Apple",
+        )
+        Item.objects.create(
+            world=self.spawn_world,
+            container=self.player,
+            template=template,
+            name=template.name,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "i")
+
+        inventory_message = self._message_by_type(messages, "cmd.inventory.success")
+        self.assertIsNotNone(inventory_message)
+        self.assertIn("Apple", inventory_message["text"])
+        self.assertIsNone(self._message_by_type(messages, "cmd.inspect.success"))
+        self.assertIsNone(self._message_by_type(messages, "cmd.inspect.error"))
+
 
 class TestDropCommand(WorldTestCase):
     def _message_by_type(self, messages, message_type):
