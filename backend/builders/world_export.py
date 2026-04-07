@@ -564,7 +564,11 @@ def _canonicalize_quest_node(node: Any, *, world: World) -> Any:
 
     canonical = {}
     for key, value in node.items():
-        if key in {"room", "room_id"} and str(node.get("type") or "").strip().lower() == "room_prompt":
+        if key in {"room", "room_id"} and (
+            str(node.get("type") or "").strip().lower() == "room_prompt"
+            or "item_template" in node
+            or "item_template_id" in node
+        ):
             canonical["room"] = _canonicalize_room_ref(value, world=world)
             continue
         if key in {"mob_template", "mob_template_id"}:

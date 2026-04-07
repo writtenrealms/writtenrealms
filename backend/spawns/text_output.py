@@ -44,6 +44,9 @@ def _render_room_lines(
         if not line:
             item_name = item.get("name") or "item"
             line = "{} lies here.".format(_capfirst(item_name))
+        indicator = str(item.get("indicator") or "").strip()
+        if indicator:
+            line = f"{line} [ {indicator} ]"
         lines.append(line)
 
     for char in room.get("chars") or []:

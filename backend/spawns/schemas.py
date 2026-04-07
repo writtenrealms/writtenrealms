@@ -72,6 +72,7 @@ class Item(BaseModel):
     keywords: str = ""
     keyword: Optional[str] = None  # First keyword
     label: Optional[str] = None
+    indicator: Optional[str] = None
 
     # Upgrades
     upgrade_cost: int = 0

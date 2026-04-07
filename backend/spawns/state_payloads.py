@@ -16,6 +16,7 @@ from config import constants as adv_consts
 from core.computations import compute_stats
 from core.scoped_state import STATE_SCOPE_WORLD, get_state_snapshot
 from quests.services.interactions import room_mob_quest_indicator_map, room_quest_callouts
+from quests.services.room_items import serialized_quest_room_items_for_room
 from spawns.models import DoorState, Item, Mob, Player
 from spawns.schemas import (
     Actor,
@@ -473,6 +474,11 @@ def serialize_room(
         room.inventory.filter(is_pending_deletion=False).select_related("template", "currency"),
         viewer=viewer,
     )
+    if isinstance(viewer, Player):
+        room_inventory.extend(
+            ItemSchema(**payload)
+            for payload in serialized_quest_room_items_for_room(viewer, room.id)
+        )
 
     room_players = room.players.filter(in_game=True).select_related("user", "equipment")
     room_mobs = list(room.mobs.select_related("template"))

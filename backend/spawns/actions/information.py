@@ -17,6 +17,7 @@ from spawns.state_payloads import (
     serialize_room,
 )
 from quests.services.interactions import room_mob_quest_indicator_map
+from quests.services.room_items import find_quest_room_item_target
 from spawns.text_output import render_event_text
 
 
@@ -72,6 +73,29 @@ class LookAction:
                 data = {
                     "actor": actor_payload.model_dump(),
                     "target": target_payload.model_dump(),
+                    "target_type": "item",
+                }
+                text = render_event_text("cmd.look.success", data, viewer=player)
+                return ActionResult(
+                    events=[
+                        GameEvent(
+                            type="cmd.look.success",
+                            recipients=[player.key],
+                            data=data,
+                            text=text,
+                        )
+                    ]
+                )
+
+            quest_room_item_target = find_quest_room_item_target(
+                player,
+                room.id,
+                normalized_target,
+            )
+            if quest_room_item_target is not None:
+                data = {
+                    "actor": actor_payload.model_dump(),
+                    "target": quest_room_item_target.to_item_payload(),
                     "target_type": "item",
                 }
                 text = render_event_text("cmd.look.success", data, viewer=player)

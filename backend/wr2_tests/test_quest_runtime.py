@@ -15,6 +15,7 @@ from spawns.handlers import dispatch_command
 from spawns.models import Item
 from quests.models import QuestInstance, QuestTemplate
 from tests.base import WorldTestCase
+from worlds.models import Room
 from wr2_tests.utils import capture_game_messages, dispatch_text_command
 
 
@@ -814,6 +815,177 @@ class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
         self.assertIsNotNone(resolved_message)
         self.assertIn("Coin", resolved_message["text"])
         self.assertIn("Removed quest item", resolved_message["text"])
+
+
+class TestQuestRoomItemsRuntime(QuestRuntimeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.back_room = Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Back Room",
+            x=self.room.x + 1,
+            y=self.room.y,
+            z=self.room.z,
+        )
+        self.room.east = self.back_room
+        self.room.save(update_fields=["east"])
+        self.back_room.west = self.room
+        self.back_room.save(update_fields=["west"])
+
+        self.keg_template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Saloon Keg",
+            slug="saloon_keg",
+            type=adv_consts.ITEM_TYPE_QUEST,
+            description="A stout wooden keg stamped with the saloon's brand.",
+            keywords="saloon keg keg",
+        )
+        self.satchel_template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Satchel",
+            keywords="satchel",
+            type=adv_consts.ITEM_TYPE_CONTAINER,
+        )
+        self.chest_template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Chest",
+            keywords="chest",
+            type=adv_consts.ITEM_TYPE_CONTAINER,
+        )
+        self.create_runtime_quest(
+            slug="saloon_keg_run",
+            name="A Keg for the Bar",
+            discovery_policy={
+                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "visible_if": {},
+                "accept_if": {},
+                "salience": 15,
+                "cooldown_seconds": 0,
+            },
+            steps=[
+                {
+                    "id": "fetch_keg",
+                    "kind": "objective",
+                    "recap": "Fetch a keg from the back room.",
+                    "room_items": [
+                        {
+                            "id": "saloon_keg",
+                            "room": f"room.{self.back_room.id}",
+                            "item_template": self.keg_template.slug,
+                            "ground_description": "A full saloon keg rests here.",
+                        }
+                    ],
+                },
+                {
+                    "id": "resolved",
+                    "kind": "resolution",
+                    "recap": "Done.",
+                },
+            ],
+        )
+
+    def test_active_room_item_appears_in_room_and_can_be_claimed_with_get(self):
+        watcher = self.create_player("Watcher", user=self.create_user("watcher@example.com"), room=self.back_room)
+        watcher.in_game = True
+        watcher.save(update_fields=["in_game"])
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest accept saloon_keg_run")
+
+        with capture_game_messages() as move_messages:
+            dispatch_text_command(self.player.id, "east")
+
+        move_message = self._message_by_type(move_messages, "cmd.move.success")
+        self.assertIsNotNone(move_message)
+        room_inventory = move_message["data"]["room"]["inventory"]
+        keg_entry = next((entry for entry in room_inventory if entry["name"] == "Saloon Keg"), None)
+        self.assertIsNotNone(keg_entry)
+        self.assertEqual(keg_entry["indicator"], "*")
+        self.assertIn("[ * ]", move_message["text"])
+
+        with capture_game_messages() as get_messages:
+            dispatch_text_command(self.player.id, "get keg")
+
+        self.assertEqual(
+            self.player.inventory.filter(template=self.keg_template).count(),
+            1,
+        )
+        get_message = self._message_by_type(get_messages, "cmd.get.success")
+        self.assertIsNotNone(get_message)
+        self.assertIn("Saloon Keg", get_message["text"])
+        self.assertFalse(
+            any(
+                msg["message"].get("type") == "notification.cmd.get.success"
+                for msg in get_messages
+            )
+        )
+        self.assertFalse(
+            any(entry["name"] == "Saloon Keg" for entry in get_message["data"]["room"]["inventory"])
+        )
+
+        quest_instance = QuestInstance.objects.get(player=self.player, template__slug="saloon_keg_run")
+        self.assertIn("granted_item_ids", quest_instance.local_state)
+        self.assertIn("room_item_claims", quest_instance.local_state)
+
+    def test_look_can_target_visible_quest_room_item(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest accept saloon_keg_run")
+            dispatch_text_command(self.player.id, "east")
+
+        with capture_game_messages() as look_messages:
+            dispatch_text_command(self.player.id, "look keg")
+
+        look_message = self._message_by_type(look_messages, "cmd.look.success")
+        self.assertIsNotNone(look_message)
+        self.assertEqual(look_message["data"]["target_type"], "item")
+        self.assertEqual(look_message["data"]["target"]["type"], adv_consts.ITEM_TYPE_QUEST)
+        self.assertEqual(look_message["data"]["target"]["indicator"], "*")
+        self.assertIn("stout wooden keg", look_message["text"].lower())
+
+    def test_bound_quest_item_cannot_be_dropped_or_put_in_room_container(self):
+        chest = Item.objects.create(
+            world=self.spawn_world,
+            container=self.back_room,
+            template=self.chest_template,
+            name=self.chest_template.name,
+            type=adv_consts.ITEM_TYPE_CONTAINER,
+            is_pickable=False,
+        )
+        satchel = Item.objects.create(
+            world=self.spawn_world,
+            container=self.player,
+            template=self.satchel_template,
+            name=self.satchel_template.name,
+            type=adv_consts.ITEM_TYPE_CONTAINER,
+        )
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "quest accept saloon_keg_run")
+            dispatch_text_command(self.player.id, "east")
+            dispatch_text_command(self.player.id, "get keg")
+
+        with capture_game_messages() as drop_messages:
+            dispatch_text_command(self.player.id, "drop keg")
+
+        drop_message = self._message_by_type(drop_messages, "cmd.drop.error")
+        self.assertIsNotNone(drop_message)
+        self.assertIn("Quest items stay with you", drop_message["text"])
+
+        with capture_game_messages() as put_room_messages:
+            dispatch_text_command(self.player.id, "put keg chest")
+
+        put_room_message = self._message_by_type(put_room_messages, "cmd.put.error")
+        self.assertIsNotNone(put_room_message)
+        self.assertIn("Quest items can only be carried or turned in", put_room_message["text"])
+
+        with capture_game_messages() as put_bag_messages:
+            dispatch_text_command(self.player.id, "put keg satchel")
+
+        put_bag_message = self._message_by_type(put_bag_messages, "cmd.put.success")
+        self.assertIsNotNone(put_bag_message)
+        keg_item = Item.objects.get(template=self.keg_template)
+        self.assertEqual(keg_item.container_id, satchel.id)
 
 
 class TestQuestRepeatabilityRuntime(QuestRuntimeTestCase):

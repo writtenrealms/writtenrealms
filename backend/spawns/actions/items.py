@@ -6,6 +6,11 @@ from typing import Callable
 from django.db import transaction
 
 from config import constants as adv_consts
+from quests.services.room_items import (
+    QuestRoomItemProjection,
+    claim_quest_room_item,
+    quest_room_item_projections_for_room,
+)
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.targeting import resolve_room_mob_target
 from spawns.events import GameEvent
@@ -31,21 +36,48 @@ def _tokenize_keywords(value: str) -> list[str]:
     return [token for token in re.split(r"\W+", value.lower()) if token]
 
 
-def _item_tokens(item: Item) -> set[str]:
-    keywords = item.keywords or ""
-    if not keywords and item.template:
-        keywords = item.template.keywords or ""
-    if not keywords:
-        keywords = resolve_item_name(item)
+def _candidate_name(item: Item | QuestRoomItemProjection) -> str:
+    if isinstance(item, Item):
+        return resolve_item_name(item)
+    return str(item.name or "").strip()
+
+
+def _candidate_keywords(item: Item | QuestRoomItemProjection) -> str:
+    keywords = str(getattr(item, "keywords", "") or "").strip()
+    if keywords:
+        return keywords
+    if isinstance(item, Item) and item.template:
+        keywords = str(item.template.keywords or "").strip()
+        if keywords:
+            return keywords
+    return _candidate_name(item)
+
+
+def _candidate_type(item: Item | QuestRoomItemProjection) -> str:
+    if isinstance(item, Item):
+        return item.type or (item.template.type if item.template else "")
+    return str(item.type or "").strip()
+
+
+def _item_tokens(item: Item | QuestRoomItemProjection) -> set[str]:
+    keywords = _candidate_keywords(item)
     tokens = set(_tokenize_keywords(keywords))
     tokens.add("item")
+    item_type = _candidate_type(item)
+    if item_type == adv_consts.ITEM_TYPE_CONTAINER:
+        tokens.add("container")
+    elif item_type == adv_consts.ITEM_TYPE_CORPSE:
+        tokens.add("corpse")
+    elif item_type == adv_consts.ITEM_TYPE_TRASH:
+        tokens.add("trash")
     return tokens
 
 
-def _item_matches(item: Item, token: str) -> bool:
+def _item_matches(item: Item | QuestRoomItemProjection, token: str) -> bool:
     if not token:
         return False
-    if item.key and item.key.lower() == token:
+    item_key = str(getattr(item, "key", "") or "").lower()
+    if item_key and item_key == token:
         return True
     return token in _item_tokens(item)
 
@@ -59,12 +91,12 @@ def _is_container_item(item: Item) -> bool:
 
 
 def _select_items(
-    items: list[Item],
+    items: list[Item | QuestRoomItemProjection],
     selector: str,
     *,
     empty_error: str,
     not_found_error: Callable[[str], str],
-) -> list[Item]:
+) -> list[Item | QuestRoomItemProjection]:
     if not selector:
         raise ActionError(empty_error, code="missing_item")
 
@@ -142,6 +174,33 @@ def _room_items(room: Room) -> list[Item]:
     )
 
 
+def _visible_room_items(
+    player: Player,
+    room: Room,
+) -> list[Item | QuestRoomItemProjection]:
+    room_items: list[Item | QuestRoomItemProjection] = [
+        item for item in _room_items(room) if item.is_pickable
+    ]
+    room_items.extend(quest_room_item_projections_for_room(player, room.id))
+    return room_items
+
+
+def _room_backed_candidates(
+    items: list[Item | QuestRoomItemProjection],
+) -> list[Item]:
+    return [item for item in items if isinstance(item, Item)]
+
+
+def _quest_room_item_candidates(
+    items: list[Item | QuestRoomItemProjection],
+) -> list[QuestRoomItemProjection]:
+    return [item for item in items if isinstance(item, QuestRoomItemProjection)]
+
+
+def _is_bound_quest_item(item: Item) -> bool:
+    return item.type == adv_consts.ITEM_TYPE_QUEST
+
+
 def _resolve_accessible_container(player: Player, room: Room, selector: str) -> Item:
     if not selector:
         raise ActionError("From where?", code="missing_container")
@@ -183,6 +242,11 @@ class DropAction:
             room = Room.objects.get(pk=player.room_id)
             items = _select_inventory_items(player, selector)
             for item in items:
+                if _is_bound_quest_item(item):
+                    raise ActionError(
+                        "Quest items stay with you until you turn them in.",
+                        code="quest_item_bound",
+                    )
                 item.container = room
                 item.save(update_fields=["container_type", "container_id"])
 
@@ -272,7 +336,7 @@ class GetAction:
                     ),
                 )
             else:
-                room_items = [item for item in _room_items(room) if item.is_pickable]
+                room_items = _visible_room_items(player, room)
                 if not room_items:
                     raise ActionError("There is nothing here to take.", code="empty_room")
                 selected_items = _select_items(
@@ -282,7 +346,10 @@ class GetAction:
                     not_found_error=lambda token: f"You don't see a {token} here.",
                 )
 
-            item_ids = [item.id for item in selected_items]
+            room_backed_items = _room_backed_candidates(selected_items)
+            quest_room_items = _quest_room_item_candidates(selected_items)
+
+            item_ids = [item.id for item in room_backed_items]
             locked_items = {
                 item.id: item
                 for item in Item.objects.select_for_update()
@@ -294,6 +361,15 @@ class GetAction:
                 item.container = player
                 item.save(update_fields=["container_type", "container_id"])
 
+            claimed_items: list[Item] = []
+            for quest_room_item in quest_room_items:
+                claimed_item = claim_quest_room_item(player, quest_room_item)
+                if claimed_item is not None:
+                    claimed_items.append(claimed_item)
+
+            if not moved_items and not claimed_items:
+                raise ActionError("You don't see that here.", code="item_not_found")
+
         updated_player = get_player_with_related(player_id)
         actor_payload = serialize_actor(updated_player, updated_player.room)
         room_payload = serialize_room(
@@ -302,7 +378,10 @@ class GetAction:
             {},
             viewer=updated_player,
         )
-        item_payloads = [serialize_item(item).model_dump() for item in moved_items]
+        item_payloads = [
+            serialize_item(item).model_dump()
+            for item in [*moved_items, *claimed_items]
+        ]
 
         data = {
             "actor": actor_payload.model_dump(),
@@ -323,16 +402,21 @@ class GetAction:
             )
         ]
 
-        if not updated_player.is_invisible and _room_visibility_target(source_container, room):
+        if (
+            not updated_player.is_invisible
+            and moved_items
+            and _room_visibility_target(source_container, room)
+        ):
             recipients = (
                 Player.objects.filter(room_id=room.id, in_game=True)
                 .exclude(pk=updated_player.id)
                 .values_list("id", flat=True)
             )
             if recipients:
+                moved_item_payloads = [serialize_item(item).model_dump() for item in moved_items]
                 notify_data = {
                     "actor": serialize_char_from_player(updated_player).model_dump(),
-                    "items": item_payloads,
+                    "items": moved_item_payloads,
                 }
                 if source_container:
                     notify_data["source"] = serialize_item(source_container).model_dump()
@@ -385,6 +469,17 @@ class PutAction:
                 selected_items = [item for item in selected_items if item.id != target_container.id]
 
             for item in selected_items:
+                if _is_bound_quest_item(item):
+                    target_is_player_container = (
+                        getattr(target_container, "container_type", None) is not None
+                        and target_container.container_type.model == "player"
+                        and target_container.container_id == player.id
+                    )
+                    if not target_is_player_container:
+                        raise ActionError(
+                            "Quest items can only be carried or turned in.",
+                            code="quest_item_bound",
+                        )
                 if item.type == adv_consts.ITEM_TYPE_CONTAINER:
                     contained_ids = item.get_contained_ids()
                     if target_container.id in contained_ids:

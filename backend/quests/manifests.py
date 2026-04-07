@@ -23,6 +23,7 @@ from quests.models import (
     QuestArcTemplate,
     QuestTemplate,
 )
+from builders.models import ItemTemplate
 from worlds.models import World
 
 
@@ -486,6 +487,38 @@ def _validate_effect_template_refs(world: World, effects: list[dict[str, Any]] |
             )
 
 
+def _validate_step_room_items(world: World, room_items: list[dict[str, Any]] | None, field_name: str) -> None:
+    if not room_items:
+        return
+    for index, room_item in enumerate(room_items):
+        if not isinstance(room_item, dict):
+            continue
+        _validate_room_ref(
+            world,
+            room_item.get("room") or room_item.get("room_id"),
+            f"{field_name}[{index}].room",
+        )
+        item_template_ref = room_item.get("item_template") or room_item.get("item_template_id")
+        _validate_template_ref(
+            world,
+            item_template_ref,
+            "itemtemplate",
+            f"{field_name}[{index}].item_template",
+        )
+        item_template_id = resolve_template_ref_id(
+            world=world,
+            value=item_template_ref,
+            expected_type="itemtemplate",
+        )
+        if not item_template_id:
+            continue
+        item_template = ItemTemplate.objects.filter(pk=item_template_id).only("type").first()
+        if item_template and item_template.type != "quest":
+            raise serializers.ValidationError(
+                f"{field_name}[{index}].item_template must reference an item template of type 'quest'."
+            )
+
+
 def _validate_slot_schema_template_refs(world: World, slot_schema: dict[str, Any]) -> None:
     for slot_name, slot_spec in (slot_schema or {}).items():
         if not isinstance(slot_spec, dict):
@@ -544,6 +577,11 @@ def _validate_quest_template_refs(
     for step_index, step in enumerate(steps):
         if not isinstance(step, dict):
             continue
+        _validate_step_room_items(
+            world,
+            step.get("room_items"),
+            f"spec.steps[{step_index}].room_items",
+        )
         _validate_effect_template_refs(world, step.get("effects"), f"spec.steps[{step_index}].effects")
         for objective_index, objective in enumerate(step.get("objectives") or []):
             if not isinstance(objective, dict):
@@ -639,12 +677,29 @@ class QuestDiscoverySpec(BaseModel):
         return self
 
 
+class QuestRoomItemSpec(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    id: str
+    room: Any
+    item_template: Any
+    ground_description: str = ""
+
+    @model_validator(mode="after")
+    def validate_values(self):
+        room_item_id = self.id.strip()
+        if not room_item_id:
+            raise ValueError("room item ids cannot be blank")
+        self.id = room_item_id
+        return self
+
+
 class QuestStepSpec(BaseModel):
     model_config = ConfigDict(extra="allow")
     id: str
     kind: str
     recap: str = ""
     text: dict[str, Any] = Field(default_factory=dict)
+    room_items: list[QuestRoomItemSpec] = Field(default_factory=list)
     objectives: list[dict[str, Any]] = Field(default_factory=list)
     choices: list[dict[str, Any]] = Field(default_factory=list)
     transitions: list[dict[str, Any]] = Field(default_factory=list)

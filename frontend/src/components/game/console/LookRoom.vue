@@ -66,12 +66,14 @@
           <span v-interactive="{ target: item }" class="interactive" :class="[item.quality]"
             @click="onItemClick(item)">
             {{ itemGroundDescription(item) }}
+            <span v-if="item.indicator" class="quest-indicator-wrapper">[ <span class="quest-indicator">{{ item.indicator }}</span> ]</span>
             <template v-if="item.count && item.count > 1">[{{ item.count }}]</template>
           </span>
         </template>
         <template v-else>
           <span>
             {{ itemGroundDescription(item) }}
+            <span v-if="item.indicator" class="quest-indicator-wrapper">[ <span class="quest-indicator">{{ item.indicator }}</span> ]</span>
             <template v-if="item.count && item.count > 1">[{{ item.count }}]</template>
           </span>
         </template>
@@ -310,19 +312,19 @@ const motd_lines = computed(() => {
     opacity: 0.5;
   }
 
+  .quest-indicator-wrapper {
+    color: $color-text-gray;
+  }
+
+  .quest-indicator {
+    color: $color-secondary;
+    font-weight: bold;
+  }
+
   .room-quest-callout {
     display: flex;
     gap: 10px;
     align-items: baseline;
-
-    .quest-indicator-wrapper {
-      color: $color-text-gray;
-    }
-
-    .quest-indicator {
-      color: $color-secondary;
-      font-weight: bold;
-    }
   }
 }
 

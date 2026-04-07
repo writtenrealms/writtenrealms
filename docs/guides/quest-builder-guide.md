@@ -309,6 +309,7 @@ Common step fields:
 | `kind`    | `storylet`, `objective`, `resolution` | The manifest schema also accepts `branch` and `timer`, but the current runtime rejects them. |
 | `recap`   | string                                | Used heavily in quest info output and journal output.                                        |
 | `text`    | mapping                               | `text.body` is the common authored field for player-facing pitch/body text.                  |
+| `room_items` | list of room item mappings         | Viewer-specific quest pickups for the active step. They render in the room with `[ * ]` and are claimed with normal `get <item>`. |
 | `effects` | list of effect mappings               | Applied when the step is entered, including resolution steps.                                |
 
 
@@ -475,6 +476,11 @@ spec:
         body: |
           "Could you grab a keg from the back for me?" the bartender asks.
           "I can't leave the bar unattended."
+      room_items:
+        - id: saloon_keg
+          room: room@1,0,0
+          item_template: saloon_keg
+          ground_description: A full saloon keg rests here.
       objectives:
         - id: deliver_keg
           text: Bring the saloon keg to the bartender.
@@ -512,6 +518,9 @@ Notes:
 
 - `saloon_bartender` is a mob template slug reference.
 - `saloon_keg` is an item template slug reference.
+- `room_items` belongs on the active step, not in discovery. It makes the keg
+visible in the back room with `[ * ]` and lets the player use normal `get keg`.
+- Step room items only accept item templates of type `quest`.
 - The quest pitch text lives in the first step’s `text.body`.
 - The player still accepts explicitly with `quest accept saloon_keg_run`.
 - Turn-in happens with `give keg bartender`, not with `quest complete`.

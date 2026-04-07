@@ -253,6 +253,118 @@ spec:
             "A forgotten coat hangs over the back of a chair.",
         )
 
+    def test_apply_quest_manifest_accepts_step_room_items(self):
+        quest_item = ItemTemplate.objects.create(
+            world=self.world,
+            name="Saloon Keg",
+            slug="saloon_keg",
+            type="quest",
+        )
+
+        manifest = f"""
+kind: quest
+metadata:
+  world: world.{self.world.id}
+  slug: saloon_keg_run
+  name: A Keg for the Bar
+spec:
+  type: quest
+  scope: player
+  status: active
+  repeatability:
+    mode: never
+    cooldown_seconds: 0
+  max_active: 1
+  discovery:
+    sources:
+      - type: room_prompt
+        room: room.{self.room.id}
+    salience: 80
+  slots: {{}}
+  steps:
+    - id: fetch_keg
+      kind: objective
+      recap: Fetch the keg.
+      room_items:
+        - id: saloon_keg
+          room: room.{self.room.id}
+          item_template: {quest_item.slug}
+          ground_description: A full saloon keg rests here.
+    - id: resolved
+      kind: resolution
+      recap: Done.
+  rewards:
+    complete: []
+    compromised: []
+    failed_forward: []
+    expired: []
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+
+        quest = QuestTemplate.objects.get(slug="saloon_keg_run")
+        room_item = quest.graph["steps"][0]["room_items"][0]
+        self.assertEqual(room_item["id"], "saloon_keg")
+        self.assertEqual(room_item["item_template"], quest_item.slug)
+        self.assertEqual(room_item["room"], f"room.{self.room.id}")
+
+    def test_apply_quest_manifest_rejects_non_quest_step_room_item_templates(self):
+        inert_item = ItemTemplate.objects.create(
+            world=self.world,
+            name="Lantern",
+            slug="lantern",
+            type="inert",
+        )
+
+        manifest = f"""
+kind: quest
+metadata:
+  world: world.{self.world.id}
+  slug: invalid_pickup
+  name: Invalid Pickup
+spec:
+  type: quest
+  scope: player
+  status: active
+  repeatability:
+    mode: never
+    cooldown_seconds: 0
+  max_active: 1
+  discovery:
+    sources:
+      - type: room_prompt
+        room: room.{self.room.id}
+    salience: 80
+  slots: {{}}
+  steps:
+    - id: fetch
+      kind: objective
+      recap: Fetch it.
+      room_items:
+        - id: lantern
+          room: room.{self.room.id}
+          item_template: {inert_item.slug}
+    - id: resolved
+      kind: resolution
+      recap: Done.
+  rewards:
+    complete: []
+    compromised: []
+    failed_forward: []
+    expired: []
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("type 'quest'", str(resp.data).lower())
+
     def test_apply_quest_manifest_accepts_quest_completed_conditions_by_slug(self):
         prereq = QuestTemplate.objects.create(
             world=self.world,
