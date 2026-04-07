@@ -154,8 +154,7 @@ def _should_emit_available_event(matched_sources: list[dict]) -> bool:
     if not matched_sources:
         return False
     return any(
-        _source_type(source) != "npc_dialogue"
-        and _room_prompt_source_callout(source) is None
+        _source_type(source) not in {"npc_dialogue", "room_prompt"}
         for source in matched_sources
     )
 

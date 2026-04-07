@@ -107,11 +107,6 @@ class QuestRuntimeView(APIView):
         return super().handle_exception(exc)
 
 
-class QuestOpportunityListView(QuestRuntimeView):
-    def get(self, request, format=None):
-        return Response({"opportunities": list_opportunities(request.player, refresh=True)})
-
-
 class QuestOpportunityAcceptView(QuestRuntimeView):
     def post(self, request, slug, format=None):
         opportunities = {op["slug"]: op for op in list_opportunities(request.player, refresh=True)}
@@ -168,7 +163,6 @@ class QuestInstanceChooseView(QuestRuntimeView):
         return Response({"quest": payload, "text": info_text})
 
 
-quest_opportunity_list = QuestOpportunityListView.as_view()
 quest_opportunity_accept = QuestOpportunityAcceptView.as_view()
 quest_active_list = QuestActiveListView.as_view()
 quest_resolved_list = QuestResolvedListView.as_view()

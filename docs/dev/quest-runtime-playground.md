@@ -62,7 +62,6 @@ Implemented in this pass:
 - quest journal entries and info output
 - in-game `quest` command
 - runtime endpoints for:
-  - opportunities
   - active quests
   - resolved quests
   - info
@@ -88,9 +87,9 @@ Auto-start qualifying events currently are:
 - `cmd.look.success`
 - `cmd.move.success`
 
-Other commands such as `say`, `inspect`, `talk`, `give`, `kill`, and `quest
-opportunities` may still refresh discovery or progress active quests, but they
-do not trigger `auto_start`.
+Other commands such as `say`, `inspect`, `talk`, `give`, and `kill` may still
+refresh discovery or progress active quests, but they do not trigger
+`auto_start`.
 
 ## Prerequisites
 
@@ -160,13 +159,6 @@ COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec bac
   python scripts/quest_runtime_playground.py cmd --player <player_id> "look"
 ```
 
-Show current quest opportunities:
-
-```bash
-COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
-  python scripts/quest_runtime_playground.py opportunities --player <player_id>
-```
-
 Show current active quest list:
 
 ```bash
@@ -189,7 +181,6 @@ same text commands work there too:
 - `quest list`
 - `quest info <slug-or-id>`
 - `quest resolved`
-- `quest opportunities`
 - `quest accept <slug>`
 - `quest choose <slug-or-id> <choice_id>`
 - `quest abandon <slug-or-id>`
@@ -442,17 +433,13 @@ COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec bac
   python scripts/quest_runtime_playground.py cmd --player <player_id> "look"
 ```
 
-You should see a `quest.opportunity.available` message.
+You should see the authored room callout line with `[ ! ]`.
 
-If you author a `callout` on that `room_prompt` source instead, the room view
-shows the callout line with `[ ! ]` and you use `inspect` to present the quest
-pitch instead of getting the opportunity card automatically.
-
-You can confirm it explicitly:
+Use `inspect` to present the quest pitch:
 
 ```bash
 COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
-  python scripts/quest_runtime_playground.py cmd --player <player_id> "quest opportunities"
+  python scripts/quest_runtime_playground.py cmd --player <player_id> "inspect"
 ```
 
 ### Step 4: Accept And Begin It
@@ -800,7 +787,6 @@ What should happen:
 If you want to hit the HTTP endpoints directly instead of using the runtime
 playground script, the Phase 2 runtime currently exposes:
 
-- `GET /api/v1/game/quests/opportunities/`
 - `POST /api/v1/game/quests/opportunities/<slug>/accept/`
 - `GET /api/v1/game/quests/active/`
 - `GET /api/v1/game/quests/resolved/`

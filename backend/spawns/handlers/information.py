@@ -61,7 +61,7 @@ class InspectHandler(CommandHandler):
     help = {
         "name": "Inspect",
         "format": "inspect",
-        "description": "Inspect the room for room-based quest opportunities.",
+        "description": "Inspect the current room for quest callouts.",
         "details": [
             "`inspect` is the room-side counterpart to `talk <mob>`.",
         ],

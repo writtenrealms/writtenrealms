@@ -75,8 +75,8 @@ Implemented so far:
   - `cmd.look.success`
   - `cmd.move.success`
 - runtime command surface:
+  - `quest list`
   - `quest info`
-  - `quest opportunities`
   - `quest accept <slug>`
   - `quest choose <slug-or-id> <choice_id>`
   - `quest abandon <slug-or-id>`
@@ -98,7 +98,6 @@ Implemented so far:
   - `grant_xp`
   - constrained mob completion commands
 - runtime endpoints:
-  - `GET /game/quests/opportunities/`
   - `POST /game/quests/opportunities/<slug>/accept/`
   - `GET /game/quests/active/`
   - `GET /game/quests/resolved/`
@@ -452,7 +451,6 @@ Manifest create/update/delete behavior should match the trigger workflow:
 
 The player runtime surface should be explicit and service-backed.
 
-- `GET /api/v1/game/quests/opportunities/`
 - `POST /api/v1/game/quests/opportunities/<slug>/accept/`
 - `GET /api/v1/game/quests/active/`
 - `GET /api/v1/game/quests/completed/`
@@ -720,8 +718,8 @@ Completed in this pass:
   - `count`
   - `unique_count`
 - in-game command path exists:
+  - `quest list`
   - `quest info`
-  - `quest opportunities`
   - `quest accept`
   - `quest choose`
   - `quest abandon`

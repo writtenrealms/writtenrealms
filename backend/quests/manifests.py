@@ -560,6 +560,11 @@ def _validate_quest_template_refs(
                 source.get("room") or source.get("room_id"),
                 f"spec.discovery.sources[{index}].room",
             )
+            callout = str(source.get("callout") or "").strip()
+            if not callout:
+                raise serializers.ValidationError(
+                    f"spec.discovery.sources[{index}].callout is required for room_prompt sources."
+                )
         if source_type == "npc_dialogue":
             _validate_template_ref(
                 world,

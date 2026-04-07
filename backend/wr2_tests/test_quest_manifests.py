@@ -279,6 +279,7 @@ spec:
     sources:
       - type: room_prompt
         room: room.{self.room.id}
+        callout: A keg request has been posted here.
     salience: 80
   slots: {{}}
   steps:
@@ -338,6 +339,7 @@ spec:
     sources:
       - type: room_prompt
         room: room.{self.room.id}
+        callout: Something here is ready to be fetched.
     salience: 80
   slots: {{}}
   steps:
@@ -390,6 +392,7 @@ spec:
     sources:
       - type: room_prompt
         room: room.{self.room.id}
+        callout: A veteran notice hangs here.
     visible_if:
       quest_completed: {prereq.slug}
     accept_if:
@@ -443,6 +446,7 @@ spec:
     sources:
       - type: room_prompt
         room: room.{self.room.id}
+        callout: A blocked notice hangs here.
     visible_if:
       quest_completed: missing_prereq
     salience: 80
@@ -472,6 +476,53 @@ spec:
         self.assertEqual(resp.status_code, 400)
         self.assertIn("quest_completed", str(resp.data))
         self.assertIn("unknown questtemplate", str(resp.data).lower())
+
+    def test_apply_quest_manifest_rejects_room_prompt_without_callout(self):
+        manifest = f"""
+kind: quest
+metadata:
+  world: world.{self.world.id}
+  slug: missing_callout
+  name: Missing Callout
+spec:
+  type: quest
+  scope: player
+  status: active
+  repeatability:
+    mode: never
+    cooldown_seconds: 0
+  max_active: 1
+  discovery:
+    sources:
+      - type: room_prompt
+        room: room.{self.room.id}
+    salience: 80
+  slots: {{}}
+  steps:
+    - id: offer
+      kind: storylet
+      recap: Missing authored room callout.
+      choices:
+        - id: continue
+          text: Continue.
+          goto: resolved
+    - id: resolved
+      kind: resolution
+      recap: Done.
+  rewards:
+    complete: []
+    compromised: []
+    failed_forward: []
+    expired: []
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("callout", str(resp.data).lower())
+        self.assertIn("required", str(resp.data).lower())
 
     def test_apply_quest_manifest_rejects_removed_questlet_type(self):
         manifest = f"""

@@ -245,9 +245,10 @@ quest choose first_steps continue
 Quest resolved: First Steps
 You finished the lesson.
 
-quest opportunities
-Second Steps
+inspect
+Quest available: Second Steps
 A second lesson appears once the first is complete.
+Accept with: quest accept second_steps
 
 quest accept second_steps
 Quest started: Second Steps

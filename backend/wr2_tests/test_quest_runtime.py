@@ -14,6 +14,7 @@ from core.scoped_state import (
 from spawns.handlers import dispatch_command
 from spawns.models import Item
 from quests.models import QuestInstance, QuestTemplate
+from quests.services.discovery import list_opportunities
 from tests.base import WorldTestCase
 from worlds.models import Room
 from wr2_tests.utils import capture_game_messages, dispatch_text_command
@@ -178,9 +179,9 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
         self.assertNotIn("quest.instance.started", self._message_types(messages))
         self.assertFalse(QuestInstance.objects.filter(player=self.player, template__slug="tiny_hello").exists())
 
-    def test_listing_opportunities_does_not_trigger_auto_start(self):
+    def test_listing_active_quests_does_not_trigger_auto_start(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "quest opportunities")
+            dispatch_text_command(self.player.id, "quest list")
 
         self.assertIn("cmd.quest.success", self._message_types(messages))
         self.assertNotIn("quest.instance.started", self._message_types(messages))
@@ -288,7 +289,13 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
             slug="shrine_survey",
             name="Shrine Survey",
             discovery_policy={
-                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "sources": [
+                    {
+                        "type": "room_prompt",
+                        "room": f"room.{self.room.id}",
+                        "callout": "A weathered placard asks for a shrine survey.",
+                    }
+                ],
                 "visible_if": {},
                 "accept_if": {},
                 "salience": 20,
@@ -346,7 +353,10 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
         with capture_game_messages() as discovery_messages:
             dispatch_text_command(self.player.id, "look")
 
-        self.assertIn("quest.opportunity.available", self._message_types(discovery_messages))
+        self.assertNotIn("quest.opportunity.available", self._message_types(discovery_messages))
+        look_message = self._message_by_type(discovery_messages, "cmd.look.success")
+        self.assertIsNotNone(look_message)
+        self.assertIn("A weathered placard asks for a shrine survey.", look_message.get("text", ""))
         self.assertFalse(QuestInstance.objects.filter(player=self.player, template__slug="shrine_survey").exists())
 
         with capture_game_messages() as accept_messages:
@@ -396,15 +406,14 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
         self.assertEqual(update_message["data"]["updated_objective"]["progress"], "1/2")
         self.assertEqual(update_message["data"]["updated_objective"]["status"], "active")
 
-    def test_quest_opp_prefix_lists_opportunities(self):
+    def test_quest_opp_prefix_is_rejected_as_unknown(self):
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "quest opp")
 
-        list_message = self._message_by_type(messages, "cmd.quest.success")
-        self.assertIsNotNone(list_message)
-        self.assertEqual(list_message["data"]["subcommand"], "opportunities")
-        self.assertIn("Opportunities:", list_message["text"])
-        self.assertIn("shrine_survey", list_message["text"])
+        error_message = self._message_by_type(messages, "cmd.quest.error")
+        self.assertIsNotNone(error_message)
+        self.assertEqual(error_message["data"]["code"], "unknown_subcommand")
+        self.assertIn("opp", error_message["text"])
 
     def test_abandoned_non_repeatable_quest_can_be_reaccepted(self):
         with capture_game_messages():
@@ -430,12 +439,10 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
         self.assertEqual(resolved_message["data"]["subcommand"], "resolved")
         self.assertNotIn("shrine_survey", resolved_message["text"])
 
-        with capture_game_messages() as opportunities_messages:
-            dispatch_text_command(self.player.id, "quest opportunities")
-
-        opportunities_message = self._message_by_type(opportunities_messages, "cmd.quest.success")
-        self.assertIsNotNone(opportunities_message)
-        self.assertIn("shrine_survey", opportunities_message["text"])
+        self.assertIn(
+            "shrine_survey",
+            [opportunity["slug"] for opportunity in list_opportunities(self.player, refresh=True)],
+        )
 
         with capture_game_messages() as accept_again_messages:
             dispatch_text_command(self.player.id, "quest accept shrine_survey")
@@ -547,6 +554,7 @@ class TestPortableRoomRefsQuestRuntime(QuestRuntimeTestCase):
                     {
                         "type": "room_prompt",
                         "room": f"room@{self.room.x},{self.room.y},{self.room.z}",
+                        "callout": "A survey notice hangs here.",
                     }
                 ],
                 "visible_if": {},
@@ -606,7 +614,10 @@ class TestPortableRoomRefsQuestRuntime(QuestRuntimeTestCase):
         with capture_game_messages() as discovery_messages:
             dispatch_text_command(self.player.id, "look")
 
-        self.assertIn("quest.opportunity.available", self._message_types(discovery_messages))
+        self.assertNotIn("quest.opportunity.available", self._message_types(discovery_messages))
+        look_message = self._message_by_type(discovery_messages, "cmd.look.success")
+        self.assertIsNotNone(look_message)
+        self.assertIn("A survey notice hangs here.", look_message.get("text", ""))
 
         with capture_game_messages() as accept_messages:
             dispatch_text_command(self.player.id, "quest accept portable_shrine_survey")
@@ -658,7 +669,13 @@ class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
             slug="survey_route",
             name="Survey Route",
             discovery_policy={
-                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "sources": [
+                    {
+                        "type": "room_prompt",
+                        "room": f"room.{self.room.id}",
+                        "callout": "A survey route placard hangs here.",
+                    }
+                ],
                 "visible_if": {},
                 "accept_if": {},
                 "salience": 15,
@@ -857,7 +874,13 @@ class TestQuestRoomItemsRuntime(QuestRuntimeTestCase):
             slug="saloon_keg_run",
             name="A Keg for the Bar",
             discovery_policy={
-                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "sources": [
+                    {
+                        "type": "room_prompt",
+                        "room": f"room.{self.room.id}",
+                        "callout": "Gus looks like he needs a hand behind the bar.",
+                    }
+                ],
                 "visible_if": {},
                 "accept_if": {},
                 "salience": 15,
@@ -997,7 +1020,13 @@ class TestQuestRepeatabilityRuntime(QuestRuntimeTestCase):
             repeatability_mode="cooldown",
             repeatability_cooldown_seconds=60,
             discovery_policy={
-                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "sources": [
+                    {
+                        "type": "room_prompt",
+                        "room": f"room.{self.room.id}",
+                        "callout": "A trial marker stands ready here.",
+                    }
+                ],
                 "visible_if": {},
                 "accept_if": {},
                 "salience": 15,
@@ -1027,12 +1056,10 @@ class TestQuestRepeatabilityRuntime(QuestRuntimeTestCase):
         with capture_game_messages():
             dispatch_text_command(self.player.id, "quest choose cooldown_trial finish")
 
-        with capture_game_messages() as cooldown_messages:
-            dispatch_text_command(self.player.id, "quest opportunities")
-
-        cooldown_message = self._message_by_type(cooldown_messages, "cmd.quest.success")
-        self.assertIsNotNone(cooldown_message)
-        self.assertNotIn("cooldown_trial", cooldown_message["text"])
+        self.assertNotIn(
+            "cooldown_trial",
+            [opportunity["slug"] for opportunity in list_opportunities(self.player, refresh=True)],
+        )
 
         quest_instance = QuestInstance.objects.get(
             player=self.player,
@@ -1042,12 +1069,10 @@ class TestQuestRepeatabilityRuntime(QuestRuntimeTestCase):
         quest_instance.resolved_at = timezone.now() - timedelta(seconds=61)
         quest_instance.save(update_fields=["resolved_at", "modified_ts"])
 
-        with capture_game_messages() as expired_messages:
-            dispatch_text_command(self.player.id, "quest opportunities")
-
-        expired_message = self._message_by_type(expired_messages, "cmd.quest.success")
-        self.assertIsNotNone(expired_message)
-        self.assertIn("cooldown_trial", expired_message["text"])
+        self.assertIn(
+            "cooldown_trial",
+            [opportunity["slug"] for opportunity in list_opportunities(self.player, refresh=True)],
+        )
 
 
 class TestQuestRuntimeEndpoints(QuestRuntimeTestCase):
@@ -1059,7 +1084,13 @@ class TestQuestRuntimeEndpoints(QuestRuntimeTestCase):
             name="Campfire Note",
             quest_type="quest",
             discovery_policy={
-                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "sources": [
+                    {
+                        "type": "room_prompt",
+                        "room": f"room.{self.room.id}",
+                        "callout": "A note lies beside the fire.",
+                    }
+                ],
                 "visible_if": {},
                 "accept_if": {},
                 "salience": 10,
@@ -1082,15 +1113,8 @@ class TestQuestRuntimeEndpoints(QuestRuntimeTestCase):
             ],
         )
 
-    def test_runtime_endpoints_cover_opportunity_accept_choose_and_info(self):
+    def test_runtime_endpoints_cover_accept_choose_and_info(self):
         headers = {"HTTP_X_PLAYER_ID": str(self.player.id)}
-
-        opportunities_resp = self.client.get(
-            reverse("game-quest-opportunity-list"),
-            **headers,
-        )
-        self.assertEqual(opportunities_resp.status_code, 200)
-        self.assertEqual(opportunities_resp.data["opportunities"][0]["slug"], "campfire_note")
 
         accept_resp = self.client.post(
             reverse("game-quest-opportunity-accept", args=["campfire_note"]),
@@ -1605,7 +1629,13 @@ class TestQuestScopedState(QuestRuntimeTestCase):
             slug="weather_watch",
             name="Weather Watch",
             discovery_policy={
-                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "sources": [
+                    {
+                        "type": "room_prompt",
+                        "room": f"room.{self.room.id}",
+                        "callout": "A weather log waits on the wall.",
+                    }
+                ],
                 "visible_if": {"eq": ["state.world.weather", "stormy"]},
                 "accept_if": {},
                 "salience": 10,
@@ -1642,13 +1672,12 @@ class TestQuestScopedState(QuestRuntimeTestCase):
         )
 
     def test_quest_can_use_scoped_state_in_visibility_text_and_effects(self):
-        with capture_game_messages() as opportunities_messages:
-            dispatch_text_command(self.player.id, "quest opportunities")
-
-        opportunities_message = self._message_by_type(opportunities_messages, "cmd.quest.success")
-        self.assertIsNotNone(opportunities_message)
-        self.assertIn("weather_watch", opportunities_message.get("text", ""))
-        self.assertIn("The sky is stormy.", opportunities_message.get("text", ""))
+        opportunities = list_opportunities(self.player, refresh=True)
+        self.assertIn("weather_watch", [opportunity["slug"] for opportunity in opportunities])
+        weather_watch = next(
+            opportunity for opportunity in opportunities if opportunity["slug"] == "weather_watch"
+        )
+        self.assertEqual(weather_watch["recap"], "The sky is stormy.")
 
         with capture_game_messages() as accept_messages:
             dispatch_text_command(self.player.id, "quest accept weather_watch")
@@ -1708,7 +1737,13 @@ class TestQuestCompletionPrerequisites(QuestRuntimeTestCase):
             slug="gated_visible",
             name="Gated Visible",
             discovery_policy={
-                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "sources": [
+                    {
+                        "type": "room_prompt",
+                        "room": f"room.{self.room.id}",
+                        "callout": "A veteran task notice hangs here.",
+                    }
+                ],
                 "visible_if": {"quest_completed": self.first_steps.slug},
                 "accept_if": {},
                 "salience": 10,
@@ -1734,7 +1769,13 @@ class TestQuestCompletionPrerequisites(QuestRuntimeTestCase):
             slug="gated_visible_multi",
             name="Gated Visible Multi",
             discovery_policy={
-                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "sources": [
+                    {
+                        "type": "room_prompt",
+                        "room": f"room.{self.room.id}",
+                        "callout": "A second veteran notice hangs here.",
+                    }
+                ],
                 "visible_if": {
                     "all": [
                         {"quest_completed": self.first_steps.slug},
@@ -1765,7 +1806,13 @@ class TestQuestCompletionPrerequisites(QuestRuntimeTestCase):
             slug="gated_accept",
             name="Gated Accept",
             discovery_policy={
-                "sources": [{"type": "room_prompt", "room": f"room.{self.room.id}"}],
+                "sources": [
+                    {
+                        "type": "room_prompt",
+                        "room": f"room.{self.room.id}",
+                        "callout": "A sealed notice waits here.",
+                    }
+                ],
                 "visible_if": {},
                 "accept_if": {"quest_completed": self.first_steps.slug},
                 "salience": 10,
@@ -1789,12 +1836,7 @@ class TestQuestCompletionPrerequisites(QuestRuntimeTestCase):
         )
 
     def _opportunity_slugs(self):
-        resp = self.client.get(
-            reverse("game-quest-opportunity-list"),
-            **self.headers,
-        )
-        self.assertEqual(resp.status_code, 200)
-        return [opportunity["slug"] for opportunity in resp.data["opportunities"]]
+        return [opportunity["slug"] for opportunity in list_opportunities(self.player, refresh=True)]
 
     def test_visible_if_can_require_a_completed_quest_by_slug(self):
         self.assertNotIn("gated_visible", self._opportunity_slugs())

@@ -79,7 +79,6 @@ api_v1_urls = [
     path('game/enter/', spawn_views.EnterGame.as_view(), name='enter-game'),
     path('game/play/', spawn_views.PlayGame.as_view(), name='game-play'),
     path('game/lookup/<key>/', spawn_views.Lookup.as_view(), name='game-lookup'),
-    path('game/quests/opportunities/', quest_views.quest_opportunity_list, name='game-quest-opportunity-list'),
     path('game/quests/opportunities/<slug:slug>/accept/', quest_views.quest_opportunity_accept, name='game-quest-opportunity-accept'),
     path('game/quests/active/', quest_views.quest_active_list, name='game-quest-active-list'),
     path('game/quests/resolved/', quest_views.quest_resolved_list, name='game-quest-resolved-list'),

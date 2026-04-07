@@ -22,7 +22,6 @@ from spawns.handlers.base import (
 from spawns.handlers.registry import register_handler
 
 QUEST_SUBCOMMANDS = (
-    "opportunities",
     "list",
     "resolved",
     "accept",
@@ -30,9 +29,7 @@ QUEST_SUBCOMMANDS = (
     "abandon",
     "info",
 )
-QUEST_SUBCOMMAND_ALIASES = {
-    "offers": "opportunities",
-}
+QUEST_SUBCOMMAND_ALIASES = {}
 
 
 def _render_quest_list(title: str, quests: list[dict]) -> str:
@@ -59,23 +56,21 @@ class QuestCommandHandler(CommandHandler):
     help = {
         "name": "Quest",
         "format": "quest [subcommand]",
-        "description": "Review your active quests, resolved quests, opportunities, and quest choices.",
+        "description": "Review your active quests, resolved quests, and quest choices.",
         "details": [
             "If you omit the subcommand, `quest` defaults to `quest list`.",
-            "`list`: List your active quests.",
-            "`info <slug-or-id>`: Show detailed information for one specific quest.",
-            "`resolved`: List your resolved quests.",
-            "`opportunities`: List quests you can currently accept.",
-            "`accept <slug>`: Accept an available quest opportunity.",
-            "`choose <slug-or-id> <choice_id>`: Make a quest choice for an active quest.",
-            "`abandon <slug-or-id>`: Abandon an active quest.",
+            "* list: List your active quests.",
+            "* info <slug>: Show detailed information for one specific quest.",
+            "* resolved: List your resolved quests.",
+            "* accept <slug>: Accept an available quest opportunity.",
+            "* choose <slug> <choice_id>: Make a quest choice for an active quest.",
+            "* abandon <slug>: Abandon an active quest.",
         ],
         "examples": [
             "quest",
             "quest list",
             "quest info tiny_hello",
             "quest resolved",
-            "quest opportunities",
             "quest accept shrine_survey",
             "quest choose tiny_hello continue",
             "quest abandon tiny_hello",
@@ -138,16 +133,6 @@ class QuestCommandHandler(CommandHandler):
 
         try:
             subcommand = self._resolve_subcommand(args[0] if args else None)
-            if subcommand == "opportunities":
-                opportunities = list_opportunities(ctx.player, refresh=True)
-                self._publish_text(
-                    ctx,
-                    _render_quest_list("Opportunities:", opportunities),
-                    subcommand=subcommand,
-                    data={"opportunities": opportunities},
-                )
-                return
-
             if subcommand == "list":
                 quests = list_active_instances(ctx.player)
                 self._publish_text(

@@ -33,7 +33,7 @@ That means:
 - connecting or reconnecting can now start an `auto_start` quest immediately
 - looking around can start one
 - entering a new room can start one
-- `say`, `talk`, `give`, `kill`, and `quest opportunities` do not auto-start
+- `say`, `talk`, `give`, `kill`, and `quest list` do not auto-start
 quests, even though some of those flows still refresh quest discovery or
 progression for other reasons
 
@@ -43,7 +43,7 @@ This is the intended player loop right now:
 
 1. The player sees a quest source in the world.
 2. If the source is an NPC dialogue offer, the room UI shows `[ ! ]` on that mob.
-3. If the source is a room prompt with a `callout`, the room UI shows the authored callout text with `[ ! ]`.
+3. If the source is a room prompt, the room UI shows the authored callout text with `[ ! ]`.
 4. The player uses an in-world verb like `talk bartender` or `inspect`.
 5. The game shows the authored pitch text and an explicit accept command:
   `quest accept <quest-slug>`.
@@ -185,7 +185,7 @@ Supported discovery source shapes:
 | `type`         | Required fields                     | Behavior                                                                                                                      |
 | -------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `auto_start`   | none                                | Starts automatically on `cmd.state.sync.success`, `cmd.look.success`, or `cmd.move.success`.                                  |
-| `room_prompt`  | `room` or `room_id`; optional `callout` | Shows as an opportunity when the player is in that room. The room reference can be an integer id, `room.<id>`, or portable `room@x,y,z`. If `callout` is authored, the room view shows that line with `[ ! ]` and the player can use `inspect` to see the quest pitch. |
+| `room_prompt`  | `room` or `room_id`, plus `callout`     | Shows as an opportunity when the player is in that room. The room reference can be an integer id, `room.<id>`, or portable `room@x,y,z`. The room view shows the authored callout line with `[ ! ]` and the player can use `inspect` to see the quest pitch. |
 | `npc_dialogue` | `mob_template` or `mob_template_id` | Shows through NPC dialogue and room UI markers. Mob refs can be ids, `mobtemplate.<id>`, `mobtemplate.<slug>`, or bare slugs. |
 
 

@@ -214,14 +214,12 @@ const kicker = computed(() => {
   if (type === "quest.instance.resolved") return "Quest Resolved";
   if (type === "cmd.quest.error") return "Quest Error";
   if (type === "cmd.quest.success") {
-    if (questSubcommand.value === "opportunities") return "Quest Opportunities";
     if (questSubcommand.value === "resolved") return "Resolved Quests";
     if (questSubcommand.value === "list") return "Active Quests";
     if (questSubcommand.value === "info") return "Quest Info";
   }
 
   const rawText = String(props.message.text || "").toLowerCase();
-  if (rawText.startsWith("opportunities:")) return "Quest Opportunities";
   if (rawText.startsWith("resolved quests:")) return "Resolved Quests";
   if (rawText.startsWith("active quests:")) return "Active Quests";
   return "Quest";

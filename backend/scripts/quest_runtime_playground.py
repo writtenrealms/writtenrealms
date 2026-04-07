@@ -23,7 +23,6 @@ from django.core.wsgi import get_wsgi_application
 
 application = get_wsgi_application()
 
-from quests.services.discovery import list_opportunities
 from quests.services.engine import (
     QuestRuntimeError,
     info_for_player,
@@ -142,11 +141,6 @@ def cmd_dispatch(args):
         print()
 
 
-def cmd_opportunities(args):
-    player = _player(args.player)
-    _print_json({"opportunities": list_opportunities(player, refresh=True)})
-
-
 def cmd_list(args):
     player = _player(args.player)
     _print_json({"quests": list_active_instances(player)})
@@ -184,10 +178,6 @@ def main():
     dispatch_parser.add_argument("--player", type=int, required=True)
     dispatch_parser.add_argument("text")
     dispatch_parser.set_defaults(func=cmd_dispatch)
-
-    opp_parser = subparsers.add_parser("opportunities", help="List current quest opportunities")
-    opp_parser.add_argument("--player", type=int, required=True)
-    opp_parser.set_defaults(func=cmd_opportunities)
 
     list_parser = subparsers.add_parser("list", help="List active quests")
     list_parser.add_argument("--player", type=int, required=True)
