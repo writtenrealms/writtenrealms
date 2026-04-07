@@ -105,6 +105,28 @@ An objective is defined by:
 - how progress is accumulated
 - how completion is determined
 
+### Quest Item
+
+A quest item is a typed item that exists to support quest progression, not a
+generic shared world drop.
+
+Examples:
+
+- a packet handed to the player when they accept a courier job
+- a relic picked up from a shrine during an active step
+- a piece of evidence that must be turned in to an NPC
+
+Important design rules:
+
+- builders should not solve quest pickup problems by placing shared world items
+  on the ground
+- discovery-time quest pickups may be viewer-specific and effectively virtual
+  until claimed
+- once claimed, quest items should participate in normal inventory and turn-in
+  flows where appropriate
+- quest lifecycle rules, especially abandon/resolve cleanup, should be owned by
+  the quest runtime rather than by ad hoc room-loader behavior
+
 ### Slot
 
 A symbolic binding resolved at runtime.
@@ -310,6 +332,7 @@ Opportunities may be surfaced through:
 - dedicated quest endpoints
 - room payloads
 - mob payloads
+- viewer-specific room item payloads
 - explicit commands like `rumors`
 
 The important rule is that the canonical source is the quest service, not the

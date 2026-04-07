@@ -31,6 +31,11 @@ Status as of 2026-03-26:
 - Phase 2.7 auto-start qualification is implemented:
   - `auto_start` now qualifies on `state.sync`, `look`, and `move`
   - non-qualifying discovery refreshes no longer auto-start quests
+- Phase 2.8 quest-private pickups and bound quest items are implemented:
+  - active quest steps can surface viewer-specific `room_items` with `[ * ]`
+  - `get <item>` claims them into inventory as real `quest` items
+  - claimed quest items are cleaned up on abandon/resolve and cannot be
+    dropped into the room
 - Quest arcs still do not have a dedicated frontend builder UI yet.
 - There is no dedicated frontend quest UI yet.
 
@@ -84,6 +89,10 @@ Implemented so far:
   - `give <item> <mob>`
   - `talk <mob>`
   - `kill <mob>`
+- step-authored quest room pickups now exist:
+  - `room_items` on the active step
+  - viewer-specific room rendering with `[ * ]`
+  - normal `get <item>` claim flow
 - room mob quest discoverability now feeds frontend `quest_data`:
   - `[ ! ]` for available `npc_dialogue` opportunities
   - `[ ? ]` for ready report-back / hand-in NPCs
@@ -317,6 +326,74 @@ Notes:
 - A quest instance is the authoritative runtime record.
 - We do not rebuild runtime state out of `PlayerQuest` timestamps.
 - Phase 2 is player-scoped only, so shared-scope fields are still future work.
+
+### Quest-private pickups and bound quest items
+
+This is now a first-class runtime concept, because ordinary shared ground items
+are the wrong primitive for many multiplayer quest flows.
+
+Current supported pattern:
+
+- an active quest step may author `room_items`
+- the room view renders those as viewer-specific quest pickups with `[ * ]`
+- the pickup is not a real ground `Item` row yet
+- `get <item>` claims the pickup and spawns a real `Item` into the player's
+  inventory
+- the claimed item must use `ItemTemplate.type == quest`
+- claimed quest items are treated as bound:
+  - they cannot be dropped into the room
+  - they cannot be stashed in room containers
+  - they can still be carried, put into the player's own bag, and turned in
+- abandon and normal resolution clean up claimed quest items that are still
+  player-owned
+
+Why this exists:
+
+- it gives the player the correct physical verb for fetch quests: `get keg`
+  instead of `inspect`
+- it avoids multiplayer race conditions where one player can steal a shared
+  quest object out from under another
+- it avoids litter and ground-item buildup from repeatable quest pickups
+- it keeps the quest pickup lifecycle tied to the quest instance instead of the
+  generic world loader/cleanup lifecycle
+
+Two-phase lifecycle:
+
+1. Projection phase:
+   the active quest step contributes a viewer-specific room inventory entry.
+   This is assembled from quest state at render time and only appears for a
+   player whose active quest state qualifies.
+2. Claimed phase:
+   `get` converts that projection into a real `quest` item in player
+   inventory, records the claim in `quest_instance.local_state`, and removes
+   the projection for that player while they still own the claimed item.
+
+Cleanup implications:
+
+- virtual quest room pickups are not real room items, so world cleanup does not
+  see or delete them
+- claimed quest items are ordinary `Item` rows carried by the player, so world
+  cleanup also does not touch them during normal play
+- if a quest item somehow ended up on the room floor anyway, world cleanup
+  would treat it like any other non-persistent room item; the bound-item rules
+  exist specifically to keep that from happening through normal commands
+
+Implementation map:
+
+- manifest validation and `room_items` schema enforcement:
+  - `backend/quests/manifests.py`
+- viewer-specific room projection and claim lifecycle:
+  - `backend/quests/services/room_items.py`
+- room payload injection:
+  - `backend/spawns/state_payloads.py`
+- `get`, `drop`, and `put` behavior for claimed quest items:
+  - `backend/spawns/actions/items.py`
+- abandon / resolve cleanup of player-owned quest items:
+  - `backend/quests/services/effects.py`
+  - `backend/quests/services/engine.py`
+- reference tests:
+  - `backend/wr2_tests/test_quest_manifests.py`
+  - `backend/wr2_tests/test_quest_runtime.py`
 
 ### `QuestObjectiveState`
 
