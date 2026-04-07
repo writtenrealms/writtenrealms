@@ -8,6 +8,10 @@ from spawns.handlers.registry import register_handler, resolve_text_handler
 from spawns.triggers import execute_command_fallback_trigger
 
 
+def _unknown_command_text(raw_text: str) -> str:
+    return f"Unknown command: '{raw_text}'. Type 'help' for help."
+
+
 def _parse_text_command(text: str) -> tuple[str | None, list[str], str]:
     stripped = text.strip()
     if not stripped:
@@ -46,8 +50,12 @@ class TextCommandHandler(CommandHandler):
                 ctx.publish(
                     {
                         "type": f"cmd.{command}.error",
-                        "text": "Unknown builder command.",
-                        "data": {"error": "Unknown builder command.", "code": "unknown_cmd"},
+                        "text": _unknown_command_text(raw_text),
+                        "data": {
+                            "error": _unknown_command_text(raw_text),
+                            "code": "unknown_cmd",
+                            "original_command": raw_text,
+                        },
                     }
                 )
             else:
@@ -70,10 +78,12 @@ class TextCommandHandler(CommandHandler):
 
                 ctx.publish(
                     {
-                        "type": "cmd.text.echo",
-                        "text": cmd_text,
+                        "type": "cmd.text.error",
+                        "text": _unknown_command_text(raw_text),
                         "data": {
-                            "original_command": cmd_text,
+                            "error": _unknown_command_text(raw_text),
+                            "code": "unknown_cmd",
+                            "original_command": raw_text,
                         },
                     }
                 )

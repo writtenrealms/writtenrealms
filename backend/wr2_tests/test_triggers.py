@@ -92,7 +92,12 @@ class TestCommandFallbackTriggers(WorldTestCase):
         with capture_game_messages() as non_matching_messages:
             dispatch_text_command(self.player.id, "touch altar bow")
 
-        self.assertIsNotNone(self._message_by_type(non_matching_messages, "cmd.text.echo"))
+        error_message = self._message_by_type(non_matching_messages, "cmd.text.error")
+        self.assertIsNotNone(error_message)
+        self.assertEqual(
+            error_message.get("text"),
+            "Unknown command: 'touch altar bow'. Type 'help' for help.",
+        )
         self.assertIsNone(self._message_by_type(non_matching_messages, "cmd./echo.success"))
 
     def test_multiline_script_executes_first_line_and_schedules_followups(self):

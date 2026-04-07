@@ -85,6 +85,9 @@ Available template state objects:
 
 Triggers can both read and write state.
 
+For full trigger authoring guidance aimed at builders, also read
+[trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md).
+
 Use structured conditions with the same condition DSL used by quests:
 
 ```yaml

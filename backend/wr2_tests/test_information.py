@@ -281,3 +281,24 @@ class TestStateSyncMapKeys(WorldTestCase):
         expected_key = f"room.{self.room.relative_id}"
         self.assertEqual(world_data["starting_room"], expected_key)
         self.assertEqual(world_data["death_room"], expected_key)
+
+
+class TestUnknownTextCommand(WorldTestCase):
+    def _message_by_type(self, messages, message_type):
+        for msg in messages:
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def test_unknown_text_command_returns_explicit_helpful_error(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "flarble")
+
+        error_message = self._message_by_type(messages, "cmd.text.error")
+        self.assertIsNotNone(error_message)
+        self.assertEqual(
+            error_message["text"],
+            "Unknown command: 'flarble'. Type 'help' for help.",
+        )
+        self.assertEqual(error_message["data"]["code"], "unknown_cmd")
+        self.assertEqual(error_message["data"]["original_command"], "flarble")

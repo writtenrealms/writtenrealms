@@ -16,6 +16,10 @@ Implemented entities currently include:
 - `quest`
 - `questarc`
 
+Builder-facing trigger authoring guidance lives in:
+
+- [docs/guides/trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md)
+
 ## Current Flows
 
 ### 1. World Config Screen
