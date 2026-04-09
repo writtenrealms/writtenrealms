@@ -5,6 +5,7 @@ from django.urls import reverse
 
 from builders.models import ItemTemplate, MobTemplate
 from config import constants as adv_consts
+from core.computations import compute_stats
 from core.scoped_state import (
     STATE_SCOPE_CHARACTER,
     STATE_SCOPE_WORLD,
@@ -1499,6 +1500,9 @@ class TestQuestAcceptCommand(QuestRuntimeTestCase):
 class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
     def setUp(self):
         super().setUp()
+        stats = compute_stats(self.player.level, self.player.archetype)
+        self.player.health = stats["health_max"]
+        self.player.save(update_fields=["health"])
         self.captain_template = MobTemplate.objects.create(
             world=self.world,
             name="Captain Merrow",

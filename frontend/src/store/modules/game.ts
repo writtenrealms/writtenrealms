@@ -547,6 +547,13 @@ const receiveMessage = async ({
   if (message_data.type === "notification.death") {
     commit("last_death_set", message_data.data.deceased.key);
     commit("room_chars_remove", message_data.data.deceased);
+    if (message_data.data.room) {
+      commit("room_set", message_data.data.room);
+      commit("map_add", message_data.data.room);
+      if (message_data.data.room.key) {
+        commit("set_room_key", message_data.data.room.key);
+      }
+    }
     if (message_data.data.killer) {
       commit('room_chars_update_target', {
         char: message_data.data.killer,
