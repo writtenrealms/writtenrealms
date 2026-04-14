@@ -150,6 +150,8 @@ class KillAction:
             config = player.world.effective_config
             if config and not config.allow_combat:
                 raise ActionError("Combat is disabled here.", code="combat_disabled")
+            # TODO: Route non-zero combat_resolution_interval worlds through an
+            # encounter scheduler instead of this immediate placeholder loop.
 
             room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
             target_ref = resolve_room_mob_target(

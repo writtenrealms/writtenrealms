@@ -549,7 +549,7 @@ Implementation direction:
    move builder manifest routing into domain modules if the file gets too large
 3. extend `WorldManifestApplyView` to route `kind: quest` and later
    `kind: questarc`
-4. add round-trip tests similar to existing trigger and world-config manifest
+4. add round-trip tests similar to existing trigger and world manifest
    tests
 
 Current status:

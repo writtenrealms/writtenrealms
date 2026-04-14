@@ -590,6 +590,7 @@ def serialize_world(world: World) -> Dict:
             "never_reload": config.never_reload if config else False,
             "starting_room": room_payload_key_from_id(config.starting_room_id) if config else None,
             "death_room": room_payload_key_from_id(config.death_room_id) if config else None,
+            "combat_resolution_interval": float(config.combat_resolution_interval) if config else 0.0,
             "death_gold_penalty": config.death_gold_penalty if config else 0.0,
             "has_corpse_decay": config.has_corpse_decay if config else True,
             "auto_equip": config.auto_equip if config else True,
@@ -619,6 +620,7 @@ def serialize_world(world: World) -> Dict:
     if config:
         data["starting_room"] = room_payload_key_from_id(config.starting_room_id)
         data["death_room"] = room_payload_key_from_id(config.death_room_id)
+        data["combat_resolution_interval"] = float(config.combat_resolution_interval)
 
     if not data.get("context"):
         data["context"] = world.context.key if world.context else world.key

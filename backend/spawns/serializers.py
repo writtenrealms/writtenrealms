@@ -250,6 +250,8 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
     starting_room = KeyField(source='config.starting_room')
     death_room = KeyField(source='config.death_room')
     death_mode = serializers.CharField(source='config.death_mode')
+    combat_resolution_interval = serializers.FloatField(
+        source='config.combat_resolution_interval')
     flee_to_unknown_rooms = serializers.BooleanField(
         source='config.flee_to_unknown_rooms')
     players_can_set_title = serializers.BooleanField(
@@ -286,6 +288,7 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
             'never_reload',
             'starting_room',
             'death_room',
+            'combat_resolution_interval',
             'death_gold_penalty',
             'has_corpse_decay',
             'auto_equip',

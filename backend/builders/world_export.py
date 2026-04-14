@@ -34,7 +34,7 @@ ZONE_MANIFEST_KIND = "zone"
 ROOM_MANIFEST_KIND = "room"
 MOB_TEMPLATE_MANIFEST_KIND = "mobtemplate"
 
-_WORLD_KIND_ALIASES = {"world", "worldconfig", "world-config", "world_config"}
+_WORLD_KIND_ALIASES = {"world"}
 _ZONE_KIND_ALIASES = {"zone"}
 _ROOM_KIND_ALIASES = {"room"}
 _CURRENCY_KIND_ALIASES = {"currency"}
@@ -1290,7 +1290,6 @@ def apply_world_manifest(*, world: World, manifest: dict[str, Any]) -> None:
         raise serializers.ValidationError("Unsupported manifest kind. Expected 'world'.")
 
     normalized = copy.deepcopy(manifest)
-    normalized["kind"] = builder_manifests.WORLD_CONFIG_MANIFEST_KIND
     spec = _manifest_spec(normalized)
     for field_name in ("starting_room", "death_room"):
         if field_name not in spec:

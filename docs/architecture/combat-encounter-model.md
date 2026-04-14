@@ -218,6 +218,33 @@ handler and event pipeline.
 This document does not prescribe exact models, but the architecture should make
 room for concepts like:
 
+## World-Level Pacing Configuration
+
+Encounter pacing should live in world config, not in a separate combat-only
+manifest kind.
+
+The existing WR2 manifest flow already puts runtime world rules like
+`allow_combat`, `death_mode`, and `death_room` inside `kind: world` `spec`.
+Combat pacing should follow that same pattern.
+
+Recommended field:
+
+- `combat_resolution_interval`
+
+Recommended semantics:
+
+- `> 0`: auto-advance active encounters every N seconds
+- `0`: resolve combat immediately
+- `-1`: do not auto-advance encounters; advance them only through explicit
+  actions or a later scheduler
+
+This keeps authored pacing policy in one place and lets future encounter
+implementations interpret the policy consistently across live and async worlds.
+
+Current status: the minimal combat skeleton may still resolve immediately while
+this field is being plumbed through WR2. The field exists so later encounter
+schedulers can honor one stable authored contract.
+
 - submit combat intent
 - replace or cancel queued combat intent
 - resolve encounter step

@@ -39,6 +39,7 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(config_resp.data["world"]["id"], self.world.id)
         self.assertEqual(config_resp.data["world"]["name"], self.world.name)
         self.assertEqual(config_resp.data["config"]["starting_room"]["id"], self.room.id)
+        self.assertEqual(config_resp.data["config"]["combat_resolution_interval"], 0)
 
         export_resp = self.client.get(self.export_ep)
         self.assertEqual(export_resp.status_code, 200)
@@ -52,6 +53,7 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(world_manifest["spec"]["name"], self.world.name)
         self.assertEqual(world_manifest["spec"]["starting_room"], "room@0,0,0")
         self.assertEqual(world_manifest["spec"]["death_room"], "room@0,0,0")
+        self.assertEqual(world_manifest["spec"]["combat_resolution_interval"], 0)
 
     def test_apply_world_config_manifest_updates_world_and_config(self):
         spawn_world = self.world.spawned_worlds.first()
@@ -75,7 +77,7 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         )
 
         manifest = f"""
-kind: worldconfig
+kind: world
 metadata:
   world: world.{self.world.id}
 spec:
@@ -84,6 +86,7 @@ spec:
   motd: Manifest update complete.
   is_public: true
   starting_gold: 15
+  combat_resolution_interval: 1.5
   starting_room: room.{starting_room.id}
   death_room: room.{death_room.id}
   death_mode: lose_gold
@@ -111,10 +114,8 @@ spec:
             format="json",
         )
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.data["kind"], "worldconfig")
+        self.assertEqual(resp.data["kind"], "world")
         self.assertEqual(resp.data["operation"], "updated")
-        self.assertIn("world_config", resp.data)
-        self.assertIn("yaml", resp.data["world_config"])
 
         self.world.refresh_from_db()
         self.world.config.refresh_from_db()
@@ -132,6 +133,7 @@ spec:
 
         config = self.world.config
         self.assertEqual(config.starting_gold, 15)
+        self.assertEqual(config.combat_resolution_interval, 1.5)
         self.assertEqual(config.starting_room_id, starting_room.id)
         self.assertEqual(config.death_room_id, death_room.id)
         self.assertEqual(config.death_mode, "lose_gold")
@@ -152,6 +154,40 @@ spec:
         self.assertEqual(config.large_background, "https://assets.example/banner.png")
         self.assertEqual(config.name_exclusions.strip().splitlines(), ["admin", "system"])
 
+    def test_apply_world_config_manifest_accepts_async_combat_pacing_sentinel(self):
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{self.world.id}
+spec:
+  combat_resolution_interval: -1
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        self.world.config.refresh_from_db()
+        self.assertEqual(self.world.config.combat_resolution_interval, -1)
+
+    def test_apply_world_config_manifest_rejects_legacy_kind(self):
+        manifest = f"""
+kind: worldconfig
+metadata:
+  world: world.{self.world.id}
+spec:
+  combat_resolution_interval: 1
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("Unsupported manifest kind", str(resp.data))
+
     def test_rank_2_builder_cannot_apply_world_config_manifest(self):
         builder_user = self.create_user("rank2-builder@example.com")
         WorldBuilder.objects.create(
@@ -162,7 +198,7 @@ spec:
         self.client.force_authenticate(builder_user)
 
         manifest = f"""
-kind: worldconfig
+kind: world
 metadata:
   world: world.{self.world.id}
 spec:

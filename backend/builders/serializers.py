@@ -324,6 +324,7 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'can_select_faction',
             'auto_equip',
             'allow_combat',
+            'combat_resolution_interval',
             'is_narrative',
             'players_can_set_title',
             'allow_pvp',
@@ -335,6 +336,13 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'name_exclusions',
             'globals_enabled',
         ]
+
+    def validate_combat_resolution_interval(self, value):
+        if value < 0 and value != -1:
+            raise serializers.ValidationError(
+                "combat_resolution_interval must be -1 or >= 0."
+            )
+        return value
 
 # World Admin
 

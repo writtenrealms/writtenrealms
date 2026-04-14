@@ -1717,23 +1717,11 @@ class WorldManifestApplyView(BaseWorldBuilderView):
     def _apply_world_manifest(self, manifest):
         self._assert_can_edit_world_config()
         builder_world_export.apply_world_manifest(world=self.world, manifest=manifest)
-        raw_kind = str(manifest.get("kind") or "").strip().lower()
-        is_legacy_world_config = raw_kind != builder_world_export.WORLD_MANIFEST_KIND
-        payload = {
-            "kind": (
-                builder_manifests.WORLD_CONFIG_MANIFEST_KIND
-                if is_legacy_world_config
-                else builder_world_export.WORLD_MANIFEST_KIND
-            ),
-            "operation": "updated",
-        }
-        if is_legacy_world_config:
-            payload["world_config"] = builder_manifests.serialize_world_config_payload(
-                world=self.world
-            )
-
         return Response(
-            payload,
+            {
+                "kind": builder_world_export.WORLD_MANIFEST_KIND,
+                "operation": "updated",
+            },
             status=status.HTTP_200_OK,
         )
 

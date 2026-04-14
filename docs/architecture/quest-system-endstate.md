@@ -203,7 +203,7 @@ World-mutating consequences should be rare and explicit.
 ### Builder Workflow
 
 Authoring should follow the same broad pattern as existing WR2 trigger and
-world-config manifests:
+world manifests:
 
 1. read current state in the builder UI
 2. export/copy YAML
