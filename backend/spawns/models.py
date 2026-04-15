@@ -489,6 +489,51 @@ class CharacterState(BaseModel):
         ordering = ['player_id']
 
 
+class CombatEncounter(BaseModel):
+    STATUS_ACTIVE = "active"
+    STATUS_FINISHED = "finished"
+    STATUS_CHOICES = list_to_choice((STATUS_ACTIVE, STATUS_FINISHED))
+
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='combat_encounters',
+    )
+    room = models.ForeignKey(
+        'worlds.Room',
+        on_delete=models.CASCADE,
+        related_name='combat_encounters',
+    )
+    player = models.ForeignKey(
+        'spawns.Player',
+        on_delete=models.CASCADE,
+        related_name='combat_encounters',
+    )
+    mob = models.ForeignKey(
+        'spawns.Mob',
+        on_delete=models.SET_NULL,
+        related_name='combat_encounters',
+        blank=True,
+        null=True,
+    )
+    status = models.TextField(
+        choices=STATUS_CHOICES,
+        default=STATUS_ACTIVE,
+        db_index=True,
+    )
+    resolution_interval = models.FloatField(default=0)
+    round_number = models.PositiveIntegerField(default=0)
+    next_resolution_ts = models.DateTimeField(db_index=True, **optional)
+    last_resolution_ts = models.DateTimeField(db_index=True, **optional)
+
+    class Meta(BaseModel.Meta):
+        indexes = [
+            models.Index(fields=['status', 'next_resolution_ts']),
+            models.Index(fields=['player', 'status']),
+            models.Index(fields=['mob', 'status']),
+        ]
+
+
 class PlayerData(BaseModel):
     "Player extraction data persisted when they are exiting a world."
 

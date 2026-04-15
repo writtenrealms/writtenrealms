@@ -230,8 +230,15 @@ seconds:
 - `-1`: do not auto-advance combat encounters
 
 Current status: this field is the authored WR2 contract for encounter pacing,
-but the current minimal combat skeleton still resolves immediately until
-encounter scheduling is implemented.
+and the current placeholder `kill <mob>` combat flow now honors it:
+
+- `0`: immediate full auto-resolve
+- `> 0`: scheduled round-by-round resolution on that cadence
+- `-1`: manual round-by-round resolution, advanced by explicit `kill <mob>`
+  commands
+
+Broader encounter scheduling, queued abilities, and non-basic combat actions are
+still future work.
 
 ## `apiVersion`
 

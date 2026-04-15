@@ -18,6 +18,7 @@ from django.utils import timezone
 from spawns.services import WorldGate
 from spawns.models import Mob, Player
 from spawns.serializers import PlayerConfigSerializer
+from spawns.events import publish_events
 from spawns.handlers import (
     ActorNotFoundError,
     dispatch_command,
@@ -602,6 +603,21 @@ def execute_trigger_script_segments(
             )
         except (ActorNotFoundError, HandlerNotFoundError, ValueError):
             return
+
+
+@shared_task(ignore_result=True)
+def resolve_combat_encounter(encounter_id: int):
+    from spawns.actions.combat import resolve_combat_encounter_step
+
+    result = resolve_combat_encounter_step(
+        encounter_id,
+        auto_advance=True,
+    )
+    if result.events:
+        publish_events(
+            result.events,
+            actor_key=result.actor_key,
+        )
 
 
 @shared_task

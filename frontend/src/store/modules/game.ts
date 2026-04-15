@@ -559,6 +559,9 @@ const receiveMessage = async ({
         char: message_data.data.killer,
         target: null,
       });
+      if (state.player && message_data.data.killer.key === state.player.key) {
+        commit("player_target_set", null);
+      }
     }
   }
 

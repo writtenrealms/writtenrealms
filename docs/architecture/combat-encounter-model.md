@@ -241,9 +241,16 @@ Recommended semantics:
 This keeps authored pacing policy in one place and lets future encounter
 implementations interpret the policy consistently across live and async worlds.
 
-Current status: the minimal combat skeleton may still resolve immediately while
-this field is being plumbed through WR2. The field exists so later encounter
-schedulers can honor one stable authored contract.
+Current status: the placeholder `kill <mob>` flow now honors this field for WR2
+combat pacing:
+
+- `0`: immediate full auto-resolve
+- `> 0`: scheduled round-by-round resolution
+- `-1`: manual round-by-round resolution driven by explicit `kill <mob>`
+  commands
+
+Queued abilities, richer action selection, and more general encounter
+orchestration are still future work.
 
 - submit combat intent
 - replace or cancel queued combat intent
