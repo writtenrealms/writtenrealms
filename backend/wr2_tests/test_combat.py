@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from core.combat_formulas import normalize_combat_system
 from core.computations import compute_stats
 from django.utils import timezone
 from spawns.models import CombatEncounter, Mob
@@ -17,6 +18,26 @@ class TestKillCommand(WorldTestCase):
         self.player.stamina = self.stats["stamina_max"]
         self.player.in_game = True
         self.player.save(update_fields=["health", "mana", "stamina", "in_game"])
+        self.world.config.combat_system = normalize_combat_system({
+            "variance": {
+                "enabled": False,
+                "percent": 0,
+            },
+            "profiles": {
+                "basic_physical": {
+                    "power_scale": 1,
+                    "use_weapon_damage": False,
+                    "can_dodge": False,
+                    "can_crit": False,
+                    "mitigation": {
+                        "armor": False,
+                        "resilience": False,
+                    },
+                    "minimum": 0,
+                },
+            },
+        })
+        self.world.config.save(update_fields=["combat_system"])
 
     def _message_by_type(self, messages, message_type, player_key=None):
         for msg in messages:

@@ -811,6 +811,8 @@ ATTR_AP = 'attack_power'
 
 ATTR_SP = 'spell_power'
 
+ATTR_WEAPON_DAMAGE = 'weapon_damage'
+
 ATTR_CRIT = 'crit'
 
 ATTR_MAX_HEALTH = 'health_max'
@@ -868,6 +870,7 @@ ATTR_BUDGET = {
     ATTR_MAX_MANA: 4,
     ATTR_AP: 4,
     ATTR_SP: 4,
+    ATTR_WEAPON_DAMAGE: 4,
     ATTR_CRIT: 4,
     ATTR_RESILIENCE: 4,
     ATTR_DODGE: 4,

@@ -594,7 +594,7 @@ class AnimateItemSerializer(serializers.ModelSerializer):
             'food_value', 'food_type',
             'is_boat', 'is_pickable', 'capacity',
             'equipment_type', 'armor_class', 'weapon_type',
-            'weapon_grip', 'hit_msg_first', 'hit_msg_third',
+            'weapon_grip', 'weapon_damage', 'hit_msg_first', 'hit_msg_third',
             'health_max', 'health_regen',
             'mana_max', 'mana_regen',
             'stamina_max', 'stamina_regen',

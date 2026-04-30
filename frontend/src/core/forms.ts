@@ -576,7 +576,7 @@ export const BUILDER_FORMS = {
         },
         {
           attr: "spell_power",
-          label: "Spell Power",
+          label: "Ability Power",
         },
         {
           attr: "crit",
@@ -812,9 +812,9 @@ export const BUILDER_FORMS = {
         {
           attr: "level",
           label: "Level",
-          help: `The level of an item represents its power. For weapons, it
-                determines how much damage is dealt, and for armor how much physical
-                damage it absorbs.`,
+          help: `The level of an item represents its rough power band. Weapons
+                use weapon damage for direct hit damage, and armor uses armor
+                rating for physical mitigation.`,
         },
       ],
     },
@@ -948,16 +948,16 @@ export const BUILDER_FORMS = {
           label: "Attack Power",
         },
         {
+          attr: "weapon_damage",
+          label: "Weapon Damage",
+        },
+        {
           attr: "spell_power",
-          label: "Spell Power",
+          label: "Ability Power",
         },
         {
           attr: "crit",
           label: "Crit Rating",
-        },
-        {
-          attr: "",
-          label: "",
         },
       ],
     },

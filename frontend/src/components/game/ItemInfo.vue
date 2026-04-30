@@ -133,7 +133,7 @@ const derivedLabels = computed(() => world.value?.labels?.derived || {});
 const primaryLabels = computed(() => world.value?.labels?.primaries || {});
 
 const ITEM_STAT_LABELS = {
-  damage: "Damage",
+  weapon_damage: "Weapon damage",
   armor: "Armor",
   strength: "Strength",
   constitution: "Constitution",
@@ -194,7 +194,7 @@ const buildComparedStats = (item: any) => {
   const equippedItem = playerEquipment[slot];
   const offhandItem = eqType === "weapon_2h" ? playerEquipment.offhand : null;
   const statOrder = [
-    "damage",
+    "weapon_damage",
     "armor",
     "strength",
     "constitution",
@@ -215,7 +215,7 @@ const buildComparedStats = (item: any) => {
 
   const stats: any[] = [];
   for (const statName of statOrder) {
-    if (statName === "damage" && slot !== "weapon") continue;
+    if (statName === "weapon_damage" && slot !== "weapon") continue;
     if (statName === "armor" && slot === "weapon") continue;
 
     const value = getStatValue(item, statName);
@@ -260,7 +260,7 @@ const rawStats = computed(() => {
 });
 
 const itemStats = computed(() => {
-  return rawStats.value.filter(stat => world.value.allow_combat || stat.label !== 'Damage');
+  return rawStats.value.filter(stat => world.value.allow_combat || stat.name !== 'weapon_damage');
 });
 
 const inventoryStack = computed(() => {

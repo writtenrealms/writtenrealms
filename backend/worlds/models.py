@@ -1012,6 +1012,7 @@ class WorldConfig(BaseModel):
     #   0   => resolve immediately
     #   -1  => never auto-advance (manual / fully async progression)
     combat_resolution_interval = models.FloatField(default=0)
+    combat_system = models.JSONField(default=dict)
     players_can_set_title = models.BooleanField(default=True)
     allow_pvp = models.BooleanField(default=True)
     is_narrative = models.BooleanField(default=False)

@@ -21,6 +21,10 @@ from rest_framework import serializers
 
 from config import constants as api_consts
 from config import game_settings as adv_config
+from core.combat_formulas import (
+    CombatFormulaValidationError,
+    normalize_combat_system,
+)
 from core.stat_system import (
     StatSystemValidationError,
     normalize_stat_system,
@@ -329,6 +333,7 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'auto_equip',
             'allow_combat',
             'combat_resolution_interval',
+            'combat_system',
             'is_narrative',
             'players_can_set_title',
             'allow_pvp',
@@ -353,6 +358,12 @@ class WorldConfigSerializer(serializers.ModelSerializer):
         try:
             return normalize_stat_system(value)
         except StatSystemValidationError as exc:
+            raise serializers.ValidationError(str(exc))
+
+    def validate_combat_system(self, value):
+        try:
+            return normalize_combat_system(value)
+        except CombatFormulaValidationError as exc:
             raise serializers.ValidationError(str(exc))
 
 # World Admin
@@ -1498,7 +1509,7 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
             'type', 'capacity', 'quality', 'power', 'is_boat', 'is_pickable',
             'cost', 'currency',
             'equipment_type', 'armor_class',
-            'weapon_type', 'hit_msg_first', 'hit_msg_third',
+            'weapon_type', 'weapon_damage', 'hit_msg_first', 'hit_msg_third',
             'health_max', 'health_regen', 'mana_max', 'mana_regen',
             'stamina_max', 'stamina_regen',
             'strength', 'constitution', 'dexterity', 'intelligence',

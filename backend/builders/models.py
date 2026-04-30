@@ -167,7 +167,7 @@ class ItemTemplate(ItemMixin, AdventBaseModel):
     @property
     def budget_spent(self):
         spent_budget = 0
-        for attr in adv_consts.ATTRIBUTES:
+        for attr in [*adv_consts.ATTRIBUTES, adv_consts.ATTR_WEAPON_DAMAGE]:
             if getattr(self, attr):
                 spent_budget += (
                     adv_consts.ATTR_BUDGET[attr]

@@ -48,7 +48,11 @@
         <div class="value">{{ template.attack_power }}</div>
       </div>
       <div class="stat">
-        <div class="label">Spell Power</div>
+        <div class="label">Weapon Damage</div>
+        <div class="value">{{ template.weapon_damage }}</div>
+      </div>
+      <div class="stat">
+        <div class="label">Ability Power</div>
         <div class="value">{{ template.spell_power }}</div>
       </div>
       <div class="stat">

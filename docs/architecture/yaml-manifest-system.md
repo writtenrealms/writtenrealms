@@ -19,6 +19,7 @@ Implemented entities currently include:
 Builder-facing trigger authoring guidance lives in:
 
 - [docs/guides/trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md)
+- [docs/guides/combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md)
 
 ## Current Flows
 
@@ -252,6 +253,20 @@ For details and a working WR1-style reference configuration, see:
 
 - [stats-formulas-and-classes.md](/Users/teebes/code/writtenrealms/docs/architecture/stats-formulas-and-classes.md)
 - [wr1-archetype-world-reference.md](/Users/teebes/code/writtenrealms/docs/dev/wr1-archetype-world-reference.md)
+
+World manifests also support `spec.combat`, which holds the authored WR2
+combat formula system:
+
+- named attack/healing profiles
+- rating curves for dodge, crit, armor, and resilience
+- weapon damage, attack power, and ability power scaling
+- mitigation rules for physical and ability damage
+- variance, crit multiplier, and minimum output rules
+
+For details, see:
+
+- [combat-resolution-formulas.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-resolution-formulas.md)
+- [combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md)
 
 ## `apiVersion`
 

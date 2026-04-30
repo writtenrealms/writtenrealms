@@ -44,6 +44,10 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
             config_resp.data["config"]["stat_system"]["labels"]["resources"]["energy"],
             "Mana",
         )
+        self.assertEqual(
+            config_resp.data["config"]["combat_system"]["profiles"]["basic_physical"]["mitigation"]["resilience"],
+            False,
+        )
 
         export_resp = self.client.get(self.export_ep)
         self.assertEqual(export_resp.status_code, 200)
@@ -59,6 +63,7 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(world_manifest["spec"]["death_room"], "room@0,0,0")
         self.assertEqual(world_manifest["spec"]["combat_resolution_interval"], 0)
         self.assertIn("stats", world_manifest["spec"])
+        self.assertIn("combat", world_manifest["spec"])
         self.assertEqual(
             world_manifest["spec"]["stats"]["labels"]["resources"]["energy"],
             "Mana",
@@ -66,6 +71,10 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(
             world_manifest["spec"]["stats"]["labels"]["derived"]["ability_power"],
             "Spell Power",
+        )
+        self.assertEqual(
+            world_manifest["spec"]["combat"]["profiles"]["basic_physical"]["mitigation"]["armor"],
+            True,
         )
 
     def test_apply_world_config_manifest_updates_world_and_config(self):
@@ -120,6 +129,15 @@ spec:
   name_exclusions: |
     admin
     system
+  combat:
+    variance:
+      enabled: false
+      percent: 0
+    profiles:
+      basic_physical:
+        power_scale: 0.5
+        mitigation:
+          resilience: false
   stats:
     labels:
       resources:
@@ -179,7 +197,7 @@ spec:
             {"manifest": manifest},
             format="json",
         )
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 200, resp.data)
         self.assertEqual(resp.data["kind"], "world")
         self.assertEqual(resp.data["operation"], "updated")
 
@@ -224,6 +242,11 @@ spec:
             config.stat_system["labels"]["derived"]["ability_power"],
             "Skill Power",
         )
+        self.assertFalse(config.combat_system["variance"]["enabled"])
+        self.assertEqual(
+            config.combat_system["profiles"]["basic_physical"]["power_scale"],
+            0.5,
+        )
         self.assertEqual(
             config.stat_system["labels"]["classes"]["warrior"],
             "Vanguard",
@@ -246,7 +269,7 @@ spec:
             {"manifest": manifest},
             format="json",
         )
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 200, resp.data)
 
         self.world.config.refresh_from_db()
         self.assertEqual(self.world.config.combat_resolution_interval, -1)
@@ -278,7 +301,7 @@ spec:
             {"manifest": manifest},
             format="json",
         )
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 200, resp.data)
 
         self.world.config.refresh_from_db()
         self.assertTrue(self.world.config.is_classless)

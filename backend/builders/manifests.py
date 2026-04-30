@@ -14,6 +14,11 @@ from rest_framework import serializers
 from builders import serializers as builder_serializers
 from builders.models import Currency, ItemTemplate, MobTemplate, Trigger
 from config import constants as adv_consts
+from core.combat_formulas import (
+    CombatFormulaValidationError,
+    get_world_combat_system,
+    normalize_combat_system,
+)
 from core.stat_system import (
     StatSystemValidationError,
     get_world_stat_system,
@@ -89,6 +94,7 @@ _WORLD_CONFIG_CONFIG_ROOM_FIELDS = (
     "death_room",
 )
 _WORLD_CONFIG_STATS_FIELD = "stats"
+_WORLD_CONFIG_COMBAT_FIELD = "combat"
 _WORLD_FIELDS_PROPAGATED_TO_SPAWNS = {
     "name",
     "short_description",
@@ -134,6 +140,7 @@ _ITEM_TEMPLATE_SPEC_FIELDS = (
     "armor_class",
     "weapon_grip",
     "weapon_type",
+    "weapon_damage",
     "skill_modifier",
     "hit_msg_first",
     "hit_msg_third",
@@ -499,6 +506,7 @@ def world_config_to_manifest(
             "large_background": config.large_background or "",
             "name_exclusions": config.name_exclusions or "",
             _WORLD_CONFIG_STATS_FIELD: get_world_stat_system(world),
+            _WORLD_CONFIG_COMBAT_FIELD: get_world_combat_system(world),
         },
     }
     if include_metadata:
@@ -573,6 +581,7 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
             "name_exclusions": config.name_exclusions or "",
             "globals_enabled": bool(config.globals_enabled),
             "stat_system": get_world_stat_system(world),
+            "combat_system": get_world_combat_system(world),
         },
         "manifest": manifest_data["manifest"],
         "yaml": manifest_data["yaml"],
@@ -1547,6 +1556,7 @@ def parse_world_config_manifest(
     allowed_fields.update(_WORLD_CONFIG_CONFIG_CHOICE_FIELDS.keys())
     allowed_fields.update(_WORLD_CONFIG_CONFIG_ROOM_FIELDS)
     allowed_fields.add(_WORLD_CONFIG_STATS_FIELD)
+    allowed_fields.add(_WORLD_CONFIG_COMBAT_FIELD)
 
     unknown_fields = sorted(set(spec.keys()) - allowed_fields)
     if unknown_fields:
@@ -1626,6 +1636,14 @@ def parse_world_config_manifest(
                 spec.get(_WORLD_CONFIG_STATS_FIELD)
             )
         except StatSystemValidationError as exc:
+            raise serializers.ValidationError(str(exc))
+
+    if _WORLD_CONFIG_COMBAT_FIELD in spec:
+        try:
+            config_updates["combat_system"] = normalize_combat_system(
+                spec.get(_WORLD_CONFIG_COMBAT_FIELD)
+            )
+        except CombatFormulaValidationError as exc:
             raise serializers.ValidationError(str(exc))
 
     return ParsedWorldConfigManifest(

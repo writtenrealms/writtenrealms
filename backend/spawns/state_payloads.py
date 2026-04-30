@@ -165,6 +165,7 @@ def serialize_item(
         attack_power=item.attack_power,
         spell_power=item.spell_power,
         ability_power=item.spell_power,
+        weapon_damage=item.weapon_damage,
         armor=armor_value,
         crit=item.crit,
         resilience=item.resilience,

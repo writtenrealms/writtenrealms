@@ -521,8 +521,8 @@ def _coerce_base_resource_config(
 
 
 def normalize_stat_system(value: Any) -> dict[str, Any]:
-    if value in (None, "", {}):
-        return deepcopy(DEFAULT_STAT_SYSTEM)
+    if value in (None, ""):
+        value = {}
     if not isinstance(value, dict):
         raise StatSystemValidationError("stats must be a mapping.")
 

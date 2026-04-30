@@ -51,6 +51,7 @@ class Item(BaseModel):
     attack_power: int = 0
     spell_power: int = 0
     ability_power: int = 0
+    weapon_damage: float = 0
     armor: int = 0
     crit: int = 0
     resilience: int = 0

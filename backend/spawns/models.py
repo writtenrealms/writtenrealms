@@ -783,11 +783,11 @@ class Item(ItemMixin, AdventBaseModel):
 
     def boost(self, amount=20):
         "Boost the stats on an item by a percentage amount."
-        for attr in adv_consts.ATTRIBUTES:
+        for attr in [*adv_consts.ATTRIBUTES, adv_consts.ATTR_WEAPON_DAMAGE]:
             value = getattr(self, attr, None)
             if value:
                 value = math.ceil(value * 120 / 100)
-                setattr(self, attr, value)
+            setattr(self, attr, value)
         self.upgrade_count += 1
         self.save()
         return self
@@ -795,7 +795,7 @@ class Item(ItemMixin, AdventBaseModel):
     @property
     def budget_spent(self):
         spent_budget = 0
-        for attr in adv_consts.ATTRIBUTES:
+        for attr in [*adv_consts.ATTRIBUTES, adv_consts.ATTR_WEAPON_DAMAGE]:
             if getattr(self, attr):
                 spent_budget += (
                     adv_consts.ATTR_BUDGET[attr]
