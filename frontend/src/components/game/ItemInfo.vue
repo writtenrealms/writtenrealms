@@ -128,6 +128,9 @@ const props = defineProps({
 });
 
 const world = computed(() => store.state.game.world);
+const resourceLabels = computed(() => world.value?.labels?.resources || {});
+const derivedLabels = computed(() => world.value?.labels?.derived || {});
+const primaryLabels = computed(() => world.value?.labels?.primaries || {});
 
 const ITEM_STAT_LABELS = {
   damage: "Damage",
@@ -150,6 +153,23 @@ const ITEM_STAT_LABELS = {
 };
 
 const statLabel = (statName: string) => {
+  if (statName === "spell_power") {
+    return derivedLabels.value.ability_power || ITEM_STAT_LABELS[statName];
+  }
+  if (statName === "mana_max") {
+    const energy = resourceLabels.value.energy || "Energy";
+    return `Max ${energy}`;
+  }
+  if (statName === "mana_regen") {
+    const energy = resourceLabels.value.energy || "Energy";
+    return `${energy} Regen`;
+  }
+  if (primaryLabels.value[statName]) {
+    return primaryLabels.value[statName];
+  }
+  if (derivedLabels.value[statName]) {
+    return derivedLabels.value[statName];
+  }
   if (ITEM_STAT_LABELS[statName]) return ITEM_STAT_LABELS[statName];
   const label = statName.replace(/_/g, " ");
   return capfirst(label);

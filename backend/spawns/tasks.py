@@ -101,7 +101,12 @@ def _apply_regen(
 
 
 def _regen_player(player: Player) -> dict[str, int | str] | None:
-    stats = compute_stats(player.level, player.archetype)
+    stats = compute_stats(
+        player.level,
+        player.archetype,
+        char=player,
+        world=player.world,
+    )
 
     health_max = max(_as_non_negative_int(stats.get("health_max")), _as_non_negative_int(player.health))
     mana_max = max(_as_non_negative_int(stats.get("mana_max")), _as_non_negative_int(player.mana))

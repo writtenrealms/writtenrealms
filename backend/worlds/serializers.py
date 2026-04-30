@@ -3,6 +3,7 @@ from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from core.serializers import ReferenceField
+from core.stat_system import get_world_label_bundle
 from worlds.models import Room, World, Zone, StartingEq
 
 
@@ -147,10 +148,12 @@ class WorldSerializer(serializers.ModelSerializer):
             'wrack': 'Wrack',
         }
 
-        return {
+        labels = {
             'attacks': attack_labels,
             'effects': effect_labels,
         }
+        labels.update(get_world_label_bundle(world))
+        return labels
 
     def get_is_classless(self, world):
         root_world = world.context or world

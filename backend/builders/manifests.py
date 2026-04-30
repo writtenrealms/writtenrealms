@@ -14,6 +14,11 @@ from rest_framework import serializers
 from builders import serializers as builder_serializers
 from builders.models import Currency, ItemTemplate, MobTemplate, Trigger
 from config import constants as adv_consts
+from core.stat_system import (
+    StatSystemValidationError,
+    get_world_stat_system,
+    normalize_stat_system,
+)
 from spawns import trigger_matcher
 from worlds.models import Room, World, Zone
 
@@ -83,6 +88,7 @@ _WORLD_CONFIG_CONFIG_ROOM_FIELDS = (
     "starting_room",
     "death_room",
 )
+_WORLD_CONFIG_STATS_FIELD = "stats"
 _WORLD_FIELDS_PROPAGATED_TO_SPAWNS = {
     "name",
     "short_description",
@@ -492,6 +498,7 @@ def world_config_to_manifest(
             "small_background": config.small_background or "",
             "large_background": config.large_background or "",
             "name_exclusions": config.name_exclusions or "",
+            _WORLD_CONFIG_STATS_FIELD: get_world_stat_system(world),
         },
     }
     if include_metadata:
@@ -565,6 +572,7 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
             "decay_glory": bool(config.decay_glory),
             "name_exclusions": config.name_exclusions or "",
             "globals_enabled": bool(config.globals_enabled),
+            "stat_system": get_world_stat_system(world),
         },
         "manifest": manifest_data["manifest"],
         "yaml": manifest_data["yaml"],
@@ -1538,6 +1546,7 @@ def parse_world_config_manifest(
     allowed_fields.update(_WORLD_CONFIG_CONFIG_FLOAT_FIELDS)
     allowed_fields.update(_WORLD_CONFIG_CONFIG_CHOICE_FIELDS.keys())
     allowed_fields.update(_WORLD_CONFIG_CONFIG_ROOM_FIELDS)
+    allowed_fields.add(_WORLD_CONFIG_STATS_FIELD)
 
     unknown_fields = sorted(set(spec.keys()) - allowed_fields)
     if unknown_fields:
@@ -1610,6 +1619,14 @@ def parse_world_config_manifest(
                 f"Room referenced by spec.{field_name} was not found in this world."
             )
         config_updates[field_name] = room
+
+    if _WORLD_CONFIG_STATS_FIELD in spec:
+        try:
+            config_updates["stat_system"] = normalize_stat_system(
+                spec.get(_WORLD_CONFIG_STATS_FIELD)
+            )
+        except StatSystemValidationError as exc:
+            raise serializers.ValidationError(str(exc))
 
     return ParsedWorldConfigManifest(
         world=world,

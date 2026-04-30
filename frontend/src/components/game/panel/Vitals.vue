@@ -4,7 +4,7 @@
       <div class="vitals">
         <div class="vital health">
           <div class="label-row">
-            <div class="label">Health</div>
+            <div class="label">{{ healthLabel }}</div>
             <div class="amount">{{ player.health }}</div>
           </div>
           <div class="vital-bar">
@@ -12,19 +12,19 @@
           </div>
         </div>
 
-        <div class="vital mana" v-if="hasMana">
+        <div class="vital mana" v-if="hasEnergy">
           <div class="label-row">
-            <div class="label">Mana</div>
-            <div class="amount">{{ player.mana }}</div>
+            <div class="label">{{ energyLabel }}</div>
+            <div class="amount">{{ energyCurrent }}</div>
           </div>
           <div class="vital-bar">
-            <div class="mana-bar" :style="{ width: manaPerc }"></div>
+            <div class="mana-bar" :style="{ width: energyPerc }"></div>
           </div>
         </div>
 
         <div class="vital stamina">
           <div class="label-row">
-            <div class="label">Stamina</div>
+            <div class="label">{{ staminaLabel }}</div>
             <div class="amount">{{ player.stamina }}</div>
           </div>
           <div class="vital-bar">
@@ -63,13 +63,25 @@ const is_mobile = computed(() => store.state.game.is_mobile);
 const player: any = computed(() => store.state.game.player);
 const world: any = computed(() => store.state.game.world);
 const current_cast = computed(() => store.state.game.current_cast);
-const healthPerc = computed(() => (player.value.health / player.value.health_max) * 100 + "%");
-const manaPerc = computed(() => (player.value.mana / player.value.mana_max) * 100 + "%");
-const staminaPerc = computed(() => (player.value.stamina / player.value.stamina_max) * 100 + "%");
-const hasMana = computed(() => {
-  if (player.value.archetype == "mage" || player.value.archetype == "cleric" || world.value.is_classless) return true;
-  return false;
+const resourceLabels = computed(() => world.value?.labels?.resources || {});
+const healthLabel = computed(() => resourceLabels.value.health || "Health");
+const energyLabel = computed(() => resourceLabels.value.energy || "Energy");
+const staminaLabel = computed(() => resourceLabels.value.stamina || "Stamina");
+const energyCurrent = computed(() => player.value.energy ?? player.value.mana ?? 0);
+const energyMax = computed(() => player.value.energy_max ?? player.value.mana_max ?? 0);
+const healthPerc = computed(() => {
+  const max = player.value.health_max || 1;
+  return (player.value.health / max) * 100 + "%";
 });
+const energyPerc = computed(() => {
+  const max = energyMax.value || 1;
+  return (energyCurrent.value / max) * 100 + "%";
+});
+const staminaPerc = computed(() => {
+  const max = player.value.stamina_max || 1;
+  return (player.value.stamina / max) * 100 + "%";
+});
+const hasEnergy = computed(() => energyMax.value > 0);
 </script>
 
 <style lang="scss">

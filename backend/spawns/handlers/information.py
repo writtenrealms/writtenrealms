@@ -5,7 +5,13 @@ Implements information-oriented commands such as look, inventory, and help.
 """
 from spawns.actions.base import ActionError
 from quests.services.discovery import available_room_prompt_opportunities_for_room
-from spawns.actions.information import InspectAction, InventoryAction, LookAction, RollAction
+from spawns.actions.information import (
+    InspectAction,
+    InventoryAction,
+    LookAction,
+    RollAction,
+    StatsAction,
+)
 from spawns.events import publish_events
 from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.permissions import has_builder_access
@@ -141,6 +147,31 @@ class InventoryHandler(CommandHandler):
             result = InventoryAction().execute(ctx.player.id)
         except ActionError as err:
             ctx.publish_error("inventory", err.message)
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.player.key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class StatsHandler(CommandHandler):
+    command_type = "stats"
+    text_commands = ("stats",)
+    help = {
+        "name": "Stats",
+        "format": "stats",
+        "description": "Show your current vitals, attributes, and derived combat stats.",
+        "examples": ["stats"],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        try:
+            result = StatsAction().execute(ctx.player.id)
+        except ActionError as err:
+            ctx.publish_error("stats", err.message)
             return
 
         publish_events(

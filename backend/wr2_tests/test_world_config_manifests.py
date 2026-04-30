@@ -40,6 +40,10 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(config_resp.data["world"]["name"], self.world.name)
         self.assertEqual(config_resp.data["config"]["starting_room"]["id"], self.room.id)
         self.assertEqual(config_resp.data["config"]["combat_resolution_interval"], 0)
+        self.assertEqual(
+            config_resp.data["config"]["stat_system"]["labels"]["resources"]["energy"],
+            "Mana",
+        )
 
         export_resp = self.client.get(self.export_ep)
         self.assertEqual(export_resp.status_code, 200)
@@ -54,6 +58,15 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(world_manifest["spec"]["starting_room"], "room@0,0,0")
         self.assertEqual(world_manifest["spec"]["death_room"], "room@0,0,0")
         self.assertEqual(world_manifest["spec"]["combat_resolution_interval"], 0)
+        self.assertIn("stats", world_manifest["spec"])
+        self.assertEqual(
+            world_manifest["spec"]["stats"]["labels"]["resources"]["energy"],
+            "Mana",
+        )
+        self.assertEqual(
+            world_manifest["spec"]["stats"]["labels"]["derived"]["ability_power"],
+            "Spell Power",
+        )
 
     def test_apply_world_config_manifest_updates_world_and_config(self):
         spawn_world = self.world.spawned_worlds.first()
@@ -107,6 +120,59 @@ spec:
   name_exclusions: |
     admin
     system
+  stats:
+    labels:
+      resources:
+        energy: Focus
+      derived:
+        ability_power: Skill Power
+    primary_attributes:
+      - key: constitution
+        label: Constitution
+      - key: strength
+        label: Strength
+      - key: dexterity
+        label: Dexterity
+      - key: intelligence
+        label: Intelligence
+      - key: awareness
+        label: Awareness
+    class_profiles:
+      warrior:
+        label: Vanguard
+        primary_attribute: strength
+        base_attribute_weights:
+          constitution: 3
+          strength: 4
+          dexterity: 1
+          intelligence: 1
+          awareness: 2
+    formulas:
+      global_rules:
+        - source: constitution
+          target: health_max
+          multiplier: 2
+        - source: constitution
+          target: resilience
+          multiplier: 1
+        - source: strength
+          target: attack_power
+          multiplier: 1
+        - source: strength
+          target: health_max
+          multiplier: 1
+        - source: dexterity
+          target: dodge
+          multiplier: 1
+        - source: dexterity
+          target: crit
+          multiplier: 1
+        - source: intelligence
+          target: ability_power
+          multiplier: 2
+        - source: awareness
+          target: energy_max
+          multiplier: 2
 """
         resp = self.client.post(
             self.apply_ep,
@@ -153,6 +219,19 @@ spec:
         self.assertEqual(config.small_background, "https://assets.example/card.png")
         self.assertEqual(config.large_background, "https://assets.example/banner.png")
         self.assertEqual(config.name_exclusions.strip().splitlines(), ["admin", "system"])
+        self.assertEqual(config.stat_system["labels"]["resources"]["energy"], "Focus")
+        self.assertEqual(
+            config.stat_system["labels"]["derived"]["ability_power"],
+            "Skill Power",
+        )
+        self.assertEqual(
+            config.stat_system["labels"]["classes"]["warrior"],
+            "Vanguard",
+        )
+        primary_keys = [
+            entry["key"] for entry in config.stat_system["primary_attributes"]
+        ]
+        self.assertIn("awareness", primary_keys)
 
     def test_apply_world_config_manifest_accepts_async_combat_pacing_sentinel(self):
         manifest = f"""
@@ -171,6 +250,67 @@ spec:
 
         self.world.config.refresh_from_db()
         self.assertEqual(self.world.config.combat_resolution_interval, -1)
+
+    def test_explicit_empty_class_profiles_create_clean_classless_stat_system(self):
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{self.world.id}
+spec:
+  is_classless: true
+  stats:
+    labels:
+      classes:
+        '': Classless
+    default_profile:
+      label: Classless
+      primary_attribute: ''
+      base_attribute_weights:
+        constitution: 3
+        strength: 2
+        dexterity: 2
+        intelligence: 2
+      derived_rules: []
+    class_profiles: {{}}
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        self.world.config.refresh_from_db()
+        self.assertTrue(self.world.config.is_classless)
+        self.assertEqual(self.world.config.stat_system["class_profiles"], {})
+        self.assertEqual(
+            self.world.config.stat_system["labels"]["classes"],
+            {"": "Classless"},
+        )
+
+        config_resp = self.client.get(self.config_ep)
+        self.assertEqual(config_resp.status_code, 200)
+        exported = yaml.safe_load(config_resp.data["yaml"])
+        self.assertEqual(exported["spec"]["stats"]["class_profiles"], {})
+        self.assertEqual(
+            exported["spec"]["stats"]["labels"]["classes"],
+            {"": "Classless"},
+        )
+
+    def test_apply_exported_world_config_yaml_round_trips_unchanged(self):
+        config_resp = self.client.get(self.config_ep)
+        self.assertEqual(config_resp.status_code, 200)
+
+        manifest_yaml = config_resp.data["yaml"]
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest_yaml},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["kind"], "world")
+        self.assertEqual(resp.data["operation"], "updated")
 
     def test_apply_world_config_manifest_rejects_legacy_kind(self):
         manifest = f"""

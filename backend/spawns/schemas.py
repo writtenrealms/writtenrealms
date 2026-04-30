@@ -50,6 +50,7 @@ class Item(BaseModel):
     # Combat stats
     attack_power: int = 0
     spell_power: int = 0
+    ability_power: int = 0
     armor: int = 0
     crit: int = 0
     resilience: int = 0
@@ -59,6 +60,8 @@ class Item(BaseModel):
     health_regen: int = 0
     mana_max: int = 0
     mana_regen: int = 0
+    energy_max: int = 0
+    energy_regen: int = 0
     stamina_max: int = 0
     stamina_regen: int = 0
 
@@ -214,6 +217,10 @@ class Actor(BaseModel):
     mana: int = 0
     mana_max: int = 0
     mana_regen: int = 0
+    energy: int = 0
+    energy_base: int = 0
+    energy_max: int = 0
+    energy_regen: int = 0
 
     # Combat
     target: Optional[Target] = None
@@ -229,12 +236,15 @@ class Actor(BaseModel):
     intelligence: int = 0
     attack_power: int = 0
     spell_power: int = 0
+    ability_power: int = 0
     crit: int = 0
     crit_perc: float = 0.0
     dodge: int = 0
     dodge_perc: float = 0.0
     resilience: int = 0
     resilience_perc: float = 0.0
+    primary_attributes: Dict[str, int] = Field(default_factory=dict)
+    derived_stats: Dict[str, int] = Field(default_factory=dict)
 
     # Equipment & inventory
     equipment: Equipment = Field(default_factory=Equipment)
@@ -517,6 +527,7 @@ class World(BaseModel):
     players_can_set_title: bool = False
 
     # Game data
+    labels: Dict[str, Any] = Field(default_factory=dict)
     factions: Dict[str, Faction] = Field(default_factory=dict)
     skills: Dict[str, Any] = Field(default_factory=dict)  # Custom skill definitions
     facts: Dict[str, Any] = Field(default_factory=dict)

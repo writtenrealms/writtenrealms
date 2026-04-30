@@ -370,7 +370,9 @@ class MobTemplate(CharMixin, MobMixin, AdventBaseModel):
         stats = computations.compute_stats(
             level=self.level,
             archetype=self.archetype,
-            boost_mob=True)
+            boost_mob=True,
+            world=self.world,
+        )
         for stat, value in stats.items():
             setattr(self, stat, value)
         self.save()

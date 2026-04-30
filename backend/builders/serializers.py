@@ -21,6 +21,10 @@ from rest_framework import serializers
 
 from config import constants as api_consts
 from config import game_settings as adv_config
+from core.stat_system import (
+    StatSystemValidationError,
+    normalize_stat_system,
+)
 from builders.models import (
     BuilderAssignment,
     Currency,
@@ -335,6 +339,7 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'decay_glory',
             'name_exclusions',
             'globals_enabled',
+            'stat_system',
         ]
 
     def validate_combat_resolution_interval(self, value):
@@ -343,6 +348,12 @@ class WorldConfigSerializer(serializers.ModelSerializer):
                 "combat_resolution_interval must be -1 or >= 0."
             )
         return value
+
+    def validate_stat_system(self, value):
+        try:
+            return normalize_stat_system(value)
+        except StatSystemValidationError as exc:
+            raise serializers.ValidationError(str(exc))
 
 # World Admin
 

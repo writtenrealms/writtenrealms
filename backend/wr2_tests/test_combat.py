@@ -34,7 +34,7 @@ class TestKillCommand(WorldTestCase):
             and (player_key is None or msg["player_key"] == player_key)
         ]
 
-    def test_kill_auto_resolves_until_mob_dies_and_awards_experience(self):
+    def test_kill_auto_resolves_until_mob_dies_and_awards_rewards(self):
         mob = Mob.objects.create(
             world=self.spawn_world,
             room=self.room,
@@ -44,9 +44,14 @@ class TestKillCommand(WorldTestCase):
             health_max=self.stats["attack_power"] + 5,
             attack_power=4,
             exp_worth=17,
+            gold=300,
         )
         mob.create_corpse()
         exp_before = self.player.experience
+        gold_before = self.player.gold
+        watcher = self.create_player("Watcher", room=self.room)
+        watcher.in_game = True
+        watcher.save(update_fields=["in_game"])
 
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "kill rat")
@@ -54,6 +59,7 @@ class TestKillCommand(WorldTestCase):
         self.player.refresh_from_db()
         self.assertFalse(Mob.objects.filter(pk=mob.id).exists())
         self.assertEqual(self.player.experience, exp_before + 17)
+        self.assertEqual(self.player.gold, gold_before + 300)
 
         actor_attacks = self._messages_by_type(
             messages,
@@ -69,13 +75,39 @@ class TestKillCommand(WorldTestCase):
             self.player.key,
         )
         self.assertIsNotNone(death_message)
-        self.assertEqual(death_message["text"], "You kill Rat.")
+        self.assertEqual(death_message["text"], "Rat is dead! R.I.P.")
         self.assertEqual(death_message["data"]["actor"]["experience"], exp_before + 17)
+        self.assertEqual(death_message["data"]["actor"]["gold"], gold_before + 300)
+        self.assertEqual(death_message["data"]["gold_gained"], 300)
         self.assertTrue(
             any(
                 item["type"] == "corpse" and "rat" in item["name"].lower()
                 for item in death_message["data"]["room"]["inventory"]
             )
+        )
+
+        reward_message = self._message_by_type(
+            messages,
+            "notification.reward",
+            self.player.key,
+        )
+        self.assertIsNotNone(reward_message)
+        self.assertEqual(
+            reward_message["text"],
+            "You gain 17 experience.\nYou receive 300 gold.",
+        )
+        self.assertEqual(reward_message["data"]["actor"]["experience"], exp_before + 17)
+        self.assertEqual(reward_message["data"]["actor"]["gold"], gold_before + 300)
+
+        watcher_death = self._message_by_type(
+            messages,
+            "notification.death",
+            watcher.key,
+        )
+        self.assertIsNotNone(watcher_death)
+        self.assertEqual(watcher_death["text"], "Rat is dead! R.I.P.")
+        self.assertIsNone(
+            self._message_by_type(messages, "notification.reward", watcher.key)
         )
 
     def test_kill_can_get_player_killed_and_moves_them_to_death_room(self):
@@ -229,9 +261,11 @@ class TestKillCommand(WorldTestCase):
             attack_power=4,
             fights_back=True,
             exp_worth=9,
+            gold=25,
         )
         mob.create_corpse()
         exp_before = self.player.experience
+        gold_before = self.player.gold
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async") as schedule_mock:
             with capture_game_messages() as first_messages:
@@ -261,10 +295,21 @@ class TestKillCommand(WorldTestCase):
             CombatEncounter.STATUS_FINISHED,
         )
         self.assertEqual(self.player.experience, exp_before + 9)
+        self.assertEqual(self.player.gold, gold_before + 25)
         death_message = self._message_by_type(
             second_messages,
             "notification.death",
             self.player.key,
         )
         self.assertIsNotNone(death_message)
-        self.assertEqual(death_message["text"], "You kill Rat.")
+        self.assertEqual(death_message["text"], "Rat is dead! R.I.P.")
+        reward_message = self._message_by_type(
+            second_messages,
+            "notification.reward",
+            self.player.key,
+        )
+        self.assertIsNotNone(reward_message)
+        self.assertEqual(
+            reward_message["text"],
+            "You gain 9 experience.\nYou receive 25 gold.",
+        )

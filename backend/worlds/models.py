@@ -1018,6 +1018,7 @@ class WorldConfig(BaseModel):
     non_ascii_names = models.BooleanField(default=False)
     is_classless = models.BooleanField(default=False)
     globals_enabled = models.BooleanField(default=True)
+    stat_system = models.JSONField(default=dict)
 
     # If false, all chars will be default_gender gender
     can_select_gender = models.BooleanField(default=True)

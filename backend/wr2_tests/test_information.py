@@ -210,6 +210,78 @@ class TestStateSyncText(WorldTestCase):
         self.assertEqual(actor["mana_max"], stats["mana_max"])
         self.assertEqual(actor["stamina_max"], stats["stamina_max"])
 
+    def test_state_sync_includes_world_stat_labels_and_aliases(self):
+        self.world.config.stat_system = {
+            "labels": {
+                "resources": {
+                    "energy": "Focus",
+                },
+                "derived": {
+                    "ability_power": "Skill Power",
+                },
+                "classes": {
+                    "warrior": "Vanguard",
+                },
+            },
+            "primary_attributes": [
+                {"key": "constitution", "label": "Constitution"},
+                {"key": "strength", "label": "Strength"},
+                {"key": "dexterity", "label": "Dexterity"},
+                {"key": "intelligence", "label": "Intelligence"},
+                {"key": "awareness", "label": "Awareness"},
+            ],
+            "class_profiles": {
+                "warrior": {
+                    "label": "Vanguard",
+                    "primary_attribute": "strength",
+                    "base_attribute_weights": {
+                        "constitution": 3,
+                        "strength": 4,
+                        "dexterity": 1,
+                        "intelligence": 1,
+                        "awareness": 2,
+                    },
+                },
+            },
+            "formulas": {
+                "global_rules": [
+                    {"source": "constitution", "target": "health_max", "multiplier": 2},
+                    {"source": "constitution", "target": "resilience", "multiplier": 1},
+                    {"source": "strength", "target": "attack_power", "multiplier": 1},
+                    {"source": "strength", "target": "health_max", "multiplier": 1},
+                    {"source": "dexterity", "target": "dodge", "multiplier": 1},
+                    {"source": "dexterity", "target": "crit", "multiplier": 1},
+                    {"source": "intelligence", "target": "ability_power", "multiplier": 2},
+                    {"source": "awareness", "target": "energy_max", "multiplier": 2},
+                ],
+            },
+        }
+        self.world.config.save(update_fields=["stat_system"])
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="state.sync",
+                player_id=self.player.id,
+                payload={},
+            )
+
+        message = self._message_by_type(messages, "cmd.state.sync.success")
+        self.assertIsNotNone(message)
+        actor = message["data"]["actor"]
+        world_data = message["data"]["world"]
+
+        self.assertEqual(world_data["labels"]["resources"]["energy"], "Focus")
+        self.assertEqual(
+            world_data["labels"]["derived"]["ability_power"],
+            "Skill Power",
+        )
+        self.assertEqual(world_data["labels"]["classes"]["warrior"], "Vanguard")
+        self.assertEqual(actor["energy"], actor["mana"])
+        self.assertEqual(actor["energy_max"], actor["mana_max"])
+        self.assertEqual(actor["ability_power"], actor["spell_power"])
+        self.assertIn("awareness", actor["primary_attributes"])
+        self.assertGreater(actor["primary_attributes"]["awareness"], 0)
+
     def test_state_sync_room_chars_include_primary_keyword(self):
         mob = self.create_mob("Gus Tone", keywords="gus tone")
 

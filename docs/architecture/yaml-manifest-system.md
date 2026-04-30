@@ -240,6 +240,19 @@ and the current placeholder `kill <mob>` combat flow now honors it:
 Broader encounter scheduling, queued abilities, and non-basic combat actions are
 still future work.
 
+World manifests now also support `spec.stats`, which holds the authored WR2
+stat system for that world:
+
+- primary attribute definitions
+- resource and derived stat labels
+- class or archetype profiles
+- bounded formula rules
+
+For details and a working WR1-style reference configuration, see:
+
+- [stats-formulas-and-classes.md](/Users/teebes/code/writtenrealms/docs/architecture/stats-formulas-and-classes.md)
+- [wr1-archetype-world-reference.md](/Users/teebes/code/writtenrealms/docs/dev/wr1-archetype-world-reference.md)
+
 ## `apiVersion`
 
 - `apiVersion` is optional for manifests.

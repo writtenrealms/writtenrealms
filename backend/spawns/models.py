@@ -307,7 +307,12 @@ class Player(CharMixin, AdventBaseModel):
             self.marks.all().delete()
             CharacterState.objects.filter(player=self).delete()
 
-        stats = compute_stats(self.level, self.archetype)
+        stats = compute_stats(
+            self.level,
+            self.archetype,
+            char=self,
+            world=self.world,
+        )
         self.health = stats['health_max']
         self.mana = stats['mana_max']
         self.stamina = stats['stamina_max']

@@ -44,7 +44,12 @@ class CombatStepResult:
 
 
 def _player_combat_stats(player: Player) -> CombatStats:
-    stats = compute_stats(player.level, player.archetype)
+    stats = compute_stats(
+        player.level,
+        player.archetype,
+        char=player,
+        world=player.world,
+    )
     return CombatStats(
         # TODO: Replace this placeholder AP=damage model with the real formulas layer.
         player_attack_power=int(stats.get("attack_power") or 0),
@@ -98,6 +103,26 @@ def _actor_hit_text(actor_name: str, damage: int) -> str:
 
 def _room_attack_text(actor_name: str, target_name: str, damage: int) -> str:
     return f"{actor_name} hits {target_name} for {damage} damage."
+
+
+def _mob_death_text(mob_name: str | None) -> str:
+    name = str(mob_name or "").strip() or "Something"
+    return f"{name} is dead! R.I.P."
+
+
+def _reward_text(
+    *,
+    experience_gained: int = 0,
+    gold_gained: int = 0,
+) -> str | None:
+    lines: list[str] = []
+    if experience_gained > 0:
+        lines.append(f"You gain {experience_gained} experience.")
+    if gold_gained > 0:
+        lines.append(f"You receive {gold_gained} gold.")
+    if not lines:
+        return None
+    return "\n".join(lines)
 
 
 def _empty_corpse_payload() -> dict:
@@ -292,13 +317,21 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
             corpse_id = _ensure_corpse(target_mob)
             deceased_payload = serialize_char_from_mob(target_mob).model_dump()
             exp_reward = int(target_mob.exp_worth or 0)
+            gold_reward = int(target_mob.gold or 0)
             _finish_encounter(encounter)
             target_mob.delete()
 
+            reward_update_fields: list[str] = []
             if exp_reward:
                 player.experience = int(player.experience or 0) + exp_reward
                 # TODO: Trigger level-up/progression checks once WR2 leveling exists.
-                player.save(update_fields=["experience"])
+                reward_update_fields.append("experience")
+            if gold_reward:
+                # TODO: Route mob spoils through a party/share policy once WR2 grouping exists.
+                player.gold = int(player.gold or 0) + gold_reward
+                reward_update_fields.append("gold")
+            if reward_update_fields:
+                player.save(update_fields=reward_update_fields)
 
             actor_payload = serialize_actor(player, room).model_dump()
             corpse_payload = _serialize_corpse(corpse_id, viewer=player)
@@ -310,13 +343,15 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
                 "corpse": corpse_payload,
                 "room": room_payload,
                 "experience_gained": exp_reward,
+                "gold_gained": gold_reward,
             }
+            death_text = _mob_death_text(deceased_payload.get("name"))
             events.append(
                 GameEvent(
                     type="notification.death",
                     recipients=[player.key],
                     data=death_data,
-                    text=f"You kill {deceased_payload.get('name') or 'them'}.",
+                    text=death_text,
                 )
             )
 
@@ -332,12 +367,28 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
                                 "killer": serialize_char_from_player(player).model_dump(),
                                 "corpse": corpse_payload,
                             },
-                            text=(
-                                f"{player.name} kills "
-                                f"{deceased_payload.get('name') or 'them'}."
-                            ),
-                        )
+                            text=death_text,
                     )
+                )
+
+            reward_text = _reward_text(
+                experience_gained=exp_reward,
+                gold_gained=gold_reward,
+            )
+            if reward_text:
+                events.append(
+                    GameEvent(
+                        type="notification.reward",
+                        recipients=[player.key],
+                        data={
+                            "actor": actor_payload,
+                            "source": deceased_payload,
+                            "experience_gained": exp_reward,
+                            "gold_gained": gold_reward,
+                        },
+                        text=reward_text,
+                    )
+                )
 
             events.append(
                 GameEvent(
@@ -348,6 +399,7 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
                         "target": deceased_payload,
                         "room": room_payload,
                         "experience_gained": exp_reward,
+                        "gold_gained": gold_reward,
                     },
                 )
             )

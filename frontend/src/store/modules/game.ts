@@ -205,6 +205,14 @@ const receiveMessage = async ({
     commit("full_screen_message_clear");
   }
 
+  if (message_data.data && message_data.data.world && !isStateSnapshot) {
+    const world_data = {
+      ...state.world,
+      ...message_data.data.world,
+    };
+    commit("world_set", world_data);
+  }
+
   // Disconection
   if (message_data.type === "system.disconnect.success") {
     if (rootState.auth.user.is_temporary) {
