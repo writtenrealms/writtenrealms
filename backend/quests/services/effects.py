@@ -13,6 +13,7 @@ from core.scoped_state import (
     resolve_scope_owner,
     set_state_value,
 )
+from core.leveling import apply_experience
 from core.utils import format_actor_msg
 from quests.entity_refs import resolve_template_ref_id
 from spawns.actions.base import ActionError
@@ -337,7 +338,7 @@ def apply_quest_effects(
 
     state = dict(quest_instance.local_state or {})
     state_changed = False
-    player_changed = False
+    player_update_fields: set[str] = set()
 
     for effect in effects:
         if not isinstance(effect, dict):
@@ -459,7 +460,7 @@ def apply_quest_effects(
             amount = _coerce_amount(effect.get("amount", effect.get("gold")))
             if amount:
                 player.gold = int(player.gold or 0) + amount
-                player_changed = True
+                player_update_fields.add("gold")
                 result.reward_summaries.append(f"{amount} gold")
             continue
 
@@ -473,9 +474,13 @@ def apply_quest_effects(
                 )
             )
             if amount:
-                player.experience = int(player.experience or 0) + amount
-                player_changed = True
+                leveling = apply_experience(player, amount)
+                player_update_fields.add("experience")
+                if leveling.leveled_up:
+                    player_update_fields.add("level")
                 result.reward_summaries.append(f"{amount} experience")
+                if leveling.leveled_up:
+                    result.reward_summaries.append(f"level {leveling.new_level}")
             continue
 
         if effect_type in {"grant_item", "spawn_item"}:
@@ -534,7 +539,7 @@ def apply_quest_effects(
         quest_instance.local_state = state
         quest_instance.save(update_fields=["local_state", "modified_ts"])
 
-    if player_changed:
-        player.save(update_fields=["gold", "experience"])
+    if player_update_fields:
+        player.save(update_fields=sorted(player_update_fields))
 
     return result

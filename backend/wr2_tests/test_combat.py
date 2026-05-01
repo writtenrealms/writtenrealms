@@ -131,6 +131,47 @@ class TestKillCommand(WorldTestCase):
             self._message_by_type(messages, "notification.reward", watcher.key)
         )
 
+    def test_kill_reward_levels_player_when_xp_crosses_threshold(self):
+        self.player.experience = 29
+        self.player.level = 1
+        self.player.save(update_fields=["experience", "level"])
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Rat",
+            keywords="rat",
+            health=self.stats["attack_power"],
+            health_max=self.stats["attack_power"],
+            attack_power=0,
+            exp_worth=1,
+        )
+        mob.create_corpse()
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "kill rat")
+
+        self.player.refresh_from_db()
+        self.assertFalse(Mob.objects.filter(pk=mob.id).exists())
+        self.assertEqual(self.player.experience, 30)
+        self.assertEqual(self.player.level, 2)
+
+        reward_message = self._message_by_type(
+            messages,
+            "notification.reward",
+            self.player.key,
+        )
+        self.assertIsNotNone(reward_message)
+        self.assertEqual(
+            reward_message["text"],
+            "You gain 1 experience.\nYou are now level 2!",
+        )
+        self.assertEqual(reward_message["data"]["previous_level"], 1)
+        self.assertEqual(reward_message["data"]["new_level"], 2)
+        self.assertEqual(reward_message["data"]["levels_gained"], 1)
+        self.assertEqual(reward_message["data"]["actor"]["level"], 2)
+        self.assertEqual(reward_message["data"]["experience_progress"], 0)
+        self.assertEqual(reward_message["data"]["experience_needed"], 70)
+
     def test_kill_can_get_player_killed_and_moves_them_to_death_room(self):
         graveyard = self.room.create_at("east")
         self.world.config.death_room = graveyard

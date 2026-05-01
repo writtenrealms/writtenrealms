@@ -429,6 +429,93 @@ class TestBuilderJump(WorldTestCase):
         )
 
 
+class TestBuilderSetLevel(WorldTestCase):
+    def _message_by_type(self, messages, message_type):
+        for msg in messages:
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def test_setlevel_updates_builder_player_level_and_experience(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/setlevel 3")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.level, 3)
+        self.assertEqual(self.player.experience, 100)
+
+        message = self._message_by_type(messages, "cmd./setlevel.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target_type"], "player")
+        self.assertEqual(message["data"]["previous_level"], 1)
+        self.assertEqual(message["data"]["new_level"], 3)
+        self.assertEqual(message["data"]["experience"], 100)
+        self.assertEqual(message["data"]["experience_progress"], 0)
+        self.assertEqual(message["data"]["experience_needed"], 300)
+
+    def test_setlevel_updates_room_player_target(self):
+        target = self.create_player("Target", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/setlevel target 2")
+
+        target.refresh_from_db()
+        self.assertEqual(target.level, 2)
+        self.assertEqual(target.experience, 30)
+
+        message = self._message_by_type(messages, "cmd./setlevel.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target"]["key"], target.key)
+        self.assertIn("Target", message["text"])
+
+    def test_setlevel_updates_room_mob_target(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Guard",
+            keywords="guard",
+            level=1,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/setlevel guard 4")
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.level, 4)
+
+        message = self._message_by_type(messages, "cmd./setlevel.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target_type"], "mob")
+        self.assertEqual(message["data"]["target"]["key"], mob.key)
+        self.assertEqual(message["data"]["new_level"], 4)
+
+    def test_setlevel_rejects_levels_above_world_max(self):
+        self.world.config.max_level = 2
+        self.world.config.save(update_fields=["max_level"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/setlevel 3")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.level, 1)
+        message = self._message_by_type(messages, "cmd./setlevel.error")
+        self.assertIsNotNone(message)
+        self.assertIn("between 1 and 2", message.get("text", ""))
+
+    def test_setlevel_requires_builder_permissions(self):
+        other_user = self.create_user("other-setlevel@example.com")
+        other_player = self.create_player("Other", user=other_user)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(other_player.id, "/setlevel 3")
+
+        other_player.refresh_from_db()
+        self.assertEqual(other_player.level, 1)
+        message = self._message_by_type(messages, "cmd./setlevel.error")
+        self.assertIsNotNone(message)
+        self.assertIn("permission", message.get("text", "").lower())
+
+
 class TestBuilderResync(WorldTestCase):
     def _message_by_type(self, messages, message_type):
         for msg in messages:

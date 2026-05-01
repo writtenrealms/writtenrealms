@@ -19,6 +19,11 @@ from core.combat_formulas import (
     get_world_combat_system,
     normalize_combat_system,
 )
+from core.leveling import (
+    LevelingConfigError,
+    normalize_leveling_curve,
+    validate_leveling_config,
+)
 from core.stat_system import (
     StatSystemValidationError,
     get_world_stat_system,
@@ -80,6 +85,8 @@ _WORLD_CONFIG_CONFIG_BOOL_FIELDS = (
 )
 _WORLD_CONFIG_CONFIG_INT_FIELDS = (
     "starting_gold",
+    "starting_level",
+    "max_level",
 )
 _WORLD_CONFIG_CONFIG_FLOAT_FIELDS = (
     "combat_resolution_interval",
@@ -95,6 +102,7 @@ _WORLD_CONFIG_CONFIG_ROOM_FIELDS = (
 )
 _WORLD_CONFIG_STATS_FIELD = "stats"
 _WORLD_CONFIG_COMBAT_FIELD = "combat"
+_WORLD_CONFIG_LEVELING_FIELD = "leveling_curve"
 _WORLD_FIELDS_PROPAGATED_TO_SPAWNS = {
     "name",
     "short_description",
@@ -478,6 +486,11 @@ def world_config_to_manifest(
             "motd": world.motd or "",
             "is_public": bool(world.is_public),
             "starting_gold": int(config.starting_gold),
+            "starting_level": int(config.starting_level),
+            _WORLD_CONFIG_LEVELING_FIELD: normalize_leveling_curve(
+                config.leveling_curve
+            ),
+            "max_level": int(config.max_level),
             "combat_resolution_interval": _serialize_number(
                 config.combat_resolution_interval
             ),
@@ -558,6 +571,11 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
         },
         "config": {
             "starting_gold": int(config.starting_gold),
+            "starting_level": int(config.starting_level),
+            _WORLD_CONFIG_LEVELING_FIELD: normalize_leveling_curve(
+                config.leveling_curve
+            ),
+            "max_level": int(config.max_level),
             "combat_resolution_interval": _serialize_number(
                 config.combat_resolution_interval
             ),
@@ -1557,6 +1575,7 @@ def parse_world_config_manifest(
     allowed_fields.update(_WORLD_CONFIG_CONFIG_ROOM_FIELDS)
     allowed_fields.add(_WORLD_CONFIG_STATS_FIELD)
     allowed_fields.add(_WORLD_CONFIG_COMBAT_FIELD)
+    allowed_fields.add(_WORLD_CONFIG_LEVELING_FIELD)
 
     unknown_fields = sorted(set(spec.keys()) - allowed_fields)
     if unknown_fields:
@@ -1594,8 +1613,11 @@ def parse_world_config_manifest(
     for field_name in _WORLD_CONFIG_CONFIG_INT_FIELDS:
         if field_name in spec:
             value = _coerce_int(spec.get(field_name), f"spec.{field_name}")
-            if value < 0:
-                raise serializers.ValidationError(f"spec.{field_name} must be >= 0.")
+            min_value = 1 if field_name in {"starting_level", "max_level"} else 0
+            if value < min_value:
+                raise serializers.ValidationError(
+                    f"spec.{field_name} must be >= {min_value}."
+                )
             config_updates[field_name] = value
 
     for field_name in _WORLD_CONFIG_CONFIG_FLOAT_FIELDS:
@@ -1645,6 +1667,32 @@ def parse_world_config_manifest(
             )
         except CombatFormulaValidationError as exc:
             raise serializers.ValidationError(str(exc))
+
+    if _WORLD_CONFIG_LEVELING_FIELD in spec:
+        try:
+            config_updates[_WORLD_CONFIG_LEVELING_FIELD] = normalize_leveling_curve(
+                spec.get(_WORLD_CONFIG_LEVELING_FIELD)
+            )
+        except LevelingConfigError as exc:
+            raise serializers.ValidationError(str(exc))
+
+    try:
+        validate_leveling_config(
+            starting_level=config_updates.get(
+                "starting_level",
+                config.starting_level,
+            ),
+            max_level=config_updates.get(
+                "max_level",
+                config.max_level,
+            ),
+            leveling_curve=config_updates.get(
+                _WORLD_CONFIG_LEVELING_FIELD,
+                config.leveling_curve,
+            ),
+        )
+    except LevelingConfigError as exc:
+        raise serializers.ValidationError(str(exc))
 
     return ParsedWorldConfigManifest(
         world=world,

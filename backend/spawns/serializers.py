@@ -249,6 +249,9 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
 
     starting_room = KeyField(source='config.starting_room')
     death_room = KeyField(source='config.death_room')
+    starting_level = serializers.IntegerField(source='config.starting_level')
+    max_level = serializers.IntegerField(source='config.max_level')
+    leveling_curve = serializers.JSONField(source='config.leveling_curve')
     death_mode = serializers.CharField(source='config.death_mode')
     combat_resolution_interval = serializers.FloatField(
         source='config.combat_resolution_interval')
@@ -288,6 +291,9 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
             'never_reload',
             'starting_room',
             'death_room',
+            'starting_level',
+            'max_level',
+            'leveling_curve',
             'combat_resolution_interval',
             'death_gold_penalty',
             'has_corpse_decay',

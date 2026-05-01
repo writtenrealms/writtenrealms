@@ -20,6 +20,7 @@ Builder-facing trigger authoring guidance lives in:
 
 - [docs/guides/trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md)
 - [docs/guides/combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md)
+- [docs/guides/leveling-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/leveling-builder-guide.md)
 
 ## Current Flows
 
@@ -200,6 +201,14 @@ spec:
   motd: Questions? Join Discord.
   is_public: true
   starting_gold: 0
+  starting_level: 1
+  max_level: 5
+  leveling_curve:
+    - 0
+    - 30
+    - 100
+    - 400
+    - 1000
   combat_resolution_interval: 0
   starting_room: room@0,0,0
   death_room: room@10,0,0
@@ -240,6 +249,14 @@ and the current placeholder `kill <mob>` combat flow now honors it:
 
 Broader encounter scheduling, queued abilities, and non-basic combat actions are
 still future work.
+
+`starting_level`, `max_level`, and `leveling_curve` control player progression.
+`leveling_curve` is a cumulative XP threshold list where the first entry is
+level 1 and must be `0`; for example, the second entry is the XP required to
+reach level 2. `max_level` cannot be higher than the number of curve entries.
+The example above defines five reachable levels; a 20-level world needs 20
+entries.
+See [leveling-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/leveling-builder-guide.md).
 
 World manifests now also support `spec.stats`, which holds the authored WR2
 stat system for that world:

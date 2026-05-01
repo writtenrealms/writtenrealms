@@ -44,6 +44,9 @@
             <li>
               Starting Gold: {{ configData.starting_gold }}
             </li>
+            <li>Starting Level: {{ configData.starting_level }}</li>
+            <li>Max Level: {{ configData.max_level }}</li>
+            <li>Leveling Curve: {{ levelingCurveSummary }}</li>
 
             <li>
               Starting Room:
@@ -267,6 +270,11 @@ const configPayload = computed(() => store.state.builder.worlds.config);
 const configData = computed(() => configPayload.value?.config || null);
 const configYaml = computed(() => configPayload.value?.yaml || "");
 const showConfigYaml = ref(false);
+const levelingCurveSummary = computed(() => {
+  const curve = configData.value?.leveling_curve;
+  if (!Array.isArray(curve) || !curve.length) return "(empty)";
+  return `${curve.length} levels, ${curve[curve.length - 1]} XP at cap`;
+});
 
 const room_link = (id: number) => {
   return {

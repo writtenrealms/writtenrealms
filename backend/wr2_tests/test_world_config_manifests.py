@@ -39,6 +39,9 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(config_resp.data["world"]["id"], self.world.id)
         self.assertEqual(config_resp.data["world"]["name"], self.world.name)
         self.assertEqual(config_resp.data["config"]["starting_room"]["id"], self.room.id)
+        self.assertEqual(config_resp.data["config"]["starting_level"], 1)
+        self.assertEqual(config_resp.data["config"]["max_level"], 20)
+        self.assertEqual(config_resp.data["config"]["leveling_curve"][1], 30)
         self.assertEqual(config_resp.data["config"]["combat_resolution_interval"], 0)
         self.assertEqual(
             config_resp.data["config"]["stat_system"]["labels"]["resources"]["energy"],
@@ -59,6 +62,9 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(world_manifest["kind"], "world")
         self.assertNotIn("metadata", world_manifest)
         self.assertEqual(world_manifest["spec"]["name"], self.world.name)
+        self.assertEqual(world_manifest["spec"]["starting_level"], 1)
+        self.assertEqual(world_manifest["spec"]["max_level"], 20)
+        self.assertEqual(world_manifest["spec"]["leveling_curve"][1], 30)
         self.assertEqual(world_manifest["spec"]["starting_room"], "room@0,0,0")
         self.assertEqual(world_manifest["spec"]["death_room"], "room@0,0,0")
         self.assertEqual(world_manifest["spec"]["combat_resolution_interval"], 0)
@@ -108,6 +114,9 @@ spec:
   motd: Manifest update complete.
   is_public: true
   starting_gold: 15
+  starting_level: 2
+  max_level: 5
+  leveling_curve: [0, 10, 30, 60, 100]
   combat_resolution_interval: 1.5
   starting_room: room.{starting_room.id}
   death_room: room.{death_room.id}
@@ -217,6 +226,9 @@ spec:
 
         config = self.world.config
         self.assertEqual(config.starting_gold, 15)
+        self.assertEqual(config.starting_level, 2)
+        self.assertEqual(config.max_level, 5)
+        self.assertEqual(config.leveling_curve, [0, 10, 30, 60, 100])
         self.assertEqual(config.combat_resolution_interval, 1.5)
         self.assertEqual(config.starting_room_id, starting_room.id)
         self.assertEqual(config.death_room_id, death_room.id)
@@ -273,6 +285,40 @@ spec:
 
         self.world.config.refresh_from_db()
         self.assertEqual(self.world.config.combat_resolution_interval, -1)
+
+    def test_apply_world_config_manifest_rejects_invalid_leveling_curve(self):
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{self.world.id}
+spec:
+  max_level: 4
+  leveling_curve: [0, 30, 30]
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("strictly increase", str(resp.data))
+
+    def test_apply_world_config_manifest_rejects_max_above_curve_length(self):
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{self.world.id}
+spec:
+  max_level: 4
+  leveling_curve: [0, 30, 100]
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("max_level", str(resp.data))
 
     def test_explicit_empty_class_profiles_create_clean_classless_stat_system(self):
         manifest = f"""

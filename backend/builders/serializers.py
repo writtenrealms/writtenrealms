@@ -25,6 +25,11 @@ from core.combat_formulas import (
     CombatFormulaValidationError,
     normalize_combat_system,
 )
+from core.leveling import (
+    LevelingConfigError,
+    normalize_leveling_curve,
+    validate_leveling_config,
+)
 from core.stat_system import (
     StatSystemValidationError,
     normalize_stat_system,
@@ -323,6 +328,9 @@ class WorldConfigSerializer(serializers.ModelSerializer):
         model = WorldConfig
         fields = [
             'starting_gold',
+            'starting_level',
+            'leveling_curve',
+            'max_level',
             'starting_room',
             'death_room',
             'death_mode',
@@ -354,6 +362,12 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             )
         return value
 
+    def validate_leveling_curve(self, value):
+        try:
+            return normalize_leveling_curve(value)
+        except LevelingConfigError as exc:
+            raise serializers.ValidationError(str(exc))
+
     def validate_stat_system(self, value):
         try:
             return normalize_stat_system(value)
@@ -365,6 +379,28 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             return normalize_combat_system(value)
         except CombatFormulaValidationError as exc:
             raise serializers.ValidationError(str(exc))
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        config = self.instance
+        try:
+            validate_leveling_config(
+                starting_level=attrs.get(
+                    "starting_level",
+                    getattr(config, "starting_level", 1),
+                ),
+                max_level=attrs.get(
+                    "max_level",
+                    getattr(config, "max_level", 20),
+                ),
+                leveling_curve=attrs.get(
+                    "leveling_curve",
+                    getattr(config, "leveling_curve", None),
+                ),
+            )
+        except LevelingConfigError as exc:
+            raise serializers.ValidationError(str(exc))
+        return attrs
 
 # World Admin
 

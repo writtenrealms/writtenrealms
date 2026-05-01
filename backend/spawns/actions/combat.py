@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from core.combat_formulas import CombatAttackResult, resolve_attack
 from core.computations import compute_stats
+from core.leveling import ExperienceGrant, apply_experience
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.targeting import resolve_room_mob_target
 from spawns.events import GameEvent
@@ -124,10 +125,13 @@ def _reward_text(
     *,
     experience_gained: int = 0,
     gold_gained: int = 0,
+    leveling: ExperienceGrant | None = None,
 ) -> str | None:
     lines: list[str] = []
     if experience_gained > 0:
         lines.append(f"You gain {experience_gained} experience.")
+    if leveling and leveling.leveled_up:
+        lines.append(f"You are now level {leveling.new_level}!")
     if gold_gained > 0:
         lines.append(f"You receive {gold_gained} gold.")
     if not lines:
@@ -329,10 +333,12 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
         target_mob.delete()
 
         reward_update_fields: list[str] = []
+        leveling: ExperienceGrant | None = None
         if exp_reward:
-            player.experience = int(player.experience or 0) + exp_reward
-            # TODO: Trigger level-up/progression checks once WR2 leveling exists.
+            leveling = apply_experience(player, exp_reward)
             reward_update_fields.append("experience")
+            if leveling.leveled_up:
+                reward_update_fields.append("level")
         if gold_reward:
             # TODO: Route mob spoils through a party/share policy once WR2 grouping exists.
             player.gold = int(player.gold or 0) + gold_reward
@@ -381,18 +387,31 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
         reward_text = _reward_text(
             experience_gained=exp_reward,
             gold_gained=gold_reward,
+            leveling=leveling,
         )
         if reward_text:
+            reward_data = {
+                "actor": actor_payload,
+                "source": deceased_payload,
+                "experience_gained": exp_reward,
+                "gold_gained": gold_reward,
+            }
+            if leveling:
+                reward_data.update(
+                    {
+                        "previous_level": leveling.previous_level,
+                        "new_level": leveling.new_level,
+                        "levels_gained": leveling.levels_gained,
+                        "experience_progress": leveling.experience_progress,
+                        "experience_needed": leveling.experience_needed,
+                        "max_level": leveling.max_level,
+                    }
+                )
             events.append(
                 GameEvent(
                     type="notification.reward",
                     recipients=[player.key],
-                    data={
-                        "actor": actor_payload,
-                        "source": deceased_payload,
-                        "experience_gained": exp_reward,
-                        "gold_gained": gold_reward,
-                    },
+                    data=reward_data,
                     text=reward_text,
                 )
             )
@@ -407,6 +426,7 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
                     "room": room_payload,
                     "experience_gained": exp_reward,
                     "gold_gained": gold_reward,
+                    "levels_gained": leveling.levels_gained if leveling else 0,
                 },
             )
         )

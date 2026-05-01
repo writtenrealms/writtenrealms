@@ -353,6 +353,9 @@ class TestStateSyncMapKeys(WorldTestCase):
         expected_key = f"room.{self.room.relative_id}"
         self.assertEqual(world_data["starting_room"], expected_key)
         self.assertEqual(world_data["death_room"], expected_key)
+        self.assertEqual(world_data["starting_level"], 1)
+        self.assertEqual(world_data["max_level"], 20)
+        self.assertEqual(world_data["leveling_curve"][1], 30)
         self.assertEqual(world_data["combat_resolution_interval"], 0.0)
 
 

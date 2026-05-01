@@ -141,6 +141,187 @@ combat:
 You do not need to paste the full block every time. You can paste only the
 fields you want to change.
 
+## How A Hit Becomes Damage
+
+Combat uses the actor's effective stats at the moment the hit resolves. For a
+player, `attack_power`, `ability_power`, armor, crit, dodge, and resilience come
+from the stat system, including equipped item and augment bonuses. The equipped
+weapon's `weapon_damage` is read separately from the weapon slot. Use the
+`stats` command before testing combat if you want to confirm the exact effective
+numbers the engine is using.
+
+For the default physical attack profile, the base damage starts from weapon
+damage plus attack power:
+
+```text
+power = actor.attack_power
+weapon = actor.equipped_weapon.weapon_damage
+
+if weapon > 0:
+  base = weapon * weapon_damage_scale + power * power_scale
+else:
+  base = power * unarmed_power_scale
+```
+
+Mobs without weapons use a level-based fallback instead of the player unarmed
+formula:
+
+```text
+base = level_scale(actor.level) * mob_unarmed_level_scale
+     + power * power_scale
+```
+
+The default ability profile does not use weapon damage:
+
+```text
+base = actor.ability_power * power_scale
+```
+
+After base damage is found, the combat profile resolves the hit in this order:
+
+```text
+output = base * multiplier
+
+if can_dodge and random() < target_dodge_chance:
+  damage_dealt = 0
+  damage_taken = 0
+  stop
+
+if variance is enabled:
+  output *= random number from (1 - variance.percent / 100)
+            to (1 + variance.percent / 100)
+
+if can_crit and random() < actor_crit_chance:
+  output *= crit_multiplier
+
+damage_dealt = ceil(output)
+mitigated = damage_dealt
+
+for each enabled mitigation, such as armor or resilience:
+  mitigated *= 1 - target_mitigation_percent
+
+damage_taken = ceil(mitigated)
+
+if damage_dealt > 0:
+  damage_taken = max(minimum, damage_taken)
+```
+
+`damage_dealt` is the pre-mitigation number. `damage_taken` is the final HP loss
+after armor, resilience, and minimum damage.
+
+### Dodge, Crit, Armor, And Resilience Ratings
+
+Dodge, crit, armor, and resilience use rating configs. Each config has the same
+shape, though the default values differ by rating:
+
+```yaml
+base: 0
+constant: 60
+cap: 0.75
+```
+
+The `base` is the starting chance or mitigation. The `cap` is the maximum. The
+`constant` controls how strong each rating point is. Lower constants make rating
+points stronger. Higher constants make them weaker.
+
+The rating is scaled against the opponent's level:
+
+```text
+opponent_scale = level_scale(opponent.level)
+```
+
+For `linear_rating`, used by default crit:
+
+```text
+percent = rating / (opponent_scale * constant) + base
+percent = clamp(percent, 0, cap)
+```
+
+For `mitigation_curve`, used by default dodge, armor, and resilience:
+
+```text
+percent = (rating + opponent_scale * constant * base)
+        / (rating + opponent_scale * constant)
+percent = clamp(percent, 0, cap)
+```
+
+For a default physical attack, only armor mitigates damage. Resilience is
+ignored unless `mitigation.resilience` is set to `true`. For a default ability
+attack, resilience mitigates damage and armor is ignored.
+
+When more than one mitigation is enabled, they stack multiplicatively. For
+example, 20% armor mitigation and 10% resilience mitigation leave:
+
+```text
+damage * 0.8 * 0.9 = damage * 0.72
+```
+
+### Worked Physical Attack Example
+
+Assume:
+
+- the attacker is level 1
+- the attacker has `attack_power: 80`
+- the attacker has `crit: 30`
+- the attacker has a weapon with `weapon_damage: 12`
+- the target is level 1
+- the target has `armor: 60`
+- variance and dodge are disabled for easier math
+- the profile uses default `basic_physical` values
+
+Base damage:
+
+```text
+base = 12 * 1.0 + 80 * 0.0625
+base = 17
+```
+
+At level 1, the default level scale is about `6.05`. The attacker's crit chance
+against a level 1 target is:
+
+```text
+crit_chance = 30 / (6.05 * 120) + 0.02
+crit_chance = 0.061, or about 6.1%
+```
+
+The target's armor mitigation against a level 1 attacker is:
+
+```text
+armor_mitigation = 60 / (60 + 6.05 * 60)
+armor_mitigation = 0.142, or about 14.2%
+```
+
+On a normal hit:
+
+```text
+damage_dealt = ceil(17)
+damage_taken = ceil(17 * (1 - 0.142))
+damage_taken = 15
+```
+
+On a crit:
+
+```text
+damage_dealt = ceil(17 * 1.5)
+damage_dealt = 26
+damage_taken = ceil(26 * (1 - 0.142))
+damage_taken = 23
+```
+
+If default variance is left on, the `17` output is first randomly adjusted by
+`-12.5%` to `+12.5%`, then crit is applied, then mitigation is applied.
+
+For rough balancing, ignoring rounding and minimum damage:
+
+```text
+average_damage_before_mitigation =
+  base * multiplier * (1 - dodge_chance)
+  * (1 + crit_chance * (crit_multiplier - 1))
+```
+
+Variance is centered around `1.0`, so it changes the spread of hits more than the
+average hit size.
+
 ## Common Edits
 
 ### Make Combat Less Random
@@ -287,6 +468,14 @@ armor, crit, and encounter pacing.
 
 For a simple world, start by making a basic mob die in about 4-8 successful
 hits from an appropriately equipped player.
+
+## XP And Leveling
+
+Mob rewards use `exp_worth`. When combat grants XP, the player is checked
+against the world leveling config (`starting_level`, `leveling_curve`, and
+`max_level`). See
+[leveling-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/leveling-builder-guide.md)
+for the YAML shape and `/setlevel` testing command.
 
 ## Designing Armor And Resilience
 

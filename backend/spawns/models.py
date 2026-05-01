@@ -27,6 +27,10 @@ from core.db import (
     AdventBaseModel,
     list_to_choice,
     optional)
+from core.leveling import (
+    experience_for_level,
+    get_world_leveling_config,
+)
 from core.model_mixins import CharMixin, ItemMixin, MobMixin
 from worlds.models import StartingEq
 
@@ -268,13 +272,18 @@ class Player(CharMixin, AdventBaseModel):
         "Lookup something in the game by its key."
         raise NotImplementedError("Old game lookup is no longer supported.")
 
-    def initialize(self, reset=False, level=1, starting_eq=True):
+    def initialize(self, reset=False, level=None, starting_eq=True):
         from builders.models import FactionAssignment
         from worlds.models import Door
 
+        leveling_config = get_world_leveling_config(self.world)
+        if level is None:
+            level = leveling_config.starting_level
+        level = max(1, min(int(level or 1), leveling_config.max_level))
+
         if reset:
             self.level = level
-            self.experience = adv_config.LEVEL_EXPERIENCE[level-1]
+            self.experience = experience_for_level(level, leveling_config)
             self.gold = self.world.config.starting_gold
             self.glory = 0
             self.room = self.get_starting_room()
@@ -306,6 +315,9 @@ class Player(CharMixin, AdventBaseModel):
             # Delete legacy marks and canonical character state
             self.marks.all().delete()
             CharacterState.objects.filter(player=self).delete()
+        elif self.level < leveling_config.starting_level:
+            self.level = leveling_config.starting_level
+            self.experience = experience_for_level(self.level, leveling_config)
 
         stats = compute_stats(
             self.level,
@@ -376,7 +388,7 @@ class Player(CharMixin, AdventBaseModel):
         # Default to the world's starting room
         return self.world.context.config.starting_room
 
-    def reset(self, level=1):
+    def reset(self, level=None):
         player = self
         if player.world.is_multiplayer:
             player.initialize(reset=True, level=level)

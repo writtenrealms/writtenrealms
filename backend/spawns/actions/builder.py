@@ -4,6 +4,13 @@ import json
 import re
 
 from builders.models import ItemTemplate, MobTemplate
+from core.leveling import (
+    LevelingConfigError,
+    clamp_level,
+    get_world_leveling_config,
+    progress_for_experience,
+    set_player_level,
+)
 from core.model_mixins import CharMixin, ItemMixin, MobMixin
 from core.scoped_state import (
     clear_state_value,
@@ -40,6 +47,7 @@ from spawns.state_payloads import (
     get_player_with_related,
     room_payload_key_for,
     serialize_actor,
+    serialize_char_from_mob,
     serialize_char_from_player,
     serialize_room,
 )
@@ -229,6 +237,35 @@ def _collect_room_mob_targets(room: Room, selector: str) -> list[Mob]:
 
     room_mobs = list(room.mobs.select_related("template"))
     return [mob for mob in room_mobs if _entity_matches(mob, normalized)]
+
+
+def _player_matches(player: Player, selector: str) -> bool:
+    if not selector:
+        return False
+    key = getattr(player, "key", None)
+    if key and str(key).lower() == selector:
+        return True
+    name = str(getattr(player, "name", "") or "").strip().lower()
+    if not name:
+        return False
+    return name == selector or name.startswith(selector)
+
+
+def _collect_room_player_targets(room: Room, selector: str) -> list[Player]:
+    normalized = selector.strip().lower()
+    if not normalized:
+        return []
+
+    if normalized.startswith("player."):
+        try:
+            player_id = int(normalized.split(".", 1)[1])
+        except (TypeError, ValueError):
+            return []
+        player = room.players.filter(pk=player_id).first()
+        return [player] if player else []
+
+    room_players = list(room.players.select_related("world", "world__config", "user"))
+    return [player for player in room_players if _player_matches(player, normalized)]
 
 
 def _actor_kind(actor: Player | Mob) -> str:
@@ -664,6 +701,103 @@ class StateAction:
                     type="cmd./state.success",
                     recipients=[actor.key],
                     data=data,
+                    text=text,
+                )
+            ]
+        )
+
+
+class SetLevelAction:
+    def _resolve_target(
+        self,
+        *,
+        actor: Player,
+        target_selector: str | None,
+    ) -> Player | Mob:
+        room = actor.room
+        if not room:
+            raise ActionError("You are nowhere. Cannot set levels.", code="no_room")
+
+        normalized_target = str(target_selector or "").strip().lower()
+        if not normalized_target or normalized_target in {"self", "me"}:
+            return actor
+
+        player_targets = _collect_room_player_targets(room, normalized_target)
+        mob_targets = _collect_room_mob_targets(room, normalized_target)
+        targets: list[Player | Mob] = [*player_targets, *mob_targets]
+        if not targets:
+            raise ActionError("Target not found in this room.", code="invalid_target")
+        if len(targets) > 1:
+            raise ActionError("Target is ambiguous.", code="ambiguous_target")
+        return targets[0]
+
+    def execute(
+        self,
+        *,
+        actor: Player,
+        level: int | str,
+        target_selector: str | None = None,
+    ) -> ActionResult:
+        target = self._resolve_target(
+            actor=actor,
+            target_selector=target_selector,
+        )
+        leveling_config = get_world_leveling_config(getattr(target, "world", None))
+        try:
+            new_level = clamp_level(level, leveling_config)
+        except LevelingConfigError as exc:
+            raise ActionError(str(exc), code="invalid_level")
+
+        previous_level = int(getattr(target, "level", 1) or 1)
+        previous_experience = int(getattr(target, "experience", 0) or 0)
+
+        if isinstance(target, Player):
+            result = set_player_level(target, new_level, reset_resources=True)
+            target.save(update_fields=["level", "experience", "health", "mana", "stamina"])
+            target.refresh_from_db()
+            target_data = serialize_actor(target, target.room).model_dump()
+            target_type = "player"
+            experience = target.experience
+            experience_progress = result.experience_progress
+            experience_needed = result.experience_needed
+        else:
+            target.level = new_level
+            target.save(update_fields=["level"])
+            progress = progress_for_experience(
+                previous_experience,
+                level=target.level,
+                config_obj=leveling_config,
+            )
+            target_data = serialize_char_from_mob(target).model_dump()
+            target_type = "mob"
+            experience = None
+            experience_progress = progress.experience_progress
+            experience_needed = progress.experience_needed
+
+        updated_actor = get_player_with_related(actor.id)
+        actor_payload = serialize_actor(updated_actor, updated_actor.room)
+        room_payload = _get_single_room_payload(updated_actor)
+        target_name = getattr(target, "name", None) or "target"
+        text = f"Set {target_name} to level {new_level}."
+
+        return ActionResult(
+            events=[
+                GameEvent(
+                    type="cmd./setlevel.success",
+                    recipients=[updated_actor.key],
+                    data={
+                        "actor": actor_payload.model_dump(),
+                        "room": room_payload.model_dump(),
+                        "target": target_data,
+                        "target_type": target_type,
+                        "previous_level": previous_level,
+                        "new_level": new_level,
+                        "previous_experience": previous_experience,
+                        "experience": experience,
+                        "experience_progress": experience_progress,
+                        "experience_needed": experience_needed,
+                        "max_level": leveling_config.max_level,
+                    },
                     text=text,
                 )
             ]

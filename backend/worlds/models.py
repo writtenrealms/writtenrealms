@@ -23,6 +23,7 @@ from core.db import (
     optional,
     list_to_choice,
     batch_deletion)
+from core.leveling import default_leveling_curve
 from worlds.managers import (
     WorldManager,
     RoomManager)
@@ -1042,6 +1043,9 @@ class WorldConfig(BaseModel):
     built_by = models.TextField(**optional)
     name_exclusions = models.TextField(**optional)
     starting_gold = models.PositiveIntegerField(default=0)
+    starting_level = models.PositiveIntegerField(default=1)
+    leveling_curve = models.JSONField(default=default_leveling_curve)
+    max_level = models.PositiveIntegerField(default=20)
     death_gold_penalty = models.FloatField(default=0.2)
     clan_registration_cost = models.PositiveIntegerField(default=1000)
     # URLs for the frontend to use for world backgrounds.

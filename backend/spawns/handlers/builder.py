@@ -12,6 +12,7 @@ from spawns.actions.builder import (
     PurgeAction,
     ResyncItemTemplatesAction,
     ResyncMobTemplatesAction,
+    SetLevelAction,
     StateAction,
 )
 from spawns.events import publish_events
@@ -145,6 +146,20 @@ def _parse_state_args(
         return operation, args[1], args[2], " ".join(args[3:]).strip()
 
     return None, None, None, None
+
+
+def _parse_setlevel_args(ctx: CommandContext) -> tuple[str | None, str | None]:
+    level = ctx.payload.get("level")
+    target = ctx.payload.get("target")
+    if level is not None:
+        return str(level), str(target).strip() if target else None
+
+    args = [str(arg).strip() for arg in list(ctx.payload.get("args", [])) if str(arg).strip()]
+    if not args:
+        return None, None
+    if len(args) == 1:
+        return args[0], None
+    return args[-1], " ".join(args[:-1]).strip()
 
 
 @register_handler
@@ -438,6 +453,71 @@ class StateHandler(CommandHandler):
         publish_events(
             result.events,
             actor_key=ctx.actor_key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class SetLevelHandler(CommandHandler):
+    command_type = "/setlevel"
+    text_commands = ("/setlevel",)
+    builder_only = True
+    help = {
+        "name": "Set Level",
+        "format": "/setlevel <level> | /setlevel <target> <level>",
+        "description": (
+            "Set your level, or set a player or mob in the current room to a level. "
+            "Player targets have their XP moved to that level's threshold and their vitals restored."
+        ),
+        "examples": [
+            "/setlevel 5",
+            "/setlevel joe 3",
+            "/setlevel guard 8",
+            "/setlevel mob.123 2",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        if not has_builder_access(ctx.player):
+            ctx.publish(
+                {
+                    "type": "cmd./setlevel.error",
+                    "text": "You do not have permission to use builder commands.",
+                    "data": {"error": "Builder permissions required."},
+                }
+            )
+            return
+
+        level, target = _parse_setlevel_args(ctx)
+        if not level:
+            ctx.publish(
+                {
+                    "type": "cmd./setlevel.error",
+                    "text": "Usage: /setlevel <level> | /setlevel <target> <level>",
+                    "data": {"error": "Missing level.", "code": "invalid_args"},
+                }
+            )
+            return
+
+        try:
+            result = SetLevelAction().execute(
+                actor=ctx.player,
+                level=level,
+                target_selector=target,
+            )
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd./setlevel.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.player.key,
             connection_id=ctx.connection_id,
         )
 

@@ -14,6 +14,10 @@ from django.utils import timezone
 
 from config import constants as adv_consts
 from core.scoped_state import STATE_SCOPE_WORLD, get_state_snapshot
+from core.leveling import (
+    get_world_leveling_config,
+    progress_for_experience,
+)
 from core.stat_system import (
     build_player_stat_payload,
     get_world_label_bundle,
@@ -556,6 +560,19 @@ def serialize_actor(player: Player, room: Optional[Room]) -> Actor:
             "room": None,
         }
     actor_data.update(build_player_stat_payload(player))
+    leveling_config = get_world_leveling_config(player.world)
+    progress = progress_for_experience(
+        getattr(player, "experience", 0),
+        level=getattr(player, "level", 1),
+        config_obj=leveling_config,
+    )
+    actor_data.update(
+        {
+            "experience": int(getattr(player, "experience", 0) or 0),
+            "experience_progress": progress.experience_progress,
+            "experience_needed": progress.experience_needed,
+        }
+    )
     actor_data["room"] = {"key": room_payload_key_for(room)} if room else None
     actor_data["equipment"] = serialize_equipment(player.equipment, viewer=player)
     actor_data["inventory"] = serialize_inventory(player.inventory.all(), viewer=player)
@@ -582,6 +599,9 @@ def serialize_world(world: World) -> Dict:
             "never_reload": config.never_reload if config else False,
             "starting_room": room_payload_key_from_id(config.starting_room_id) if config else None,
             "death_room": room_payload_key_from_id(config.death_room_id) if config else None,
+            "starting_level": int(config.starting_level) if config else 1,
+            "max_level": int(config.max_level) if config else 20,
+            "leveling_curve": list(config.leveling_curve or []) if config else [],
             "combat_resolution_interval": float(config.combat_resolution_interval) if config else 0.0,
             "death_gold_penalty": config.death_gold_penalty if config else 0.0,
             "has_corpse_decay": config.has_corpse_decay if config else True,
@@ -614,6 +634,9 @@ def serialize_world(world: World) -> Dict:
     if config:
         data["starting_room"] = room_payload_key_from_id(config.starting_room_id)
         data["death_room"] = room_payload_key_from_id(config.death_room_id)
+        data["starting_level"] = int(config.starting_level)
+        data["max_level"] = int(config.max_level)
+        data["leveling_curve"] = list(config.leveling_curve or [])
         data["combat_resolution_interval"] = float(config.combat_resolution_interval)
 
     if not data.get("context"):

@@ -513,6 +513,11 @@ class World(BaseModel):
     starting_room: Optional[str] = None
     death_room: Optional[str] = None
 
+    # Progression settings
+    starting_level: int = 1
+    max_level: int = 20
+    leveling_curve: List[int] = Field(default_factory=list)
+
     # Death settings
     combat_resolution_interval: float = 0.0
     death_mode: str = "flee"  # "flee", "respawn", etc.
