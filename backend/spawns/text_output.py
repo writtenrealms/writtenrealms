@@ -155,6 +155,13 @@ def _render_inventory_text(actor: dict | None) -> str | None:
     return "You are carrying:\nNothing."
 
 
+def _render_stats_text(data: dict) -> str | None:
+    actor = data.get("actor") or {}
+    if not actor.get("key"):
+        return None
+    return "You review your stats."
+
+
 def _render_drop_text(event_type: str, data: dict) -> str | None:
     items = data.get("items") or []
     if not items:
@@ -389,6 +396,9 @@ def render_event_text(
 
     if event_type == "cmd.inventory.success":
         return _render_inventory_text(data.get("actor"))
+
+    if event_type == "cmd.stats.success":
+        return _render_stats_text(data)
 
     if event_type in ("cmd.roll.success", "notification.cmd.roll.success"):
         return _render_roll_text(event_type, data)

@@ -205,6 +205,14 @@ const receiveMessage = async ({
     commit("full_screen_message_clear");
   }
 
+  if (message_data.data && message_data.data.world && !isStateSnapshot) {
+    const world_data = {
+      ...state.world,
+      ...message_data.data.world,
+    };
+    commit("world_set", world_data);
+  }
+
   // Disconection
   if (message_data.type === "system.disconnect.success") {
     if (rootState.auth.user.is_temporary) {
@@ -547,11 +555,21 @@ const receiveMessage = async ({
   if (message_data.type === "notification.death") {
     commit("last_death_set", message_data.data.deceased.key);
     commit("room_chars_remove", message_data.data.deceased);
+    if (message_data.data.room) {
+      commit("room_set", message_data.data.room);
+      commit("map_add", message_data.data.room);
+      if (message_data.data.room.key) {
+        commit("set_room_key", message_data.data.room.key);
+      }
+    }
     if (message_data.data.killer) {
       commit('room_chars_update_target', {
         char: message_data.data.killer,
         target: null,
       });
+      if (state.player && message_data.data.killer.key === state.player.key) {
+        commit("player_target_set", null);
+      }
     }
   }
 

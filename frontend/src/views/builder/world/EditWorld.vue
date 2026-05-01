@@ -30,7 +30,7 @@
           {{ capfirst(lastOperation) }} {{ appliedTrigger.key }} ({{ appliedTrigger.scope }} / {{ appliedTrigger.kind }}).
         </template>
       </template>
-      <template v-else-if="appliedKind === 'world' || appliedKind === 'worldconfig'">
+      <template v-else-if="appliedKind === 'world'">
         Updated world config for {{ world.name }}.
       </template>
       <template v-else-if="appliedKind === 'itemtemplate' && appliedItemTemplate">
@@ -99,7 +99,7 @@ const submitManifest = async () => {
     if (appliedKind.value === "trigger") {
       appliedTrigger.value = resp.data.trigger || null;
       appliedItemTemplate.value = null;
-    } else if (appliedKind.value === "world" || appliedKind.value === "worldconfig") {
+    } else if (appliedKind.value === "world") {
       appliedTrigger.value = null;
       appliedItemTemplate.value = null;
     } else if (appliedKind.value === "itemtemplate") {

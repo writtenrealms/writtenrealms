@@ -1007,12 +1007,19 @@ class WorldConfig(BaseModel):
     can_select_faction = models.BooleanField(default=True)
     auto_equip = models.BooleanField(default=True)
     allow_combat = models.BooleanField(default=True)
+    # Encounter pacing in seconds:
+    #   > 0 => auto-advance combat encounters on this cadence
+    #   0   => resolve immediately
+    #   -1  => never auto-advance (manual / fully async progression)
+    combat_resolution_interval = models.FloatField(default=0)
+    combat_system = models.JSONField(default=dict)
     players_can_set_title = models.BooleanField(default=True)
     allow_pvp = models.BooleanField(default=True)
     is_narrative = models.BooleanField(default=False)
     non_ascii_names = models.BooleanField(default=False)
     is_classless = models.BooleanField(default=False)
     globals_enabled = models.BooleanField(default=True)
+    stat_system = models.JSONField(default=dict)
 
     # If false, all chars will be default_gender gender
     can_select_gender = models.BooleanField(default=True)

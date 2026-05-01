@@ -8,6 +8,10 @@ def suggest_stats(level=1, archetype='warrior', adjust=True, is_elite=False):
         stats = compute_stats(level, archetype, boost_mob=True)
         stats.pop('health_base', None)
         stats.pop('stamina_base', None)
+        stats.pop('energy_base', None)
+        stats.pop('energy_max', None)
+        stats.pop('energy_regen', None)
+        stats.pop('ability_power', None)
         if 'mana_base' in stats: stats.pop('mana_base', None)
 
         # For mobs, we don't want the 4 base stats so we remove them here

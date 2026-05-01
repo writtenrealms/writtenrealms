@@ -259,6 +259,7 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
                     {
                         "type": "room_prompt",
                         "room": f"room.{self.start_room.id}",
+                        "callout": "A harbor survey notice has been posted here.",
                     }
                 ],
                 "visible_if": {},
@@ -398,7 +399,7 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             {"manifest": source_export_resp.data["yaml"]},
             format="json",
         )
-        self.assertEqual(apply_resp.status_code, 200)
+        self.assertEqual(apply_resp.status_code, 200, apply_resp.data)
         self.assertEqual(apply_resp.data["kind"], "batch")
         self.assertEqual(apply_resp.data["operation"], "applied")
         self.assertEqual(apply_resp.data["summary"]["documents"], len(source_docs))

@@ -307,7 +307,12 @@ class Player(CharMixin, AdventBaseModel):
             self.marks.all().delete()
             CharacterState.objects.filter(player=self).delete()
 
-        stats = compute_stats(self.level, self.archetype)
+        stats = compute_stats(
+            self.level,
+            self.archetype,
+            char=self,
+            world=self.world,
+        )
         self.health = stats['health_max']
         self.mana = stats['mana_max']
         self.stamina = stats['stamina_max']
@@ -487,6 +492,51 @@ class CharacterState(BaseModel):
 
     class Meta(BaseModel.Meta):
         ordering = ['player_id']
+
+
+class CombatEncounter(BaseModel):
+    STATUS_ACTIVE = "active"
+    STATUS_FINISHED = "finished"
+    STATUS_CHOICES = list_to_choice((STATUS_ACTIVE, STATUS_FINISHED))
+
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='combat_encounters',
+    )
+    room = models.ForeignKey(
+        'worlds.Room',
+        on_delete=models.CASCADE,
+        related_name='combat_encounters',
+    )
+    player = models.ForeignKey(
+        'spawns.Player',
+        on_delete=models.CASCADE,
+        related_name='combat_encounters',
+    )
+    mob = models.ForeignKey(
+        'spawns.Mob',
+        on_delete=models.SET_NULL,
+        related_name='combat_encounters',
+        blank=True,
+        null=True,
+    )
+    status = models.TextField(
+        choices=STATUS_CHOICES,
+        default=STATUS_ACTIVE,
+        db_index=True,
+    )
+    resolution_interval = models.FloatField(default=0)
+    round_number = models.PositiveIntegerField(default=0)
+    next_resolution_ts = models.DateTimeField(db_index=True, **optional)
+    last_resolution_ts = models.DateTimeField(db_index=True, **optional)
+
+    class Meta(BaseModel.Meta):
+        indexes = [
+            models.Index(fields=['status', 'next_resolution_ts']),
+            models.Index(fields=['player', 'status']),
+            models.Index(fields=['mob', 'status']),
+        ]
 
 
 class PlayerData(BaseModel):
@@ -733,11 +783,11 @@ class Item(ItemMixin, AdventBaseModel):
 
     def boost(self, amount=20):
         "Boost the stats on an item by a percentage amount."
-        for attr in adv_consts.ATTRIBUTES:
+        for attr in [*adv_consts.ATTRIBUTES, adv_consts.ATTR_WEAPON_DAMAGE]:
             value = getattr(self, attr, None)
             if value:
                 value = math.ceil(value * 120 / 100)
-                setattr(self, attr, value)
+            setattr(self, attr, value)
         self.upgrade_count += 1
         self.save()
         return self
@@ -745,7 +795,7 @@ class Item(ItemMixin, AdventBaseModel):
     @property
     def budget_spent(self):
         spent_budget = 0
-        for attr in adv_consts.ATTRIBUTES:
+        for attr in [*adv_consts.ATTRIBUTES, adv_consts.ATTR_WEAPON_DAMAGE]:
             if getattr(self, attr):
                 spent_budget += (
                     adv_consts.ATTR_BUDGET[attr]

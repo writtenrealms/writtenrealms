@@ -128,9 +128,12 @@ const props = defineProps({
 });
 
 const world = computed(() => store.state.game.world);
+const resourceLabels = computed(() => world.value?.labels?.resources || {});
+const derivedLabels = computed(() => world.value?.labels?.derived || {});
+const primaryLabels = computed(() => world.value?.labels?.primaries || {});
 
 const ITEM_STAT_LABELS = {
-  damage: "Damage",
+  weapon_damage: "Weapon damage",
   armor: "Armor",
   strength: "Strength",
   constitution: "Constitution",
@@ -150,6 +153,23 @@ const ITEM_STAT_LABELS = {
 };
 
 const statLabel = (statName: string) => {
+  if (statName === "spell_power") {
+    return derivedLabels.value.ability_power || ITEM_STAT_LABELS[statName];
+  }
+  if (statName === "mana_max") {
+    const energy = resourceLabels.value.energy || "Energy";
+    return `Max ${energy}`;
+  }
+  if (statName === "mana_regen") {
+    const energy = resourceLabels.value.energy || "Energy";
+    return `${energy} Regen`;
+  }
+  if (primaryLabels.value[statName]) {
+    return primaryLabels.value[statName];
+  }
+  if (derivedLabels.value[statName]) {
+    return derivedLabels.value[statName];
+  }
   if (ITEM_STAT_LABELS[statName]) return ITEM_STAT_LABELS[statName];
   const label = statName.replace(/_/g, " ");
   return capfirst(label);
@@ -174,7 +194,7 @@ const buildComparedStats = (item: any) => {
   const equippedItem = playerEquipment[slot];
   const offhandItem = eqType === "weapon_2h" ? playerEquipment.offhand : null;
   const statOrder = [
-    "damage",
+    "weapon_damage",
     "armor",
     "strength",
     "constitution",
@@ -195,7 +215,7 @@ const buildComparedStats = (item: any) => {
 
   const stats: any[] = [];
   for (const statName of statOrder) {
-    if (statName === "damage" && slot !== "weapon") continue;
+    if (statName === "weapon_damage" && slot !== "weapon") continue;
     if (statName === "armor" && slot === "weapon") continue;
 
     const value = getStatValue(item, statName);
@@ -240,7 +260,7 @@ const rawStats = computed(() => {
 });
 
 const itemStats = computed(() => {
-  return rawStats.value.filter(stat => world.value.allow_combat || stat.label !== 'Damage');
+  return rawStats.value.filter(stat => world.value.allow_combat || stat.name !== 'weapon_damage');
 });
 
 const inventoryStack = computed(() => {

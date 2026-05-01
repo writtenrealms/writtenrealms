@@ -21,6 +21,14 @@ from rest_framework import serializers
 
 from config import constants as api_consts
 from config import game_settings as adv_config
+from core.combat_formulas import (
+    CombatFormulaValidationError,
+    normalize_combat_system,
+)
+from core.stat_system import (
+    StatSystemValidationError,
+    normalize_stat_system,
+)
 from builders.models import (
     BuilderAssignment,
     Currency,
@@ -324,6 +332,8 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'can_select_faction',
             'auto_equip',
             'allow_combat',
+            'combat_resolution_interval',
+            'combat_system',
             'is_narrative',
             'players_can_set_title',
             'allow_pvp',
@@ -334,7 +344,27 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'decay_glory',
             'name_exclusions',
             'globals_enabled',
+            'stat_system',
         ]
+
+    def validate_combat_resolution_interval(self, value):
+        if value < 0 and value != -1:
+            raise serializers.ValidationError(
+                "combat_resolution_interval must be -1 or >= 0."
+            )
+        return value
+
+    def validate_stat_system(self, value):
+        try:
+            return normalize_stat_system(value)
+        except StatSystemValidationError as exc:
+            raise serializers.ValidationError(str(exc))
+
+    def validate_combat_system(self, value):
+        try:
+            return normalize_combat_system(value)
+        except CombatFormulaValidationError as exc:
+            raise serializers.ValidationError(str(exc))
 
 # World Admin
 
@@ -1479,7 +1509,7 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
             'type', 'capacity', 'quality', 'power', 'is_boat', 'is_pickable',
             'cost', 'currency',
             'equipment_type', 'armor_class',
-            'weapon_type', 'hit_msg_first', 'hit_msg_third',
+            'weapon_type', 'weapon_damage', 'hit_msg_first', 'hit_msg_third',
             'health_max', 'health_regen', 'mana_max', 'mana_regen',
             'stamina_max', 'stamina_regen',
             'strength', 'constitution', 'dexterity', 'intelligence',

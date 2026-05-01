@@ -581,7 +581,7 @@ What this verifies:
 - quest manifests can be deleted
 - quest arcs can be created and linked
 - the shared builder manifest endpoint still works for existing trigger and
-  world config manifests
+  world manifests
 
 ## Implementation Details
 

@@ -18,6 +18,7 @@ from django.utils import timezone
 from spawns.services import WorldGate
 from spawns.models import Mob, Player
 from spawns.serializers import PlayerConfigSerializer
+from spawns.events import publish_events
 from spawns.handlers import (
     ActorNotFoundError,
     dispatch_command,
@@ -100,7 +101,12 @@ def _apply_regen(
 
 
 def _regen_player(player: Player) -> dict[str, int | str] | None:
-    stats = compute_stats(player.level, player.archetype)
+    stats = compute_stats(
+        player.level,
+        player.archetype,
+        char=player,
+        world=player.world,
+    )
 
     health_max = max(_as_non_negative_int(stats.get("health_max")), _as_non_negative_int(player.health))
     mana_max = max(_as_non_negative_int(stats.get("mana_max")), _as_non_negative_int(player.mana))
@@ -602,6 +608,21 @@ def execute_trigger_script_segments(
             )
         except (ActorNotFoundError, HandlerNotFoundError, ValueError):
             return
+
+
+@shared_task(ignore_result=True)
+def resolve_combat_encounter(encounter_id: int):
+    from spawns.actions.combat import resolve_combat_encounter_step
+
+    result = resolve_combat_encounter_step(
+        encounter_id,
+        auto_advance=True,
+    )
+    if result.events:
+        publish_events(
+            result.events,
+            actor_key=result.actor_key,
+        )
 
 
 @shared_task

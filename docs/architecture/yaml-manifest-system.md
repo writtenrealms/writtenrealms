@@ -11,7 +11,7 @@ WR2 world editing is moving toward an authored-manifest workflow inspired by Kub
 Implemented entities currently include:
 
 - `trigger`
-- `worldconfig`
+- `world`
 - `itemtemplate`
 - `quest`
 - `questarc`
@@ -19,6 +19,7 @@ Implemented entities currently include:
 Builder-facing trigger authoring guidance lives in:
 
 - [docs/guides/trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md)
+- [docs/guides/combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md)
 
 ## Current Flows
 
@@ -26,7 +27,7 @@ Builder-facing trigger authoring guidance lives in:
 
 In **World > Config**, configuration is read-oriented:
 
-- all configurable world/world-config values are shown read-only
+- all configurable world values are shown read-only
 - the page can reveal the current **World Config YAML**
 - the page supports **Copy Config YAML**
 - edits happen through **World > Edit World** by applying one or more YAML manifests
@@ -58,7 +59,7 @@ A new world-level **Edit World** view accepts a YAML manifest textarea.
 
 - Submitting YAML currently supports one or more YAML documents in sequence.
 - Supported kinds:
-  - `kind: world` (`worldconfig` remains accepted as an alias)
+  - `kind: world`
   - `kind: currency`
   - `kind: zone`
   - `kind: room`
@@ -188,7 +189,7 @@ metadata:
 
 ## World Config Manifest Shape
 
-World config edits are update-only manifests (no create/delete mode). The config screen and the full world export now emit the same single world document shape, and `kind: worldconfig` is still accepted for compatibility:
+World config edits are update-only manifests (no create/delete mode). The config screen and the full world export emit the same single world document shape:
 
 ```yaml
 kind: world
@@ -199,6 +200,7 @@ spec:
   motd: Questions? Join Discord.
   is_public: true
   starting_gold: 0
+  combat_resolution_interval: 0
   starting_room: room@0,0,0
   death_room: room@10,0,0
   death_mode: lose_gold
@@ -220,6 +222,51 @@ spec:
     admin
     moderator
 ```
+
+`combat_resolution_interval` is the world-level encounter pacing knob, in
+seconds:
+
+- `> 0`: auto-advance combat encounters on that cadence
+- `0`: resolve combat immediately
+- `-1`: do not auto-advance combat encounters
+
+Current status: this field is the authored WR2 contract for encounter pacing,
+and the current placeholder `kill <mob>` combat flow now honors it:
+
+- `0`: immediate full auto-resolve
+- `> 0`: scheduled round-by-round resolution on that cadence
+- `-1`: manual round-by-round resolution, advanced by explicit `kill <mob>`
+  commands
+
+Broader encounter scheduling, queued abilities, and non-basic combat actions are
+still future work.
+
+World manifests now also support `spec.stats`, which holds the authored WR2
+stat system for that world:
+
+- primary attribute definitions
+- resource and derived stat labels
+- class or archetype profiles
+- bounded formula rules
+
+For details and a working WR1-style reference configuration, see:
+
+- [stats-formulas-and-classes.md](/Users/teebes/code/writtenrealms/docs/architecture/stats-formulas-and-classes.md)
+- [wr1-archetype-world-reference.md](/Users/teebes/code/writtenrealms/docs/dev/wr1-archetype-world-reference.md)
+
+World manifests also support `spec.combat`, which holds the authored WR2
+combat formula system:
+
+- named attack/healing profiles
+- rating curves for dodge, crit, armor, and resilience
+- weapon damage, attack power, and ability power scaling
+- mitigation rules for physical and ability damage
+- variance, crit multiplier, and minimum output rules
+
+For details, see:
+
+- [combat-resolution-formulas.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-resolution-formulas.md)
+- [combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md)
 
 ## `apiVersion`
 
@@ -268,8 +315,7 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 
 ## Validation Rules (Current)
 
-- `kind` must resolve to `trigger`, `world`, or `worldconfig` (case-insensitive).
-- `worldconfig` aliases `world-config` and `world_config` are accepted.
+- `kind` must resolve to `trigger`, `world`, `currency`, `zone`, `room`, `itemtemplate`, `mobtemplate`, `quest`, or `questarc`.
 - For update: `metadata.id` or `metadata.key` must reference an existing trigger in the selected world.
 - For create: omit both `metadata.id` and `metadata.key`.
 - For delete: set `operation: delete` and include `metadata.id` or `metadata.key`.
@@ -288,7 +334,7 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 - `conditions` are validated through the WR2 conditions parser in `backend/core/conditions.py`.
 - For world config manifests:
   - only `operation: apply` is supported
-  - `spec` fields are validated against the world/world-config schema
+  - `spec` fields are validated against the world schema
   - room references (`starting_room`, `death_room`) must resolve to rooms in the selected world
 
 Permission checks are applied when editing via manifest:
@@ -296,7 +342,7 @@ Permission checks are applied when editing via manifest:
 - rank 3+ builders can edit all trigger scopes
 - rank 1-2 builders can edit room/zone targets only when assigned
 - rank 1-2 builders cannot edit world-scoped triggers
-- rank 1-2 builders cannot edit world config manifests (`world` / `worldconfig`)
+- rank 1-2 builders cannot edit world config manifests (`world`)
 
 ## Implementation Notes
 

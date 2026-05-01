@@ -9,21 +9,9 @@
       <div class="stats-group">
         <div class="label">Stats</div>
         <div class="stats">
-          <div class="stat">
-            <div class="st-label">Strength</div>
-            <div class="st-value">{{ player.strength }}</div>
-          </div>
-          <div class="stat">
-            <div class="st-label">Intelligence</div>
-            <div class="st-value">{{ player.intelligence }}</div>
-          </div>
-          <div class="stat">
-            <div class="st-label">Constitution</div>
-            <div class="st-value">{{ player.constitution }}</div>
-          </div>
-          <div class="stat">
-            <div class="st-label">Dexterity</div>
-            <div class="st-value">{{ player.dexterity }}</div>
+          <div v-for="stat in primaryEntries" :key="stat.key" class="stat">
+            <div class="st-label">{{ stat.label }}</div>
+            <div class="st-value">{{ stat.value }}</div>
           </div>
         </div>
       </div>
@@ -31,59 +19,9 @@
       <div class="stats-group">
         <div class="label">Attributes</div>
         <div class="stats">
-          <div class="stat">
-            <div class="st-label">Attack Power</div>
-            <div class="st-value">{{ player.attack_power }}</div>
-          </div>
-
-          <div class="stat">
-            <div class="st-label">Spell Power</div>
-            <div class="st-value">{{ player.spell_power }}</div>
-          </div>
-
-          <div class="stat">
-            <div class="st-label">Damage</div>
-            <div class="st-value">{{ player.damage }}</div>
-          </div>
-
-          <div class="stat">
-            <div class="st-label">Crit Chance</div>
-            <div class="st-value">{{ player.crit_perc }}%</div>
-          </div>
-
-          <div class="stat">
-            <div class="st-label">Health Regen</div>
-            <div class="st-value">{{ player.health_regen }}</div>
-          </div>
-
-          <div class="stat">
-            <div class="st-label">Mana Regen</div>
-            <div class="st-value">{{ player.mana_regen }}</div>
-          </div>
-
-          <div class="stat">
-            <div class="st-label">Stamina Regen</div>
-            <div class="st-value">{{ player.stamina_regen }}</div>
-          </div>
-
-          <div class="stat">
-            <div class="st-label">Armor</div>
-            <div class="st-value">{{ player.armor_perc }}%</div>
-          </div>
-
-          <div class="stat">
-            <div class="st-label">Resilience</div>
-            <div class="st-value">{{ player.resilience_perc }}%</div>
-          </div>
-
-          <div class="stat">
-            <div class="st-label">Dodge</div>
-            <div class="st-value">{{ player.dodge_perc }}%</div>
-          </div>
-
-          <div class="stat">
-            <div class="st-label"></div>
-            <div class="st-value"></div>
+          <div v-for="stat in derivedEntries" :key="stat.key" class="stat">
+            <div class="st-label">{{ stat.label }}</div>
+            <div class="st-value">{{ stat.value }}</div>
           </div>
         </div>
       </div>
@@ -125,6 +63,48 @@ const store = useStore();
 
 const player = computed(() => store.state.game.player);
 const game = computed(() => store.state.game);
+const world = computed(() => store.state.game.world);
+
+const primaryLabels = computed(() => world.value?.labels?.primaries || {});
+const primaryOrder = computed(() => world.value?.labels?.order?.primaries || Object.keys(player.value?.primary_attributes || {}));
+const derivedLabels = computed(() => world.value?.labels?.derived || {});
+const derivedOrder = computed(() => world.value?.labels?.order?.derived || Object.keys(player.value?.derived_stats || {}));
+
+const primaryEntries = computed(() => {
+  const values = player.value?.primary_attributes || {};
+  return primaryOrder.value
+    .filter((key: string) => values[key] !== undefined)
+    .map((key: string) => ({
+      key,
+      label: primaryLabels.value[key] || key.replace(/_/g, " "),
+      value: values[key],
+    }));
+});
+
+const formatDerivedValue = (key: string, value: number) => {
+  const percentMap: Record<string, number | undefined> = {
+    armor: player.value?.armor_perc,
+    crit: player.value?.crit_perc,
+    dodge: player.value?.dodge_perc,
+    resilience: player.value?.resilience_perc,
+  };
+  const perc = percentMap[key];
+  if (perc !== undefined && perc !== null) {
+    return `${value} (${perc}%)`;
+  }
+  return value;
+};
+
+const derivedEntries = computed(() => {
+  const values = player.value?.derived_stats || {};
+  return derivedOrder.value
+    .filter((key: string) => values[key] !== undefined)
+    .map((key: string) => ({
+      key,
+      label: derivedLabels.value[key] || key.replace(/_/g, " "),
+      value: formatDerivedValue(key, values[key]),
+    }));
+});
 </script>
 
 <style lang="scss">

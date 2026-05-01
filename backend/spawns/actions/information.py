@@ -15,6 +15,7 @@ from spawns.state_payloads import (
     serialize_char_from_player,
     serialize_item,
     serialize_room,
+    serialize_world,
 )
 from quests.services.interactions import room_mob_quest_indicator_map
 from quests.services.room_items import find_quest_room_item_target
@@ -209,6 +210,29 @@ class InventoryAction:
             events=[
                 GameEvent(
                     type="cmd.inventory.success",
+                    recipients=[player.key],
+                    data=data,
+                    text=text,
+                )
+            ]
+        )
+
+
+class StatsAction:
+    def execute(self, player_id: int) -> ActionResult:
+        player = get_player_with_related(player_id)
+        actor_payload = serialize_actor(player, player.room)
+        world_payload = serialize_world(player.world)
+        data = {
+            "actor": actor_payload.model_dump(),
+            "world": world_payload,
+        }
+        text = render_event_text("cmd.stats.success", data, viewer=player)
+
+        return ActionResult(
+            events=[
+                GameEvent(
+                    type="cmd.stats.success",
                     recipients=[player.key],
                     data=data,
                     text=text,

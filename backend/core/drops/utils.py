@@ -8,7 +8,7 @@ from config import constants
 10 Points - CON, STR, DEX, INT, 1 Mana Per Tick
 40 Points - 1 Health Per Tick
 20 Points - 1 Mana Per Tick
-4 Points - Resilience, Dodge Rating, Crit Rating, Attack Power, Spell Power, 1 Health
+4 Points - Resilience, Dodge Rating, Crit Rating, Attack Power, Spell Power, Weapon Damage, 1 Health
 2 Points - 1 Mana
 """
 

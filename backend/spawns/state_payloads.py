@@ -13,8 +13,11 @@ from django.db.models import Prefetch
 from django.utils import timezone
 
 from config import constants as adv_consts
-from core.computations import compute_stats
 from core.scoped_state import STATE_SCOPE_WORLD, get_state_snapshot
+from core.stat_system import (
+    build_player_stat_payload,
+    get_world_label_bundle,
+)
 from quests.services.interactions import room_mob_quest_indicator_map, room_quest_callouts
 from quests.services.room_items import serialized_quest_room_items_for_room
 from spawns.models import DoorState, Item, Mob, Player
@@ -52,21 +55,6 @@ def first_keyword(value: Optional[str], fallback: Optional[str] = None) -> str:
     if tokens:
         return tokens[0]
     return str(fallback or "").strip().lower()
-
-
-def computed_player_vitals(player: Player) -> dict[str, int]:
-    stats = compute_stats(player.level, player.archetype)
-    health_max = int(stats.get("health_max") or 0)
-    mana_max = int(stats.get("mana_max") or 0)
-    stamina_max = int(stats.get("stamina_max") or 0)
-    return {
-        "health_max": max(health_max, int(getattr(player, "health", 0) or 0)),
-        "mana_max": max(mana_max, int(getattr(player, "mana", 0) or 0)),
-        "stamina_max": max(stamina_max, int(getattr(player, "stamina", 0) or 0)),
-        "health_regen": int(stats.get("health_regen") or 0),
-        "mana_regen": int(stats.get("mana_regen") or 0),
-        "stamina_regen": int(stats.get("stamina_regen") or 0),
-    }
 
 
 def get_player_with_related(player_id: int) -> Player:
@@ -176,6 +164,8 @@ def serialize_item(
         intelligence=item.intelligence,
         attack_power=item.attack_power,
         spell_power=item.spell_power,
+        ability_power=item.spell_power,
+        weapon_damage=item.weapon_damage,
         armor=armor_value,
         crit=item.crit,
         resilience=item.resilience,
@@ -184,6 +174,8 @@ def serialize_item(
         health_regen=item.health_regen,
         mana_max=item.mana_max,
         mana_regen=item.mana_regen,
+        energy_max=item.mana_max,
+        energy_regen=item.mana_regen,
         stamina_max=item.stamina_max,
         stamina_regen=item.stamina_regen,
         is_pickable=item.is_pickable,
@@ -563,7 +555,7 @@ def serialize_actor(player: Player, room: Optional[Room]) -> Actor:
             "factions": getattr(player, "factions", {}) or {},
             "room": None,
         }
-    actor_data.update(computed_player_vitals(player))
+    actor_data.update(build_player_stat_payload(player))
     actor_data["room"] = {"key": room_payload_key_for(room)} if room else None
     actor_data["equipment"] = serialize_equipment(player.equipment, viewer=player)
     actor_data["inventory"] = serialize_inventory(player.inventory.all(), viewer=player)
@@ -590,6 +582,7 @@ def serialize_world(world: World) -> Dict:
             "never_reload": config.never_reload if config else False,
             "starting_room": room_payload_key_from_id(config.starting_room_id) if config else None,
             "death_room": room_payload_key_from_id(config.death_room_id) if config else None,
+            "combat_resolution_interval": float(config.combat_resolution_interval) if config else 0.0,
             "death_gold_penalty": config.death_gold_penalty if config else 0.0,
             "has_corpse_decay": config.has_corpse_decay if config else True,
             "auto_equip": config.auto_equip if config else True,
@@ -613,12 +606,15 @@ def serialize_world(world: World) -> Dict:
     if data.get("currencies"):
         data["currencies"] = {str(k): v for k, v in data["currencies"].items()}
 
+    data["labels"] = get_world_label_bundle(world)
+
     # Normalize world-config room references to the same room key contract used
     # across WR2 room/map payloads.
     config = world.config
     if config:
         data["starting_room"] = room_payload_key_from_id(config.starting_room_id)
         data["death_room"] = room_payload_key_from_id(config.death_room_id)
+        data["combat_resolution_interval"] = float(config.combat_resolution_interval)
 
     if not data.get("context"):
         data["context"] = world.context.key if world.context else world.key

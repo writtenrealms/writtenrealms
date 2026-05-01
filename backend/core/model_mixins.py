@@ -344,6 +344,7 @@ class ItemMixin(models.Model):
     weapon_type = models.TextField(
         choices=list_to_choice(adv_consts.WEAPON_TYPES),
         **optional)
+    weapon_damage = models.FloatField(default=0)
 
     skill_modifier = models.TextField(**optional)
     on_use_cmd = models.TextField(**optional)

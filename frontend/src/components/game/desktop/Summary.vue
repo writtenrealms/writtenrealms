@@ -3,7 +3,7 @@
     <div>
       <div class="name-and-summary">
         <div class="name">{{ player.name }}</div>
-        <div class="summary"><span v-if="world.allow_combat">{{ capfirst(player.archetype) }} level {{ player.level }}</span><span v-else>&nbsp;</span></div>
+        <div class="summary"><span v-if="world.allow_combat">{{ combatSummary }}</span><span v-else>&nbsp;</span></div>
       </div>
       <div class="experience">
         <div class="exp-gained" :style="{width: expPerc +'%'}" :title="expProgress"></div>
@@ -21,6 +21,19 @@ const store = useStore();
 
 const world = computed(() => store.state.game.world);
 const player = computed(() => store.state.game.player);
+
+const classLabel = computed(() => {
+  const archetype = String(player.value?.archetype || "").trim();
+  if (!archetype || world.value?.is_classless) return "";
+  const labels = world.value?.labels?.classes || {};
+  return labels[archetype] || capfirst(archetype);
+});
+
+const combatSummary = computed(() => {
+  const levelText = `level ${player.value?.level || 1}`;
+  if (!classLabel.value) return capfirst(levelText);
+  return `${classLabel.value} ${levelText}`;
+});
 
 const expPerc = computed(() => {
   const needed = player.value.experience_needed,

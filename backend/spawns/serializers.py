@@ -250,6 +250,8 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
     starting_room = KeyField(source='config.starting_room')
     death_room = KeyField(source='config.death_room')
     death_mode = serializers.CharField(source='config.death_mode')
+    combat_resolution_interval = serializers.FloatField(
+        source='config.combat_resolution_interval')
     flee_to_unknown_rooms = serializers.BooleanField(
         source='config.flee_to_unknown_rooms')
     players_can_set_title = serializers.BooleanField(
@@ -286,6 +288,7 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
             'never_reload',
             'starting_room',
             'death_room',
+            'combat_resolution_interval',
             'death_gold_penalty',
             'has_corpse_decay',
             'auto_equip',
@@ -591,7 +594,7 @@ class AnimateItemSerializer(serializers.ModelSerializer):
             'food_value', 'food_type',
             'is_boat', 'is_pickable', 'capacity',
             'equipment_type', 'armor_class', 'weapon_type',
-            'weapon_grip', 'hit_msg_first', 'hit_msg_third',
+            'weapon_grip', 'weapon_damage', 'hit_msg_first', 'hit_msg_third',
             'health_max', 'health_regen',
             'mana_max', 'mana_regen',
             'stamina_max', 'stamina_regen',

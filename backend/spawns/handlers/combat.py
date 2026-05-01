@@ -12,7 +12,7 @@ class KillHandler(CommandHandler):
     help = {
         "name": "Kill",
         "format": "kill <mob>",
-        "description": "Defeat a mob in the current room.",
+        "description": "Fight a mob to the death using the current placeholder combat rules.",
         "examples": [
             "kill rat",
         ],

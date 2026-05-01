@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 from typing import Any
 
 import yaml
@@ -13,6 +14,16 @@ from rest_framework import serializers
 from builders import serializers as builder_serializers
 from builders.models import Currency, ItemTemplate, MobTemplate, Trigger
 from config import constants as adv_consts
+from core.combat_formulas import (
+    CombatFormulaValidationError,
+    get_world_combat_system,
+    normalize_combat_system,
+)
+from core.stat_system import (
+    StatSystemValidationError,
+    get_world_stat_system,
+    normalize_stat_system,
+)
 from spawns import trigger_matcher
 from worlds.models import Room, World, Zone
 
@@ -20,7 +31,7 @@ from worlds.models import Room, World, Zone
 MANIFEST_API_VERSION = "v1alpha1"
 LEGACY_MANIFEST_API_VERSION = "writtenrealms.com/v1alpha1"
 TRIGGER_MANIFEST_KIND = "trigger"
-WORLD_CONFIG_MANIFEST_KIND = "worldconfig"
+WORLD_MANIFEST_KIND = "world"
 QUEST_MANIFEST_KIND = "quest"
 QUEST_ARC_MANIFEST_KIND = "questarc"
 ITEM_TEMPLATE_MANIFEST_KIND = "itemtemplate"
@@ -30,12 +41,6 @@ TRIGGER_MANIFEST_OPERATION_DELETE = "delete"
 _TRIGGER_KEY_PREFIX = "trigger"
 _WORLD_KEY_PREFIX = "world"
 
-_WORLD_CONFIG_MANIFEST_KIND_ALIASES = {
-    "world",
-    WORLD_CONFIG_MANIFEST_KIND,
-    "world-config",
-    "world_config",
-}
 _QUEST_ARC_MANIFEST_KIND_ALIASES = {
     QUEST_ARC_MANIFEST_KIND,
     "quest-arc",
@@ -76,6 +81,9 @@ _WORLD_CONFIG_CONFIG_BOOL_FIELDS = (
 _WORLD_CONFIG_CONFIG_INT_FIELDS = (
     "starting_gold",
 )
+_WORLD_CONFIG_CONFIG_FLOAT_FIELDS = (
+    "combat_resolution_interval",
+)
 _WORLD_CONFIG_CONFIG_CHOICE_FIELDS = {
     "death_mode": adv_consts.DEATH_MODES,
     "death_route": adv_consts.DEATH_ROUTES,
@@ -85,6 +93,8 @@ _WORLD_CONFIG_CONFIG_ROOM_FIELDS = (
     "starting_room",
     "death_room",
 )
+_WORLD_CONFIG_STATS_FIELD = "stats"
+_WORLD_CONFIG_COMBAT_FIELD = "combat"
 _WORLD_FIELDS_PROPAGATED_TO_SPAWNS = {
     "name",
     "short_description",
@@ -130,6 +140,7 @@ _ITEM_TEMPLATE_SPEC_FIELDS = (
     "armor_class",
     "weapon_grip",
     "weapon_type",
+    "weapon_damage",
     "skill_modifier",
     "hit_msg_first",
     "hit_msg_third",
@@ -313,8 +324,8 @@ def parse_manifest_kind(manifest: dict[str, Any]) -> str:
     manifest_kind = _normalize_kind(manifest.get("kind"), "kind")
     if manifest_kind == TRIGGER_MANIFEST_KIND:
         return TRIGGER_MANIFEST_KIND
-    if manifest_kind in _WORLD_CONFIG_MANIFEST_KIND_ALIASES:
-        return WORLD_CONFIG_MANIFEST_KIND
+    if manifest_kind == WORLD_MANIFEST_KIND:
+        return WORLD_MANIFEST_KIND
     if manifest_kind in _ITEM_TEMPLATE_MANIFEST_KIND_ALIASES:
         return ITEM_TEMPLATE_MANIFEST_KIND
     if manifest_kind == QUEST_MANIFEST_KIND:
@@ -323,7 +334,7 @@ def parse_manifest_kind(manifest: dict[str, Any]) -> str:
         return QUEST_ARC_MANIFEST_KIND
     raise serializers.ValidationError(
         f"Unsupported manifest kind '{manifest_kind}'. "
-        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_CONFIG_MANIFEST_KIND}, {ITEM_TEMPLATE_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
+        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_MANIFEST_KIND}, {ITEM_TEMPLATE_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
     )
 
 
@@ -376,6 +387,25 @@ def _coerce_int(value: Any, field_name: str) -> int:
         return int(value)
     except (TypeError, ValueError):
         raise serializers.ValidationError(f"{field_name} must be an integer.")
+
+
+def _coerce_float(value: Any, field_name: str) -> float:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(f"{field_name} must be a number.")
+    try:
+        coerced = float(value)
+    except (TypeError, ValueError):
+        raise serializers.ValidationError(f"{field_name} must be a number.")
+    if not math.isfinite(coerced):
+        raise serializers.ValidationError(f"{field_name} must be a finite number.")
+    return coerced
+
+
+def _serialize_number(value: Any) -> int | float:
+    numeric = float(value or 0)
+    if numeric.is_integer():
+        return int(numeric)
+    return numeric
 
 
 def load_yaml_documents(manifest_text: str) -> list[dict[str, Any]]:
@@ -431,7 +461,7 @@ def _serialize_world_room_reference(*, room: Room | None, mode: str) -> str:
 def world_config_to_manifest(
     *,
     world: World,
-    manifest_kind: str = WORLD_CONFIG_MANIFEST_KIND,
+    manifest_kind: str = WORLD_MANIFEST_KIND,
     include_metadata: bool = True,
     room_reference_mode: str = "key",
 ) -> dict[str, Any]:
@@ -448,6 +478,9 @@ def world_config_to_manifest(
             "motd": world.motd or "",
             "is_public": bool(world.is_public),
             "starting_gold": int(config.starting_gold),
+            "combat_resolution_interval": _serialize_number(
+                config.combat_resolution_interval
+            ),
             "starting_room": _serialize_world_room_reference(
                 room=config.starting_room,
                 mode=room_reference_mode,
@@ -472,6 +505,8 @@ def world_config_to_manifest(
             "small_background": config.small_background or "",
             "large_background": config.large_background or "",
             "name_exclusions": config.name_exclusions or "",
+            _WORLD_CONFIG_STATS_FIELD: get_world_stat_system(world),
+            _WORLD_CONFIG_COMBAT_FIELD: get_world_combat_system(world),
         },
     }
     if include_metadata:
@@ -484,7 +519,7 @@ def world_config_to_manifest(
 def serialize_world_config_manifest(
     *,
     world: World,
-    manifest_kind: str = WORLD_CONFIG_MANIFEST_KIND,
+    manifest_kind: str = WORLD_MANIFEST_KIND,
     include_metadata: bool = True,
     room_reference_mode: str = "key",
 ) -> dict[str, Any]:
@@ -507,7 +542,7 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
 
     manifest_data = serialize_world_config_manifest(
         world=world,
-        manifest_kind="world",
+        manifest_kind=WORLD_MANIFEST_KIND,
         include_metadata=False,
         room_reference_mode="coords",
     )
@@ -523,6 +558,9 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
         },
         "config": {
             "starting_gold": int(config.starting_gold),
+            "combat_resolution_interval": _serialize_number(
+                config.combat_resolution_interval
+            ),
             "starting_room": _serialize_room_reference(config.starting_room),
             "death_room": _serialize_room_reference(config.death_room),
             "death_mode": config.death_mode,
@@ -542,6 +580,8 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
             "decay_glory": bool(config.decay_glory),
             "name_exclusions": config.name_exclusions or "",
             "globals_enabled": bool(config.globals_enabled),
+            "stat_system": get_world_stat_system(world),
+            "combat_system": get_world_combat_system(world),
         },
         "manifest": manifest_data["manifest"],
         "yaml": manifest_data["yaml"],
@@ -1472,9 +1512,9 @@ def parse_world_config_manifest(
     manifest: dict[str, Any],
 ) -> ParsedWorldConfigManifest:
     manifest_kind = parse_manifest_kind(manifest)
-    if manifest_kind != WORLD_CONFIG_MANIFEST_KIND:
+    if manifest_kind != WORLD_MANIFEST_KIND:
         raise serializers.ValidationError(
-            f"Unsupported manifest kind '{manifest_kind}'. Expected '{WORLD_CONFIG_MANIFEST_KIND}'."
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{WORLD_MANIFEST_KIND}'."
         )
 
     operation = str(manifest.get("operation") or TRIGGER_MANIFEST_OPERATION_APPLY).strip().lower()
@@ -1512,8 +1552,11 @@ def parse_world_config_manifest(
     allowed_fields.update(_WORLD_CONFIG_CONFIG_TEXT_FIELDS)
     allowed_fields.update(_WORLD_CONFIG_CONFIG_BOOL_FIELDS)
     allowed_fields.update(_WORLD_CONFIG_CONFIG_INT_FIELDS)
+    allowed_fields.update(_WORLD_CONFIG_CONFIG_FLOAT_FIELDS)
     allowed_fields.update(_WORLD_CONFIG_CONFIG_CHOICE_FIELDS.keys())
     allowed_fields.update(_WORLD_CONFIG_CONFIG_ROOM_FIELDS)
+    allowed_fields.add(_WORLD_CONFIG_STATS_FIELD)
+    allowed_fields.add(_WORLD_CONFIG_COMBAT_FIELD)
 
     unknown_fields = sorted(set(spec.keys()) - allowed_fields)
     if unknown_fields:
@@ -1555,6 +1598,15 @@ def parse_world_config_manifest(
                 raise serializers.ValidationError(f"spec.{field_name} must be >= 0.")
             config_updates[field_name] = value
 
+    for field_name in _WORLD_CONFIG_CONFIG_FLOAT_FIELDS:
+        if field_name in spec:
+            value = _coerce_float(spec.get(field_name), f"spec.{field_name}")
+            if value < 0 and value != -1:
+                raise serializers.ValidationError(
+                    f"spec.{field_name} must be -1 or >= 0."
+                )
+            config_updates[field_name] = value
+
     for field_name, choices in _WORLD_CONFIG_CONFIG_CHOICE_FIELDS.items():
         if field_name in spec:
             config_updates[field_name] = _coerce_choice(
@@ -1577,6 +1629,22 @@ def parse_world_config_manifest(
                 f"Room referenced by spec.{field_name} was not found in this world."
             )
         config_updates[field_name] = room
+
+    if _WORLD_CONFIG_STATS_FIELD in spec:
+        try:
+            config_updates["stat_system"] = normalize_stat_system(
+                spec.get(_WORLD_CONFIG_STATS_FIELD)
+            )
+        except StatSystemValidationError as exc:
+            raise serializers.ValidationError(str(exc))
+
+    if _WORLD_CONFIG_COMBAT_FIELD in spec:
+        try:
+            config_updates["combat_system"] = normalize_combat_system(
+                spec.get(_WORLD_CONFIG_COMBAT_FIELD)
+            )
+        except CombatFormulaValidationError as exc:
+            raise serializers.ValidationError(str(exc))
 
     return ParsedWorldConfigManifest(
         world=world,

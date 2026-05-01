@@ -136,7 +136,7 @@ const schema = computed<any[]>(() => {
   const damage_type: FormElement = {
     attr: "damage_type",
     label: "Damage Type",
-    help: `The type of damage the skill does. Physical damage is reduced by armor and resilience, while magical damage is reduced by resilience only.`,
+    help: `The type of damage the skill does. Physical damage is reduced by armor, while magical or ability damage is reduced by resilience.`,
     widget: "select",
     default: "physical",
     options: [
@@ -221,7 +221,7 @@ const schema = computed<any[]>(() => {
   const effect_damage_type: FormElement = {
     attr: "effect_damage_type",
     label: "Effect Damage Type",
-    help: `The type of damage the effect does for DOTs or HOTs. Physical damage is reduced by armor and resilience, while magical damage is reduced by resilience only.`,
+    help: `The type of damage the effect does for DOTs or HOTs. Physical damage is reduced by armor, while magical or ability damage is reduced by resilience.`,
     widget: "select",
     default: "magical",
     options: [

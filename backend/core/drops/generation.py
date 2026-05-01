@@ -215,6 +215,8 @@ def generate_weapon(level, quality, eq_type, main_stat=None, for_archetype=None)
 
     stats['name'] = weapon_data['name']
     stats['equipment_type'] = eq_type
+    damage_multiplier = 1.5 if eq_type == constants.EQUIPMENT_TYPE_WEAPON_2H else 1.0
+    stats['weapon_damage'] = max(1, math.ceil(config.ILF(level) * damage_multiplier))
     stats['hit_msg_first'] = weapon_data['hit_msg_first']
     stats['hit_msg_third'] = weapon_data['hit_msg_third']
     stats['keywords'] = weapon_data['keywords']
