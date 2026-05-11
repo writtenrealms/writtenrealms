@@ -13,7 +13,6 @@ from rest_framework.reverse import reverse
 
 from config import constants as api_consts
 from backend.config.exceptions import ServiceError
-from core.db import get_redis_db
 from builders.models import (
     ItemTemplate,
     ItemTemplateInventory,
@@ -30,8 +29,7 @@ from builders.models import (
     PathRoom,
     Faction,
     FactionAssignment,
-    Procession,
-    Skill)
+    Procession)
 from spawns import serializers as spawns_serializers
 from spawns.extraction import APIExtractor
 from spawns.loading import LoaderRun
@@ -419,41 +417,6 @@ class APIExtractionPlayerTests(APIExtractionTests):
             self.player.faction_assignments.get(
                 faction__code='illuminati').value,
             -2)
-
-    def test_skills_extraction(self):
-        api_extractor = APIExtractor(
-            self.spawn_world,
-            [
-                {
-                    "model": "skills",
-                    "player_id": self.player.id,
-                    "skills": {
-                        "flex": {
-                            "1": "barrier",
-                            "2": "innervate",
-                            "3": "combust"
-                        },
-                        "feat": {
-                            "1": "linguist",
-                            "2": "freeze",
-                            "3": "kaboom"
-                        }
-                    }
-                }
-            ])
-        api_extractor.save_skills(self.player)
-        # Check that the flex skills all line up
-        self.assertEqual(
-            self.player.flex_skills.get(code='barrier').number, 1)
-        self.assertEqual(
-            self.player.flex_skills.get(number=2).code, 'innervate')
-        self.assertEqual(self.player.flex_skills.count(), 3)
-        # Check that the feats all line up
-        self.assertEqual(
-            self.player.feats.get(code='linguist').number, 1)
-        self.assertEqual(
-            self.player.feats.get(number=2).code, 'freeze')
-        self.assertEqual(self.player.feats.count(), 3)
 
     def test_trophy_extraction(self):
         # A soldier which had been previously killed once

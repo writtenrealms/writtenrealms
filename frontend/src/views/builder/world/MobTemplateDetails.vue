@@ -126,7 +126,7 @@
       <MobTemplateLoads class="loads" />
       <MobTemplateUpgrades class="upgrades" />
       <MobTemplateCrafting class="crafting" />
-      <MobTemplateSkills class="skills" />
+      <MobTemplateAbilities class="abilities" />
       <MobTemplateTraits class="traits" />
       <MobTemplateQuests class="quests" />
       <MobTemplateAdvanced class="advanced" />
@@ -148,7 +148,7 @@ import MobTemplateMerchant from "@/components/builder/world/MobTemplateMerchant.
 import MobTemplateLoads from "@/components/builder/world/MobTemplateLoads.vue";
 import MobTemplateQuests from "@/components/builder/world/MobTemplateQuests.vue";
 import MobTemplateCrafting from "@/components/builder/world/MobTemplateCrafting.vue";
-import MobTemplateSkills from "@/components/builder/world/MobTemplateSkills.vue";
+import MobTemplateAbilities from "@/components/builder/world/MobTemplateAbilities.vue";
 import MobTemplateTraits from "@/components/builder/world/MobTemplateTraits.vue";
 import MobTemplateUpgrades from "@/components/builder/world/MobTemplateUpgrades.vue";
 import MobTemplateAdvanced from "@/components/builder/world/MobTemplateAdvanced.vue";

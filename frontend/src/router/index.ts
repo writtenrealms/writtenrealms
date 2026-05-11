@@ -89,10 +89,11 @@ const routes = [
       { path: 'players/:player_id/restoration', name: 'builder_world_player_restoration', component: () => import('@/views/builder/world/PlayerRestoration.vue') },
       { path: 'factions', name: 'builder_world_faction_list', component: () => import('@/views/builder/world/FactionList.vue') },
       { path: 'factions/:faction_id/ranks', name: 'builder_world_faction_rank_list', component: () => import('@/views/builder/world/FactionRankList.vue') },
-      { path: 'skills', name: 'builder_world_skill_list', component: () => import('@/views/builder/world/SkillList.vue') },
+      { path: 'abilities', name: 'builder_world_ability_list', component: () => import('@/views/builder/world/Abilities.vue') },
       { path: 'startingeq', name: 'builder_world_starting_eq_list', component: () => import('@/views/builder/world/StartingEqList.vue') },
       { path: 'socials', name: 'builder_world_social_list', component: () => import('@/views/builder/world/SocialList.vue') },
       { path: 'currencies', name: 'builder_world_currency_list', component: () => import('@/views/builder/world/CurrencyList.vue') },
+      { path: 'instances', name: 'builder_world_instance_list', component: () => import('@/views/builder/world/Instances.vue') },
 
       // Zone Views
       { path: 'zones/:zone_id', name: 'builder_zone_index', component: () => import('@/views/builder/zone/Zone.vue') },

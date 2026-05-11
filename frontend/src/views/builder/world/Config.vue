@@ -1,265 +1,127 @@
 <template>
   <div id="world-config" class="builder-config" v-if="store.state.builder.world.builder_info.builder_rank > 2">
-    <h2>{{ world.name.toUpperCase() }} CONFIG</h2>
+    <h1>{{ world.name.toUpperCase() }} CONFIG</h1>
 
-    <div class="general-settings mt-6">
-      <!-- <h3>GENERAL SETTINGS</h3> -->
+    <div class="config-layout">
+      <section class="config-links">
+        <div class="top-actions">
+          <router-link class="config-action" :to="editWorldPrefillLink">Edit World</router-link>
+        </div>
 
-      <div class="color-text-60">
-        <span v-if="world.is_public">Public</span><span v-else>Private</span> World
-      </div>
+        <div class="link-grid">
+          <router-link
+            v-for="link in visibleConfigLinks"
+            :key="link.title"
+            class="link-grid-item"
+            :to="link.to"
+          >
+            <span class="link-grid-title">{{ link.title }}</span>
+            <span class="link-grid-description">{{ link.description }}</span>
+          </router-link>
+        </div>
+      </section>
 
-      <div class="color-text-60 mb-6">Publication Status: {{ review_status }} <Help :help="review_help" v-if="review_help"/></div>
-      <div class="review-details" v-if="review_status == 'Reviewed'">
-        <div class="reviewer color-text-60 mb-2">Comments by {{ review.reviewer }}:</div>
-        <div class="review-text mb-4">
-          <div class="review-line min-line-height"
-              v-for="(line, index) in review.text.split('\n')"
-              :key="index">{{ line }}</div>
-          </div>
-      </div>
-
-      <div v-if="world.description" class="world-description">
-        <div class="desc-line" v-for="(line, index) of descLines" :key="index">{{ line }}</div>
-      </div>
-
-      <div class="settings-actions mt-4">
-        <button class="btn-small" @click="deleteWorld">DELETE</button>
-        <button class="btn-small ml-4" @click="submitForReview" v-if="displaySubmitReview">SUBMIT FOR REVIEW</button>
-      </div>
-    </div>
-
-    <div class="divider"></div>
-
-    <div class="config-panels">
-      <div class="advanced-config">
-        <h3>ADVANCED CONFIG</h3>
-        <template v-if="configData">
-          <ul class="list">
-            <li>World Name: {{ world.name }}</li>
-            <li>Short Description: {{ world.short_description || "(empty)" }}</li>
-            <li>Message of the Day: {{ world.motd || "(empty)" }}</li>
-            <li>World Visibility: <span v-if="world.is_public">Public</span><span v-else>Private</span></li>
-
-            <li>
-              Starting Gold: {{ configData.starting_gold }}
-            </li>
-            <li>Starting Level: {{ configData.starting_level }}</li>
-            <li>Max Level: {{ configData.max_level }}</li>
-            <li>Leveling Curve: {{ levelingCurveSummary }}</li>
-
-            <li>
-              Starting Room:
-              <router-link
-                v-if="configData.starting_room"
-                :to="room_link(configData.starting_room.id)"
-              >{{ configData.starting_room.name }}</router-link>
-              <span v-else>(unset)</span>
-            </li>
-            <li>
-              Death Room:
-              <router-link
-                v-if="configData.death_room"
-                :to="room_link(configData.death_room.id)"
-              >{{ configData.death_room.name }}</router-link>
-              <span v-else>(unset)</span>
-            </li>
-            <li>Death EQ Loss: {{ deathModeLabel(configData.death_mode) }}</li>
-            <li>Death Route: {{ deathRouteLabel(configData.death_route) }}</li>
-            <li>PvP Mode: {{ pvpModeLabel(configData.pvp_mode) }}</li>
-            <li>Narrative World: {{ yesNo(configData.is_narrative) }}</li>
-            <li>Can Select Core Faction: {{ yesNo(configData.can_select_faction) }}</li>
-            <li>Auto Equip Items: {{ yesNo(configData.auto_equip) }}</li>
-            <li>Players Can Set Title: {{ yesNo(configData.players_can_set_title) }}</li>
-            <li>Allow PvP: {{ yesNo(configData.allow_pvp) }}</li>
-            <li>Classless Players: {{ yesNo(configData.is_classless) }}</li>
-            <li>Allow Non-ASCII Names: {{ yesNo(configData.non_ascii_names) }}</li>
-            <li>Enable Channels: {{ yesNo(configData.globals_enabled) }}</li>
-            <li>Decay Glory: {{ yesNo(configData.decay_glory) }}</li>
-            <li>Built By: {{ configData.built_by || "(uses world author)" }}</li>
-            <li>General Lobby Art: {{ configData.small_background || "(empty)" }}</li>
-            <li>World Lobby Art: {{ configData.large_background || "(empty)" }}</li>
-          </ul>
-
-          <div class="config-manifest mt-6">
-            <button class="btn-small" @click="copyConfigYaml">COPY CONFIG YAML</button>
-            <button class="btn-thin ml-2" @click="toggleConfigYaml">
+      <section class="world-data">
+        <div class="section-header">
+          <h2>World Data</h2>
+          <div class="data-actions">
+            <button class="btn-small" @click="copyConfigYaml">COPY YAML</button>
+            <button class="btn-thin" @click="toggleConfigYaml">
               {{ showConfigYaml ? "HIDE YAML" : "SHOW YAML" }}
             </button>
-            <router-link class="ml-4" :to="edit_world_link">open Edit World</router-link>
-
-            <pre v-if="showConfigYaml" class="config-yaml mt-4"><code>{{ configYaml }}</code></pre>
           </div>
-        </template>
-        <template v-else>
-          <div class="color-text-60">World config is unavailable for this world.</div>
-        </template>
-      </div>
-
-      <div class="world-status">
-        <h3>World Admin</h3>
-
-        <div>View connected players, start/stop multiplayer worlds.</div>
-
-        <router-link :to="world_admin_link">manage</router-link>
-      </div>
-
-      <div class="random-profiles" v-if="!world.instance_of.id">
-        <h3>RANDOM ITEM PROFILES</h3>
-
-        <div>
-          <p>Random Item Profiles offer a way to define a random load. Use cases include:</p>
-          <ul class="list">
-            <!-- <li>Equipping a mob with random gear</li> -->
-            <li>Giving a random item reward on completing a quest</li>
-            <li>Merchants with random sales inventory</li>
-          </ul>
         </div>
 
-        <router-link
-          :to="{name: 'builder_world_random_profile_list', params: {world_id: $route.params.world_id}}"
-        >manage</router-link>
-      </div>
+        <div class="world-data-layout">
+          <div class="manifest-grid">
+            <template v-if="worldSpec">
+              <section
+                v-for="section in manifestSections"
+                :key="section.title"
+                class="manifest-section"
+                :class="{ wide: section.wide }"
+              >
+                <h3>{{ section.title }}</h3>
 
-      <div class="transformation-templates" v-if="!world.instance_of.id">
-        <h3>Transformations</h3>
+                <table v-if="section.tableEntries.length" class="data-table key-value-table manifest-section-table">
+                  <tbody>
+                    <tr v-for="entry in section.tableEntries" :key="entry.key">
+                      <th scope="row">{{ entry.label }}</th>
+                      <td>
+                        <router-link v-if="entry.to" :to="entry.to">
+                          {{ entry.displayValue }}
+                        </router-link>
+                        <ManifestValue v-else :value="entry.value" />
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
 
-        <div>
-          <p>Transformations can be applied to the output of a loader rule to modify a loaded template. Use cases include:</p>
-          <ul class="list">
-            <li>Making a mob roam 100% of the time on tic rather than the default 5%</li>
-            <li>Force a mob to roam in a particular direction</li>
-            <li>Change the name of a mob when it loads</li>
-            <li>Make any other one-off modification to a template for a loaded mob.</li>
-          </ul>
+                <div
+                  v-for="entry in section.stackedEntries"
+                  :key="entry.key"
+                  class="manifest-field"
+                >
+                  <div class="manifest-label">{{ entry.label }}</div>
+                  <div class="manifest-field-value">
+                    <router-link v-if="entry.to" :to="entry.to">
+                      {{ entry.displayValue }}
+                    </router-link>
+                    <template v-else-if="entry.backgroundPreview">
+                      <ManifestValue :value="entry.value" />
+                      <details class="background-preview">
+                        <summary>Preview background</summary>
+                        <img :src="entry.backgroundPreview" :alt="`${entry.label} preview`">
+                      </details>
+                    </template>
+                    <ManifestValue
+                      v-else
+                      :value="entry.value"
+                      :collapse-complex="entry.collapseComplex"
+                    />
+                  </div>
+                </div>
+              </section>
+            </template>
+            <template v-else>
+              <div class="color-text-60">World config is unavailable for this world.</div>
+            </template>
+          </div>
+
+          <aside class="config-yaml-panel" v-if="showConfigYaml">
+            <div class="yaml-panel-header">
+              <h3>World YAML</h3>
+            </div>
+            <pre class="config-yaml"><code>{{ configYaml }}</code></pre>
+          </aside>
         </div>
+      </section>
 
-        <router-link
-          :to="{name: 'builder_world_transformation_template_list', params: {world_id: $route.params.world_id}}"
-        >manage</router-link>
-      </div>
-
-      <div class="world-builders" v-if="!world.instance_of.id">
-        <h3>World Builders</h3>
-
-        <div>Builders are able to access the editor for a given world. They can be given read-only access.</div>
-
-        <router-link
-          :to="{name: 'builder_world_builder_list', params: {world_id: $route.params.world_id}}"
-        >manage</router-link>
-      </div>
-
-      <div class="world-players" v-if="!world.instance_of.id">
-        <h3>World Players</h3>
-
-        <div>View information about players in your world.</div>
-
-        <router-link
-          :to="{name: 'builder_world_player_list', params: {world_id: $route.params.world_id}}"
-        >manage</router-link>
-      </div>
-
-      <div class="world-factions" v-if="!world.instance_of.id">
-        <h3>Worlds Factions</h3>
-
-        <div>View information about factions in your world.</div>
-
-        <router-link :to="world_factions_link">manage</router-link>
-      </div>
-
-      <div class="world-facts">
-        <h3>World State</h3>
-
-        <div>State is mutable runtime data for your world. Builders, triggers, quests, mobs, and schedules can read or update it to drive dynamic behavior.</div>
-
-        <router-link :to="world_facts_link">manage</router-link>
-      </div>
-
-      <div class='world-skills' v-if="!world.instance_of.id">
-        <h3>Custom Skills</h3>
-
-        <div>Builders can create skills, usable by players and mobs that do not have an archetype. To enable the creation of players that do not have an archetype, check the "Classless Players" checkbox under Advanced Config.</div>
-
-        <router-link :to="world_skills_link">manage</router-link>
-      </div>
-
-      <div class="world-starting-eq" v-if="!world.instance_of.id">
-        <h3>Starting EQ</h3>
-
-        <div>Define the items that a player starts with.</div>
-
-        <router-link :to="world_starting_eq_link">manage</router-link>
-      </div>
-
-      <div class="world-socials" v-if="!world.instance_of.id">
-        <h3>SOCIALS</h3>
-        <div>Socials are custom commands defined by builders that players and mobs can use to emote in a standardized way. Example typical socials: nod, shrug, wave, smile, laugh, sigh, shake, slap.</div>
-
-        <router-link :to="world_socials_link">manage</router-link>
-      </div>
-
-      <div class="world-name-exclusions" v-if="!world.instance_of.id && configData">
-        <h3>NAME EXCLUSIONS</h3>
-
-        <div v-if="nameExclusions.length">
-          {{ nameExclusions.length }} configured name exclusions.
-        </div>
-        <div v-else>No name exclusions configured.</div>
-        <div class="color-text-60 mt-2">
-          Manage exclusions through world config YAML in <router-link :to="edit_world_link">Edit World</router-link>.
-        </div>
-      </div>
-
-      <div class="world-currencies" v-if="!world.instance_of.id">
-        <h3>CURRENCIES</h3>
-
-        <div>Define the currencies that players can use in your world.</div>
-
-        <router-link
-          :to="{name: 'builder_world_currency_list', params: {world_id: $route.params.world_id}}"
-        >manage</router-link>
-      </div>
-    </div>
-
-    <div class="instances" v-if="!world.instance_of.id">
-      <div class="divider"></div>
-      <h3 class='mb-8'>INSTANCES</h3>
-
-      <p>An instance is a unique, isolated version of a game area or dungeon that a player or group can enter, allowing for a private experience separate from other players in the world.</p>
-
-      <p>Note: Instances are currently in Alpha, proceed with caution.</p>
-
-      <div class='my-8'>
-        <button class="btn-small" @click="createInstance">CREATE INSTANCE</button>
-      </div>
-
-      <div v-for="instance in store.state.builder.worlds.instances" :key="instance.id" :instance="instance" class="mb-8">
-        <a :href="instanceLink(instance.id)">{{ instance.name }}</a>
-      </div>
+      <section class="danger-zone">
+        <h2>Danger Zone</h2>
+        <button class="btn-small button-red" @click="deleteWorld">DELETE WORLD</button>
+      </section>
     </div>
   </div>
   <div v-else>
     <p>You do not have permission to configure this world.</p>
 
     <p v-if="store.state.builder.world.builder_info.builder_assignments.length">Entites assigned to you:</p>
-    <ul class='ml-4'>
+    <ul class="ml-4">
       <li v-for="assignment in store.state.builder.world.builder_info.builder_assignments" :key="assignment.id">
         <router-link :to="assignment_link(assignment)">
           {{ assignment.name }}
         </router-link>
       </li>
     </ul>
-
   </div>
 </template>
 
-<script lang='ts' setup>
-import { computed, onMounted, ref } from 'vue';
-import { useStore } from 'vuex';
-import { useRouter, useRoute, RouteLocationRaw } from 'vue-router';
-import { capfirst } from "@/core/utils.ts";
-import Help from "@/components/Help.vue";
-import ReviewInstructions from "@/components/builder/world/ReviewInstructions.vue";
+<script lang="ts" setup>
+import { computed, onMounted, ref } from "vue";
+import { useStore } from "vuex";
+import { useRouter, useRoute, RouteLocationRaw } from "vue-router";
+import ManifestValue from "@/components/builder/world/ManifestValue.vue";
 
 const store = useStore();
 const router = useRouter();
@@ -269,66 +131,303 @@ const world = computed(() => store.state.builder.world);
 const configPayload = computed(() => store.state.builder.worlds.config);
 const configData = computed(() => configPayload.value?.config || null);
 const configYaml = computed(() => configPayload.value?.yaml || "");
+const worldSpec = computed(() => configPayload.value?.manifest?.spec || null);
 const showConfigYaml = ref(false);
-const levelingCurveSummary = computed(() => {
-  const curve = configData.value?.leveling_curve;
-  if (!Array.isArray(curve) || !curve.length) return "(empty)";
-  return `${curve.length} levels, ${curve[curve.length - 1]} XP at cap`;
-});
 
-const room_link = (id: number) => {
+const isRootWorld = computed(() => !world.value.instance_of?.id);
+
+const editWorldPrefillLink = computed(() => ({
+  name: "builder_world_edit",
+  params: { world_id: route.params.world_id },
+  query: { prefill: "world-config" },
+}));
+
+const roomLinkForKey = (key: string) => {
+  const room = configData.value?.[key];
+  if (!room?.id) return null;
   return {
-    name: 'builder_room_index',
+    name: "builder_room_index",
     params: {
-      world_id: world.value.id,
-      room_id: id,
+      world_id: route.params.world_id,
+      room_id: room.id,
     },
   };
 };
 
-onMounted(async () => {
-  store.commit("builder/worlds/config_clear");
+const roomDisplayForKey = (key: string, fallback: any) => {
+  const room = configData.value?.[key];
+  if (room?.name) return room.name;
+  return fallback || "(unset)";
+};
 
-  // Convert each call into a promise and then call both at once
+const backgroundPreviewSrc = (value: any) => {
+  if (typeof value !== "string") return "";
+  const src = value.trim();
+  if (!src) return "";
+  return src;
+};
 
-  const config_promise = store.dispatch("builder/worlds/config_fetch", {
-    world_id: world.value.id,
-  });
+const configLinks = computed(() => [
+  {
+    title: "World Admin",
+    description: "Connected players, maintenance mode, and spawned worlds.",
+    to: {
+      name: "builder_world_admin",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
+    title: "Random Item Profiles",
+    description: "Reusable item roll profiles for rewards, merchants, and loads.",
+    rootOnly: true,
+    to: {
+      name: "builder_world_random_profile_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
+    title: "Transformations",
+    description: "One-off template changes applied through loader rules.",
+    rootOnly: true,
+    to: {
+      name: "builder_world_transformation_template_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
+    title: "World Builders",
+    description: "Builder access, roles, and assigned editor work.",
+    rootOnly: true,
+    to: {
+      name: "builder_world_builder_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
+    title: "World Players",
+    description: "Player records, details, and restoration tools.",
+    rootOnly: true,
+    to: {
+      name: "builder_world_player_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
+    title: "Starting EQ",
+    description: "Items granted to new players when they enter the world.",
+    rootOnly: true,
+    to: {
+      name: "builder_world_starting_eq_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
+    title: "Currencies",
+    description: "Currency definitions and default money behavior.",
+    rootOnly: true,
+    to: {
+      name: "builder_world_currency_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
+    title: "Socials",
+    description: "Shared emote commands available to players and mobs.",
+    rootOnly: true,
+    to: {
+      name: "builder_world_social_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
+    title: "Abilities",
+    description: "WR2 manifest-backed combat and utility commands.",
+    rootOnly: true,
+    to: {
+      name: "builder_world_ability_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
+    title: "Instances",
+    description: "Private instance contexts created from this world.",
+    rootOnly: true,
+    to: {
+      name: "builder_world_instance_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+]);
 
-  const instances_promise = store.dispatch("builder/worlds/instances_fetch", {
-    world_id: world.value.id,
-  });
-
-  await Promise.all([config_promise, instances_promise]);
-
+const visibleConfigLinks = computed(() => {
+  return configLinks.value.filter((link) => !link.rootOnly || isRootWorld.value);
 });
 
-const yesNo = (value: boolean) => value ? "Yes" : "No";
+const manifestGroups = [
+  {
+    title: "Identity",
+    keys: ["name", "short_description", "description", "motd", "is_public", "built_by"],
+  },
+  {
+    title: "Progression",
+    keys: ["starting_level", "max_level", "starting_gold", "leveling_curve", "ability_progression"],
+  },
+  {
+    title: "Rooms",
+    keys: ["starting_room", "death_room"],
+  },
+  {
+    title: "Combat",
+    keys: ["combat_resolution_interval", "combat", "death_mode", "death_route"],
+    wide: true,
+  },
+  {
+    title: "PvP",
+    keys: ["allow_pvp", "pvp_mode"],
+  },
+  {
+    title: "Player Rules",
+    keys: [
+      "can_select_faction",
+      "auto_equip",
+      "is_narrative",
+      "players_can_set_title",
+      "is_classless",
+      "non_ascii_names",
+      "globals_enabled",
+      "decay_glory",
+    ],
+  },
+  {
+    title: "Presentation",
+    keys: ["small_background", "large_background"],
+  },
+  {
+    title: "Naming",
+    keys: ["name_exclusions"],
+  },
+  {
+    title: "Stats",
+    keys: ["stats"],
+    wide: true,
+  },
+];
 
-const pvpModeLabel = (value?: string) => {
-  if (value === "free_for_all") return "Free for All";
-  if (value === "zone") return "PvP Zones";
-  if (value === "disabled") return "Disabled";
-  return value || "(unset)";
+const labelOverrides = {
+  motd: "Message Of The Day",
+  is_public: "Visibility",
+  pvp_mode: "PvP Mode",
+  allow_pvp: "Allow PvP",
+  small_background: "General Lobby Art",
+  large_background: "World Lobby Art",
 };
 
-const deathModeLabel = (value?: string) => {
-  if (value === "lose_all") return "Lose All";
-  if (value === "lose_none") return "Lose None";
-  if (value === "lose_gold") return "Lose Gold";
-  if (value === "lose_inv") return "Lose Inventory";
-  if (value === "destroy_eq") return "Destroy Equipped Items";
-  if (value === "lose_eq") return "Lose Equipped";
-  return value || "(unset)";
+const labelForKey = (key: string) => {
+  if (labelOverrides[key]) return labelOverrides[key];
+  return key
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 };
 
-const deathRouteLabel = (value?: string) => {
-  if (value === "top_faction") return "Top Faction";
-  if (value === "near_room") return "Nearest Room";
-  if (value === "far_room") return "Furthest Room";
-  if (value === "nearest_in_zone") return "Nearest in Zone";
-  return value || "(unset)";
+const isPlainObject = (value: any) => {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 };
+
+const isEmptyValue = (value: any) => {
+  if (value === null || value === undefined || value === "") return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (isPlainObject(value)) return Object.keys(value).length === 0;
+  return false;
+};
+
+const isCompactPrimitive = (value: any) => {
+  if (isEmptyValue(value) || typeof value === "number" || typeof value === "boolean") return true;
+  if (typeof value !== "string") return false;
+  return value.length <= 160 && !value.includes("\n");
+};
+
+const isPrimitiveArray = (value: any) => {
+  return Array.isArray(value) && value.every((item) => isCompactPrimitive(item));
+};
+
+const isSimpleSectionEntry = (entry: any) => {
+  if (entry.backgroundPreview || entry.collapseComplex) return false;
+  if (entry.to) return true;
+  if (isCompactPrimitive(entry.value) || isPrimitiveArray(entry.value)) return true;
+  return false;
+};
+
+const entryForKey = (spec: any, key: string) => {
+  const value = spec[key];
+  const entry: any = {
+    key,
+    label: labelForKey(key),
+    value,
+  };
+
+  if (key === "starting_room" || key === "death_room") {
+    entry.to = roomLinkForKey(key);
+    entry.displayValue = roomDisplayForKey(key, value);
+  }
+
+  if (key === "small_background" || key === "large_background") {
+    entry.backgroundPreview = backgroundPreviewSrc(value);
+  }
+
+  if (key === "combat" || key === "stats") {
+    entry.collapseComplex = true;
+  }
+
+  return entry;
+};
+
+const manifestSections = computed(() => {
+  const spec = worldSpec.value;
+  if (!spec) return [];
+
+  const usedKeys = new Set<string>();
+  const sections = manifestGroups
+    .map((group) => {
+      const entries = group.keys
+        .filter((key) => Object.prototype.hasOwnProperty.call(spec, key))
+        .map((key) => {
+          usedKeys.add(key);
+          return entryForKey(spec, key);
+        });
+
+      return {
+        title: group.title,
+        entries,
+        tableEntries: entries.filter(isSimpleSectionEntry),
+        stackedEntries: entries.filter((entry) => !isSimpleSectionEntry(entry)),
+        wide: group.wide,
+      };
+    })
+    .filter((section) => section.entries.length);
+
+  const remainingEntries = Object.keys(spec)
+    .filter((key) => !usedKeys.has(key))
+    .map((key) => entryForKey(spec, key));
+
+  if (remainingEntries.length) {
+    sections.push({
+      title: "Other",
+      entries: remainingEntries,
+      tableEntries: remainingEntries.filter(isSimpleSectionEntry),
+      stackedEntries: remainingEntries.filter((entry) => !isSimpleSectionEntry(entry)),
+      wide: false,
+    });
+  }
+
+  return sections;
+});
+
+onMounted(async () => {
+  store.commit("builder/worlds/config_clear");
+  await store.dispatch("builder/worlds/config_fetch", {
+    world_id: world.value.id,
+  });
+});
 
 const toggleConfigYaml = () => {
   showConfigYaml.value = !showConfigYaml.value;
@@ -343,211 +442,225 @@ const copyConfigYaml = async () => {
   }
 };
 
-const createInstance = () => {
-  const modal = {
-    title: 'Create Instance',
-    data: {
-      'name': 'Unnamed Instance',
-      'instance_of': world.value.id,
-    },
-    submitLabel: 'CREATE INSTANCE',
-    schema: [
-      {
-        attr: 'name',
-        label: 'Name',
-        help: `The name of the instance.`
-      },
-    ],
-    action: 'builder/worlds/instance_create',
-  }
-  store.commit('ui/modal/open_form', modal);
-};
-
-const submitForReview = () => {
-  const modal = {
-    title: 'Submit For Review',
-    data: { 'description': '' },
-    submitLabel: 'SUBMIT',
-    schema: [
-      {
-        attr: 'description',
-        label: 'Description',
-        widget: 'textarea',
-        help: `Describe your world to the reviewer.`
-      }
-    ],
-    action: "builder/worlds/submit_world_for_review",
-    slot: ReviewInstructions,
-  };
-  store.commit('ui/modal/open_form', modal);
-}
-
 const deleteWorld = async () => {
   const world_id = world.value.id;
+  const confirmed = confirm("Are you sure you want to delete this world and everything in it? This action cannot be undone.");
+  if (!confirmed) return;
 
-  // Crude confirm dialog
-  const c = confirm(`Are you sure you want to delete this world and everything in it? This action cannot be undone.`);
-  if (!c) return;
-
-  await store.dispatch('builder/world_delete');
-  store.commit('ui/notification_set', `Deleted World ${world_id}`);
-  router.push({ name: 'lobby' });
-};
-
-const edit_world_link = {
-  name: 'builder_world_edit',
-  params: { world_id: world.value.id },
-};
-
-const world_admin_link = {
-  name: 'builder_world_admin',
-  params: { world_id: world.value.id },
-};
-
-const world_factions_link = {
-  name: 'builder_world_faction_list',
-  params: { world_id: world.value.id },
-};
-
-const world_facts_link = {
-  name: 'builder_world_fact_list',
-  params: { world_id: world.value.id },
-};
-
-const world_skills_link = {
-  name: 'builder_world_skill_list',
-  params: { world_id: world.value.id },
-};
-
-const world_starting_eq_link = {
-  name: 'builder_world_starting_eq_list',
-  params: { world_id: world.value.id },
-};
-
-const world_socials_link = {
-  name: 'builder_world_social_list',
-  params: { world_id: world.value.id },
-};
-
-const nameExclusions = computed(() => {
-  const raw = configData.value?.name_exclusions || "";
-  return raw
-    .split(/\r?\n/g)
-    .map((name: string) => name.trim())
-    .filter((name: string) => !!name);
-});
-
-const descLines = computed(() => world.value.description.split("\n"));
-const displaySubmitReview = computed(() => world.value.review.status === "unsubmitted" || world.value.review.status == "reviewed");
-const review = computed(() => world.value.review);
-
-const review_status = computed(() => {
-  if (world.value.review.status === 'unsubmitted') {
-    return 'Unpublished';
-  } else if (world.value.review.status === 'submitted') {
-    return 'Under Review';
-  } else if (world.value.review.status === 'reviewed') {
-    return 'Reviewed';
-  } else if (world.value.review.status === 'approved') {
-    return 'Published';
-  }
-  return capfirst(world.value.review.status);
-});
-
-const review_help = computed(() => {
-  if (world.value.review.status === 'unsubmitted') {
-    return `A world that's been approved for publication will be featured in curated sections of the site. To initiate a review, click the SUBMIT FOR REVIEW action.`;
-  } else if (world.value.review.status === 'submitted') {
-    return `Your review has been submitted. Once a staff member reviews it, it will either be approved or you will receive feedback on what to change.`;
-  } else if (world.value.review.status === 'reviewed') {
-    return `Your world has been reviewed but is not quite ready for primetime yet. Read the reviewer's notes and re-submit it once you're ready.`;
-  }
-  return '';
-});
-
-const instanceLink = (instance_id) => {
-  return router.resolve({
-    name: 'builder_world_index',
-    params: { world_id: instance_id }
-  }).href;
+  await store.dispatch("builder/world_delete");
+  store.commit("ui/notification_set", `Deleted World ${world_id}`);
+  router.push({ name: "lobby" });
 };
 
 const assignment_link = (assignment) => {
-  if (assignment.model_type === 'room') {
+  if (assignment.model_type === "room") {
     return {
-      name: 'builder_room_index',
+      name: "builder_room_index",
       params: {
         world_id: route.params.world_id,
-        room_id: assignment.id
-      }
+        room_id: assignment.id,
+      },
     } as RouteLocationRaw;
-  } else if (assignment.model_type === 'itemtemplate') {
+  } else if (assignment.model_type === "itemtemplate") {
     return {
-      name: 'builder_item_template_details',
+      name: "builder_item_template_details",
       params: {
         world_id: route.params.world_id,
-        item_template_id: assignment.id
-      }
+        item_template_id: assignment.id,
+      },
     } as RouteLocationRaw;
-  } else if (assignment.model_type === 'mobtemplate') {
+  } else if (assignment.model_type === "mobtemplate") {
     return {
-      name: 'builder_mob_template_details',
+      name: "builder_mob_template_details",
       params: {
         world_id: route.params.world_id,
-        mob_template_id: assignment.id
-      }
+        mob_template_id: assignment.id,
+      },
     } as RouteLocationRaw;
   }
-  // Assume it's a zone
   return {
-    name: 'builder_zone_index',
+    name: "builder_zone_index",
     params: {
       world_id: route.params.world_id,
-      zone_id: assignment.id
-    }
+      zone_id: assignment.id,
+    },
   } as RouteLocationRaw;
-}
+};
 </script>
 
 <style lang="scss" scoped>
 @import "@/styles/colors.scss";
 @import "@/styles/layout.scss";
 
-.world-description {
-  div.desc-line:not(:last-child) {
-    margin-bottom: 0.8em;
+.config-layout {
+  max-width: $site-max-width;
+  width: 100%;
+}
+
+.section-header,
+.yaml-panel-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+
+  @media ($mobile-site) {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 
+.config-links,
+.world-data,
+.danger-zone {
+  margin-top: 2rem;
+}
 
-.review-details {
-  .review-text {
+.top-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: flex-start;
+  margin-bottom: 1rem;
+}
+
+.config-action {
+  background: transparent;
+  border: 0;
+  color: $color-primary;
+  cursor: pointer;
+  font: inherit;
+  line-height: inherit;
+  padding: 0;
+  text-decoration: none;
+
+  &:hover {
+    color: $color-primary;
+    text-decoration: underline;
+  }
+
+}
+
+.link-grid {
+  gap: 0.8rem;
+}
+
+.data-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.danger-zone {
+  border-top: 1px solid $color-background-light-border;
+  padding-top: 1.25rem;
+
+  h2 {
+    color: $color-text-hex-60;
+    margin-bottom: 1rem;
+  }
+}
+
+.world-data-layout {
+  display: grid;
+  gap: 1.5rem;
+  min-width: 0;
+}
+
+.manifest-grid {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  min-width: 0;
+}
+
+.manifest-section {
+  border-top: 1px solid $color-background-light-border;
+  min-width: 0;
+  padding: 1.25rem 0;
+
+  &.wide {
+    grid-column: 1 / -1;
+  }
+
+  h3 {
+    color: $color-secondary;
+    margin-bottom: 1rem;
+  }
+}
+
+.manifest-field {
+  margin-bottom: 1.25rem;
+  min-width: 0;
+}
+
+.manifest-section-table + .manifest-field {
+  margin-top: 1.25rem;
+}
+
+.manifest-label {
+  color: $color-text-hex-60;
+  margin-bottom: 0.35rem;
+}
+
+.manifest-field-value {
+  line-height: 1.5;
+  min-width: 0;
+}
+
+.background-preview {
+  margin-top: 0.5rem;
+
+  summary {
+    color: $color-secondary;
+    cursor: pointer;
+    width: fit-content;
+  }
+
+  img {
     border: 1px solid $color-background-light-border;
-    padding: 15px;
+    display: block;
+    margin-top: 0.75rem;
+    max-height: 280px;
+    max-width: 100%;
+    object-fit: contain;
   }
 }
 
-.config-manifest {
-  .config-yaml {
-    margin: 0;
-    padding: 0.75rem;
-    overflow-x: auto;
-    border: 1px solid $color-form-border;
-    background: $color-background;
-    white-space: pre-wrap;
-    word-break: break-word;
+.config-yaml-panel {
+  border-top: 1px solid $color-background-light-border;
+  min-width: 0;
+  order: -1;
+  padding-top: 1.25rem;
+  width: 100%;
+}
 
-    code {
-      border: 0;
-      padding: 0;
-      display: block;
-      background: transparent;
-    }
+.config-yaml {
+  background: $color-background;
+  border: 1px solid $color-form-border;
+  box-sizing: border-box;
+  margin: 0;
+  max-height: 70vh;
+  overflow: auto;
+  padding: 1rem;
+  white-space: pre;
+  width: 100%;
+
+  code {
+    background: transparent;
+    border: 0;
+    display: block;
+    padding: 0;
   }
 }
 
-.divider {
-  margin-top: 50px;
-  margin-bottom: 50px;
+.manifest-section.wide :deep(.manifest-map.root) {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.manifest-section.wide :deep(.manifest-map.nested) {
+  grid-template-columns: 1fr;
 }
 </style>

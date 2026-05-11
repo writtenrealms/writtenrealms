@@ -184,6 +184,9 @@ class Player(CharMixin, AdventBaseModel):
 
     cooldowns = models.TextField(**optional)
     effects = models.TextField(**optional)
+    known_abilities = models.JSONField(default=list)
+    ability_hotkeys = models.JSONField(default=dict)
+    ability_cooldowns = models.JSONField(default=dict)
 
     def __str__(self):
         return "{name} ({level})".format(
@@ -542,6 +545,9 @@ class CombatEncounter(BaseModel):
     round_number = models.PositiveIntegerField(default=0)
     next_resolution_ts = models.DateTimeField(db_index=True, **optional)
     last_resolution_ts = models.DateTimeField(db_index=True, **optional)
+    pending_player_ability = models.JSONField(default=dict)
+    pending_flee = models.JSONField(default=dict)
+    active_effects = models.JSONField(default=list)
 
     class Meta(BaseModel.Meta):
         indexes = [
@@ -581,24 +587,6 @@ class PlayerTrophy(BaseModel):
 
 models.signals.post_save.connect(Player.post_char_save, Player)
 models.signals.post_delete.connect(Player.post_char_delete, Player)
-
-
-class PlayerFlexSkill(BaseModel):
-
-    number = models.IntegerField()
-
-    player = models.ForeignKey(Player,
-                               related_name='flex_skills',
-                               on_delete=models.CASCADE)
-    code = models.TextField()
-
-
-class PlayerFeat(BaseModel):
-    number = models.IntegerField()
-    player = models.ForeignKey(Player,
-                               related_name='feats',
-                               on_delete=models.CASCADE)
-    code = models.TextField()
 
 
 class PlayerEvent(BaseModel):

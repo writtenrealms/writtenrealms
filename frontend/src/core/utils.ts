@@ -3,6 +3,48 @@ export const capfirst = word => {
   return word.charAt(0).toUpperCase() + word.slice(1);
 };
 
+const thisYearDateFormatter = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric"
+});
+const priorYearDateFormatter = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  year: "numeric"
+});
+
+export const formatRelativeModifiedDate = (value?: string) => {
+  if (!value) {
+    return "";
+  }
+
+  const modifiedAt = new Date(value);
+  if (Number.isNaN(modifiedAt.getTime())) {
+    return "";
+  }
+
+  const now = new Date();
+  const diffMs = now.getTime() - modifiedAt.getTime();
+  if (diffMs < 60000) {
+    return "now";
+  }
+
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ago`;
+  }
+
+  if (modifiedAt.getFullYear() === now.getFullYear()) {
+    return thisYearDateFormatter.format(modifiedAt);
+  }
+
+  return priorYearDateFormatter.format(modifiedAt);
+};
+
 export const stackedInventory = function(inv) {
   /*
     Takes a list of items and consolidates those with identical template IDs

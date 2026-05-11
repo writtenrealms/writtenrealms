@@ -16,7 +16,7 @@ to define the shape combat should have so WR2 can:
 WR1 combat was fun, but it depended heavily on precise wall-clock timing:
 
 - global combat ticks
-- off-tick instant skills
+- off-round instant abilities
 - cast timers with sub-tick urgency
 - responsiveness that degraded quickly under load
 
@@ -126,6 +126,14 @@ Examples:
 
 Intents are submitted between combat steps and become eligible for resolution on
 the appropriate future step.
+
+Flee is a delayed combat intent in WR2. Submitting `flee` chooses a valid random
+adjacent room that the player has enough stamina to enter, spends that
+destination room's normal movement cost, and stores a pending flee intent. On
+the next combat step, the player spends the round looking for an opening and
+takes no primary action. On the following combat step, flee resolves at the top
+of the step before effect ticks, attacks, or other damage can occur; the
+encounter finishes and the player moves to the chosen room.
 
 ### Combat Resolution Step
 

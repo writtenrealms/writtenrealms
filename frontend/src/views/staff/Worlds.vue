@@ -4,6 +4,7 @@
     :schema="list_schema"
     :endpoint="endpoint"
     :resolve_route="resolve_route"
+    default-sort="name"
     @add="onClickAdd"
   />
 </template>
@@ -12,6 +13,7 @@
 import { useStore } from "vuex";
 import ElementList from "@/components/elementlist/ElementList.vue";
 import { BUILDER_FORMS } from "@/core/forms.ts";
+import { formatRelativeModifiedDate } from "@/core/utils.ts";
 
 const store = useStore();
 
@@ -27,8 +29,15 @@ const resolve_route = (world: any) => {
 };
 
 const list_schema: any[] = [
-  { name: "id", label: "ID" },
-  { name: "name", label: "Name" },
+  { name: "id", label: "ID", sortable: true },
+  { name: "name", label: "Name", nowrap: true, sortable: true },
+  {
+    name: "modified_ts",
+    label: "Modified",
+    nowrap: true,
+    sortable: true,
+    format: formatRelativeModifiedDate
+  },
   { name: "num_zones", label: "Zones" },
   { name: "num_players", label: "Players" },
   { name: "num_mobs", label: "Mobs" },

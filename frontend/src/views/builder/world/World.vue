@@ -1,7 +1,28 @@
 <template>
   <div id="world-details">
+    <div class="world-quick-links link-grid link-grid-title-only">
+      <router-link
+        class="link-grid-item"
+        :to="{ name: 'lobby_world_details', params: { world_id: route.params.world_id } }"
+      >
+        <span class="link-grid-title">Lobby</span>
+      </router-link>
+      <router-link
+        class="link-grid-item"
+        :to="{ name: 'builder_zone_list', params: { world_id: route.params.world_id } }"
+      >
+        <span class="link-grid-title">Zones</span>
+      </router-link>
+      <router-link
+        class="link-grid-item"
+        :to="{ name: 'builder_world_admin', params: { world_id: route.params.world_id } }"
+      >
+        <span class="link-grid-title">Admin</span>
+      </router-link>
+    </div>
+
     <div class="world-map" id="world_map">
-      <div v-if="store.state.builder.world.builder_info.builder_rank > 1">
+      <div v-if="store.state.builder.world.builder_info.builder_rank > 1" class="world-map-canvas">
         <Map
           v-if="isMapReady"
           :key="mapKey"
@@ -134,9 +155,22 @@ const assignment_link = (assignment) => {
   display: flex;
   flex-direction: column;
   flex-grow: 1;
+  min-width: 0;
+
+  .world-quick-links {
+    margin-bottom: 1rem;
+  }
 
   .world-map {
     flex-grow: 1;
+    min-width: 0;
+  }
+
+  .world-map-canvas {
+    display: flex;
+    justify-content: center;
+    min-width: 0;
+    width: 100%;
   }
 }
 </style>

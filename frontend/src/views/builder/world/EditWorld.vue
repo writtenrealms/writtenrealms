@@ -2,7 +2,7 @@
   <div id="edit-world-manifest">
     <h2>{{ world.name.toUpperCase() }} EDIT WORLD</h2>
     <div class="color-text-60 mb-6">
-      Paste one or more YAML manifests. Each YAML document is applied in order. Supported kinds: world, currency, zone, room, itemtemplate, mobtemplate, quest, questarc, and trigger.
+      Paste one or more YAML manifests. Each YAML document is applied in order. Supported kinds: world, currency, zone, room, itemtemplate, mobtemplate, ability, abilities, quest, questarc, and trigger.
     </div>
 
     <textarea
@@ -45,7 +45,7 @@
 
 <script lang="ts" setup>
 import axios from "axios";
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { useStore } from "vuex";
 import { capfirst } from "@/core/utils.ts";
@@ -85,6 +85,22 @@ const extractError = (error: any): string => {
   }
   return "Could not apply manifest.";
 };
+
+const loadWorldConfigYaml = async () => {
+  let payload = store.state.builder.worlds.config;
+  if (!payload?.yaml) {
+    payload = await store.dispatch("builder/worlds/config_fetch", {
+      world_id: route.params.world_id,
+    });
+  }
+  manifestText.value = payload?.yaml || "";
+};
+
+onMounted(async () => {
+  if (route.query.prefill === "world-config") {
+    await loadWorldConfigYaml();
+  }
+});
 
 const submitManifest = async () => {
   isSubmitting.value = true;
@@ -145,7 +161,12 @@ const submitManifest = async () => {
 @import "@/styles/colors.scss";
 
 #edit-world-manifest {
+  min-width: 0;
+  width: 100%;
+
   .manifest-input {
+    box-sizing: border-box;
+    max-width: 100%;
     width: 100%;
     min-height: 480px;
     padding: 0.75rem;

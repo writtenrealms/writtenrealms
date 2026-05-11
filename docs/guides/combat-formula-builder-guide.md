@@ -31,6 +31,12 @@ The default combat model is:
 - resilience mitigates ability or magical damage
 - dodge and crit use level-scaled ratings
 
+Auto-attacks use `basic_physical` by default. Ability components can use
+`basic_physical`, `basic_ability`, `basic_heal`, or a custom combat profile
+defined by the world. See
+[ability-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/ability-builder-guide.md)
+for the ability authoring shape.
+
 ## Where To Edit
 
 Open the world config YAML from the builder UI, then edit:
@@ -176,6 +182,9 @@ The default ability profile does not use weapon damage:
 ```text
 base = actor.ability_power * power_scale
 ```
+
+This is the formula an ability damage component will use when it points at
+`basic_ability`. It is not currently exposed as a standalone player command.
 
 After base damage is found, the combat profile resolves the hit in this order:
 

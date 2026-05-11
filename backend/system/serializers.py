@@ -441,7 +441,7 @@ class CraftItemSerializer(serializers.Serializer):
 class RootWorldSerializer(serializers.ModelSerializer):
 
     author = ReferenceField()
-    author_email = serializers.CharField(source='author.email')
+    author_email = serializers.SerializerMethodField()
     num_rooms = serializers.SerializerMethodField()
     num_mobs = serializers.SerializerMethodField()
     num_items = serializers.SerializerMethodField()
@@ -450,13 +450,16 @@ class RootWorldSerializer(serializers.ModelSerializer):
     class Meta:
         model = World
         fields = [
-            'id', 'name', 'author', 'is_multiplayer',
+            'id', 'name', 'modified_ts', 'author', 'is_multiplayer',
             'author_email', 'num_rooms', 'num_players',
             'num_mobs', 'num_items'
         ]
 
     def get_num_rooms(self, world):
         return world.rooms.count()
+
+    def get_author_email(self, world):
+        return world.author.email if world.author else ''
 
     def get_num_players(self, world):
         return Player.objects.filter(

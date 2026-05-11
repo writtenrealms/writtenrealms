@@ -32,6 +32,23 @@ class TestLookCommandText(WorldTestCase):
         self.assertIn(self.room.name, message["text"])
         self.assertIn("A test room.", message["text"])
 
+    def test_look_capitalizes_generated_mob_room_description(self):
+        mob = self.create_mob("a rat", keywords="rat")
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="look",
+                player_id=self.player.id,
+                payload={},
+            )
+
+        message = self._message_by_type(messages, "cmd.look.success")
+        self.assertIsNotNone(message)
+        room_chars = message["data"]["target"]["chars"]
+        mob_payload = next(char for char in room_chars if char["key"] == mob.key)
+        self.assertEqual(mob_payload["room_description"], "A rat is here.")
+        self.assertIn("A rat is here.", message["text"])
+
     def test_look_target_mob_returns_char_payload(self):
         mob = self.create_mob(
             "Sam",
@@ -217,7 +234,7 @@ class TestStateSyncText(WorldTestCase):
                     "energy": "Focus",
                 },
                 "derived": {
-                    "ability_power": "Skill Power",
+                    "ability_power": "Ability Power",
                 },
                 "classes": {
                     "warrior": "Vanguard",
@@ -273,7 +290,7 @@ class TestStateSyncText(WorldTestCase):
         self.assertEqual(world_data["labels"]["resources"]["energy"], "Focus")
         self.assertEqual(
             world_data["labels"]["derived"]["ability_power"],
-            "Skill Power",
+            "Ability Power",
         )
         self.assertEqual(world_data["labels"]["classes"]["warrior"], "Vanguard")
         self.assertEqual(actor["energy"], actor["mana"])
@@ -299,6 +316,24 @@ class TestStateSyncText(WorldTestCase):
         mob_payload = next(char for char in room_chars if char["key"] == mob.key)
         self.assertEqual(mob_payload["keywords"], "gus tone")
         self.assertEqual(mob_payload["keyword"], "gus")
+
+    def test_state_sync_capitalizes_generated_mob_room_description(self):
+        mob = self.create_mob("a rat", keywords="rat")
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="state.sync",
+                player_id=self.player.id,
+                payload={},
+            )
+
+        message = self._message_by_type(messages, "cmd.state.sync.success")
+        self.assertIsNotNone(message)
+
+        room_chars = message["data"]["room"]["chars"]
+        mob_payload = next(char for char in room_chars if char["key"] == mob.key)
+        self.assertEqual(mob_payload["room_description"], "A rat is here.")
+        self.assertIn("A rat is here.", message["text"])
 
 
 class TestStateSyncMapKeys(WorldTestCase):

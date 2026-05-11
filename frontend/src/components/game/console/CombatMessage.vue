@@ -129,27 +129,13 @@ const message_type = computed(() => {
   const attack = props.message.data.attack;
 
   if (props.message.data.label && props.message.data.label != "Attack") {
-    let label = props.message.data.label;
-
-    if (props.message.data.attack == "customdot") {
-      label = label + " (DOT)";
-    } else if (props.message.data.attack == "customhot") {
-      label = label + " (HOT)";
-    }
-    return label;
+    return props.message.data.label;
   }
 
   let label;
   const world = store.state.game.world;
-  // See if we find a label in the world labels (for regular skills)
   if (world.labels.attacks[attack]) {
     label = world.labels.attacks[attack];
-  } else if (world && world.skills && world.skills.custom) {
-    // See if we find a label in the custom skills (for custom skills)
-    const customSkill = world.skills.custom.definitions[attack];
-    if (customSkill) {
-      label = customSkill.name;
-    }
   }
 
   return label || "Special Attack";

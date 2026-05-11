@@ -74,6 +74,7 @@ class CommandHandler(ABC):
     """
     command_type: str
     text_commands: tuple[str, ...] = ()
+    text_aliases: Mapping[str, str] = {}
     builder_only: bool = False
     supported_actor_types: tuple[str, ...] = ("player",)
     help: dict[str, Any] | None = None

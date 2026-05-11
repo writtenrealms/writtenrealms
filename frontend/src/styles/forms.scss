@@ -205,6 +205,17 @@ a[role="button"].btn-small {
       background-color: #444;
     }
   }
+
+  &.button-red {
+    border-color: $color-red;
+    color: $color-red;
+
+    &:hover {
+      border-color: $color-red-70;
+      background-color: $color-red-70;
+      color: white;
+    }
+  }
 }
 
 button.btn-medium,

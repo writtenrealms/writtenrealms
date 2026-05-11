@@ -750,10 +750,26 @@ class StaffViewMixin:
     )
 
 
-class RootWorlds(ListAPIView):
+class StaffSortableListMixin:
+    default_ordering = None
 
-    queryset = World.objects.filter(context__isnull=True)
+    def apply_sorting(self, qs):
+        sorting = self.request.query_params.get('sort_by')
+        if sorting:
+            return qs.order_by(sorting)
+        if self.default_ordering:
+            return qs.order_by(self.default_ordering)
+        return qs
+
+
+class RootWorlds(StaffSortableListMixin, ListAPIView):
+
+    default_ordering = 'name'
     serializer_class = system_serializers.RootWorldSerializer
+
+    def get_queryset(self):
+        qs = World.objects.filter(context__isnull=True)
+        return self.apply_sorting(qs)
 
     # def get(self, request, format=None):
     #     qs = World.objects.filter(context__isnull=True)
@@ -771,7 +787,7 @@ class PlayerEvents(generics.ListAPIView):
     queryset = PlayerEvent.objects.order_by('-created_ts')
 
 
-class Playing(ListAPIView):
+class Playing(StaffSortableListMixin, ListAPIView):
 
     serializer_class = system_serializers.PlayerStaffViewSerializer
 
@@ -782,17 +798,20 @@ class Playing(ListAPIView):
             user__is_temporary=False,
             world__lifecycle=api_consts.WORLD_STATE_RUNNING)
 
-        return qs
+        return self.apply_sorting(qs)
 
 
-class SignUps(ListAPIView):
+class SignUps(StaffSortableListMixin, ListAPIView):
 
-    queryset = user_models.User.objects.filter(is_temporary=False).order_by(
-        '-date_joined')
+    default_ordering = '-date_joined'
     serializer_class = user_serializers.UserSerializer
 
+    def get_queryset(self):
+        qs = user_models.User.objects.filter(is_temporary=False)
+        return self.apply_sorting(qs)
 
-class Activity(ListAPIView):
+
+class Activity(StaffSortableListMixin, ListAPIView):
 
     serializer_class = user_serializers.UserSerializer
 
@@ -814,7 +833,8 @@ class Activity(ListAPIView):
             pk__in=player_ids,
         ).order_by('-last_connection_ts').values_list('user_id', flat=True).distinct()
 
-        return qs_by_pks(user_models.User, user_pks)
+        qs = qs_by_pks(user_models.User, user_pks)
+        return self.apply_sorting(qs)
 
         return Player.objects.filter(
             pk__in=player_ids,
@@ -1023,33 +1043,4 @@ class NexusData(APIView, StaffViewMixin):
             'timings': timings,
             'now': expiration_ts(0),
             'worlds': worlds,
-        })
-
-
-# ==== Public Views ====
-
-def get_archetype_skills(archetype):
-    # WR2 does not currently expose archetype command metadata here.
-    return {
-        'core': [],
-        'flex': [],
-    }
-
-class ArchetypeSkills(APIView):
-
-    permission_classes = ()
-
-    def get(self, request, archetype, format=None):
-        skills = get_archetype_skills(archetype)
-        return Response(skills)
-
-
-class AllSkills(APIView):
-    permission_classes = ()
-
-    def get(self, request, format=None):
-        return Response({
-            archetype: get_archetype_skills(archetype)
-            for archetype in adv_consts.ARCHETYPES
-            if archetype
         })

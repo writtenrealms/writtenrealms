@@ -11,7 +11,10 @@
           :previousMessage="messages[index - 1]"
           :index="index"
           class="message"
-          :class="[message.type, {grouped: isGrouped(message, messages[index - 1])}]"
+          :class="[message.type, {
+            grouped: isGrouped(message, messages[index - 1]),
+            'combat-round': isCombatRound(message),
+          }]"
           :distanceToBottom="distanceToBottom"
           @scrollDown="scrollToBottom"
         />
@@ -29,7 +32,6 @@
 import { computed, onMounted, onUnmounted, onUpdated, ref } from 'vue';
 import { useStore } from 'vuex';
 import _ from "lodash";
-import Cast from "@/components/game/console/Cast.vue";
 import Chat from '@/components/game/console/Chat.vue';
 import CombatMessage from '@/components/game/console/CombatMessage.vue';
 import Compare from '@/components/game/console/Compare.vue';
@@ -39,7 +41,6 @@ import Equipment from "@/components/game/console/Equipment.vue";
 import EventBus from "@/core/eventbus";
 import Exits from "@/components/game/console/Exits.vue";
 import Factions from "@/components/game/console/Factions.vue";
-import Feats from "@/components/game/console/Feats.vue";
 import Help from "@/components/game/console/Help.vue";
 import Inventory from "@/components/game/console/Inventory.vue";
 import List from "@/components/game/console/List.vue";
@@ -72,7 +73,6 @@ const consoleMessage = (message) => {
     "cmd.equipment.success": Equipment,
     "cmd.exits.success": Exits,
     "cmd.factions.success": Factions,
-    "cmd.feats.success": Feats,
     "cmd.help.success": Help,
     "cmd.inventory.success": Inventory,
     "cmd.list.success": List,
@@ -114,11 +114,6 @@ const consoleMessage = (message) => {
 
   if (type === "cmd.upgrade.success" && message.data.items) return Upgrade;
 
-  if (message.data &&
-      message.data.skill &&
-      (message.data.method === "cast" || message.data.method === "channel") &&
-      message.data.duration !== 0) return Cast;
-
   return Message;
 }
 
@@ -135,6 +130,10 @@ const isGrouped = (message, prevMessage) => {
       prevMessage.group === message.group)
     return true;
   return false;
+};
+
+const isCombatRound = (message) => {
+  return !!(message && message.data && message.data.round_id);
 };
 
 onMounted(() => {
@@ -230,6 +229,7 @@ const onScroll = _.debounce(updateScroll, 250);
         }
       }
 
+      &.combat-round:not(.grouped),
       &.notification\.combat\.attack:not(.grouped) {
         margin-top: 1em;
       }

@@ -25,8 +25,6 @@ from spawns.models import (
     RoomCommandCheckState,
     PlayerQuest,
     PlayerTrophy,
-    PlayerFlexSkill,
-    PlayerFeat,
     Alias)
 from worlds.models import World, Room, Door
 
@@ -69,7 +67,6 @@ class APIExtractor:
         self.save_factions(player)
         self.save_aliases(player)
         self.save_trophy(player)
-        self.save_skills(player)
         self.save_marks(player)
         self.save_items(player)
         # It's important for equipment to be after items because all items
@@ -102,7 +99,6 @@ class APIExtractor:
         self.save_factions(player)
         self.save_aliases(player)
         self.save_trophy(player)
-        self.save_skills(player)
         self.save_marks(player)
         self.save_items(self.world)
         self.save_mobs()
@@ -473,48 +469,6 @@ class APIExtractor:
                     PlayerTrophy.objects.create(
                         player=player,
                         mob_template_id=mob_template_id)
-
-    def save_skills(self, player):
-        for chunk in self.chunks.get('skills', []):
-            # Procedss flex skills
-            skill_codes_added = []
-            for skill_number, skill_code in chunk['skills']['flex'].items():
-                try:
-                    skill_number = int(skill_number)
-                except ValueError: continue
-
-                if not skill_code: continue
-                skill, created = PlayerFlexSkill.objects.get_or_create(
-                    player=player,
-                    number=skill_number)
-                skill.code = skill_code
-                skill.save()
-                skill_codes_added.append(skill_code)
-            # Remove entries for codes that were not seen
-            PlayerFlexSkill.objects.filter(
-                player=player
-            ).exclude(code__in=skill_codes_added).delete()
-
-            # Process feats
-            feats_added = []
-            for feat_number, feat_code in chunk['skills']['feat'].items():
-                feat, created = PlayerFeat.objects.get_or_create(
-                    player=player,
-                    number=feat_number)
-                feat.code = feat_code
-                feat.save()
-                feats_added.append(feat_code)
-            # Clean up
-            if feats_added:
-                PlayerFeat.objects.filter(
-                    player=player,
-                ).exclude(code__in=feats_added).delete()
-
-            # Process custom skills
-            skills = json.loads(player.skills or "{}")
-            skills['custom'] = chunk['skills'].get('custom', {})
-            player.skills = json.dumps(skills)
-            player.save(update_fields=['skills'])
 
     def save_marks(self, player):
         for chunk in self.chunks.get('marks', []):

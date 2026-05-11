@@ -1,5 +1,5 @@
 from spawns.actions.base import ActionError
-from spawns.actions.combat import KillAction
+from spawns.actions.combat import FleeAction, KillAction
 from spawns.events import publish_events
 from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.registry import register_handler
@@ -30,6 +30,39 @@ class KillHandler(CommandHandler):
             ctx.publish(
                 {
                     "type": "cmd.kill.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.player.key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class FleeHandler(CommandHandler):
+    command_type = "flee"
+    text_commands = ("flee",)
+    help = {
+        "name": "Flee",
+        "format": "flee",
+        "description": "Prepare to escape combat, then flee to a random adjacent room.",
+        "examples": [
+            "flee",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        try:
+            result = FleeAction().execute(ctx.player.id)
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd.flee.error",
                     "text": err.message,
                     "data": {"error": err.message, "code": err.code, **err.data},
                 }

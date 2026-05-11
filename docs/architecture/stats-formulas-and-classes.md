@@ -139,7 +139,7 @@ A world should be able to display:
 - `energy` as `Focus`
 - `ability_power` as `Spell Power`
 - `ability_power` as `Tech Power`
-- `ability_power` as `Skill Power`
+- `ability_power` as `Ability Power`
 
 without changing the underlying engine stat identifiers.
 
@@ -193,7 +193,7 @@ contract.
 - psionics
 - tech abilities
 - martial techniques
-- support skills
+- support abilities
 
 The engine should use `ability_power` internally even if some worlds present it
 as `Spell Power`.
@@ -311,7 +311,7 @@ A class or archetype should be able to define or influence:
 
 - starting attribute distributions
 - growth curves
-- skill access
+- ability access
 - equipment proficiencies
 - formula modifiers
 - passive bonuses
@@ -409,7 +409,7 @@ Low-magic presentation:
 
 - `Focus`
 - `Focus Recovery`
-- `Skill Power`
+- `Ability Power`
 
 The engine remains stable while the world presentation changes.
 

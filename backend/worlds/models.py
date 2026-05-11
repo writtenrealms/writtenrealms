@@ -24,6 +24,7 @@ from core.db import (
     list_to_choice,
     batch_deletion)
 from core.leveling import default_leveling_curve
+from core.abilities import default_ability_progression
 from worlds.managers import (
     WorldManager,
     RoomManager)
@@ -1014,6 +1015,7 @@ class WorldConfig(BaseModel):
     #   -1  => never auto-advance (manual / fully async progression)
     combat_resolution_interval = models.FloatField(default=0)
     combat_system = models.JSONField(default=dict)
+    ability_progression = models.JSONField(default=default_ability_progression)
     players_can_set_title = models.BooleanField(default=True)
     allow_pvp = models.BooleanField(default=True)
     is_narrative = models.BooleanField(default=False)

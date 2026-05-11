@@ -22,10 +22,10 @@ const resolve_route = (user: any) => {
 };
 
 const list_schema: any[] = [
-  { name: "id", label: "ID" },
-  { name: "name", label: "Name" },
-  { name: "email", label: "Email", light: true },
-  { name: "date_joined_str", label: "Joined", light: true }
+  { name: "id", label: "ID", sortable: true },
+  { name: "name", label: "Name", nowrap: true, sortable: true, sortKey: "username" },
+  { name: "email", label: "Email", light: true, nowrap: true, sortable: true },
+  { name: "date_joined_str", label: "Joined", light: true, sortable: true, sortKey: "date_joined" }
 ];
 </script>
 

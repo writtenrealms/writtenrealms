@@ -16,6 +16,9 @@
     :filters="list_filters"
     :endpoint="endpoint"
     :resolve_route="resolve_route"
+    filter-display="dropdown"
+    table-variant="data"
+    default-sort="-modified_ts"
     @add="onClickAdd"
   />
 </template>
@@ -26,6 +29,7 @@ import { useStore } from "vuex";
 import { useRoute, onBeforeRouteUpdate } from "vue-router";
 import ElementList from "@/components/elementlist/ElementList.vue";
 import { GET_MOB_TEMPLATE_INFO } from "@/core/forms.ts";
+import { formatRelativeModifiedDate } from "@/core/utils.ts";
 import axios from "axios";
 
 const store = useStore();
@@ -63,15 +67,21 @@ const resolve_route = element => {
 };
 
 const list_schema: any[] = [
-  { name: "id", label: "ID" },
-  { name: "name", label: "Name", nowrap: true },
-  { name: "level", label: "Level", light: true },
-  { name: "notes", label: "Notes", light: true }
+  { name: "id", label: "ID", sortable: true },
+  { name: "name", label: "Name", nowrap: true, sortable: true },
+  { name: "level", label: "Level", light: true, sortable: true },
+  {
+    name: "modified_ts",
+    label: "Modified",
+    nowrap: true,
+    sortable: true,
+    format: formatRelativeModifiedDate
+  }
 ];
 
 const list_filters = computed(() => {
   const mob_types = {
-    label: "types",
+    label: "Type",
     attr: "type",
     filter_options: [
       { key: "humanoid", name: "humanoid" },
@@ -92,38 +102,19 @@ const list_filters = computed(() => {
   };
 
   const factions = {
-    label: "factions",
+    label: "Faction",
     attr: "faction",
     filter_options: world_factions.value
   };
 
   return [
     {
-      label: "levels",
-      attr: "level_range",
-      filter_options: [
-        { key: "15", name: "1-5" },
-        { key: "610", name: "6-10" },
-        { key: "1115", name: "11-15" },
-        { key: "1620", name: "16-20" }
-      ]
-    },
-    {
-      label: "special",
+      label: "Special",
       attr: "special",
       filter_options: [
         { key: "is_merchant", name: "Is Merchant" },
         { key: "has_quest", name: "Has Quest" },
         { key: "is_elite", name: "Is Elite" }
-      ]
-    },
-    {
-      attr: "sort_by",
-      label: "sorting",
-      filter_options: [
-        { key: "-created_ts", name: "Last Created" },
-        { key: "-level", name: "Level - desc" },
-        { key: "level", name: "Level - asc" },
       ]
     },
     factions,

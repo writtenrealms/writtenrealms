@@ -62,7 +62,6 @@ from builders.models import (
     RoomCheck,
     RoomAction,
     Trigger,
-    Skill,
     Social,
     Path,
     PathRoom,
@@ -543,7 +542,7 @@ class FactionViewSet(BaseWorldBuilderViewSet):
         self.update_live_instances(self.world)
 
     def perform_update(self, serializer):
-        skill = serializer.save()
+        serializer.save()
         self.update_live_instances(self.world)
         return self.world
 
@@ -637,7 +636,9 @@ class ZoneBuilderViewSet(WorldCreationMixin,
     serializer_class = builder_serializers.ZoneBuilderSerializer
 
     def get_queryset(self):
-        order_by = self.request.query_params.get('order_by', 'name')
+        order_by = self.request.query_params.get(
+            'sort_by',
+            self.request.query_params.get('order_by', 'name'))
         qs = Zone.objects.filter(
             world=self.world
         ).prefetch_related(
@@ -717,6 +718,9 @@ class ZoneBuilderViewSet(WorldCreationMixin,
                 qs = qs.filter(pk=query)
             except ValueError:
                 qs = qs.filter(name__icontains=query)
+        sorting = self.request.query_params.get('sort_by')
+        if sorting is not None:
+            qs = qs.order_by(sorting)
         page = self.paginate_queryset(qs)
         serializer = builder_serializers.MapRoomSerializer(page, many=True)
         return self.get_paginated_response(serializer.data)
@@ -742,6 +746,9 @@ class ZoneBuilderViewSet(WorldCreationMixin,
                 qs = qs.filter(pk=query)
             except ValueError:
                 qs = qs.filter(name__icontains=query)
+        sorting = self.request.query_params.get('sort_by')
+        if sorting is not None:
+            qs = qs.order_by(sorting)
         page = self.paginate_queryset(qs)
         serializer = builder_serializers.PathListSerializer(page, many=True)
         return self.get_paginated_response(serializer.data)
@@ -775,7 +782,9 @@ class ZoneBuilderViewSet(WorldCreationMixin,
                 qs = qs.filter(pk=query)
             except ValueError:
                 qs = qs.filter(name__icontains=query)
-        page = self.paginate_queryset(qs)
+        sorting = self.request.query_params.get('sort_by')
+        if sorting is not None:
+            qs = qs.order_by(sorting)
         page = self.paginate_queryset(qs)
         serializer = builder_serializers.LoaderSerializer(page, many=True)
         return self.get_paginated_response(serializer.data)
@@ -804,6 +813,9 @@ class ZoneBuilderViewSet(WorldCreationMixin,
             ).values_list('assignment_id', flat=True)
             qs = qs.filter(zone_id__in=zone_ids)
 
+        sorting = self.request.query_params.get('sort_by')
+        if sorting is not None:
+            qs = qs.order_by(sorting)
         page = self.paginate_queryset(qs)
         serializer = builder_serializers.QuestSerializer(page, many=True)
         return self.get_paginated_response(serializer.data)
@@ -1591,6 +1603,13 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             "You do not have permission to alter quest templates."
         )
 
+    def _assert_can_edit_abilities(self):
+        if self._builder_rank >= 3:
+            return
+        raise drf_exceptions.PermissionDenied(
+            "You do not have permission to alter abilities."
+        )
+
     def _assert_can_edit_item_template(self, item_template=None):
         if item_template is None:
             return
@@ -1827,6 +1846,65 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
         )
 
+    def _apply_ability_manifest(self, manifest):
+        self._assert_can_edit_abilities()
+        operation = builder_manifests.parse_manifest_operation(manifest)
+        if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+            parsed_delete = builder_manifests.parse_ability_delete_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            ability = parsed_delete.ability
+            ability_payload = {
+                "id": ability.id,
+                "key": f"ability.{ability.id}",
+                "slug": ability.slug,
+                "name": ability.name,
+            }
+            ability.delete()
+            return Response(
+                {
+                    "kind": builder_manifests.ABILITY_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "ability": ability_payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        parsed_ability = builder_manifests.parse_ability_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        is_create = parsed_ability.ability is None
+        ability = builder_manifests.apply_ability_manifest(parsed_ability)
+        return Response(
+            {
+                "kind": builder_manifests.ABILITY_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "ability": builder_manifests.serialize_ability_payload(ability),
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
+    def _apply_abilities_manifest(self, manifest):
+        self._assert_can_edit_abilities()
+        parsed_bundle = builder_manifests.parse_abilities_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        abilities = builder_manifests.apply_abilities_manifest(parsed_bundle)
+        return Response(
+            {
+                "kind": builder_manifests.ABILITIES_MANIFEST_KIND,
+                "operation": "applied",
+                "abilities": [
+                    builder_manifests.serialize_ability_payload(ability)
+                    for ability in abilities
+                ],
+            },
+            status=status.HTTP_200_OK,
+        )
+
     def _apply_quest_arc_manifest(self, manifest):
         self._assert_can_edit_quest_templates()
         operation = quest_manifests.parse_manifest_operation(manifest)
@@ -1976,6 +2054,10 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             return self._apply_trigger_manifest(manifest)
         if manifest_kind == builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND:
             return self._apply_item_template_manifest(manifest)
+        if manifest_kind == builder_manifests.ABILITY_MANIFEST_KIND:
+            return self._apply_ability_manifest(manifest)
+        if manifest_kind == builder_manifests.ABILITIES_MANIFEST_KIND:
+            return self._apply_abilities_manifest(manifest)
         if manifest_kind == builder_world_export.MOB_TEMPLATE_MANIFEST_KIND:
             return self._apply_mob_template_manifest(manifest)
         if manifest_kind == quest_manifests.QUEST_MANIFEST_KIND:
@@ -2371,7 +2453,7 @@ class ItemTemplateViewSet(BaseWorldBuilderViewSet):
         # Sorting
         sorting = self.request.query_params.get('sort_by')
         if sorting is not None:
-            mobs_qs = mobs_qs.order_by(sorting)
+            qs = qs.order_by(sorting)
 
         return qs
 
@@ -3131,6 +3213,9 @@ class LoaderViewSet(BaseWorldBuilderViewSet):
     def get_queryset(self):
         qs = Loader.objects.filter(world=self.world)
         qs = apply_zone_filter(qs, self.request)
+        sorting = self.request.query_params.get('sort_by')
+        if sorting is not None:
+            return qs.order_by(sorting)
         return qs.order_by('-created_ts')
 
     def get_object(self):
@@ -3389,8 +3474,11 @@ class PathViewSet(BaseWorldBuilderViewSet):
     serializer_class = builder_serializers.PathDetailsSerializer
 
     def get_queryset(self):
-        return Path.objects.filter(world=self.world).order_by(
-            '-created_ts')
+        qs = Path.objects.filter(world=self.world)
+        sorting = self.request.query_params.get('sort_by')
+        if sorting is not None:
+            return qs.order_by(sorting)
+        return qs.order_by('-created_ts')
 
     def add_room(self, request, world_pk, pk):
         path = self.get_object()
@@ -3843,34 +3931,6 @@ fact_schedule_details = FactScheduleViewSet.as_view({
     'get': 'retrieve',
     'put': 'update',
     'delete': 'destroy',
-})
-
-
-class SkillViewSet(BaseWorldBuilderViewSet):
-
-    serializer_class = builder_serializers.SkillDetailSerializer
-
-    def get_queryset(self):
-        return Skill.objects.filter(world=self.world).order_by('-created_ts')
-
-    def update_live_instances(self, world):
-        return
-
-    def perform_create(self, serializer):
-        serializer.save(world=self.world)
-        self.update_live_instances(self.world)
-
-    def perform_update(self, serializer):
-        skill = serializer.save()
-        self.update_live_instances(self.world)
-        return self.world
-
-
-skill_list = SkillViewSet.as_view({'get': 'list', 'post': 'create'})
-skill_detail = SkillViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'update',
-    'delete': 'destroy'
 })
 
 

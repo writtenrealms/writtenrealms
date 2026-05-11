@@ -3,14 +3,26 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timedelta
 import logging
+import random
 
 from django.db import transaction
 from django.utils import timezone
 
+from config import constants as adv_consts
 from core.combat_formulas import CombatAttackResult, resolve_attack
 from core.computations import compute_stats
 from core.leveling import ExperienceGrant, apply_experience
+from builders.models import AbilityDefinition
 from spawns.actions.base import ActionError, ActionResult
+from spawns.actions.abilities import (
+    ability_state_event,
+    cooldown_remaining,
+    decrement_ability_cooldowns,
+    pay_ability_cost,
+    player_knows_ability,
+    start_ability_cooldown,
+)
+from spawns.actions.movement_costs import movement_cost
 from spawns.actions.targeting import resolve_room_mob_target
 from spawns.events import GameEvent
 from spawns.models import CombatEncounter, Item, Mob, Player
@@ -22,6 +34,7 @@ from spawns.state_payloads import (
     serialize_char_from_player,
     serialize_item,
     serialize_room,
+    safe_capitalize,
 )
 from worlds.models import Room
 
@@ -42,6 +55,13 @@ class CombatStepResult:
     actor_key: str | None
     events: list[GameEvent]
     encounter_active: bool
+
+
+@dataclass(frozen=True)
+class FleeDestination:
+    direction: str
+    room_id: int
+    movement_cost: int
 
 
 def _player_combat_stats(player: Player) -> CombatStats:
@@ -94,7 +114,7 @@ def _serialize_corpse(corpse_id: int, *, viewer: Player | None = None) -> dict:
 
 def _actor_attack_text(target_name: str, result: CombatAttackResult) -> str:
     if result.outcome == "dodged":
-        return f"{target_name} dodges your attack."
+        return f"{safe_capitalize(target_name)} dodges your attack."
     if result.is_crit_hit:
         return f"You critically hit {target_name} for {result.damage_taken} damage."
     return f"You hit {target_name} for {result.damage_taken} damage."
@@ -104,21 +124,27 @@ def _actor_hit_text(actor_name: str, result: CombatAttackResult) -> str:
     if result.outcome == "dodged":
         return f"You dodge {actor_name}'s attack."
     if result.is_crit_hit:
-        return f"{actor_name} critically hits you for {result.damage_taken} damage."
-    return f"{actor_name} hits you for {result.damage_taken} damage."
+        return (
+            f"{safe_capitalize(actor_name)} critically hits you "
+            f"for {result.damage_taken} damage."
+        )
+    return f"{safe_capitalize(actor_name)} hits you for {result.damage_taken} damage."
 
 
 def _room_attack_text(actor_name: str, target_name: str, result: CombatAttackResult) -> str:
     if result.outcome == "dodged":
-        return f"{target_name} dodges {actor_name}'s attack."
+        return f"{safe_capitalize(target_name)} dodges {actor_name}'s attack."
     if result.is_crit_hit:
-        return f"{actor_name} critically hits {target_name} for {result.damage_taken} damage."
-    return f"{actor_name} hits {target_name} for {result.damage_taken} damage."
+        return (
+            f"{safe_capitalize(actor_name)} critically hits {target_name} "
+            f"for {result.damage_taken} damage."
+        )
+    return f"{safe_capitalize(actor_name)} hits {target_name} for {result.damage_taken} damage."
 
 
 def _mob_death_text(mob_name: str | None) -> str:
     name = str(mob_name or "").strip() or "Something"
-    return f"{name} is dead! R.I.P."
+    return f"{safe_capitalize(name)} is dead! R.I.P."
 
 
 def _reward_text(
@@ -195,12 +221,14 @@ def _combat_attack_events(
     round_id: str,
     actor_text: str,
     room_text: str,
+    attack: str = "attack",
+    label: str = "Attack",
 ) -> list[GameEvent]:
     data = {
         "actor": actor_payload,
         "target": target_payload,
-        "attack": "attack",
-        "label": "Attack",
+        "attack": attack,
+        "label": label,
         "round_id": round_id,
     }
     data.update(result.event_data())
@@ -275,6 +303,769 @@ def _combat_interval(config) -> float:
         return 0.0
 
 
+def _room_with_exits(room_id: int) -> Room:
+    return Room.objects.select_related(
+        "north",
+        "east",
+        "south",
+        "west",
+        "up",
+        "down",
+        "zone",
+        "world",
+    ).get(pk=room_id)
+
+
+def _available_flee_destinations(player: Player) -> list[FleeDestination]:
+    if not player.room_id:
+        raise ActionError("You are nowhere. Cannot flee.", code="no_room")
+
+    room = _room_with_exits(player.room_id)
+    door_states = door_state_lookup(player.world, [room.id]).get(room.id, {})
+    config = player.world.effective_config
+    viewed_room_ids: set[int] = set()
+    if config and not config.flee_to_unknown_rooms:
+        viewed_room_ids = set(player.viewed_rooms.values_list("id", flat=True))
+
+    destinations: list[FleeDestination] = []
+    has_unaffordable_destination = False
+    for direction in adv_consts.DIRECTIONS:
+        destination = getattr(room, direction, None)
+        if not destination:
+            continue
+        if door_states.get(direction) in ("closed", "locked"):
+            continue
+        if viewed_room_ids and destination.id not in viewed_room_ids:
+            continue
+        if destination.type == adv_consts.ROOM_TYPE_WATER:
+            has_boat = player.inventory.filter(is_boat=True).exists()
+            if not has_boat:
+                continue
+        destination_cost = movement_cost(destination)
+        if int(player.stamina or 0) < destination_cost:
+            has_unaffordable_destination = True
+            continue
+        destinations.append(
+            FleeDestination(
+                direction=direction,
+                room_id=destination.id,
+                movement_cost=destination_cost,
+            )
+        )
+
+    if not destinations:
+        if has_unaffordable_destination:
+            raise ActionError("You are too exhausted to flee.", code="exhausted")
+        raise ActionError("There is nowhere to flee to.", code="no_flee_exit")
+    return destinations
+
+
+def _choose_flee_destination(player: Player) -> FleeDestination:
+    return random.choice(_available_flee_destinations(player))
+
+
+def _flee_success_events(
+    *,
+    player: Player,
+    origin_room_id: int,
+    destination_room_id: int,
+    direction: str,
+    movement_cost: int,
+    round_id: str | None = None,
+) -> list[GameEvent]:
+    destination = _room_with_exits(destination_room_id)
+    actor_payload = serialize_actor(player, destination).model_dump()
+    room_payload = _room_payload(player, destination)
+    data = {
+        "actor": actor_payload,
+        "room": room_payload,
+        "direction": direction,
+        "movement_cost": movement_cost,
+    }
+    if round_id:
+        data["round_id"] = round_id
+    events = [
+        GameEvent(
+            type="cmd.flee.success",
+            recipients=[player.key],
+            data=data,
+            text=f"You flee {direction}.",
+        )
+    ]
+
+    if player.is_invisible:
+        return events
+
+    actor_char = serialize_char_from_player(player).model_dump()
+    origin_recipients = (
+        Player.objects.filter(room_id=origin_room_id, in_game=True)
+        .exclude(pk=player.id)
+        .values_list("id", flat=True)
+    )
+    if origin_recipients:
+        events.append(
+            GameEvent(
+                type="notification.cmd.flee.exit",
+                recipients=[f"player.{player_id}" for player_id in origin_recipients],
+                data={"actor": actor_char, "direction": direction},
+                text=f"{safe_capitalize(player.name)} flees {direction}.",
+            )
+        )
+
+    destination_recipients = (
+        Player.objects.filter(room_id=destination_room_id, in_game=True)
+        .exclude(pk=player.id)
+        .values_list("id", flat=True)
+    )
+    if destination_recipients:
+        reverse_direction = adv_consts.REVERSE_DIRECTIONS[direction]
+        events.append(
+            GameEvent(
+                type="notification.cmd.flee.enter",
+                recipients=[f"player.{player_id}" for player_id in destination_recipients],
+                data={"actor": actor_char, "direction": reverse_direction},
+                text=(
+                    f"{safe_capitalize(player.name)} arrives from the "
+                    f"{reverse_direction}, looking panicked."
+                ),
+            )
+        )
+
+    return events
+
+
+def _complete_flee(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    round_id: str,
+) -> CombatStepResult:
+    pending = encounter.pending_flee or {}
+    destination_room_id = int(pending.get("destination_room_id") or 0)
+    direction = str(pending.get("direction") or "").strip()
+    if not destination_room_id or direction not in adv_consts.DIRECTIONS:
+        encounter.pending_flee = {}
+        if not encounter._state.adding:
+            encounter.save(update_fields=["pending_flee"])
+        return CombatStepResult(
+            actor_key=player.key,
+            events=[
+                _combat_failure_event(
+                    player,
+                    "You lose your chance to flee.",
+                    code="flee_invalid",
+                )
+            ],
+            encounter_active=True,
+        )
+
+    origin_room_id = encounter.room_id
+    player.room_id = destination_room_id
+    player.last_action_ts = timezone.now()
+    player.save(update_fields=["room", "last_action_ts"])
+    player.viewed_rooms.add(destination_room_id)
+
+    encounter.pending_flee = {}
+    encounter.pending_player_ability = {}
+    _finish_encounter(encounter)
+
+    return CombatStepResult(
+        actor_key=player.key,
+        events=_flee_success_events(
+            player=player,
+            origin_room_id=origin_room_id,
+            destination_room_id=destination_room_id,
+            direction=direction,
+            movement_cost=int(pending.get("movement_cost") or 0),
+            round_id=round_id,
+        ),
+        encounter_active=False,
+    )
+
+
+def _advance_flee_preparation(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    round_id: str,
+) -> list[GameEvent]:
+    pending = encounter.pending_flee or {}
+    if pending.get("status") != "preparing":
+        return []
+    encounter.pending_flee = {
+        **pending,
+        "status": "ready",
+    }
+    encounter.pending_player_ability = {}
+    return [
+        GameEvent(
+            type="notification.combat.flee",
+            recipients=[player.key],
+            data={"status": "preparing", "round_id": round_id},
+            text="You look for an opening to flee.",
+        )
+    ]
+
+
+def _handle_mob_defeated(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    target_mob: Mob,
+    room: Room,
+    events: list[GameEvent],
+) -> CombatStepResult:
+    corpse_id = _ensure_corpse(target_mob)
+    deceased_payload = serialize_char_from_mob(target_mob).model_dump()
+    exp_reward = int(target_mob.exp_worth or 0)
+    gold_reward = int(target_mob.gold or 0)
+    _finish_encounter(encounter)
+    target_mob.delete()
+
+    reward_update_fields: list[str] = []
+    leveling: ExperienceGrant | None = None
+    if exp_reward:
+        leveling = apply_experience(player, exp_reward)
+        reward_update_fields.append("experience")
+        if leveling.leveled_up:
+            reward_update_fields.append("level")
+    if gold_reward:
+        # TODO: Route mob spoils through a party/share policy once WR2 grouping exists.
+        player.gold = int(player.gold or 0) + gold_reward
+        reward_update_fields.append("gold")
+    if reward_update_fields:
+        player.save(update_fields=reward_update_fields)
+
+    actor_payload = serialize_actor(player, room).model_dump()
+    corpse_payload = _serialize_corpse(corpse_id, viewer=player)
+    room_payload = _room_payload(player, room)
+    death_data = {
+        "actor": actor_payload,
+        "deceased": deceased_payload,
+        "killer": serialize_char_from_player(player).model_dump(),
+        "corpse": corpse_payload,
+        "room": room_payload,
+        "experience_gained": exp_reward,
+        "gold_gained": gold_reward,
+    }
+    death_text = _mob_death_text(deceased_payload.get("name"))
+    events.append(
+        GameEvent(
+            type="notification.death",
+            recipients=[player.key],
+            data=death_data,
+            text=death_text,
+        )
+    )
+
+    if not player.is_invisible:
+        recipients = _combat_recipients(player, room)
+        if recipients:
+            events.append(
+                GameEvent(
+                    type="notification.death",
+                    recipients=recipients,
+                    data={
+                        "deceased": deceased_payload,
+                        "killer": serialize_char_from_player(player).model_dump(),
+                        "corpse": corpse_payload,
+                    },
+                    text=death_text,
+                )
+            )
+
+    reward_text = _reward_text(
+        experience_gained=exp_reward,
+        gold_gained=gold_reward,
+        leveling=leveling,
+    )
+    if reward_text:
+        reward_data = {
+            "actor": actor_payload,
+            "source": deceased_payload,
+            "experience_gained": exp_reward,
+            "gold_gained": gold_reward,
+        }
+        if leveling:
+            reward_data.update(
+                {
+                    "previous_level": leveling.previous_level,
+                    "new_level": leveling.new_level,
+                    "levels_gained": leveling.levels_gained,
+                    "experience_progress": leveling.experience_progress,
+                    "experience_needed": leveling.experience_needed,
+                    "max_level": leveling.max_level,
+                }
+            )
+        events.append(
+            GameEvent(
+                type="notification.reward",
+                recipients=[player.key],
+                data=reward_data,
+                text=reward_text,
+            )
+        )
+
+    events.append(
+        GameEvent(
+            type="quest.mob.killed",
+            recipients=[],
+            data={
+                "actor": actor_payload,
+                "target": deceased_payload,
+                "room": room_payload,
+                "experience_gained": exp_reward,
+                "gold_gained": gold_reward,
+                "levels_gained": leveling.levels_gained if leveling else 0,
+            },
+        )
+    )
+    return CombatStepResult(
+        actor_key=player.key,
+        events=events,
+        encounter_active=False,
+    )
+
+
+@dataclass(frozen=True)
+class AbilityRoundResult:
+    consumed_primary: bool
+    cooldown_exclude: str | None = None
+
+
+def _ability_definition_for_player(player: Player, slug: str) -> AbilityDefinition | None:
+    source_world = player.world.config_source_world
+    return AbilityDefinition.objects.filter(
+        world=source_world,
+        slug=slug,
+        is_active=True,
+    ).first()
+
+
+def _component_label(component: dict, ability: AbilityDefinition | None = None) -> str:
+    text = component.get("text") or {}
+    label = str(text.get("label") or "").strip()
+    if label:
+        return label
+    if ability:
+        return ability.name or ability.slug
+    return "Ability"
+
+
+def _combat_failure_event(player: Player, text: str, *, code: str) -> GameEvent:
+    return GameEvent(
+        type="notification.combat.ability_failed",
+        recipients=[player.key],
+        data={"error": text, "code": code},
+        text=text,
+    )
+
+
+def _effect_applies_to(effect: dict, *, target_type: str, target_id: int) -> bool:
+    target = effect.get("target") or {}
+    return target.get("type") == target_type and int(target.get("id") or 0) == target_id
+
+
+def _append_effect(
+    encounter: CombatEncounter,
+    *,
+    effect: str,
+    source_type: str,
+    source_id: int,
+    target_type: str,
+    target_id: int,
+    duration_rounds: int,
+    label: str,
+    tick: dict | None = None,
+) -> None:
+    effects = list(encounter.active_effects or [])
+    effects.append(
+        {
+            "effect": effect,
+            "source": {"type": source_type, "id": source_id},
+            "target": {"type": target_type, "id": target_id},
+            "remaining_rounds": max(1, int(duration_rounds or 1)),
+            "rounds_elapsed": 0,
+            "label": label,
+            "tick": tick or {},
+        }
+    )
+    encounter.active_effects = effects
+
+
+def _consume_stun(
+    encounter: CombatEncounter,
+    *,
+    target_type: str,
+    target_id: int,
+) -> bool:
+    effects = list(encounter.active_effects or [])
+    stunned = False
+    kept: list[dict] = []
+    for effect in effects:
+        if effect.get("effect") == "stun" and _effect_applies_to(
+            effect,
+            target_type=target_type,
+            target_id=target_id,
+        ):
+            stunned = True
+            remaining = int(effect.get("remaining_rounds") or 0) - 1
+            if remaining > 0:
+                kept.append({**effect, "remaining_rounds": remaining})
+            continue
+        kept.append(effect)
+    if stunned:
+        encounter.active_effects = kept
+    return stunned
+
+
+def _stun_event(
+    *,
+    player: Player,
+    room: Room,
+    target_name: str,
+    target_payload: dict,
+    round_id: str,
+) -> list[GameEvent]:
+    data = {
+        "target": target_payload,
+        "effect": "stun",
+        "round_id": round_id,
+    }
+    events = [
+        GameEvent(
+            type="notification.combat.effect",
+            recipients=[player.key],
+            data=data,
+            text=f"{safe_capitalize(target_name)} is stunned and cannot act.",
+        )
+    ]
+    if not player.is_invisible:
+        recipients = _combat_recipients(player, room)
+        if recipients:
+            events.append(
+                GameEvent(
+                type="notification.combat.effect",
+                recipients=recipients,
+                data=data,
+                text=f"{safe_capitalize(target_name)} is stunned and cannot act.",
+            )
+            )
+    return events
+
+
+def _apply_healing(
+    *,
+    actor: Player,
+    target: Player,
+    result: CombatAttackResult,
+    health_max: int,
+) -> None:
+    if result.healing_done <= 0:
+        return
+    target.health = min(health_max, int(target.health or 0) + result.healing_done)
+
+
+def _execute_output_component(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    target_mob: Mob,
+    room: Room,
+    component: dict,
+    ability: AbilityDefinition | None,
+    round_id: str,
+    player_health_max: int,
+) -> tuple[list[GameEvent], bool]:
+    component_type = component.get("type")
+    label = _component_label(component, ability)
+    events: list[GameEvent] = []
+
+    if component_type == "healing":
+        result = resolve_attack(
+            actor=player,
+            target=player,
+            world=player.world,
+            profile_key=component.get("profile"),
+            overrides=component.get("overrides") or {},
+        )
+        _apply_healing(
+            actor=player,
+            target=player,
+            result=result,
+            health_max=player_health_max,
+        )
+        actor_payload = _combat_state_payload(
+            serialize_char_from_player(player).model_dump(),
+            target_payload=serialize_char_from_mob(target_mob).model_dump(),
+        )
+        target_payload = actor_payload
+        events.extend(
+            _combat_attack_events(
+                viewer=player,
+                room=room,
+                actor_payload=actor_payload,
+                target_payload=target_payload,
+                result=result,
+                round_id=round_id,
+                actor_text=f"You use {label} and heal for {result.healing_done}.",
+                room_text=f"{player.name} uses {label}.",
+                attack=ability.slug if ability else "effect",
+                label=label,
+            )
+        )
+        return events, result.healing_done > 0
+
+    result = resolve_attack(
+        actor=player,
+        target=target_mob,
+        world=player.world,
+        profile_key=component.get("profile"),
+        overrides=component.get("overrides") or {},
+    )
+    if result.damage_taken > 0:
+        target_mob.health = max(0, int(target_mob.health or 0) - result.damage_taken)
+        target_mob.save(update_fields=["health"])
+
+    player_char = _combat_state_payload(
+        serialize_char_from_player(player).model_dump(),
+        target_payload=serialize_char_from_mob(target_mob).model_dump(),
+    )
+    target_char = _combat_state_payload(
+        serialize_char_from_mob(target_mob).model_dump(),
+        target_payload=serialize_char_from_player(player).model_dump(),
+    )
+    target_name = target_char.get("name") or "them"
+    if result.outcome == "dodged":
+        actor_text = f"{target_name} dodges {label}."
+    elif result.is_crit_hit:
+        actor_text = f"You critically hit {target_name} with {label} for {result.damage_taken} damage."
+    else:
+        actor_text = f"You hit {target_name} with {label} for {result.damage_taken} damage."
+    events.extend(
+        _combat_attack_events(
+            viewer=player,
+            room=room,
+            actor_payload=player_char,
+            target_payload=target_char,
+            result=result,
+            round_id=round_id,
+            actor_text=actor_text,
+            room_text=_room_attack_text(player.name, target_name, result),
+            attack=ability.slug if ability else "effect",
+            label=label,
+        )
+    )
+    return events, result.outcome != "dodged" and result.damage_taken > 0
+
+
+def _resolve_periodic_effects(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    target_mob: Mob,
+    room: Room,
+    round_id: str,
+    player_health_max: int,
+) -> list[GameEvent]:
+    effects = list(encounter.active_effects or [])
+    if not effects:
+        return []
+
+    events: list[GameEvent] = []
+    kept: list[dict] = []
+    initial_player_health = int(player.health or 0)
+    for effect in effects:
+        effect_type = effect.get("effect")
+        if effect_type not in {"dot", "hot"}:
+            kept.append(effect)
+            continue
+
+        target = effect.get("target") or {}
+        if target.get("type") == "mob" and int(target.get("id") or 0) != target_mob.id:
+            continue
+        if target.get("type") == "player" and int(target.get("id") or 0) != player.id:
+            continue
+
+        elapsed = int(effect.get("rounds_elapsed") or 0) + 1
+        remaining = int(effect.get("remaining_rounds") or 0)
+        every = max(1, int((effect.get("tick") or {}).get("every_rounds") or 1))
+        if elapsed % every == 0:
+            tick_component = (effect.get("tick") or {}).get("component") or {}
+            component_events, _ = _execute_output_component(
+                encounter=encounter,
+                player=player,
+                target_mob=target_mob,
+                room=room,
+                component=tick_component,
+                ability=None,
+                round_id=round_id,
+                player_health_max=player_health_max,
+            )
+            events.extend(component_events)
+
+        remaining -= 1
+        if remaining > 0:
+            kept.append({**effect, "rounds_elapsed": elapsed, "remaining_rounds": remaining})
+
+    encounter.active_effects = kept
+    if int(player.health or 0) != initial_player_health:
+        player.save(update_fields=["health"])
+    return events
+
+
+def _execute_pending_player_ability(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    target_mob: Mob,
+    room: Room,
+    round_id: str,
+    player_health_max: int,
+) -> tuple[list[GameEvent], AbilityRoundResult]:
+    pending = encounter.pending_player_ability or {}
+    if not pending:
+        return [], AbilityRoundResult(consumed_primary=False)
+
+    encounter.pending_player_ability = {}
+    ability_slug = str(pending.get("ability") or "").strip().lower()
+    ability = _ability_definition_for_player(player, ability_slug)
+    if not ability:
+        return [
+            _combat_failure_event(
+                player,
+                "Your queued ability is no longer available.",
+                code="ability_missing",
+            )
+        ], AbilityRoundResult(consumed_primary=False)
+
+    if not player_knows_ability(player, ability):
+        return [
+            _combat_failure_event(
+                player,
+                f"You do not know {ability.name}.",
+                code="ability_unknown",
+            )
+        ], AbilityRoundResult(consumed_primary=False)
+
+    remaining = cooldown_remaining(player, ability)
+    if remaining > 0:
+        return [
+            _combat_failure_event(
+                player,
+                f"{ability.name} is not ready.",
+                code="ability_on_cooldown",
+            )
+        ], AbilityRoundResult(consumed_primary=False)
+
+    target = pending.get("target") or {}
+    if target.get("type") == "mob" and int(target.get("id") or 0) != target_mob.id:
+        return [
+            _combat_failure_event(
+                player,
+                f"{ability.name} no longer has a valid target.",
+                code="target_invalid",
+            )
+        ], AbilityRoundResult(consumed_primary=False)
+
+    try:
+        cost_paid = pay_ability_cost(player, ability)
+    except ActionError as err:
+        return [
+            _combat_failure_event(player, err.message, code=err.code)
+        ], AbilityRoundResult(consumed_primary=False)
+
+    events: list[GameEvent] = []
+    hit_landed = False
+    health_changed = False
+    for component in ability.components or []:
+        component_type = component.get("type")
+        if component_type in {"damage", "healing"}:
+            component_events, component_hit = _execute_output_component(
+                encounter=encounter,
+                player=player,
+                target_mob=target_mob,
+                room=room,
+                component=component,
+                ability=ability,
+                round_id=round_id,
+                player_health_max=player_health_max,
+            )
+            events.extend(component_events)
+            hit_landed = hit_landed or component_hit
+            health_changed = health_changed or component_type == "healing"
+            if target_mob.health <= 0:
+                break
+            continue
+
+        if component_type != "effect":
+            continue
+        if component.get("apply") == "on_hit" and not hit_landed:
+            continue
+        effect_type = component.get("effect")
+        duration = int(((component.get("duration") or {}).get("rounds")) or 1)
+        target_type = "player" if effect_type == "hot" else "mob"
+        target_id = player.id if target_type == "player" else target_mob.id
+        _append_effect(
+            encounter,
+            effect=effect_type,
+            source_type="player",
+            source_id=player.id,
+            target_type=target_type,
+            target_id=target_id,
+            duration_rounds=duration,
+            label=_component_label(component, ability),
+            tick=component.get("tick") or {},
+        )
+        events.append(
+            GameEvent(
+                type="notification.combat.effect",
+                recipients=[player.key],
+                data={
+                    "ability": ability.slug,
+                    "effect": effect_type,
+                    "duration_rounds": duration,
+                    "round_id": round_id,
+                },
+                text=f"{ability.name} applies {effect_type}.",
+            )
+        )
+
+    cooldown_started = start_ability_cooldown(player, ability)
+    update_fields: list[str] = []
+    if cost_paid:
+        resource = str((ability.cost or {}).get("resource") or "").strip().lower()
+        update_fields.append("mana" if resource == "energy" else resource)
+    if health_changed:
+        update_fields.append("health")
+    if cooldown_started:
+        update_fields.append("ability_cooldowns")
+    if update_fields:
+        player.save(update_fields=list(dict.fromkeys(field for field in update_fields if field)))
+
+    return events, AbilityRoundResult(
+        consumed_primary=True,
+        cooldown_exclude=ability.slug if cooldown_started else None,
+    )
+
+
+def _finalize_active_round(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    cooldown_exclude: str | None,
+) -> bool:
+    cooldowns_changed = decrement_ability_cooldowns(
+        player,
+        exclude={cooldown_exclude} if cooldown_exclude else set(),
+    )
+    if cooldowns_changed:
+        player.save(update_fields=["ability_cooldowns"])
+    if not encounter._state.adding:
+        encounter.save(update_fields=["pending_player_ability", "pending_flee", "active_effects"])
+    return cooldowns_changed
+
+
 def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target_mob: Mob, config) -> CombatStepResult:
     room = Room.objects.select_related("world", "zone").get(pk=encounter.room_id)
     stats = _player_combat_stats(player)
@@ -289,154 +1080,165 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
     round_id = f"encounter:{encounter.id}:{encounter.round_number}"
 
     events: list[GameEvent] = []
+    cooldown_exclude: str | None = None
 
-    player_attack = resolve_attack(
-        actor=player,
-        target=target_mob,
-        world=player.world,
-    )
-    if player_attack.damage_taken > 0:
-        target_mob.health = max(
-            0,
-            int(target_mob.health or 0) - player_attack.damage_taken,
-        )
-        target_mob.save(update_fields=["health"])
+    if (encounter.pending_flee or {}).get("status") == "ready":
+        return _complete_flee(encounter=encounter, player=player, round_id=round_id)
 
-    player_char = _combat_state_payload(
-        serialize_char_from_player(player).model_dump(),
-        target_payload=serialize_char_from_mob(target_mob).model_dump(),
-    )
-    target_char = _combat_state_payload(
-        serialize_char_from_mob(target_mob).model_dump(),
-        target_payload=serialize_char_from_player(player).model_dump(),
-    )
-    target_name = target_char.get("name") or "them"
     events.extend(
-        _combat_attack_events(
-            viewer=player,
+        _resolve_periodic_effects(
+            encounter=encounter,
+            player=player,
+            target_mob=target_mob,
             room=room,
-            actor_payload=player_char,
-            target_payload=target_char,
-            result=player_attack,
             round_id=round_id,
-            actor_text=_actor_attack_text(target_name, player_attack),
-            room_text=_room_attack_text(player.name, target_name, player_attack),
+            player_health_max=stats.player_health_max,
         )
     )
 
     if target_mob.health <= 0:
-        corpse_id = _ensure_corpse(target_mob)
-        deceased_payload = serialize_char_from_mob(target_mob).model_dump()
-        exp_reward = int(target_mob.exp_worth or 0)
-        gold_reward = int(target_mob.gold or 0)
-        _finish_encounter(encounter)
-        target_mob.delete()
-
-        reward_update_fields: list[str] = []
-        leveling: ExperienceGrant | None = None
-        if exp_reward:
-            leveling = apply_experience(player, exp_reward)
-            reward_update_fields.append("experience")
-            if leveling.leveled_up:
-                reward_update_fields.append("level")
-        if gold_reward:
-            # TODO: Route mob spoils through a party/share policy once WR2 grouping exists.
-            player.gold = int(player.gold or 0) + gold_reward
-            reward_update_fields.append("gold")
-        if reward_update_fields:
-            player.save(update_fields=reward_update_fields)
-
-        actor_payload = serialize_actor(player, room).model_dump()
-        corpse_payload = _serialize_corpse(corpse_id, viewer=player)
-        room_payload = _room_payload(player, room)
-        death_data = {
-            "actor": actor_payload,
-            "deceased": deceased_payload,
-            "killer": serialize_char_from_player(player).model_dump(),
-            "corpse": corpse_payload,
-            "room": room_payload,
-            "experience_gained": exp_reward,
-            "gold_gained": gold_reward,
-        }
-        death_text = _mob_death_text(deceased_payload.get("name"))
-        events.append(
-            GameEvent(
-                type="notification.death",
-                recipients=[player.key],
-                data=death_data,
-                text=death_text,
-            )
+        return _handle_mob_defeated(
+            encounter=encounter,
+            player=player,
+            target_mob=target_mob,
+            room=room,
+            events=events,
         )
 
-        if not player.is_invisible:
-            recipients = _combat_recipients(player, room)
-            if recipients:
-                events.append(
-                    GameEvent(
-                        type="notification.death",
-                        recipients=recipients,
-                        data={
-                            "deceased": deceased_payload,
-                            "killer": serialize_char_from_player(player).model_dump(),
-                            "corpse": corpse_payload,
-                        },
-                        text=death_text,
-                    )
-                )
+    flee_preparation_events = _advance_flee_preparation(
+        encounter=encounter,
+        player=player,
+        round_id=round_id,
+    )
+    events.extend(flee_preparation_events)
 
-        reward_text = _reward_text(
-            experience_gained=exp_reward,
-            gold_gained=gold_reward,
-            leveling=leveling,
+    player_stunned = _consume_stun(
+        encounter,
+        target_type="player",
+        target_id=player.id,
+    )
+    if flee_preparation_events:
+        pass
+    elif player_stunned:
+        player_payload = _combat_state_payload(
+            serialize_char_from_player(player).model_dump(),
+            target_payload=serialize_char_from_mob(target_mob).model_dump(),
         )
-        if reward_text:
-            reward_data = {
-                "actor": actor_payload,
-                "source": deceased_payload,
-                "experience_gained": exp_reward,
-                "gold_gained": gold_reward,
-            }
-            if leveling:
-                reward_data.update(
-                    {
-                        "previous_level": leveling.previous_level,
-                        "new_level": leveling.new_level,
-                        "levels_gained": leveling.levels_gained,
-                        "experience_progress": leveling.experience_progress,
-                        "experience_needed": leveling.experience_needed,
-                        "max_level": leveling.max_level,
-                    }
+        events.extend(
+            _stun_event(
+                player=player,
+                room=room,
+                target_name=player.name,
+                target_payload=player_payload,
+                round_id=round_id,
+            )
+        )
+        encounter.pending_player_ability = {}
+    else:
+        ability_events, ability_result = _execute_pending_player_ability(
+            encounter=encounter,
+            player=player,
+            target_mob=target_mob,
+            room=room,
+            round_id=round_id,
+            player_health_max=stats.player_health_max,
+        )
+        events.extend(ability_events)
+        cooldown_exclude = ability_result.cooldown_exclude
+
+        if target_mob.health <= 0:
+            return _handle_mob_defeated(
+                encounter=encounter,
+                player=player,
+                target_mob=target_mob,
+                room=room,
+                events=events,
+            )
+
+        if not ability_result.consumed_primary:
+            player_attack = resolve_attack(
+                actor=player,
+                target=target_mob,
+                world=player.world,
+            )
+            if player_attack.damage_taken > 0:
+                target_mob.health = max(
+                    0,
+                    int(target_mob.health or 0) - player_attack.damage_taken,
                 )
-            events.append(
-                GameEvent(
-                    type="notification.reward",
-                    recipients=[player.key],
-                    data=reward_data,
-                    text=reward_text,
+                target_mob.save(update_fields=["health"])
+
+            player_char = _combat_state_payload(
+                serialize_char_from_player(player).model_dump(),
+                target_payload=serialize_char_from_mob(target_mob).model_dump(),
+            )
+            target_char = _combat_state_payload(
+                serialize_char_from_mob(target_mob).model_dump(),
+                target_payload=serialize_char_from_player(player).model_dump(),
+            )
+            target_name = target_char.get("name") or "them"
+            events.extend(
+                _combat_attack_events(
+                    viewer=player,
+                    room=room,
+                    actor_payload=player_char,
+                    target_payload=target_char,
+                    result=player_attack,
+                    round_id=round_id,
+                    actor_text=_actor_attack_text(target_name, player_attack),
+                    room_text=_room_attack_text(player.name, target_name, player_attack),
                 )
             )
 
-        events.append(
-            GameEvent(
-                type="quest.mob.killed",
-                recipients=[],
-                data={
-                    "actor": actor_payload,
-                    "target": deceased_payload,
-                    "room": room_payload,
-                    "experience_gained": exp_reward,
-                    "gold_gained": gold_reward,
-                    "levels_gained": leveling.levels_gained if leveling else 0,
-                },
-            )
+            if target_mob.health <= 0:
+                return _handle_mob_defeated(
+                    encounter=encounter,
+                    player=player,
+                    target_mob=target_mob,
+                    room=room,
+                    events=events,
+                )
+
+    if not target_mob.fights_back:
+        cooldowns_changed = _finalize_active_round(
+            encounter=encounter,
+            player=player,
+            cooldown_exclude=cooldown_exclude,
         )
+        if cooldown_exclude or cooldowns_changed:
+            events.append(ability_state_event(player))
         return CombatStepResult(
             actor_key=player.key,
             events=events,
-            encounter_active=False,
+            encounter_active=True,
         )
 
-    if not target_mob.fights_back:
+    mob_stunned = _consume_stun(
+        encounter,
+        target_type="mob",
+        target_id=target_mob.id,
+    )
+    if mob_stunned:
+        mob_payload = _combat_state_payload(
+            serialize_char_from_mob(target_mob).model_dump(),
+            target_payload=serialize_char_from_player(player).model_dump(),
+        )
+        events.extend(
+            _stun_event(
+                player=player,
+                room=room,
+                target_name=mob_payload.get("name") or "Something",
+                target_payload=mob_payload,
+                round_id=round_id,
+            )
+        )
+        cooldowns_changed = _finalize_active_round(
+            encounter=encounter,
+            player=player,
+            cooldown_exclude=cooldown_exclude,
+        )
+        if cooldown_exclude or cooldowns_changed:
+            events.append(ability_state_event(player))
         return CombatStepResult(
             actor_key=player.key,
             events=events,
@@ -520,6 +1322,13 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
             encounter_active=False,
         )
 
+    cooldowns_changed = _finalize_active_round(
+        encounter=encounter,
+        player=player,
+        cooldown_exclude=cooldown_exclude,
+    )
+    if cooldown_exclude or cooldowns_changed:
+        events.append(ability_state_event(player))
     return CombatStepResult(
         actor_key=player.key,
         events=events,
@@ -587,6 +1396,72 @@ def resolve_combat_encounter_step(
         _schedule_encounter_resolution(encounter_id, next_delay)
 
     return result
+
+
+class FleeAction:
+    def execute(self, player_id: int) -> ActionResult:
+        with transaction.atomic():
+            player = Player.objects.select_for_update().get(pk=player_id)
+            encounter = (
+                CombatEncounter.objects.select_for_update()
+                .filter(player=player, status=CombatEncounter.STATUS_ACTIVE)
+                .first()
+            )
+            if not encounter:
+                raise ActionError("You are not in combat.", code="not_in_combat")
+
+            if player.room_id != encounter.room_id:
+                _finish_encounter(encounter)
+                raise ActionError("You are no longer in that fight.", code="combat_ended")
+
+            pending = encounter.pending_flee or {}
+            if pending.get("status") == "ready" and encounter.resolution_interval == -1:
+                step = resolve_combat_encounter_step(encounter.id, auto_advance=False)
+                return ActionResult(events=step.events)
+            if pending:
+                return ActionResult(
+                    events=[
+                        GameEvent(
+                            type="cmd.flee.success",
+                            recipients=[player.key],
+                            data={"status": pending.get("status", "preparing")},
+                            text="You are already trying to flee.",
+                        )
+                    ]
+                )
+
+            destination = _choose_flee_destination(player)
+            player.stamina = max(0, int(player.stamina or 0) - destination.movement_cost)
+            player.save(update_fields=["stamina"])
+            encounter.pending_flee = {
+                "status": "preparing",
+                "queued_round": int(encounter.round_number or 0),
+                "direction": destination.direction,
+                "destination_room_id": destination.room_id,
+                "movement_cost": destination.movement_cost,
+            }
+            encounter.pending_player_ability = {}
+            encounter.save(update_fields=["pending_flee", "pending_player_ability"])
+
+            events = [
+                GameEvent(
+                    type="cmd.flee.success",
+                    recipients=[player.key],
+                    data={
+                        "status": "queued",
+                        "direction": destination.direction,
+                        "destination_room_id": destination.room_id,
+                        "movement_cost": destination.movement_cost,
+                    },
+                    text="You prepare to flee.",
+                )
+            ]
+
+            if encounter.resolution_interval == -1:
+                step = resolve_combat_encounter_step(encounter.id, auto_advance=False)
+                return ActionResult(events=[*events, *step.events])
+
+            return ActionResult(events=events)
 
 
 class KillAction:

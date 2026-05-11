@@ -12,6 +12,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from django.db.models import Prefetch
 from django.utils import timezone
 
+from builders.models import AbilityDefinition
 from config import constants as adv_consts
 from core.scoped_state import STATE_SCOPE_WORLD, get_state_snapshot
 from core.leveling import (
@@ -59,6 +60,84 @@ def first_keyword(value: Optional[str], fallback: Optional[str] = None) -> str:
     if tokens:
         return tokens[0]
     return str(fallback or "").strip().lower()
+
+
+def _definition_world(world: World) -> World:
+    return getattr(world, "config_source_world", None) or getattr(world, "context", None) or world
+
+
+def _known_ability_slugs(player: Player) -> list[str]:
+    if not isinstance(player.known_abilities, list):
+        return []
+    known: list[str] = []
+    for raw_slug in player.known_abilities:
+        slug = str(raw_slug or "").strip().lower()
+        if slug and slug not in known:
+            known.append(slug)
+    return known
+
+
+def _ability_hotkeys(player: Player) -> dict[str, str]:
+    if not isinstance(player.ability_hotkeys, dict):
+        return {}
+    hotkeys: dict[str, str] = {}
+    assigned_slugs: set[str] = set()
+    for raw_slot, raw_slug in player.ability_hotkeys.items():
+        try:
+            slot_number = int(raw_slot)
+        except (TypeError, ValueError):
+            continue
+        if slot_number < 1 or slot_number > 8:
+            continue
+        slug = str(raw_slug or "").strip().lower()
+        if not slug or slug in assigned_slugs:
+            continue
+        hotkeys[str(slot_number)] = slug
+        assigned_slugs.add(slug)
+    return hotkeys
+
+
+def _ability_cooldowns(player: Player) -> dict[str, int]:
+    if not isinstance(player.ability_cooldowns, dict):
+        return {}
+    cooldowns: dict[str, int] = {}
+    for raw_slug, raw_rounds in player.ability_cooldowns.items():
+        slug = str(raw_slug or "").strip().lower()
+        if not slug:
+            continue
+        try:
+            rounds = int(raw_rounds or 0)
+        except (TypeError, ValueError):
+            rounds = 0
+        if rounds > 0:
+            cooldowns[slug] = rounds
+    return cooldowns
+
+
+def _serialize_ability_definitions(world: World) -> dict[str, dict]:
+    source_world = _definition_world(world)
+    definitions: dict[str, dict] = {}
+    order: list[str] = []
+    for ability in AbilityDefinition.objects.filter(
+        world=source_world,
+        is_active=True,
+    ).order_by("slug", "id"):
+        order.append(ability.slug)
+        definitions[ability.slug] = {
+            "id": ability.id,
+            "key": f"ability.{ability.id}",
+            "slug": ability.slug,
+            "name": ability.name or ability.slug,
+            "command_verbs": list(ability.command_verbs or []),
+            "action_type": ability.action_type,
+            "target": ability.target or {},
+            "cost": ability.cost or {},
+            "cooldown": ability.cooldown or {},
+        }
+    return {
+        "definitions": definitions,
+        "order": order,
+    }
 
 
 def get_player_with_related(player_id: int) -> Player:
@@ -299,7 +378,7 @@ def serialize_char_from_mob(
         description=description,
         archetype=mob.archetype,
         core_faction=(factions or {}).get("core"),
-        room_description=room_desc or (name + " is here."),
+        room_description=safe_capitalize(room_desc or (name + " is here.")),
         state="standing",
         stance="normal",
         health=mob.health,
@@ -571,6 +650,9 @@ def serialize_actor(player: Player, room: Optional[Room]) -> Actor:
             "experience": int(getattr(player, "experience", 0) or 0),
             "experience_progress": progress.experience_progress,
             "experience_needed": progress.experience_needed,
+            "known_abilities": _known_ability_slugs(player),
+            "ability_hotkeys": _ability_hotkeys(player),
+            "ability_cooldowns": _ability_cooldowns(player),
         }
     )
     actor_data["room"] = {"key": room_payload_key_for(room)} if room else None
@@ -609,7 +691,7 @@ def serialize_world(world: World) -> Dict:
             "globals_enabled": config.globals_enabled if config else False,
             "factions": {},
             "death_mode": config.death_mode if config else "flee",
-            "skills": {},
+            "abilities": {},
             "flee_to_unknown_rooms": config.flee_to_unknown_rooms if config else False,
             "death_route": config.death_route if config else "",
             "allow_pvp": config.allow_pvp if config else False,
@@ -627,6 +709,7 @@ def serialize_world(world: World) -> Dict:
         data["currencies"] = {str(k): v for k, v in data["currencies"].items()}
 
     data["labels"] = get_world_label_bundle(world)
+    data["abilities"] = _serialize_ability_definitions(world)
 
     # Normalize world-config room references to the same room key contract used
     # across WR2 room/map payloads.

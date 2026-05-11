@@ -4,6 +4,7 @@
     :schema="list_schema"
     :endpoint="endpoint"
     :resolve_route="resolve_route"
+    default-sort="name"
     @add="onClickAdd" />
 </template>
 
@@ -13,6 +14,7 @@ import { useStore } from "vuex";
 import { useRoute } from "vue-router";
 import ElementList from "@/components/elementlist/ElementList.vue";
 import { BUILDER_FORMS } from "@/core/forms.ts";
+import { formatRelativeModifiedDate } from "@/core/utils.ts";
 
 
 const store = useStore();
@@ -30,9 +32,16 @@ const resolve_route = element => {
 };
 
 const list_schema: any[] = [
-  { name: "id", label: "ID" },
-  { name: "name", label: "Name" },
-  { name: "num_rooms", label: "Rooms" }
+  { name: "id", label: "ID", sortable: true },
+  { name: "name", label: "Name", nowrap: true, sortable: true },
+  { name: "num_rooms", label: "Rooms" },
+  {
+    name: "modified_ts",
+    label: "Modified",
+    nowrap: true,
+    sortable: true,
+    format: formatRelativeModifiedDate
+  }
 ];
 
 const onClickAdd = () => {

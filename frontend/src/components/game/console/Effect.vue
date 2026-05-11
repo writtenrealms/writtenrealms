@@ -35,13 +35,7 @@ const isHostile = computed(() => {
 });
 
 const effectLabel = computed(() => {
-  if (props.message.data.custom) {
-    return props.message.data.name;
-  }
-  // if (store.state.game.world.is_classless) {
-  //   return props.message.data.name;
-  // }
-  return store.state.game.world.labels.effects[props.message.data.code];
+  return store.state.game.world.labels.effects[props.message.data.code] || props.message.data.name;
 });
 </script>
 

@@ -26,6 +26,123 @@ body > .tooltip {
   }
 }
 
+.link-grid {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr));
+  min-width: 0;
+}
+
+.link-grid-item {
+  background: $color-background-light;
+  border: 1px solid $color-background-light-border;
+  box-sizing: border-box;
+  color: $color-text;
+  display: block;
+  min-width: 0;
+  padding: 1rem;
+  text-decoration: none;
+
+  &:hover {
+    border-color: $color-background-light-border-selected;
+    text-decoration: none;
+  }
+
+  &:active {
+    text-decoration: none;
+  }
+}
+
+.link-grid-title {
+  color: $color-secondary;
+  display: block;
+  margin-bottom: 0.45rem;
+}
+
+.link-grid-description {
+  color: $color-text-hex-70;
+  display: block;
+  line-height: 1.45;
+}
+
+.link-grid-title-only {
+  grid-template-columns: repeat(auto-fit, minmax(min(5.5rem, 100%), 1fr));
+
+  .link-grid-item {
+    align-items: center;
+    display: flex;
+    justify-content: center;
+    min-height: 3rem;
+    padding: 0.65rem;
+    text-align: center;
+  }
+
+  .link-grid-title {
+    margin-bottom: 0;
+  }
+}
+
+.data-table-scroll {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  width: 100%;
+  -webkit-overflow-scrolling: touch;
+}
+
+.data-table {
+  border-collapse: collapse;
+  color: $color-text;
+  line-height: 1.35;
+  min-width: 100%;
+  table-layout: auto;
+
+  th,
+  td {
+    border-bottom: 1px solid $color-background-light-border;
+    padding: 0.45rem 0.75rem;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  thead th {
+    color: $color-text-hex-60;
+    font-size: 0.82rem;
+  }
+
+  tbody th {
+    color: $color-secondary;
+    min-width: 7rem;
+    white-space: nowrap;
+  }
+
+  tbody tr:last-child th,
+  tbody tr:last-child td {
+    border-bottom: 0;
+  }
+
+  td {
+    min-width: 5rem;
+    overflow-wrap: anywhere;
+  }
+
+  &.key-value-table {
+    width: 100%;
+
+    tbody th {
+      color: $color-text-hex-60;
+      min-width: 0;
+      white-space: normal;
+      width: 38%;
+    }
+  }
+
+  &.record-table {
+    width: max-content;
+  }
+}
+
 .divider {
   // fancy divider
   // 582 - 24

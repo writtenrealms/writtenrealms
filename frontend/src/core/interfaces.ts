@@ -55,10 +55,15 @@ export interface Map {
 }
 
 export interface ElementListSchema {
-  id: number;
+  id?: number;
   name: string;
   label: string;
-  link: string;
+  link?: string;
+  nowrap?: boolean;
+  light?: boolean;
+  sortable?: boolean;
+  sortKey?: string;
+  format?: (value: any, element: any) => string;
 }
 
 export interface ElementListFilterItem {

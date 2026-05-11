@@ -23,11 +23,11 @@ const resolve_route = (player: any) => {
 };
 
 const list_schema: any[] = [
-  { name: "id", label: "ID" },
-  { name: "name", label: "Name" },
-  { name: "level", label: "Level", light: true },
-  { name: "world_name", label: "World", light: true },
-  { name: "user.email", label: "Email", light: true }
+  { name: "id", label: "ID", sortable: true },
+  { name: "name", label: "Name", nowrap: true, sortable: true },
+  { name: "level", label: "Level", light: true, sortable: true },
+  { name: "world_name", label: "World", light: true, sortable: true, sortKey: "world__name" },
+  { name: "user.email", label: "Email", light: true, nowrap: true, sortable: true, sortKey: "user__email" }
 ];
 </script>
 

@@ -35,7 +35,6 @@ from builders.models import (
     RoomCommandCheck,
     RoomGetTrigger,
     Rule,
-    Skill,
     Social,
     TransformationTemplate,
     WorldBuilder,
@@ -302,11 +301,6 @@ class FactScheduleAdmin(BaseAdmin):
     raw_id_fields = ['world']
 
 
-class SkillAdmin(BaseAdmin):
-    list_display = ('id', 'world', 'code')
-    raw_id_fields = ['world', 'consumes']
-
-
 class WorldReviewAdmin(BaseAdmin):
     list_display = ('id', 'world', 'status', 'reviewer')
     raw_id_fields = ['world', 'reviewer']
@@ -362,7 +356,6 @@ admin.site.register(RoomCheck, RoomCheckAdmin)
 admin.site.register(RoomCommandCheck, RoomCommandCheckAdmin)
 admin.site.register(RoomGetTrigger, RoomGetTriggerAdmin)
 admin.site.register(Rule, RuleAdmin)
-admin.site.register(Skill, SkillAdmin)
 admin.site.register(Social, SocialAdmin)
 admin.site.register(TransformationTemplate, TransformationTemplateAdmin)
 admin.site.register(WorldBuilder, WorldBuilderAdmin)

@@ -38,14 +38,7 @@
     <div v-if="is_mobile" class="grow flex flex-col justify-center">
       <Combat @taplook="$emit('taplook')" />
     </div>
-    <div v-if="is_mobile" class="mobile-cast-region">
-      <Cast
-        :message="current_cast"
-        v-if="current_cast"
-        :key="current_cast.data.expires"
-      />
-    </div>
-    <Skills v-if="world.allow_combat" />
+    <Abilities v-if="world.allow_combat" />
   </div>
 </template>
 
@@ -53,16 +46,14 @@
 import { computed } from "vue";
 import { useStore } from "vuex";
 import Status from "@/components/game/panel/Status.vue";
-import Skills from "@/components/game/panel/Skills.vue";
+import Abilities from "@/components/game/panel/Abilities.vue";
 import Combat from "@/components/game/panel/Combat.vue";
-import Cast from "@/components/game/console/Cast.vue";
 
 const store = useStore();
 
 const is_mobile = computed(() => store.state.game.is_mobile);
 const player: any = computed(() => store.state.game.player);
 const world: any = computed(() => store.state.game.world);
-const current_cast = computed(() => store.state.game.current_cast);
 const resourceLabels = computed(() => world.value?.labels?.resources || {});
 const healthLabel = computed(() => resourceLabels.value.health || "Health");
 const energyLabel = computed(() => resourceLabels.value.energy || "Energy");

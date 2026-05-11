@@ -8,6 +8,7 @@ Command -> Action -> Event:
 """
 from django.db import transaction
 
+from config import constants as adv_consts
 from spawns.actions.base import ActionError
 from spawns.actions.movement import (
     AdjustStaminaAction,
@@ -25,6 +26,14 @@ from spawns.models import Player
 class MoveHandler(CommandHandler):
     command_type = "move"
     text_commands = ("north", "east", "south", "west", "up", "down")
+    text_aliases = {
+        "n": adv_consts.DIRECTION_NORTH,
+        "e": adv_consts.DIRECTION_EAST,
+        "s": adv_consts.DIRECTION_SOUTH,
+        "w": adv_consts.DIRECTION_WEST,
+        "u": adv_consts.DIRECTION_UP,
+        "d": adv_consts.DIRECTION_DOWN,
+    }
     help = {
         "name": "Move",
         "format": "north | east | south | west | up | down",

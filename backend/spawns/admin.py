@@ -13,8 +13,6 @@ from spawns.models import (
     PlayerQuest,
     PlayerTrophy,
     Alias,
-    PlayerFlexSkill,
-    PlayerFeat,
     PlayerEvent,
     PlayerConfig,
     Mark)
@@ -104,16 +102,6 @@ class PlayerEnquireAdmin(BaseAdmin):
     raw_id_fields = ('player', 'quest')
 
 
-class PlayerFlexSkillAdmin(BaseAdmin):
-    list_display = ('id', 'player', 'code')
-    raw_id_fields = ('player',)
-
-
-class PlayerFeatAdmin(BaseAdmin):
-    list_display = ('id', 'player', 'code')
-    raw_id_fields = ('player',)
-
-
 def user(player_event):
     return player_event.player.user
 class PlayerEventAdmin(BaseAdmin):
@@ -157,8 +145,6 @@ admin.site.register(Alias, AliasAdmin)
 admin.site.register(PlayerEnquire, PlayerEnquireAdmin)
 admin.site.register(PlayerQuest, PlayerQuestAdmin)
 admin.site.register(PlayerTrophy, PlayerTrophyAdmin)
-admin.site.register(PlayerFlexSkill, PlayerFlexSkillAdmin)
-admin.site.register(PlayerFeat, PlayerFeatAdmin)
 admin.site.register(PlayerEvent, PlayerEventAdmin)
 admin.site.register(PlayerConfig, PlayerConfigAdmin)
 admin.site.register(Mark, MarkAdmin)

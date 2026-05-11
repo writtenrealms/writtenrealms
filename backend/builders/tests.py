@@ -4209,19 +4209,6 @@ class WorldReviewTests(BuilderTestCase):
         self.assertEqual(resp.data[0],
                          "Cannot resubmit for another 30 days.")
 
-class CustomSkillDefinitionTests(BuilderTestCase):
-
-    def test_create_custom_skill(self):
-        endpoint = reverse('builder-skill-list', args=[self.world.pk])
-        resp = self.client.post(endpoint, {'code': 'myskill'})
-        self.assertEqual(resp.status_code, 201)
-
-    def test_code_validation(self):
-        endpoint = reverse('builder-skill-list', args=[self.world.pk])
-        resp = self.client.post(endpoint, {'code': 'my skill'})
-        self.assertEqual(resp.status_code, 400)
-
-
 class BuilderAssignmentTests(BuilderTestCase):
 
     def setUp(self):

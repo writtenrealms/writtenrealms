@@ -31,8 +31,6 @@ def scaled_formula(char, enemy, stat):
         base = 0
         value = char.armor
 
-        if enemy:
-            value = enemy.apply_feats_for_type(constants.FEAT_TYPE_ENEMY_ARMOR, value)
     elif stat == 'dodge':
         constant = 60
         base = 0.02
@@ -51,7 +49,6 @@ def scaled_formula(char, enemy, stat):
             char.offhand.equipment_type == constants.EQUIPMENT_TYPE_SHIELD):
             base = 0.25
 
-        base = char.apply_feats_for_type(constants.FEAT_TYPE_BASE_RESILIENCE, base)
     else:
         raise ValueError("Invalid stat: %s" % stat)
 

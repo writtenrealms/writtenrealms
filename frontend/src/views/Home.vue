@@ -58,8 +58,8 @@
           </div>
 
           <div class="highlight">
-            Features a rich combat system. Each world offers either four playable classes with
-            predefined skills and talents, or builder-defined custom skills and abilities.
+            Features a rich combat system. Each world can offer authored classes,
+            combat formulas, and builder-defined abilities.
           </div>
 
           <div class="highlight">
@@ -147,7 +147,7 @@
           <div class="feature-text">
             <div>
               Assisted combat: use the action bar, aliases or hotkeys to trigger
-              abilities and skills.
+              abilities.
             </div>
           </div>
         </div>

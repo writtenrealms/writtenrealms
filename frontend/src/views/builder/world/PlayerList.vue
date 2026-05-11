@@ -6,6 +6,7 @@
       :filters="list_filters"
       :endpoint="endpoint"
       :resolve_route="resolve_route"
+      default-sort="-modified_ts"
     />
   </template>
   <template v-else>
@@ -19,6 +20,7 @@
 import { useStore } from "vuex";
 import { useRoute } from "vue-router";
 import ElementList from "@/components/elementlist/ElementList.vue";
+import { formatRelativeModifiedDate } from "@/core/utils.ts";
 
 const store = useStore();
 const route = useRoute();
@@ -36,14 +38,21 @@ const resolve_route = (element: any) => {
 };
 
 const list_schema: any[] = [
-  { name: "id", label: "ID" },
-  { name: "name", label: "Name" },
-  { name: "level", label: "Level", light: true },
+  { name: "id", label: "ID", sortable: true },
+  { name: "name", label: "Name", nowrap: true, sortable: true },
+  { name: "level", label: "Level", light: true, sortable: true },
+  {
+    name: "modified_ts",
+    label: "Modified",
+    nowrap: true,
+    sortable: true,
+    format: formatRelativeModifiedDate
+  },
 ];
 
 const list_filters: any[] = [
   {
-    label: "factions",
+    label: "Faction",
     attr: "core_faction",
     filter_options: [
       { key: "human", name: "Human" },
@@ -52,25 +61,13 @@ const list_filters: any[] = [
     ]
   },
   {
-    label: "levels",
+    label: "Level",
     attr: "level_range",
     filter_options: [
       { key: "15", name: "1-5" },
       { key: "610", name: "6-10" },
       { key: "1115", name: "11-15" },
       { key: "1620", name: "16-20" }
-    ]
-  },
-  {
-    attr: "sort_by",
-    label: "sorting",
-    filter_options: [
-      { key: "-level", name: "Level 20-1" },
-      { key: "level", name: "Level 1-20" },
-      { key: "-created_ts", name: "Last Created" },
-      { key: "created_ts", name: "First Created" },
-      { key: "name", name: "A - Z" },
-      { key: "-name", name: "Z - A" }
     ]
   }
 ];

@@ -35,7 +35,7 @@ The first WR2 implementation is live in the runtime:
 - Item templates and spawned items now have `weapon_damage`.
 - Randomly generated weapons receive level-scaled `weapon_damage`.
 
-This is still the first version. Skills, effects, PvP, groups, absorbs,
+This is still the first version. Abilities, effects, PvP, groups, absorbs,
 resistances, and richer action overrides should build on this layer rather
 than bypass it.
 
@@ -338,7 +338,7 @@ This layer does not implement the whole future combat system.
 
 It deliberately does not yet solve:
 
-- active skills
+- active abilities
 - player-vs-player formulas
 - group reward splitting
 - absorptions and shields

@@ -9,7 +9,7 @@ Top-level structure:
 - map: List of rooms the player has visited (for minimap)
 - actor: Full player data
 - room: Current room with characters, inventory, actions, etc.
-- world: World configuration (skills, feats, factions, currencies)
+- world: World configuration (abilities, factions, currencies)
 - who_list: List of connected players
 
 Reference: legacy WR1 resource payloads.
@@ -172,11 +172,6 @@ class Char(BaseModel):
     upgrade_cost_multiplier: float = 0.0
 
 
-class PlayerSkills(BaseModel):
-    """Player skill selections."""
-    custom: Dict[str, str] = Field(default_factory=dict)
-
-
 class Alias(BaseModel):
     """Player alias."""
     id: int
@@ -266,8 +261,9 @@ class Actor(BaseModel):
     # Factions
     factions: Dict[str, Any] = Field(default_factory=dict)
 
-    # Skills
-    skills: PlayerSkills = Field(default_factory=PlayerSkills)
+    known_abilities: List[str] = Field(default_factory=list)
+    ability_hotkeys: Dict[str, str] = Field(default_factory=dict)
+    ability_cooldowns: Dict[str, int] = Field(default_factory=dict)
     trophy: Dict[int, int] = Field(default_factory=dict)
 
     # Player character type
@@ -430,23 +426,6 @@ class Room(BaseModel):
 # World Configuration
 # =============================================================================
 
-class SkillDefinition(BaseModel):
-    """Single skill definition."""
-    code: str
-    name: str
-    archetype: Optional[str] = None
-    level: int = 1
-    default_hotkey: Optional[str] = None
-    stances: List[str] = Field(default_factory=list)
-    disabled: List[str] = Field(default_factory=list)
-
-
-class ArchetypeSkills(BaseModel):
-    """Skills for a single archetype."""
-    # Individual skill definitions keyed by code
-    definitions: Dict[str, Any] = Field(default_factory=dict)
-
-
 class FactionRank(BaseModel):
     """Faction rank definition."""
     standing: int
@@ -535,7 +514,7 @@ class World(BaseModel):
     # Game data
     labels: Dict[str, Any] = Field(default_factory=dict)
     factions: Dict[str, Faction] = Field(default_factory=dict)
-    skills: Dict[str, Any] = Field(default_factory=dict)  # Custom skill definitions
+    abilities: Dict[str, Any] = Field(default_factory=dict)
     facts: Dict[str, Any] = Field(default_factory=dict)
     socials: Socials = Field(default_factory=Socials)
     currencies: Dict[str, Currency] = Field(default_factory=dict)
@@ -597,7 +576,7 @@ def build_mock_state_sync(
     This creates realistic mock data that exercises all major UI components:
     - Player stats, equipment, inventory
     - Room with multiple characters, items, and exits
-    - World configuration with skills, factions, currencies
+    - World configuration with abilities, factions, currencies
     - Minimap with several connected rooms
     """
 
@@ -1007,12 +986,6 @@ def build_mock_state_sync(
         west="room.5",
     )
 
-    # --- Player Skills ---
-
-    player_skills = PlayerSkills(
-        custom={},
-    )
-
     # --- Player Aliases ---
 
     player_aliases = {
@@ -1091,8 +1064,6 @@ def build_mock_state_sync(
             "adventurers": 150,
             "merchants": 50,
         },
-        # Skills
-        skills=player_skills,
         trophy={1: 5, 2: 3, 3: 1},  # mob_template_id -> kill count
         # Player flags
         is_builder=False,
@@ -1208,9 +1179,6 @@ def build_mock_state_sync(
         order=["wave", "bow", "laugh"],
     )
 
-    # Skills - custom skill definitions (WR2: no core/flex/feat system)
-    mock_skills: Dict[str, Any] = {}
-
     mock_world = World(
         id=world_id,
         key=f"world.{world_id}",
@@ -1237,7 +1205,7 @@ def build_mock_state_sync(
         flee_to_unknown_rooms=False,
         players_can_set_title=True,
         factions=mock_factions,
-        skills=mock_skills,
+        abilities={},
         facts={"world_started": True, "event_active": False},
         socials=mock_socials,
         currencies=mock_currencies,

@@ -1,7 +1,6 @@
 import axios from "axios";
 import { FORGE_WS_URI } from "@/config";
 import _ from "lodash";
-import EventBus from "@/core/eventbus";
 import router from "@/router";
 
 
@@ -44,7 +43,6 @@ const set_initial_state = () => {
     */
     player: null,
     player_effects: [],
-    player_skills: [],
     player_level: 0,
     player_archetype: "",
 
@@ -65,16 +63,10 @@ const set_initial_state = () => {
     // Master record for all tracked effects, keyed by character key
     effects: {},
 
-    player_cooldowns: {},
-    cooldown_adjustments: [],
-
     // Index of casts / channels that have been started and therefore should
     // not be re-animated. Indexed by expires timestamp, since it should be
     // unique per cast.
     started_casts: {},
-
-    // Currently ongoing cast
-    current_cast: null,
 
     // Value to keep track of what entity the user is currently hovering over,
     // if any. This is to assist in the closing or non-closing of hover popups
@@ -137,6 +129,7 @@ const receiveMessage = async ({
     "notification.shorttic",
     "notification.longtic",
     "notification.who",
+    "player.abilities.update",
     // "notification.regen",
   ];
 
@@ -149,7 +142,6 @@ const receiveMessage = async ({
 
   // Add message to be shown in console
   if (skip_messages.indexOf(message_data.type) == -1) {
-    // EventBus.$emit("new-message", message_data);
     commit("message_add", message_data);
   }
 
@@ -432,17 +424,6 @@ const receiveMessage = async ({
     commit("player_target_set", null);
   }
 
-  // Track current casts
-  if (
-    message_data.data &&
-    message_data.data.skill &&
-    (message_data.data.method === "cast" ||
-      message_data.data.method === "channel") &&
-    message_data.data.duration !== 0
-  ) {
-    commit("current_cast_set", message_data);
-  }
-
   // Track effects for all chars
   if (message_data.type === "effect.start") {
     commit("effects_add", message_data.data);
@@ -485,16 +466,8 @@ const receiveMessage = async ({
 
     let remove_effects = [];
 
-    const is_custom = message_data.data.custom;
-
-    if (is_custom) {
-      if (message_data.data.code === 'dispel') {
-        remove_effects = message_data.data.removed_effects;
-      }
-    } else {
-      if (message_data.data.code === 'purge' || message_data.data.code === 'purify') {
-        remove_effects = message_data.data.removed_effects;
-      }
+    if (message_data.data.code === 'purge' || message_data.data.code === 'purify') {
+      remove_effects = message_data.data.removed_effects;
     }
 
     if (remove_effects.length) {
@@ -507,20 +480,6 @@ const receiveMessage = async ({
         });
       }
     }
-  }
-
-
-  // Player cooldowns
-  if (message_data.type === "skill.cooldown.start") {
-    commit("player_cooldown_start", message_data.data);
-    EventBus.emit("cooldown-start", message_data.data);
-    setTimeout(() => {
-      commit("player_cooldown_clear", message_data.data.skill);
-    }, message_data.data.duration * 1000);
-  }
-
-  if (message_data.type === "skill.cooldown.adjust") {
-    // EventBus.$emit("cooldown-adjustment", message_data.data);
   }
 
   // Hint processing
@@ -884,13 +843,6 @@ const actions = {
       headers: { "X-PLAYER-ID": state.player.id },
     });
     commit("player_config_set", config);
-    /*
-    Vue.nextTick(() => {
-      // Though this gets correcly caught by the console, the scroll down does
-      // not actually seem to happen, oddly enough.
-      EventBus.$emit("scroll-down");
-    });
-    */
   },
 };
 
@@ -906,6 +858,9 @@ const mutations = {
   message_add: (state, message) => {
     message.receive_ts = new Date().getTime();
     message.message_id = uuidv4();
+    if (message.data && message.data.round_id && !message.group) {
+      message.group = message.data.round_id;
+    }
 
     state.messages.push(message);
     const messages_length = state.messages.length;
@@ -952,12 +907,6 @@ const mutations = {
       ...state.player,
       ...player,
     };
-
-    // Player component updates, only if needed
-
-    if (player.skills && !_.isEqual(state.player_skills, state.player.skills)) {
-      state.player_skills = state.player.skills;
-    }
 
     if (player.stance && player.stance != state.player_stance) {
       state.player_stance = player.stance;
@@ -1080,23 +1029,6 @@ const mutations = {
     });
     // Vue.set(state.effects, target_key, kept_effects);
     state.effects[target_key] = kept_effects;
-  },
-
-  player_cooldown_start: (state, message_data) => {
-    message_data.start = new Date().getTime();
-    // Vue.set(state.player_cooldowns, message_data.skill, message_data);
-    state.player_cooldowns[message_data.skill] = message_data;
-  },
-
-  player_cooldown_adjust: (state, { skill, adjustment }) => {
-    if (state.player_cooldowns[skill]) {
-      state.player_cooldowns[skill].adjustment = adjustment;
-    }
-  },
-
-  player_cooldown_clear: (state, skill) => {
-    // Vue.delete(state.player_cooldowns, skill);
-    delete state.player_cooldowns[skill];
   },
 
   player_config_set: (state, player_config) => {
@@ -1255,10 +1187,6 @@ const mutations = {
     // if (target.key != state.player.key) {
     state.player_target = target;
     // }
-  },
-
-  current_cast_set: (state, data) => {
-    state.current_cast = data;
   },
 
   who_list_set: (state, who_list) => {

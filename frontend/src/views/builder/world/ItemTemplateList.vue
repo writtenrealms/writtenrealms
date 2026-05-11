@@ -17,6 +17,9 @@
     :filters="list_filters"
     :endpoint="endpoint"
     :resolve_route="resolve_route"
+    filter-display="dropdown"
+    table-variant="data"
+    default-sort="-modified_ts"
     @add="onClickAdd"
   />
 </template>
@@ -26,6 +29,7 @@ import { useStore } from "vuex";
 import { onBeforeRouteUpdate } from "vue-router";
 import ElementList from "@/components/elementlist/ElementList.vue";
 import { BUILDER_FORMS } from "@/core/forms.ts";
+import { formatRelativeModifiedDate } from "@/core/utils.ts";
 
 const store = useStore();
 
@@ -42,9 +46,16 @@ const resolve_route = element => {
 };
 
 const list_schema: any[] = [
-  { name: "id", label: "ID" },
-  { name: "name", label: "Name" },
-  { name: "level", label: "Level", light: true }
+  { name: "id", label: "ID", sortable: true },
+  { name: "name", label: "Name", nowrap: true, sortable: true },
+  { name: "level", label: "Level", light: true, sortable: true },
+  {
+    name: "modified_ts",
+    label: "Modified",
+    nowrap: true,
+    sortable: true,
+    format: formatRelativeModifiedDate
+  }
 ];
 
 const list_filters: any[] = [

@@ -16,7 +16,7 @@ class TestStatsCommand(WorldTestCase):
                     "energy": "Focus",
                 },
                 "derived": {
-                    "ability_power": "Skill Power",
+                    "ability_power": "Ability Power",
                 },
                 "classes": {
                     "warrior": "Vanguard",
@@ -54,7 +54,7 @@ class TestStatsCommand(WorldTestCase):
         self.assertEqual(world["labels"]["resources"]["energy"], "Focus")
         self.assertEqual(
             world["labels"]["derived"]["ability_power"],
-            "Skill Power",
+            "Ability Power",
         )
         self.assertEqual(world["labels"]["classes"]["warrior"], "Vanguard")
 

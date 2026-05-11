@@ -150,8 +150,6 @@ api_v1_urls = [
     path('builder/worlds/<world_id>/facts/', builder_views.FactList.as_view()),
     path('builder/worlds/<world_pk>/factschedules/', builder_views.fact_schedule_list, name='builder-fact-schedule-list'),
     path('builder/worlds/<world_pk>/factschedules/<pk>/', builder_views.fact_schedule_details, name='builder-fact-schedule-details'),
-    path('builder/worlds/<world_pk>/skills/', builder_views.skill_list, name='builder-skill-list'),
-    path('builder/worlds/<world_pk>/skills/<pk>/', builder_views.skill_detail, name='builder-skill-detail'),
     path('builder/worlds/<world_pk>/instances/', builder_views.instance_list, name='builder-world-instance-list'),
     path('builder/worlds/<world_pk>/reviews/', builder_views.review_list, name='builder-review-list'),
     path('builder/worlds/<world_pk>/reviews/<pk>/', builder_views.review_detail, name='builder-review-detail'),
@@ -284,9 +282,6 @@ api_v1_urls = [
     # url(r'/api/v1/builder/worlds/([^/]+)/reflookup/$', BuilderHandlers.RefLookupHandler, name='world_ref_lookup'),
 
     # Blog
-
-    path('public/skills/', system_views.AllSkills.as_view(), name='all-skills'),
-    path('public/skills/<archetype>/', system_views.ArchetypeSkills.as_view(), name='archetype-skills'),
 
 ]
 

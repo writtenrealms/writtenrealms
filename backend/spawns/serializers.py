@@ -56,7 +56,6 @@ from spawns.models import (
     PlayerEnquire,
     PlayerQuest,
     Alias,
-    PlayerFlexSkill,
     PlayerEvent,
     PlayerConfig,
     Mark)
@@ -272,8 +271,6 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
     #classless = serializers.BooleanField(source='config.is_classless')
 
     factions = serializers.SerializerMethodField()
-    skills = serializers.SerializerMethodField()
-    feats = serializers.SerializerMethodField()
     facts = serializers.SerializerMethodField()
     socials = serializers.SerializerMethodField()
     currencies = serializers.SerializerMethodField()
@@ -301,8 +298,6 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
             'globals_enabled',
             'factions',
             'death_mode',
-            'skills',
-            'feats',
             'flee_to_unknown_rooms',
             'death_route',
             'allow_pvp',
@@ -356,94 +351,6 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
                 'is_core': faction.is_core,
             }
         return factions
-
-    def get_skills(self, spawn_world):
-        import inspect
-        from builders.serializers import SkillDetailSerializer
-
-        ret_data = {}
-
-        """
-        for name, obj in inspect.getmembers(skills):
-            try:
-                mro = inspect.getmro(obj)
-            except AttributeError:
-                continue
-
-            # Find classes that inherit ClassSkill as well as Skill,
-            # which should exclude the mixins only.
-            if (skills.ClassSkillMixin in mro
-                and skills.Skill in mro):
-                skill = obj
-
-                if skill.archetype not in ret_data:
-                    ret_data[skill.archetype] = {}
-
-                if skill.level:
-                    ret_data[skill.archetype][skill.code] = {
-                        'code': skill.code,
-                        'archetype': skill.archetype,
-                        'level': skill.level,
-                        'name': skill.name,
-                        'is_flex': skill.is_flex,
-                        'is_feat': bool(skill.feat_code),
-                        'default_hotkey': skill.default_hotkey,
-                        'stances': getattr(skill, 'stances', []),
-                        'disabled': getattr(skill, 'disabled', []),
-                    }
-
-        # Go through each class's skills and determine core vs flex skills
-        for archetype, arch_data in ret_data.items():
-
-            core_skills = []
-            flex_skills = []
-            feat_skills = []
-            for skill_code, skill_data in arch_data.items():
-                if not skill_data['is_flex']:
-                    if skill_data['is_feat']:
-                        feat_skills.append(skill_data)
-                    else:
-                        core_skills.append(skill_data)
-                else:
-                    flex_skills.append(skill_data)
-
-            # Sort flex skills first by skill and then by level
-            flex_skills = sorted(flex_skills, key=lambda s: s['name'])
-            flex_skills = sorted(flex_skills, key=lambda s: s['level'])
-            flex_skill_codes = [ s['code'] for s in flex_skills ]
-            arch_data['flex'] = flex_skill_codes
-
-            # Sort core skills by level
-            core_skills = sorted([
-                skill for skill in core_skills
-            ], key=lambda s: s['level'])
-
-            # Sort core skills by default hotkey
-            core_skills = sorted([
-                skill for skill in core_skills
-            ], key=lambda s: s['default_hotkey'])
-
-            arch_data['core'] = [ s['code'] for s in core_skills ]
-
-            # Sort feat skills by code and then by level
-            feat_skills = sorted(feat_skills, key=lambda s: s['code'])
-            feat_skills = sorted(feat_skills, key=lambda s: s['level'])
-            feat_skill_codes = [ s['code'] for s in feat_skills ]
-            arch_data['feat'] = feat_skill_codes
-        """
-
-        # Get classless skills
-        root_world = spawn_world.context
-        root_world = root_world.instance_of or root_world
-        defs = {}
-        for skill in root_world.skills.all():
-            defs[skill.code] = SkillDetailSerializer(skill).data
-        ret_data['custom'] = {'definitions': defs}
-
-        return ret_data
-
-    def get_feats(self, spawn_world):
-        return {}
 
     def get_facts(self, spawn_world):
         return get_state_snapshot(STATE_SCOPE_WORLD, spawn_world)
@@ -607,7 +514,6 @@ class AnimateItemSerializer(serializers.ModelSerializer):
             'strength', 'constitution', 'dexterity', 'intelligence',
             'attack_power', 'spell_power', 'armor', 'crit',
             'resilience', 'dodge',
-            'skill_modifier',
             'on_use_cmd', 'on_use_description', 'on_use_equipped',
         ]
 
@@ -796,8 +702,7 @@ class AnimateMobSerializer(serializers.ModelSerializer):
             'control_flag', 'flags',
             'is_elite', 'is_invisible', 'is_crafter', 'craft_multiplier',
             'merchant_profit',
-            'teaches', 'teaching_conditions',
-            'unlearns', 'unlearn_cost', 'traits',
+            'traits',
             'is_upgrader', 'upgrade_cost_multiplier',
 
             #'drops_random_items', 'num_items',
@@ -999,7 +904,6 @@ class AnimatePlayerSerializer(serializers.ModelSerializer):
     autoflee = serializers.SerializerMethodField()
     keywords = serializers.SerializerMethodField()
     trophy = serializers.SerializerMethodField()
-    skills = serializers.SerializerMethodField()
     user_name = serializers.SerializerMethodField()
     config = serializers.SerializerMethodField()
     effects = serializers.SerializerMethodField()
@@ -1022,7 +926,7 @@ class AnimatePlayerSerializer(serializers.ModelSerializer):
             'experience', 'is_temporary', 'is_builder',
             'health', 'stamina', 'mana',
             'room_description',
-            'trophy', 'skills', 'config', 'effects', 'marks',
+            'trophy', 'config', 'effects', 'marks',
             'user_name', 'is_staff', 'is_confirmed', 'link_id',
             'player_housing', 'name_recognition',
             'home',
@@ -1063,29 +967,6 @@ class AnimatePlayerSerializer(serializers.ModelSerializer):
                 trophy[entry.mob_template_id] = 0
             trophy[entry.mob_template_id] += 1
         return trophy
-
-    def get_skills(self, player):
-        "Return flex & feat selections"
-        flex_skills = {1: None, 2: None, 3: None}
-
-        # Fetch custom skills.
-        player_skills = json.loads(player.skills or "{}") or {}
-        custom_skills = player_skills.get('custom', {})
-        # Validate that all codes are still valid.
-        if custom_skills != {}:
-            root_world = player.world.context
-            root_world = root_world.instance_of or root_world
-            codes = root_world.skills.values_list('code', flat=True)
-            custom_skills = {
-                position: code for position, code in custom_skills.items()
-                if code in codes
-            }
-
-        return {
-            'flex': flex_skills,
-            'feat': {},
-            'custom': custom_skills
-        }
 
     def get_effects(self, player): return {}
 

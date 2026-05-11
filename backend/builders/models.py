@@ -9,6 +9,7 @@ from django.contrib.contenttypes.fields import (
     GenericForeignKey,
     GenericRelation)
 from django.contrib.contenttypes.models import ContentType
+from django.contrib.postgres.indexes import GinIndex
 from django.db import models
 from django.utils import timezone
 from django.utils.text import slugify
@@ -1388,81 +1389,34 @@ class FactSchedule(BaseModel):
         return result
 
 
-class Skill(BaseModel):
+class AbilityDefinition(BaseModel):
+    world = models.ForeignKey(
+        'worlds.World',
+        related_name='ability_definitions',
+        on_delete=models.CASCADE)
 
-    """
-    code
-    name level
-
-    cast_time cooldown
-    cost cost_type cost_calc
-
-
-    damage damage_type
-
-    effect effect_duration
-    effect_damage effect_damage_type
-
-    consumes requires
-    """
-
-    world = models.ForeignKey('worlds.World',
-                              related_name='skills',
-                              on_delete=models.CASCADE)
-
-    code = models.TextField()
-    name = models.TextField(**optional)
-    level = models.IntegerField(default=0)
-
-    arguments = models.TextField(**optional)
-
-    cost = models.FloatField(default=0)
-    cost_type = models.TextField(
-        choices=list_to_choice(adv_consts.SKILL_COST_TYPES),
-        default=adv_consts.SKILL_COST_TYPE_MANA)
-    cost_calc = models.TextField(
-        choices=list_to_choice(adv_consts.SKILL_COST_CALCS),
-        default=adv_consts.SKILL_COST_CALC_PERC_BASE)
-
-    damage = models.FloatField(default=0)
-    damage_type = models.TextField(
-        choices=list_to_choice(adv_consts.DAMAGE_TYPES),
-        default=adv_consts.DAMAGE_TYPE_PHYSICAL)
-    damage_calc = models.TextField(
-        choices=list_to_choice(adv_consts.SKILL_DAMAGE_CALCS),
-        default=adv_consts.SKILL_DAMAGE_CALC_NORMAL)
-
-    cast_time = models.FloatField(default=0)
-    cooldown = models.FloatField(default=0)
-
-    effect = models.TextField(
-        choices=list_to_choice(adv_consts.SKILL_EFFECTS),
-        **optional)
-    effect_damage = models.FloatField(default=0)
-    effect_duration = models.FloatField(default=0)
-    effect_damage_type = models.TextField(
-        choices=list_to_choice(adv_consts.DAMAGE_TYPES),
-        default=adv_consts.DAMAGE_TYPE_MAGICAL)
-    effect_damage_calc = models.TextField(
-        choices=list_to_choice(adv_consts.SKILL_DAMAGE_CALCS),
-        default=adv_consts.SKILL_DAMAGE_CALC_NORMAL)
-
-    intent = models.TextField(
-        choices=list_to_choice(adv_consts.SKILL_INTENTS),
-        default=adv_consts.SKILL_INTENT_DAMAGE)
-
-    consumes = models.ForeignKey(
-        'builders.ItemTemplate',
-        related_name='consumers',
-        on_delete=models.SET_NULL,
-        **optional)
-    requires = models.TextField(**optional)
-    learn_conditions = models.TextField(**optional)
-
-    help = models.TextField(**optional)
+    slug = models.TextField()
+    name = models.TextField()
+    command_verbs = models.JSONField(default=list)
+    action_type = models.TextField(default='primary', db_index=True)
+    target = models.JSONField(default=dict)
+    availability = models.JSONField(default=dict)
+    requirements = models.JSONField(default=dict)
+    cost = models.JSONField(default=dict)
+    cooldown = models.JSONField(default=dict)
+    components = models.JSONField(default=list)
+    is_active = models.BooleanField(default=True, db_index=True)
 
     class Meta:
-        unique_together = ['world_id', 'code']
+        unique_together = ['world_id', 'slug']
+        indexes = [
+            models.Index(fields=['world', 'slug']),
+            models.Index(fields=['world', 'is_active']),
+            GinIndex(fields=['command_verbs']),
+        ]
+
+    def __str__(self):
+        return f"{self.slug} - {self.name}"
 
 
 class WorldReview(BaseModel):

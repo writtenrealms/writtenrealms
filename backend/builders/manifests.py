@@ -12,8 +12,13 @@ from django.utils.text import slugify
 from rest_framework import serializers
 
 from builders import serializers as builder_serializers
-from builders.models import Currency, ItemTemplate, MobTemplate, Trigger
+from builders.models import AbilityDefinition, Currency, ItemTemplate, MobTemplate, Trigger
 from config import constants as adv_consts
+from core.abilities import (
+    AbilityValidationError,
+    normalize_ability_definition,
+    normalize_ability_progression,
+)
 from core.combat_formulas import (
     CombatFormulaValidationError,
     get_world_combat_system,
@@ -40,6 +45,8 @@ WORLD_MANIFEST_KIND = "world"
 QUEST_MANIFEST_KIND = "quest"
 QUEST_ARC_MANIFEST_KIND = "questarc"
 ITEM_TEMPLATE_MANIFEST_KIND = "itemtemplate"
+ABILITY_MANIFEST_KIND = "ability"
+ABILITIES_MANIFEST_KIND = "abilities"
 TRIGGER_MANIFEST_OPERATION_APPLY = "apply"
 TRIGGER_MANIFEST_OPERATION_DELETE = "delete"
 
@@ -55,6 +62,14 @@ _ITEM_TEMPLATE_MANIFEST_KIND_ALIASES = {
     ITEM_TEMPLATE_MANIFEST_KIND,
     "item-template",
     "item_template",
+}
+_ABILITY_MANIFEST_KIND_ALIASES = {
+    ABILITY_MANIFEST_KIND,
+}
+_ABILITIES_MANIFEST_KIND_ALIASES = {
+    ABILITIES_MANIFEST_KIND,
+    "ability-bundle",
+    "ability_bundle",
 }
 
 _WORLD_CONFIG_WORLD_TEXT_FIELDS = (
@@ -103,6 +118,7 @@ _WORLD_CONFIG_CONFIG_ROOM_FIELDS = (
 _WORLD_CONFIG_STATS_FIELD = "stats"
 _WORLD_CONFIG_COMBAT_FIELD = "combat"
 _WORLD_CONFIG_LEVELING_FIELD = "leveling_curve"
+_WORLD_CONFIG_ABILITY_PROGRESS_FIELD = "ability_progression"
 _WORLD_FIELDS_PROPAGATED_TO_SPAWNS = {
     "name",
     "short_description",
@@ -149,7 +165,6 @@ _ITEM_TEMPLATE_SPEC_FIELDS = (
     "weapon_grip",
     "weapon_type",
     "weapon_damage",
-    "skill_modifier",
     "hit_msg_first",
     "hit_msg_third",
     "on_use_cmd",
@@ -237,6 +252,29 @@ class ParsedItemTemplateDeleteManifest:
     world: World
     item_template: ItemTemplate
     item_template_id: int
+
+
+@dataclass
+class ParsedAbilityManifest:
+    world: World
+    ability: AbilityDefinition | None
+    ability_id: int | None
+    slug: str
+    name: str
+    normalized_spec: dict[str, Any]
+
+
+@dataclass
+class ParsedAbilityDeleteManifest:
+    world: World
+    ability: AbilityDefinition
+    ability_id: int
+
+
+@dataclass
+class ParsedAbilitiesManifest:
+    world: World
+    abilities: list[ParsedAbilityManifest]
 
 
 def _entity_key(entity_type: str, entity_id: int) -> str:
@@ -336,13 +374,17 @@ def parse_manifest_kind(manifest: dict[str, Any]) -> str:
         return WORLD_MANIFEST_KIND
     if manifest_kind in _ITEM_TEMPLATE_MANIFEST_KIND_ALIASES:
         return ITEM_TEMPLATE_MANIFEST_KIND
+    if manifest_kind in _ABILITY_MANIFEST_KIND_ALIASES:
+        return ABILITY_MANIFEST_KIND
+    if manifest_kind in _ABILITIES_MANIFEST_KIND_ALIASES:
+        return ABILITIES_MANIFEST_KIND
     if manifest_kind == QUEST_MANIFEST_KIND:
         return QUEST_MANIFEST_KIND
     if manifest_kind in _QUEST_ARC_MANIFEST_KIND_ALIASES:
         return QUEST_ARC_MANIFEST_KIND
     raise serializers.ValidationError(
         f"Unsupported manifest kind '{manifest_kind}'. "
-        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_MANIFEST_KIND}, {ITEM_TEMPLATE_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
+        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_MANIFEST_KIND}, {ITEM_TEMPLATE_MANIFEST_KIND}, {ABILITY_MANIFEST_KIND}, {ABILITIES_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
     )
 
 
@@ -490,6 +532,9 @@ def world_config_to_manifest(
             _WORLD_CONFIG_LEVELING_FIELD: normalize_leveling_curve(
                 config.leveling_curve
             ),
+            _WORLD_CONFIG_ABILITY_PROGRESS_FIELD: normalize_ability_progression(
+                config.ability_progression
+            ),
             "max_level": int(config.max_level),
             "combat_resolution_interval": _serialize_number(
                 config.combat_resolution_interval
@@ -575,6 +620,9 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
             _WORLD_CONFIG_LEVELING_FIELD: normalize_leveling_curve(
                 config.leveling_curve
             ),
+            _WORLD_CONFIG_ABILITY_PROGRESS_FIELD: normalize_ability_progression(
+                config.ability_progression
+            ),
             "max_level": int(config.max_level),
             "combat_resolution_interval": _serialize_number(
                 config.combat_resolution_interval
@@ -600,6 +648,9 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
             "globals_enabled": bool(config.globals_enabled),
             "stat_system": get_world_stat_system(world),
             "combat_system": get_world_combat_system(world),
+            "ability_progression": normalize_ability_progression(
+                config.ability_progression
+            ),
         },
         "manifest": manifest_data["manifest"],
         "yaml": manifest_data["yaml"],
@@ -686,6 +737,69 @@ def serialize_item_template_payload(item_template: ItemTemplate) -> dict[str, An
     payload["delete_manifest"] = delete_manifest
     payload["delete_yaml"] = manifest_to_yaml(delete_manifest)
     return payload
+
+
+def ability_to_manifest(ability: AbilityDefinition) -> dict[str, Any]:
+    return {
+        "kind": ABILITY_MANIFEST_KIND,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, ability.world_id),
+            "id": ability.id,
+            "key": _entity_key("ability", ability.id),
+            "slug": ability.slug,
+            "name": ability.name or "",
+        },
+        "spec": {
+            "version": 1,
+            "command": {"verbs": list(ability.command_verbs or [])},
+            "action_type": ability.action_type,
+            "target": ability.target or {},
+            "availability": ability.availability or {},
+            "requirements": ability.requirements or {},
+            "cost": ability.cost or {},
+            "cooldown": ability.cooldown or {},
+            "components": ability.components or [],
+            "is_active": bool(ability.is_active),
+        },
+    }
+
+
+def ability_delete_manifest(ability: AbilityDefinition) -> dict[str, Any]:
+    return {
+        "kind": ABILITY_MANIFEST_KIND,
+        "operation": TRIGGER_MANIFEST_OPERATION_DELETE,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, ability.world_id),
+            "id": ability.id,
+            "key": _entity_key("ability", ability.id),
+            "slug": ability.slug,
+            "name": ability.name or "",
+        },
+    }
+
+
+def serialize_ability_payload(ability: AbilityDefinition) -> dict[str, Any]:
+    manifest = ability_to_manifest(ability)
+    delete_manifest = ability_delete_manifest(ability)
+    return {
+        "id": ability.id,
+        "key": _entity_key("ability", ability.id),
+        "slug": ability.slug,
+        "name": ability.name or "",
+        "command_verbs": list(ability.command_verbs or []),
+        "action_type": ability.action_type,
+        "target": ability.target or {},
+        "availability": ability.availability or {},
+        "requirements": ability.requirements or {},
+        "cost": ability.cost or {},
+        "cooldown": ability.cooldown or {},
+        "components": ability.components or [],
+        "is_active": bool(ability.is_active),
+        "manifest": manifest,
+        "yaml": manifest_to_yaml(manifest),
+        "delete_manifest": delete_manifest,
+        "delete_yaml": manifest_to_yaml(delete_manifest),
+    }
 
 
 def trigger_to_manifest(trigger: Trigger) -> dict[str, Any]:
@@ -1524,6 +1638,267 @@ def parse_item_template_delete_manifest(
     )
 
 
+def _parse_ability_reference(value: Any, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or an ability key."
+        )
+    if isinstance(value, int):
+        return value
+
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or an ability key."
+        )
+    if text.isdigit():
+        return int(text)
+
+    entity_type, sep, raw_id = text.partition(".")
+    if sep != "." or not raw_id.isdigit() or entity_type != "ability":
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or an ability key."
+        )
+    return int(raw_id)
+
+
+def _resolve_ability_reference(
+    *,
+    world: World,
+    metadata: dict[str, Any],
+) -> tuple[AbilityDefinition | None, int | None]:
+    ability_id = metadata.get("id")
+    ability_key = metadata.get("key")
+    ability_slug = str(metadata.get("slug") or "").strip()
+
+    resolved_by_id = None
+    if ability_id is not None:
+        parsed_id = _parse_ability_reference(ability_id, "metadata.id")
+        resolved_by_id = AbilityDefinition.objects.filter(world=world, pk=parsed_id).first()
+        if not resolved_by_id:
+            raise serializers.ValidationError("Ability referenced by metadata.id was not found.")
+
+    resolved_by_key = None
+    if ability_key not in (None, ""):
+        parsed_key_id = _parse_ability_reference(ability_key, "metadata.key")
+        resolved_by_key = AbilityDefinition.objects.filter(world=world, pk=parsed_key_id).first()
+        if not resolved_by_key:
+            raise serializers.ValidationError("Ability referenced by metadata.key was not found.")
+
+    resolved_by_slug = None
+    if ability_slug:
+        resolved_by_slug = AbilityDefinition.objects.filter(world=world, slug=ability_slug).first()
+
+    resolved = [ability for ability in (resolved_by_id, resolved_by_key, resolved_by_slug) if ability]
+    if len({ability.pk for ability in resolved}) > 1:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, and metadata.slug refer to different abilities."
+        )
+
+    ability = resolved_by_id or resolved_by_key or resolved_by_slug
+    if ability is None:
+        return None, None
+    return ability, ability.id
+
+
+def parse_ability_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedAbilityManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != ABILITY_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{ABILITY_MANIFEST_KIND}'."
+        )
+
+    operation = parse_manifest_operation(manifest)
+    if operation != TRIGGER_MANIFEST_OPERATION_APPLY:
+        raise serializers.ValidationError(
+            f"Ability manifests only support operation '{TRIGGER_MANIFEST_OPERATION_APPLY}' in this parser."
+        )
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError("Manifest world does not match the selected world.")
+
+    ability, ability_id = _resolve_ability_reference(world=world, metadata=metadata)
+
+    spec_patch = manifest.get("spec") or {}
+    if not isinstance(spec_patch, dict):
+        raise serializers.ValidationError("spec must be a mapping.")
+    if ability is None and not spec_patch:
+        raise serializers.ValidationError("spec is required when creating an ability.")
+
+    base_spec: dict[str, Any] = {}
+    if ability is not None:
+        base_spec = ability_to_manifest(ability)["spec"]
+    merged_spec = _deep_merge(base_spec, spec_patch)
+
+    slug_source = metadata.get("slug")
+    if slug_source is None:
+        slug_source = ability.slug if ability else metadata.get("name")
+    slug = _slug_or_error(str(slug_source or ""), "metadata.slug")
+    if AbilityDefinition.objects.filter(world=world, slug=slug).exclude(pk=ability_id).exists():
+        raise serializers.ValidationError("metadata.slug is already used by another ability.")
+
+    default_name = ability.name if ability else slug.replace("-", " ").title()
+    name = _coerce_text(metadata.get("name", default_name))
+    if not name.strip():
+        raise serializers.ValidationError("metadata.name cannot be empty.")
+
+    try:
+        normalized_spec = normalize_ability_definition(
+            merged_spec,
+            slug=slug,
+            name=name,
+        )
+    except AbilityValidationError as exc:
+        raise serializers.ValidationError(str(exc))
+
+    return ParsedAbilityManifest(
+        world=world,
+        ability=ability,
+        ability_id=ability_id,
+        slug=slug,
+        name=name,
+        normalized_spec=normalized_spec,
+    )
+
+
+def parse_ability_delete_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedAbilityDeleteManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != ABILITY_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{ABILITY_MANIFEST_KIND}'."
+        )
+
+    operation = parse_manifest_operation(manifest)
+    if operation != TRIGGER_MANIFEST_OPERATION_DELETE:
+        raise serializers.ValidationError("Delete parser requires operation: delete.")
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError("Manifest world does not match the selected world.")
+
+    ability, ability_id = _resolve_ability_reference(world=world, metadata=metadata)
+    if ability is None or ability_id is None:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, or metadata.slug is required for operation: delete."
+        )
+
+    spec = manifest.get("spec")
+    if spec not in (None, {}):
+        raise serializers.ValidationError("spec is not allowed for operation: delete.")
+
+    return ParsedAbilityDeleteManifest(
+        world=world,
+        ability=ability,
+        ability_id=ability_id,
+    )
+
+
+def _ability_manifest_from_bundle_entry(entry: Any) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        raise serializers.ValidationError("spec.abilities entries must be mappings.")
+    if "metadata" in entry or "spec" in entry:
+        metadata = entry.get("metadata") or {}
+        spec = entry.get("spec") or {}
+        if not isinstance(metadata, dict) or not isinstance(spec, dict):
+            raise serializers.ValidationError("Bundled ability metadata and spec must be mappings.")
+        return {
+            "kind": ABILITY_MANIFEST_KIND,
+            "metadata": dict(metadata),
+            "spec": dict(spec),
+        }
+
+    metadata = {
+        "slug": entry.get("slug"),
+        "name": entry.get("name"),
+    }
+    spec = {
+        key: value
+        for key, value in entry.items()
+        if key not in {"slug", "name"}
+    }
+    return {
+        "kind": ABILITY_MANIFEST_KIND,
+        "metadata": metadata,
+        "spec": spec,
+    }
+
+
+def parse_abilities_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedAbilitiesManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != ABILITIES_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{ABILITIES_MANIFEST_KIND}'."
+        )
+
+    operation = parse_manifest_operation(manifest)
+    if operation != TRIGGER_MANIFEST_OPERATION_APPLY:
+        raise serializers.ValidationError(
+            f"Abilities manifests only support operation '{TRIGGER_MANIFEST_OPERATION_APPLY}'."
+        )
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError("Manifest world does not match the selected world.")
+
+    spec = manifest.get("spec") or {}
+    if not isinstance(spec, dict):
+        raise serializers.ValidationError("spec must be a mapping.")
+    entries = spec.get("abilities")
+    if not isinstance(entries, list) or not entries:
+        raise serializers.ValidationError("spec.abilities must be a non-empty list.")
+
+    parsed = [
+        parse_ability_manifest(
+            world=world,
+            manifest=_ability_manifest_from_bundle_entry(entry),
+        )
+        for entry in entries
+    ]
+    return ParsedAbilitiesManifest(world=world, abilities=parsed)
+
+
 def parse_world_config_manifest(
     *,
     world: World,
@@ -1576,6 +1951,7 @@ def parse_world_config_manifest(
     allowed_fields.add(_WORLD_CONFIG_STATS_FIELD)
     allowed_fields.add(_WORLD_CONFIG_COMBAT_FIELD)
     allowed_fields.add(_WORLD_CONFIG_LEVELING_FIELD)
+    allowed_fields.add(_WORLD_CONFIG_ABILITY_PROGRESS_FIELD)
 
     unknown_fields = sorted(set(spec.keys()) - allowed_fields)
     if unknown_fields:
@@ -1676,6 +2052,14 @@ def parse_world_config_manifest(
         except LevelingConfigError as exc:
             raise serializers.ValidationError(str(exc))
 
+    if _WORLD_CONFIG_ABILITY_PROGRESS_FIELD in spec:
+        try:
+            config_updates[_WORLD_CONFIG_ABILITY_PROGRESS_FIELD] = normalize_ability_progression(
+                spec.get(_WORLD_CONFIG_ABILITY_PROGRESS_FIELD)
+            )
+        except AbilityValidationError as exc:
+            raise serializers.ValidationError(str(exc))
+
     try:
         validate_leveling_config(
             starting_level=config_updates.get(
@@ -1744,6 +2128,39 @@ def apply_item_template_manifest(parsed: ParsedItemTemplateManifest) -> ItemTemp
     if parsed.item_template is None:
         return serializer.save(world=parsed.world)
     return serializer.save()
+
+
+def apply_ability_manifest(parsed: ParsedAbilityManifest) -> AbilityDefinition:
+    spec = parsed.normalized_spec
+    fields = {
+        "slug": parsed.slug,
+        "name": parsed.name,
+        "command_verbs": spec["command"]["verbs"],
+        "action_type": spec["action_type"],
+        "target": spec["target"],
+        "availability": spec["availability"],
+        "requirements": spec["requirements"],
+        "cost": spec["cost"],
+        "cooldown": spec["cooldown"],
+        "components": spec["components"],
+        "is_active": spec["is_active"],
+    }
+    if parsed.ability is None:
+        return AbilityDefinition.objects.create(world=parsed.world, **fields)
+
+    ability = parsed.ability
+    for field_name, value in fields.items():
+        setattr(ability, field_name, value)
+    ability.save(update_fields=[*fields.keys(), "modified_ts"])
+    return ability
+
+
+def apply_abilities_manifest(parsed: ParsedAbilitiesManifest) -> list[AbilityDefinition]:
+    with transaction.atomic():
+        return [
+            apply_ability_manifest(parsed_ability)
+            for parsed_ability in parsed.abilities
+        ]
 
 
 def apply_trigger_manifest(parsed: ParsedTriggerManifest) -> Trigger:

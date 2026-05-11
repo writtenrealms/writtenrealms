@@ -55,9 +55,6 @@ class CharMixin(models.Model):
         content_type_field='member_type',
         object_id_field='member_id')
 
-    # Dictionary of skills currently learned
-    skills = models.TextField(**optional)
-
     class Meta:
         abstract = True
 
@@ -235,12 +232,6 @@ class MobMixin(models.Model):
     is_upgrader = models.BooleanField(default=False)
     upgrade_cost_multiplier = models.FloatField(default=1.0)
 
-    teaches = models.TextField(**optional)
-    teaching_conditions = models.TextField(**optional)
-    # 'all' - or space-delimited list of skills the mob unlearns
-    unlearns = models.TextField(**optional)
-    unlearn_cost = models.PositiveIntegerField(default=0)
-
     traits = models.TextField(**optional)
 
 
@@ -346,7 +337,6 @@ class ItemMixin(models.Model):
         **optional)
     weapon_damage = models.FloatField(default=0)
 
-    skill_modifier = models.TextField(**optional)
     on_use_cmd = models.TextField(**optional)
     on_use_description = models.TextField(**optional)
     on_use_equipped = models.BooleanField(default=False)

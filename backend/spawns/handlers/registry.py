@@ -109,10 +109,20 @@ def resolve_text_handler(
     Resolve a raw text command (including partials) to a handler route.
     """
     command = command.lower()
-    for text_command, handler in iter_text_handlers(include_builder=include_builder):
+    routes = iter_text_handlers(include_builder=include_builder)
+    for text_command, handler in routes:
         if text_command == command:
             return text_command, handler
-    for text_command, handler in iter_text_handlers(include_builder=include_builder):
+
+    for _text_command, handler in routes:
+        aliases = getattr(handler, "text_aliases", {}) or {}
+        for alias, target in aliases.items():
+            alias = str(alias).strip().lower()
+            target = str(target).strip().lower()
+            if alias == command and target:
+                return target, handler
+
+    for text_command, handler in routes:
         if text_command.startswith(command):
             return text_command, handler
     return None

@@ -13,6 +13,7 @@ from rest_framework import serializers
 from builders import manifests as builder_manifests
 from builders import serializers as builder_serializers
 from builders.models import (
+    AbilityDefinition,
     Currency,
     ItemTemplate,
     ItemTemplateInventory,
@@ -47,6 +48,8 @@ _QUEST_ARC_KIND_ALIASES = {
     "quest_arc",
 }
 _TRIGGER_KIND_ALIASES = {builder_manifests.TRIGGER_MANIFEST_KIND}
+_ABILITY_KIND_ALIASES = {builder_manifests.ABILITY_MANIFEST_KIND}
+_ABILITIES_KIND_ALIASES = {builder_manifests.ABILITIES_MANIFEST_KIND}
 
 _ROOM_REF_PREFIX = "room@"
 _ITEM_REF_PREFIX = "itemtemplate."
@@ -98,11 +101,7 @@ _MOB_TEMPLATE_SPEC_FIELDS = (
     "fights_back",
     "craft_multiplier",
     "craft_enchanted",
-    "teaches",
-    "teaching_conditions",
     "combat_script",
-    "unlearns",
-    "unlearn_cost",
     "traits",
     "is_upgrader",
     "upgrade_cost_multiplier",
@@ -166,9 +165,13 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
         return quest_manifests.QUEST_MANIFEST_KIND
     if raw_kind in _TRIGGER_KIND_ALIASES:
         return builder_manifests.TRIGGER_MANIFEST_KIND
+    if raw_kind in _ABILITY_KIND_ALIASES:
+        return builder_manifests.ABILITY_MANIFEST_KIND
+    if raw_kind in _ABILITIES_KIND_ALIASES:
+        return builder_manifests.ABILITIES_MANIFEST_KIND
     raise serializers.ValidationError(
         "Unsupported manifest kind. Supported kinds: "
-        "world, currency, zone, room, itemtemplate, mobtemplate, questarc, quest, trigger."
+        "world, currency, zone, room, itemtemplate, mobtemplate, questarc, quest, trigger, ability, abilities."
     )
 
 
@@ -402,6 +405,14 @@ def _serialize_mob_template_manifest(mob_template: MobTemplate) -> dict[str, Any
         },
         "spec": spec,
     }
+
+
+def _serialize_ability_manifest(ability: AbilityDefinition) -> dict[str, Any]:
+    manifest = builder_manifests.ability_to_manifest(ability)
+    manifest["metadata"].pop("world", None)
+    manifest["metadata"].pop("id", None)
+    manifest["metadata"].pop("key", None)
+    return manifest
 
 
 def _canonicalize_template_ref(
@@ -717,6 +728,10 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             ).order_by("slug", "id")
         ],
         *[
+            _serialize_ability_manifest(ability)
+            for ability in world.ability_definitions.all().order_by("slug", "id")
+        ],
+        *[
             _serialize_quest_arc_manifest(quest_arc)
             for quest_arc in world.quest_arc_templates.all().order_by("slug", "id")
         ],
@@ -742,6 +757,7 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
         "rooms": 0,
         "item_templates": 0,
         "mob_templates": 0,
+        "abilities": 0,
         "quest_arcs": 0,
         "quests": 0,
         "triggers": 0,
@@ -758,6 +774,8 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
             counts["item_templates"] += 1
         elif kind == MOB_TEMPLATE_MANIFEST_KIND:
             counts["mob_templates"] += 1
+        elif kind == builder_manifests.ABILITY_MANIFEST_KIND:
+            counts["abilities"] += 1
         elif kind == quest_manifests.QUEST_ARC_MANIFEST_KIND:
             counts["quest_arcs"] += 1
         elif kind == quest_manifests.QUEST_MANIFEST_KIND:

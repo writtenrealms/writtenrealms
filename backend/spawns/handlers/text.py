@@ -59,6 +59,11 @@ class TextCommandHandler(CommandHandler):
                     }
                 )
             else:
+                from spawns.handlers.abilities import handle_dynamic_ability_command
+
+                if handle_dynamic_ability_command(ctx):
+                    return
+
                 if not ctx.payload.get("skip_triggers"):
                     trigger_result = execute_command_fallback_trigger(
                         actor=ctx.actor,

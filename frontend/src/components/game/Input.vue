@@ -91,25 +91,26 @@ const onTab = (event: KeyboardEvent) => {
   const tokens = input.value.split(/\s+/);
   const lastToken = tokens[tokens.length - 1].toLowerCase();
 
-  // If there's only one word in the input bar, then assume a combat command
-  // is being tab-completed using custom skills
+  // If there's only one word in the input bar, then assume a command
+  // is being tab-completed using known abilities.
   if (tokens.length === 1) {
-    const playerCustomSkills = store.state.game.player.skills?.custom || {};
-    const worldCustomSkills = store.state.game.world.skills?.definitions || {};
+    const playerState = store.state.game.player || {};
+    const worldState = store.state.game.world || {};
+    const playerAbilities = playerState.known_abilities || [];
+    const worldAbilities = worldState.abilities?.definitions || {};
 
-    // Get all player's custom skill codes
-    const skills: string[] = [];
-    for (const skillNumber in playerCustomSkills) {
-      const skillCode = playerCustomSkills[skillNumber];
-      if (skillCode && worldCustomSkills[skillCode]) {
-        const skill = worldCustomSkills[skillCode];
-        skills.push(skill.skill || skillCode);
-      }
+    const commands: string[] = [];
+    for (const slug of playerAbilities) {
+      const ability = worldAbilities[slug];
+      if (!ability) continue;
+
+      const verbs = ability.command_verbs || [];
+      commands.push(verbs[0] || ability.slug || slug);
     }
 
-    for (const skill of skills) {
-      if (skill.match("^" + lastToken)) {
-        input.value = skill;
+    for (const command of commands) {
+      if (command.match("^" + lastToken)) {
+        input.value = command;
         return;
       }
     }

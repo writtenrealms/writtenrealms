@@ -58,7 +58,6 @@ from builders.models import (
     RoomCheck,
     RoomAction,
     Trigger,
-    Skill,
     Social,
     Path,
     PathRoom,
@@ -741,6 +740,7 @@ class ZoneBuilderSerializer(serializers.ModelSerializer):
             'id',
             'key',
             'name',
+            'modified_ts',
             'num_rooms',
             'center',
             'zone_data',
@@ -1042,7 +1042,7 @@ class MapRoomSerializer(serializers.ModelSerializer):
     class Meta:
         model = Room
         fields = [
-            'id', 'key', 'name', 'model_type',
+            'id', 'key', 'name', 'model_type', 'modified_ts',
             'type', 'zone', 'note', 'flags',
             'description',
             'x', 'y', 'z',
@@ -1539,7 +1539,8 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
     class Meta:
         model = ItemTemplate
         fields = [
-            'id', 'key', 'slug', 'name', 'model_type', 'is_persistent',
+            'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
+            'is_persistent',
             'level', 'description', 'ground_description', 'notes',
             'keywords', 'empty_keywords',
             'type', 'capacity', 'quality', 'power', 'is_boat', 'is_pickable',
@@ -1774,6 +1775,7 @@ class MobTemplateSerializer(serializers.ModelSerializer):
         model = MobTemplate
         fields = [
             'id', 'key', 'slug', 'name', 'model_type',
+            'modified_ts',
             'level', 'description', 'room_description',
             'keywords', 'empty_keywords',
             'notes', 'gold',
@@ -1792,8 +1794,7 @@ class MobTemplateSerializer(serializers.ModelSerializer):
             'is_elite', 'is_invisible', 'fights_back',
             'core_faction',
             'craft_multiplier', 'craft_enchanted',
-            'teaches', 'teaching_conditions', 'combat_script', 'use_abilities',
-            'unlearns', 'unlearn_cost',
+            'combat_script', 'use_abilities',
             'has_assignment', 'traits',
             'is_upgrader', 'upgrade_cost_multiplier',
             'upgrade_success_chance',
@@ -2136,7 +2137,7 @@ class LoaderSerializer(serializers.ModelSerializer):
     class Meta:
         model = Loader
         fields = [
-            'id', 'key', 'world', 'zone',
+            'id', 'key', 'world', 'zone', 'modified_ts',
             'name', 'description', 'respawn_wait', 'num_rules',
             'loader_condition', 'conditions', 'inherit_zone_wait',
             'zone_wait',
@@ -2388,7 +2389,7 @@ class QuestSerializer(serializers.ModelSerializer):
     class Meta:
         model = Quest
         fields = [
-            'id', 'key', 'name', 'notes', 'level', 'summary',
+            'id', 'key', 'name', 'modified_ts', 'notes', 'level', 'summary',
             'zone',
             'rewards', 'objectives',
             'is_hidden', 'is_setup', 'is_logged',
@@ -2623,6 +2624,7 @@ class PathListSerializer(serializers.ModelSerializer):
             'id',
             'name',
             'key',
+            'modified_ts',
         ]
 
 
@@ -2735,6 +2737,7 @@ class PlayerListSerializer(serializers.ModelSerializer):
             'id',
             'key',
             'name',
+            'modified_ts',
             'title',
             'level',
             'gender',
@@ -2874,62 +2877,6 @@ class FactScheduleSerializer(serializers.ModelSerializer):
 
     def validate_fact(self, fact):
         return fact.lower().replace(' ', '_')
-
-
-# Custom Skills
-
-class SkillDetailSerializer(serializers.ModelSerializer):
-
-    skill = serializers.CharField(source='code', read_only=True)
-
-    class Meta:
-        model = Skill
-        fields = [
-            'id',
-            'code',
-            'skill',
-            'name',
-            'level',
-            'intent',
-            'cost',
-            'cost_type',
-            'cost_calc',
-            'damage',
-            'damage_type',
-            'damage_calc',
-            'cast_time',
-            'cooldown',
-            'effect',
-            'effect_damage',
-            'effect_duration',
-            'effect_damage_type',
-            'effect_damage_calc',
-            'arguments',
-            'help',
-            'consumes',
-            'requires',
-            'learn_conditions',
-        ]
-
-    def validate_code(self, code):
-        if ' ' in code:
-            raise serializers.ValidationError(
-                "Code cannot contain spaces.")
-
-        # Check for code uniqueness and case insensitivity
-        world = self.context['view'].world
-        if self.instance:
-            if Skill.objects.filter(
-                world=world,
-                code__iexact=code).exclude(id=self.instance.id).exists():
-                raise serializers.ValidationError(
-                    "A skill with this code already exists.")
-        else:
-            if Skill.objects.filter(world=world, code__iexact=code).exists():
-                raise serializers.ValidationError(
-                    "A skill with this code already exists.")
-
-        return code
 
 
 # World Reviews

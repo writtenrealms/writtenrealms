@@ -5,12 +5,14 @@
     :endpoint="endpoint"
     :resolve_route="resolve_route"
     :exclude_add="true"
+    default-sort="-modified_ts"
   />
 </template>
 
 <script lang='ts' setup>
 import { useRoute } from "vue-router";
 import ElementList from "@/components/elementlist/ElementList.vue";
+import { formatRelativeModifiedDate } from "@/core/utils.ts";
 
 const route = useRoute();
 
@@ -26,7 +28,14 @@ const resolve_route = element => {
 };
 
 const list_schema: any[] = [
-  { name: "id", label: "ID" },
-  { name: "name", label: "Name" }
+  { name: "id", label: "ID", sortable: true },
+  { name: "name", label: "Name", nowrap: true, sortable: true },
+  {
+    name: "modified_ts",
+    label: "Modified",
+    nowrap: true,
+    sortable: true,
+    format: formatRelativeModifiedDate
+  }
 ];
 </script>

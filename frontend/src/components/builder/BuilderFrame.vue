@@ -30,13 +30,6 @@
       <div class="side-nav navigation">
         <!-- World nav -->
         <template v-if="viewType === 'world'">
-          <router-link
-            :to="{name: 'lobby_world_details', params: {world_id: route.params.world_id}}"
-          >Lobby</router-link>
-
-          <router-link
-            :to="{name: 'builder_zone_list', params: { world_id: route.params.world_id}}"
-          >Zones</router-link>
 
           <router-link
             :to="{name: 'builder_mob_template_list', params: {world_id: route.params.world_id}}" :class="{ 'router-link-active': isWorldMobsRoute }"
@@ -56,15 +49,19 @@
 
           <router-link
             :to="{name: 'builder_world_edit', params: {world_id: route.params.world_id}}"
-          >Edit World</router-link>
-
-          <router-link
-            v-if="world?.builder_info?.builder_rank > 2"
-            :to="{name: 'builder_world_export', params: {world_id: route.params.world_id}}"
-          >Export</router-link>
+          >Edit</router-link>
 
           <div class="mobile-hidden">
             <div class="line-divider my-2"></div>
+
+            <router-link
+              :to="{name: 'lobby_world_details', params: {world_id: route.params.world_id}}"
+            >Lobby</router-link>
+
+            <router-link
+              :to="{name: 'builder_zone_list', params: { world_id: route.params.world_id}}"
+            >Zones</router-link>
+
             <router-link :to="world_admin_link" :class="{ 'router-link-active' :isWorldAdminRoute }">Admin</router-link>
 
             <router-link
@@ -77,6 +74,12 @@
             >Players</router-link>
 
             <router-link :to="world_factions_link">Factions</router-link>
+
+            <router-link
+              v-if="world?.builder_info?.builder_rank > 2"
+              :to="{name: 'builder_world_export', params: {world_id: route.params.world_id}}"
+            >Export</router-link>
+
           </div>
         </template>
 
@@ -232,9 +235,11 @@ const isWorldConfigRoute = computed(() => {
     'builder_world_random_profile_list',
     'builder_world_transformation_template_list',
     'builder_world_fact_list',
-    'builder_world_skill_list',
+    'builder_world_ability_list',
     'builder_world_starting_eq_list',
     'builder_world_social_list',
+    'builder_world_currency_list',
+    'builder_world_instance_list',
   ];
   return routes.includes(route.name as string);
 });
@@ -259,13 +264,20 @@ const isZoneConfigRoute = computed(() => { return route.name === 'builder_zone_p
 @import "@/styles/layout.scss";
 
 #builder {
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  max-width: 100%;
+  overflow-x: clip;
 
   .builder-nav {
+    box-sizing: border-box;
     display: flex;
     flex-wrap: nowrap;
     justify-content: space-evenly;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: clip;
 
     flex-shrink: 0;
 
@@ -347,14 +359,19 @@ const isZoneConfigRoute = computed(() => { return route.name === 'builder_zone_p
   }
 
   .builder-contents-outer {
+    box-sizing: border-box;
     display: flex;
     flex-grow: 1;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: clip;
 
     /* Responsive nav set */
     @media ($desktop-site) {
       flex-direction: row;
 
       .side-nav {
+        box-sizing: border-box;
         display: flex;
         flex-shrink: 0;
         flex-direction: column;
@@ -364,9 +381,11 @@ const isZoneConfigRoute = computed(() => { return route.name === 'builder_zone_p
     }
 
     .builder-contents {
+      box-sizing: border-box;
       flex-grow: 1;
       display: flex;
       -webkit-overflow-scrolling: touch;
+      min-width: 0;
     }
 
     @media ($mobile-site) {
@@ -382,8 +401,10 @@ const isZoneConfigRoute = computed(() => { return route.name === 'builder_zone_p
     /* End Responsive nav set */
 
     .builder-contents {
+      box-sizing: border-box;
       padding: 15px;
       flex-grow: 1;
+      min-width: 0;
 
       @media ($mobile-site) {
         overflow-y: auto;
@@ -392,6 +413,12 @@ const isZoneConfigRoute = computed(() => { return route.name === 'builder_zone_p
       .entity-title {
         font-size: 24px;
         margin-bottom: 10px;
+      }
+
+      > * {
+        box-sizing: border-box;
+        min-width: 0;
+        width: 100%;
       }
     }
   }

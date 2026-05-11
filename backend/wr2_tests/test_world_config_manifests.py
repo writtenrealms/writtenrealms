@@ -152,7 +152,7 @@ spec:
       resources:
         energy: Focus
       derived:
-        ability_power: Skill Power
+        ability_power: Ability Power
     primary_attributes:
       - key: constitution
         label: Constitution
@@ -252,7 +252,7 @@ spec:
         self.assertEqual(config.stat_system["labels"]["resources"]["energy"], "Focus")
         self.assertEqual(
             config.stat_system["labels"]["derived"]["ability_power"],
-            "Skill Power",
+            "Ability Power",
         )
         self.assertFalse(config.combat_system["variance"]["enabled"])
         self.assertEqual(
