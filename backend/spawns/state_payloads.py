@@ -22,6 +22,7 @@ from core.leveling import (
 from core.stat_system import (
     build_player_stat_payload,
     get_world_label_bundle,
+    world_uses_classes,
 )
 from quests.services.interactions import room_mob_quest_indicator_map, room_quest_callouts
 from quests.services.room_items import serialized_quest_room_items_for_room
@@ -695,7 +696,7 @@ def serialize_world(world: World) -> Dict:
             "allow_combat": config.allow_combat if config else True,
             "players_can_set_title": config.players_can_set_title if config else False,
             "facts": get_state_snapshot(STATE_SCOPE_WORLD, world),
-            "classless": config.is_classless if config else False,
+            "classless": not world_uses_classes(world) if config else False,
             "tier": world.tier,
             "socials": {"cmds": {}, "order": []},
             "currencies": {},

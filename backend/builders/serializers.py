@@ -33,6 +33,7 @@ from core.leveling import (
 from core.stat_system import (
     StatSystemValidationError,
     normalize_stat_system,
+    world_uses_classes,
 )
 from builders.models import (
     BuilderAssignment,
@@ -190,8 +191,7 @@ class WorldSerializer(serializers.ModelSerializer):
     author = AuthorField()
     factions = serializers.SerializerMethodField()
     facts = serializers.SerializerMethodField()
-    is_classless = serializers.BooleanField(source='config.is_classless',
-                                            read_only=True)
+    is_classless = serializers.SerializerMethodField()
     instance_of = serializers.SerializerMethodField()
     builder_info = serializers.SerializerMethodField()
     currencies = serializers.SerializerMethodField()
@@ -218,6 +218,9 @@ class WorldSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     "World creation is currently disabled.")
         return super().validate(*args, **kwargs)
+
+    def get_is_classless(self, world):
+        return not world_uses_classes(world)
 
     def get_last_viewed_room(self, world):
         #from builders.serializers import RoomBuilderSerializer
@@ -387,7 +390,6 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'allow_pvp',
             'pvp_mode',
             'built_by',
-            'is_classless',
             'non_ascii_names',
             'decay_glory',
             'name_exclusions',

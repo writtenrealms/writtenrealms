@@ -24,12 +24,12 @@ spec:
 
 That stat system currently controls:
 
-- primary attribute definitions and labels
+- input attribute definitions and labels
 - resource labels
 - derived stat labels
 - class profile labels
 - base attribute weights per class profile
-- formula rules mapping primaries into derived combat stats
+- formula rules mapping inputs into derived combat stats
 
 The runtime now uses the authored world stat system for:
 
@@ -48,36 +48,29 @@ Use this feature with these current boundaries in mind:
 1. Canonical runtime names are `energy` and `ability_power`.
    Player-facing labels can still be `Mana` and `Spell Power`.
 
-2. The database schema is still largely legacy-shaped.
-   Current value fields still live on `mana`, `mana_max`, `mana_regen`, and
-   `spell_power` columns, with WR2 aliases layered on top.
+2. The database still has compatibility aliases for older names such as
+   `mana` and `spell_power`, but builder-authored input attributes live in
+   `input_attributes`, not fixed primary stat columns.
 
-3. The safest class ids to use right now are the existing WR1 ids:
+3. Class ids are non-empty slugs. A WR1-like world usually uses:
    - `warrior`
    - `assassin`
    - `mage`
    - `cleric`
-   - `""` for classless/default
 
-4. Custom primary attributes work in formulas and UI, but item and mob template
-   columns are still legacy column-based.
-   That means brand-new primary ids are best used as formula/profile inputs for
-   now, not as item-template stat columns.
-
-5. Equipment bonuses still come from existing item stat columns.
-   For a WR1-style world, that is fine, because WR1 already uses the legacy
-   primary and derived columns.
+4. Equipment, mob templates, players, and spawned items can carry
+   `input_attributes` values for whichever keys the world defines.
 
 ## Recommended WR1-Compatible Approach
 
 For a WR1-style world:
 
-- keep `is_classless: false`
-- keep the four WR1 primaries:
+- define the four WR1-like inputs explicitly:
   - `constitution`
   - `strength`
   - `dexterity`
   - `intelligence`
+- define class profiles; their presence is what makes the world class-based
 - label `energy` as `Mana`
 - label `ability_power` as `Spell Power`
 - use WR1 archetype ids for class profiles
@@ -107,7 +100,6 @@ spec:
   is_narrative: false
   players_can_set_title: true
   allow_pvp: true
-  is_classless: false
   non_ascii_names: false
   globals_enabled: true
   decay_glory: false
@@ -117,7 +109,7 @@ spec:
   name_exclusions: ''
 
   stats:
-    primary_attributes:
+    input_attributes:
       - key: constitution
         label: Constitution
       - key: strength
@@ -143,7 +135,6 @@ spec:
         energy_regen: Mana Regen
         stamina_regen: Stamina Regen
       classes:
-        "": Classless
         warrior: Warrior
         assassin: Assassin
         mage: Mage
@@ -161,8 +152,8 @@ spec:
       - stamina_regen
 
     default_profile:
-      label: Classless
-      primary_attribute: ""
+      label: ""
+      main_attribute: ""
       base_attribute_weights:
         constitution: 3
         strength: 2
@@ -172,7 +163,7 @@ spec:
     class_profiles:
       warrior:
         label: Warrior
-        primary_attribute: strength
+        main_attribute: strength
         base_attribute_weights:
           constitution: 3
           strength: 4
@@ -185,7 +176,7 @@ spec:
 
       assassin:
         label: Assassin
-        primary_attribute: dexterity
+        main_attribute: dexterity
         base_attribute_weights:
           constitution: 3
           strength: 1
@@ -198,7 +189,7 @@ spec:
 
       mage:
         label: Mage
-        primary_attribute: intelligence
+        main_attribute: intelligence
         base_attribute_weights:
           constitution: 3
           strength: 1
@@ -207,7 +198,7 @@ spec:
 
       cleric:
         label: Cleric
-        primary_attribute: intelligence
+        main_attribute: intelligence
         base_attribute_weights:
           constitution: 3
           strength: 1
@@ -256,7 +247,6 @@ spec:
       mob_boost:
         slot_factor: 10.25
         elite_multiplier: 1.2
-        constitution_share: 0.5
         armor_multiplier_by_profile:
           warrior: 3
           default: 2
@@ -281,7 +271,7 @@ This reference configuration preserves the major WR1 patterns:
   - strength `1`
   - dexterity `1`
   - intelligence `4`
-- classless/default weights:
+- default profile weights:
   - constitution `3`
   - strength `2`
   - dexterity `2`

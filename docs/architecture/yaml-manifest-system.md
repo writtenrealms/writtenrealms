@@ -220,7 +220,6 @@ spec:
   is_narrative: false
   players_can_set_title: true
   allow_pvp: true
-  is_classless: false
   non_ascii_names: false
   globals_enabled: true
   decay_glory: false
@@ -268,6 +267,8 @@ stat system for that world:
 
 New worlds do not get authored input attributes by default. Builders add only
 the input keys they want, then map those keys into canonical derived stats.
+Class selection is implied by `spec.stats.class_profiles`: if no class profiles
+are defined, the world has no classes.
 
 For details and examples, see:
 

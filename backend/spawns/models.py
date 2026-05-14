@@ -328,9 +328,9 @@ class Player(CharMixin, AdventBaseModel):
             char=self,
             world=self.world,
         )
-        self.health = stats['health_max']
-        self.mana = stats['mana_max']
-        self.stamina = stats['stamina_max']
+        self.health = max(1, int(stats.get('health_max') or 1))
+        self.mana = int(stats.get('mana_max') or 0)
+        self.stamina = int(stats.get('stamina_max') or 0)
         self.save()
 
         if starting_eq:

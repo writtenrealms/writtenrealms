@@ -93,10 +93,12 @@ _WORLD_CONFIG_CONFIG_BOOL_FIELDS = (
     "is_narrative",
     "players_can_set_title",
     "allow_pvp",
-    "is_classless",
     "non_ascii_names",
     "decay_glory",
     "globals_enabled",
+)
+_WORLD_CONFIG_LEGACY_BOOL_FIELDS = (
+    "is_classless",
 )
 _WORLD_CONFIG_CONFIG_INT_FIELDS = (
     "starting_gold",
@@ -126,6 +128,30 @@ _WORLD_FIELDS_PROPAGATED_TO_SPAWNS = {
     "motd",
     "is_public",
 }
+
+
+def _has_authored_world_config_map(value: Any) -> bool:
+    return isinstance(value, dict) and bool(value)
+
+
+def _export_stat_system(world: World) -> dict[str, Any] | None:
+    config = world.config
+    if not config or not _has_authored_world_config_map(config.stat_system):
+        return None
+    try:
+        return get_world_stat_system(world)
+    except StatSystemValidationError:
+        return None
+
+
+def _export_combat_system(world: World) -> dict[str, Any] | None:
+    config = world.config
+    if not config or not _has_authored_world_config_map(config.combat_system):
+        return None
+    try:
+        return get_world_combat_system(world)
+    except CombatFormulaValidationError:
+        return None
 
 _SCOPE_TO_TARGET_MODEL = {
     adv_consts.TRIGGER_SCOPE_ROOM: Room,
@@ -516,53 +542,58 @@ def world_config_to_manifest(
     if not config:
         raise serializers.ValidationError("World has no config to serialize.")
 
+    spec = {
+        "name": world.name or "",
+        "short_description": world.short_description or "",
+        "description": world.description or "",
+        "motd": world.motd or "",
+        "is_public": bool(world.is_public),
+        "starting_gold": int(config.starting_gold),
+        "starting_level": int(config.starting_level),
+        _WORLD_CONFIG_LEVELING_FIELD: normalize_leveling_curve(
+            config.leveling_curve
+        ),
+        _WORLD_CONFIG_ABILITY_PROGRESS_FIELD: normalize_ability_progression(
+            config.ability_progression
+        ),
+        "max_level": int(config.max_level),
+        "combat_resolution_interval": _serialize_number(
+            config.combat_resolution_interval
+        ),
+        "starting_room": _serialize_world_room_reference(
+            room=config.starting_room,
+            mode=room_reference_mode,
+        ),
+        "death_room": _serialize_world_room_reference(
+            room=config.death_room,
+            mode=room_reference_mode,
+        ),
+        "death_mode": config.death_mode,
+        "death_route": config.death_route,
+        "pvp_mode": config.pvp_mode,
+        "can_select_faction": bool(config.can_select_faction),
+        "auto_equip": bool(config.auto_equip),
+        "is_narrative": bool(config.is_narrative),
+        "players_can_set_title": bool(config.players_can_set_title),
+        "allow_pvp": bool(config.allow_pvp),
+        "non_ascii_names": bool(config.non_ascii_names),
+        "globals_enabled": bool(config.globals_enabled),
+        "decay_glory": bool(config.decay_glory),
+        "built_by": config.built_by or "",
+        "small_background": config.small_background or "",
+        "large_background": config.large_background or "",
+        "name_exclusions": config.name_exclusions or "",
+    }
+    stat_system = _export_stat_system(world)
+    if stat_system:
+        spec[_WORLD_CONFIG_STATS_FIELD] = stat_system
+    combat_system = _export_combat_system(world)
+    if combat_system:
+        spec[_WORLD_CONFIG_COMBAT_FIELD] = combat_system
+
     manifest = {
         "kind": manifest_kind,
-        "spec": {
-            "name": world.name or "",
-            "short_description": world.short_description or "",
-            "description": world.description or "",
-            "motd": world.motd or "",
-            "is_public": bool(world.is_public),
-            "starting_gold": int(config.starting_gold),
-            "starting_level": int(config.starting_level),
-            _WORLD_CONFIG_LEVELING_FIELD: normalize_leveling_curve(
-                config.leveling_curve
-            ),
-            _WORLD_CONFIG_ABILITY_PROGRESS_FIELD: normalize_ability_progression(
-                config.ability_progression
-            ),
-            "max_level": int(config.max_level),
-            "combat_resolution_interval": _serialize_number(
-                config.combat_resolution_interval
-            ),
-            "starting_room": _serialize_world_room_reference(
-                room=config.starting_room,
-                mode=room_reference_mode,
-            ),
-            "death_room": _serialize_world_room_reference(
-                room=config.death_room,
-                mode=room_reference_mode,
-            ),
-            "death_mode": config.death_mode,
-            "death_route": config.death_route,
-            "pvp_mode": config.pvp_mode,
-            "can_select_faction": bool(config.can_select_faction),
-            "auto_equip": bool(config.auto_equip),
-            "is_narrative": bool(config.is_narrative),
-            "players_can_set_title": bool(config.players_can_set_title),
-            "allow_pvp": bool(config.allow_pvp),
-            "is_classless": bool(config.is_classless),
-            "non_ascii_names": bool(config.non_ascii_names),
-            "globals_enabled": bool(config.globals_enabled),
-            "decay_glory": bool(config.decay_glory),
-            "built_by": config.built_by or "",
-            "small_background": config.small_background or "",
-            "large_background": config.large_background or "",
-            "name_exclusions": config.name_exclusions or "",
-            _WORLD_CONFIG_STATS_FIELD: get_world_stat_system(world),
-            _WORLD_CONFIG_COMBAT_FIELD: get_world_combat_system(world),
-        },
+        "spec": spec,
     }
     if include_metadata:
         manifest["metadata"] = {
@@ -638,13 +669,12 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
             "allow_pvp": bool(config.allow_pvp),
             "pvp_mode": config.pvp_mode,
             "built_by": config.built_by or "",
-            "is_classless": bool(config.is_classless),
             "non_ascii_names": bool(config.non_ascii_names),
             "decay_glory": bool(config.decay_glory),
             "name_exclusions": config.name_exclusions or "",
             "globals_enabled": bool(config.globals_enabled),
-            "stat_system": get_world_stat_system(world),
-            "combat_system": get_world_combat_system(world),
+            "stat_system": _export_stat_system(world) or {},
+            "combat_system": _export_combat_system(world) or {},
             "ability_progression": normalize_ability_progression(
                 config.ability_progression
             ),
@@ -1941,6 +1971,7 @@ def parse_world_config_manifest(
     allowed_fields.update(_WORLD_CONFIG_WORLD_BOOL_FIELDS)
     allowed_fields.update(_WORLD_CONFIG_CONFIG_TEXT_FIELDS)
     allowed_fields.update(_WORLD_CONFIG_CONFIG_BOOL_FIELDS)
+    allowed_fields.update(_WORLD_CONFIG_LEGACY_BOOL_FIELDS)
     allowed_fields.update(_WORLD_CONFIG_CONFIG_INT_FIELDS)
     allowed_fields.update(_WORLD_CONFIG_CONFIG_FLOAT_FIELDS)
     allowed_fields.update(_WORLD_CONFIG_CONFIG_CHOICE_FIELDS.keys())
@@ -1977,6 +2008,13 @@ def parse_world_config_manifest(
             config_updates[field_name] = _coerce_text(spec.get(field_name))
 
     for field_name in _WORLD_CONFIG_CONFIG_BOOL_FIELDS:
+        if field_name in spec:
+            config_updates[field_name] = _coerce_bool(
+                spec.get(field_name),
+                f"spec.{field_name}",
+            )
+
+    for field_name in _WORLD_CONFIG_LEGACY_BOOL_FIELDS:
         if field_name in spec:
             config_updates[field_name] = _coerce_bool(
                 spec.get(field_name),
@@ -2027,9 +2065,11 @@ def parse_world_config_manifest(
 
     if _WORLD_CONFIG_STATS_FIELD in spec:
         try:
-            config_updates["stat_system"] = normalize_stat_system(
+            stat_system = normalize_stat_system(
                 spec.get(_WORLD_CONFIG_STATS_FIELD)
             )
+            config_updates["stat_system"] = stat_system
+            config_updates["is_classless"] = not bool(stat_system.get("class_profiles"))
         except StatSystemValidationError as exc:
             raise serializers.ValidationError(str(exc))
 

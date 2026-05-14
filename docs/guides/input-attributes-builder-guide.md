@@ -18,7 +18,8 @@ them into canonical derived stats such as `attack_power`, `armor`,
 
 ## World Stats
 
-Define input attributes and formula rules in the world manifest:
+Define input attributes and formula rules in the world manifest. Omit
+`class_profiles` if the world does not use classes:
 
 ```yaml
 kind: world
@@ -84,6 +85,9 @@ spec:
           target: resilience
           multiplier: 1
 ```
+
+Classes are not controlled by a separate flag in WR2 authoring. If
+`class_profiles` is empty or omitted, the world has no class selection.
 
 ## Items
 

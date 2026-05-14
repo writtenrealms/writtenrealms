@@ -405,7 +405,7 @@ export const GET_MOB_TEMPLATE_INFO = () => {
             },
             {
               value: "",
-              label: "Classless"
+              label: "None"
             },
           ],
         },

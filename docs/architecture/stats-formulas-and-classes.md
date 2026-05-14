@@ -325,8 +325,8 @@ The engine should not assume:
 - every character must pick one class
 - formulas are impossible without class context
 
-Classless worlds should simply omit that layer and still resolve cleanly through
-the same formula pipeline.
+Worlds without classes should simply omit that layer and still resolve cleanly
+through the same formula pipeline.
 
 ## Runtime Model
 

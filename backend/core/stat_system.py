@@ -144,7 +144,6 @@ def _coerce_label_map(
     *,
     field_name: str,
     allowed_keys: tuple[str, ...] | None = None,
-    allow_empty_keys: bool = False,
 ) -> dict[str, str]:
     if value in (None, ""):
         return {}
@@ -154,7 +153,7 @@ def _coerce_label_map(
     normalized: dict[str, str] = {}
     for raw_key, raw_label in value.items():
         key = str(raw_key if raw_key is not None else "").strip()
-        if not key and not allow_empty_keys:
+        if not key:
             raise StatSystemValidationError(
                 f"{field_name} keys must be non-empty strings."
             )
@@ -163,8 +162,6 @@ def _coerce_label_map(
                 f"{field_name}.{key} is not supported."
             )
         fallback_label = key.replace("_", " ").title()
-        if allow_empty_keys and not key:
-            fallback_label = "Classless"
         normalized[key] = str(raw_label or "").strip() or fallback_label
     return normalized
 
@@ -427,7 +424,6 @@ def normalize_stat_system(value: Any) -> dict[str, Any]:
         (raw_labels or {}).get("classes"),
         field_name="stats.labels.classes",
         allowed_keys=None,
-        allow_empty_keys=True,
     )
     normalized["labels"]["resources"] = _merge_dict(
         normalized["labels"]["resources"],
@@ -504,9 +500,6 @@ def normalize_stat_system(value: Any) -> dict[str, Any]:
         if class_profiles[normalized_key]["label"]:
             normalized["labels"]["classes"][normalized_key] = class_profiles[normalized_key]["label"]
     normalized["class_profiles"] = class_profiles
-    if normalized["default_profile"]["label"]:
-        normalized["labels"]["classes"][""] = normalized["default_profile"]["label"]
-
     formulas = deepcopy(normalized["formulas"])
     raw_formulas = value.get("formulas") or {}
     if raw_formulas not in ({}, None) and not isinstance(raw_formulas, dict):
@@ -602,6 +595,14 @@ def get_world_stat_system(world) -> dict[str, Any]:
     if config_obj is None:
         return deepcopy(DEFAULT_STAT_SYSTEM)
     return normalize_stat_system(getattr(config_obj, "stat_system", None))
+
+
+def world_uses_classes(world) -> bool:
+    try:
+        stat_system = get_world_stat_system(world)
+    except StatSystemValidationError:
+        return False
+    return bool(stat_system.get("class_profiles"))
 
 
 def get_input_attribute_order(stat_system: dict[str, Any]) -> list[str]:

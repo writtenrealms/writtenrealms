@@ -47,6 +47,7 @@ from core.serializers import (
     InstanceOrTemplateValueField,
     ContainerTypeField,
     ReferenceField)
+from core.stat_system import world_uses_classes
 from spawns import instances
 from spawns.models import (
     Player,
@@ -268,7 +269,6 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
     classless = serializers.SerializerMethodField()
     globals_enabled = serializers.BooleanField(
         source='config.globals_enabled')
-    #classless = serializers.BooleanField(source='config.is_classless')
 
     factions = serializers.SerializerMethodField()
     facts = serializers.SerializerMethodField()
@@ -383,7 +383,7 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
     def get_classless(self, spawn_world):
         root_world = spawn_world.context
         root_world = root_world.instance_of or root_world
-        return root_world.config.is_classless
+        return not world_uses_classes(root_world)
 
     def get_currencies(self, spawn_world):
         root_world = spawn_world.context

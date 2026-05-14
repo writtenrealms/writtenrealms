@@ -43,14 +43,8 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(config_resp.data["config"]["max_level"], 20)
         self.assertEqual(config_resp.data["config"]["leveling_curve"][1], 30)
         self.assertEqual(config_resp.data["config"]["combat_resolution_interval"], 0)
-        self.assertEqual(
-            config_resp.data["config"]["stat_system"]["labels"]["resources"]["energy"],
-            "Energy",
-        )
-        self.assertEqual(
-            config_resp.data["config"]["combat_system"]["profiles"]["basic_physical"]["mitigation"]["resilience"],
-            False,
-        )
+        self.assertEqual(config_resp.data["config"]["stat_system"], {})
+        self.assertEqual(config_resp.data["config"]["combat_system"], {})
 
         export_resp = self.client.get(self.export_ep)
         self.assertEqual(export_resp.status_code, 200)
@@ -68,20 +62,9 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(world_manifest["spec"]["starting_room"], "room@0,0,0")
         self.assertEqual(world_manifest["spec"]["death_room"], "room@0,0,0")
         self.assertEqual(world_manifest["spec"]["combat_resolution_interval"], 0)
-        self.assertIn("stats", world_manifest["spec"])
-        self.assertIn("combat", world_manifest["spec"])
-        self.assertEqual(
-            world_manifest["spec"]["stats"]["labels"]["resources"]["energy"],
-            "Energy",
-        )
-        self.assertEqual(
-            world_manifest["spec"]["stats"]["labels"]["derived"]["ability_power"],
-            "Ability Power",
-        )
-        self.assertEqual(
-            world_manifest["spec"]["combat"]["profiles"]["basic_physical"]["mitigation"]["armor"],
-            True,
-        )
+        self.assertNotIn("is_classless", world_manifest["spec"])
+        self.assertNotIn("stats", world_manifest["spec"])
+        self.assertNotIn("combat", world_manifest["spec"])
 
     def test_apply_world_config_manifest_updates_world_and_config(self):
         spawn_world = self.world.spawned_worlds.first()
@@ -128,7 +111,6 @@ spec:
   is_narrative: true
   players_can_set_title: false
   allow_pvp: false
-  is_classless: true
   non_ascii_names: true
   globals_enabled: false
   decay_glory: true
@@ -241,7 +223,7 @@ spec:
         self.assertFalse(config.allow_combat)
         self.assertFalse(config.players_can_set_title)
         self.assertFalse(config.allow_pvp)
-        self.assertTrue(config.is_classless)
+        self.assertFalse(config.is_classless)
         self.assertTrue(config.non_ascii_names)
         self.assertFalse(config.globals_enabled)
         self.assertTrue(config.decay_glory)
@@ -320,19 +302,15 @@ spec:
         self.assertEqual(resp.status_code, 400)
         self.assertIn("max_level", str(resp.data))
 
-    def test_explicit_empty_class_profiles_create_clean_classless_stat_system(self):
+    def test_empty_stats_create_clean_world_without_class_profiles(self):
         manifest = f"""
 kind: world
 metadata:
   world: world.{self.world.id}
 spec:
-  is_classless: true
   stats:
-    labels:
-      classes:
-        '': Classless
     default_profile:
-      label: Classless
+      label: ""
       main_attribute: ''
       base_attribute_weights: {{}}
       derived_rules: []
@@ -348,19 +326,13 @@ spec:
         self.world.config.refresh_from_db()
         self.assertTrue(self.world.config.is_classless)
         self.assertEqual(self.world.config.stat_system["class_profiles"], {})
-        self.assertEqual(
-            self.world.config.stat_system["labels"]["classes"],
-            {"": "Classless"},
-        )
+        self.assertEqual(self.world.config.stat_system["labels"]["classes"], {})
 
         config_resp = self.client.get(self.config_ep)
         self.assertEqual(config_resp.status_code, 200)
         exported = yaml.safe_load(config_resp.data["yaml"])
         self.assertEqual(exported["spec"]["stats"]["class_profiles"], {})
-        self.assertEqual(
-            exported["spec"]["stats"]["labels"]["classes"],
-            {"": "Classless"},
-        )
+        self.assertEqual(exported["spec"]["stats"]["labels"]["classes"], {})
 
     def test_apply_exported_world_config_yaml_round_trips_unchanged(self):
         config_resp = self.client.get(self.config_ep)

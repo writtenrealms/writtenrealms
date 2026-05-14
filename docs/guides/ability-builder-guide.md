@@ -328,8 +328,8 @@ spec:
       profile: basic_physical
 ```
 
-Classless worlds can grant abilities through trainers, quests, starting loadout,
-items, or builder tools instead.
+Worlds without classes can grant abilities through trainers, quests, starting
+loadout, items, or builder tools instead.
 
 ## Queueing Behavior
 

@@ -292,7 +292,6 @@ const manifestGroups = [
       "auto_equip",
       "is_narrative",
       "players_can_set_title",
-      "is_classless",
       "non_ascii_names",
       "globals_enabled",
       "decay_glory",

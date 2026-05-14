@@ -1020,7 +1020,7 @@ class WorldConfig(BaseModel):
     allow_pvp = models.BooleanField(default=True)
     is_narrative = models.BooleanField(default=False)
     non_ascii_names = models.BooleanField(default=False)
-    is_classless = models.BooleanField(default=False)
+    is_classless = models.BooleanField(default=True)
     globals_enabled = models.BooleanField(default=True)
     stat_system = models.JSONField(default=dict)
 

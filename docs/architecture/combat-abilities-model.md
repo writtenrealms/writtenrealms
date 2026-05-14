@@ -539,8 +539,8 @@ does actor have access to ability X right now?
 It should not need a warrior code path, mage code path, or class-specific
 Python skill registry.
 
-Classless worlds should work by granting abilities through trainers, quests,
-items, starting loadouts, or direct builder configuration.
+Worlds without classes should work by granting abilities through trainers,
+quests, items, starting loadouts, or direct builder configuration.
 
 ## Ability Progression
 
