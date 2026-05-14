@@ -261,14 +261,18 @@ See [leveling-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/lev
 World manifests now also support `spec.stats`, which holds the authored WR2
 stat system for that world:
 
-- primary attribute definitions
+- input attribute definitions
 - resource and derived stat labels
 - class or archetype profiles
 - bounded formula rules
 
-For details and a working WR1-style reference configuration, see:
+New worlds do not get authored input attributes by default. Builders add only
+the input keys they want, then map those keys into canonical derived stats.
+
+For details and examples, see:
 
 - [stats-formulas-and-classes.md](/Users/teebes/code/writtenrealms/docs/architecture/stats-formulas-and-classes.md)
+- [input-attributes-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/input-attributes-builder-guide.md)
 - [wr1-archetype-world-reference.md](/Users/teebes/code/writtenrealms/docs/dev/wr1-archetype-world-reference.md)
 
 World manifests also support `spec.combat`, which holds the authored WR2

@@ -9,9 +9,9 @@ The goal is to keep the system flexible enough for different world genres and
 builder preferences without turning the runtime contract into a fully dynamic
 "anything can mean anything" engine.
 
-This is a future-facing architecture target. It is intentionally directional.
-It defines the shape the system should have, not the final field list or every
-schema detail.
+This is the WR2 direction implemented by the world `stats` configuration:
+worlds start with no authored input attributes, and builders opt into only the
+attributes their world needs.
 
 Reference docs:
 
@@ -99,10 +99,10 @@ progression systems can modify directly.
 
 Examples:
 
-- strength
+- brawn
 - grit
-- precision
-- intellect
+- grace
+- insight
 - willpower
 - faith
 - tech
@@ -221,12 +221,13 @@ until there is a real balancing need.
 
 ## Input Attribute Direction
 
-Worlds should be able to define their own primary or authored input attributes.
+Worlds define their own authored input attributes. A newly created world has no
+fixed `strength`, `dexterity`, `constitution`, or `intelligence` attributes
+unless a builder explicitly adds those keys.
 
 Examples:
 
-- a classic fantasy world may define `strength`, `constitution`, `dexterity`,
-  and `intelligence`
+- a classic fantasy world may define `might`, `grit`, `finesse`, and `lore`
 - a sci-fi world may define `power`, `precision`, `systems`, and `will`
 - a classless survival world may define only `grit`, `awareness`, and
   `craft`
@@ -266,10 +267,10 @@ Formulas should map from authored inputs into canonical engine combat stats.
 
 Examples:
 
-- `strength` contributes to `attack_power`
+- `brawn` contributes to `attack_power`
 - `willpower` contributes to `energy_max`
-- `constitution` contributes to `health_max`
-- `precision` contributes to `crit`
+- `grit` contributes to `health_max`
+- `grace` contributes to `crit`
 - class profile modifiers change coefficients or grant bonuses
 
 Formulas may also incorporate:
@@ -367,7 +368,7 @@ At runtime, the combat engine should care about:
 It should not care about:
 
 - the user-facing label for a stat
-- whether `ability_power` came from intelligence, faith, tech, or gear
+- whether `ability_power` came from willpower, faith, tech, or gear
 - whether the world is class-based or classless
 
 That is formula-layer and presentation-layer work.
@@ -415,7 +416,7 @@ The engine remains stable while the world presentation changes.
 
 ## Combat Relationship
 
-Combat should consume canonical derived stats, not authored primaries directly.
+Combat should consume canonical derived stats, not authored inputs directly.
 
 Examples:
 
@@ -431,7 +432,7 @@ combat resolution should operate on a simple, explicit runtime contract.
 
 ## Why Not Fully Dynamic Engine Stats
 
-It is tempting to let builders define every primary and every derived stat
+It is tempting to let builders define every input and every derived stat
 freely, but that would create major problems:
 
 - combat actions would need per-world semantic lookup

@@ -7,9 +7,9 @@
 
     <div class="stats-view">
       <div class="stats-group">
-        <div class="label">Stats</div>
+        <div class="label">Attributes</div>
         <div class="stats">
-          <div v-for="stat in primaryEntries" :key="stat.key" class="stat">
+          <div v-for="stat in inputAttributeEntries" :key="stat.key" class="stat">
             <div class="st-label">{{ stat.label }}</div>
             <div class="st-value">{{ stat.value }}</div>
           </div>
@@ -17,7 +17,7 @@
       </div>
 
       <div class="stats-group">
-        <div class="label">Attributes</div>
+        <div class="label">Combat</div>
         <div class="stats">
           <div v-for="stat in derivedEntries" :key="stat.key" class="stat">
             <div class="st-label">{{ stat.label }}</div>
@@ -65,18 +65,18 @@ const player = computed(() => store.state.game.player);
 const game = computed(() => store.state.game);
 const world = computed(() => store.state.game.world);
 
-const primaryLabels = computed(() => world.value?.labels?.primaries || {});
-const primaryOrder = computed(() => world.value?.labels?.order?.primaries || Object.keys(player.value?.primary_attributes || {}));
+const inputAttributeLabels = computed(() => world.value?.labels?.input_attributes || {});
+const inputAttributeOrder = computed(() => world.value?.labels?.order?.input_attributes || Object.keys(player.value?.input_attributes || {}));
 const derivedLabels = computed(() => world.value?.labels?.derived || {});
 const derivedOrder = computed(() => world.value?.labels?.order?.derived || Object.keys(player.value?.derived_stats || {}));
 
-const primaryEntries = computed(() => {
-  const values = player.value?.primary_attributes || {};
-  return primaryOrder.value
+const inputAttributeEntries = computed(() => {
+  const values = player.value?.input_attributes || {};
+  return inputAttributeOrder.value
     .filter((key: string) => values[key] !== undefined)
     .map((key: string) => ({
       key,
-      label: primaryLabels.value[key] || key.replace(/_/g, " "),
+      label: inputAttributeLabels.value[key] || key.replace(/_/g, " "),
       value: values[key],
     }));
 });

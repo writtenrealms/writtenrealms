@@ -6,11 +6,13 @@ from core.computations import compute_stats
 from spawns.models import Mob
 from spawns.tasks import WR2_STANDING_REGEN_RATE, run_heartbeat_regen
 from tests.base import WorldTestCase
+from wr2_tests.utils import apply_basic_stat_system
 
 
 class TestHeartbeatRegen(WorldTestCase):
     def setUp(self):
         super().setUp()
+        apply_basic_stat_system(self.world)
         self.spawn_world.lifecycle = api_consts.WORLD_LIFECYCLE_RUNNING
         self.spawn_world.save(update_fields=["lifecycle"])
         spawn_zone = self.spawn_world.zones.first()
@@ -20,7 +22,7 @@ class TestHeartbeatRegen(WorldTestCase):
             self.spawn_room = self.room
 
     def test_player_regen_restores_health_mana_and_stamina(self):
-        stats = compute_stats(self.player.level, self.player.archetype)
+        stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
         health_max = stats["health_max"]
         mana_max = stats["mana_max"]
         stamina_max = stats["stamina_max"]
@@ -53,7 +55,7 @@ class TestHeartbeatRegen(WorldTestCase):
         self.assertEqual(self.player.stamina, expected_stamina)
 
     def test_player_regen_skips_players_not_in_game(self):
-        stats = compute_stats(self.player.level, self.player.archetype)
+        stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
 
         self.player.in_game = False
         self.player.health = max(stats["health_max"] - 10, 0)
@@ -95,7 +97,7 @@ class TestHeartbeatRegen(WorldTestCase):
         self.assertEqual(mob.stamina, 25)
 
     def test_regen_skips_non_running_worlds(self):
-        stats = compute_stats(self.player.level, self.player.archetype)
+        stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
 
         self.player.in_game = True
         self.player.health = max(stats["health_max"] - 10, 0)
@@ -130,7 +132,7 @@ class TestHeartbeatRegen(WorldTestCase):
         self.assertEqual((mob.health, mob.mana, mob.stamina), mob_before)
 
     def test_player_regen_publishes_notification_event(self):
-        stats = compute_stats(self.player.level, self.player.archetype)
+        stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
         health_max = stats["health_max"]
         mana_max = stats["mana_max"]
         stamina_max = stats["stamina_max"]
@@ -163,7 +165,7 @@ class TestHeartbeatRegen(WorldTestCase):
         self.assertEqual(actor["stamina_max"], stamina_max)
 
     def test_player_regen_notification_uses_current_vitals_as_floor_for_max_values(self):
-        stats = compute_stats(self.player.level, self.player.archetype)
+        stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
 
         self.player.in_game = True
         self.player.health = stats["health_max"] + 1050

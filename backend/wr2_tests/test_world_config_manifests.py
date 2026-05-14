@@ -45,7 +45,7 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(config_resp.data["config"]["combat_resolution_interval"], 0)
         self.assertEqual(
             config_resp.data["config"]["stat_system"]["labels"]["resources"]["energy"],
-            "Mana",
+            "Energy",
         )
         self.assertEqual(
             config_resp.data["config"]["combat_system"]["profiles"]["basic_physical"]["mitigation"]["resilience"],
@@ -72,11 +72,11 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertIn("combat", world_manifest["spec"])
         self.assertEqual(
             world_manifest["spec"]["stats"]["labels"]["resources"]["energy"],
-            "Mana",
+            "Energy",
         )
         self.assertEqual(
             world_manifest["spec"]["stats"]["labels"]["derived"]["ability_power"],
-            "Spell Power",
+            "Ability Power",
         )
         self.assertEqual(
             world_manifest["spec"]["combat"]["profiles"]["basic_physical"]["mitigation"]["armor"],
@@ -153,51 +153,51 @@ spec:
         energy: Focus
       derived:
         ability_power: Ability Power
-    primary_attributes:
-      - key: constitution
-        label: Constitution
-      - key: strength
-        label: Strength
-      - key: dexterity
-        label: Dexterity
-      - key: intelligence
-        label: Intelligence
-      - key: awareness
+    input_attributes:
+      - key: grit
+        label: Grit
+      - key: brawn
+        label: Brawn
+      - key: grace
+        label: Grace
+      - key: willpower
+        label: Willpower
+      - key: insight
         label: Awareness
     class_profiles:
       warrior:
         label: Vanguard
-        primary_attribute: strength
+        main_attribute: brawn
         base_attribute_weights:
-          constitution: 3
-          strength: 4
-          dexterity: 1
-          intelligence: 1
-          awareness: 2
+          grit: 3
+          brawn: 4
+          grace: 1
+          willpower: 1
+          insight: 2
     formulas:
       global_rules:
-        - source: constitution
+        - source: grit
           target: health_max
           multiplier: 2
-        - source: constitution
+        - source: grit
           target: resilience
           multiplier: 1
-        - source: strength
+        - source: brawn
           target: attack_power
           multiplier: 1
-        - source: strength
+        - source: brawn
           target: health_max
           multiplier: 1
-        - source: dexterity
+        - source: grace
           target: dodge
           multiplier: 1
-        - source: dexterity
+        - source: grace
           target: crit
           multiplier: 1
-        - source: intelligence
+        - source: willpower
           target: ability_power
           multiplier: 2
-        - source: awareness
+        - source: insight
           target: energy_max
           multiplier: 2
 """
@@ -264,9 +264,9 @@ spec:
             "Vanguard",
         )
         primary_keys = [
-            entry["key"] for entry in config.stat_system["primary_attributes"]
+            entry["key"] for entry in config.stat_system["input_attributes"]
         ]
-        self.assertIn("awareness", primary_keys)
+        self.assertIn("insight", primary_keys)
 
     def test_apply_world_config_manifest_accepts_async_combat_pacing_sentinel(self):
         manifest = f"""
@@ -333,12 +333,8 @@ spec:
         '': Classless
     default_profile:
       label: Classless
-      primary_attribute: ''
-      base_attribute_weights:
-        constitution: 3
-        strength: 2
-        dexterity: 2
-        intelligence: 2
+      main_attribute: ''
+      base_attribute_weights: {{}}
       derived_rules: []
     class_profiles: {{}}
 """

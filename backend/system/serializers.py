@@ -17,6 +17,7 @@ from core.utils.items import price_item
 from config import constants as api_consts
 from builders.models import HousingLease, FactionAssignment
 from core.serializers import ref_field, ReferenceField
+from core.stat_system import fold_declared_input_attributes
 from spawns.loading import run_loaders
 from spawns.models import Item, Mob, Player, PlayerEvent, Clan, ClanMembership
 from spawns.serializers import PlayerSerializer
@@ -426,6 +427,11 @@ class CraftItemSerializer(serializers.Serializer):
             level=player.level,
             quality=quality,
             eq_type=eq_type)
+        fold_declared_input_attributes(
+            stats,
+            world=player.world,
+            candidate_keys=adv_consts.PRIMARY_ATTRIBUTES,
+        )
 
         item = Item.objects.create(
             world=player.world,

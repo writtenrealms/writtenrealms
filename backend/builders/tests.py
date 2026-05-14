@@ -1882,22 +1882,22 @@ class ItemTemplateTests(BuilderTestCase):
             equipment_type=adv_consts.EQUIPMENT_TYPE_WEAPON_1H)
         self.assertEqual(item_template.quality, adv_consts.ITEM_QUALITY_NORMAL)
 
-        # Boosting strength marks the item as Imbued
+        # Adding input attributes marks the item as Imbued
         endpoint = reverse('builder-item-template-detail',
                            args=[self.world.pk, item_template.pk])
         resp = self.client.put(endpoint, {
-            'strength': 10,
-        })
+            'input_attributes': {'brawn': 10},
+        }, format='json')
         self.assertEqual(resp.status_code, 200)
         item_template.refresh_from_db()
         self.assertEqual(item_template.quality, adv_consts.ITEM_QUALITY_IMBUED)
 
-        # Boosting strength to a ridiculous amount marks it as Enchanted
+        # Boosting input attributes to a ridiculous amount marks it as Enchanted
         endpoint = reverse('builder-item-template-detail',
                            args=[self.world.pk, item_template.pk])
         resp = self.client.put(endpoint, {
-            'strength': 1000000,
-        })
+            'input_attributes': {'brawn': 1000000},
+        }, format='json')
         self.assertEqual(resp.status_code, 200)
         item_template.refresh_from_db()
         self.assertEqual(item_template.quality, adv_consts.ITEM_QUALITY_ENCHANTED)
@@ -1906,8 +1906,8 @@ class ItemTemplateTests(BuilderTestCase):
         endpoint = reverse('builder-item-template-detail',
                            args=[self.world.pk, item_template.pk])
         resp = self.client.put(endpoint, {
-            'strength': 0,
-        })
+            'input_attributes': {},
+        }, format='json')
         self.assertEqual(resp.status_code, 200)
         item_template.refresh_from_db()
         self.assertEqual(item_template.quality, adv_consts.ITEM_QUALITY_NORMAL)

@@ -783,7 +783,25 @@ class Item(ItemMixin, AdventBaseModel):
 
     def boost(self, amount=20):
         "Boost the stats on an item by a percentage amount."
-        for attr in [*adv_consts.ATTRIBUTES, adv_consts.ATTR_WEAPON_DAMAGE]:
+        input_attributes = dict(self.input_attributes or {})
+        for key, value in input_attributes.items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value:
+                input_attributes[key] = math.ceil(value * 120 / 100)
+        self.input_attributes = input_attributes
+        for attr in [
+            adv_consts.ATTR_AP,
+            adv_consts.ATTR_SP,
+            adv_consts.ATTR_CRIT,
+            adv_consts.ATTR_DODGE,
+            adv_consts.ATTR_RESILIENCE,
+            adv_consts.ATTR_MAX_HEALTH,
+            adv_consts.ATTR_MAX_MANA,
+            adv_consts.ATTR_MAX_STAMINA,
+            adv_consts.ATTR_REGEN_HEALTH,
+            adv_consts.ATTR_REGEN_MANA,
+            adv_consts.ATTR_REGEN_STAMINA,
+            adv_consts.ATTR_WEAPON_DAMAGE,
+        ]:
             value = getattr(self, attr, None)
             if value:
                 value = math.ceil(value * 120 / 100)
@@ -795,11 +813,26 @@ class Item(ItemMixin, AdventBaseModel):
     @property
     def budget_spent(self):
         spent_budget = 0
-        for attr in [*adv_consts.ATTRIBUTES, adv_consts.ATTR_WEAPON_DAMAGE]:
-            if getattr(self, attr):
-                spent_budget += (
-                    adv_consts.ATTR_BUDGET[attr]
-                    * getattr(self, attr))
+        for value in (self.input_attributes or {}).values():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                spent_budget += 10 * value
+        for attr in [
+            adv_consts.ATTR_AP,
+            adv_consts.ATTR_SP,
+            adv_consts.ATTR_CRIT,
+            adv_consts.ATTR_DODGE,
+            adv_consts.ATTR_RESILIENCE,
+            adv_consts.ATTR_MAX_HEALTH,
+            adv_consts.ATTR_MAX_MANA,
+            adv_consts.ATTR_MAX_STAMINA,
+            adv_consts.ATTR_REGEN_HEALTH,
+            adv_consts.ATTR_REGEN_MANA,
+            adv_consts.ATTR_REGEN_STAMINA,
+            adv_consts.ATTR_WEAPON_DAMAGE,
+        ]:
+            value = getattr(self, attr, 0)
+            if value:
+                spent_budget += adv_consts.ATTR_BUDGET[attr] * value
         return spent_budget
 
 class RoomCommandCheckState(BaseModel):

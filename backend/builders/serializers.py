@@ -85,6 +85,47 @@ from worlds.models import (
     WorldLocks)
 
 
+def _coerce_input_attribute_map(value):
+    if value in (None, ""):
+        return {}
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            parsed = {}
+            for line in value.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                key, sep, raw_amount = line.partition(":")
+                if not sep:
+                    raise serializers.ValidationError(
+                        "Input attributes must be a JSON object or lines like `brawn: 3`."
+                    )
+                key = key.strip()
+                raw_amount = raw_amount.strip()
+                try:
+                    parsed[key] = float(raw_amount) if "." in raw_amount else int(raw_amount)
+                except ValueError:
+                    raise serializers.ValidationError(
+                        f"Input attribute '{key}' must have a numeric value."
+                    )
+            value = parsed
+    if not isinstance(value, dict):
+        raise serializers.ValidationError("Input attributes must be a mapping.")
+    normalized = {}
+    for raw_key, raw_amount in value.items():
+        key = str(raw_key or "").strip()
+        if not key:
+            raise serializers.ValidationError("Input attribute keys must be non-empty strings.")
+        if not isinstance(raw_amount, (int, float)) or isinstance(raw_amount, bool):
+            raise serializers.ValidationError(
+                f"Input attribute '{key}' must have a numeric value."
+            )
+        normalized[key] = raw_amount
+    return normalized
+
+
 # Common to both RoomActionSerializer and RoomCheckSerializer
 def validate_conditions(self, conditions):
         if isinstance(conditions, (dict, list)):
@@ -1549,7 +1590,7 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
             'weapon_type', 'weapon_damage', 'hit_msg_first', 'hit_msg_third',
             'health_max', 'health_regen', 'mana_max', 'mana_regen',
             'stamina_max', 'stamina_regen',
-            'strength', 'constitution', 'dexterity', 'intelligence',
+            'input_attributes',
             'attack_power', 'spell_power', 'resilience', 'dodge', 'crit',
             'budget', 'cost_budget', 'food_value', 'food_type',
             'has_assignment',
@@ -1607,10 +1648,21 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
         # Do the actual update
         updated_instance = super().update(instance, validated_data)
 
-        # If any of the attributes being passed are boost attributes,
-        # see if the item quality needs to be updated
-        if (set(adv_consts.ATTRIBUTES) &
-            set(validated_data.keys())):
+        boost_fields = {
+            'input_attributes',
+            'attack_power',
+            'spell_power',
+            'crit',
+            'dodge',
+            'resilience',
+            'health_max',
+            'health_regen',
+            'mana_max',
+            'mana_regen',
+            'stamina_max',
+            'stamina_regen',
+        }
+        if boost_fields & set(validated_data.keys()):
             budget_spent = updated_instance.budget_spent
             budget = updated_instance.budget
             try:
@@ -1626,6 +1678,9 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
             updated_instance.save()
 
         return updated_instance
+
+    def validate_input_attributes(self, value):
+        return _coerce_input_attribute_map(value)
 
     def get_budget(self, item_template):
         "Return budget utilization"
@@ -1783,6 +1838,7 @@ class MobTemplateSerializer(serializers.ModelSerializer):
             'roaming_type', 'alignment', 'aggression', 'use_abilities',
             'roam_chance',
             'hit_msg_first', 'hit_msg_third',
+            'input_attributes',
             'health_max', 'health_regen', 'mana_max', 'mana_regen',
             'stamina_max', 'stamina_regen', 'regen_rate',
             'attack_power', 'spell_power',  'crit',
@@ -1801,6 +1857,9 @@ class MobTemplateSerializer(serializers.ModelSerializer):
             'upgrade_success_cmd', 'upgrade_failure_cmd',
             'merchant_profit',
         ]
+
+    def validate_input_attributes(self, value):
+        return _coerce_input_attribute_map(value)
 
     def validate_slug(self, value):
         return _normalize_template_slug(

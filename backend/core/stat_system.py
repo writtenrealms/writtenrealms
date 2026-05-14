@@ -4,9 +4,9 @@ World-authored stat system support for WR2.
 This module keeps the engine contract small and stable while allowing worlds
 to customize:
 
-- primary attribute labels and ordering
+- input attribute definitions, labels, and ordering
 - class/archetype attribute weight profiles
-- formula coefficients that map primaries into canonical combat stats
+- formula coefficients that map inputs into canonical combat stats
 - player-facing labels for resources and derived stats
 
 Canonical runtime names intentionally use WR2 terminology:
@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import math
+from collections.abc import Iterable
 from typing import Any
 
 from config import constants
@@ -30,13 +31,6 @@ from config import game_settings as config
 class StatSystemValidationError(ValueError):
     pass
 
-
-PRIMARY_ATTRIBUTE_FALLBACK_ORDER = [
-    constants.ATTR_CON,
-    constants.ATTR_STR,
-    constants.ATTR_DEX,
-    constants.ATTR_INT,
-]
 
 CANONICAL_RESOURCE_LABEL_KEYS = ("health", "energy", "stamina")
 CANONICAL_DERIVED_LABEL_KEYS = (
@@ -81,36 +75,25 @@ LEGACY_TO_CANONICAL = {
 }
 
 DEFAULT_STAT_SYSTEM = {
-    "primary_attributes": [
-        {"key": constants.ATTR_CON, "label": "Constitution"},
-        {"key": constants.ATTR_STR, "label": "Strength"},
-        {"key": constants.ATTR_DEX, "label": "Dexterity"},
-        {"key": constants.ATTR_INT, "label": "Intelligence"},
-    ],
+    "input_attributes": [],
     "labels": {
         "resources": {
             "health": "Health",
-            "energy": "Mana",
+            "energy": "Energy",
             "stamina": "Stamina",
         },
         "derived": {
             "attack_power": "Attack Power",
-            "ability_power": "Spell Power",
+            "ability_power": "Ability Power",
             "armor": "Armor",
             "crit": "Crit",
             "dodge": "Dodge",
             "resilience": "Resilience",
             "health_regen": "Health Regen",
-            "energy_regen": "Mana Regen",
+            "energy_regen": "Energy Regen",
             "stamina_regen": "Stamina Regen",
         },
-        "classes": {
-            "": "Classless",
-            constants.ARCHETYPE_WARRIOR: "Warrior",
-            constants.ARCHETYPE_ASSASSIN: "Assassin",
-            constants.ARCHETYPE_MAGE: "Mage",
-            constants.ARCHETYPE_CLERIC: "Cleric",
-        },
+        "classes": {},
     },
     "derived_display_order": [
         "attack_power",
@@ -124,136 +107,19 @@ DEFAULT_STAT_SYSTEM = {
         "stamina_regen",
     ],
     "default_profile": {
-        "label": "Classless",
-        "primary_attribute": "",
-        "base_attribute_weights": {
-            constants.ATTR_CON: 3,
-            constants.ATTR_STR: 2,
-            constants.ATTR_DEX: 2,
-            constants.ATTR_INT: 2,
-        },
+        "label": "",
+        "main_attribute": "",
+        "base_attribute_weights": {},
         "derived_rules": [],
     },
-    "class_profiles": {
-        constants.ARCHETYPE_WARRIOR: {
-            "label": "Warrior",
-            "primary_attribute": constants.ATTR_STR,
-            "base_attribute_weights": {
-                constants.ATTR_CON: 3,
-                constants.ATTR_STR: 4,
-                constants.ATTR_DEX: 1,
-                constants.ATTR_INT: 1,
-            },
-            "derived_rules": [
-                {
-                    "source": constants.ATTR_STR,
-                    "target": "crit",
-                    "multiplier": 1,
-                    "mode": "total",
-                }
-            ],
-        },
-        constants.ARCHETYPE_ASSASSIN: {
-            "label": "Assassin",
-            "primary_attribute": constants.ATTR_DEX,
-            "base_attribute_weights": {
-                constants.ATTR_CON: 3,
-                constants.ATTR_STR: 1,
-                constants.ATTR_DEX: 4,
-                constants.ATTR_INT: 1,
-            },
-            "derived_rules": [
-                {
-                    "source": constants.ATTR_DEX,
-                    "target": "attack_power",
-                    "multiplier": 1,
-                    "mode": "total",
-                }
-            ],
-        },
-        constants.ARCHETYPE_MAGE: {
-            "label": "Mage",
-            "primary_attribute": constants.ATTR_INT,
-            "base_attribute_weights": {
-                constants.ATTR_CON: 3,
-                constants.ATTR_STR: 1,
-                constants.ATTR_DEX: 1,
-                constants.ATTR_INT: 4,
-            },
-            "derived_rules": [],
-        },
-        constants.ARCHETYPE_CLERIC: {
-            "label": "Cleric",
-            "primary_attribute": constants.ATTR_INT,
-            "base_attribute_weights": {
-                constants.ATTR_CON: 3,
-                constants.ATTR_STR: 1,
-                constants.ATTR_DEX: 1,
-                constants.ATTR_INT: 4,
-            },
-            "derived_rules": [],
-        },
-    },
+    "class_profiles": {},
     "formulas": {
         "base_resources": {
-            "energy": {
-                "source": constants.ATTR_INT,
-                "multiplier": 2,
-            },
-            "stamina": {
-                "flat": config.PLAYER_STARTING_MAX_STAMINA,
-            },
+            "energy": {},
+            "stamina": {},
+            "health": {},
         },
-        "global_rules": [
-            {
-                "source": constants.ATTR_CON,
-                "target": "health_max",
-                "multiplier": 2,
-                "mode": "total",
-            },
-            {
-                "source": constants.ATTR_CON,
-                "target": "resilience",
-                "multiplier": 1,
-                "mode": "total",
-            },
-            {
-                "source": constants.ATTR_STR,
-                "target": "attack_power",
-                "multiplier": 1,
-                "mode": "total",
-            },
-            {
-                "source": constants.ATTR_STR,
-                "target": "health_max",
-                "multiplier": 1,
-                "mode": "total",
-            },
-            {
-                "source": constants.ATTR_INT,
-                "target": "ability_power",
-                "multiplier": 2,
-                "mode": "total",
-            },
-            {
-                "source": constants.ATTR_INT,
-                "target": "energy_max",
-                "multiplier": 1,
-                "mode": "bonus_from_total_minus_base",
-            },
-            {
-                "source": constants.ATTR_DEX,
-                "target": "dodge",
-                "multiplier": 1,
-                "mode": "total",
-            },
-            {
-                "source": constants.ATTR_DEX,
-                "target": "crit",
-                "multiplier": 1,
-                "mode": "total",
-            },
-        ],
+        "global_rules": [],
         "two_handed_multipliers": {
             "attack_power": 1.5,
             "ability_power": 1.5,
@@ -261,9 +127,7 @@ DEFAULT_STAT_SYSTEM = {
         "mob_boost": {
             "slot_factor": 10.25,
             "elite_multiplier": 1.2,
-            "constitution_share": 0.5,
             "armor_multiplier_by_profile": {
-                constants.ARCHETYPE_WARRIOR: 3,
                 "default": 2,
             },
         },
@@ -305,12 +169,12 @@ def _coerce_label_map(
     return normalized
 
 
-def _coerce_primary_attributes(value: Any) -> list[dict[str, str]]:
+def _coerce_input_attributes(value: Any) -> list[dict[str, str]]:
     if value in (None, ""):
-        return deepcopy(DEFAULT_STAT_SYSTEM["primary_attributes"])
-    if not isinstance(value, list) or not value:
+        return deepcopy(DEFAULT_STAT_SYSTEM["input_attributes"])
+    if not isinstance(value, list):
         raise StatSystemValidationError(
-            "stats.primary_attributes must be a non-empty list."
+            "stats.input_attributes must be a list."
         )
 
     normalized: list[dict[str, str]] = []
@@ -318,16 +182,16 @@ def _coerce_primary_attributes(value: Any) -> list[dict[str, str]]:
     for index, entry in enumerate(value):
         if not isinstance(entry, dict):
             raise StatSystemValidationError(
-                f"stats.primary_attributes[{index}] must be a mapping."
+                f"stats.input_attributes[{index}] must be a mapping."
             )
         key = str(entry.get("key") or "").strip()
         if not key:
             raise StatSystemValidationError(
-                f"stats.primary_attributes[{index}].key is required."
+                f"stats.input_attributes[{index}].key is required."
             )
         if key in seen:
             raise StatSystemValidationError(
-                f"stats.primary_attributes contains duplicate key '{key}'."
+                f"stats.input_attributes contains duplicate key '{key}'."
             )
         seen.add(key)
         label = str(entry.get("label") or "").strip() or key.replace("_", " ").title()
@@ -356,7 +220,7 @@ def _coerce_rule(
 
     if source not in allowed_sources:
         raise StatSystemValidationError(
-            f"{field_name}.source must reference a declared primary attribute."
+            f"{field_name}.source must reference a declared input attribute."
         )
     if target not in CANONICAL_COMPUTED_STAT_KEYS:
         raise StatSystemValidationError(
@@ -403,19 +267,19 @@ def _coerce_weights(
     value: Any,
     *,
     field_name: str,
-    primary_keys: list[str],
+    input_keys: list[str],
 ) -> dict[str, float]:
     if value in (None, ""):
-        return {key: 0.0 for key in primary_keys}
+        return {key: 0.0 for key in input_keys}
     if not isinstance(value, dict):
         raise StatSystemValidationError(f"{field_name} must be a mapping.")
 
-    normalized: dict[str, float] = {key: 0.0 for key in primary_keys}
+    normalized: dict[str, float] = {key: 0.0 for key in input_keys}
     for key, raw_value in value.items():
         stat_key = str(key or "").strip()
         if stat_key not in normalized:
             raise StatSystemValidationError(
-                f"{field_name}.{stat_key} must reference a declared primary attribute."
+                f"{field_name}.{stat_key} must reference a declared input attribute."
             )
         if not _is_number(raw_value):
             raise StatSystemValidationError(
@@ -439,7 +303,7 @@ def _coerce_profile(
     raw_profile: Any,
     *,
     field_name: str,
-    primary_keys: list[str],
+    input_keys: list[str],
     default_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if raw_profile in (None, ""):
@@ -448,32 +312,43 @@ def _coerce_profile(
         raise StatSystemValidationError(f"{field_name} must be a mapping.")
 
     base_profile = deepcopy(default_profile or {})
+    allowed_profile_keys = {
+        "label",
+        "main_attribute",
+        "base_attribute_weights",
+        "derived_rules",
+    }
+    unknown_profile_keys = sorted(set(raw_profile.keys()) - allowed_profile_keys)
+    if unknown_profile_keys:
+        raise StatSystemValidationError(
+            f"Unsupported {field_name} field(s): {', '.join(unknown_profile_keys)}."
+        )
 
     label = str(raw_profile.get("label") or base_profile.get("label") or "").strip()
-    primary_attribute = str(
-        raw_profile.get("primary_attribute")
-        if "primary_attribute" in raw_profile
-        else base_profile.get("primary_attribute") or ""
+    main_attribute = str(
+        raw_profile.get("main_attribute")
+        if "main_attribute" in raw_profile
+        else base_profile.get("main_attribute") or ""
     ).strip()
-    if primary_attribute and primary_attribute not in primary_keys:
+    if main_attribute and main_attribute not in input_keys:
         raise StatSystemValidationError(
-            f"{field_name}.primary_attribute must reference a declared primary attribute."
+            f"{field_name}.main_attribute must reference a declared input attribute."
         )
 
     weights = _coerce_weights(
         raw_profile.get("base_attribute_weights", base_profile.get("base_attribute_weights")),
         field_name=f"{field_name}.base_attribute_weights",
-        primary_keys=primary_keys,
+        input_keys=input_keys,
     )
     rules = _coerce_rule_list(
         raw_profile.get("derived_rules", base_profile.get("derived_rules")),
         field_name=f"{field_name}.derived_rules",
-        allowed_sources=set(primary_keys),
+        allowed_sources=set(input_keys),
     )
 
     return {
         "label": label,
-        "primary_attribute": primary_attribute,
+        "main_attribute": main_attribute,
         "base_attribute_weights": weights,
         "derived_rules": rules,
     }
@@ -483,7 +358,7 @@ def _coerce_base_resource_config(
     value: Any,
     *,
     field_name: str,
-    primary_keys: list[str],
+    input_keys: list[str],
     default_value: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     value = deepcopy(value if value is not None else default_value or {})
@@ -500,9 +375,9 @@ def _coerce_base_resource_config(
         return {"flat": float(flat)}
 
     if source:
-        if source not in primary_keys:
+        if source not in input_keys:
             raise StatSystemValidationError(
-                f"{field_name}.source must reference a declared primary attribute."
+                f"{field_name}.source must reference a declared input attribute."
             )
         if not _is_number(multiplier):
             raise StatSystemValidationError(
@@ -525,12 +400,25 @@ def normalize_stat_system(value: Any) -> dict[str, Any]:
         value = {}
     if not isinstance(value, dict):
         raise StatSystemValidationError("stats must be a mapping.")
+    allowed_top_level_keys = {
+        "input_attributes",
+        "labels",
+        "derived_display_order",
+        "default_profile",
+        "class_profiles",
+        "formulas",
+    }
+    unknown_keys = sorted(set(value.keys()) - allowed_top_level_keys)
+    if unknown_keys:
+        raise StatSystemValidationError(
+            f"Unsupported stats field(s): {', '.join(unknown_keys)}."
+        )
 
     normalized = deepcopy(DEFAULT_STAT_SYSTEM)
 
-    primary_attributes = _coerce_primary_attributes(value.get("primary_attributes"))
-    primary_keys = [entry["key"] for entry in primary_attributes]
-    normalized["primary_attributes"] = primary_attributes
+    input_attributes = _coerce_input_attributes(value.get("input_attributes"))
+    input_keys = [entry["key"] for entry in input_attributes]
+    normalized["input_attributes"] = input_attributes
 
     raw_labels = value.get("labels") or {}
     if raw_labels not in ({}, None) and not isinstance(raw_labels, dict):
@@ -593,7 +481,7 @@ def normalize_stat_system(value: Any) -> dict[str, Any]:
     normalized["default_profile"] = _coerce_profile(
         value.get("default_profile"),
         field_name="stats.default_profile",
-        primary_keys=primary_keys,
+        input_keys=input_keys,
         default_profile=normalized["default_profile"],
     )
 
@@ -610,7 +498,7 @@ def normalize_stat_system(value: Any) -> dict[str, Any]:
         class_profiles[normalized_key] = _coerce_profile(
             profile_value,
             field_name=f"stats.class_profiles.{normalized_key}",
-            primary_keys=primary_keys,
+            input_keys=input_keys,
             default_profile=class_profiles.get(normalized_key),
         )
         if class_profiles[normalized_key]["label"]:
@@ -632,7 +520,7 @@ def normalize_stat_system(value: Any) -> dict[str, Any]:
         base_resources[resource_key] = _coerce_base_resource_config(
             raw_base_resources.get(resource_key),
             field_name=f"stats.formulas.base_resources.{resource_key}",
-            primary_keys=primary_keys,
+            input_keys=input_keys,
             default_value=base_resources.get(resource_key),
         )
     formulas["base_resources"] = base_resources
@@ -640,7 +528,7 @@ def normalize_stat_system(value: Any) -> dict[str, Any]:
     formulas["global_rules"] = _coerce_rule_list(
         raw_formulas.get("global_rules", formulas.get("global_rules")),
         field_name="stats.formulas.global_rules",
-        allowed_sources=set(primary_keys),
+        allowed_sources=set(input_keys),
     )
 
     raw_two_handed = raw_formulas.get("two_handed_multipliers")
@@ -671,7 +559,7 @@ def normalize_stat_system(value: Any) -> dict[str, Any]:
         if not isinstance(raw_mob_boost, dict):
             raise StatSystemValidationError("stats.formulas.mob_boost must be a mapping.")
         mob_boost = deepcopy(formulas["mob_boost"])
-        for key in ("slot_factor", "elite_multiplier", "constitution_share"):
+        for key in ("slot_factor", "elite_multiplier"):
             if key in raw_mob_boost:
                 if not _is_number(raw_mob_boost[key]):
                     raise StatSystemValidationError(
@@ -716,23 +604,23 @@ def get_world_stat_system(world) -> dict[str, Any]:
     return normalize_stat_system(getattr(config_obj, "stat_system", None))
 
 
-def get_primary_attribute_order(stat_system: dict[str, Any]) -> list[str]:
-    return [entry["key"] for entry in stat_system["primary_attributes"]]
+def get_input_attribute_order(stat_system: dict[str, Any]) -> list[str]:
+    return [entry["key"] for entry in stat_system["input_attributes"]]
 
 
 def get_world_label_bundle(world) -> dict[str, Any]:
     stat_system = get_world_stat_system(world)
     return {
         "resources": deepcopy(stat_system["labels"]["resources"]),
-        "primaries": {
+        "input_attributes": {
             entry["key"]: entry["label"]
-            for entry in stat_system["primary_attributes"]
+            for entry in stat_system["input_attributes"]
         },
         "derived": deepcopy(stat_system["labels"]["derived"]),
         "classes": deepcopy(stat_system["labels"]["classes"]),
         "order": {
             "resources": list(CANONICAL_RESOURCE_LABEL_KEYS),
-            "primaries": get_primary_attribute_order(stat_system),
+            "input_attributes": get_input_attribute_order(stat_system),
             "derived": list(stat_system["derived_display_order"]),
         },
     }
@@ -741,13 +629,13 @@ def get_world_label_bundle(world) -> dict[str, Any]:
 def _source_value_for_rule(
     *,
     rule: dict[str, Any],
-    total_primaries: dict[str, float],
-    base_primaries: dict[str, float],
+    total_inputs: dict[str, float],
+    base_inputs: dict[str, float],
 ) -> float:
     source = rule["source"]
     mode = rule["mode"]
-    total_value = float(total_primaries.get(source, 0.0) or 0.0)
-    base_value = float(base_primaries.get(source, 0.0) or 0.0)
+    total_value = float(total_inputs.get(source, 0.0) or 0.0)
+    base_value = float(base_inputs.get(source, 0.0) or 0.0)
     if mode == "base_only":
         return base_value
     if mode == "bonus_from_total_minus_base":
@@ -759,14 +647,14 @@ def _apply_rules(
     stats: dict[str, float],
     *,
     rules: list[dict[str, Any]],
-    total_primaries: dict[str, float],
-    base_primaries: dict[str, float],
+    total_inputs: dict[str, float],
+    base_inputs: dict[str, float],
 ) -> None:
     for rule in rules:
         source_value = _source_value_for_rule(
             rule=rule,
-            total_primaries=total_primaries,
-            base_primaries=base_primaries,
+            total_inputs=total_inputs,
+            base_inputs=base_inputs,
         )
         if not source_value:
             continue
@@ -779,8 +667,8 @@ def _compute_rule_total(
     *,
     target: str,
     rules: list[dict[str, Any]],
-    total_primaries: dict[str, float],
-    base_primaries: dict[str, float],
+    total_inputs: dict[str, float],
+    base_inputs: dict[str, float],
 ) -> int:
     value = 0.0
     for rule in rules:
@@ -788,8 +676,8 @@ def _compute_rule_total(
             continue
         value += _source_value_for_rule(
             rule=rule,
-            total_primaries=total_primaries,
-            base_primaries=base_primaries,
+            total_inputs=total_inputs,
+            base_inputs=base_inputs,
         ) * float(rule["multiplier"])
     return max(0, int(math.ceil(value)))
 
@@ -797,11 +685,69 @@ def _compute_rule_total(
 def _bonus_lookup(source: Any, stat_key: str) -> float:
     if source is None:
         return 0.0
+    input_attributes = getattr(source, "input_attributes", None)
+    if isinstance(input_attributes, dict) and stat_key in input_attributes:
+        raw_value = input_attributes.get(stat_key, 0)
+        if _is_number(raw_value):
+            return float(raw_value)
+        return 0.0
     lookup_key = CANONICAL_TO_LEGACY.get(stat_key, stat_key)
     raw_value = getattr(source, lookup_key, 0)
     if not _is_number(raw_value):
         return 0.0
     return float(raw_value)
+
+
+def _input_attribute_values(source: Any, allowed_keys: list[str]) -> dict[str, float]:
+    if source is None:
+        return {}
+    raw_values = getattr(source, "input_attributes", None)
+    if not isinstance(raw_values, dict):
+        return {}
+    values: dict[str, float] = {}
+    allowed = set(allowed_keys)
+    for raw_key, raw_value in raw_values.items():
+        key = str(raw_key or "").strip()
+        if key not in allowed or not _is_number(raw_value):
+            continue
+        values[key] = float(raw_value)
+    return values
+
+
+def fold_declared_input_attributes(
+    attrs: dict[str, Any],
+    *,
+    world: Any,
+    candidate_keys: Iterable[str],
+) -> None:
+    """
+    Move loose generated stat keys into input_attributes only when the world
+    declares those keys. Unknown keys are dropped silently.
+    """
+    stat_system = get_world_stat_system(world)
+    declared_keys = set(get_input_attribute_order(stat_system))
+    if not declared_keys:
+        attrs.pop("input_attributes", None)
+        for key in candidate_keys:
+            attrs.pop(key, None)
+        return
+
+    normalized: dict[str, float] = {}
+    raw_input_attributes = attrs.pop("input_attributes", {}) or {}
+    if isinstance(raw_input_attributes, dict):
+        for raw_key, raw_value in raw_input_attributes.items():
+            key = str(raw_key or "").strip()
+            if key in declared_keys and _is_number(raw_value):
+                normalized[key] = normalized.get(key, 0.0) + float(raw_value)
+
+    for raw_key in candidate_keys:
+        key = str(raw_key or "").strip()
+        raw_value = attrs.pop(key, 0)
+        if key in declared_keys and _is_number(raw_value) and raw_value:
+            normalized[key] = normalized.get(key, 0.0) + float(raw_value)
+
+    if normalized:
+        attrs["input_attributes"] = normalized
 
 
 def _iter_equipment_items(char: Any) -> list[Any]:
@@ -822,7 +768,7 @@ def _iter_equipment_items(char: Any) -> list[Any]:
 def _evaluate_base_resource(
     spec: dict[str, Any],
     *,
-    base_primaries: dict[str, float],
+    base_inputs: dict[str, float],
 ) -> float:
     if not spec:
         return 0.0
@@ -830,7 +776,7 @@ def _evaluate_base_resource(
         return float(spec["flat"])
     source = spec.get("source")
     multiplier = float(spec.get("multiplier") or 0.0)
-    return float(base_primaries.get(source, 0.0) or 0.0) * multiplier
+    return float(base_inputs.get(source, 0.0) or 0.0) * multiplier
 
 
 def _derive_runtime_world(char: Any = None, world=None):
@@ -860,10 +806,10 @@ def compute_stats(
 
     runtime_world = _derive_runtime_world(char=char, world=world)
     stat_system = get_world_stat_system(runtime_world)
-    primary_keys = get_primary_attribute_order(stat_system)
+    input_keys = get_input_attribute_order(stat_system)
 
     stats: dict[str, float] = {}
-    for key in set(primary_keys + PRIMARY_ATTRIBUTE_FALLBACK_ORDER):
+    for key in input_keys:
         stats[key] = 0.0
     for key in CANONICAL_COMPUTED_STAT_KEYS:
         stats[key] = 0.0
@@ -873,34 +819,37 @@ def compute_stats(
         profile = stat_system["default_profile"]
 
     weights = profile["base_attribute_weights"]
-    for key in primary_keys:
+    for key in input_keys:
         stats[key] = math.ceil(config.ILF(level) * float(weights.get(key, 0.0) or 0.0))
-
-    base_primaries = {key: float(stats.get(key, 0.0) or 0.0) for key in primary_keys}
 
     if faction_level:
         faction_multiplier = 1 + (float(faction_level) * config.FACTION_STAT_BONUS / 100)
-        for key in primary_keys:
+        for key in input_keys:
             stats[key] = math.ceil(float(stats.get(key, 0.0) or 0.0) * faction_multiplier)
+
+    for key, value in _input_attribute_values(char, input_keys).items():
+        stats[key] += value
+
+    base_inputs = {key: float(stats.get(key, 0.0) or 0.0) for key in input_keys}
 
     formulas = stat_system["formulas"]
     base_resources = formulas["base_resources"]
     stats["energy_base"] = _evaluate_base_resource(
         base_resources.get("energy", {}),
-        base_primaries=base_primaries,
+        base_inputs=base_inputs,
     )
     stats["stamina_base"] = _evaluate_base_resource(
         base_resources.get("stamina", {}),
-        base_primaries=base_primaries,
+        base_inputs=base_inputs,
     )
     stats["health_max"] += _evaluate_base_resource(
         base_resources.get("health", {}),
-        base_primaries=base_primaries,
+        base_inputs=base_inputs,
     )
     stats["energy_max"] += stats["energy_base"]
     stats["stamina_max"] += stats["stamina_base"]
 
-    additive_stat_keys = set(primary_keys)
+    additive_stat_keys = set(input_keys)
     additive_stat_keys.update(
         (
             "health_max",
@@ -932,21 +881,12 @@ def compute_stats(
         if boost_mob == "elite":
             stats_boost = math.ceil(stats_boost * float(mob_boost["elite_multiplier"]))
 
-        constitution_share = float(mob_boost["constitution_share"])
-        con_stats = int(round(stats_boost * constitution_share))
-        remaining_stats = max(0, stats_boost - con_stats)
-        if constants.ATTR_CON in primary_keys:
-            stats[constants.ATTR_CON] += con_stats
+        remaining_stats = max(0, stats_boost)
+        main_target = profile.get("main_attribute") or ""
+        if main_target and main_target in input_keys:
+            stats[main_target] += remaining_stats
         else:
-            remaining_stats += con_stats
-
-        primary_target = profile.get("primary_attribute") or ""
-        if primary_target and primary_target in primary_keys:
-            stats[primary_target] += remaining_stats
-        else:
-            fallback_targets = [key for key in primary_keys if key != constants.ATTR_CON]
-            if not fallback_targets:
-                fallback_targets = list(primary_keys)
+            fallback_targets = list(input_keys)
             if fallback_targets:
                 share = remaining_stats // len(fallback_targets)
                 extra = remaining_stats % len(fallback_targets)
@@ -960,19 +900,19 @@ def compute_stats(
         )
         stats["armor"] = math.ceil(stats["armor"] * armor_multiplier)
 
-    total_primaries = {key: float(stats.get(key, 0.0) or 0.0) for key in primary_keys}
+    total_inputs = {key: float(stats.get(key, 0.0) or 0.0) for key in input_keys}
     global_rules = formulas["global_rules"]
     _apply_rules(
         stats,
         rules=global_rules,
-        total_primaries=total_primaries,
-        base_primaries=base_primaries,
+        total_inputs=total_inputs,
+        base_inputs=base_inputs,
     )
     _apply_rules(
         stats,
         rules=profile["derived_rules"],
-        total_primaries=total_primaries,
-        base_primaries=base_primaries,
+        total_inputs=total_inputs,
+        base_inputs=base_inputs,
     )
 
     equipped_weapon = None
@@ -990,8 +930,8 @@ def compute_stats(
     stats["health_base"] = _compute_rule_total(
         target="health_max",
         rules=global_rules + profile["derived_rules"],
-        total_primaries=base_primaries,
-        base_primaries=base_primaries,
+        total_inputs=base_inputs,
+        base_inputs=base_inputs,
     )
 
     finalized: dict[str, int] = {}
@@ -1003,9 +943,7 @@ def compute_stats(
     finalized["mana_regen"] = finalized["energy_regen"]
     finalized["spell_power"] = finalized["ability_power"]
 
-    for key in primary_keys:
-        finalized.setdefault(key, 0)
-    for key in PRIMARY_ATTRIBUTE_FALLBACK_ORDER:
+    for key in input_keys:
         finalized.setdefault(key, 0)
     for key in (
         "health_max",
@@ -1041,7 +979,7 @@ def build_player_stat_payload(player) -> dict[str, Any]:
         char=player,
         world=runtime_world,
     )
-    primary_order = get_primary_attribute_order(stat_system)
+    input_order = get_input_attribute_order(stat_system)
     derived_order = list(stat_system["derived_display_order"])
     health_max = max(
         int(stats.get("health_max") or 0),
@@ -1056,9 +994,9 @@ def build_player_stat_payload(player) -> dict[str, Any]:
         int(getattr(player, "stamina", 0) or 0),
     )
     return {
-        "primary_attributes": {
+        "input_attributes": {
             key: int(stats.get(key) or 0)
-            for key in primary_order
+            for key in input_order
         },
         "derived_stats": {
             key: int(stats.get(key) or 0)
@@ -1084,8 +1022,4 @@ def build_player_stat_payload(player) -> dict[str, Any]:
         "crit": int(stats.get("crit") or 0),
         "dodge": int(stats.get("dodge") or 0),
         "resilience": int(stats.get("resilience") or 0),
-        "strength": int(stats.get(constants.ATTR_STR) or 0),
-        "constitution": int(stats.get(constants.ATTR_CON) or 0),
-        "dexterity": int(stats.get(constants.ATTR_DEX) or 0),
-        "intelligence": int(stats.get(constants.ATTR_INT) or 0),
     }

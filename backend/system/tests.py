@@ -33,7 +33,7 @@ class UpgradeItemTests(WorldTestCase):
             world=self.spawn_world,
             name='a sword',
             quality=adv_consts.ITEM_QUALITY_IMBUED,
-            strength=100)
+            input_attributes={'brawn': 100})
 
         self.mob_template = MobTemplate.objects.create(
             world=self.world,
@@ -74,7 +74,7 @@ class UpgradeItemTests(WorldTestCase):
         self.assertEqual(resp.data['outcome'], 'success')
 
         self.item.refresh_from_db()
-        self.assertEqual(self.item.strength, 120)
+        self.assertEqual(self.item.input_attributes['brawn'], 120)
 
     def test_item_must_be_magical(self):
         self.item.quality = adv_consts.ITEM_QUALITY_NORMAL

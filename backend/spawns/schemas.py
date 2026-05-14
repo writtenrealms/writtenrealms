@@ -39,13 +39,8 @@ class Item(BaseModel):
     template: Optional[str] = None
     template_id: Optional[int] = None
 
-    # Stats
-    strength: int = 0
-    agility: int = 0
-    constitution: int = 0
-    dexterity: int = 0
-    intelligence: int = 0
-    max_stamina: int = 0
+    # World-authored input attributes
+    input_attributes: Dict[str, float] = Field(default_factory=dict)
 
     # Combat stats
     attack_power: int = 0
@@ -226,10 +221,6 @@ class Actor(BaseModel):
     focus: Optional[str] = None
 
     # Stats
-    dexterity: int = 0
-    constitution: int = 0
-    strength: int = 0
-    intelligence: int = 0
     attack_power: int = 0
     spell_power: int = 0
     ability_power: int = 0
@@ -239,7 +230,7 @@ class Actor(BaseModel):
     dodge_perc: float = 0.0
     resilience: int = 0
     resilience_perc: float = 0.0
-    primary_attributes: Dict[str, int] = Field(default_factory=dict)
+    input_attributes: Dict[str, float] = Field(default_factory=dict)
     derived_stats: Dict[str, int] = Field(default_factory=dict)
 
     # Equipment & inventory
@@ -612,7 +603,7 @@ def build_mock_state_sync(
         keywords="leather helm armor",
         keyword="helm",
         armor=5,
-        constitution=2,
+        input_attributes={"grit": 2},
         cost=25,
     )
 
@@ -630,7 +621,7 @@ def build_mock_state_sync(
         keywords="chainmail armor body",
         keyword="chainmail",
         armor=20,
-        constitution=5,
+        input_attributes={"grit": 5},
         health_max=25,
         cost=200,
     )
@@ -662,7 +653,7 @@ def build_mock_state_sync(
         description="A golden ring set with a small ruby.",
         keywords="gold ring accessory ruby",
         keyword="ring",
-        intelligence=3,
+        input_attributes={"insight": 3},
         spell_power=10,
         cost=150,
     )
@@ -696,7 +687,7 @@ def build_mock_state_sync(
         keywords="leather boots feet",
         keyword="boots",
         armor=3,
-        dexterity=1,
+        input_attributes={"grace": 1},
         cost=20,
     )
 
@@ -1033,10 +1024,12 @@ def build_mock_state_sync(
         armor_perc=15.5,
         focus=None,
         # Stats
-        strength=18,
-        constitution=16,
-        dexterity=12,
-        intelligence=10,
+        input_attributes={
+            "brawn": 18,
+            "grit": 16,
+            "grace": 12,
+            "insight": 10,
+        },
         attack_power=42,
         spell_power=15,
         crit=8,

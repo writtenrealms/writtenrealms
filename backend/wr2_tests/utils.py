@@ -1,8 +1,46 @@
 from contextlib import contextmanager
+from copy import deepcopy
 from typing import Generator
 from unittest.mock import patch
 
 from spawns.handlers import dispatch_command
+
+
+BASIC_TEST_STAT_SYSTEM = {
+    "input_attributes": [
+        {"key": "brawn", "label": "Brawn"},
+        {"key": "grit", "label": "Grit"},
+        {"key": "focus", "label": "Focus"},
+    ],
+    "class_profiles": {
+        "warrior": {
+            "label": "Warrior",
+            "main_attribute": "brawn",
+            "base_attribute_weights": {
+                "brawn": 2,
+                "grit": 4,
+                "focus": 2,
+            },
+        },
+    },
+    "formulas": {
+        "base_resources": {
+            "energy": {"source": "focus", "multiplier": 5},
+            "stamina": {"flat": 100},
+            "health": {},
+        },
+        "global_rules": [
+            {"source": "brawn", "target": "attack_power", "multiplier": 1},
+            {"source": "grit", "target": "health_max", "multiplier": 2},
+            {"source": "focus", "target": "ability_power", "multiplier": 1},
+        ],
+    },
+}
+
+
+def apply_basic_stat_system(world) -> None:
+    world.config.stat_system = deepcopy(BASIC_TEST_STAT_SYSTEM)
+    world.config.save(update_fields=["stat_system"])
 
 
 @contextmanager

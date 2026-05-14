@@ -14,12 +14,6 @@ def suggest_stats(level=1, archetype='warrior', adjust=True, is_elite=False):
         stats.pop('ability_power', None)
         if 'mana_base' in stats: stats.pop('mana_base', None)
 
-        # For mobs, we don't want the 4 base stats so we remove them here
-        stats.pop('strength', None)
-        stats.pop('dexterity', None)
-        stats.pop('intelligence', None)
-        stats.pop('constitution', None)
-
         # ==== Stats Reduction ====
         REDUCED_STATS = ['health_max']
 

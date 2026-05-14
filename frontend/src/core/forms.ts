@@ -14,7 +14,7 @@ export interface FormElement {
   attr: string;
   label: string;
   references?: string;
-  widget?: "text" | "textarea" | "reference" | "select" | "checkbox" | "custom";
+  widget?: "text" | "textarea" | "key_value_map" | "reference" | "select" | "checkbox" | "custom";
   widgetComponent?: any;
   autofocus?: boolean;
   context?: string;
@@ -382,8 +382,8 @@ export const GET_MOB_TEMPLATE_INFO = () => {
           label: "Mob Class",
           widget: "select",
           help: `The mob's class determine how its stats are calculated. For
-                 example, warriors will roll more strength and thieves will roll
-                 more dexterity.<br/>
+                 example, bruisers might roll more brawn and duelists might roll
+                 more grace.<br/>
                  If abilities are enabled, also informs which abilities are used.
                 `,
           options: [
@@ -920,25 +920,10 @@ export const BUILDER_FORMS = {
       ]
     },
     {
-      row_name: "Primary Stats",
-      children: [
-        {
-          attr: "strength",
-          label: "Strength",
-        },
-        {
-          attr: "constitution",
-          label: "Constitution",
-        },
-        {
-          attr: "intelligence",
-          label: "Intelligence",
-        },
-        {
-          attr: "dexterity",
-          label: "Dexterity",
-        },
-      ],
+      attr: "input_attributes",
+      label: "Input Attributes",
+      widget: "key_value_map",
+      help: `One world-defined input attribute per line, for example:<br/>brawn: 3<br/>willpower: 1`,
     },
     {
       row_name: "Attack Attributes",

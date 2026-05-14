@@ -33,6 +33,7 @@ from core.db import (
     list_to_choice,
     optional)
 from core.model_mixins import CharMixin, ItemMixin, MobMixin
+from core.stat_system import fold_declared_input_attributes
 
 
 def _generate_unique_world_slug(instance, *, fallback_prefix: str) -> str:
@@ -168,11 +169,26 @@ class ItemTemplate(ItemMixin, AdventBaseModel):
     @property
     def budget_spent(self):
         spent_budget = 0
-        for attr in [*adv_consts.ATTRIBUTES, adv_consts.ATTR_WEAPON_DAMAGE]:
-            if getattr(self, attr):
-                spent_budget += (
-                    adv_consts.ATTR_BUDGET[attr]
-                    * getattr(self, attr))
+        for value in (self.input_attributes or {}).values():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                spent_budget += 10 * value
+        for attr in [
+            adv_consts.ATTR_AP,
+            adv_consts.ATTR_SP,
+            adv_consts.ATTR_CRIT,
+            adv_consts.ATTR_DODGE,
+            adv_consts.ATTR_RESILIENCE,
+            adv_consts.ATTR_MAX_HEALTH,
+            adv_consts.ATTR_MAX_MANA,
+            adv_consts.ATTR_MAX_STAMINA,
+            adv_consts.ATTR_REGEN_HEALTH,
+            adv_consts.ATTR_REGEN_MANA,
+            adv_consts.ATTR_REGEN_STAMINA,
+            adv_consts.ATTR_WEAPON_DAMAGE,
+        ]:
+            value = getattr(self, attr, 0)
+            if value:
+                spent_budget += adv_consts.ATTR_BUDGET[attr] * value
         return spent_budget
 
     @property
@@ -954,6 +970,12 @@ class EquipmentProfile(models.Model):
                     quality=quality,
                     eq_type=slot.slot_name,
                     armor_class=armor_class)
+
+            fold_declared_input_attributes(
+                attrs,
+                world=mob.world,
+                candidate_keys=adv_consts.PRIMARY_ATTRIBUTES,
+            )
 
             item = Item.objects.create(
                 world=mob.world,

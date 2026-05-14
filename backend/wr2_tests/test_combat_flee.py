@@ -8,13 +8,22 @@ from spawns.actions.movement_costs import movement_cost
 from spawns.models import CombatEncounter, Mob
 from spawns.tasks import resolve_combat_encounter
 from tests.base import WorldTestCase
-from wr2_tests.utils import capture_game_messages, dispatch_text_command
+from wr2_tests.utils import (
+    apply_basic_stat_system,
+    capture_game_messages,
+    dispatch_text_command,
+)
 
 
 class TestCombatFlee(WorldTestCase):
     def setUp(self):
         super().setUp()
-        self.stats = compute_stats(self.player.level, self.player.archetype)
+        apply_basic_stat_system(self.world)
+        self.stats = compute_stats(
+            self.player.level,
+            self.player.archetype,
+            char=self.player,
+        )
         self.player.health = self.stats["health_max"]
         self.player.mana = self.stats["mana_max"]
         self.player.stamina = self.stats["stamina_max"]
