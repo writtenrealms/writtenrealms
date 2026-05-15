@@ -106,6 +106,10 @@ spec:
     default_attack_profile: basic_physical
     default_ability_profile: basic_ability
     default_healing_profile: basic_heal
+    level_scale:
+      type: exponential
+      base: 5.5
+      growth: 1.1
 
     variance:
       enabled: true
@@ -234,11 +238,24 @@ intentional: predictable pipeline ordering keeps combat debuggable and cheap.
 
 ## Rating Curves
 
+Rating curves use `level_scale(opponent.level)` so the same rating value is more
+effective against lower-level opponents and less dominant against higher-level
+opponents. The default scale is open-ended exponential:
+
+```text
+level_scale = 5.5 * 1.1^level
+```
+
+Worlds can also choose `linear`, `flat`, or legacy WR1 `ilf` scaling under
+`spec.combat.level_scale`. See
+[combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md)
+for the builder-facing options.
+
 `mitigation_curve` is used for armor, dodge, and resilience:
 
 ```text
-value = (rating + opponent_ilf * constant * base)
-      / (rating + opponent_ilf * constant)
+value = (rating + opponent_scale * constant * base)
+      / (rating + opponent_scale * constant)
 ```
 
 The result is clamped between `0` and `cap`.
@@ -246,13 +263,10 @@ The result is clamped between `0` and `cap`.
 `linear_rating` is used for crit:
 
 ```text
-value = rating / (opponent_ilf * constant) + base
+value = rating / (opponent_scale * constant) + base
 ```
 
 The result is also clamped between `0` and `cap`.
-
-This means the same rating is more effective against lower-level opponents and
-less dominant against higher-level opponents.
 
 ## Weapon Damage
 
@@ -275,7 +289,7 @@ base = attack_power * unarmed_power_scale
 For spawned mobs without a weapon:
 
 ```text
-base = ilf(actor.level) * mob_unarmed_level_scale
+base = level_scale(actor.level) * mob_unarmed_level_scale
      + attack_power * power_scale
 ```
 

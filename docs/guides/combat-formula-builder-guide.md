@@ -83,6 +83,10 @@ combat:
   default_attack_profile: basic_physical
   default_ability_profile: basic_ability
   default_healing_profile: basic_heal
+  level_scale:
+    type: exponential
+    base: 5.5
+    growth: 1.1
   variance:
     enabled: true
     percent: 12.5
@@ -189,6 +193,142 @@ formula:
 base = level_scale(actor.level) * mob_unarmed_level_scale
      + power * power_scale
 ```
+
+### Level Scale
+
+`level_scale` is the combat system's way to make ratings and unarmed mob damage
+grow with level. Combat clamps levels below `1` up to `1` before applying the
+scale.
+
+This is separate from `leveling_curve`, which controls how much XP a player
+needs to reach each level.
+
+Combat uses `level_scale` in two places:
+
+- unarmed mob fallback damage:
+  `level_scale(actor.level) * mob_unarmed_level_scale`
+- rating math for dodge, crit, armor, and resilience:
+  `level_scale(opponent.level) * constant`
+
+#### Exponential
+
+`exponential` is the default. It keeps growing past the player level cap, which
+lets builders cap players at one level while still creating higher-level
+monsters or challenge content.
+
+```yaml
+combat:
+  level_scale:
+    type: exponential
+    base: 5.5
+    growth: 1.1
+```
+
+Formula:
+
+```text
+level_scale = base * growth^level
+```
+
+With the default `base: 5.5` and `growth: 1.1`:
+
+| Level | `level_scale` |
+| ---: | ---: |
+| 1 | 6.05 |
+| 5 | 8.86 |
+| 10 | 14.27 |
+| 15 | 22.97 |
+| 20 | 37.00 |
+| 30 | 95.97 |
+| 40 | 248.93 |
+| 60 | 1674.65 |
+
+#### Linear
+
+`linear` is easier to reason about and grows at the same amount every level.
+
+```yaml
+combat:
+  level_scale:
+    type: linear
+    base: 5.5
+    per_level: 1.25
+```
+
+Formula:
+
+```text
+level_scale = base + per_level * level
+```
+
+With the default linear values:
+
+| Level | `level_scale` |
+| ---: | ---: |
+| 1 | 6.75 |
+| 5 | 11.75 |
+| 10 | 18.00 |
+| 15 | 24.25 |
+| 20 | 30.50 |
+| 60 | 80.50 |
+
+#### Flat
+
+`flat` ignores level. Use it for worlds where ratings should mean the same
+thing at every level.
+
+```yaml
+combat:
+  level_scale:
+    type: flat
+    value: 1.0
+```
+
+Formula:
+
+```text
+level_scale = value
+```
+
+#### ILF
+
+`ilf` is the WR1 legacy scale. It preserves the original level 1-20 feel:
+levels 1-15 grow quickly, then levels 16-20 taper so that high-level content is
+not locked exclusively to capped characters. Values above level 20 currently use
+the same scale as level 20.
+
+```yaml
+combat:
+  level_scale:
+    type: ilf
+```
+
+Formula:
+
+```text
+if level < 17:
+  level_scale = 5.5 * 1.1^level
+else:
+  level_scale = 5.5 * 1.1^16
+  if level >= 17: level_scale *= 1.08
+  if level >= 18: level_scale *= 1.06
+  if level >= 19: level_scale *= 1.04
+  if level >= 20: level_scale *= 1.02
+```
+
+Approximate values:
+
+| Level | `level_scale` |
+| ---: | ---: |
+| 1 | 6.05 |
+| 5 | 8.86 |
+| 10 | 14.27 |
+| 15 | 22.97 |
+| 16 | 25.27 |
+| 17 | 27.29 |
+| 18 | 28.93 |
+| 19 | 30.09 |
+| 20 | 30.69 |
 
 The default ability profile does not use weapon damage:
 

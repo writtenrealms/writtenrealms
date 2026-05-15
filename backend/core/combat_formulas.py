@@ -28,6 +28,7 @@ SUPPORTED_COMBAT_VERSION = 1
 PROFILE_KINDS = ("damage", "healing")
 RATING_TYPES = ("mitigation_curve", "linear_rating")
 PROFILE_VARIANCE_STRATEGIES = ("default", "none")
+LEVEL_SCALE_TYPES = ("exponential", "linear", "flat", "ilf")
 ALLOWED_POWER_STATS = (
     "attack_power",
     "ability_power",
@@ -91,7 +92,9 @@ DEFAULT_COMBAT_SYSTEM: dict[str, Any] = {
     "default_ability_profile": "basic_ability",
     "default_healing_profile": "basic_heal",
     "level_scale": {
-        "type": "ilf",
+        "type": "exponential",
+        "base": 5.5,
+        "growth": 1.1,
     },
     "variance": {
         "enabled": True,
@@ -291,10 +294,50 @@ def _coerce_level_scale(value: Any) -> dict[str, Any]:
         value = {}
     if not isinstance(value, dict):
         raise CombatFormulaValidationError("combat.level_scale must be a mapping.")
-    scale_type = str(value.get("type") or "ilf").strip()
-    if scale_type != "ilf":
-        raise CombatFormulaValidationError("combat.level_scale.type must be ilf.")
-    return {"type": scale_type}
+    scale_type = str(value.get("type") or DEFAULT_COMBAT_SYSTEM["level_scale"]["type"]).strip()
+    if scale_type not in LEVEL_SCALE_TYPES:
+        supported = ", ".join(LEVEL_SCALE_TYPES)
+        raise CombatFormulaValidationError(
+            f"combat.level_scale.type must be one of: {supported}."
+        )
+    if scale_type == "ilf":
+        return {"type": scale_type}
+    if scale_type == "exponential":
+        return {
+            "type": scale_type,
+            "base": _coerce_number(
+                value.get("base", DEFAULT_COMBAT_SYSTEM["level_scale"]["base"]),
+                field_name="combat.level_scale.base",
+                minimum=0.0001,
+            ),
+            "growth": _coerce_number(
+                value.get("growth", DEFAULT_COMBAT_SYSTEM["level_scale"]["growth"]),
+                field_name="combat.level_scale.growth",
+                minimum=0.0001,
+            ),
+        }
+    if scale_type == "linear":
+        return {
+            "type": scale_type,
+            "base": _coerce_number(
+                value.get("base", 5.5),
+                field_name="combat.level_scale.base",
+                minimum=0,
+            ),
+            "per_level": _coerce_number(
+                value.get("per_level", 1.25),
+                field_name="combat.level_scale.per_level",
+                minimum=0,
+            ),
+        }
+    return {
+        "type": scale_type,
+        "value": _coerce_number(
+            value.get("value", 1.0),
+            field_name="combat.level_scale.value",
+            minimum=0,
+        ),
+    }
 
 
 def _coerce_variance_block(value: Any, *, field_name: str) -> dict[str, Any]:
@@ -611,10 +654,20 @@ def get_world_combat_system(world) -> dict[str, Any]:
 
 
 def _level_scale(level: int, combat_system: dict[str, Any]) -> float:
-    scale_type = combat_system.get("level_scale", {}).get("type", "ilf")
+    normalized_level = max(1, int(level or 1))
+    level_scale = combat_system.get("level_scale", {})
+    scale_type = level_scale.get("type", DEFAULT_COMBAT_SYSTEM["level_scale"]["type"])
     if scale_type == "ilf":
-        return float(config.ILF(max(1, int(level or 1))))
-    return float(max(1, int(level or 1)))
+        return float(config.ILF(normalized_level))
+    if scale_type == "linear":
+        return float(level_scale.get("base", 5.5)) + (
+            float(level_scale.get("per_level", 1.25)) * normalized_level
+        )
+    if scale_type == "flat":
+        return float(level_scale.get("value", 1.0))
+    return float(level_scale.get("base", 5.5)) * (
+        float(level_scale.get("growth", 1.1)) ** normalized_level
+    )
 
 
 def _actor_type(actor: Any) -> str:

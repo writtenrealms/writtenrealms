@@ -280,6 +280,7 @@ World manifests also support `spec.combat`, which holds the authored WR2
 combat formula system:
 
 - named attack/healing profiles
+- level scaling for rating curves and unarmed mob fallback damage
 - rating curves for dodge, crit, armor, and resilience
 - weapon damage, attack power, and ability power scaling
 - mitigation rules for physical and ability damage
