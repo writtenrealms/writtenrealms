@@ -9,19 +9,24 @@ variance.
 Example:
 
 ```yaml
-slug: bronze-sword
-name: a bronze sword
-description: A practical blade with a simple leather grip.
-randomization:
-  attributes:
-    - key: brawn
-      min: 10
-      max: 20
-      mode: uniform
-    - key: grace
-      min: 1
-      max: 5
-      mode: favor_low
+kind: itemdefinition
+metadata:
+  slug: bronze-sword
+  name: a bronze sword
+spec:
+  description: A practical blade with a simple leather grip.
+  type: equippable
+  equipment_type: weapon_1h
+  randomization:
+    attributes:
+      - key: brawn
+        min: 10
+        max: 20
+        mode: uniform
+      - key: grace
+        min: 1
+        max: 5
+        mode: favor_low
 ```
 
 The feature should support:
@@ -37,22 +42,36 @@ The feature should support:
 The design goal is not a fully procedural loot engine. It is controlled
 randomness that builders can understand.
 
+First-pass non-goals:
+
+- no randomized names, affixes, description fragments, sockets, or rarity tables
+- no arbitrary formula language inside item randomization
+- no hard-coded `strength`, `dexterity`, `constitution`, or `intelligence`
+  assumptions
+- no revival of WR1 `RandomItemProfile` as the runtime model
+
 Reference docs:
 
 - [stats-formulas-and-classes.md](/Users/teebes/code/writtenrealms/docs/architecture/stats-formulas-and-classes.md)
 - [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
+- [input-attributes-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/input-attributes-builder-guide.md)
 - `.codex/skills/wr-transition/wr2-architecture.md`
 
 ## Current Baseline
 
-The repository already has relevant pieces, but they should be treated as
-constraints and migration context rather than the target model:
+The repository already has relevant pieces, but they are implementation
+constraints rather than the target builder model:
 
 - `ItemTemplate` has a world-scoped `slug` and spawns concrete `Item` rows.
-- WR2 architecture expects `ItemInstance`/`Item` rows to hold per-item JSON for
-  rolled stats or sockets.
-- The frontend currently stacks inventory by `template_id` when the item is not
-  a container.
+- `ItemTemplate` and `spawns.Item` already have JSON-backed
+  `input_attributes`.
+- State payloads already expose item `input_attributes` and canonical item
+  combat fields such as `weapon_damage`, `attack_power`, `ability_power`,
+  `armor`, `crit`, `dodge`, and `resilience`.
+- State payloads do not yet expose `definition_slug`, `is_stackable`, or
+  `stack_key`.
+- The frontend still stacks inventory by `template_id` when the item is not a
+  container.
 
 There is also a WR1-era `RandomItemProfile` path. That system procedurally
 generates equipment from broad categories such as weapon, shield, or armor. It
@@ -72,11 +91,11 @@ Recommended target nouns:
 - `ItemInstance`: concrete spawned item with persisted rolled values
 - `ItemBundle`: authored weighted bundle/table of item definitions
 
-The current `ItemTemplate` and `spawns.Item` tables may be used as transitional
-adapter points if that is the cheapest implementation route, but the new
-builder/API concepts should be named and shaped around WR2. New authored
-guided-random definitions should live in the new model, not in
-`RandomItemProfile` or the old random-drop fields.
+The implementation may bridge through current `ItemTemplate` and `spawns.Item`
+plumbing where that keeps the first pass smaller, but those names should not be
+the builder-facing concept for this feature. New authored guided-random
+definitions should live in the new model, not in `RandomItemProfile` or the old
+random-drop fields.
 
 This keeps the mental model simple:
 
@@ -103,18 +122,26 @@ class ItemDefinition(models.Model):
     description = models.TextField(blank=True)
     ground_description = models.TextField(blank=True)
     keywords = models.TextField(blank=True)
+    notes = models.TextField(blank=True)
     item_type = models.TextField()
     base_properties = models.JSONField(default=dict, blank=True)
     base_input_attributes = models.JSONField(default=dict, blank=True)
     randomization = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        unique_together = ("world", "slug")
 ```
 
 `base_properties` is for structured item fields that are not input attributes,
 such as equipment type, weapon grip, food value, or container capacity. Fields
 that become high-traffic query targets can be promoted to columns later.
 
-`base_input_attributes` is for fixed authored input attributes. `randomization`
-is only for values that should roll at spawn time.
+`base_input_attributes` is for fixed authored input attributes. In manifests and
+builder APIs this should appear as `spec.input_attributes`, matching current
+`itemtemplate` manifests. The `base_` prefix is only an internal distinction
+between fixed authored inputs and rolled inputs.
+
+`randomization` is only for values that should roll at spawn time.
 
 Recommended shape:
 
@@ -140,8 +167,10 @@ Recommended shape:
 ```
 
 The initial randomization version should support numeric input-attribute rolls
-only. Avoid name pieces, description fragments, sockets, affixes, or conditional
-formulas in the first implementation.
+only. Rollable canonical item fields such as `weapon_damage`, `cost`, or
+`armor` can be considered later, but they should not be part of phase 1. Avoid
+name pieces, description fragments, sockets, affixes, or conditional formulas
+in the first implementation.
 
 ### ItemInstance
 
@@ -188,15 +217,18 @@ should hold low-cardinality audit data, not gameplay logic:
 ```
 
 During implementation, `ItemInstance` may be backed by the existing
-`spawns.Item` table plus JSON fields. The target behavior is still clean WR2:
-item bonuses flow through JSON-backed `input_attributes` and canonical item
-stat fields, not through fixed STR/DEX/CON/INT columns.
+`spawns.Item` table. That table already has JSON-backed `input_attributes`; the
+guided-random feature still needs definition linkage and roll metadata. The
+target behavior is clean WR2: item bonuses flow through JSON-backed
+`input_attributes` and canonical item stat fields, not through fixed
+STR/DEX/CON/INT columns.
 
 ## Roll Spec Semantics
 
 Each random attribute entry should be small and declarative:
 
-- `key`: input attribute key from the world's stat system
+- `key`: input attribute key from the world's stat system, not a canonical
+  derived stat
 - `min`: inclusive minimum integer
 - `max`: inclusive maximum integer
 - `mode`: distribution mode
@@ -225,11 +257,15 @@ Hard validation should only reject malformed definitions:
 
 Missing attribute keys should not make runtime generation fail.
 
+Do not hard-code `strength`, `dexterity`, `constitution`, or `intelligence` in
+the feature. Those keys only work in worlds that explicitly define them in
+`spec.stats.input_attributes`.
+
 ## Stale Attribute Tolerance
 
-World input attributes are configurable. Builders may remove or rename
-`brawn` after item definitions already reference it. The runtime must
-survive that.
+World input attributes are configurable. New WR2 worlds start with no input
+attributes at all. Builders may later remove or rename `brawn` after item
+definitions already reference it. The runtime must survive that.
 
 Runtime rule:
 
@@ -240,6 +276,11 @@ Runtime rule:
 - if the key is missing, skip that entry and add it to
   `roll_metadata.ignored_attributes`
 - never raise a player-facing error because of a stale attribute key
+
+If a blank world imports an item definition that references `strength`, that
+definition is stale until the world defines `strength`. The item can still be
+created and spawned, but the `strength` roll is ignored for gameplay and
+reported to builders through validation and audit tooling.
 
 Existing spawned items should be treated the same way during stat aggregation:
 
@@ -295,6 +336,10 @@ Audits should be warnings unless the malformed spec cannot be parsed. A world
 with stale random definitions should still boot.
 
 ## Frontend Stacking
+
+Current state payloads already include item `input_attributes` and
+`template_id`. They do not yet include stack metadata, and
+`frontend/src/core/utils.ts` still stacks by `template_id`.
 
 The frontend should stop deciding stackability from `template_id` alone. In the
 WR2 target payload, the corresponding field should be `definition_id` or
@@ -366,9 +411,16 @@ class ItemBundle(models.Model):
     name = models.TextField()
     notes = models.TextField(blank=True)
 
+    class Meta:
+        unique_together = ("world", "slug")
+
 class ItemBundleEntry(models.Model):
-    bundle = models.ForeignKey(ItemBundle, related_name="entries")
-    item_definition = models.ForeignKey(ItemDefinition)
+    bundle = models.ForeignKey(
+        ItemBundle,
+        related_name="entries",
+        on_delete=models.CASCADE,
+    )
+    item_definition = models.ForeignKey(ItemDefinition, on_delete=models.CASCADE)
     weight = models.PositiveIntegerField(default=1)
     min_quantity = models.PositiveIntegerField(default=1)
     max_quantity = models.PositiveIntegerField(default=1)
@@ -381,16 +433,18 @@ definitions. Those definitions may be deterministic or guided-random.
 Example:
 
 ```yaml
-item_bundles:
-  bandit-weapon-drop:
-    name: Bandit weapon drop
-    entries:
-      - item_definition: bronze-sword
-        weight: 5
-      - item_definition: chipped-axe
-        weight: 3
-      - item_definition: rusty-dagger
-        weight: 2
+kind: itembundle
+metadata:
+  slug: bandit-weapon-drop
+  name: Bandit weapon drop
+spec:
+  entries:
+    - item_definition: bronze-sword
+      weight: 5
+    - item_definition: chipped-axe
+      weight: 3
+    - item_definition: rusty-dagger
+      weight: 2
 ```
 
 This supports cases like:
@@ -440,37 +494,53 @@ deterministic when the initial state and random seed are the same.
 
 ## Manifest Shape
 
-World manifests should eventually allow item randomization alongside normal item
-definition fields:
+World manifests should eventually support `kind: itemdefinition` and
+`kind: itembundle` documents, following the existing multi-document manifest
+flow used by `kind: itemtemplate`, `kind: world`, `kind: quest`, and other WR2
+entities.
 
 ```yaml
-item_definitions:
-  bronze-sword:
-    name: a bronze sword
-    description: A practical blade with a simple leather grip.
-    type: equippable
-    equipment_type: weapon_1h
-    randomization:
-      attributes:
-        - key: brawn
-          min: 10
-          max: 20
-          mode: uniform
-        - key: grace
-          min: 1
-          max: 5
-          mode: favor_low
-          curve: 1.5
-
-item_bundles:
-  bandit-weapon-drop:
-    name: Bandit weapon drop
-    entries:
-      - item_definition: bronze-sword
-        weight: 5
-      - item_definition: rusty-dagger
-        weight: 3
+kind: itemdefinition
+metadata:
+  slug: bronze-sword
+  name: a bronze sword
+spec:
+  description: A practical blade with a simple leather grip.
+  ground_description: A bronze sword lies here.
+  keywords: bronze sword blade
+  type: equippable
+  equipment_type: weapon_1h
+  weapon_grip: one_hand
+  weapon_damage: 8
+  input_attributes:
+    brawn: 2
+  randomization:
+    attributes:
+      - key: brawn
+        min: 10
+        max: 20
+        mode: uniform
+      - key: grace
+        min: 1
+        max: 5
+        mode: favor_low
+        curve: 1.5
+---
+kind: itembundle
+metadata:
+  slug: bandit-weapon-drop
+  name: Bandit weapon drop
+spec:
+  entries:
+    - item_definition: bronze-sword
+      weight: 5
+    - item_definition: rusty-dagger
+      weight: 3
 ```
+
+`spec.input_attributes` is the fixed item contribution. `spec.randomization`
+defines additional spawn-time rolls that merge into the concrete item's
+persisted `input_attributes`.
 
 Manifest import should hard-fail malformed randomization specs, but stale
 attribute keys should be warnings. This matches runtime behavior while still
@@ -480,8 +550,9 @@ giving builders feedback when they are editing authored content.
 
 ### Phase 1: Spawn-Time Guided Rolls
 
-- Add `ItemDefinition`.
-- Add JSON-backed input-attribute and roll-metadata storage to the concrete item
+- Add `ItemDefinition` as the authored WR2 item concept.
+- Reuse the existing JSON-backed `input_attributes` storage on concrete items.
+- Add definition linkage and `roll_metadata` storage to the concrete item
   instance path.
 - Implement a pure roll service with seeded RNG support.
 - Call the service from `spawn_item_from_definition`.
@@ -504,6 +575,7 @@ available.
 
 ### Phase 3: Builder Editor
 
+- Add `kind: itemdefinition` manifest import/export.
 - Add a structured randomization editor to the item definition form.
 - Populate attribute options from the world's stat config.
 - Display stale keys as ignored warnings.
@@ -515,6 +587,7 @@ This phase makes the feature manageable by builders.
 ### Phase 4: Item Bundles
 
 - Add `ItemBundle` and `ItemBundleEntry` with world-scoped slugs.
+- Add `kind: itembundle` manifest import/export.
 - Add builder list/detail screens.
 - Allow mob drops and merchant inventories to reference either a direct
   `ItemDefinition` or an `ItemBundle`.
