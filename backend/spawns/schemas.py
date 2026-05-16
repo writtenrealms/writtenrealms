@@ -38,6 +38,10 @@ class Item(BaseModel):
     equipment_type: Optional[str] = None  # "weapon_1h", "weapon_2h", "head", etc.
     template: Optional[str] = None
     template_id: Optional[int] = None
+    definition_id: Optional[int] = None
+    definition_slug: Optional[str] = None
+    is_stackable: bool = False
+    stack_key: Optional[str] = None
 
     # World-authored input attributes
     input_attributes: Dict[str, float] = Field(default_factory=dict)

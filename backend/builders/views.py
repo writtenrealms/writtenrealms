@@ -46,6 +46,8 @@ from builders.models import (
     BuilderAssignment,
     Currency,
     LastViewedRoom,
+    ItemBundle,
+    ItemDefinition,
     ItemTemplate,
     ItemTemplateInventory,
     ItemAction,
@@ -1624,6 +1626,13 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             "You do not have permission to alter this item template."
         )
 
+    def _assert_can_edit_item_definitions(self):
+        if self._builder_rank >= 3:
+            return
+        raise drf_exceptions.PermissionDenied(
+            "You do not have permission to alter item definitions."
+        )
+
     def _assert_can_edit_mob_template(self, mob_template=None):
         if mob_template is None:
             return
@@ -1846,6 +1855,86 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
         )
 
+    def _apply_item_definition_manifest(self, manifest):
+        self._assert_can_edit_item_definitions()
+        operation = builder_manifests.parse_manifest_operation(manifest)
+        if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+            parsed_delete = builder_manifests.parse_item_definition_delete_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            item_definition = parsed_delete.item_definition
+            item_definition_payload = {
+                "id": item_definition.id,
+                "key": item_definition.key,
+                "slug": item_definition.slug,
+                "name": item_definition.name,
+            }
+            item_definition.delete()
+            return Response(
+                {
+                    "kind": builder_manifests.ITEM_DEFINITION_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "item_definition": item_definition_payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        item_definition, is_create = builder_world_export.apply_item_definition_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        return Response(
+            {
+                "kind": builder_manifests.ITEM_DEFINITION_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "item_definition": builder_manifests.serialize_item_definition_payload(
+                    item_definition
+                ),
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
+    def _apply_item_bundle_manifest(self, manifest):
+        self._assert_can_edit_item_definitions()
+        operation = builder_manifests.parse_manifest_operation(manifest)
+        if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+            parsed_delete = builder_manifests.parse_item_bundle_delete_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            item_bundle = parsed_delete.item_bundle
+            item_bundle_payload = {
+                "id": item_bundle.id,
+                "key": item_bundle.key,
+                "slug": item_bundle.slug,
+                "name": item_bundle.name,
+            }
+            item_bundle.delete()
+            return Response(
+                {
+                    "kind": builder_manifests.ITEM_BUNDLE_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "item_bundle": item_bundle_payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        item_bundle, is_create = builder_world_export.apply_item_bundle_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        return Response(
+            {
+                "kind": builder_manifests.ITEM_BUNDLE_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "item_bundle": builder_manifests.serialize_item_bundle_payload(
+                    item_bundle
+                ),
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
     def _apply_ability_manifest(self, manifest):
         self._assert_can_edit_abilities()
         operation = builder_manifests.parse_manifest_operation(manifest)
@@ -2054,6 +2143,10 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             return self._apply_trigger_manifest(manifest)
         if manifest_kind == builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND:
             return self._apply_item_template_manifest(manifest)
+        if manifest_kind == builder_manifests.ITEM_DEFINITION_MANIFEST_KIND:
+            return self._apply_item_definition_manifest(manifest)
+        if manifest_kind == builder_manifests.ITEM_BUNDLE_MANIFEST_KIND:
+            return self._apply_item_bundle_manifest(manifest)
         if manifest_kind == builder_manifests.ABILITY_MANIFEST_KIND:
             return self._apply_ability_manifest(manifest)
         if manifest_kind == builder_manifests.ABILITIES_MANIFEST_KIND:

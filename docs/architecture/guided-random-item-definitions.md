@@ -59,19 +59,36 @@ Reference docs:
 
 ## Current Baseline
 
-The repository already has relevant pieces, but they are implementation
-constraints rather than the target builder model:
+The repository now has the first guided-random implementation slice:
 
 - `ItemTemplate` has a world-scoped `slug` and spawns concrete `Item` rows.
-- `ItemTemplate` and `spawns.Item` already have JSON-backed
+- `ItemDefinition` is the new transitional authored item model for this path.
+- `ItemBundle` and `ItemBundleEntry` provide weighted authored choices among
+  item definitions.
+- `ItemTemplate` and `spawns.Item` have JSON-backed
   `input_attributes`.
-- State payloads already expose item `input_attributes` and canonical item
-  combat fields such as `weapon_damage`, `attack_power`, `ability_power`,
-  `armor`, `crit`, `dodge`, and `resilience`.
-- State payloads do not yet expose `definition_slug`, `is_stackable`, or
-  `stack_key`.
-- The frontend still stacks inventory by `template_id` when the item is not a
-  container.
+- `spawns.Item` has nullable `definition`, `definition_slug_snapshot`, and
+  `roll_metadata` fields for definition-backed generated items.
+- State payloads expose item `input_attributes`, `definition_slug`,
+  `is_stackable`, `stack_key`, and canonical item combat fields such as
+  `weapon_damage`, `attack_power`, `ability_power`, `armor`, `crit`, `dodge`,
+  and `resilience`.
+- The frontend stacks by backend-provided `stack_key`, with a legacy
+  `template_id` fallback for older item payloads.
+- `/load item <slug-or-id>` can spawn either the old `ItemTemplate` path or the
+  new `ItemDefinition` path, preferring `ItemTemplate` when both match.
+- `MobTemplateInventory` and `MerchantInventory` can reference either old
+  templates, new direct definitions, or item bundles.
+- Mob template manifests can assign inventory via `item_template`,
+  `item_definition`, or `item_bundle`.
+
+Remaining gaps before this is builder-complete:
+
+- no structured item definition editor yet
+- no stale-randomization audit endpoint or management command yet
+- no structured merchant or mob-drop assignment UI for item definitions or
+  bundles yet
+- no long-term rename from `ItemDefinition` back to `ItemTemplate` yet
 
 There is also a WR1-era `RandomItemProfile` path. That system procedurally
 generates equipment from broad categories such as weapon, shield, or armor. It
@@ -562,48 +579,52 @@ giving builders feedback when they are editing authored content.
 
 ### Phase 1: Spawn-Time Guided Rolls
 
-- Add the clean authored WR2 item model under the transitional
+- Done: add the clean authored WR2 item model under the transitional
   `ItemDefinition` name.
-- Reuse the existing JSON-backed `input_attributes` storage on concrete items.
-- Add definition linkage and `roll_metadata` storage to `spawns.Item`.
-- Implement a pure roll service with seeded RNG support.
-- Call the service from `spawn_item_from_definition`.
-- Store rolled input attributes in JSON and let stat computation ignore stale or
-  undeclared keys.
-- Add WR2 tests for uniform rolls, biased rolls, stale keys, and persistence.
+- Done: reuse the existing JSON-backed `input_attributes` storage on concrete
+  items.
+- Done: add definition linkage and `roll_metadata` storage to `spawns.Item`.
+- Done: implement a pure roll service with seeded RNG support.
+- Done: call the service from `spawn_item_from_definition`.
+- Done: store rolled input attributes in JSON and let stat computation ignore
+  stale or undeclared keys.
+- Done: add WR2 tests for rolls, stale keys, persistence, manifests, export, and
+  `/load item` support.
 
 This phase proves the clean model without touching merchants, bundles, or the
 builder UI heavily.
 
 ### Phase 2: Payload And Stacking
 
-- Add `input_attributes`, `is_stackable`, and `stack_key` to item payloads.
-- Update frontend stacking to group by `stack_key`.
-- Make guided-random spawned items return `stack_key: null`.
-- Add frontend/unit coverage where available for deterministic stack grouping.
+- Done: add `input_attributes`, `is_stackable`, and `stack_key` to item
+  payloads.
+- Done: update frontend stacking to group by `stack_key`.
+- Done: make guided-random spawned items return `stack_key: null`.
+- Remaining: add frontend/unit coverage where available for deterministic stack
+  grouping.
 
 This phase prevents UI regressions before randomized items become widely
 available.
 
 ### Phase 3: Builder Editor
 
-- Add `kind: itemdefinition` manifest import/export.
+- Done: add `kind: itemdefinition` manifest import/export.
 - Add a structured randomization editor to the item definition form.
 - Populate attribute options from the world's stat config.
 - Display stale keys as ignored warnings.
 - Return validation warnings from the item definition API.
-- Include randomization in world export/import.
+- Done: include randomization in world export/import.
 
 This phase makes the feature manageable by builders.
 
 ### Phase 4: Item Bundles
 
-- Add `ItemBundle` and `ItemBundleEntry` with world-scoped slugs.
-- Add `kind: itembundle` manifest import/export.
+- Done: add `ItemBundle` and `ItemBundleEntry` with world-scoped slugs.
+- Done: add `kind: itembundle` manifest import/export.
 - Add builder list/detail screens.
-- Allow mob drops and merchant inventories to reference either a direct
+- Done: allow mob drops and merchant inventories to reference either a direct
   `ItemDefinition` or an `ItemBundle`.
-- Keep bundle execution as selection plus normal definition spawn.
+- Done: keep bundle execution as selection plus normal definition spawn.
 
 This phase adds discrete random choice without expanding the stat roll language.
 

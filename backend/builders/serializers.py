@@ -39,6 +39,8 @@ from builders.models import (
     BuilderAssignment,
     Currency,
     LastViewedRoom,
+    ItemBundle,
+    ItemDefinition,
     ItemTemplate,
     ItemTemplateInventory,
     ItemAction,
@@ -1975,7 +1977,9 @@ class MobTemplateSerializer(serializers.ModelSerializer):
 class MobTemplateInventorySerializer(serializers.ModelSerializer):
 
     container = ReferenceField(required=False, allow_null=False)
-    item_template = ReferenceField(required=True, allow_null=False)
+    item_template = ReferenceField(required=False, allow_null=True)
+    item_definition = ReferenceField(required=False, allow_null=True)
+    item_bundle = ReferenceField(required=False, allow_null=True)
 
     class Meta:
         model = MobTemplateInventory
@@ -1984,6 +1988,8 @@ class MobTemplateInventorySerializer(serializers.ModelSerializer):
             'id',
             'container',
             'item_template',
+            'item_definition',
+            'item_bundle',
             'probability',
             'num_copies'
         ]
@@ -1995,10 +2001,30 @@ class MobTemplateInventorySerializer(serializers.ModelSerializer):
                     api_consts.MAX_RULE_SPAWNS))
         return num_copies
 
+    def validate(self, data):
+        validated_data = super().validate(data)
+        sources = [
+            validated_data.get('item_template', getattr(self.instance, 'item_template', None)),
+            validated_data.get('item_definition', getattr(self.instance, 'item_definition', None)),
+            validated_data.get('item_bundle', getattr(self.instance, 'item_bundle', None)),
+        ]
+        source_count = sum(1 for source in sources if source)
+        if source_count == 0:
+            raise serializers.ValidationError(
+                "Either an item template, item definition, or item bundle is required."
+            )
+        if source_count > 1:
+            raise serializers.ValidationError(
+                "Specify only one item template, item definition, or item bundle."
+            )
+        return validated_data
+
 
 class AddMobTemplateInventorySerializer(serializers.Serializer):
 
-    item_template = ReferenceField()
+    item_template = ReferenceField(required=False, allow_null=True)
+    item_definition = ReferenceField(required=False, allow_null=True)
+    item_bundle = ReferenceField(required=False, allow_null=True)
     probability = serializers.IntegerField(required=False)
     num_copies = serializers.IntegerField(required=False)
 
@@ -2018,10 +2044,30 @@ class AddMobTemplateInventorySerializer(serializers.Serializer):
                     api_consts.MAX_RULE_SPAWNS))
         return num_copies
 
+    def validate(self, data):
+        validated_data = super().validate(data)
+        sources = [
+            validated_data.get('item_template'),
+            validated_data.get('item_definition'),
+            validated_data.get('item_bundle'),
+        ]
+        source_count = sum(1 for source in sources if source)
+        if source_count == 0:
+            raise serializers.ValidationError(
+                "Either an item template, item definition, or item bundle is required."
+            )
+        if source_count > 1:
+            raise serializers.ValidationError(
+                "Specify only one item template, item definition, or item bundle."
+            )
+        return validated_data
+
 
 class MobTemplateMerchantInventorySerializer(serializers.ModelSerializer):
 
     item_template = ReferenceField(required=False, allow_null=True)
+    item_definition = ReferenceField(required=False, allow_null=True)
+    item_bundle = ReferenceField(required=False, allow_null=True)
     random_item_profile = ReferenceField(required=False, allow_null=True)
     name = serializers.SerializerMethodField()
 
@@ -2031,24 +2077,30 @@ class MobTemplateMerchantInventorySerializer(serializers.ModelSerializer):
         model = MerchantInventory
         fields = [
             'id', 'num', 'name',
-            'item_template', 'random_item_profile',
+            'item_template', 'item_definition', 'item_bundle',
+            'random_item_profile',
         ]
 
     def validate(self, data):
         validated_data = super().validate(data)
 
-        # have item or profile but neither nor both
-
-        if (not validated_data.get('item_template') and
-            not validated_data.get('random_item_profile')):
+        sources = [
+            validated_data.get('item_template', getattr(self.instance, 'item_template', None)),
+            validated_data.get('item_definition', getattr(self.instance, 'item_definition', None)),
+            validated_data.get('item_bundle', getattr(self.instance, 'item_bundle', None)),
+            validated_data.get('random_item_profile', getattr(self.instance, 'random_item_profile', None)),
+        ]
+        source_count = sum(1 for source in sources if source)
+        if source_count == 0:
             raise serializers.ValidationError(
-                "Either an item template or a random profile is required.")
-
-        if (validated_data.get('item_template') and
-            validated_data.get('random_item_profile')):
+                "Either an item template, item definition, item bundle, "
+                "or random profile is required."
+            )
+        if source_count > 1:
             raise serializers.ValidationError(
-                "Specify either an item template or a random profile "
-                "(but not both).")
+                "Specify only one item template, item definition, item bundle, "
+                "or random profile (not both)."
+            )
 
         return validated_data
 

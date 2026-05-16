@@ -47,31 +47,35 @@ export const formatRelativeModifiedDate = (value?: string) => {
 
 export const stackedInventory = function(inv) {
   /*
-    Takes a list of items and consolidates those with identical template IDs
-    to the count of the already encountered item.
+    Takes a list of items and consolidates those with identical backend-provided
+    stack keys to the count of the already encountered item.
   */
 
-  var c_inv: any[] = []; // the inventory with template id counts
-  var t_items = {}; // template items cache
+  var c_inv: any[] = []; // the inventory with stack counts
+  var t_items = {}; // stackable items cache
 
   for (let item of inv) {
     var tid = item.template_id;
+    var stackKey = item.stack_key;
+    if (stackKey === undefined && tid && !item.is_container) {
+      stackKey = `template:${tid}`;
+    }
 
-    // Templated item
-    if (tid && !item.is_container) {
-      if (t_items[tid] === undefined) {
-        item.display_key = tid;
-        t_items[tid] = item;
+    // Stackable item
+    if (stackKey) {
+      if (t_items[stackKey] === undefined) {
+        item.display_key = stackKey;
+        t_items[stackKey] = item;
         item.count = 1;
         item.showCount = false;
         c_inv.push(item);
       } else {
         // Modify item in cache
-        if (t_items[tid].count === 1) t_items[tid].showCount = true;
-        t_items[tid].count += 1;
+        if (t_items[stackKey].count === 1) t_items[stackKey].showCount = true;
+        t_items[stackKey].count += 1;
       }
 
-    // Generated Item
+    // Generated or otherwise unique item
     } else {
       item.display_key = item.key;
       c_inv.push(item);

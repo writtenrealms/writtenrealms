@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 from django.test import override_settings
 
-from builders.models import ItemTemplate, MobTemplate
+from builders.models import ItemDefinition, ItemTemplate, MobTemplate
 from config import constants as api_consts
 from core.scoped_state import (
     STATE_SCOPE_CHARACTER,
@@ -93,6 +93,25 @@ class TestBuilderLoad(WorldTestCase):
         message = self._message_by_type(messages, "cmd./load.success")
         self.assertIsNotNone(message)
         self.assertEqual(message.get("data", {}).get("loaded", {}).get("name"), self.item_template.name)
+
+    def test_load_item_accepts_item_definition_slug(self):
+        item_definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="definition-sword",
+            name="a definition sword",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/load item definition-sword")
+
+        loaded_item = self.player.inventory.get(definition=item_definition)
+        self.assertEqual(loaded_item.name, item_definition.name)
+        message = self._message_by_type(messages, "cmd./load.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(
+            message.get("data", {}).get("loaded", {}).get("name"),
+            item_definition.name,
+        )
 
     def test_load_mob_accepts_template_slug(self):
         with capture_game_messages() as messages:

@@ -30,6 +30,7 @@ from builders.models import (
     Quest,
     Objective,
     Reward,
+    ItemDefinition,
     ItemTemplate,
     MobTemplate,
     TransformationTemplate,
@@ -618,6 +619,8 @@ class AnimateItemSerializer(serializers.ModelSerializer):
         if item.template:
             currency = item.template.currency
             return currency.code if currency else 'gold'
+        if item.currency:
+            return item.currency.code
         currency = Currency.objects.filter(
             world=item.world.context, is_default=True
         ).first()
@@ -1483,6 +1486,17 @@ class LoadTemplateSerializer(serializers.Serializer):
                 slug=template_ref,
                 world=context,
             ).first()
+        if template is None and data['template_type'] == 'item':
+            if template_ref.isdigit():
+                template = ItemDefinition.objects.filter(
+                    pk=int(template_ref),
+                    world=context,
+                ).first()
+            if template is None:
+                template = ItemDefinition.objects.filter(
+                    slug=template_ref,
+                    world=context,
+                ).first()
         if template is None:
             raise serializers.ValidationError(
                 "Template does not belong to this world")

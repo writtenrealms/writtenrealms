@@ -146,7 +146,7 @@ def get_player_with_related(player_id: int) -> Player:
     Reload the player with the relations we need for serialization to keep
     query counts low.
     """
-    inventory_qs = Item.objects.select_related("template", "currency")
+    inventory_qs = Item.objects.select_related("definition", "template", "currency")
     return (
         Player.objects.select_related(
             "world",
@@ -174,11 +174,17 @@ def get_player_with_related(player_id: int) -> Player:
 
 def resolve_item_name(item: Item) -> str:
     """
-    Prefer template names for templated items when instance name is empty
+    Prefer authored names for definition/template-backed items when instance name is empty
     or still the legacy default placeholder.
     """
     instance_name = (item.name or "").strip()
+    definition_name = (item.definition.name if item.definition else "") or ""
     template_name = (item.template.name if item.template else "") or ""
+    if definition_name and (
+        not instance_name
+        or instance_name.lower() == "unnamed item"
+    ):
+        return definition_name
     if template_name and (
         not instance_name
         or instance_name.lower() == "unnamed item"
@@ -191,6 +197,32 @@ def resolve_item_name(item: Item) -> str:
     return "Unnamed item"
 
 
+def item_stack_key(item: Item, *, item_type: str | None = None) -> str | None:
+    is_container = item_type in (
+        adv_consts.ITEM_TYPE_CONTAINER,
+        adv_consts.ITEM_TYPE_CORPSE,
+        adv_consts.ITEM_TYPE_TRASH,
+    )
+    if is_container:
+        return None
+
+    if item.definition_id:
+        roll_metadata = item.roll_metadata if isinstance(item.roll_metadata, dict) else {}
+        if roll_metadata.get("randomized"):
+            return None
+        definition_slug = (
+            item.definition.slug
+            if item.definition
+            else item.definition_slug_snapshot
+        )
+        return f"definition:{definition_slug or item.definition_id}"
+
+    if item.template_id:
+        return f"template:{item.template_id}"
+
+    return None
+
+
 def serialize_item(
     item: Item,
     *,
@@ -201,6 +233,8 @@ def serialize_item(
     name = resolve_item_name(item)
     currency = item.currency.code if item.currency else "gold"
     description = item.description
+    if not description and item.definition:
+        description = item.definition.description
     if not description and item.template:
         description = item.template.description
     armor_value = getattr(item, "armor", None)
@@ -210,11 +244,16 @@ def serialize_item(
         armor_value = 0
     actions = get_item_action_labels_for_actor(viewer, item)
     keywords = item.keywords or ""
+    if not keywords and item.definition:
+        keywords = item.definition.keywords or ""
     if not keywords and item.template:
         keywords = item.template.keywords or ""
     if not keywords:
         keywords = name.lower()
-    item_type = item.type or (item.template.type if item.template else None)
+    item_type = item.type or (
+        item.definition.item_type if item.definition else None
+    ) or (item.template.type if item.template else None)
+    stack_key = item_stack_key(item, item_type=item_type)
     inventory = []
     if include_inventory and item_type in (
         adv_consts.ITEM_TYPE_CONTAINER,
@@ -223,7 +262,7 @@ def serialize_item(
     ):
         inventory = serialize_inventory(
             item.inventory.filter(is_pending_deletion=False)
-            .select_related("template", "currency")
+            .select_related("definition", "template", "currency")
             .order_by("id"),
             viewer=viewer,
             include_inventory=True,
@@ -236,12 +275,24 @@ def serialize_item(
         type=item_type,
         armor_class=item.armor_class,
         description=description,
-        ground_description=item.ground_description or (item.template.ground_description if item.template else None),
+        ground_description=(
+            item.ground_description
+            or (item.definition.ground_description if item.definition else None)
+            or (item.template.ground_description if item.template else None)
+        ),
         level=item.level,
         quality=item.quality,
         is_magic=getattr(item, "is_magic", False),
         equipment_type=item.equipment_type,
         template_id=item.template_id,
+        definition_id=item.definition_id,
+        definition_slug=(
+            item.definition.slug
+            if item.definition
+            else item.definition_slug_snapshot or None
+        ),
+        stack_key=stack_key,
+        is_stackable=bool(stack_key),
         input_attributes=item.input_attributes or {},
         attack_power=item.attack_power,
         spell_power=item.spell_power,

@@ -1797,7 +1797,10 @@ class MobTemplateMerchantInventoryTests(BuilderTestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(
             resp.data['non_field_errors'],
-            ['Either an item template or a random profile is required.'])
+            [
+                'Either an item template, item definition, item bundle, '
+                'or random profile is required.'
+            ])
 
         resp = self.client.post(self.list_ep, {
             'random_item_profile': {'key': self.random_item_profile.key},

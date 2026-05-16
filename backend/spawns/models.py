@@ -716,6 +716,14 @@ class Item(ItemMixin, AdventBaseModel):
                                  related_name='template_items',
                                  **optional)
 
+    # For clean WR2 authored item definitions.
+    definition = models.ForeignKey('builders.ItemDefinition',
+                                   on_delete=models.SET_NULL,
+                                   related_name='spawned_items',
+                                   **optional)
+    definition_slug_snapshot = models.SlugField(max_length=120, blank=True)
+    roll_metadata = models.JSONField(default=dict, blank=True)
+
     # For procedural items
     profile = models.ForeignKey('builders.RandomItemProfile',
                                 on_delete=models.SET_NULL,

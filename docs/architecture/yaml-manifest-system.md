@@ -65,6 +65,8 @@ A new world-level **Edit World** view accepts a YAML manifest textarea.
   - `kind: zone`
   - `kind: room`
   - `kind: itemtemplate`
+  - `kind: itemdefinition`
+  - `kind: itembundle`
   - `kind: mobtemplate`
   - `kind: quest`
   - `kind: questarc`

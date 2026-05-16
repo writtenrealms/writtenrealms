@@ -222,6 +222,97 @@ class ItemTemplate(ItemMixin, AdventBaseModel):
 models.signals.post_save.connect(ItemTemplate.post_rule_save, ItemTemplate)
 
 
+class ItemDefinition(AdventBaseModel):
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='item_definitions')
+    slug = models.SlugField(max_length=120, blank=True)
+    name = models.TextField(default='Unnamed Item')
+    description = models.TextField(**optional)
+    ground_description = models.TextField(**optional)
+    keywords = models.TextField(**optional)
+    notes = models.TextField(**optional)
+    item_type = models.TextField(
+        choices=list_to_choice(adv_consts.ITEM_TYPES),
+        default=adv_consts.ITEM_TYPE_INERT)
+    base_properties = models.JSONField(default=dict, blank=True)
+    base_input_attributes = models.JSONField(default=dict, blank=True)
+    randomization = models.JSONField(default=dict, blank=True)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('world', 'slug')]
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = _generate_unique_world_slug(
+                self,
+                fallback_prefix="item-definition",
+            )
+        super().save(*args, **kwargs)
+
+    def spawn(self, target, spawn_world, rule=None, rng=None):
+        from builders.item_definitions import spawn_item_from_definition
+
+        return spawn_item_from_definition(
+            self,
+            target,
+            spawn_world,
+            rng=rng,
+            rule=rule,
+        )
+
+
+class ItemBundle(AdventBaseModel):
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='item_bundles')
+    slug = models.SlugField(max_length=120, blank=True)
+    name = models.TextField(default='Unnamed Item Bundle')
+    notes = models.TextField(**optional)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('world', 'slug')]
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = _generate_unique_world_slug(
+                self,
+                fallback_prefix="item-bundle",
+            )
+        super().save(*args, **kwargs)
+
+    def spawn(self, target, spawn_world, rule=None, rng=None):
+        from builders.item_definitions import spawn_item_from_bundle
+
+        return spawn_item_from_bundle(
+            self,
+            target,
+            spawn_world,
+            rng=rng,
+            rule=rule,
+        )
+
+
+class ItemBundleEntry(AdventBaseModel):
+    bundle = models.ForeignKey(
+        'builders.ItemBundle',
+        on_delete=models.CASCADE,
+        related_name='entries')
+    item_definition = models.ForeignKey(
+        'builders.ItemDefinition',
+        on_delete=models.CASCADE,
+        related_name='bundle_entries')
+    weight = models.PositiveIntegerField(default=1)
+    min_quantity = models.PositiveIntegerField(default=1)
+    max_quantity = models.PositiveIntegerField(default=1)
+    probability = models.PositiveIntegerField(default=100)
+
+    class Meta(AdventBaseModel.Meta):
+        ordering = ['created_ts', 'id']
+
+
 class MobTemplate(CharMixin, MobMixin, AdventBaseModel):
 
     world = models.ForeignKey(
@@ -338,14 +429,14 @@ class MobTemplate(CharMixin, MobMixin, AdventBaseModel):
 
             Note: closed over function
             """
-            if item.type == adv_consts.ITEM_TYPE_EQUIPPABLE:
+            if candidate_item.type == adv_consts.ITEM_TYPE_EQUIPPABLE:
                 slot = type_to_slot(
-                    eq_type=item.equipment_type,
+                    eq_type=candidate_item.equipment_type,
                     has_weapon=bool(mob.equipment.weapon),
                     has_offhand=bool(mob.equipment.offhand),
                     archetype=self.archetype)
                 if slot and not getattr(mob.equipment, slot, None):
-                    mob.equipment.equip(item=item, slot=slot)
+                    mob.equipment.equip(item=candidate_item, slot=slot)
 
         # process random item shortcut
         if self.drops_random_items:
@@ -369,10 +460,26 @@ class MobTemplate(CharMixin, MobMixin, AdventBaseModel):
                         inventory_record.probability)):
                         continue
 
-                item = inventory_record.item_template.spawn(
-                    target=mob,
-                    spawn_world=spawn_world)
-                equip_if_possible(item)
+                spawned_items = []
+                if inventory_record.item_template_id:
+                    spawned_items = [
+                        inventory_record.item_template.spawn(
+                            target=mob,
+                            spawn_world=spawn_world)
+                    ]
+                elif inventory_record.item_definition_id:
+                    spawned_items = [
+                        inventory_record.item_definition.spawn(
+                            target=mob,
+                            spawn_world=spawn_world)
+                    ]
+                elif inventory_record.item_bundle_id:
+                    spawned_items = inventory_record.item_bundle.spawn(
+                        target=mob,
+                        spawn_world=spawn_world)
+
+                for item in spawned_items:
+                    equip_if_possible(item)
 
         # For every mob, create a corpse item and load it in their
         # inventory.
@@ -459,7 +566,16 @@ class TemplateInventory(AdventBaseModel):
 class MobTemplateInventory(TemplateInventory):
     item_template = models.ForeignKey('builders.ItemTemplate',
                                       on_delete=models.CASCADE,
-                                      related_name='inventory_for_mobs')
+                                      related_name='inventory_for_mobs',
+                                      **optional)
+    item_definition = models.ForeignKey('builders.ItemDefinition',
+                                        on_delete=models.CASCADE,
+                                        related_name='inventory_for_mobs',
+                                        **optional)
+    item_bundle = models.ForeignKey('builders.ItemBundle',
+                                    on_delete=models.CASCADE,
+                                    related_name='inventory_for_mobs',
+                                    **optional)
     container = models.ForeignKey('builders.MobTemplate',
                                   on_delete=models.CASCADE,
                                   related_name='template_inventories')
@@ -1013,6 +1129,12 @@ class MerchantInventory(models.Model):
     item_template = models.ForeignKey('builders.ItemTemplate',
                                       on_delete=models.CASCADE,
                                       **optional)
+    item_definition = models.ForeignKey('builders.ItemDefinition',
+                                        on_delete=models.CASCADE,
+                                        **optional)
+    item_bundle = models.ForeignKey('builders.ItemBundle',
+                                    on_delete=models.CASCADE,
+                                    **optional)
     random_item_profile = models.ForeignKey('builders.RandomItemProfile',
                                        on_delete=models.CASCADE,
                                        **optional)
