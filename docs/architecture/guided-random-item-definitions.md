@@ -36,7 +36,7 @@ The feature should support:
 - world-authored input attributes from `spec.stats.input_attributes`
 - silent runtime tolerance when an authored attribute becomes stale
 - builder warnings and audit tools for stale definitions
-- unique frontend inventory and room lines for randomized item instances
+- unique frontend inventory and room lines for randomized spawned items
 - random bundles that can be assigned to merchants, mobs, rewards, or loaders
 
 The design goal is not a fully procedural loot engine. It is controlled
@@ -85,24 +85,32 @@ mental model: broad procedural generation with hard-coded legacy stat names.
 Create a clean WR2 item definition layer and keep the old random item system out
 of the new path.
 
-Recommended target nouns:
+Transitional names used in this document:
 
-- `ItemDefinition`: authored item content with a world-scoped slug
-- `ItemInstance`: concrete spawned item with persisted rolled values
+- `ItemDefinition`: the clean authored item model while the current
+  `ItemTemplate` model still exists
+- `ItemInstance`: a documentation term for a concrete spawned item with
+  persisted rolled values; in code this is `spawns.Item`
 - `ItemBundle`: authored weighted bundle/table of item definitions
 
 The implementation may bridge through current `ItemTemplate` and `spawns.Item`
-plumbing where that keeps the first pass smaller, but those names should not be
-the builder-facing concept for this feature. New authored guided-random
-definitions should live in the new model, not in `RandomItemProfile` or the old
-random-drop fields.
+plumbing where that keeps the first pass smaller, but the legacy table shapes
+should not define the feature. New authored guided-random definitions should
+live in the new model, not in `RandomItemProfile` or the old random-drop fields.
+
+The long-term target is not to keep `ItemTemplate` and `ItemDefinition` as
+parallel builder concepts. There should be one authored item concept. During
+the transition, `ItemDefinition` is a useful name because it distinguishes the
+new clean model from the existing `ItemTemplate` table. Once the old
+`ItemTemplate` implementation is gone, the new authored model can take the
+`ItemTemplate` name again if that is the clearest builder-facing vocabulary.
 
 This keeps the mental model simple:
 
 - stable item: an `ItemDefinition` with no randomization spec
 - guided random item: an `ItemDefinition` with a randomization spec
-- spawned item: an `ItemInstance` with copied base fields and persisted rolled
-  values
+- spawned item: a `spawns.Item` row with copied base fields and persisted
+  rolled values
 - random bundle: an `ItemBundle` that chooses among authored definitions
 
 `ItemDefinition.slug` is the stable reference for manifests, merchants, mob
@@ -110,9 +118,12 @@ drops, rewards, and bundles.
 
 ## Core Model
 
-### ItemDefinition
+### Authored Item
 
-Create a new authored model for WR2 item content:
+Create a new authored model for WR2 item content. The document calls it
+`ItemDefinition` because the current codebase already has `ItemTemplate`. That
+name is transitional; the important design point is the clean shape, not the
+permanent class name.
 
 ```python
 class ItemDefinition(models.Model):
@@ -172,23 +183,23 @@ only. Rollable canonical item fields such as `weapon_damage`, `cost`, or
 name pieces, description fragments, sockets, affixes, or conditional formulas
 in the first implementation.
 
-### ItemInstance
+### Runtime Item
 
 Persist the roll result on the spawned item. Do not rely on recomputing the
 definition later.
 
-Conceptual target fields:
+The runtime item is `spawns.Item`. That is the concrete object loaded into
+rooms, inventories, equipment slots, corpses, merchants, quest rewards, and
+other gameplay surfaces. Player commands should continue to interact with
+`spawns.Item`; do not add a second concrete runtime item table just because
+this document uses the phrase "item instance."
+
+Target additions or guarantees on `spawns.Item`:
 
 ```python
-class ItemInstance(models.Model):
-    world = models.ForeignKey("worlds.World", on_delete=models.CASCADE)
+class Item(models.Model):
     definition = models.ForeignKey(ItemDefinition, null=True, on_delete=models.SET_NULL)
     definition_slug_snapshot = models.SlugField(max_length=120, blank=True)
-    name = models.TextField()
-    description = models.TextField(blank=True)
-    ground_description = models.TextField(blank=True)
-    base_properties = models.JSONField(default=dict, blank=True)
-    base_input_attributes = models.JSONField(default=dict, blank=True)
     input_attributes = models.JSONField(default=dict, blank=True)
     roll_metadata = models.JSONField(default=dict, blank=True)
 ```
@@ -216,12 +227,10 @@ should hold low-cardinality audit data, not gameplay logic:
 }
 ```
 
-During implementation, `ItemInstance` may be backed by the existing
-`spawns.Item` table. That table already has JSON-backed `input_attributes`; the
-guided-random feature still needs definition linkage and roll metadata. The
-target behavior is clean WR2: item bonuses flow through JSON-backed
-`input_attributes` and canonical item stat fields, not through fixed
-STR/DEX/CON/INT columns.
+`spawns.Item` already has JSON-backed `input_attributes`; the guided-random
+feature still needs definition linkage and roll metadata. The target behavior
+is clean WR2: item bonuses flow through JSON-backed `input_attributes` and
+canonical item stat fields, not through fixed STR/DEX/CON/INT columns.
 
 ## Roll Spec Semantics
 
@@ -455,15 +464,15 @@ This supports cases like:
 
 ## Merchant And Mob Integration
 
-Keep direct item-definition assignment and bundle assignment separate in the data
+Keep direct authored-item assignment and bundle assignment separate in the data
 model. Avoid a generic "target can be anything" field for the first pass unless
 the surrounding builder code already strongly prefers it.
 
 Suggested progression:
 
 1. Direct `ItemDefinition` assignment spawns stable or guided-random items.
-2. Existing direct `ItemTemplate` assignment can continue until the new
-   definition path replaces it.
+2. Existing direct `ItemTemplate` assignment can continue during the transition
+   until the new authored model replaces it.
 3. Add `ItemBundle` assignment to merchant inventory and mob drops.
 4. Bundle entries spawn their selected `ItemDefinition` through the same item
    spawn path.
@@ -486,7 +495,7 @@ roll_item_randomization(definition, world_stat_system, rng) -> RollResult
 
 The spawn orchestration is responsible for choosing the RNG seed. Tests should
 be able to pass a seeded RNG and assert exact roll results. Runtime code should
-store rolled values immediately on the item instance row so later definition
+store rolled values immediately on the `spawns.Item` row so later definition
 edits do not mutate existing items.
 
 This follows the WR2 architecture direction that execution should be
@@ -494,10 +503,13 @@ deterministic when the initial state and random seed are the same.
 
 ## Manifest Shape
 
-World manifests should eventually support `kind: itemdefinition` and
-`kind: itembundle` documents, following the existing multi-document manifest
-flow used by `kind: itemtemplate`, `kind: world`, `kind: quest`, and other WR2
-entities.
+World manifests should support separate documents for authored items and item
+bundles, following the existing multi-document manifest flow used by
+`kind: itemtemplate`, `kind: world`, `kind: quest`, and other WR2 entities.
+
+During the transition, this document uses `kind: itemdefinition` for the new
+authored item shape. Once the existing `itemtemplate` path is retired, the final
+builder-facing kind can be renamed or collapsed back to `kind: itemtemplate`.
 
 ```yaml
 kind: itemdefinition
@@ -550,10 +562,10 @@ giving builders feedback when they are editing authored content.
 
 ### Phase 1: Spawn-Time Guided Rolls
 
-- Add `ItemDefinition` as the authored WR2 item concept.
+- Add the clean authored WR2 item model under the transitional
+  `ItemDefinition` name.
 - Reuse the existing JSON-backed `input_attributes` storage on concrete items.
-- Add definition linkage and `roll_metadata` storage to the concrete item
-  instance path.
+- Add definition linkage and `roll_metadata` storage to `spawns.Item`.
 - Implement a pure roll service with seeded RNG support.
 - Call the service from `spawn_item_from_definition`.
 - Store rolled input attributes in JSON and let stat computation ignore stale or
@@ -567,7 +579,7 @@ builder UI heavily.
 
 - Add `input_attributes`, `is_stackable`, and `stack_key` to item payloads.
 - Update frontend stacking to group by `stack_key`.
-- Make guided-random item instances return `stack_key: null`.
+- Make guided-random spawned items return `stack_key: null`.
 - Add frontend/unit coverage where available for deterministic stack grouping.
 
 This phase prevents UI regressions before randomized items become widely
@@ -602,6 +614,9 @@ This phase adds discrete random choice without expanding the stat roll language.
 - Keep WR1-era `RandomItemProfile` outside the new execution path. If content
   conversion is needed, do it as a one-way manifest/import conversion into
   `ItemDefinition` and `ItemBundle`, not as a runtime adapter.
+- Remove the old `ItemTemplate` implementation once the new authored model
+  covers the required builder/runtime surfaces, then decide whether to keep the
+  `ItemDefinition` name or rename the clean model back to `ItemTemplate`.
 - Remove any remaining fixed primary-stat assumptions from item generation and
   presentation.
 
