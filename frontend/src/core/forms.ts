@@ -382,8 +382,8 @@ export const GET_MOB_TEMPLATE_INFO = () => {
           label: "Mob Class",
           widget: "select",
           help: `The mob's class determine how its stats are calculated. For
-                 example, bruisers might roll more brawn and duelists might roll
-                 more grace.<br/>
+                 example, warriors might roll more strength and assassins might roll
+                 more dexterity.<br/>
                  If abilities are enabled, also informs which abilities are used.
                 `,
           options: [
@@ -920,10 +920,10 @@ export const BUILDER_FORMS = {
       ]
     },
     {
-      attr: "input_attributes",
-      label: "Input Attributes",
+      attr: "attributes",
+      label: "Attributes",
       widget: "key_value_map",
-      help: `One world-defined input attribute per line, for example:<br/>brawn: 3<br/>willpower: 1`,
+      help: `One world-defined attribute per line, for example:<br/>strength: 3<br/>dexterity: 1`,
     },
     {
       row_name: "Attack Attributes",

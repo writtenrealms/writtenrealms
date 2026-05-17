@@ -298,7 +298,7 @@ def serialize_item(
         ),
         stack_key=stack_key,
         is_stackable=bool(stack_key),
-        input_attributes=item.input_attributes or {},
+        attributes=item.attributes or {},
         attack_power=item.attack_power,
         ability_power=item.ability_power,
         weapon_damage=item.weapon_damage,

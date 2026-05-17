@@ -48,7 +48,7 @@ class CharMixin(models.Model):
 
     group_id = models.TextField(**optional)
 
-    input_attributes = models.JSONField(default=dict, blank=True)
+    attributes = models.JSONField(default=dict, blank=True)
 
     gold = models.IntegerField(default=0)
 
@@ -351,7 +351,7 @@ class ItemMixin(models.Model):
     stamina_max = models.IntegerField(default=0)
     stamina_regen = models.IntegerField(default=0)
 
-    input_attributes = models.JSONField(default=dict, blank=True)
+    attributes = models.JSONField(default=dict, blank=True)
 
     # Computed Stats
     attack_power = models.IntegerField(default=0)

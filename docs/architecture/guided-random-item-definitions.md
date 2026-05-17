@@ -19,11 +19,11 @@ spec:
   equipment_type: weapon_1h
   randomization:
     attributes:
-      - key: brawn
+      - key: strength
         min: 10
         max: 20
         mode: uniform
-      - key: grace
+      - key: dexterity
         min: 1
         max: 5
         mode: favor_low
@@ -33,7 +33,7 @@ The feature should support:
 
 - deterministic item definitions with no variance
 - guided random item definitions with explicit ranges and distribution modes
-- world-authored input attributes from `spec.stats.input_attributes`
+- world-authored attributes from `spec.stats.attributes`
 - silent runtime tolerance when an authored attribute becomes stale
 - builder warnings and audit tools for stale definitions
 - unique frontend inventory and room lines for randomized spawned items
@@ -67,17 +67,17 @@ The repository now has the first guided-random implementation slice:
 - `ItemBundle` and `ItemBundleEntry` provide weighted authored choices among
   item definitions.
 - `ItemTemplate` and `spawns.Item` have JSON-backed
-  `input_attributes`.
+  `attributes`.
 - `spawns.Item` has nullable `definition`, `definition_slug_snapshot`, and
   `roll_metadata` fields for definition-backed generated items.
-- State payloads expose item `input_attributes`, `definition_slug`,
+- State payloads expose item `attributes`, `definition_slug`,
   `is_stackable`, `stack_key`, and canonical item combat fields such as
   `weapon_damage`, `attack_power`, `ability_power`, `armor`, `crit`, `dodge`,
   and `resilience`.
 - The frontend stacks by backend-provided `stack_key`, with a legacy
   `template_id` fallback for older item payloads.
 - Stable definition-backed items resync unmodified spawned copies when the
-  definition changes. Randomized items keep their rolled input attributes, and
+  definition changes. Randomized items keep their rolled attributes, and
   upgraded or augmented items are treated as modified instances.
 - `/load item <slug-or-id>` can spawn either the old `ItemTemplate` path or the
   new `ItemDefinition` path, preferring `ItemTemplate` when both match.
@@ -157,21 +157,20 @@ class ItemDefinition(models.Model):
     notes = models.TextField(blank=True)
     item_type = models.TextField()
     base_properties = models.JSONField(default=dict, blank=True)
-    base_input_attributes = models.JSONField(default=dict, blank=True)
+    attributes = models.JSONField(default=dict, blank=True)
     randomization = models.JSONField(default=dict, blank=True)
 
     class Meta:
         unique_together = ("world", "slug")
 ```
 
-`base_properties` is for structured item fields that are not input attributes,
+`base_properties` is for structured item fields that are not attributes,
 such as equipment type, weapon grip, food value, or container capacity. Fields
 that become high-traffic query targets can be promoted to columns later.
 
-`base_input_attributes` is for fixed authored input attributes. In manifests and
-builder APIs this should appear as `spec.input_attributes`, matching current
-`itemtemplate` manifests. The `base_` prefix is only an internal distinction
-between fixed authored inputs and rolled inputs.
+`attributes` is for fixed authored attributes. In manifests and
+builder APIs this appears as `spec.attributes`. Rolled attributes are merged
+into the concrete runtime item's `attributes` when spawned.
 
 `randomization` is only for values that should roll at spawn time.
 
@@ -182,13 +181,13 @@ Recommended shape:
   "version": 1,
   "attributes": [
     {
-      "key": "brawn",
+      "key": "strength",
       "min": 10,
       "max": 20,
       "mode": "uniform"
     },
     {
-      "key": "grace",
+      "key": "dexterity",
       "min": 1,
       "max": 5,
       "mode": "favor_low",
@@ -198,7 +197,7 @@ Recommended shape:
 }
 ```
 
-The initial randomization version should support numeric input-attribute rolls
+The initial randomization version should support numeric attribute rolls
 only. Rollable canonical item fields such as `weapon_damage`, `cost`, or
 `armor` can be considered later, but they should not be part of phase 1. Avoid
 name pieces, description fragments, sockets, affixes, or conditional formulas
@@ -221,21 +220,21 @@ Target additions or guarantees on `spawns.Item`:
 class Item(models.Model):
     definition = models.ForeignKey(ItemDefinition, null=True, on_delete=models.SET_NULL)
     definition_slug_snapshot = models.SlugField(max_length=120, blank=True)
-    input_attributes = models.JSONField(default=dict, blank=True)
+    attributes = models.JSONField(default=dict, blank=True)
     roll_metadata = models.JSONField(default=dict, blank=True)
 ```
 
-`input_attributes` holds effective authored input attributes for this concrete
+`attributes` holds effective authored attributes for this concrete
 item, such as:
 
 ```json
 {
-  "brawn": 17,
-  "grace": 2
+  "strength": 17,
+  "dexterity": 2
 }
 ```
 
-`input_attributes` is the final effective input-attribute contribution for this
+`attributes` is the final effective attribute contribution for this
 concrete item after fixed and rolled attributes are merged. `roll_metadata`
 should hold low-cardinality audit data, not gameplay logic:
 
@@ -248,16 +247,16 @@ should hold low-cardinality audit data, not gameplay logic:
 }
 ```
 
-`spawns.Item` already has JSON-backed `input_attributes`; the guided-random
+`spawns.Item` already has JSON-backed `attributes`; the guided-random
 feature still needs definition linkage and roll metadata. The target behavior
-is clean WR2: item bonuses flow through JSON-backed `input_attributes` and
+is clean WR2: item bonuses flow through JSON-backed `attributes` and
 canonical item stat fields, not through fixed STR/DEX/CON/INT columns.
 
 ## Roll Spec Semantics
 
 Each random attribute entry should be small and declarative:
 
-- `key`: input attribute key from the world's stat system, not a canonical
+- `key`: attribute key from the world's stat system, not a canonical
   derived stat
 - `min`: inclusive minimum integer
 - `max`: inclusive maximum integer
@@ -289,19 +288,19 @@ Missing attribute keys should not make runtime generation fail.
 
 Do not hard-code `strength`, `dexterity`, `constitution`, or `intelligence` in
 the feature. Those keys only work in worlds that explicitly define them in
-`spec.stats.input_attributes`.
+`spec.stats.attributes`.
 
 ## Stale Attribute Tolerance
 
-World input attributes are configurable. New WR2 worlds start with no input
-attributes at all. Builders may later remove or rename `brawn` after item
+World attributes are configurable. New WR2 worlds start with no attributes at
+all. Builders may later remove or rename `strength` after item
 definitions already reference it. The runtime must survive that.
 
 Runtime rule:
 
 - when spawning an item, load the current world stat system
 - for each randomization entry, check whether `key` exists in
-  `spec.stats.input_attributes`
+  `spec.stats.attributes`
 - if the key exists, roll and persist it
 - if the key is missing, skip that entry and add it to
   `roll_metadata.ignored_attributes`
@@ -329,7 +328,7 @@ Recommended editor:
 
 - a "Randomized attributes" section on item definitions
 - one row per attribute roll
-- attribute picker populated from current `spec.stats.input_attributes`
+- attribute picker populated from current `spec.stats.attributes`
 - min/max numeric inputs
 - mode dropdown with `Uniform`, `Favor low`, `Favor high`
 - optional advanced curve input hidden behind row expansion
@@ -367,7 +366,7 @@ with stale random definitions should still boot.
 
 ## Frontend Stacking
 
-Current state payloads already include item `input_attributes` and
+Current state payloads already include item `attributes` and
 `template_id`, `definition_slug`, `is_stackable`, and `stack_key`.
 
 The frontend should stop deciding stackability from `template_id` alone. In the
@@ -393,8 +392,8 @@ Recommended payload change:
   "definition_slug": "bronze-sword",
   "stack_key": null,
   "is_stackable": false,
-  "input_attributes": {
-    "brawn": 17
+  "attributes": {
+    "strength": 17
   }
 }
 ```
@@ -549,15 +548,15 @@ spec:
   equipment_type: weapon_1h
   weapon_grip: one_hand
   weapon_damage: 8
-  input_attributes:
-    brawn: 2
+  attributes:
+    strength: 2
   randomization:
     attributes:
-      - key: brawn
+      - key: strength
         min: 10
         max: 20
         mode: uniform
-      - key: grace
+      - key: dexterity
         min: 1
         max: 5
         mode: favor_low
@@ -575,9 +574,9 @@ spec:
       weight: 3
 ```
 
-`spec.input_attributes` is the fixed item contribution. `spec.randomization`
+`spec.attributes` is the fixed item contribution. `spec.randomization`
 defines additional spawn-time rolls that merge into the concrete item's
-persisted `input_attributes`.
+persisted `attributes`.
 
 Manifest import should hard-fail malformed randomization specs, but stale
 attribute keys should be warnings. This matches runtime behavior while still
@@ -589,12 +588,12 @@ giving builders feedback when they are editing authored content.
 
 - Done: add the clean authored WR2 item model under the transitional
   `ItemDefinition` name.
-- Done: reuse the existing JSON-backed `input_attributes` storage on concrete
+- Done: reuse the existing JSON-backed `attributes` storage on concrete
   items.
 - Done: add definition linkage and `roll_metadata` storage to `spawns.Item`.
 - Done: implement a pure roll service with seeded RNG support.
 - Done: call the service from `spawn_item_from_definition`.
-- Done: store rolled input attributes in JSON and let stat computation ignore
+- Done: store rolled attributes in JSON and let stat computation ignore
   stale or undeclared keys.
 - Done: add WR2 tests for rolls, stale keys, persistence, manifests, export, and
   `/load item` support.
@@ -604,7 +603,7 @@ builder UI heavily.
 
 ### Phase 2: Payload And Stacking
 
-- Done: add `input_attributes`, `is_stackable`, and `stack_key` to item
+- Done: add `attributes`, `is_stackable`, and `stack_key` to item
   payloads.
 - Done: update frontend stacking to group by `stack_key`.
 - Done: make guided-random spawned items return `stack_key: null`.
@@ -673,5 +672,5 @@ procedural content engine.
 - Should bundle entries support "choose N distinct entries" immediately, or
   only one weighted roll per entry?
 - How should merchant restock timing interact with generated unique items?
-- Should player-facing item inspection show rolled input attributes directly,
+- Should player-facing item inspection show rolled attributes directly,
   or only the derived effective stats after formulas apply?

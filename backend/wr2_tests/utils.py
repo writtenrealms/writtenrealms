@@ -7,7 +7,7 @@ from spawns.handlers import dispatch_command
 
 
 BASIC_TEST_STAT_SYSTEM = {
-    "input_attributes": [
+    "attributes": [
         {"key": "brawn", "label": "Brawn"},
         {"key": "grit", "label": "Grit"},
         {"key": "focus", "label": "Focus"},
@@ -16,7 +16,7 @@ BASIC_TEST_STAT_SYSTEM = {
         "warrior": {
             "label": "Warrior",
             "main_attribute": "brawn",
-            "base_attribute_weights": {
+            "attribute_weights": {
                 "brawn": 2,
                 "grit": 4,
                 "focus": 2,

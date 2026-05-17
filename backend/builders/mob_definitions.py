@@ -6,7 +6,7 @@ from django.db.models import NOT_PROVIDED
 
 from builders.item_definitions import (
     RollResult,
-    normalize_input_attribute_map,
+    normalize_attribute_map,
     roll_item_randomization,
 )
 from core.model_mixins import CharMixin, MobMixin
@@ -27,7 +27,7 @@ def mob_definition_property_fields() -> tuple[str, ...]:
         "description",
         "room_description",
         "keywords",
-        "input_attributes",
+        "attributes",
         "type",
         "health",
         "energy",
@@ -71,10 +71,10 @@ def _normalize_for_mob_model(fields: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def _merge_input_attributes(*maps: dict[str, Any]) -> dict[str, float]:
+def _merge_attributes(*maps: dict[str, Any]) -> dict[str, float]:
     merged: dict[str, float] = {}
     for values in maps:
-        normalized = normalize_input_attribute_map(values or {})
+        normalized = normalize_attribute_map(values or {})
         for key, value in normalized.items():
             merged[key] = merged.get(key, 0.0) + value
     return merged
@@ -88,7 +88,7 @@ def roll_mob_randomization(
     return roll_item_randomization(definition, world_stat_system, rng=rng)
 
 
-def _mob_fields_from_definition(definition, input_attributes: dict[str, float]) -> dict[str, Any]:
+def _mob_fields_from_definition(definition, attributes: dict[str, float]) -> dict[str, Any]:
     fields = _template_field_defaults()
     fields["name"] = definition.name or fields.get("name") or "Unnamed Mob"
     fields["description"] = definition.description or ""
@@ -98,7 +98,7 @@ def _mob_fields_from_definition(definition, input_attributes: dict[str, float]) 
 
     for key, value in (definition.base_properties or {}).items():
         if key not in MOB_BASE_FIELD_NAMES or key in {
-            "input_attributes",
+            "attributes",
             "name",
             "health",
             "energy",
@@ -108,7 +108,7 @@ def _mob_fields_from_definition(definition, input_attributes: dict[str, float]) 
             continue
         fields[key] = value
 
-    fields["input_attributes"] = input_attributes
+    fields["attributes"] = attributes
     return _normalize_for_mob_model(fields)
 
 
@@ -137,11 +137,11 @@ def spawn_mob_from_definition(
         get_world_stat_system(definition.world),
         rng=rng,
     )
-    input_attributes = _merge_input_attributes(
-        definition.base_input_attributes or {},
-        roll_result.input_attributes,
+    attributes = _merge_attributes(
+        definition.attributes or {},
+        roll_result.attributes,
     )
-    mob_fields = _mob_fields_from_definition(definition, input_attributes)
+    mob_fields = _mob_fields_from_definition(definition, attributes)
     for field_name in ("health", "energy", "stamina", "group_id"):
         mob_fields.pop(field_name, None)
 
@@ -187,12 +187,12 @@ def sync_spawned_mobs_from_definition(definition) -> int:
     for mob in queryset.iterator(chunk_size=200):
         roll_metadata = mob.roll_metadata if isinstance(mob.roll_metadata, dict) else {}
         if roll_metadata.get("randomized"):
-            input_attributes = mob.input_attributes or {}
+            attributes = mob.attributes or {}
         else:
-            input_attributes = _merge_input_attributes(
-                definition.base_input_attributes or {},
+            attributes = _merge_attributes(
+                definition.attributes or {},
             )
-        mob_fields = _mob_fields_from_definition(definition, input_attributes)
+        mob_fields = _mob_fields_from_definition(definition, attributes)
         for field_name in ("health", "energy", "stamina", "group_id"):
             mob_fields.pop(field_name, None)
         for field_name, value in mob_fields.items():

@@ -9,7 +9,7 @@
       <div class="stats-group">
         <div class="label">Attributes</div>
         <div class="stats">
-          <div v-for="stat in inputAttributeEntries" :key="stat.key" class="stat">
+          <div v-for="stat in attributeEntries" :key="stat.key" class="stat">
             <div class="st-label">{{ stat.label }}</div>
             <div class="st-value">{{ stat.value }}</div>
           </div>
@@ -65,18 +65,18 @@ const player = computed(() => store.state.game.player);
 const game = computed(() => store.state.game);
 const world = computed(() => store.state.game.world);
 
-const inputAttributeLabels = computed(() => world.value?.labels?.input_attributes || {});
-const inputAttributeOrder = computed(() => world.value?.labels?.order?.input_attributes || Object.keys(player.value?.input_attributes || {}));
+const attributeLabels = computed(() => world.value?.labels?.attributes || {});
+const attributeOrder = computed(() => world.value?.labels?.order?.attributes || Object.keys(player.value?.attributes || {}));
 const derivedLabels = computed(() => world.value?.labels?.derived || {});
 const derivedOrder = computed(() => world.value?.labels?.order?.derived || Object.keys(player.value?.derived_stats || {}));
 
-const inputAttributeEntries = computed(() => {
-  const values = player.value?.input_attributes || {};
-  return inputAttributeOrder.value
+const attributeEntries = computed(() => {
+  const values = player.value?.attributes || {};
+  return attributeOrder.value
     .filter((key: string) => values[key] !== undefined)
     .map((key: string) => ({
       key,
-      label: inputAttributeLabels.value[key] || key.replace(/_/g, " "),
+      label: attributeLabels.value[key] || key.replace(/_/g, " "),
       value: values[key],
     }));
 });

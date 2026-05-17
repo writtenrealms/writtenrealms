@@ -27,7 +27,7 @@
         <div class="label">Stamina Regen</div>
         <div class="value">{{ template.stamina_regen }}</div>
       </div>
-      <div class="stat" v-for="stat in inputAttributeStats" :key="stat.key">
+      <div class="stat" v-for="stat in attributeStats" :key="stat.key">
         <div class="label">{{ stat.label }}</div>
         <div class="value">{{ stat.value }}</div>
       </div>
@@ -80,15 +80,15 @@ const store = useStore();
 
 const template = computed(() => store.state.builder.worlds.item_template);
 const world = computed(() => store.state.builder.worlds.world || store.state.game.world || {});
-const inputAttributeLabels = computed(() => world.value?.labels?.input_attributes || {});
-const inputAttributeOrder = computed(() => world.value?.labels?.order?.input_attributes || Object.keys(template.value?.input_attributes || {}));
-const inputAttributeStats = computed(() => {
-  const values = template.value?.input_attributes || {};
-  return inputAttributeOrder.value
+const attributeLabels = computed(() => world.value?.labels?.attributes || {});
+const attributeOrder = computed(() => world.value?.labels?.order?.attributes || Object.keys(template.value?.attributes || {}));
+const attributeStats = computed(() => {
+  const values = template.value?.attributes || {};
+  return attributeOrder.value
     .filter((key: string) => values[key] !== undefined)
     .map((key: string) => ({
       key,
-      label: inputAttributeLabels.value[key] || key.replace(/_/g, " "),
+      label: attributeLabels.value[key] || key.replace(/_/g, " "),
       value: values[key],
     }));
 });

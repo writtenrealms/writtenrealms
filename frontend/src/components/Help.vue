@@ -3,8 +3,8 @@
 
   elementSchema = {}
   elementSchema.help = `The mob's class determine how its stats are calculated. For
-                 example, bruisers might roll more brawn and duelists might roll
-                 more grace.<br/>
+                 example, warriors might roll more strength and assassins might roll
+                 more dexterity.<br/>
                  If abilities are enabled, also informs which abilities are used.`,
 
   <Help v-if="elementSchema.help" :help="elementSchema.help"></Help>

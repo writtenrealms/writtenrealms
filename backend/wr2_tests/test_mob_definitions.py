@@ -32,7 +32,7 @@ class TestMobDefinitions(WorldTestCase):
                 "health_max": 45,
                 "attack_power": 6,
             },
-            base_input_attributes={"brawn": 2},
+            attributes={"brawn": 2},
             randomization={
                 "version": 1,
                 "attributes": [
@@ -56,7 +56,7 @@ class TestMobDefinitions(WorldTestCase):
         self.assertEqual(mob.health_max, 45)
         self.assertEqual(mob.health, 45)
         self.assertEqual(mob.attack_power, 6)
-        self.assertEqual(mob.input_attributes, {"brawn": 12.0})
+        self.assertEqual(mob.attributes, {"brawn": 12.0})
         self.assertEqual(mob.roll_metadata["ignored_attributes"], ["luck"])
         self.assertTrue(mob.roll_metadata["randomized"])
 
@@ -73,7 +73,7 @@ class TestMobDefinitions(WorldTestCase):
                 "health_max": 20,
                 "attack_power": 1,
             },
-            base_input_attributes={"brawn": 1},
+            attributes={"brawn": 1},
         )
         mob = definition.spawn(self.room, self.spawn_world)
 
@@ -82,7 +82,7 @@ class TestMobDefinitions(WorldTestCase):
             "health_max": 35,
             "attack_power": 3,
         }
-        definition.base_input_attributes = {"brawn": 4}
+        definition.attributes = {"brawn": 4}
         definition.save()
 
         mob.refresh_from_db()
@@ -91,7 +91,7 @@ class TestMobDefinitions(WorldTestCase):
         self.assertEqual(mob.health_max, 35)
         self.assertEqual(mob.health, 35)
         self.assertEqual(mob.attack_power, 3)
-        self.assertEqual(mob.input_attributes, {"brawn": 4})
+        self.assertEqual(mob.attributes, {"brawn": 4})
         self.assertEqual(mob.roll_metadata["randomized"], False)
 
     def test_loader_rule_can_spawn_mob_definition(self):
@@ -169,7 +169,7 @@ spec:
   level: 5
   health_max: 42
   attack_power: 7
-  input_attributes:
+  attributes:
     brawn: 2
   randomization:
     attributes:
@@ -189,7 +189,7 @@ spec:
         self.assertEqual(definition.mob_type, adv_consts.MOB_TYPE_HUMANOID)
         self.assertEqual(definition.base_properties["level"], 5)
         self.assertEqual(definition.base_properties["health_max"], 42)
-        self.assertEqual(definition.base_input_attributes, {"brawn": 2})
+        self.assertEqual(definition.attributes, {"brawn": 2})
         self.assertEqual(definition.randomization["attributes"][0]["mode"], "favor_high")
 
     def test_world_export_includes_mob_definition_documents(self):
@@ -260,7 +260,7 @@ class TestMobDefinitionBuilderEndpoints(WorldTestCase):
             slug="bandit",
             name="a bandit",
             mob_type=adv_consts.MOB_TYPE_HUMANOID,
-            base_input_attributes={"brawn": 2},
+            attributes={"brawn": 2},
         )
 
         resp = self.client.get(
@@ -269,6 +269,6 @@ class TestMobDefinitionBuilderEndpoints(WorldTestCase):
 
         self.assertEqual(resp.status_code, 200, resp.data)
         self.assertEqual(resp.data["slug"], "bandit")
-        self.assertEqual(resp.data["input_attributes"], {"brawn": 2})
+        self.assertEqual(resp.data["attributes"], {"brawn": 2})
         self.assertIn("kind: mobdefinition", resp.data["yaml"])
         self.assertEqual(resp.data["manifest"]["kind"], "mobdefinition")

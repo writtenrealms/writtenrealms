@@ -8,7 +8,7 @@ from typing import Any
 from django.db.models import NOT_PROVIDED
 
 from core.model_mixins import ItemMixin
-from core.stat_system import get_input_attribute_order
+from core.stat_system import get_attribute_order
 
 
 RANDOMIZATION_VERSION = 1
@@ -21,7 +21,7 @@ class ItemDefinitionError(ValueError):
 
 @dataclass(frozen=True)
 class RollResult:
-    input_attributes: dict[str, float]
+    attributes: dict[str, float]
     ignored_attributes: list[str]
     randomization_version: int
     randomized: bool
@@ -31,7 +31,7 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
 
 
-def normalize_input_attribute_map(value: Any, *, field_name: str = "input_attributes") -> dict[str, int | float]:
+def normalize_attribute_map(value: Any, *, field_name: str = "attributes") -> dict[str, int | float]:
     if value in (None, ""):
         return {}
     if not isinstance(value, dict):
@@ -171,7 +171,7 @@ def roll_item_randomization(
 ) -> RollResult:
     rng = rng or random
     randomization = normalize_item_randomization(definition.randomization or {})
-    declared_keys = set(get_input_attribute_order(world_stat_system))
+    declared_keys = set(get_attribute_order(world_stat_system))
     rolled: dict[str, float] = {}
     ignored: list[str] = []
 
@@ -184,7 +184,7 @@ def roll_item_randomization(
         rolled[key] = rolled.get(key, 0.0) + float(_roll_attribute(entry, rng))
 
     return RollResult(
-        input_attributes=rolled,
+        attributes=rolled,
         ignored_attributes=ignored,
         randomization_version=randomization.get("version", RANDOMIZATION_VERSION),
         randomized=bool(randomization.get("attributes")),
@@ -204,7 +204,7 @@ def item_definition_property_fields() -> tuple[str, ...]:
         "description",
         "ground_description",
         "keywords",
-        "input_attributes",
+        "attributes",
         "type",
     }
     return tuple(sorted(ITEM_MIXIN_FIELD_NAMES - excluded))
@@ -243,7 +243,7 @@ def _resolve_currency(definition, value: Any):
     return Currency.objects.filter(world=definition.world, code=text).first()
 
 
-def _item_fields_from_definition(definition, input_attributes: dict[str, float]) -> dict[str, Any]:
+def _item_fields_from_definition(definition, attributes: dict[str, float]) -> dict[str, Any]:
     fields: dict[str, Any] = {}
     for field in ItemMixin._meta.fields:
         if field.name == "id":
@@ -258,7 +258,7 @@ def _item_fields_from_definition(definition, input_attributes: dict[str, float])
 
     base_properties = definition.base_properties or {}
     for key, value in base_properties.items():
-        if key not in ITEM_MIXIN_FIELD_NAMES or key in {"input_attributes", "name"}:
+        if key not in ITEM_MIXIN_FIELD_NAMES or key in {"attributes", "name"}:
             continue
         if key == "currency":
             fields[key] = _resolve_currency(definition, value)
@@ -268,14 +268,14 @@ def _item_fields_from_definition(definition, input_attributes: dict[str, float])
     if "currency" not in base_properties:
         fields["currency"] = _resolve_currency(definition, None)
 
-    fields["input_attributes"] = input_attributes
+    fields["attributes"] = attributes
     return fields
 
 
-def _merge_input_attributes(*maps: dict[str, Any]) -> dict[str, float]:
+def _merge_attributes(*maps: dict[str, Any]) -> dict[str, float]:
     merged: dict[str, float] = {}
     for values in maps:
-        normalized = normalize_input_attribute_map(values or {})
+        normalized = normalize_attribute_map(values or {})
         for key, value in normalized.items():
             merged[key] = merged.get(key, 0.0) + value
     return merged
@@ -298,11 +298,11 @@ def spawn_item_from_definition(
         get_world_stat_system(definition.world),
         rng=rng,
     )
-    input_attributes = _merge_input_attributes(
-        definition.base_input_attributes or {},
-        roll_result.input_attributes,
+    attributes = _merge_attributes(
+        definition.attributes or {},
+        roll_result.attributes,
     )
-    item_fields = _item_fields_from_definition(definition, input_attributes)
+    item_fields = _item_fields_from_definition(definition, attributes)
     roll_metadata = {
         "source_definition_slug": definition.slug,
         "randomization_version": roll_result.randomization_version,
@@ -328,7 +328,7 @@ def spawn_item_from_definition(
 def sync_spawned_items_from_definition(definition) -> int:
     """
     Keep unmodified definition-backed runtime items aligned with their authoring
-    definition. Randomized items keep their rolled input attributes, but still
+    definition. Randomized items keep their rolled attributes, but still
     receive current authored properties such as name, descriptions, and damage.
     """
     from spawns.models import Item
@@ -346,12 +346,12 @@ def sync_spawned_items_from_definition(definition) -> int:
     for item in queryset:
         roll_metadata = item.roll_metadata if isinstance(item.roll_metadata, dict) else {}
         if roll_metadata.get("randomized"):
-            input_attributes = item.input_attributes or {}
+            attributes = item.attributes or {}
         else:
-            input_attributes = _merge_input_attributes(
-                definition.base_input_attributes or {},
+            attributes = _merge_attributes(
+                definition.attributes or {},
             )
-        item_fields = _item_fields_from_definition(definition, input_attributes)
+        item_fields = _item_fields_from_definition(definition, attributes)
         for field_name, value in item_fields.items():
             setattr(item, field_name, value)
         item.roll_metadata = {

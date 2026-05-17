@@ -141,7 +141,7 @@ spec:
   resilience: 0
   fights_back: true
   is_invisible: false
-  input_attributes: {}
+  attributes: {}
   randomization:
     attributes: []
 `;

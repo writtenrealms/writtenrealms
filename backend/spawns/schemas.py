@@ -43,8 +43,8 @@ class Item(BaseModel):
     is_stackable: bool = False
     stack_key: Optional[str] = None
 
-    # World-authored input attributes
-    input_attributes: Dict[str, float] = Field(default_factory=dict)
+    # World-authored attributes
+    attributes: Dict[str, float] = Field(default_factory=dict)
 
     # Combat stats
     attack_power: int = 0
@@ -229,7 +229,7 @@ class Actor(BaseModel):
     dodge_perc: float = 0.0
     resilience: int = 0
     resilience_perc: float = 0.0
-    input_attributes: Dict[str, float] = Field(default_factory=dict)
+    attributes: Dict[str, float] = Field(default_factory=dict)
     derived_stats: Dict[str, int] = Field(default_factory=dict)
 
     # Equipment & inventory
@@ -602,7 +602,7 @@ def build_mock_state_sync(
         keywords="leather helm armor",
         keyword="helm",
         armor=5,
-        input_attributes={"grit": 2},
+        attributes={"grit": 2},
         cost=25,
     )
 
@@ -620,7 +620,7 @@ def build_mock_state_sync(
         keywords="chainmail armor body",
         keyword="chainmail",
         armor=20,
-        input_attributes={"grit": 5},
+        attributes={"grit": 5},
         health_max=25,
         cost=200,
     )
@@ -652,7 +652,7 @@ def build_mock_state_sync(
         description="A golden ring set with a small ruby.",
         keywords="gold ring accessory ruby",
         keyword="ring",
-        input_attributes={"insight": 3},
+        attributes={"insight": 3},
         ability_power=10,
         cost=150,
     )
@@ -686,7 +686,7 @@ def build_mock_state_sync(
         keywords="leather boots feet",
         keyword="boots",
         armor=3,
-        input_attributes={"grace": 1},
+        attributes={"dexterity": 1},
         cost=20,
     )
 
@@ -1023,11 +1023,11 @@ def build_mock_state_sync(
         armor_perc=15.5,
         focus=None,
         # Stats
-        input_attributes={
-            "brawn": 18,
-            "grit": 16,
-            "grace": 12,
-            "insight": 10,
+        attributes={
+            "strength": 18,
+            "constitution": 16,
+            "dexterity": 12,
+            "intelligence": 10,
         },
         attack_power=42,
         ability_power=15,

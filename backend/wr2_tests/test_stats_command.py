@@ -48,7 +48,7 @@ class TestStatsCommand(WorldTestCase):
         self.assertEqual(actor["ability_power"], actor["ability_power"])
         self.assertEqual(actor["experience"], self.player.experience)
         self.assertEqual(actor["experience_needed"], 30)
-        self.assertEqual(actor["input_attributes"], {})
+        self.assertEqual(actor["attributes"], {})
         self.assertIn("attack_power", actor["derived_stats"])
 
         self.assertEqual(world["labels"]["resources"]["energy"], "Focus")

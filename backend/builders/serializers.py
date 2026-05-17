@@ -89,7 +89,7 @@ from worlds.models import (
     WorldLocks)
 
 
-def _coerce_input_attribute_map(value):
+def _coerce_attribute_map(value):
     if value in (None, ""):
         return {}
     if isinstance(value, str):
@@ -104,7 +104,7 @@ def _coerce_input_attribute_map(value):
                 key, sep, raw_amount = line.partition(":")
                 if not sep:
                     raise serializers.ValidationError(
-                        "Input attributes must be a JSON object or lines like `brawn: 3`."
+                        "Attributes must be a JSON object or lines like `strength: 3`."
                     )
                 key = key.strip()
                 raw_amount = raw_amount.strip()
@@ -112,19 +112,19 @@ def _coerce_input_attribute_map(value):
                     parsed[key] = float(raw_amount) if "." in raw_amount else int(raw_amount)
                 except ValueError:
                     raise serializers.ValidationError(
-                        f"Input attribute '{key}' must have a numeric value."
+                        f"Attribute '{key}' must have a numeric value."
                     )
             value = parsed
     if not isinstance(value, dict):
-        raise serializers.ValidationError("Input attributes must be a mapping.")
+        raise serializers.ValidationError("Attributes must be a mapping.")
     normalized = {}
     for raw_key, raw_amount in value.items():
         key = str(raw_key or "").strip()
         if not key:
-            raise serializers.ValidationError("Input attribute keys must be non-empty strings.")
+            raise serializers.ValidationError("Attribute keys must be non-empty strings.")
         if not isinstance(raw_amount, (int, float)) or isinstance(raw_amount, bool):
             raise serializers.ValidationError(
-                f"Input attribute '{key}' must have a numeric value."
+                f"Attribute '{key}' must have a numeric value."
             )
         normalized[key] = raw_amount
     return normalized
@@ -1595,7 +1595,7 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
             'weapon_type', 'weapon_damage', 'hit_msg_first', 'hit_msg_third',
             'health_max', 'health_regen', 'energy_max', 'energy_regen',
             'stamina_max', 'stamina_regen',
-            'input_attributes',
+            'attributes',
             'attack_power', 'ability_power', 'resilience', 'dodge', 'crit',
             'budget', 'cost_budget', 'food_value', 'food_type',
             'has_assignment',
@@ -1654,7 +1654,7 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
         updated_instance = super().update(instance, validated_data)
 
         boost_fields = {
-            'input_attributes',
+            'attributes',
             'attack_power',
             'ability_power',
             'crit',
@@ -1684,8 +1684,8 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
 
         return updated_instance
 
-    def validate_input_attributes(self, value):
-        return _coerce_input_attribute_map(value)
+    def validate_attributes(self, value):
+        return _coerce_attribute_map(value)
 
     def get_budget(self, item_template):
         "Return budget utilization"
@@ -1780,7 +1780,7 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
 
 class ItemDefinitionSerializer(serializers.ModelSerializer):
     type = serializers.CharField(source='item_type', read_only=True)
-    input_attributes = serializers.JSONField(source='base_input_attributes', read_only=True)
+    attributes = serializers.JSONField(read_only=True)
     randomized = serializers.SerializerMethodField()
 
     class Meta:
@@ -1788,7 +1788,7 @@ class ItemDefinitionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
             'description', 'ground_description', 'notes', 'keywords',
-            'type', 'base_properties', 'input_attributes', 'randomization',
+            'type', 'base_properties', 'attributes', 'randomization',
             'randomized',
         ]
 
@@ -1862,7 +1862,7 @@ class MobTemplateSerializer(serializers.ModelSerializer):
             'roaming_type', 'alignment', 'aggression', 'use_abilities',
             'roam_chance',
             'hit_msg_first', 'hit_msg_third',
-            'input_attributes',
+            'attributes',
             'health_max', 'health_regen', 'energy_max', 'energy_regen',
             'stamina_max', 'stamina_regen', 'regen_rate',
             'attack_power', 'ability_power',  'crit',
@@ -1882,8 +1882,8 @@ class MobTemplateSerializer(serializers.ModelSerializer):
             'merchant_profit',
         ]
 
-    def validate_input_attributes(self, value):
-        return _coerce_input_attribute_map(value)
+    def validate_attributes(self, value):
+        return _coerce_attribute_map(value)
 
     def validate_slug(self, value):
         return _normalize_template_slug(
@@ -1996,7 +1996,7 @@ class MobTemplateSerializer(serializers.ModelSerializer):
 
 class MobDefinitionSerializer(serializers.ModelSerializer):
     type = serializers.CharField(source='mob_type', read_only=True)
-    input_attributes = serializers.JSONField(source='base_input_attributes', read_only=True)
+    attributes = serializers.JSONField(read_only=True)
     randomized = serializers.SerializerMethodField()
 
     class Meta:
@@ -2004,7 +2004,7 @@ class MobDefinitionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
             'description', 'room_description', 'notes', 'keywords',
-            'type', 'assists', 'base_properties', 'input_attributes',
+            'type', 'assists', 'base_properties', 'attributes',
             'randomization', 'randomized',
         ]
 

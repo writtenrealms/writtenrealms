@@ -24,12 +24,12 @@ spec:
 
 That stat system currently controls:
 
-- input attribute definitions and labels
+- attribute definitions and labels
 - resource labels
 - derived stat labels
 - class profile labels
-- base attribute weights per class profile
-- formula rules mapping inputs into derived combat stats
+- attribute weights per class profile
+- formula rules mapping attributes into stats
 
 The runtime now uses the authored world stat system for:
 
@@ -48,7 +48,7 @@ Use this feature with these current boundaries in mind:
 1. Canonical runtime names are `energy` and `ability_power`.
    Player-facing labels can still be `Mana` and `Spell Power`.
 
-2. Builder-authored input attributes live in `input_attributes`, not fixed
+2. Builder-authored attributes live in `attributes`, not fixed
    primary stat columns.
 
 3. Class ids are non-empty slugs. A WR1-like world usually uses:
@@ -58,7 +58,7 @@ Use this feature with these current boundaries in mind:
    - `cleric`
 
 4. Equipment, mob templates, players, and spawned items can carry
-   `input_attributes` values for whichever keys the world defines.
+   `attributes` values for whichever keys the world defines.
 
 ## Recommended WR1-Compatible Approach
 
@@ -108,7 +108,7 @@ spec:
   name_exclusions: ''
 
   stats:
-    input_attributes:
+    attributes:
       - key: constitution
         label: Constitution
       - key: strength
@@ -153,7 +153,7 @@ spec:
     default_profile:
       label: ""
       main_attribute: ""
-      base_attribute_weights:
+      attribute_weights:
         constitution: 3
         strength: 2
         dexterity: 2
@@ -163,7 +163,7 @@ spec:
       warrior:
         label: Warrior
         main_attribute: strength
-        base_attribute_weights:
+        attribute_weights:
           constitution: 3
           strength: 4
           dexterity: 1
@@ -176,7 +176,7 @@ spec:
       assassin:
         label: Assassin
         main_attribute: dexterity
-        base_attribute_weights:
+        attribute_weights:
           constitution: 3
           strength: 1
           dexterity: 4
@@ -189,7 +189,7 @@ spec:
       mage:
         label: Mage
         main_attribute: intelligence
-        base_attribute_weights:
+        attribute_weights:
           constitution: 3
           strength: 1
           dexterity: 1
@@ -198,7 +198,7 @@ spec:
       cleric:
         label: Cleric
         main_attribute: intelligence
-        base_attribute_weights:
+        attribute_weights:
           constitution: 3
           strength: 1
           dexterity: 1

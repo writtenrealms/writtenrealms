@@ -49,25 +49,25 @@ spec:
   keywords: bronze sword blade weapon
   equipment_type: weapon_1h
   weapon_damage: 4
-  input_attributes:
+  attributes:
     strength: 2
 ```
 
-Use `input_attributes` for world-defined attributes such as `strength`,
+Use `attributes` for world-defined attributes such as `strength`,
 `dexterity`, `intelligence`, or `constitution`. Use direct item properties such
 as `weapon_damage`, `equipment_type`, `armor_class`, `cost`, `currency`, and
 `food_value` for ordinary item fields.
 
-Worlds can define different input attribute names, but the common WR1-style
+Worlds can define different attribute names, but the common WR1-style
 names are good defaults for most fantasy worlds. If the world does not define an
-input attribute, that key contributes nothing to combat. This is intentional:
+attribute, that key contributes nothing to combat. This is intentional:
 item YAML should not make the world fail to boot because an attribute was
 renamed or removed.
 
 ## Random Stat Items
 
 Add `randomization.attributes` when each spawned copy should roll different
-input-attribute values. Randomized items are always shown as separate lines, even
+attribute values. Randomized items are always shown as separate lines, even
 if two copies happen to roll the same numbers.
 
 ```yaml
@@ -82,7 +82,7 @@ spec:
   keywords: scavenged sword blade weapon
   equipment_type: weapon_1h
   weapon_damage: 4
-  input_attributes:
+  attributes:
     strength: 1
   randomization:
     attributes:
@@ -92,7 +92,7 @@ spec:
         mode: favor_low
 ```
 
-The fixed `input_attributes` value is added to the roll. In the example above,
+The fixed `attributes` value is added to the roll. In the example above,
 `strength` is always at least `2`: fixed `1` plus a random `1-4`.
 
 Supported randomization modes:
@@ -120,7 +120,7 @@ Stable definition-backed items are meant to behave like authored copies of the
 definition. When a stable item definition is edited, existing unmodified spawned
 items are resynced to the new definition values.
 
-Randomized items keep their rolled input attributes. Upgraded and augmented
+Randomized items keep their rolled attributes. Upgraded and augmented
 items are treated as modified instances and do not stack or get reset by later
 definition edits.
 

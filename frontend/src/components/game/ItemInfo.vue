@@ -130,7 +130,7 @@ const props = defineProps({
 const world = computed(() => store.state.game.world);
 const resourceLabels = computed(() => world.value?.labels?.resources || {});
 const derivedLabels = computed(() => world.value?.labels?.derived || {});
-const inputAttributeLabels = computed(() => world.value?.labels?.input_attributes || {});
+const attributeLabels = computed(() => world.value?.labels?.attributes || {});
 
 const ITEM_STAT_LABELS = {
   weapon_damage: "Weapon damage",
@@ -160,8 +160,8 @@ const statLabel = (statName: string) => {
     const energy = resourceLabels.value.energy || "Energy";
     return `${energy} Regen`;
   }
-  if (inputAttributeLabels.value[statName]) {
-    return inputAttributeLabels.value[statName];
+  if (attributeLabels.value[statName]) {
+    return attributeLabels.value[statName];
   }
   if (derivedLabels.value[statName]) {
     return derivedLabels.value[statName];
@@ -178,8 +178,8 @@ const getStatValue = (item: any, statName: string) => {
   return Math.round(parsed);
 };
 
-const getInputAttributeValue = (item: any, statName: string) => {
-  const values = item?.input_attributes || {};
+const getAttributeValue = (item: any, statName: string) => {
+  const values = item?.attributes || {};
   if (values[statName] === undefined || values[statName] === null) return 0;
   const parsed = Number(values[statName]);
   if (Number.isNaN(parsed)) return 0;
@@ -197,14 +197,14 @@ const buildComparedStats = (item: any) => {
   const playerEquipment = (store.state.game.player && store.state.game.player.equipment) || {};
   const equippedItem = playerEquipment[slot];
   const offhandItem = eqType === "weapon_2h" ? playerEquipment.offhand : null;
-  const inputAttributeOrder = world.value?.labels?.order?.input_attributes || Object.keys(item.input_attributes || {});
-  const inputStats: any[] = inputAttributeOrder
-    .filter((statName: string) => getInputAttributeValue(item, statName) || getInputAttributeValue(equippedItem, statName) || (offhandItem && getInputAttributeValue(offhandItem, statName)))
+  const attributeOrder = world.value?.labels?.order?.attributes || Object.keys(item.attributes || {});
+  const attributeStats: any[] = attributeOrder
+    .filter((statName: string) => getAttributeValue(item, statName) || getAttributeValue(equippedItem, statName) || (offhandItem && getAttributeValue(offhandItem, statName)))
     .map((statName: string) => {
-      const value = getInputAttributeValue(item, statName);
-      let equippedValue = getInputAttributeValue(equippedItem, statName);
+      const value = getAttributeValue(item, statName);
+      let equippedValue = getAttributeValue(equippedItem, statName);
       if (offhandItem) {
-        equippedValue += getInputAttributeValue(offhandItem, statName);
+        equippedValue += getAttributeValue(offhandItem, statName);
       }
       const delta = value - equippedValue;
       let change = "+0";
@@ -242,7 +242,7 @@ const buildComparedStats = (item: any) => {
     "stamina_regen",
   ];
 
-  const stats: any[] = [...inputStats];
+  const stats: any[] = [...attributeStats];
   for (const statName of statOrder) {
     if (statName === "weapon_damage" && slot !== "weapon") continue;
     if (statName === "armor" && slot === "weapon") continue;

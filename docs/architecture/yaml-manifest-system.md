@@ -273,13 +273,13 @@ See [leveling-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/lev
 World manifests now also support `spec.stats`, which holds the authored WR2
 stat system for that world:
 
-- input attribute definitions
+- attribute definitions
 - resource and derived stat labels
 - class or archetype profiles
 - bounded formula rules
 
-New worlds do not get authored input attributes by default. Builders add only
-the input keys they want, then map those keys into canonical derived stats.
+New worlds do not get authored attributes by default. Builders add only
+the attributes they want, then map those attributes into stats.
 Class selection is implied by `spec.stats.class_profiles`: if no class profiles
 are defined, the world has no classes.
 

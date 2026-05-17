@@ -37,7 +37,7 @@ Common direct mob fields include `level`, `exp_worth`, `gold`, `health_max`,
 
 ## Fixed Attribute Mobs
 
-Use `input_attributes` for world-defined attributes such as `strength`,
+Use `attributes` for world-defined attributes such as `strength`,
 `dexterity`, `intelligence`, or `constitution`.
 
 ```yaml
@@ -54,19 +54,19 @@ spec:
   health_max: 42
   attack_power: 7
   armor: 3
-  input_attributes:
+  attributes:
     strength: 2
     dexterity: 1
 ```
 
-If the world does not define an input attribute, that key contributes nothing to
+If the world does not define an attribute, that key contributes nothing to
 combat. This is intentional: mob YAML should not make the world fail to boot
 because an attribute was renamed or removed.
 
 ## Random Attribute Mobs
 
 Add `randomization.attributes` when each spawned copy should roll different
-input-attribute values.
+attribute values.
 
 ```yaml
 kind: mobdefinition
@@ -81,7 +81,7 @@ spec:
   level: 7
   health_max: 55
   attack_power: 9
-  input_attributes:
+  attributes:
     strength: 1
     constitution: 1
   randomization:
@@ -96,7 +96,7 @@ spec:
         mode: uniform
 ```
 
-The fixed `input_attributes` value is added to the roll. In the example above,
+The fixed `attributes` value is added to the roll. In the example above,
 `strength` is always at least `2`: fixed `1` plus a random `1-4`.
 
 Supported randomization modes:
@@ -124,7 +124,7 @@ Stable definition-backed mobs are meant to behave like authored copies of the
 definition. When a stable mob definition is edited, existing spawned mobs from
 that definition are resynced to the new definition values.
 
-Randomized mobs keep their rolled input attributes. They still receive current
+Randomized mobs keep their rolled attributes. They still receive current
 authored properties such as name, descriptions, level, and combat stats when the
 definition changes.
 

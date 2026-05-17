@@ -135,7 +135,7 @@ spec:
         energy: Focus
       derived:
         ability_power: Ability Power
-    input_attributes:
+    attributes:
       - key: grit
         label: Grit
       - key: brawn
@@ -150,7 +150,7 @@ spec:
       warrior:
         label: Vanguard
         main_attribute: brawn
-        base_attribute_weights:
+        attribute_weights:
           grit: 3
           brawn: 4
           grace: 1
@@ -246,7 +246,7 @@ spec:
             "Vanguard",
         )
         primary_keys = [
-            entry["key"] for entry in config.stat_system["input_attributes"]
+            entry["key"] for entry in config.stat_system["attributes"]
         ]
         self.assertIn("insight", primary_keys)
 
@@ -312,7 +312,7 @@ spec:
     default_profile:
       label: ""
       main_attribute: ''
-      base_attribute_weights: {{}}
+      attribute_weights: {{}}
       derived_rules: []
     class_profiles: {{}}
 """

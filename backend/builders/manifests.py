@@ -15,7 +15,7 @@ from builders import serializers as builder_serializers
 from builders.item_definitions import (
     ItemDefinitionError,
     item_definition_property_fields,
-    normalize_input_attribute_map,
+    normalize_attribute_map,
     normalize_item_randomization,
 )
 from builders.mob_definitions import mob_definition_property_fields
@@ -237,7 +237,7 @@ _ITEM_TEMPLATE_SPEC_FIELDS = (
     "energy_regen",
     "stamina_max",
     "stamina_regen",
-    "input_attributes",
+    "attributes",
     "attack_power",
     "ability_power",
     "resilience",
@@ -251,7 +251,7 @@ _ITEM_DEFINITION_SPEC_FIELDS = (
     "notes",
     "keywords",
     "type",
-    "input_attributes",
+    "attributes",
     "randomization",
     *_ITEM_DEFINITION_BASE_PROPERTY_FIELDS,
 )
@@ -263,7 +263,7 @@ _MOB_DEFINITION_SPEC_FIELDS = (
     "keywords",
     "type",
     "assists",
-    "input_attributes",
+    "attributes",
     "randomization",
     *_MOB_DEFINITION_BASE_PROPERTY_FIELDS,
 )
@@ -895,10 +895,10 @@ def _item_definition_spec_from_instance(item_definition: ItemDefinition) -> dict
             spec[field_name] = ""
         else:
             spec[field_name] = value
-    if item_definition.base_input_attributes:
-        spec["input_attributes"] = item_definition.base_input_attributes
+    if item_definition.attributes:
+        spec["attributes"] = item_definition.attributes
     else:
-        spec["input_attributes"] = {}
+        spec["attributes"] = {}
     if item_definition.randomization:
         spec["randomization"] = item_definition.randomization
     else:
@@ -948,7 +948,7 @@ def serialize_item_definition_payload(item_definition: ItemDefinition) -> dict[s
         "notes": item_definition.notes or "",
         "type": item_definition.item_type,
         "base_properties": item_definition.base_properties or {},
-        "input_attributes": item_definition.base_input_attributes or {},
+        "attributes": item_definition.attributes or {},
         "randomization": item_definition.randomization or {},
         "manifest": manifest,
         "yaml": manifest_to_yaml(manifest),
@@ -971,7 +971,7 @@ def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[st
             spec[field_name] = ""
         else:
             spec[field_name] = value
-    spec["input_attributes"] = mob_definition.base_input_attributes or {}
+    spec["attributes"] = mob_definition.attributes or {}
     spec["randomization"] = mob_definition.randomization or {}
     return spec
 
@@ -1019,7 +1019,7 @@ def serialize_mob_definition_payload(mob_definition: MobDefinition) -> dict[str,
         "type": mob_definition.mob_type,
         "assists": bool(mob_definition.assists),
         "base_properties": mob_definition.base_properties or {},
-        "input_attributes": mob_definition.base_input_attributes or {},
+        "attributes": mob_definition.attributes or {},
         "randomization": mob_definition.randomization or {},
         "manifest": manifest,
         "yaml": manifest_to_yaml(manifest),
@@ -2228,13 +2228,13 @@ def _coerce_item_definition_fields(*, world: World, spec_patch: dict[str, Any], 
             continue
         base_properties[field_name] = value
 
-    input_attributes = (
-        normalize_input_attribute_map(
-            spec_patch.get("input_attributes"),
-            field_name="spec.input_attributes",
+    attributes = (
+        normalize_attribute_map(
+            spec_patch.get("attributes"),
+            field_name="spec.attributes",
         )
-        if "input_attributes" in spec_patch
-        else dict(existing.base_input_attributes or {}) if existing else {}
+        if "attributes" in spec_patch
+        else dict(existing.attributes or {}) if existing else {}
     )
     randomization = (
         normalize_item_randomization(spec_patch.get("randomization"))
@@ -2269,7 +2269,7 @@ def _coerce_item_definition_fields(*, world: World, spec_patch: dict[str, Any], 
         ),
         "item_type": item_type,
         "base_properties": base_properties,
-        "base_input_attributes": input_attributes,
+        "attributes": attributes,
         "randomization": randomization,
     }
 
@@ -2291,13 +2291,13 @@ def _coerce_mob_definition_fields(*, spec_patch: dict[str, Any], existing: MobDe
             continue
         base_properties[field_name] = spec_patch.get(field_name)
 
-    input_attributes = (
-        normalize_input_attribute_map(
-            spec_patch.get("input_attributes"),
-            field_name="spec.input_attributes",
+    attributes = (
+        normalize_attribute_map(
+            spec_patch.get("attributes"),
+            field_name="spec.attributes",
         )
-        if "input_attributes" in spec_patch
-        else dict(existing.base_input_attributes or {}) if existing else {}
+        if "attributes" in spec_patch
+        else dict(existing.attributes or {}) if existing else {}
     )
     randomization = (
         normalize_item_randomization(spec_patch.get("randomization"))
@@ -2336,7 +2336,7 @@ def _coerce_mob_definition_fields(*, spec_patch: dict[str, Any], existing: MobDe
             "spec.assists",
         ),
         "base_properties": base_properties,
-        "base_input_attributes": input_attributes,
+        "attributes": attributes,
         "randomization": randomization,
     }
 

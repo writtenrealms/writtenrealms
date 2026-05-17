@@ -245,7 +245,7 @@ class TestStateSyncText(WorldTestCase):
                     "warrior": "Vanguard",
                 },
             },
-            "input_attributes": [
+            "attributes": [
                 {"key": "grit", "label": "Grit"},
                 {"key": "brawn", "label": "Brawn"},
                 {"key": "grace", "label": "Grace"},
@@ -256,7 +256,7 @@ class TestStateSyncText(WorldTestCase):
                 "warrior": {
                     "label": "Vanguard",
                     "main_attribute": "brawn",
-                    "base_attribute_weights": {
+                    "attribute_weights": {
                         "grit": 3,
                         "brawn": 4,
                         "grace": 1,
@@ -301,8 +301,8 @@ class TestStateSyncText(WorldTestCase):
         self.assertEqual(actor["energy"], actor["energy"])
         self.assertEqual(actor["energy_max"], actor["energy_max"])
         self.assertEqual(actor["ability_power"], actor["ability_power"])
-        self.assertIn("insight", actor["input_attributes"])
-        self.assertGreater(actor["input_attributes"]["insight"], 0)
+        self.assertIn("insight", actor["attributes"])
+        self.assertGreater(actor["attributes"]["insight"], 0)
 
     def test_state_sync_room_chars_include_primary_keyword(self):
         mob = self.create_mob("Gus Tone", keywords="gus tone")

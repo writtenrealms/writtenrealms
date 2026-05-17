@@ -22,8 +22,8 @@
         </div>
 
         <div
-          v-for="stat in inputAttributeEntries"
-          :key="`input-attribute-${stat.key}`"
+          v-for="stat in attributeEntries"
+          :key="`attribute-${stat.key}`"
           class="stat-entry"
         >
           <div class="label">{{ stat.label }}</div>
@@ -90,15 +90,15 @@ const energyCurrent = computed(() => player.value?.energy ?? 0);
 const energyMax = computed(() => player.value?.energy_max ?? 0);
 const hasEnergy = computed(() => energyMax.value > 0);
 
-const inputAttributeLabels = computed(() => world.value?.labels?.input_attributes || {});
-const inputAttributeOrder = computed(() => world.value?.labels?.order?.input_attributes || Object.keys(player.value?.input_attributes || {}));
-const inputAttributeEntries = computed(() => {
-  const values = player.value?.input_attributes || {};
-  return inputAttributeOrder.value
+const attributeLabels = computed(() => world.value?.labels?.attributes || {});
+const attributeOrder = computed(() => world.value?.labels?.order?.attributes || Object.keys(player.value?.attributes || {}));
+const attributeEntries = computed(() => {
+  const values = player.value?.attributes || {};
+  return attributeOrder.value
     .filter((key: string) => values[key] !== undefined)
     .map((key: string) => ({
       key,
-      label: inputAttributeLabels.value[key] || capfirst(key.replace(/_/g, " ")),
+      label: attributeLabels.value[key] || capfirst(key.replace(/_/g, " ")),
       value: values[key],
     }));
 });

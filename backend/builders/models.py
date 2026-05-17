@@ -33,7 +33,7 @@ from core.db import (
     list_to_choice,
     optional)
 from core.model_mixins import CharMixin, ItemMixin, MobMixin
-from core.stat_system import fold_declared_input_attributes
+from core.stat_system import fold_declared_attributes
 
 
 def _generate_unique_world_slug(instance, *, fallback_prefix: str) -> str:
@@ -169,7 +169,7 @@ class ItemTemplate(ItemMixin, AdventBaseModel):
     @property
     def budget_spent(self):
         spent_budget = 0
-        for value in (self.input_attributes or {}).values():
+        for value in (self.attributes or {}).values():
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 spent_budget += 10 * value
         for attr in [
@@ -237,7 +237,7 @@ class ItemDefinition(AdventBaseModel):
         choices=list_to_choice(adv_consts.ITEM_TYPES),
         default=adv_consts.ITEM_TYPE_INERT)
     base_properties = models.JSONField(default=dict, blank=True)
-    base_input_attributes = models.JSONField(default=dict, blank=True)
+    attributes = models.JSONField(default=dict, blank=True)
     randomization = models.JSONField(default=dict, blank=True)
 
     class Meta(AdventBaseModel.Meta):
@@ -339,7 +339,7 @@ class MobDefinition(AdventBaseModel):
         default=adv_consts.MOB_TYPE_BEAST)
     assists = models.BooleanField(default=False)
     base_properties = models.JSONField(default=dict, blank=True)
-    base_input_attributes = models.JSONField(default=dict, blank=True)
+    attributes = models.JSONField(default=dict, blank=True)
     randomization = models.JSONField(default=dict, blank=True)
 
     class Meta(AdventBaseModel.Meta):
@@ -1150,7 +1150,7 @@ class EquipmentProfile(models.Model):
                     eq_type=slot.slot_name,
                     armor_class=armor_class)
 
-            fold_declared_input_attributes(
+            fold_declared_attributes(
                 attrs,
                 world=mob.world,
                 candidate_keys=adv_consts.PRIMARY_ATTRIBUTES,

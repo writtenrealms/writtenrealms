@@ -9,7 +9,7 @@ from spawns.models import Item
 
 from backend.core.drops import generate_equipment
 from backend.core.drops import generation as drops_generation
-from core.stat_system import fold_declared_input_attributes
+from core.stat_system import fold_declared_attributes
 
 
 def generate_archetype_characteristics(archetype):
@@ -251,7 +251,7 @@ def generate_item(char, chance_imbued, chance_enchanted, specification,
         level=level,
         quality=quality,
         eq_type=attrs.get('equipment_type'))
-    fold_declared_input_attributes(
+    fold_declared_attributes(
         attrs,
         world=char.world,
         candidate_keys=adv_consts.PRIMARY_ATTRIBUTES,

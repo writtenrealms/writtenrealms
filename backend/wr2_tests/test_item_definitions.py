@@ -41,7 +41,7 @@ class TestItemDefinitions(WorldTestCase):
                 "equipment_type": adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
                 "weapon_damage": 8,
             },
-            base_input_attributes={"brawn": 2},
+            attributes={"brawn": 2},
             randomization={
                 "version": 1,
                 "attributes": [
@@ -63,7 +63,7 @@ class TestItemDefinitions(WorldTestCase):
         self.assertEqual(item.type, adv_consts.ITEM_TYPE_EQUIPPABLE)
         self.assertEqual(item.equipment_type, adv_consts.EQUIPMENT_TYPE_WEAPON_1H)
         self.assertEqual(item.weapon_damage, 8)
-        self.assertEqual(item.input_attributes, {"brawn": 12.0})
+        self.assertEqual(item.attributes, {"brawn": 12.0})
         self.assertEqual(item.roll_metadata["ignored_attributes"], ["luck"])
         self.assertTrue(item.roll_metadata["randomized"])
 
@@ -119,7 +119,7 @@ class TestItemDefinitions(WorldTestCase):
                 "equipment_type": adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
                 "weapon_damage": 2,
             },
-            base_input_attributes={"brawn": 1},
+            attributes={"brawn": 1},
         )
         item = definition.spawn(self.player, self.spawn_world)
 
@@ -128,7 +128,7 @@ class TestItemDefinitions(WorldTestCase):
             "equipment_type": adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
             "weapon_damage": 5,
         }
-        definition.base_input_attributes = {"brawn": 4}
+        definition.attributes = {"brawn": 4}
         definition.save()
 
         item.refresh_from_db()
@@ -136,7 +136,7 @@ class TestItemDefinitions(WorldTestCase):
 
         self.assertEqual(item.name, "a sharpened training sword")
         self.assertEqual(item.weapon_damage, 5)
-        self.assertEqual(item.input_attributes, {"brawn": 4})
+        self.assertEqual(item.attributes, {"brawn": 4})
         self.assertEqual(item.roll_metadata["randomized"], False)
         self.assertEqual(
             item.roll_metadata["rolled_at_definition_modified_ts"],
@@ -328,7 +328,7 @@ spec:
   equipment_type: weapon_1h
   weapon_damage: 8
   currency: gold
-  input_attributes:
+  attributes:
     brawn: 2
   randomization:
     attributes:
@@ -349,7 +349,7 @@ spec:
         self.assertEqual(definition.base_properties["equipment_type"], "weapon_1h")
         self.assertEqual(definition.base_properties["weapon_damage"], 8)
         self.assertEqual(definition.base_properties["currency"], "gold")
-        self.assertEqual(definition.base_input_attributes, {"brawn": 2})
+        self.assertEqual(definition.attributes, {"brawn": 2})
         self.assertEqual(definition.randomization["attributes"][0]["mode"], "favor_high")
 
     def test_apply_item_bundle_manifest_can_create_weighted_bundle(self):
@@ -531,7 +531,7 @@ class TestItemDefinitionBuilderEndpoints(WorldTestCase):
             slug="bronze-sword",
             name="a bronze sword",
             item_type=adv_consts.ITEM_TYPE_EQUIPPABLE,
-            base_input_attributes={"brawn": 2},
+            attributes={"brawn": 2},
         )
 
         resp = self.client.get(
@@ -540,6 +540,6 @@ class TestItemDefinitionBuilderEndpoints(WorldTestCase):
 
         self.assertEqual(resp.status_code, 200, resp.data)
         self.assertEqual(resp.data["slug"], "bronze-sword")
-        self.assertEqual(resp.data["input_attributes"], {"brawn": 2})
+        self.assertEqual(resp.data["attributes"], {"brawn": 2})
         self.assertIn("kind: itemdefinition", resp.data["yaml"])
         self.assertEqual(resp.data["manifest"]["kind"], "itemdefinition")

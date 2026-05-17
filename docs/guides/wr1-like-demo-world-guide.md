@@ -16,7 +16,7 @@ This guide builds a small WR2 demo world with WR1-style fantasy stats:
     ability damage each round
   - `slice`: deal 1.5x weapon damage
 
-The result is WR1-flavored, but it uses the WR2 input attribute and ability
+The result is WR1-flavored, but it uses the WR2 attribute and ability
 systems. Strength, dexterity, constitution, and intelligence are not built into
 WR2; this guide adds them explicitly.
 
@@ -38,7 +38,7 @@ spec:
     max_known: 8
 
   stats:
-    input_attributes:
+    attributes:
       - key: constitution
         label: Constitution
       - key: strength
@@ -83,7 +83,7 @@ spec:
     default_profile:
       label: ""
       main_attribute: ""
-      base_attribute_weights:
+      attribute_weights:
         constitution: 3
         strength: 2
         dexterity: 2
@@ -94,7 +94,7 @@ spec:
       warrior:
         label: Warrior
         main_attribute: strength
-        base_attribute_weights:
+        attribute_weights:
           constitution: 3
           strength: 4
           dexterity: 1
@@ -107,7 +107,7 @@ spec:
       mage:
         label: Mage
         main_attribute: intelligence
-        base_attribute_weights:
+        attribute_weights:
           constitution: 3
           strength: 1
           dexterity: 1
@@ -117,7 +117,7 @@ spec:
       assassin:
         label: Assassin
         main_attribute: dexterity
-        base_attribute_weights:
+        attribute_weights:
           constitution: 3
           strength: 1
           dexterity: 4
@@ -130,7 +130,7 @@ spec:
       cleric:
         label: Cleric
         main_attribute: intelligence
-        base_attribute_weights:
+        attribute_weights:
           constitution: 3
           strength: 1
           dexterity: 1
@@ -233,7 +233,7 @@ spec:
   keywords: sword training
   hit_msg_first: slash
   hit_msg_third: slashes
-  input_attributes:
+  attributes:
     strength: 2
     dexterity: 1
 ```
@@ -413,7 +413,7 @@ equip sword
 ```
 
 Run `stats` again. The sword should contribute `strength` and `dexterity`, and
-those inputs should flow through the world formulas into derived stats such as
+those attributes should flow through the world formulas into stats such as
 attack power, crit, dodge, and health.
 
 ## Step 8: Learn The Abilities
@@ -461,7 +461,7 @@ If the world feels too lethal or too slow, start with these values:
 - `weapon_damage` on starter weapons
 - `basic_physical.power_scale` and `basic_ability.power_scale` in
   `spec.combat.profiles`
-- class `base_attribute_weights`
+- class `attribute_weights`
 - DOT `multiplier`
 - stun `duration.rounds`
 - `combat.level_scale` if high-level mobs are too weak or too strong

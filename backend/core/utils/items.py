@@ -36,15 +36,15 @@ def type_to_slot(eq_type, has_weapon=False, has_offhand=False, archetype=None):
 
 
 def get_main_primary_stat(stats):
-    "Returns the input attribute with the greatest value."
+    "Returns the attribute with the greatest value."
     max = 0
     max_stat = None
-    for stat, value in (stats.get("input_attributes") or {}).items():
+    for stat, value in (stats.get("attributes") or {}).items():
         if max < value:
             max = value
             max_stat = stat
     # The old procedural drop generator still names items before generated
-    # values are folded into world-declared input_attributes.
+    # values are folded into world-declared attributes.
     for stat in constants.PRIMARY_ATTRIBUTES:
         if max < stats.get(stat, 0):
             max = stats[stat]
@@ -64,13 +64,13 @@ def calculate_power(item, archetype):
     Given a certain archetype using an item, return an estimate for
     how strong that item is compared to others.
 
-    World-authored input attributes are intentionally generic here. Canonical
+    World-authored attributes are intentionally generic here. Canonical
     combat stats still use the existing budget weights.
     """
     from config import constants as adv_consts
 
     total_value = 0
-    for stat_value in (item.input_attributes or {}).values():
+    for stat_value in (item.attributes or {}).values():
         if stat_value:
             total_value += stat_value * 10
     for stat, weight in adv_consts.ATTR_BUDGET.items():
