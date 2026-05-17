@@ -48,7 +48,6 @@ class Item(BaseModel):
 
     # Combat stats
     attack_power: int = 0
-    spell_power: int = 0
     ability_power: int = 0
     weapon_damage: float = 0
     armor: int = 0
@@ -58,8 +57,6 @@ class Item(BaseModel):
 
     health_max: int = 0
     health_regen: int = 0
-    mana_max: int = 0
-    mana_regen: int = 0
     energy_max: int = 0
     energy_regen: int = 0
     stamina_max: int = 0
@@ -146,7 +143,7 @@ class Char(BaseModel):
 
     health: int = 0
     health_max: int = 0
-    mana: int = 0
+    energy: int = 0
     level: int = 1
     gender: str = "male"
     pronouns: Optional[str] = None
@@ -211,9 +208,6 @@ class Actor(BaseModel):
     stamina: int = 0
     stamina_max: int = 0
     stamina_regen: int = 0
-    mana: int = 0
-    mana_max: int = 0
-    mana_regen: int = 0
     energy: int = 0
     energy_base: int = 0
     energy_max: int = 0
@@ -228,7 +222,6 @@ class Actor(BaseModel):
 
     # Stats
     attack_power: int = 0
-    spell_power: int = 0
     ability_power: int = 0
     crit: int = 0
     crit_perc: float = 0.0
@@ -660,7 +653,7 @@ def build_mock_state_sync(
         keywords="gold ring accessory ruby",
         keyword="ring",
         input_attributes={"insight": 3},
-        spell_power=10,
+        ability_power=10,
         cost=150,
     )
 
@@ -768,7 +761,7 @@ def build_mock_state_sync(
         stance="normal",
         health=250,
         health_max=250,
-        mana=50,
+        energy=50,
         level=10,
         gender="male",
         keywords="town guard human male mob.100",
@@ -793,7 +786,7 @@ def build_mock_state_sync(
         stance="normal",
         health=80,
         health_max=80,
-        mana=20,
+        energy=20,
         level=5,
         gender="male",
         keywords="gregor merchant human male mob.101",
@@ -818,7 +811,7 @@ def build_mock_state_sync(
         stance="normal",
         health=60,
         health_max=60,
-        mana=100,
+        energy=100,
         level=7,
         gender="female",
         pronouns="she/her",
@@ -842,7 +835,7 @@ def build_mock_state_sync(
         stance="defensive",
         health=180,
         health_max=200,
-        mana=30,
+        energy=30,
         level=12,
         gender="male",
         keywords="thorin brave dwarf male player.200",
@@ -1020,9 +1013,9 @@ def build_mock_state_sync(
         stamina=75,
         stamina_max=100,
         stamina_regen=8,
-        mana=40,
-        mana_max=60,
-        mana_regen=3,
+        energy=40,
+        energy_max=60,
+        energy_regen=3,
         # Combat
         target=None,
         damage=35,
@@ -1037,7 +1030,7 @@ def build_mock_state_sync(
             "insight": 10,
         },
         attack_power=42,
-        spell_power=15,
+        ability_power=15,
         crit=8,
         crit_perc=5.2,
         dodge=6,

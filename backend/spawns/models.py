@@ -329,7 +329,7 @@ class Player(CharMixin, AdventBaseModel):
             world=self.world,
         )
         self.health = max(1, int(stats.get('health_max') or 1))
-        self.mana = int(stats.get('mana_max') or 0)
+        self.energy = int(stats.get('energy_max') or 0)
         self.stamina = int(stats.get('stamina_max') or 0)
         self.save()
 
@@ -809,15 +809,15 @@ class Item(ItemMixin, AdventBaseModel):
         self.input_attributes = input_attributes
         for attr in [
             adv_consts.ATTR_AP,
-            adv_consts.ATTR_SP,
+            adv_consts.ATTR_ABILITY_POWER,
             adv_consts.ATTR_CRIT,
             adv_consts.ATTR_DODGE,
             adv_consts.ATTR_RESILIENCE,
             adv_consts.ATTR_MAX_HEALTH,
-            adv_consts.ATTR_MAX_MANA,
+            adv_consts.ATTR_MAX_ENERGY,
             adv_consts.ATTR_MAX_STAMINA,
             adv_consts.ATTR_REGEN_HEALTH,
-            adv_consts.ATTR_REGEN_MANA,
+            adv_consts.ATTR_REGEN_ENERGY,
             adv_consts.ATTR_REGEN_STAMINA,
             adv_consts.ATTR_WEAPON_DAMAGE,
         ]:
@@ -837,15 +837,15 @@ class Item(ItemMixin, AdventBaseModel):
                 spent_budget += 10 * value
         for attr in [
             adv_consts.ATTR_AP,
-            adv_consts.ATTR_SP,
+            adv_consts.ATTR_ABILITY_POWER,
             adv_consts.ATTR_CRIT,
             adv_consts.ATTR_DODGE,
             adv_consts.ATTR_RESILIENCE,
             adv_consts.ATTR_MAX_HEALTH,
-            adv_consts.ATTR_MAX_MANA,
+            adv_consts.ATTR_MAX_ENERGY,
             adv_consts.ATTR_MAX_STAMINA,
             adv_consts.ATTR_REGEN_HEALTH,
-            adv_consts.ATTR_REGEN_MANA,
+            adv_consts.ATTR_REGEN_ENERGY,
             adv_consts.ATTR_REGEN_STAMINA,
             adv_consts.ATTR_WEAPON_DAMAGE,
         ]:

@@ -12,13 +12,13 @@
           </div>
         </div>
 
-        <div class="vital mana" v-if="hasEnergy">
+        <div class="vital energy" v-if="hasEnergy">
           <div class="label-row">
             <div class="label">{{ energyLabel }}</div>
             <div class="amount">{{ energyCurrent }}</div>
           </div>
           <div class="vital-bar">
-            <div class="mana-bar" :style="{ width: energyPerc }"></div>
+            <div class="energy-bar" :style="{ width: energyPerc }"></div>
           </div>
         </div>
 
@@ -58,8 +58,8 @@ const resourceLabels = computed(() => world.value?.labels?.resources || {});
 const healthLabel = computed(() => resourceLabels.value.health || "Health");
 const energyLabel = computed(() => resourceLabels.value.energy || "Energy");
 const staminaLabel = computed(() => resourceLabels.value.stamina || "Stamina");
-const energyCurrent = computed(() => player.value.energy ?? player.value.mana ?? 0);
-const energyMax = computed(() => player.value.energy_max ?? player.value.mana_max ?? 0);
+const energyCurrent = computed(() => player.value.energy ?? 0);
+const energyMax = computed(() => player.value.energy_max ?? 0);
 const healthPerc = computed(() => {
   const max = player.value.health_max || 1;
   return (player.value.health / max) * 100 + "%";

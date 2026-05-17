@@ -826,8 +826,8 @@ the problem is health, weapon damage, attack power scaling, or mitigation.
 
 ## Common Mistakes
 
-- Do not use `spell_power` in new combat configs unless you are working around
-  old data. Use `ability_power`.
+- Use `ability_power` in combat configs. Worlds can label it as `Spell Power`
+  if that fits the setting.
 - Do not set `constant` to zero in ratings.
 - Do not make armor and resilience both apply everywhere unless that is a
   deliberate WR1-like choice.

@@ -471,8 +471,8 @@ themselves.
 The recommended first practical WR2 contract is:
 
 - keep canonical combat stats fixed
-- rename internal `mana` concepts toward `energy`
-- rename internal `spell_power` concepts toward `ability_power`
+- use `energy` consistently for the third resource
+- use `ability_power` consistently for non-weapon combat power
 - let worlds define labels for those canonical stats
 - let worlds define authored input attributes
 - let classes be optional

@@ -48,9 +48,8 @@ Use this feature with these current boundaries in mind:
 1. Canonical runtime names are `energy` and `ability_power`.
    Player-facing labels can still be `Mana` and `Spell Power`.
 
-2. The database still has compatibility aliases for older names such as
-   `mana` and `spell_power`, but builder-authored input attributes live in
-   `input_attributes`, not fixed primary stat columns.
+2. Builder-authored input attributes live in `input_attributes`, not fixed
+   primary stat columns.
 
 3. Class ids are non-empty slugs. A WR1-like world usually uses:
    - `warrior`

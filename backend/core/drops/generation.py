@@ -23,9 +23,9 @@ def generate_boosted_stats(level, eq_type, quality, main_stat=None, exclude_stat
             constants.ARCHETYPE_ASSASSIN):
             exclude_stats = [
                 constants.ATTR_INT,
-                constants.ATTR_MAX_MANA,
-                constants.ATTR_REGEN_MANA,
-                constants.ATTR_SP,
+                constants.ATTR_MAX_ENERGY,
+                constants.ATTR_REGEN_ENERGY,
+                constants.ATTR_ABILITY_POWER,
             ]
         else:
             exclude_stats = [
@@ -91,9 +91,9 @@ def generate_armor(level, quality, eq_type, armor_class=None, main_stat=None, fo
         if armor_class == constants.ARMOR_CLASS_HEAVY:
             exclude_stats = [
                 constants.ATTR_INT,
-                constants.ATTR_MAX_MANA,
-                constants.ATTR_REGEN_MANA,
-                constants.ATTR_SP,
+                constants.ATTR_MAX_ENERGY,
+                constants.ATTR_REGEN_ENERGY,
+                constants.ATTR_ABILITY_POWER,
             ]
 
         stats = generate_boosted_stats(
@@ -126,7 +126,7 @@ def generate_shield(level, quality, armor_class=None, main_stat=None, for_archet
     * If magic, pick one of 5 primary stat / armor combinations
 
     This is a different approach than for armor, where we let all combinations
-    play out except but specifically restrict int / mana when heavy.
+    play out except but specifically restrict int / energy when heavy.
     """
     if quality == constants.ITEM_QUALITY_NORMAL:
         armor_class = armor_class or (constants.ARMOR_CLASS_HEAVY

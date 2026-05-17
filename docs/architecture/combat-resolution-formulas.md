@@ -59,12 +59,10 @@ weapon_damage + attack_power / 16
 WR1 spells generally used:
 
 ```text
-spell_power * 0.1 * attack_multiplier
+ability_power * 0.1 * attack_multiplier
 ```
 
-WR2 keeps the shape but uses `ability_power` as the canonical engine stat. The
-database still has `spell_power` in places for legacy compatibility, but
-builders should think of it as ability power.
+WR2 keeps the shape but uses `ability_power` as the combat stat.
 
 WR1 also used level-scaled rating curves for dodge, crit, armor, and
 resilience. WR2 keeps that idea because flat percentages scale poorly.
@@ -193,10 +191,8 @@ awkwardness where weapon damage was effectively hidden inside level.
 `attack_power` remains the physical throughput stat. It can add to weapon
 damage or drive unarmed damage, depending on the attack profile.
 
-`ability_power` is the canonical WR2 replacement for `spell_power`. It is
-generic enough for magic, psionics, technology, tactics, rituals, or other
-world-specific ability systems. Legacy payloads may still expose
-`spell_power`, but the engine treats it as an alias.
+`ability_power` is generic enough for magic, psionics, technology, tactics,
+rituals, or other world-specific ability systems.
 
 `armor` mitigates physical damage by default.
 

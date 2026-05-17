@@ -292,7 +292,7 @@ def _resource_max(player: Player, resource: str) -> int:
         return max(1, int(stats.get("health_max") or getattr(player, "health_max", 1) or 1))
     if resource == "stamina":
         return max(0, int(stats.get("stamina_max") or getattr(player, "stamina_max", 0) or 0))
-    return max(0, int(stats.get("mana_max") or getattr(player, "mana_max", 0) or 0))
+    return max(0, int(stats.get("energy_max") or getattr(player, "energy_max", 0) or 0))
 
 
 def ability_cost_amount(player: Player, ability: AbilityDefinition) -> tuple[str, int]:
@@ -300,8 +300,6 @@ def ability_cost_amount(player: Player, ability: AbilityDefinition) -> tuple[str
     if not cost:
         return "", 0
     resource = str(cost.get("resource") or "").strip().lower()
-    if resource == "energy":
-        resource = "mana"
     amount = float(cost.get("amount") or 0)
     if str(cost.get("calc") or "fixed") == "percent_max":
         amount = _resource_max(player, resource) * (amount / 100)
@@ -616,7 +614,7 @@ class AbilityAction:
         cooldown_started = start_ability_cooldown(player, ability)
         update_fields = ["health"]
         if paid:
-            update_fields.append((ability.cost or {}).get("resource") or "mana")
+            update_fields.append((ability.cost or {}).get("resource") or "energy")
         if cooldown_started:
             update_fields.append("ability_cooldowns")
         player.save(update_fields=list(dict.fromkeys(update_fields)))

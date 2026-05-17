@@ -557,8 +557,8 @@ export const BUILDER_FORMS = {
           label: "Health",
         },
         {
-          attr: "mana_max",
-          label: "Mana",
+          attr: "energy_max",
+          label: "Energy",
         },
         {
           attr: "exp_worth",
@@ -575,7 +575,7 @@ export const BUILDER_FORMS = {
           label: "Attack Power",
         },
         {
-          attr: "spell_power",
+          attr: "ability_power",
           label: "Ability Power",
         },
         {
@@ -894,8 +894,8 @@ export const BUILDER_FORMS = {
           label: "HP Max",
         },
         {
-          attr: "mana_max",
-          label: "Mana Max",
+          attr: "energy_max",
+          label: "Energy Max",
         },
         {
           attr: "stamina_max",
@@ -910,8 +910,8 @@ export const BUILDER_FORMS = {
           label: "HP Regen",
         },
         {
-          attr: "mana_regen",
-          label: "Mana Regen",
+          attr: "energy_regen",
+          label: "Energy Regen",
         },
         {
           attr: "stamina_regen",
@@ -937,7 +937,7 @@ export const BUILDER_FORMS = {
           label: "Weapon Damage",
         },
         {
-          attr: "spell_power",
+          attr: "ability_power",
           label: "Ability Power",
         },
         {

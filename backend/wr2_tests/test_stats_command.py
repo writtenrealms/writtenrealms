@@ -26,9 +26,9 @@ class TestStatsCommand(WorldTestCase):
         self.world.config.save(update_fields=["stat_system"])
 
         self.player.health = 17
-        self.player.mana = 9
+        self.player.energy = 9
         self.player.stamina = 33
-        self.player.save(update_fields=["health", "mana", "stamina"])
+        self.player.save(update_fields=["health", "energy", "stamina"])
 
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "stats")
@@ -42,10 +42,10 @@ class TestStatsCommand(WorldTestCase):
 
         self.assertEqual(actor["key"], self.player.key)
         self.assertEqual(actor["health"], 17)
-        self.assertEqual(actor["mana"], 9)
         self.assertEqual(actor["energy"], 9)
-        self.assertEqual(actor["energy_max"], actor["mana_max"])
-        self.assertEqual(actor["ability_power"], actor["spell_power"])
+        self.assertEqual(actor["energy"], 9)
+        self.assertEqual(actor["energy_max"], actor["energy_max"])
+        self.assertEqual(actor["ability_power"], actor["ability_power"])
         self.assertEqual(actor["experience"], self.player.experience)
         self.assertEqual(actor["experience_needed"], 30)
         self.assertEqual(actor["input_attributes"], {})

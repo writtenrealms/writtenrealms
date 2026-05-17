@@ -1437,7 +1437,7 @@ class MobTemplateTests(BuilderTestCase):
 
         # Test use of suggested stats for non-provided values
         for stat, value in suggest_stats(level=1).items():
-            if stat in ('mana_base', 'health_base', 'stamina_base'):
+            if stat in ('energy_base', 'health_base', 'stamina_base'):
                 continue
             self.assertEqual(getattr(template, stat), value)
 

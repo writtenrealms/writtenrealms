@@ -12,12 +12,12 @@
         <div class="value">{{ template.health_regen }}</div>
       </div>
       <div class="stat">
-        <div class="label">Max Mana</div>
-        <div class="value">{{ template.mana_max }}</div>
+        <div class="label">Max Energy</div>
+        <div class="value">{{ template.energy_max }}</div>
       </div>
       <div class="stat">
-        <div class="label">Mana Regen</div>
-        <div class="value">{{ template.mana_regen }}</div>
+        <div class="label">Energy Regen</div>
+        <div class="value">{{ template.energy_regen }}</div>
       </div>
       <div class="stat">
         <div class="label">Max Stamina</div>
@@ -41,7 +41,7 @@
       </div>
       <div class="stat">
         <div class="label">Ability Power</div>
-        <div class="value">{{ template.spell_power }}</div>
+        <div class="value">{{ template.ability_power }}</div>
       </div>
       <div class="stat">
         <div class="label">Crit Rating</div>

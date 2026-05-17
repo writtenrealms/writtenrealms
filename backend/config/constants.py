@@ -614,13 +614,13 @@ ITEM_TYPES = [
 
 ITEM_FOOD_TYPE_STAMINA = 'stamina'
 
-ITEM_FOOD_TYPE_MANA = 'mana'
+ITEM_FOOD_TYPE_ENERGY = 'energy'
 
 ITEM_FOOD_TYPE_HEALTH = 'health'
 
 ITEM_FOOD_TYPES = [
     ITEM_FOOD_TYPE_STAMINA,
-    ITEM_FOOD_TYPE_MANA,
+    ITEM_FOOD_TYPE_ENERGY,
     ITEM_FOOD_TYPE_HEALTH,
 ]
 
@@ -809,7 +809,7 @@ ATTR_RESILIENCE = 'resilience'
 
 ATTR_AP = 'attack_power'
 
-ATTR_SP = 'spell_power'
+ATTR_ABILITY_POWER = 'ability_power'
 
 ATTR_WEAPON_DAMAGE = 'weapon_damage'
 
@@ -819,9 +819,9 @@ ATTR_MAX_HEALTH = 'health_max'
 
 ATTR_REGEN_HEALTH = 'health_regen'
 
-ATTR_MAX_MANA = 'mana_max'
+ATTR_MAX_ENERGY = 'energy_max'
 
-ATTR_REGEN_MANA = 'mana_regen'
+ATTR_REGEN_ENERGY = 'energy_regen'
 
 ATTR_MAX_STAMINA = 'stamina_max'
 
@@ -833,15 +833,15 @@ ATTRIBUTES = [
     ATTR_INT,
     ATTR_STR,
     ATTR_AP,
-    ATTR_SP,
+    ATTR_ABILITY_POWER,
     ATTR_CRIT,
     ATTR_DODGE,
     ATTR_RESILIENCE,
     ATTR_MAX_HEALTH,
-    ATTR_MAX_MANA,
+    ATTR_MAX_ENERGY,
     ATTR_MAX_STAMINA,
     ATTR_REGEN_HEALTH,
-    ATTR_REGEN_MANA,
+    ATTR_REGEN_ENERGY,
     ATTR_REGEN_STAMINA,
 ]
 
@@ -859,7 +859,7 @@ ATTR_BUDGET = {
     ATTR_MAX_STAMINA: 45,
     # 40 pts
     ATTR_REGEN_HEALTH: 40,
-    ATTR_REGEN_MANA: 40,
+    ATTR_REGEN_ENERGY: 40,
     # 10 pts
     ATTR_CON: 10,
     ATTR_STR: 10,
@@ -867,9 +867,9 @@ ATTR_BUDGET = {
     ATTR_INT: 10,
     # 4 pts
     ATTR_MAX_HEALTH: 4,
-    ATTR_MAX_MANA: 4,
+    ATTR_MAX_ENERGY: 4,
     ATTR_AP: 4,
-    ATTR_SP: 4,
+    ATTR_ABILITY_POWER: 4,
     ATTR_WEAPON_DAMAGE: 4,
     ATTR_CRIT: 4,
     ATTR_RESILIENCE: 4,

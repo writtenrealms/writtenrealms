@@ -577,7 +577,7 @@ class APIExtractionSinglePlayerWorldTests(APIExtractionTests):
                     "room": str(self.room.id),
                     "health": 1,
                     "stamina": 100,
-                    "mana": 14
+                    "energy": 14
                 },
                 {
                     "id": str(mob2.id),
@@ -585,7 +585,7 @@ class APIExtractionSinglePlayerWorldTests(APIExtractionTests):
                     "room": str(new_room.id),
                     "health": 1,
                     "stamina": 100,
-                    "mana": 14
+                    "energy": 14
                 },
             ])
         api_extractor.save_mobs()
@@ -1988,7 +1988,7 @@ class InstanceExtractionTests(WorldTestCase):
                 "experience": 450003,
                 "level": 19,
                 "health": 200234,
-                "mana": 16,
+                "energy": 16,
                 "stamina": 100,
                 "gold": 100,
                 "glory": 0,

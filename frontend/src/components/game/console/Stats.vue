@@ -86,8 +86,8 @@ const resourceLabels = computed(() => world.value?.labels?.resources || {});
 const healthLabel = computed(() => resourceLabels.value.health || "Health");
 const energyLabel = computed(() => resourceLabels.value.energy || "Energy");
 const staminaLabel = computed(() => resourceLabels.value.stamina || "Stamina");
-const energyCurrent = computed(() => player.value?.energy ?? player.value?.mana ?? 0);
-const energyMax = computed(() => player.value?.energy_max ?? player.value?.mana_max ?? 0);
+const energyCurrent = computed(() => player.value?.energy ?? 0);
+const energyMax = computed(() => player.value?.energy_max ?? 0);
 const hasEnergy = computed(() => energyMax.value > 0);
 
 const inputAttributeLabels = computed(() => world.value?.labels?.input_attributes || {});

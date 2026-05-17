@@ -24,7 +24,7 @@ class TestCombatFormulaResolution(WorldTestCase):
             "health": 100,
             "health_max": 100,
             "attack_power": 0,
-            "spell_power": 0,
+            "ability_power": 0,
             "armor": 0,
             "resilience": 0,
             "dodge": 0,
@@ -195,7 +195,7 @@ class TestCombatFormulaResolution(WorldTestCase):
                 },
             },
         })
-        attacker = self._mob(name="Caster", spell_power=100)
+        attacker = self._mob(name="Caster", ability_power=100)
         armored_target = self._mob(name="Armored", armor=1000)
         resilient_target = self._mob(name="Resilient", resilience=1000)
 

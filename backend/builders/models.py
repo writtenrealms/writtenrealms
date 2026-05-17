@@ -174,15 +174,15 @@ class ItemTemplate(ItemMixin, AdventBaseModel):
                 spent_budget += 10 * value
         for attr in [
             adv_consts.ATTR_AP,
-            adv_consts.ATTR_SP,
+            adv_consts.ATTR_ABILITY_POWER,
             adv_consts.ATTR_CRIT,
             adv_consts.ATTR_DODGE,
             adv_consts.ATTR_RESILIENCE,
             adv_consts.ATTR_MAX_HEALTH,
-            adv_consts.ATTR_MAX_MANA,
+            adv_consts.ATTR_MAX_ENERGY,
             adv_consts.ATTR_MAX_STAMINA,
             adv_consts.ATTR_REGEN_HEALTH,
-            adv_consts.ATTR_REGEN_MANA,
+            adv_consts.ATTR_REGEN_ENERGY,
             adv_consts.ATTR_REGEN_STAMINA,
             adv_consts.ATTR_WEAPON_DAMAGE,
         ]:
@@ -448,7 +448,7 @@ class MobTemplate(CharMixin, MobMixin, AdventBaseModel):
             template_fields[field.name] = getattr(self, field.name)
 
         # Runtime spawn state should not be copied from template directly.
-        for field_name in ('health', 'stamina', 'mana', 'group_id'):
+        for field_name in ('health', 'stamina', 'energy', 'group_id'):
             template_fields.pop(field_name, None)
 
         # Template fields can be nullable while spawn fields are not.
@@ -476,7 +476,7 @@ class MobTemplate(CharMixin, MobMixin, AdventBaseModel):
             **template_fields,
             health=self.health_max,
             stamina=self.stamina_max,
-            mana=self.mana_max,
+            energy=self.energy_max,
             group_id=group_id,
             #roaming_type=roaming,
             roams=roams,

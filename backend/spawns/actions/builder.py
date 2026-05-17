@@ -354,7 +354,7 @@ def _item_template_field_names() -> list[str]:
 def _mob_template_field_names() -> list[str]:
     names: dict[str, bool] = {}
     for field in CharMixin._meta.fields:
-        if field.name in ("id", "health", "mana", "stamina", "group_id"):
+        if field.name in ("id", "health", "energy", "stamina", "group_id"):
             continue
         names[field.name] = True
     for field in MobMixin._meta.fields:
@@ -386,7 +386,7 @@ def _normalize_values_for_model(model_class, values: dict[str, object]) -> dict[
 def _mob_template_update_values(template: MobTemplate, field_names: list[str]) -> dict[str, object]:
     values = _template_update_values(template, field_names)
     values["health"] = template.health_max
-    values["mana"] = template.mana_max
+    values["energy"] = template.energy_max
     values["stamina"] = template.stamina_max
     return _normalize_values_for_model(Mob, values)
 
@@ -759,7 +759,7 @@ class SetLevelAction:
 
         if isinstance(target, Player):
             result = set_player_level(target, new_level, reset_resources=True)
-            target.save(update_fields=["level", "experience", "health", "mana", "stamina"])
+            target.save(update_fields=["level", "experience", "health", "energy", "stamina"])
             target.refresh_from_db()
             target_data = serialize_actor(target, target.room).model_dump()
             target_type = "player"

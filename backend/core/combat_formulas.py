@@ -32,7 +32,6 @@ LEVEL_SCALE_TYPES = ("exponential", "linear", "flat", "ilf")
 ALLOWED_POWER_STATS = (
     "attack_power",
     "ability_power",
-    "spell_power",
     "weapon_damage",
     "armor",
     "crit",
@@ -40,13 +39,11 @@ ALLOWED_POWER_STATS = (
     "resilience",
     "health_max",
     "energy_max",
-    "mana_max",
     "stamina_max",
 )
 SNAPSHOT_STAT_KEYS = (
     "attack_power",
     "ability_power",
-    "spell_power",
     "weapon_damage",
     "armor",
     "crit",
@@ -54,7 +51,6 @@ SNAPSHOT_STAT_KEYS = (
     "resilience",
     "health_max",
     "energy_max",
-    "mana_max",
     "stamina_max",
 )
 PROFILE_FIELDS = {
@@ -481,8 +477,6 @@ def _coerce_profile(
             f"{field_name}.kind must be one of {', '.join(PROFILE_KINDS)}."
         )
     power_stat = str(profile.get("power_stat") or "").strip()
-    if power_stat == "spell_power":
-        power_stat = "ability_power"
     if power_stat not in ALLOWED_POWER_STATS:
         raise CombatFormulaValidationError(
             f"{field_name}.power_stat must be a canonical combat stat."
@@ -748,33 +742,29 @@ def _player_snapshot(actor: Any, world: Any) -> CombatantSnapshot:
 def _mob_snapshot(actor: Any) -> CombatantSnapshot:
     snapshot_stats = {
         "attack_power": _numeric_attr(actor, "attack_power"),
-        "spell_power": _numeric_attr(actor, "spell_power"),
-        "ability_power": _numeric_attr(actor, "spell_power"),
+        "ability_power": _numeric_attr(actor, "ability_power"),
         "weapon_damage": _weapon_damage(actor),
         "armor": _numeric_attr(actor, "armor"),
         "crit": _numeric_attr(actor, "crit"),
         "dodge": _numeric_attr(actor, "dodge"),
         "resilience": _numeric_attr(actor, "resilience"),
         "health_max": _numeric_attr(actor, "health_max"),
-        "energy_max": _numeric_attr(actor, "mana_max"),
-        "mana_max": _numeric_attr(actor, "mana_max"),
+        "energy_max": _numeric_attr(actor, "energy_max"),
         "stamina_max": _numeric_attr(actor, "stamina_max"),
     }
     for item in _iter_equipment_items(actor) or ():
         for stat_key in (
             "attack_power",
-            "spell_power",
+            "ability_power",
             "armor",
             "crit",
             "dodge",
             "resilience",
             "health_max",
-            "mana_max",
+            "energy_max",
             "stamina_max",
         ):
             snapshot_stats[stat_key] += _item_stat(item, stat_key)
-    snapshot_stats["ability_power"] = snapshot_stats["spell_power"]
-    snapshot_stats["energy_max"] = snapshot_stats["mana_max"]
     return CombatantSnapshot(
         actor_type="mob",
         level=max(1, int(getattr(actor, "level", 1) or 1)),
@@ -791,8 +781,6 @@ def combatant_snapshot(actor: Any, *, world: Any | None = None) -> CombatantSnap
 
 
 def _stat_value(snapshot: CombatantSnapshot, stat_key: str) -> float:
-    if stat_key == "spell_power":
-        stat_key = "ability_power"
     return float(snapshot.stats.get(stat_key, 0.0) or 0.0)
 
 

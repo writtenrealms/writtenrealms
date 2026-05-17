@@ -9,13 +9,10 @@ to customize:
 - formula coefficients that map inputs into canonical combat stats
 - player-facing labels for resources and derived stats
 
-Canonical runtime names intentionally use WR2 terminology:
+Runtime names intentionally use WR2 terminology:
 
 - energy / energy_max / energy_regen
 - ability_power
-
-Legacy field aliases remain available because the current database schema and
-many serializers still use WR1-oriented names such as mana and spell_power.
 """
 from __future__ import annotations
 
@@ -62,17 +59,6 @@ CANONICAL_COMPUTED_STAT_KEYS = (
     "dodge",
     "resilience",
 )
-
-CANONICAL_TO_LEGACY = {
-    "energy": "mana",
-    "energy_base": "mana_base",
-    "energy_max": "mana_max",
-    "energy_regen": "mana_regen",
-    "ability_power": "spell_power",
-}
-LEGACY_TO_CANONICAL = {
-    legacy: canonical for canonical, legacy in CANONICAL_TO_LEGACY.items()
-}
 
 DEFAULT_STAT_SYSTEM = {
     "input_attributes": [],
@@ -692,8 +678,7 @@ def _bonus_lookup(source: Any, stat_key: str) -> float:
         if _is_number(raw_value):
             return float(raw_value)
         return 0.0
-    lookup_key = CANONICAL_TO_LEGACY.get(stat_key, stat_key)
-    raw_value = getattr(source, lookup_key, 0)
+    raw_value = getattr(source, stat_key, 0)
     if not _is_number(raw_value):
         return 0.0
     return float(raw_value)
@@ -801,8 +786,7 @@ def compute_stats(
     Compute derived stats for a character against the world-authored stat
     system.
 
-    The returned payload includes both canonical WR2 keys and legacy WR1-style
-    aliases so the rest of the codebase can migrate incrementally.
+    The returned payload uses WR2 stat names only.
     """
 
     runtime_world = _derive_runtime_world(char=char, world=world)
@@ -939,11 +923,6 @@ def compute_stats(
     for key, value in stats.items():
         finalized[key] = max(0, int(math.ceil(float(value or 0.0))))
 
-    finalized["mana_base"] = finalized["energy_base"]
-    finalized["mana_max"] = finalized["energy_max"]
-    finalized["mana_regen"] = finalized["energy_regen"]
-    finalized["spell_power"] = finalized["ability_power"]
-
     for key in input_keys:
         finalized.setdefault(key, 0)
     for key in (
@@ -954,7 +933,6 @@ def compute_stats(
         "stamina_regen",
         "attack_power",
         "ability_power",
-        "spell_power",
         "armor",
         "crit",
         "dodge",
@@ -962,9 +940,6 @@ def compute_stats(
         "energy_base",
         "energy_max",
         "energy_regen",
-        "mana_base",
-        "mana_max",
-        "mana_regen",
     ):
         finalized.setdefault(key, 0)
 
@@ -988,7 +963,7 @@ def build_player_stat_payload(player) -> dict[str, Any]:
     )
     energy_max = max(
         int(stats.get("energy_max") or 0),
-        int(getattr(player, "mana", 0) or 0),
+        int(getattr(player, "energy", 0) or 0),
     )
     stamina_max = max(
         int(stats.get("stamina_max") or 0),
@@ -1003,7 +978,7 @@ def build_player_stat_payload(player) -> dict[str, Any]:
             key: int(stats.get(key) or 0)
             for key in derived_order
         },
-        "energy": int(getattr(player, "mana", 0) or 0),
+        "energy": int(getattr(player, "energy", 0) or 0),
         "energy_base": int(stats.get("energy_base") or 0),
         "energy_max": energy_max,
         "energy_regen": int(stats.get("energy_regen") or 0),
@@ -1014,10 +989,6 @@ def build_player_stat_payload(player) -> dict[str, Any]:
         "stamina_base": int(stats.get("stamina_base") or 0),
         "stamina_max": stamina_max,
         "stamina_regen": int(stats.get("stamina_regen") or 0),
-        "mana_base": int(stats.get("mana_base") or 0),
-        "mana_max": energy_max,
-        "mana_regen": int(stats.get("mana_regen") or 0),
-        "spell_power": int(stats.get("spell_power") or 0),
         "attack_power": int(stats.get("attack_power") or 0),
         "armor": int(stats.get("armor") or 0),
         "crit": int(stats.get("crit") or 0),

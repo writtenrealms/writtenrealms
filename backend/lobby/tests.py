@@ -36,7 +36,7 @@ class TestCreatePlayerCharacter(WorldTestCase):
         self.assertEqual(player.health, 63)
         self.assertEqual(player.stamina,
                          adv_config.PLAYER_STARTING_MAX_STAMINA)
-        self.assertEqual(player.mana, 14)
+        self.assertEqual(player.energy, 14)
 
         world = player.world
         self.assertEqual(world.name, 'An Island')

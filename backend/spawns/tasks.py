@@ -70,10 +70,10 @@ def _apply_regen(
     actor: Player | Mob,
     *,
     health_max: int,
-    mana_max: int,
+    energy_max: int,
     stamina_max: int,
     health_add: int,
-    mana_add: int,
+    energy_add: int,
     stamina_add: int,
 ) -> bool:
     update_fields: list[str] = []
@@ -83,10 +83,10 @@ def _apply_regen(
         actor.health = next_health
         update_fields.append("health")
 
-    next_mana = _regen_resource(actor.mana, mana_max, mana_add)
-    if next_mana != actor.mana:
-        actor.mana = next_mana
-        update_fields.append("mana")
+    next_energy = _regen_resource(actor.energy, energy_max, energy_add)
+    if next_energy != actor.energy:
+        actor.energy = next_energy
+        update_fields.append("energy")
 
     next_stamina = _regen_resource(actor.stamina, stamina_max, stamina_add)
     if next_stamina != actor.stamina:
@@ -109,31 +109,31 @@ def _regen_player(player: Player) -> dict[str, int | str] | None:
     )
 
     health_max = max(_as_non_negative_int(stats.get("health_max")), _as_non_negative_int(player.health))
-    mana_max = max(_as_non_negative_int(stats.get("mana_max")), _as_non_negative_int(player.mana))
+    energy_max = max(_as_non_negative_int(stats.get("energy_max")), _as_non_negative_int(player.energy))
     stamina_max = max(_as_non_negative_int(stats.get("stamina_max")), _as_non_negative_int(player.stamina))
-    mana_base = _as_non_negative_int(stats.get("mana_base"), default=mana_max)
+    energy_base = _as_non_negative_int(stats.get("energy_base"), default=energy_max)
 
     health_regen = _as_non_negative_int(getattr(player, "health_regen", 0)) + _as_non_negative_int(
         stats.get("health_regen")
     )
-    mana_regen = _as_non_negative_int(getattr(player, "mana_regen", 0)) + _as_non_negative_int(
-        stats.get("mana_regen")
+    energy_regen = _as_non_negative_int(getattr(player, "energy_regen", 0)) + _as_non_negative_int(
+        stats.get("energy_regen")
     )
     stamina_regen = _as_non_negative_int(getattr(player, "stamina_regen", 0)) + _as_non_negative_int(
         stats.get("stamina_regen")
     )
 
     health_add = math.ceil(health_max * WR2_STANDING_REGEN_RATE / 100) + health_regen
-    mana_add = math.ceil(mana_base * WR2_STANDING_REGEN_RATE / 100) + mana_regen
+    energy_add = math.ceil(energy_base * WR2_STANDING_REGEN_RATE / 100) + energy_regen
     stamina_add = WR2_STANDING_REGEN_RATE + stamina_regen
 
     changed = _apply_regen(
         player,
         health_max=health_max,
-        mana_max=mana_max,
+        energy_max=energy_max,
         stamina_max=stamina_max,
         health_add=health_add,
-        mana_add=mana_add,
+        energy_add=energy_add,
         stamina_add=stamina_add,
     )
     if not changed:
@@ -144,9 +144,9 @@ def _regen_player(player: Player) -> dict[str, int | str] | None:
         "health": player.health,
         "health_max": health_max,
         "health_regen": health_regen,
-        "mana": player.mana,
-        "mana_max": mana_max,
-        "mana_regen": mana_regen,
+        "energy": player.energy,
+        "energy_max": energy_max,
+        "energy_regen": energy_regen,
         "stamina": player.stamina,
         "stamina_max": stamina_max,
         "stamina_regen": stamina_regen,
@@ -155,25 +155,25 @@ def _regen_player(player: Player) -> dict[str, int | str] | None:
 
 def _regen_mob(mob: Mob) -> bool:
     health_max = _as_non_negative_int(getattr(mob, "health_max", mob.health), default=mob.health)
-    mana_max = _as_non_negative_int(getattr(mob, "mana_max", mob.mana), default=mob.mana)
+    energy_max = _as_non_negative_int(getattr(mob, "energy_max", mob.energy), default=mob.energy)
     stamina_max = _as_non_negative_int(getattr(mob, "stamina_max", mob.stamina), default=mob.stamina)
     regen_rate = _as_non_negative_int(getattr(mob, "regen_rate", WR2_STANDING_REGEN_RATE))
 
     health_add = math.ceil(health_max * regen_rate / 100) + _as_non_negative_int(
         getattr(mob, "health_regen", 0)
     )
-    mana_add = math.ceil(mana_max * regen_rate / 100) + _as_non_negative_int(
-        getattr(mob, "mana_regen", 0)
+    energy_add = math.ceil(energy_max * regen_rate / 100) + _as_non_negative_int(
+        getattr(mob, "energy_regen", 0)
     )
     stamina_add = WR2_STANDING_REGEN_RATE + _as_non_negative_int(getattr(mob, "stamina_regen", 0))
 
     return _apply_regen(
         mob,
         health_max=health_max,
-        mana_max=mana_max,
+        energy_max=energy_max,
         stamina_max=stamina_max,
         health_add=health_add,
-        mana_add=mana_add,
+        energy_add=energy_add,
         stamina_add=stamina_add,
     )
 
@@ -191,7 +191,7 @@ def run_heartbeat_regen() -> dict[str, int]:
         "level",
         "archetype",
         "health",
-        "mana",
+        "energy",
         "stamina",
     )
     active_world_ids = list(active_players.values_list("world_id", flat=True).distinct())
@@ -218,19 +218,19 @@ def run_heartbeat_regen() -> dict[str, int]:
             )
             .filter(
                 Q(health__lt=F("health_max"))
-                | Q(mana__lt=F("mana_max"))
+                | Q(energy__lt=F("energy_max"))
                 | Q(stamina__lt=F("stamina_max"))
             )
             .only(
                 "id",
                 "health",
-                "mana",
+                "energy",
                 "stamina",
                 "health_max",
-                "mana_max",
+                "energy_max",
                 "stamina_max",
                 "health_regen",
-                "mana_regen",
+                "energy_regen",
                 "stamina_regen",
                 "regen_rate",
                 "is_pending_deletion",

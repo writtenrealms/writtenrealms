@@ -36,8 +36,8 @@ const editFood = () => {
         label: "Stamina"
       },
       {
-        value: "mana",
-        label: "Mana"
+        value: "energy",
+        label: "Energy"
       }
     ]
   };

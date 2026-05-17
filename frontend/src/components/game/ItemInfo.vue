@@ -136,27 +136,27 @@ const ITEM_STAT_LABELS = {
   weapon_damage: "Weapon damage",
   armor: "Armor",
   attack_power: "Attack power",
-  spell_power: "Spell power",
+  ability_power: "Ability power",
   crit: "Crit",
   resilience: "Resilience",
   dodge: "Dodge",
   health_max: "Max health",
   health_regen: "Health regen",
-  mana_max: "Max mana",
-  mana_regen: "Mana regen",
+  energy_max: "Max energy",
+  energy_regen: "Energy regen",
   stamina_max: "Max stamina",
   stamina_regen: "Stamina regen",
 };
 
 const statLabel = (statName: string) => {
-  if (statName === "spell_power") {
+  if (statName === "ability_power") {
     return derivedLabels.value.ability_power || ITEM_STAT_LABELS[statName];
   }
-  if (statName === "mana_max") {
+  if (statName === "energy_max") {
     const energy = resourceLabels.value.energy || "Energy";
     return `Max ${energy}`;
   }
-  if (statName === "mana_regen") {
+  if (statName === "energy_regen") {
     const energy = resourceLabels.value.energy || "Energy";
     return `${energy} Regen`;
   }
@@ -230,14 +230,14 @@ const buildComparedStats = (item: any) => {
     "weapon_damage",
     "armor",
     "attack_power",
-    "spell_power",
+    "ability_power",
     "crit",
     "resilience",
     "dodge",
     "health_max",
     "health_regen",
-    "mana_max",
-    "mana_regen",
+    "energy_max",
+    "energy_regen",
     "stamina_max",
     "stamina_regen",
   ];

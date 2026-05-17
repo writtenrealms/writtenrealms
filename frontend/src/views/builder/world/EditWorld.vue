@@ -128,13 +128,13 @@ spec:
   gold: 0
   health_max: 30
   health_regen: 0
-  mana_max: 1
-  mana_regen: 0
+  energy_max: 1
+  energy_regen: 0
   stamina_max: 50
   stamina_regen: 0
   regen_rate: 4
   attack_power: 1
-  spell_power: 0
+  ability_power: 0
   armor: 0
   dodge: 0
   crit: 0

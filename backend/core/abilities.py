@@ -24,7 +24,7 @@ UNCAPPED_MAX_KNOWN_ABILITIES = "uncapped"
 ACTION_TYPES = ("primary", "utility")
 TARGET_TYPES = ("hostile", "self", "ally")
 TARGET_DEFAULTS = ("current_target", "self")
-COST_RESOURCES = ("health", "mana", "energy", "stamina")
+COST_RESOURCES = ("health", "energy", "stamina")
 COST_CALCS = ("fixed", "percent_max")
 COMPONENT_TYPES = ("damage", "healing", "effect")
 EFFECT_TYPES = ("stun", "dot", "hot")
@@ -270,8 +270,6 @@ def _normalize_cost(value: Any) -> dict[str, Any]:
         choices=COST_RESOURCES,
         field_name="spec.cost.resource",
     )
-    if resource == "energy":
-        resource = "mana"
     amount = _coerce_number(
         value.get("amount", 0),
         field_name="spec.cost.amount",

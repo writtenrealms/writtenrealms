@@ -23,10 +23,10 @@ class TestKillCommand(WorldTestCase):
             char=self.player,
         )
         self.player.health = self.stats["health_max"]
-        self.player.mana = self.stats["mana_max"]
+        self.player.energy = self.stats["energy_max"]
         self.player.stamina = self.stats["stamina_max"]
         self.player.in_game = True
-        self.player.save(update_fields=["health", "mana", "stamina", "in_game"])
+        self.player.save(update_fields=["health", "energy", "stamina", "in_game"])
         self.world.config.combat_system = normalize_combat_system({
             "variance": {
                 "enabled": False,

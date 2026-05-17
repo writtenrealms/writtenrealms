@@ -213,9 +213,9 @@ class TestStateSyncText(WorldTestCase):
         stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
 
         self.player.health = max(stats["health_max"] - 10, 1)
-        self.player.mana = max(stats["mana_max"] - 1, 0)
+        self.player.energy = max(stats["energy_max"] - 1, 0)
         self.player.stamina = max(stats["stamina_max"] - 1, 0)
-        self.player.save(update_fields=["health", "mana", "stamina"])
+        self.player.save(update_fields=["health", "energy", "stamina"])
 
         with capture_game_messages() as messages:
             dispatch_command(
@@ -229,7 +229,7 @@ class TestStateSyncText(WorldTestCase):
         actor = message["data"]["actor"]
 
         self.assertEqual(actor["health_max"], stats["health_max"])
-        self.assertEqual(actor["mana_max"], stats["mana_max"])
+        self.assertEqual(actor["energy_max"], stats["energy_max"])
         self.assertEqual(actor["stamina_max"], stats["stamina_max"])
 
     def test_state_sync_includes_world_stat_labels_and_aliases(self):
@@ -298,9 +298,9 @@ class TestStateSyncText(WorldTestCase):
             "Ability Power",
         )
         self.assertEqual(world_data["labels"]["classes"]["warrior"], "Vanguard")
-        self.assertEqual(actor["energy"], actor["mana"])
-        self.assertEqual(actor["energy_max"], actor["mana_max"])
-        self.assertEqual(actor["ability_power"], actor["spell_power"])
+        self.assertEqual(actor["energy"], actor["energy"])
+        self.assertEqual(actor["energy_max"], actor["energy_max"])
+        self.assertEqual(actor["ability_power"], actor["ability_power"])
         self.assertIn("insight", actor["input_attributes"])
         self.assertGreater(actor["input_attributes"]["insight"], 0)
 

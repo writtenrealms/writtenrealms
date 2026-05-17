@@ -30,7 +30,7 @@ def mob_definition_property_fields() -> tuple[str, ...]:
         "input_attributes",
         "type",
         "health",
-        "mana",
+        "energy",
         "stamina",
         "group_id",
     }
@@ -101,7 +101,7 @@ def _mob_fields_from_definition(definition, input_attributes: dict[str, float]) 
             "input_attributes",
             "name",
             "health",
-            "mana",
+            "energy",
             "stamina",
             "group_id",
         }:
@@ -142,7 +142,7 @@ def spawn_mob_from_definition(
         roll_result.input_attributes,
     )
     mob_fields = _mob_fields_from_definition(definition, input_attributes)
-    for field_name in ("health", "mana", "stamina", "group_id"):
+    for field_name in ("health", "energy", "stamina", "group_id"):
         mob_fields.pop(field_name, None)
 
     roll_metadata = {
@@ -162,7 +162,7 @@ def spawn_mob_from_definition(
         roll_metadata=roll_metadata,
         health=mob_fields.get("health_max") or 1,
         stamina=mob_fields.get("stamina_max") or 0,
-        mana=mob_fields.get("mana_max") or 0,
+        energy=mob_fields.get("energy_max") or 0,
         group_id=_runtime_group_id(definition, rule),
         roams=roams,
         rule=rule,
@@ -193,13 +193,13 @@ def sync_spawned_mobs_from_definition(definition) -> int:
                 definition.base_input_attributes or {},
             )
         mob_fields = _mob_fields_from_definition(definition, input_attributes)
-        for field_name in ("health", "mana", "stamina", "group_id"):
+        for field_name in ("health", "energy", "stamina", "group_id"):
             mob_fields.pop(field_name, None)
         for field_name, value in mob_fields.items():
             setattr(mob, field_name, value)
         mob.health = mob.health_max
         mob.stamina = mob.stamina_max
-        mob.mana = mob.mana_max
+        mob.energy = mob.energy_max
         mob.roll_metadata = {
             **roll_metadata,
             "source_definition_slug": definition.slug,
@@ -211,7 +211,7 @@ def sync_spawned_mobs_from_definition(definition) -> int:
                 *mob_fields.keys(),
                 "health",
                 "stamina",
-                "mana",
+                "energy",
                 "roll_metadata",
                 "definition_slug_snapshot",
                 "modified_ts",

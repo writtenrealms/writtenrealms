@@ -46,7 +46,7 @@ MAX_AUTO_RESOLVE_ROUNDS = 100
 @dataclass(frozen=True)
 class CombatStats:
     player_health_max: int
-    player_mana_max: int
+    player_energy_max: int
     player_stamina_max: int
 
 
@@ -73,7 +73,7 @@ def _player_combat_stats(player: Player) -> CombatStats:
     )
     return CombatStats(
         player_health_max=max(1, int(stats.get("health_max") or 1)),
-        player_mana_max=int(stats.get("mana_max") or 0),
+        player_energy_max=int(stats.get("energy_max") or 0),
         player_stamina_max=int(stats.get("stamina_max") or 0),
     )
 
@@ -1035,7 +1035,7 @@ def _execute_pending_player_ability(
     update_fields: list[str] = []
     if cost_paid:
         resource = str((ability.cost or {}).get("resource") or "").strip().lower()
-        update_fields.append("mana" if resource == "energy" else resource)
+        update_fields.append(resource)
     if health_changed:
         update_fields.append("health")
     if cooldown_started:
@@ -1070,7 +1070,7 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
     room = Room.objects.select_related("world", "zone").get(pk=encounter.room_id)
     stats = _player_combat_stats(player)
     player.health_max = stats.player_health_max
-    player.mana_max = stats.player_mana_max
+    player.energy_max = stats.player_energy_max
     player.stamina_max = stats.player_stamina_max
 
     encounter.round_number = int(encounter.round_number or 0) + 1
@@ -1279,11 +1279,11 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
     if player.health <= 0:
         death_room = config.death_room if config and config.death_room_id else player.get_starting_room()
         player.health = stats.player_health_max
-        player.mana = stats.player_mana_max
+        player.energy = stats.player_energy_max
         player.stamina = stats.player_stamina_max
         player.room = death_room
         # TODO: Apply WR2 death penalties here once the penalty system exists.
-        player.save(update_fields=["health", "mana", "stamina", "room"])
+        player.save(update_fields=["health", "energy", "stamina", "room"])
 
         _finish_encounter(encounter)
 
@@ -1470,7 +1470,7 @@ class KillAction:
         room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
         stats = _player_combat_stats(player)
         player.health_max = stats.player_health_max
-        player.mana_max = stats.player_mana_max
+        player.energy_max = stats.player_energy_max
         player.stamina_max = stats.player_stamina_max
 
         for round_no in range(1, MAX_AUTO_RESOLVE_ROUNDS + 1):

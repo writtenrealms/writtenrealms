@@ -31,8 +31,8 @@ spec:
 ```
 
 Common direct mob fields include `level`, `exp_worth`, `gold`, `health_max`,
-`health_regen`, `mana_max`, `mana_regen`, `stamina_max`, `stamina_regen`,
-`regen_rate`, `attack_power`, `spell_power`, `armor`, `crit`, `dodge`,
+`health_regen`, `energy_max`, `energy_regen`, `stamina_max`, `stamina_regen`,
+`regen_rate`, `attack_power`, `ability_power`, `armor`, `crit`, `dodge`,
 `resilience`, `fights_back`, and `is_invisible`.
 
 ## Fixed Attribute Mobs
