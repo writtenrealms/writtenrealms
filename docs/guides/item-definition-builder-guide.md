@@ -50,17 +50,19 @@ spec:
   equipment_type: weapon_1h
   weapon_damage: 4
   input_attributes:
-    brawn: 2
+    strength: 2
 ```
 
-Use `input_attributes` for world-defined attributes such as `brawn`,
-`willpower`, or `faith`. Use direct item properties such as `weapon_damage`,
-`equipment_type`, `armor_class`, `cost`, `currency`, and `food_value` for
-ordinary item fields.
+Use `input_attributes` for world-defined attributes such as `strength`,
+`dexterity`, `intelligence`, or `constitution`. Use direct item properties such
+as `weapon_damage`, `equipment_type`, `armor_class`, `cost`, `currency`, and
+`food_value` for ordinary item fields.
 
-If the world does not define an input attribute, that key contributes nothing to
-combat. This is intentional: item YAML should not make the world fail to boot
-because an attribute was renamed or removed.
+Worlds can define different input attribute names, but the common WR1-style
+names are good defaults for most fantasy worlds. If the world does not define an
+input attribute, that key contributes nothing to combat. This is intentional:
+item YAML should not make the world fail to boot because an attribute was
+renamed or removed.
 
 ## Random Stat Items
 
@@ -81,17 +83,17 @@ spec:
   equipment_type: weapon_1h
   weapon_damage: 4
   input_attributes:
-    brawn: 1
+    strength: 1
   randomization:
     attributes:
-      - key: brawn
+      - key: strength
         min: 1
         max: 4
         mode: favor_low
 ```
 
 The fixed `input_attributes` value is added to the roll. In the example above,
-`brawn` is always at least `2`: fixed `1` plus a random `1-4`.
+`strength` is always at least `2`: fixed `1` plus a random `1-4`.
 
 Supported randomization modes:
 
@@ -105,7 +107,7 @@ default. Higher values make the favored side more likely.
 ```yaml
 randomization:
   attributes:
-    - key: willpower
+    - key: intelligence
       min: 1
       max: 10
       mode: favor_high
