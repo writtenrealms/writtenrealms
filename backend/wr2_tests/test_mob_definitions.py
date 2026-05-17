@@ -55,7 +55,7 @@ class TestMobDefinitions(WorldTestCase):
         self.assertEqual(mob.level, 4)
         self.assertEqual(mob.health_max, 45)
         self.assertEqual(mob.health, 45)
-        self.assertEqual(mob.attack_power, 6)
+        self.assertEqual(mob.attack_power, 18)
         self.assertEqual(mob.attributes, {"brawn": 12.0})
         self.assertEqual(mob.roll_metadata["ignored_attributes"], ["luck"])
         self.assertTrue(mob.roll_metadata["randomized"])
@@ -90,7 +90,7 @@ class TestMobDefinitions(WorldTestCase):
         self.assertEqual(mob.name, "a reinforced training dummy")
         self.assertEqual(mob.health_max, 35)
         self.assertEqual(mob.health, 35)
-        self.assertEqual(mob.attack_power, 3)
+        self.assertEqual(mob.attack_power, 7)
         self.assertEqual(mob.attributes, {"brawn": 4})
         self.assertEqual(mob.roll_metadata["randomized"], False)
 

@@ -9,6 +9,7 @@ from builders.item_definitions import (
     normalize_attribute_map,
     roll_item_randomization,
 )
+from core.stat_system import DIRECT_STAT_KEYS, compute_attribute_formula_stats
 from core.model_mixins import CharMixin, MobMixin
 
 
@@ -109,7 +110,18 @@ def _mob_fields_from_definition(definition, attributes: dict[str, float]) -> dic
         fields[key] = value
 
     fields["attributes"] = attributes
-    return _normalize_for_mob_model(fields)
+    fields = _normalize_for_mob_model(fields)
+    formula_stats = compute_attribute_formula_stats(
+        world=definition.world,
+        attributes=fields.get("attributes") or {},
+        archetype=fields.get("archetype"),
+    )
+    for stat_key in DIRECT_STAT_KEYS:
+        bonus = formula_stats.get(stat_key)
+        if not bonus:
+            continue
+        fields[stat_key] = int(fields.get(stat_key) or 0) + int(bonus)
+    return fields
 
 
 def _runtime_group_id(definition, rule):

@@ -60,6 +60,21 @@ CANONICAL_COMPUTED_STAT_KEYS = (
     "resilience",
 )
 
+DIRECT_STAT_KEYS = (
+    "health_max",
+    "energy_max",
+    "energy_regen",
+    "stamina_max",
+    "stamina_regen",
+    "health_regen",
+    "attack_power",
+    "ability_power",
+    "armor",
+    "crit",
+    "dodge",
+    "resilience",
+)
+
 DEFAULT_STAT_SYSTEM = {
     "attributes": [],
     "labels": {
@@ -698,6 +713,84 @@ def _attribute_values(source: Any, allowed_keys: list[str]) -> dict[str, float]:
             continue
         values[key] = float(raw_value)
     return values
+
+
+def _normalize_attribute_values(values: Any, allowed_keys: list[str]) -> dict[str, float]:
+    if not isinstance(values, dict):
+        return {}
+    normalized: dict[str, float] = {}
+    allowed = set(allowed_keys)
+    for raw_key, raw_value in values.items():
+        key = str(raw_key or "").strip()
+        if key not in allowed or not _is_number(raw_value):
+            continue
+        normalized[key] = normalized.get(key, 0.0) + float(raw_value)
+    return normalized
+
+
+def compute_attribute_formula_stats(
+    *,
+    world: Any,
+    attributes: dict[str, Any],
+    archetype: str | None = None,
+) -> dict[str, int]:
+    """
+    Compute stat bonuses produced by explicit attributes only.
+
+    This is for authored mobs that persist direct stat columns. A mob definition
+    can say both `attack_power: 3` and `attributes: {strength: 5}`; the direct
+    stat remains explicit, and this helper returns the formula-derived bonus
+    that should be added before saving the concrete mob.
+    """
+    stat_system = get_world_stat_system(world)
+    attribute_keys = get_attribute_order(stat_system)
+    own_attributes = _normalize_attribute_values(attributes, attribute_keys)
+
+    stats: dict[str, float] = {key: 0.0 for key in CANONICAL_COMPUTED_STAT_KEYS}
+    formulas = stat_system["formulas"]
+
+    base_resources = formulas["base_resources"]
+    for resource_key, target_key in (
+        ("health", "health_max"),
+        ("energy", "energy_max"),
+        ("stamina", "stamina_max"),
+    ):
+        resource_spec = base_resources.get(resource_key, {}) or {}
+        if not resource_spec.get("source"):
+            continue
+        value = _evaluate_base_resource(
+            resource_spec,
+            own_attributes=own_attributes,
+        )
+        stats[target_key] += value
+        if resource_key == "energy":
+            stats["energy_base"] += value
+        elif resource_key == "stamina":
+            stats["stamina_base"] += value
+        elif resource_key == "health":
+            stats["health_base"] += value
+
+    profile = stat_system["class_profiles"].get(archetype or "")
+    if profile is None:
+        profile = stat_system["default_profile"]
+
+    _apply_rules(
+        stats,
+        rules=formulas["global_rules"],
+        total_attributes=own_attributes,
+        own_attributes=own_attributes,
+    )
+    _apply_rules(
+        stats,
+        rules=profile["derived_rules"],
+        total_attributes=own_attributes,
+        own_attributes=own_attributes,
+    )
+
+    return {
+        key: max(0, int(math.ceil(float(stats.get(key) or 0.0))))
+        for key in DIRECT_STAT_KEYS
+    }
 
 
 def fold_declared_attributes(

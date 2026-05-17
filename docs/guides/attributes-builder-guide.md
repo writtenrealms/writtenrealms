@@ -200,6 +200,11 @@ Both are valid. Direct stats are simple and explicit. Attributes are
 better when builders want mobs, players, items, and effects to share the same
 world-specific stat language.
 
+When a mob definition provides both direct stats and attributes, they add
+together on the spawned mob. For example, if `strength` maps to `attack_power`
+at `1:1`, then `attack_power: 3` plus `attributes.strength: 5` produces an
+effective `attack_power` of `8`.
+
 ## Items
 
 Item definitions can contribute attributes:

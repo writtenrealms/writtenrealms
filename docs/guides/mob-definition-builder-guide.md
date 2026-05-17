@@ -63,6 +63,10 @@ If the world does not define an attribute, that key contributes nothing to
 combat. This is intentional: mob YAML should not make the world fail to boot
 because an attribute was renamed or removed.
 
+Direct stats and attributes compound. If the world maps `strength` to
+`attack_power`, then a mob with both `attack_power: 7` and `strength: 2` spawns
+with the direct attack power plus the attack power produced by `strength`.
+
 ## Random Attribute Mobs
 
 Add `randomization.attributes` when each spawned copy should roll different
