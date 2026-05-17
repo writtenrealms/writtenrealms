@@ -86,6 +86,11 @@ The repository now has the first guided-random implementation slice:
 - Mob template manifests can assign inventory via `item_template`,
   `item_definition`, or `item_bundle`.
 
+The `MerchantInventory` point above describes current transitional plumbing,
+not the target merchant architecture. New merchant work should use the clean
+`MerchantProfile` model described in
+[merchant-system.md](/Users/teebes/code/writtenrealms/docs/architecture/merchant-system.md).
+
 Remaining gaps before this is builder-complete:
 
 - no structured item definition editor yet
@@ -492,6 +497,11 @@ Keep direct authored-item assignment and bundle assignment separate in the data
 model. Avoid a generic "target can be anything" field for the first pass unless
 the surrounding builder code already strongly prefers it.
 
+Merchant-specific authoring and restock behavior is specified in
+[merchant-system.md](/Users/teebes/code/writtenrealms/docs/architecture/merchant-system.md).
+New merchant work should target `MerchantProfile` stock slots, not WR1-era
+merchant inventory tables.
+
 Suggested progression:
 
 1. Direct `ItemDefinition` assignment spawns stable or guided-random items.
@@ -671,6 +681,7 @@ procedural content engine.
   from item level and equipment type?
 - Should bundle entries support "choose N distinct entries" immediately, or
   only one weighted roll per entry?
-- How should merchant restock timing interact with generated unique items?
+- Merchant restock timing is specified in
+  [merchant-system.md](/Users/teebes/code/writtenrealms/docs/architecture/merchant-system.md).
 - Should player-facing item inspection show rolled attributes directly,
   or only the derived effective stats after formulas apply?
