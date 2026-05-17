@@ -2,7 +2,7 @@
   <div id="edit-world-manifest">
     <h2>{{ world.name.toUpperCase() }} EDIT WORLD</h2>
     <div class="color-text-60 mb-6">
-      Paste one or more YAML manifests. Each YAML document is applied in order. Supported kinds: world, currency, zone, room, itemtemplate, mobtemplate, ability, abilities, quest, questarc, and trigger.
+      Paste one or more YAML manifests. Each YAML document is applied in order. Supported kinds: world, currency, zone, room, itemtemplate, itemdefinition, itembundle, mobtemplate, ability, abilities, quest, questarc, and trigger.
     </div>
 
     <textarea
@@ -36,6 +36,9 @@
       <template v-else-if="appliedKind === 'itemtemplate' && appliedItemTemplate">
         {{ capfirst(lastOperation) }} {{ appliedItemTemplate.slug || appliedItemTemplate.name }}.
       </template>
+      <template v-else-if="appliedKind === 'itemdefinition' && appliedItemDefinition">
+        {{ capfirst(lastOperation) }} {{ appliedItemDefinition.slug || appliedItemDefinition.name }}.
+      </template>
       <template v-else>
         {{ capfirst(lastOperation) }} manifest.
       </template>
@@ -59,6 +62,7 @@ const isSubmitting = ref(false);
 const appliedKind = ref<string>("");
 const appliedTrigger = ref<any | null>(null);
 const appliedItemTemplate = ref<any | null>(null);
+const appliedItemDefinition = ref<any | null>(null);
 const appliedBatchSummary = ref<any | null>(null);
 const lastOperation = ref<string>("");
 
@@ -96,9 +100,40 @@ const loadWorldConfigYaml = async () => {
   manifestText.value = payload?.yaml || "";
 };
 
+const newItemDefinitionYaml = `kind: itemdefinition
+metadata:
+  slug: new-item
+  name: a new item
+spec:
+  type: inert
+`;
+
+const loadItemDefinitionYaml = async () => {
+  const rawItemDefinitionId = route.query.item_definition_id;
+  const itemDefinitionId = Array.isArray(rawItemDefinitionId)
+    ? rawItemDefinitionId[0]
+    : rawItemDefinitionId;
+  if (!itemDefinitionId) {
+    manifestText.value = "";
+    return;
+  }
+  try {
+    const resp = await axios.get(
+      `/builder/worlds/${route.params.world_id}/itemdefinitions/${itemDefinitionId}/`
+    );
+    manifestText.value = resp.data?.yaml || "";
+  } catch (error: any) {
+    store.commit("ui/notification_set_error", extractError(error));
+  }
+};
+
 onMounted(async () => {
   if (route.query.prefill === "world-config") {
     await loadWorldConfigYaml();
+  } else if (route.query.prefill === "item-definition") {
+    await loadItemDefinitionYaml();
+  } else if (route.query.prefill === "new-item-definition") {
+    manifestText.value = newItemDefinitionYaml;
   }
 });
 
@@ -115,18 +150,27 @@ const submitManifest = async () => {
     if (appliedKind.value === "trigger") {
       appliedTrigger.value = resp.data.trigger || null;
       appliedItemTemplate.value = null;
+      appliedItemDefinition.value = null;
     } else if (appliedKind.value === "world") {
       appliedTrigger.value = null;
       appliedItemTemplate.value = null;
+      appliedItemDefinition.value = null;
     } else if (appliedKind.value === "itemtemplate") {
       appliedTrigger.value = null;
       appliedItemTemplate.value = resp.data.item_template || null;
+      appliedItemDefinition.value = null;
+    } else if (appliedKind.value === "itemdefinition") {
+      appliedTrigger.value = null;
+      appliedItemTemplate.value = null;
+      appliedItemDefinition.value = resp.data.item_definition || null;
     } else if (appliedKind.value === "batch") {
       appliedTrigger.value = null;
       appliedItemTemplate.value = null;
+      appliedItemDefinition.value = null;
     } else {
       appliedTrigger.value = null;
       appliedItemTemplate.value = null;
+      appliedItemDefinition.value = null;
     }
 
     const freshWorld = await store.dispatch("builder/fetch_world", route.params.world_id);

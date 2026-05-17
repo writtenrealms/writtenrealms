@@ -325,6 +325,53 @@ def spawn_item_from_definition(
     )
 
 
+def sync_spawned_items_from_definition(definition) -> int:
+    """
+    Keep unmodified definition-backed runtime items aligned with their authoring
+    definition. Randomized items keep their rolled input attributes, but still
+    receive current authored properties such as name, descriptions, and damage.
+    """
+    from spawns.models import Item
+
+    updated = 0
+    timestamp = (
+        definition.modified_ts.isoformat()
+        if definition.modified_ts else ""
+    )
+    queryset = (
+        Item.objects
+        .filter(definition=definition, upgrade_count=0, augment__isnull=True)
+        .select_related("currency")
+    )
+    for item in queryset:
+        roll_metadata = item.roll_metadata if isinstance(item.roll_metadata, dict) else {}
+        if roll_metadata.get("randomized"):
+            input_attributes = item.input_attributes or {}
+        else:
+            input_attributes = _merge_input_attributes(
+                definition.base_input_attributes or {},
+            )
+        item_fields = _item_fields_from_definition(definition, input_attributes)
+        for field_name, value in item_fields.items():
+            setattr(item, field_name, value)
+        item.roll_metadata = {
+            **roll_metadata,
+            "source_definition_slug": definition.slug,
+            "rolled_at_definition_modified_ts": timestamp,
+        }
+        item.definition_slug_snapshot = definition.slug
+        item.save(
+            update_fields=[
+                *item_fields.keys(),
+                "roll_metadata",
+                "definition_slug_snapshot",
+                "modified_ts",
+            ]
+        )
+        updated += 1
+    return updated
+
+
 def choose_item_bundle_entry(bundle, rng: random.Random | None = None):
     rng = rng or random
     candidates = []

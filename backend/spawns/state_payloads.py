@@ -205,6 +205,8 @@ def item_stack_key(item: Item, *, item_type: str | None = None) -> str | None:
     )
     if is_container:
         return None
+    if getattr(item, "upgrade_count", 0) or getattr(item, "augment_id", None):
+        return None
 
     if item.definition_id:
         roll_metadata = item.roll_metadata if isinstance(item.roll_metadata, dict) else {}
@@ -215,6 +217,9 @@ def item_stack_key(item: Item, *, item_type: str | None = None) -> str | None:
             if item.definition
             else item.definition_slug_snapshot
         )
+        revision = roll_metadata.get("rolled_at_definition_modified_ts") or ""
+        if revision:
+            return f"definition:{definition_slug or item.definition_id}:{revision}"
         return f"definition:{definition_slug or item.definition_id}"
 
     if item.template_id:

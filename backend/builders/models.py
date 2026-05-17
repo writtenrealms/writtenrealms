@@ -244,12 +244,22 @@ class ItemDefinition(AdventBaseModel):
         unique_together = [('world', 'slug')]
 
     def save(self, *args, **kwargs):
+        is_create = self._state.adding
         if not self.slug:
             self.slug = _generate_unique_world_slug(
                 self,
                 fallback_prefix="item-definition",
             )
+        if kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = list(dict.fromkeys([
+                *kwargs["update_fields"],
+                "modified_ts",
+            ]))
         super().save(*args, **kwargs)
+        if not is_create:
+            from builders.item_definitions import sync_spawned_items_from_definition
+
+            sync_spawned_items_from_definition(self)
 
     def spawn(self, target, spawn_world, rule=None, rng=None):
         from builders.item_definitions import spawn_item_from_definition

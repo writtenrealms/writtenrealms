@@ -1777,6 +1777,25 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
         return item_template.currency.code
 
 
+class ItemDefinitionSerializer(serializers.ModelSerializer):
+    type = serializers.CharField(source='item_type', read_only=True)
+    input_attributes = serializers.JSONField(source='base_input_attributes', read_only=True)
+    randomized = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ItemDefinition
+        fields = [
+            'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
+            'description', 'ground_description', 'notes', 'keywords',
+            'type', 'base_properties', 'input_attributes', 'randomization',
+            'randomized',
+        ]
+
+    def get_randomized(self, item_definition):
+        randomization = item_definition.randomization or {}
+        return bool(randomization.get('attributes'))
+
+
 class ItemTemplateInventorySerializer(serializers.ModelSerializer):
     container = ReferenceField(required=False, allow_null=False)
     item_template = ReferenceField(required=True, allow_null=False)

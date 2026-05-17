@@ -100,7 +100,7 @@ class TestItemDefinitions(WorldTestCase):
 
         self.assertEqual(stable_payload["definition_slug"], "ration")
         self.assertTrue(stable_payload["is_stackable"])
-        self.assertEqual(stable_payload["stack_key"], "definition:ration")
+        self.assertTrue(stable_payload["stack_key"].startswith("definition:ration:"))
 
         self.assertEqual(random_payload["definition_slug"], "chipped-sword")
         self.assertFalse(random_payload["is_stackable"])
@@ -108,6 +108,63 @@ class TestItemDefinitions(WorldTestCase):
 
         self.assertTrue(template_payload["is_stackable"])
         self.assertEqual(template_payload["stack_key"], f"template:{template.id}")
+
+    def test_stable_definition_edits_sync_existing_unmodified_items(self):
+        definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="training-sword",
+            name="a training sword",
+            item_type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            base_properties={
+                "equipment_type": adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
+                "weapon_damage": 2,
+            },
+            base_input_attributes={"brawn": 1},
+        )
+        item = definition.spawn(self.player, self.spawn_world)
+
+        definition.name = "a sharpened training sword"
+        definition.base_properties = {
+            "equipment_type": adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
+            "weapon_damage": 5,
+        }
+        definition.base_input_attributes = {"brawn": 4}
+        definition.save()
+
+        item.refresh_from_db()
+        later_item = definition.spawn(self.player, self.spawn_world)
+
+        self.assertEqual(item.name, "a sharpened training sword")
+        self.assertEqual(item.weapon_damage, 5)
+        self.assertEqual(item.input_attributes, {"brawn": 4})
+        self.assertEqual(item.roll_metadata["randomized"], False)
+        self.assertEqual(
+            item.roll_metadata["rolled_at_definition_modified_ts"],
+            definition.modified_ts.isoformat(),
+        )
+        self.assertEqual(
+            serialize_item(item).stack_key,
+            serialize_item(later_item).stack_key,
+        )
+
+    def test_upgraded_definition_items_do_not_stack_or_get_resynced(self):
+        definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="heirloom-blade",
+            name="an heirloom blade",
+            item_type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            base_properties={"weapon_damage": 2},
+        )
+        item = definition.spawn(self.player, self.spawn_world)
+        item.boost()
+        boosted_damage = item.weapon_damage
+
+        definition.base_properties = {"weapon_damage": 9}
+        definition.save()
+
+        item.refresh_from_db()
+        self.assertEqual(item.weapon_damage, boosted_damage)
+        self.assertIsNone(serialize_item(item).stack_key)
 
     def test_mob_template_inventory_can_spawn_item_definition(self):
         definition = ItemDefinition.objects.create(
@@ -430,3 +487,59 @@ spec:
         self.assertFalse(
             ItemDefinition.objects.filter(world=self.world, slug="missing-sword").exists()
         )
+
+
+class TestItemDefinitionBuilderEndpoints(WorldTestCase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_authenticate(self.user)
+        apply_basic_stat_system(self.world)
+        self.list_ep = reverse("builder-item-definition-list", args=[self.world.pk])
+
+    def test_list_item_definitions_for_builder_ui(self):
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="bronze-sword",
+            name="a bronze sword",
+            item_type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            randomization={
+                "attributes": [
+                    {"key": "brawn", "min": 1, "max": 3, "mode": "uniform"},
+                ],
+            },
+        )
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="ration",
+            name="a ration",
+            item_type=adv_consts.ITEM_TYPE_FOOD,
+        )
+
+        resp = self.client.get(self.list_ep, {"sort_by": "slug"})
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data["count"], 2)
+        self.assertEqual(
+            [entry["slug"] for entry in resp.data["results"]],
+            ["bronze-sword", "ration"],
+        )
+        self.assertTrue(resp.data["results"][0]["randomized"])
+        self.assertEqual(resp.data["results"][0]["type"], adv_consts.ITEM_TYPE_EQUIPPABLE)
+
+    def test_retrieve_item_definition_includes_yaml(self):
+        definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="bronze-sword",
+            name="a bronze sword",
+            item_type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            base_input_attributes={"brawn": 2},
+        )
+
+        resp = self.client.get(
+            reverse("builder-item-definition-detail", args=[self.world.pk, definition.pk])
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data["slug"], "bronze-sword")
+        self.assertEqual(resp.data["input_attributes"], {"brawn": 2})
+        self.assertIn("kind: itemdefinition", resp.data["yaml"])
+        self.assertEqual(resp.data["manifest"]["kind"], "itemdefinition")

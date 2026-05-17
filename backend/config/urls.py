@@ -211,6 +211,8 @@ api_v1_urls = [
     path('builder/worlds/<world_pk>/itemtemplates/<item_template_pk>/actions/', builder_views.item_action_list, name='builder-item-action-list'),
     path('builder/worlds/<world_pk>/itemtemplates/<item_template_pk>/actions/<pk>/', builder_views.item_action_detail, name='builder-item-action-detail'),
     path('builder/worlds/<world_pk>/itemtemplates/<item_template_pk>/actions/<pk>/clone/', builder_views.item_action_clone, name='builder-item-action-clone'),
+    path('builder/worlds/<world_pk>/itemdefinitions/', builder_views.item_definition_list, name='builder-item-definition-list'),
+    path('builder/worlds/<world_pk>/itemdefinitions/<pk>/', builder_views.item_definition_detail, name='builder-item-definition-detail'),
 
     # Mob Templates
     path('builder/worlds/<world_pk>/mobtemplates/', builder_views.mob_template_list, name='builder-mob-template-list'),

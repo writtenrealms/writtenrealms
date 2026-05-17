@@ -36,7 +36,7 @@
           >Mobs</router-link>
 
           <router-link
-            :to="{name: 'builder_item_template_list', params: {world_id: route.params.world_id}}" :class="{ 'router-link-active': isWorldItemsRoute }"
+            :to="{name: 'builder_item_definition_list', params: {world_id: route.params.world_id}}" :class="{ 'router-link-active': isWorldItemsRoute }"
           >Items</router-link>
 
           <router-link
@@ -220,7 +220,15 @@ const viewType = computed(() => {
 
 /* Active route checks */
 // World
-const isWorldItemsRoute = computed(() => { return route.name === 'builder_item_template_details'; });
+const isWorldItemsRoute = computed(() => {
+  const routes = [
+    'builder_item_definition_list',
+    'builder_item_definition_details',
+    'builder_item_template_list',
+    'builder_item_template_details',
+  ];
+  return routes.includes(route.name as string);
+});
 const isWorldMobsRoute = computed(() => { return route.name === 'builder_mob_template_details'; });
 const isWorldQuestRoute = computed(() => {
   const routes = [

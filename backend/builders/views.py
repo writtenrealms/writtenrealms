@@ -2747,6 +2747,46 @@ class ItemTemplateLoadsinView(BaseWorldBuilderView):
 item_template_loadsin = ItemTemplateLoadsinView.as_view()
 
 
+class ItemDefinitionViewSet(BaseWorldBuilderViewSet):
+    serializer_class = builder_serializers.ItemDefinitionSerializer
+    http_method_names = ['get', 'head', 'options']
+
+    def _serialize_item_definition_response(self, item_definition):
+        payload = builder_manifests.serialize_item_definition_payload(item_definition)
+        payload["modified_ts"] = item_definition.modified_ts
+        payload["model_type"] = item_definition.model_type
+        payload["randomized"] = bool((item_definition.randomization or {}).get("attributes"))
+        return payload
+
+    def get_queryset(self):
+        context = self.world
+        if context.instance_of:
+            context = context.instance_of
+
+        qs = ItemDefinition.objects.filter(world=context).order_by('-modified_ts')
+
+        item_type = (
+            self.request.query_params.get('item_type')
+            or self.request.query_params.get('type')
+        )
+        if item_type in adv_consts.ITEM_TYPES:
+            qs = qs.filter(item_type=item_type)
+
+        return self.search_queryset(qs)
+
+    def retrieve(self, request, *args, **kwargs):
+        item_definition = self.get_object()
+        return Response(self._serialize_item_definition_response(item_definition))
+
+
+item_definition_list = ItemDefinitionViewSet.as_view({
+    'get': 'list',
+})
+item_definition_detail = ItemDefinitionViewSet.as_view({
+    'get': 'retrieve',
+})
+
+
 class ItemActionViewSet(BaseWorldBuilderViewSet):
 
     serializer_class = builder_serializers.ItemActionSerializer

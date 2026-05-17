@@ -83,6 +83,11 @@ runtime behavior notes, live in:
 - [docs/guides/quest-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/quest-builder-guide.md)
 - [docs/guides/quest-reference.md](/Users/teebes/code/writtenrealms/docs/guides/quest-reference.md)
 
+Item definition authoring details, including stackable plain items, fixed stat
+items, randomized stat items, and item bundles, live in:
+
+- [docs/guides/item-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/item-definition-builder-guide.md)
+
 ## Trigger Manifest Shapes
 
 ### Create Trigger

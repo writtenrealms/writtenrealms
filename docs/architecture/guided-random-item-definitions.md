@@ -55,6 +55,7 @@ Reference docs:
 - [stats-formulas-and-classes.md](/Users/teebes/code/writtenrealms/docs/architecture/stats-formulas-and-classes.md)
 - [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
 - [input-attributes-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/input-attributes-builder-guide.md)
+- [item-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/item-definition-builder-guide.md)
 - `.codex/skills/wr-transition/wr2-architecture.md`
 
 ## Current Baseline
@@ -75,6 +76,9 @@ The repository now has the first guided-random implementation slice:
   and `resilience`.
 - The frontend stacks by backend-provided `stack_key`, with a legacy
   `template_id` fallback for older item payloads.
+- Stable definition-backed items resync unmodified spawned copies when the
+  definition changes. Randomized items keep their rolled input attributes, and
+  upgraded or augmented items are treated as modified instances.
 - `/load item <slug-or-id>` can spawn either the old `ItemTemplate` path or the
   new `ItemDefinition` path, preferring `ItemTemplate` when both match.
 - `MobTemplateInventory` and `MerchantInventory` can reference either old
@@ -364,8 +368,7 @@ with stale random definitions should still boot.
 ## Frontend Stacking
 
 Current state payloads already include item `input_attributes` and
-`template_id`. They do not yet include stack metadata, and
-`frontend/src/core/utils.ts` still stacks by `template_id`.
+`template_id`, `definition_slug`, `is_stackable`, and `stack_key`.
 
 The frontend should stop deciding stackability from `template_id` alone. In the
 WR2 target payload, the corresponding field should be `definition_id` or
@@ -402,7 +405,7 @@ For stable non-container definition-backed items:
 {
   "key": "item.124",
   "definition_slug": "bronze-sword",
-  "stack_key": "definition:bronze-sword",
+  "stack_key": "definition:bronze-sword:2026-05-16T20:00:00+00:00",
   "is_stackable": true
 }
 ```
@@ -411,10 +414,15 @@ The frontend stacking helper should group by `stack_key`, not by
 `definition_slug` or `template_id`. If `stack_key` is empty, the item is always
 rendered as a unique line using its item `key`.
 
+The stack key is intentionally opaque to builders. The backend includes the
+definition revision so stale stable copies cannot collapse with newer copies if
+an item bypasses the normal definition resync path.
+
 The backend should own this policy because it has the full context:
 
 - randomized definition or not
 - container or not
+- upgraded or augmented instance or not
 - persistent/special item rules
 - future item-instance metadata
 
