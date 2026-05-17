@@ -410,15 +410,29 @@ def serialize_char_from_mob(
     quest_indicator_map: dict[int, dict[str, bool]] | None = None,
     include_equipment: bool = False,
 ) -> Char:
-    name = mob.name or (mob.template.name if mob.template else "Unnamed Mob")
-    keywords = mob.keywords or name.lower()
+    name = (
+        mob.name
+        or (mob.definition.name if mob.definition else "")
+        or (mob.template.name if mob.template else "Unnamed Mob")
+    )
+    keywords = mob.keywords or ""
+    if not keywords and mob.definition:
+        keywords = mob.definition.keywords or ""
+    if not keywords and mob.template:
+        keywords = mob.template.keywords or ""
+    if not keywords:
+        keywords = name.lower()
     title = mob.title
     if not title and mob.template:
         title = mob.template.title
     description = mob.description
+    if not description and mob.definition:
+        description = mob.definition.description
     if not description and mob.template:
         description = mob.template.description
     room_desc = mob.room_description
+    if not room_desc and mob.definition:
+        room_desc = mob.definition.room_description
     if not room_desc and mob.template:
         room_desc = mob.template.room_description
     factions = mob.template.factions if mob.template else mob.factions
@@ -443,6 +457,12 @@ def serialize_char_from_mob(
         keywords=keywords,
         keyword=first_keyword(keywords, name),
         template_id=mob.template_id,
+        definition_id=mob.definition_id,
+        definition_slug=(
+            mob.definition.slug
+            if mob.definition
+            else mob.definition_slug_snapshot or None
+        ),
         char_type="mob",
         is_elite=getattr(mob, "is_elite", False),
         is_invisible=getattr(mob, "is_invisible", False),
@@ -600,7 +620,7 @@ def serialize_room(
         )
 
     room_inventory = serialize_inventory(
-        room.inventory.filter(is_pending_deletion=False).select_related("template", "currency"),
+        room.inventory.filter(is_pending_deletion=False).select_related("definition", "template", "currency"),
         viewer=viewer,
     )
     if isinstance(viewer, Player):
@@ -610,7 +630,7 @@ def serialize_room(
         )
 
     room_players = room.players.filter(in_game=True).select_related("user", "equipment")
-    room_mobs = list(room.mobs.select_related("template"))
+    room_mobs = list(room.mobs.select_related("definition", "template"))
     quest_indicator_map: dict[int, dict[str, bool]] = {}
     quest_callout_data: list[dict] = []
     if isinstance(viewer, Player):

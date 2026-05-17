@@ -19,6 +19,7 @@ from builders.models import (
     ItemDefinition,
     ItemTemplate,
     ItemTemplateInventory,
+    MobDefinition,
     MobTemplate,
     MobTemplateInventory,
     Trigger,
@@ -45,6 +46,7 @@ _ITEM_TEMPLATE_KIND_ALIASES = {"itemtemplate", "item-template", "item_template"}
 _ITEM_DEFINITION_KIND_ALIASES = {"itemdefinition", "item-definition", "item_definition"}
 _ITEM_BUNDLE_KIND_ALIASES = {"itembundle", "item-bundle", "item_bundle"}
 _MOB_TEMPLATE_KIND_ALIASES = {"mobtemplate", "mob-template", "mob_template"}
+_MOB_DEFINITION_KIND_ALIASES = {"mobdefinition", "mob-definition", "mob_definition"}
 _QUEST_KIND_ALIASES = {quest_manifests.QUEST_MANIFEST_KIND}
 _QUEST_ARC_KIND_ALIASES = {
     quest_manifests.QUEST_ARC_MANIFEST_KIND,
@@ -169,6 +171,8 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
         return builder_manifests.ITEM_BUNDLE_MANIFEST_KIND
     if raw_kind in _MOB_TEMPLATE_KIND_ALIASES:
         return MOB_TEMPLATE_MANIFEST_KIND
+    if raw_kind in _MOB_DEFINITION_KIND_ALIASES:
+        return builder_manifests.MOB_DEFINITION_MANIFEST_KIND
     if raw_kind in _QUEST_ARC_KIND_ALIASES:
         return quest_manifests.QUEST_ARC_MANIFEST_KIND
     if raw_kind in _QUEST_KIND_ALIASES:
@@ -181,7 +185,7 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
         return builder_manifests.ABILITIES_MANIFEST_KIND
     raise serializers.ValidationError(
         "Unsupported manifest kind. Supported kinds: "
-        "world, currency, zone, room, itemtemplate, itemdefinition, itembundle, mobtemplate, questarc, quest, trigger, ability, abilities."
+        "world, currency, zone, room, itemtemplate, itemdefinition, itembundle, mobtemplate, mobdefinition, questarc, quest, trigger, ability, abilities."
     )
 
 
@@ -455,6 +459,14 @@ def _serialize_mob_template_manifest(mob_template: MobTemplate) -> dict[str, Any
         },
         "spec": spec,
     }
+
+
+def _serialize_mob_definition_manifest(mob_definition: MobDefinition) -> dict[str, Any]:
+    manifest = builder_manifests.mob_definition_to_manifest(mob_definition)
+    manifest["metadata"].pop("world", None)
+    manifest["metadata"].pop("id", None)
+    manifest["metadata"].pop("key", None)
+    return manifest
 
 
 def _serialize_ability_manifest(ability: AbilityDefinition) -> dict[str, Any]:
@@ -790,6 +802,10 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             ).order_by("slug", "id")
         ],
         *[
+            _serialize_mob_definition_manifest(mob_definition)
+            for mob_definition in world.mob_definitions.all().order_by("slug", "id")
+        ],
+        *[
             _serialize_ability_manifest(ability)
             for ability in world.ability_definitions.all().order_by("slug", "id")
         ],
@@ -821,6 +837,7 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
         "item_definitions": 0,
         "item_bundles": 0,
         "mob_templates": 0,
+        "mob_definitions": 0,
         "abilities": 0,
         "quest_arcs": 0,
         "quests": 0,
@@ -842,6 +859,8 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
             counts["item_bundles"] += 1
         elif kind == MOB_TEMPLATE_MANIFEST_KIND:
             counts["mob_templates"] += 1
+        elif kind == builder_manifests.MOB_DEFINITION_MANIFEST_KIND:
+            counts["mob_definitions"] += 1
         elif kind == builder_manifests.ABILITY_MANIFEST_KIND:
             counts["abilities"] += 1
         elif kind == quest_manifests.QUEST_ARC_MANIFEST_KIND:
@@ -1354,6 +1373,18 @@ def apply_item_definition_manifest(*, world: World, manifest: dict[str, Any]) ->
     )
     created = parsed.item_definition is None
     return builder_manifests.apply_item_definition_manifest(parsed), created
+
+
+def apply_mob_definition_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[MobDefinition, bool]:
+    if parse_document_kind(manifest) != builder_manifests.MOB_DEFINITION_MANIFEST_KIND:
+        raise serializers.ValidationError("Unsupported manifest kind. Expected 'mobdefinition'.")
+
+    parsed = builder_manifests.parse_mob_definition_manifest(
+        world=world,
+        manifest=manifest,
+    )
+    created = parsed.mob_definition is None
+    return builder_manifests.apply_mob_definition_manifest(parsed), created
 
 
 def apply_item_bundle_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[ItemBundle, bool]:

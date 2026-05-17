@@ -67,8 +67,10 @@ const routes = [
       // World Views
       { path: '', name: 'builder_world_index', component: () => import('@/views/builder/world/World.vue') },
       { path: 'zones', name: 'builder_zone_list', component: () => import('@/views/builder/world/ZoneList.vue') },
-      { path: 'mobs', name: 'builder_mob_template_list', component: () => import('@/views/builder/world/MobTemplateList.vue') },
-      { path: 'mobs/:mob_template_id', name: 'builder_mob_template_details', component: () => import('@/views/builder/world/MobTemplateDetails.vue') },
+      { path: 'mobs', name: 'builder_mob_definition_list', component: () => import('@/views/builder/world/MobDefinitionList.vue') },
+      { path: 'mobs/:mob_definition_id', name: 'builder_mob_definition_details', component: () => import('@/views/builder/world/MobDefinitionDetails.vue') },
+      { path: 'mobtemplates', name: 'builder_mob_template_list', component: () => import('@/views/builder/world/MobTemplateList.vue') },
+      { path: 'mobtemplates/:mob_template_id', name: 'builder_mob_template_details', component: () => import('@/views/builder/world/MobTemplateDetails.vue') },
       { path: 'items', name: 'builder_item_definition_list', component: () => import('@/views/builder/world/ItemDefinitionList.vue') },
       { path: 'items/:item_definition_id', name: 'builder_item_definition_details', component: () => import('@/views/builder/world/ItemDefinitionDetails.vue') },
       { path: 'itemtemplates', name: 'builder_item_template_list', component: () => import('@/views/builder/world/ItemTemplateList.vue') },

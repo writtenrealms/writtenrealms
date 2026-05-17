@@ -32,6 +32,7 @@ from builders.models import (
     Reward,
     ItemDefinition,
     ItemTemplate,
+    MobDefinition,
     MobTemplate,
     TransformationTemplate,
     MerchantInventory,
@@ -1494,6 +1495,17 @@ class LoadTemplateSerializer(serializers.Serializer):
                 ).first()
             if template is None:
                 template = ItemDefinition.objects.filter(
+                    slug=template_ref,
+                    world=context,
+                ).first()
+        if template is None and data['template_type'] == 'mob':
+            if template_ref.isdigit():
+                template = MobDefinition.objects.filter(
+                    pk=int(template_ref),
+                    world=context,
+                ).first()
+            if template is None:
+                template = MobDefinition.objects.filter(
                     slug=template_ref,
                     world=context,
                 ).first()

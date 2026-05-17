@@ -8,6 +8,7 @@ from builders.models import (
     ItemBundle,
     ItemDefinition,
     ItemTemplate,
+    MobDefinition,
     MobTemplate,
     TransformationTemplate,
     Loader,
@@ -92,6 +93,8 @@ class ReferenceField(Field):
         else:
             if rtype == 'mob_template':
                 return MobTemplate.objects.get(pk=rid)
+            elif rtype == 'mob_definition':
+                return MobDefinition.objects.get(pk=rid)
             elif rtype == 'item_definition':
                 return ItemDefinition.objects.get(pk=rid)
             elif rtype == 'item_bundle':

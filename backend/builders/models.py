@@ -323,6 +323,59 @@ class ItemBundleEntry(AdventBaseModel):
         ordering = ['created_ts', 'id']
 
 
+class MobDefinition(AdventBaseModel):
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='mob_definitions')
+    slug = models.SlugField(max_length=120, blank=True)
+    name = models.TextField(default='Unnamed Mob')
+    description = models.TextField(**optional)
+    room_description = models.TextField(**optional)
+    keywords = models.TextField(**optional)
+    notes = models.TextField(**optional)
+    mob_type = models.TextField(
+        choices=list_to_choice(adv_consts.MOB_TYPES),
+        default=adv_consts.MOB_TYPE_BEAST)
+    assists = models.BooleanField(default=False)
+    base_properties = models.JSONField(default=dict, blank=True)
+    base_input_attributes = models.JSONField(default=dict, blank=True)
+    randomization = models.JSONField(default=dict, blank=True)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('world', 'slug')]
+
+    def save(self, *args, **kwargs):
+        is_create = self._state.adding
+        if not self.slug:
+            self.slug = _generate_unique_world_slug(
+                self,
+                fallback_prefix="mob-definition",
+            )
+        if kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = list(dict.fromkeys([
+                *kwargs["update_fields"],
+                "modified_ts",
+            ]))
+        super().save(*args, **kwargs)
+        if not is_create:
+            from builders.mob_definitions import sync_spawned_mobs_from_definition
+
+            sync_spawned_mobs_from_definition(self)
+
+    def spawn(self, target, spawn_world, roams=None, rule=None, rng=None):
+        from builders.mob_definitions import spawn_mob_from_definition
+
+        return spawn_mob_from_definition(
+            self,
+            target,
+            spawn_world,
+            rng=rng,
+            roams=roams,
+            rule=rule,
+        )
+
+
 class MobTemplate(CharMixin, MobMixin, AdventBaseModel):
 
     world = models.ForeignKey(

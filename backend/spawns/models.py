@@ -626,6 +626,12 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
                                  on_delete=models.SET_NULL,
                                  related_name='template_mobs',
                                  **optional)
+    definition = models.ForeignKey('builders.MobDefinition',
+                                   on_delete=models.SET_NULL,
+                                   related_name='spawned_mobs',
+                                   **optional)
+    definition_slug_snapshot = models.SlugField(max_length=120, blank=True)
+    roll_metadata = models.JSONField(default=dict, blank=True)
     equipment = models.OneToOneField('spawns.Equipment',
                                      related_name='mob',
                                      on_delete=models.CASCADE,
@@ -658,7 +664,12 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
         ]
 
     def create_corpse(self):
-        name = self.template.name if self.template else self.name
+        if self.template:
+            name = self.template.name
+        elif self.definition:
+            name = self.definition.name
+        else:
+            name = self.name
         return Item.objects.create(
             name='the corpse of %s' % name,
             keywords='corpse',

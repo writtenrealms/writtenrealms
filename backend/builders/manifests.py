@@ -18,6 +18,7 @@ from builders.item_definitions import (
     normalize_input_attribute_map,
     normalize_item_randomization,
 )
+from builders.mob_definitions import mob_definition_property_fields
 from builders.models import (
     AbilityDefinition,
     Currency,
@@ -25,6 +26,7 @@ from builders.models import (
     ItemBundleEntry,
     ItemDefinition,
     ItemTemplate,
+    MobDefinition,
     MobTemplate,
     Trigger,
 )
@@ -62,6 +64,7 @@ QUEST_ARC_MANIFEST_KIND = "questarc"
 ITEM_TEMPLATE_MANIFEST_KIND = "itemtemplate"
 ITEM_DEFINITION_MANIFEST_KIND = "itemdefinition"
 ITEM_BUNDLE_MANIFEST_KIND = "itembundle"
+MOB_DEFINITION_MANIFEST_KIND = "mobdefinition"
 ABILITY_MANIFEST_KIND = "ability"
 ABILITIES_MANIFEST_KIND = "abilities"
 TRIGGER_MANIFEST_OPERATION_APPLY = "apply"
@@ -89,6 +92,11 @@ _ITEM_BUNDLE_MANIFEST_KIND_ALIASES = {
     ITEM_BUNDLE_MANIFEST_KIND,
     "item-bundle",
     "item_bundle",
+}
+_MOB_DEFINITION_MANIFEST_KIND_ALIASES = {
+    MOB_DEFINITION_MANIFEST_KIND,
+    "mob-definition",
+    "mob_definition",
 }
 _ABILITY_MANIFEST_KIND_ALIASES = {
     ABILITY_MANIFEST_KIND,
@@ -247,6 +255,18 @@ _ITEM_DEFINITION_SPEC_FIELDS = (
     "randomization",
     *_ITEM_DEFINITION_BASE_PROPERTY_FIELDS,
 )
+_MOB_DEFINITION_BASE_PROPERTY_FIELDS = mob_definition_property_fields()
+_MOB_DEFINITION_SPEC_FIELDS = (
+    "description",
+    "room_description",
+    "notes",
+    "keywords",
+    "type",
+    "assists",
+    "input_attributes",
+    "randomization",
+    *_MOB_DEFINITION_BASE_PROPERTY_FIELDS,
+)
 
 
 class _ManifestDumper(yaml.SafeDumper):
@@ -348,6 +368,23 @@ class ParsedItemBundleDeleteManifest:
     world: World
     item_bundle: ItemBundle
     item_bundle_id: int
+
+
+@dataclass
+class ParsedMobDefinitionManifest:
+    world: World
+    mob_definition: MobDefinition | None
+    mob_definition_id: int | None
+    slug: str
+    name: str
+    fields: dict[str, Any]
+
+
+@dataclass
+class ParsedMobDefinitionDeleteManifest:
+    world: World
+    mob_definition: MobDefinition
+    mob_definition_id: int
 
 
 @dataclass
@@ -474,6 +511,8 @@ def parse_manifest_kind(manifest: dict[str, Any]) -> str:
         return ITEM_DEFINITION_MANIFEST_KIND
     if manifest_kind in _ITEM_BUNDLE_MANIFEST_KIND_ALIASES:
         return ITEM_BUNDLE_MANIFEST_KIND
+    if manifest_kind in _MOB_DEFINITION_MANIFEST_KIND_ALIASES:
+        return MOB_DEFINITION_MANIFEST_KIND
     if manifest_kind in _ABILITY_MANIFEST_KIND_ALIASES:
         return ABILITY_MANIFEST_KIND
     if manifest_kind in _ABILITIES_MANIFEST_KIND_ALIASES:
@@ -484,7 +523,7 @@ def parse_manifest_kind(manifest: dict[str, Any]) -> str:
         return QUEST_ARC_MANIFEST_KIND
     raise serializers.ValidationError(
         f"Unsupported manifest kind '{manifest_kind}'. "
-        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_MANIFEST_KIND}, {ITEM_TEMPLATE_MANIFEST_KIND}, {ITEM_DEFINITION_MANIFEST_KIND}, {ITEM_BUNDLE_MANIFEST_KIND}, {ABILITY_MANIFEST_KIND}, {ABILITIES_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
+        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_MANIFEST_KIND}, {ITEM_TEMPLATE_MANIFEST_KIND}, {ITEM_DEFINITION_MANIFEST_KIND}, {ITEM_BUNDLE_MANIFEST_KIND}, {MOB_DEFINITION_MANIFEST_KIND}, {ABILITY_MANIFEST_KIND}, {ABILITIES_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
     )
 
 
@@ -911,6 +950,77 @@ def serialize_item_definition_payload(item_definition: ItemDefinition) -> dict[s
         "base_properties": item_definition.base_properties or {},
         "input_attributes": item_definition.base_input_attributes or {},
         "randomization": item_definition.randomization or {},
+        "manifest": manifest,
+        "yaml": manifest_to_yaml(manifest),
+        "delete_manifest": delete_manifest,
+        "delete_yaml": manifest_to_yaml(delete_manifest),
+    }
+
+
+def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[str, Any]:
+    spec = {
+        "description": mob_definition.description or "",
+        "room_description": mob_definition.room_description or "",
+        "notes": mob_definition.notes or "",
+        "keywords": mob_definition.keywords or "",
+        "type": mob_definition.mob_type or adv_consts.MOB_TYPE_BEAST,
+        "assists": bool(mob_definition.assists),
+    }
+    for field_name, value in (mob_definition.base_properties or {}).items():
+        if value is None:
+            spec[field_name] = ""
+        else:
+            spec[field_name] = value
+    spec["input_attributes"] = mob_definition.base_input_attributes or {}
+    spec["randomization"] = mob_definition.randomization or {}
+    return spec
+
+
+def mob_definition_to_manifest(mob_definition: MobDefinition) -> dict[str, Any]:
+    return {
+        "kind": MOB_DEFINITION_MANIFEST_KIND,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, mob_definition.world_id),
+            "id": mob_definition.id,
+            "key": mob_definition.key,
+            "slug": mob_definition.slug,
+            "name": mob_definition.name or "",
+        },
+        "spec": _mob_definition_spec_from_instance(mob_definition),
+    }
+
+
+def mob_definition_delete_manifest(mob_definition: MobDefinition) -> dict[str, Any]:
+    return {
+        "kind": MOB_DEFINITION_MANIFEST_KIND,
+        "operation": TRIGGER_MANIFEST_OPERATION_DELETE,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, mob_definition.world_id),
+            "id": mob_definition.id,
+            "key": mob_definition.key,
+            "slug": mob_definition.slug,
+            "name": mob_definition.name or "",
+        },
+    }
+
+
+def serialize_mob_definition_payload(mob_definition: MobDefinition) -> dict[str, Any]:
+    manifest = mob_definition_to_manifest(mob_definition)
+    delete_manifest = mob_definition_delete_manifest(mob_definition)
+    return {
+        "id": mob_definition.id,
+        "key": mob_definition.key,
+        "slug": mob_definition.slug,
+        "name": mob_definition.name or "",
+        "description": mob_definition.description or "",
+        "room_description": mob_definition.room_description or "",
+        "keywords": mob_definition.keywords or "",
+        "notes": mob_definition.notes or "",
+        "type": mob_definition.mob_type,
+        "assists": bool(mob_definition.assists),
+        "base_properties": mob_definition.base_properties or {},
+        "input_attributes": mob_definition.base_input_attributes or {},
+        "randomization": mob_definition.randomization or {},
         "manifest": manifest,
         "yaml": manifest_to_yaml(manifest),
         "delete_manifest": delete_manifest,
@@ -1748,6 +1858,77 @@ def _resolve_item_definition_reference(
     return item_definition, item_definition.id
 
 
+def _parse_mob_definition_reference(value: Any, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or a mob definition key."
+        )
+    if isinstance(value, int):
+        return value
+
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or a mob definition key."
+        )
+    if text.isdigit():
+        return int(text)
+
+    entity_type, sep, raw_id = text.partition(".")
+    if sep != "." or not raw_id.isdigit():
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or a mob definition key."
+        )
+    if entity_type not in {"mobdefinition", "mob_definition"}:
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or a mob definition key."
+        )
+    return int(raw_id)
+
+
+def _resolve_mob_definition_reference(
+    *,
+    world: World,
+    metadata: dict[str, Any],
+) -> tuple[MobDefinition | None, int | None]:
+    definition_id = metadata.get("id")
+    definition_key = metadata.get("key")
+    definition_slug = str(metadata.get("slug") or "").strip()
+
+    resolved_by_id = None
+    if definition_id is not None:
+        parsed_id = _parse_mob_definition_reference(definition_id, "metadata.id")
+        resolved_by_id = MobDefinition.objects.filter(world=world, pk=parsed_id).first()
+        if not resolved_by_id:
+            raise serializers.ValidationError(
+                "Mob definition referenced by metadata.id was not found."
+            )
+
+    resolved_by_key = None
+    if definition_key not in (None, ""):
+        parsed_key_id = _parse_mob_definition_reference(definition_key, "metadata.key")
+        resolved_by_key = MobDefinition.objects.filter(world=world, pk=parsed_key_id).first()
+        if not resolved_by_key:
+            raise serializers.ValidationError(
+                "Mob definition referenced by metadata.key was not found."
+            )
+
+    resolved_by_slug = None
+    if definition_slug:
+        resolved_by_slug = MobDefinition.objects.filter(world=world, slug=definition_slug).first()
+
+    resolved = [item for item in (resolved_by_id, resolved_by_key, resolved_by_slug) if item]
+    if len({item.pk for item in resolved}) > 1:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, and metadata.slug refer to different mob definitions."
+        )
+
+    mob_definition = resolved_by_id or resolved_by_key or resolved_by_slug
+    if mob_definition is None:
+        return None, None
+    return mob_definition, mob_definition.id
+
+
 def _parse_item_bundle_reference(value: Any, field_name: str) -> int:
     if isinstance(value, bool):
         raise serializers.ValidationError(
@@ -2093,6 +2274,73 @@ def _coerce_item_definition_fields(*, world: World, spec_patch: dict[str, Any], 
     }
 
 
+def _coerce_mob_definition_fields(*, spec_patch: dict[str, Any], existing: MobDefinition | None) -> dict[str, Any]:
+    mob_type = spec_patch.get(
+        "type",
+        existing.mob_type if existing else adv_consts.MOB_TYPE_BEAST,
+    )
+    mob_type = _coerce_choice(
+        mob_type,
+        choices=adv_consts.MOB_TYPES,
+        field_name="spec.type",
+    )
+
+    base_properties = dict(existing.base_properties or {}) if existing else {}
+    for field_name in _MOB_DEFINITION_BASE_PROPERTY_FIELDS:
+        if field_name not in spec_patch:
+            continue
+        base_properties[field_name] = spec_patch.get(field_name)
+
+    input_attributes = (
+        normalize_input_attribute_map(
+            spec_patch.get("input_attributes"),
+            field_name="spec.input_attributes",
+        )
+        if "input_attributes" in spec_patch
+        else dict(existing.base_input_attributes or {}) if existing else {}
+    )
+    randomization = (
+        normalize_item_randomization(spec_patch.get("randomization"))
+        if "randomization" in spec_patch
+        else dict(existing.randomization or {}) if existing else {}
+    )
+
+    return {
+        "description": _coerce_text(
+            spec_patch.get(
+                "description",
+                existing.description if existing else "",
+            )
+        ),
+        "room_description": _coerce_text(
+            spec_patch.get(
+                "room_description",
+                existing.room_description if existing else "",
+            )
+        ),
+        "notes": _coerce_text(
+            spec_patch.get(
+                "notes",
+                existing.notes if existing else "",
+            )
+        ),
+        "keywords": _coerce_text(
+            spec_patch.get(
+                "keywords",
+                existing.keywords if existing else "",
+            )
+        ),
+        "mob_type": mob_type,
+        "assists": _coerce_bool(
+            spec_patch.get("assists", existing.assists if existing else False),
+            "spec.assists",
+        ),
+        "base_properties": base_properties,
+        "base_input_attributes": input_attributes,
+        "randomization": randomization,
+    }
+
+
 def parse_item_definition_manifest(
     *,
     world: World,
@@ -2223,6 +2471,137 @@ def parse_item_definition_delete_manifest(
         world=world,
         item_definition=item_definition,
         item_definition_id=item_definition_id,
+    )
+
+
+def parse_mob_definition_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedMobDefinitionManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != MOB_DEFINITION_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{MOB_DEFINITION_MANIFEST_KIND}'."
+        )
+
+    operation = parse_manifest_operation(manifest)
+    if operation != TRIGGER_MANIFEST_OPERATION_APPLY:
+        raise serializers.ValidationError(
+            f"Mob definition manifests only support operation '{TRIGGER_MANIFEST_OPERATION_APPLY}' in this parser."
+        )
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError("Manifest world does not match the selected world.")
+
+    mob_definition, mob_definition_id = _resolve_mob_definition_reference(
+        world=world,
+        metadata=metadata,
+    )
+
+    spec_patch = manifest.get("spec") or {}
+    if not isinstance(spec_patch, dict):
+        raise serializers.ValidationError("spec must be a mapping.")
+    if mob_definition is None and not spec_patch:
+        raise serializers.ValidationError("spec is required when creating a mob definition.")
+
+    unknown_fields = sorted(set(spec_patch.keys()) - set(_MOB_DEFINITION_SPEC_FIELDS))
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported spec field(s): {', '.join(unknown_fields)}."
+        )
+
+    slug_source = metadata.get("slug")
+    if slug_source is None:
+        slug_source = mob_definition.slug if mob_definition else metadata.get("name")
+    slug = _slug_or_error(str(slug_source or ""), "metadata.slug")
+    if MobDefinition.objects.filter(world=world, slug=slug).exclude(pk=mob_definition_id).exists():
+        raise serializers.ValidationError(
+            "metadata.slug is already used by another mob definition."
+        )
+
+    default_name = mob_definition.name if mob_definition else slug.replace("-", " ").title()
+    name = _coerce_text(metadata.get("name", default_name))
+    if not name.strip():
+        raise serializers.ValidationError("metadata.name cannot be empty.")
+
+    try:
+        fields = _coerce_mob_definition_fields(
+            spec_patch=spec_patch,
+            existing=mob_definition,
+        )
+    except ItemDefinitionError as exc:
+        raise serializers.ValidationError(str(exc))
+    fields["slug"] = slug
+    fields["name"] = name
+
+    return ParsedMobDefinitionManifest(
+        world=world,
+        mob_definition=mob_definition,
+        mob_definition_id=mob_definition_id,
+        slug=slug,
+        name=name,
+        fields=fields,
+    )
+
+
+def parse_mob_definition_delete_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedMobDefinitionDeleteManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != MOB_DEFINITION_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{MOB_DEFINITION_MANIFEST_KIND}'."
+        )
+
+    operation = parse_manifest_operation(manifest)
+    if operation != TRIGGER_MANIFEST_OPERATION_DELETE:
+        raise serializers.ValidationError("Delete parser requires operation: delete.")
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError("Manifest world does not match the selected world.")
+
+    mob_definition, mob_definition_id = _resolve_mob_definition_reference(
+        world=world,
+        metadata=metadata,
+    )
+    if mob_definition is None or mob_definition_id is None:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, or metadata.slug is required for operation: delete."
+        )
+
+    spec = manifest.get("spec")
+    if spec not in (None, {}):
+        raise serializers.ValidationError("spec is not allowed for operation: delete.")
+
+    return ParsedMobDefinitionDeleteManifest(
+        world=world,
+        mob_definition=mob_definition,
+        mob_definition_id=mob_definition_id,
     )
 
 
@@ -2942,6 +3321,17 @@ def apply_item_definition_manifest(parsed: ParsedItemDefinitionManifest) -> Item
         setattr(item_definition, field_name, value)
     item_definition.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
     return item_definition
+
+
+def apply_mob_definition_manifest(parsed: ParsedMobDefinitionManifest) -> MobDefinition:
+    if parsed.mob_definition is None:
+        return MobDefinition.objects.create(world=parsed.world, **parsed.fields)
+
+    mob_definition = parsed.mob_definition
+    for field_name, value in parsed.fields.items():
+        setattr(mob_definition, field_name, value)
+    mob_definition.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
+    return mob_definition
 
 
 def apply_item_bundle_manifest(parsed: ParsedItemBundleManifest) -> ItemBundle:

@@ -68,6 +68,7 @@ A new world-level **Edit World** view accepts a YAML manifest textarea.
   - `kind: itemdefinition`
   - `kind: itembundle`
   - `kind: mobtemplate`
+  - `kind: mobdefinition`
   - `kind: quest`
   - `kind: questarc`
   - `kind: trigger`
@@ -87,6 +88,11 @@ Item definition authoring details, including stackable plain items, fixed stat
 items, randomized stat items, and item bundles, live in:
 
 - [docs/guides/item-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/item-definition-builder-guide.md)
+
+Mob definition authoring details, including plain mobs, fixed stat mobs, and
+randomized stat mobs, live in:
+
+- [docs/guides/mob-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-definition-builder-guide.md)
 
 ## Trigger Manifest Shapes
 
@@ -280,7 +286,7 @@ are defined, the world has no classes.
 For details and examples, see:
 
 - [stats-formulas-and-classes.md](/Users/teebes/code/writtenrealms/docs/architecture/stats-formulas-and-classes.md)
-- [input-attributes-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/input-attributes-builder-guide.md)
+- [attributes-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/attributes-builder-guide.md)
 - [wr1-archetype-world-reference.md](/Users/teebes/code/writtenrealms/docs/dev/wr1-archetype-world-reference.md)
 
 World manifests also support `spec.combat`, which holds the authored WR2
@@ -345,7 +351,7 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 
 ## Validation Rules (Current)
 
-- `kind` must resolve to `trigger`, `world`, `currency`, `zone`, `room`, `itemtemplate`, `mobtemplate`, `quest`, or `questarc`.
+- `kind` must resolve to `trigger`, `world`, `currency`, `zone`, `room`, `itemtemplate`, `itemdefinition`, `itembundle`, `mobtemplate`, `mobdefinition`, `ability`, `abilities`, `quest`, or `questarc`.
 - For update: `metadata.id` or `metadata.key` must reference an existing trigger in the selected world.
 - For create: omit both `metadata.id` and `metadata.key`.
 - For delete: set `operation: delete` and include `metadata.id` or `metadata.key`.

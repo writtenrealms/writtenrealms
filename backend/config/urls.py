@@ -227,6 +227,8 @@ api_v1_urls = [
     path('builder/worlds/<world_pk>/mobtemplates/<pk>/factions/', builder_views.mob_template_factions, name='builder-mob-template-factions'),
     path('builder/worlds/<world_pk>/mobtemplates/<pk>/quests/', builder_views.mob_template_quests, name='builder-mob-template-quests'),
     path('builder/worlds/<world_pk>/mobtemplates/<mob_template_pk>/factions/<pk>/', builder_views.mob_template_faction_detail, name='builder-mob-template-faction-detail'),
+    path('builder/worlds/<world_pk>/mobdefinitions/', builder_views.mob_definition_list, name='builder-mob-definition-list'),
+    path('builder/worlds/<world_pk>/mobdefinitions/<pk>/', builder_views.mob_definition_detail, name='builder-mob-definition-detail'),
 
     # Loaders
     path('builder/worlds/<world_pk>/loaders/', builder_views.loader_list, name='builder-loader-list'),

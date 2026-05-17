@@ -32,7 +32,7 @@
         <template v-if="viewType === 'world'">
 
           <router-link
-            :to="{name: 'builder_mob_template_list', params: {world_id: route.params.world_id}}" :class="{ 'router-link-active': isWorldMobsRoute }"
+            :to="{name: 'builder_mob_definition_list', params: {world_id: route.params.world_id}}" :class="{ 'router-link-active': isWorldMobsRoute }"
           >Mobs</router-link>
 
           <router-link
@@ -229,7 +229,15 @@ const isWorldItemsRoute = computed(() => {
   ];
   return routes.includes(route.name as string);
 });
-const isWorldMobsRoute = computed(() => { return route.name === 'builder_mob_template_details'; });
+const isWorldMobsRoute = computed(() => {
+  const routes = [
+    'builder_mob_definition_list',
+    'builder_mob_definition_details',
+    'builder_mob_template_list',
+    'builder_mob_template_details',
+  ];
+  return routes.includes(route.name as string);
+});
 const isWorldQuestRoute = computed(() => {
   const routes = [
     'builder_world_quest_template_list',

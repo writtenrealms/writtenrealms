@@ -54,7 +54,7 @@ Reference docs:
 
 - [stats-formulas-and-classes.md](/Users/teebes/code/writtenrealms/docs/architecture/stats-formulas-and-classes.md)
 - [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
-- [input-attributes-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/input-attributes-builder-guide.md)
+- [attributes-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/attributes-builder-guide.md)
 - [item-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/item-definition-builder-guide.md)
 - `.codex/skills/wr-transition/wr2-architecture.md`
 

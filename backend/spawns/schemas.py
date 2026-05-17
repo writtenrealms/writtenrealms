@@ -133,6 +133,8 @@ class Char(BaseModel):
     key: str
     name: str
     template_id: Optional[int] = None
+    definition_id: Optional[int] = None
+    definition_slug: Optional[str] = None
     title: Optional[str] = ""
     description: Optional[str] = None
     archetype: Optional[str] = None

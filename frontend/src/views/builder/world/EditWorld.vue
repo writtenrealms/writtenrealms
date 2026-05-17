@@ -2,7 +2,7 @@
   <div id="edit-world-manifest">
     <h2>{{ world.name.toUpperCase() }} EDIT WORLD</h2>
     <div class="color-text-60 mb-6">
-      Paste one or more YAML manifests. Each YAML document is applied in order. Supported kinds: world, currency, zone, room, itemtemplate, itemdefinition, itembundle, mobtemplate, ability, abilities, quest, questarc, and trigger.
+      Paste one or more YAML manifests. Each YAML document is applied in order. Supported kinds: world, currency, zone, room, itemtemplate, itemdefinition, itembundle, mobtemplate, mobdefinition, ability, abilities, quest, questarc, and trigger.
     </div>
 
     <textarea
@@ -39,6 +39,9 @@
       <template v-else-if="appliedKind === 'itemdefinition' && appliedItemDefinition">
         {{ capfirst(lastOperation) }} {{ appliedItemDefinition.slug || appliedItemDefinition.name }}.
       </template>
+      <template v-else-if="appliedKind === 'mobdefinition' && appliedMobDefinition">
+        {{ capfirst(lastOperation) }} {{ appliedMobDefinition.slug || appliedMobDefinition.name }}.
+      </template>
       <template v-else>
         {{ capfirst(lastOperation) }} manifest.
       </template>
@@ -63,6 +66,7 @@ const appliedKind = ref<string>("");
 const appliedTrigger = ref<any | null>(null);
 const appliedItemTemplate = ref<any | null>(null);
 const appliedItemDefinition = ref<any | null>(null);
+const appliedMobDefinition = ref<any | null>(null);
 const appliedBatchSummary = ref<any | null>(null);
 const lastOperation = ref<string>("");
 
@@ -108,6 +112,40 @@ spec:
   type: inert
 `;
 
+const newMobDefinitionYaml = `kind: mobdefinition
+metadata:
+  slug: new-mob
+  name: a new mob
+spec:
+  description: ''
+  room_description: ''
+  notes: ''
+  keywords: ''
+  type: beast
+  assists: false
+  level: 1
+  exp_worth: 1
+  gold: 0
+  health_max: 30
+  health_regen: 0
+  mana_max: 1
+  mana_regen: 0
+  stamina_max: 50
+  stamina_regen: 0
+  regen_rate: 4
+  attack_power: 1
+  spell_power: 0
+  armor: 0
+  dodge: 0
+  crit: 0
+  resilience: 0
+  fights_back: true
+  is_invisible: false
+  input_attributes: {}
+  randomization:
+    attributes: []
+`;
+
 const loadItemDefinitionYaml = async () => {
   const rawItemDefinitionId = route.query.item_definition_id;
   const itemDefinitionId = Array.isArray(rawItemDefinitionId)
@@ -127,6 +165,25 @@ const loadItemDefinitionYaml = async () => {
   }
 };
 
+const loadMobDefinitionYaml = async () => {
+  const rawMobDefinitionId = route.query.mob_definition_id;
+  const mobDefinitionId = Array.isArray(rawMobDefinitionId)
+    ? rawMobDefinitionId[0]
+    : rawMobDefinitionId;
+  if (!mobDefinitionId) {
+    manifestText.value = "";
+    return;
+  }
+  try {
+    const resp = await axios.get(
+      `/builder/worlds/${route.params.world_id}/mobdefinitions/${mobDefinitionId}/`
+    );
+    manifestText.value = resp.data?.yaml || "";
+  } catch (error: any) {
+    store.commit("ui/notification_set_error", extractError(error));
+  }
+};
+
 onMounted(async () => {
   if (route.query.prefill === "world-config") {
     await loadWorldConfigYaml();
@@ -134,6 +191,10 @@ onMounted(async () => {
     await loadItemDefinitionYaml();
   } else if (route.query.prefill === "new-item-definition") {
     manifestText.value = newItemDefinitionYaml;
+  } else if (route.query.prefill === "mob-definition") {
+    await loadMobDefinitionYaml();
+  } else if (route.query.prefill === "new-mob-definition") {
+    manifestText.value = newMobDefinitionYaml;
   }
 });
 
@@ -151,26 +212,37 @@ const submitManifest = async () => {
       appliedTrigger.value = resp.data.trigger || null;
       appliedItemTemplate.value = null;
       appliedItemDefinition.value = null;
+      appliedMobDefinition.value = null;
     } else if (appliedKind.value === "world") {
       appliedTrigger.value = null;
       appliedItemTemplate.value = null;
       appliedItemDefinition.value = null;
+      appliedMobDefinition.value = null;
     } else if (appliedKind.value === "itemtemplate") {
       appliedTrigger.value = null;
       appliedItemTemplate.value = resp.data.item_template || null;
       appliedItemDefinition.value = null;
+      appliedMobDefinition.value = null;
     } else if (appliedKind.value === "itemdefinition") {
       appliedTrigger.value = null;
       appliedItemTemplate.value = null;
       appliedItemDefinition.value = resp.data.item_definition || null;
+      appliedMobDefinition.value = null;
+    } else if (appliedKind.value === "mobdefinition") {
+      appliedTrigger.value = null;
+      appliedItemTemplate.value = null;
+      appliedItemDefinition.value = null;
+      appliedMobDefinition.value = resp.data.mob_definition || null;
     } else if (appliedKind.value === "batch") {
       appliedTrigger.value = null;
       appliedItemTemplate.value = null;
       appliedItemDefinition.value = null;
+      appliedMobDefinition.value = null;
     } else {
       appliedTrigger.value = null;
       appliedItemTemplate.value = null;
       appliedItemDefinition.value = null;
+      appliedMobDefinition.value = null;
     }
 
     const freshWorld = await store.dispatch("builder/fetch_world", route.params.world_id);

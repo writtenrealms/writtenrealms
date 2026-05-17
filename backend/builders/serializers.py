@@ -44,6 +44,7 @@ from builders.models import (
     ItemTemplate,
     ItemTemplateInventory,
     ItemAction,
+    MobDefinition,
     Loader,
     MobTemplate,
     MobTemplateInventory,
@@ -1991,6 +1992,25 @@ class MobTemplateSerializer(serializers.ModelSerializer):
             return True
 
         return False
+
+
+class MobDefinitionSerializer(serializers.ModelSerializer):
+    type = serializers.CharField(source='mob_type', read_only=True)
+    input_attributes = serializers.JSONField(source='base_input_attributes', read_only=True)
+    randomized = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MobDefinition
+        fields = [
+            'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
+            'description', 'room_description', 'notes', 'keywords',
+            'type', 'assists', 'base_properties', 'input_attributes',
+            'randomization', 'randomized',
+        ]
+
+    def get_randomized(self, mob_definition):
+        randomization = mob_definition.randomization or {}
+        return bool(randomization.get('attributes'))
 
 
 class MobTemplateInventorySerializer(serializers.ModelSerializer):

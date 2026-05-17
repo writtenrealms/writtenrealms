@@ -1043,8 +1043,12 @@ export const BUILDER_FORMS = {
       widget: "select",
       options: [
         {
-          value: "mobtemplate",
+          value: "mobdefinition",
           label: "Mob",
+        },
+        {
+          value: "mobtemplate",
+          label: "Mob Template",
         },
         {
           value: "itemtemplate",
@@ -1082,9 +1086,16 @@ export const BUILDER_FORMS = {
     },
 
     TEMPLATE_SCHEMAS: {
-      mobtemplate: {
+      mobdefinition: {
         attr: "template",
         label: "Load Mob",
+        references: "mob_definition",
+        widget: "reference",
+      },
+
+      mobtemplate: {
+        attr: "template",
+        label: "Load Mob Template",
         references: "mob_template",
         widget: "reference",
       },

@@ -79,6 +79,8 @@ def _tokenize_keywords(value: str) -> list[str]:
 
 def _entity_tokens(entity: Item | Mob) -> set[str]:
     keywords = getattr(entity, "keywords", "") or ""
+    if not keywords and getattr(entity, "definition", None):
+        keywords = entity.definition.keywords or ""
     if not keywords and getattr(entity, "template", None):
         keywords = entity.template.keywords or ""
     if not keywords:
@@ -139,12 +141,12 @@ def _collect_purge_targets(player: Player, selector: str) -> list[Item | Mob]:
         item = room.inventory.filter(pk=item_id, is_pending_deletion=False).first()
         return [item] if item else []
 
-    room_mobs = list(room.mobs.select_related("template"))
+    room_mobs = list(room.mobs.select_related("definition", "template"))
     room_items = list(
-        room.inventory.filter(is_pending_deletion=False).select_related("template", "currency")
+        room.inventory.filter(is_pending_deletion=False).select_related("definition", "template", "currency")
     )
     inventory_items = list(
-        player.inventory.filter(is_pending_deletion=False).select_related("template", "currency")
+        player.inventory.filter(is_pending_deletion=False).select_related("definition", "template", "currency")
     )
 
     targets: list[Item | Mob] = [mob for mob in room_mobs if _entity_matches(mob, selector)]
@@ -232,10 +234,10 @@ def _collect_room_mob_targets(room: Room, selector: str) -> list[Mob]:
             mob_id = int(normalized.split(".", 1)[1])
         except (TypeError, ValueError):
             return []
-        mob = room.mobs.filter(pk=mob_id).first()
+        mob = room.mobs.select_related("definition", "template").filter(pk=mob_id).first()
         return [mob] if mob else []
 
-    room_mobs = list(room.mobs.select_related("template"))
+    room_mobs = list(room.mobs.select_related("definition", "template"))
     return [mob for mob in room_mobs if _entity_matches(mob, normalized)]
 
 
@@ -439,7 +441,11 @@ class LoadTemplateAction:
                 trigger_actor_key=player.key,
             )
             loaded_key = mob.key
-            loaded_name = mob.name or (mob.template.name if mob.template else "mob")
+            loaded_name = (
+                mob.name
+                or (mob.definition.name if mob.definition else "")
+                or (mob.template.name if mob.template else "mob")
+            )
         else:
             raise ActionError("Unknown template type.", code="invalid_type")
 

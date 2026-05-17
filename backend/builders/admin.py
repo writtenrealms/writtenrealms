@@ -21,6 +21,7 @@ from builders.models import (
     ItemTemplateInventory,
     Loader,
     MobEquipmentProfile,
+    MobDefinition,
     MerchantInventory,
     MobReaction,
     MobReactionCondition,
@@ -105,6 +106,12 @@ class ItemBundleAdmin(BaseAdmin):
     raw_id_fields = ['world']
     list_filter = (DirectRootWorldFilter,)
     inlines = [ItemBundleEntryInline]
+
+
+class MobDefinitionAdmin(BaseAdmin):
+    list_display = ('id', 'key', 'slug', 'name', 'mob_type', 'world')
+    raw_id_fields = ['world']
+    list_filter = (DirectRootWorldFilter,)
 
 
 class ItemTemplateInventoryAdmin(BaseAdmin):
@@ -387,6 +394,7 @@ admin.site.register(MerchantInventory, MerchantInventoryAdmin)
 admin.site.register(MobEquipmentProfile, MobEquipmentProfileAdmin)
 admin.site.register(MobReaction, MobReactionAdmin)
 admin.site.register(MobReactionCondition, MobReactionConditionAdmin)
+admin.site.register(MobDefinition, MobDefinitionAdmin)
 admin.site.register(MobTemplate, MobTemplateAdmin)
 admin.site.register(MobTemplateInventory, MobTemplateInventoryAdmin)
 admin.site.register(Objective, ObjectiveAdmin)
