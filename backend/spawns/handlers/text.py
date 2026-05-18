@@ -126,6 +126,8 @@ class TextCommandHandler(CommandHandler):
             ctx.payload["selector"] = args[0]
             if len(args) > 1:
                 ctx.payload["target"] = " ".join(args[1:])
+        elif handler.command_type in {"equip", "wear", "wield", "remove"} and args:
+            ctx.payload["selector"] = " ".join(args)
         elif handler.command_type == "help" and args:
             ctx.payload["target"] = args[0]
 

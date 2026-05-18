@@ -2,10 +2,33 @@
 Item command handlers.
 """
 from spawns.actions.base import ActionError
-from spawns.actions.items import DropAction, GetAction, GiveAction, PutAction
+from spawns.actions.items import (
+    DropAction,
+    EquipAction,
+    GetAction,
+    GiveAction,
+    PutAction,
+    RemoveEquipmentAction,
+)
 from spawns.events import publish_events
 from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.registry import register_handler
+
+
+def _selector_from_payload(ctx: CommandContext) -> str | None:
+    selector = ctx.payload.get("selector")
+    if not selector:
+        selector = ctx.payload.get("item")
+
+    if isinstance(selector, dict):
+        selector = selector.get("key") or selector.get("name")
+
+    if not selector:
+        args = ctx.payload.get("args", [])
+        if args:
+            selector = " ".join(args)
+
+    return str(selector).strip() if selector else None
 
 
 @register_handler
@@ -45,6 +68,146 @@ class DropHandler(CommandHandler):
             ctx.publish(
                 {
                     "type": "cmd.drop.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.player.key,
+            connection_id=ctx.connection_id,
+        )
+
+
+class _EquipHandlerBase(CommandHandler):
+    command_type = "equip"
+    text_commands = ()
+    help = {
+        "name": "Equip",
+        "format": "equip <item>",
+        "description": "Equip an item from your inventory, swapping occupied slots when needed.",
+        "examples": [
+            "equip sword",
+            "equip helmet",
+            "equip all.armor",
+        ],
+    }
+    wield_only = False
+
+    def handle(self, ctx: CommandContext) -> None:
+        selector = _selector_from_payload(ctx)
+
+        if not selector:
+            ctx.publish(
+                {
+                    "type": f"cmd.{self.command_type}.error",
+                    "text": "Equip what?",
+                    "data": {"error": "Missing item.", "code": "missing_item"},
+                }
+            )
+            return
+
+        try:
+            result = EquipAction().execute(
+                ctx.player.id,
+                selector,
+                command_type=self.command_type,
+                wield_only=self.wield_only,
+            )
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": f"cmd.{self.command_type}.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.player.key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class EquipHandler(_EquipHandlerBase):
+    command_type = "equip"
+    text_commands = ("equip",)
+
+
+@register_handler
+class WearHandler(_EquipHandlerBase):
+    command_type = "wear"
+    text_commands = ("wear",)
+    help = {
+        "name": "Wear",
+        "format": "wear <item>",
+        "description": "Wear an equippable item from your inventory.",
+        "examples": [
+            "wear helmet",
+            "wear all.armor",
+        ],
+    }
+
+
+@register_handler
+class WieldHandler(_EquipHandlerBase):
+    command_type = "wield"
+    text_commands = ("wield",)
+    wield_only = True
+    help = {
+        "name": "Wield",
+        "format": "wield <weapon>",
+        "description": "Equip a weapon from your inventory.",
+        "examples": [
+            "wield sword",
+            "wield 2.dagger",
+        ],
+    }
+
+
+@register_handler
+class RemoveHandler(CommandHandler):
+    command_type = "remove"
+    text_commands = ("remove",)
+    help = {
+        "name": "Remove",
+        "format": "remove <item>",
+        "description": "Remove an equipped item and return it to your inventory.",
+        "examples": [
+            "remove helmet",
+            "remove all",
+            "remove all.armor",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        selector = _selector_from_payload(ctx)
+
+        if not selector:
+            ctx.publish(
+                {
+                    "type": "cmd.remove.error",
+                    "text": "Remove what?",
+                    "data": {"error": "Missing item.", "code": "missing_item"},
+                }
+            )
+            return
+
+        try:
+            result = RemoveEquipmentAction().execute(
+                ctx.player.id,
+                selector,
+                command_type=self.command_type,
+            )
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd.remove.error",
                     "text": err.message,
                     "data": {"error": err.message, "code": err.code, **err.data},
                 }

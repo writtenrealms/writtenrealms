@@ -344,11 +344,7 @@ async def handle_game_websocket(websocket: WebSocket):
             # Handle structured commands
             if msg_type and msg_type.startswith('cmd.'):
                 logger.info(f"Structured command from {player_key}: {msg_type}")
-                await websocket.send_json({
-                    'type': f'{msg_type}.stub',
-                    'text': f"[STUB] Received structured command: {msg_type}",
-                    'data': data.get('data', {})
-                })
+                queue_game_command(msg_type[4:], data.get('data', {}))
                 continue
 
             # Unknown message type

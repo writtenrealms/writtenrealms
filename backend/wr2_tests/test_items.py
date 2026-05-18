@@ -1,5 +1,6 @@
 from config import constants as adv_consts
 from builders.models import ItemTemplate
+from spawns.handlers import dispatch_command
 from spawns.models import Item
 from tests.base import WorldTestCase
 from wr2_tests.utils import capture_game_messages, dispatch_text_command
@@ -319,3 +320,120 @@ class TestGiveCommand(WorldTestCase):
         self.assertIsNotNone(message)
         self.assertEqual(message["data"]["target"]["id"], guard.id)
         self.assertIsNotNone(self._message_by_type(messages, "notification.cmd.give.success"))
+
+
+class TestEquipmentCommands(WorldTestCase):
+    def _message_by_type(self, messages, message_type):
+        for msg in messages:
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def _make_equipment_item(self, name, equipment_type):
+        template = ItemTemplate.objects.create(
+            world=self.world,
+            name=name,
+            type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            equipment_type=equipment_type,
+        )
+        return Item.objects.create(
+            world=self.spawn_world,
+            container=self.player,
+            template=template,
+            name=template.name,
+            type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            equipment_type=equipment_type,
+        )
+
+    def test_equip_moves_inventory_item_to_equipment(self):
+        helmet = self._make_equipment_item(
+            "Iron Helmet",
+            adv_consts.EQUIPMENT_TYPE_HEAD,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "equip helmet")
+
+        helmet.refresh_from_db()
+        self.player.equipment.refresh_from_db()
+        self.assertEqual(self.player.equipment.head_id, helmet.id)
+        self.assertEqual(helmet.container_id, self.player.equipment.id)
+
+        message = self._message_by_type(messages, "cmd.equip.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["actor"]["equipment"]["head"]["key"], helmet.key)
+        self.assertIn("You wear Iron Helmet on your head.", message.get("text", ""))
+
+    def test_wield_swaps_existing_weapon(self):
+        sword = self._make_equipment_item(
+            "Short Sword",
+            adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
+        )
+        axe = self._make_equipment_item(
+            "War Axe",
+            adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
+        )
+        self.player.equipment.equip(sword, adv_consts.EQUIPMENT_SLOT_WEAPON)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "wield axe")
+
+        sword.refresh_from_db()
+        axe.refresh_from_db()
+        self.player.equipment.refresh_from_db()
+        self.assertEqual(self.player.equipment.weapon_id, axe.id)
+        self.assertEqual(axe.container_id, self.player.equipment.id)
+        self.assertEqual(sword.container_id, self.player.id)
+
+        message = self._message_by_type(messages, "cmd.wield.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(
+            message["data"]["swapped_items"][0]["removed"]["key"],
+            sword.key,
+        )
+        self.assertIn("You swap Short Sword for War Axe.", message.get("text", ""))
+
+    def test_remove_moves_equipped_item_to_inventory_and_notifies_room(self):
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+        watcher = self.create_player("Watcher", room=self.room)
+        watcher.in_game = True
+        watcher.save(update_fields=["in_game"])
+
+        boots = self._make_equipment_item(
+            "Trail Boots",
+            adv_consts.EQUIPMENT_TYPE_FEET,
+        )
+        self.player.equipment.equip(boots, adv_consts.EQUIPMENT_SLOT_FEET)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "remove boots")
+
+        boots.refresh_from_db()
+        self.player.equipment.refresh_from_db()
+        self.assertIsNone(self.player.equipment.feet_id)
+        self.assertEqual(boots.container_id, self.player.id)
+
+        message = self._message_by_type(messages, "cmd.remove.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["items"][0]["key"], boots.key)
+        self.assertIn("You stop using Trail Boots.", message.get("text", ""))
+        self.assertIsNotNone(self._message_by_type(messages, "notification.cmd.remove.success"))
+
+    def test_structured_wear_command_accepts_item_key_payload(self):
+        gloves = self._make_equipment_item(
+            "Work Gloves",
+            adv_consts.EQUIPMENT_TYPE_HANDS,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                "wear",
+                player_id=self.player.id,
+                payload={"item": {"key": gloves.key}},
+            )
+
+        gloves.refresh_from_db()
+        self.player.equipment.refresh_from_db()
+        self.assertEqual(self.player.equipment.hands_id, gloves.id)
+        self.assertIsNotNone(self._message_by_type(messages, "cmd.wear.success"))
