@@ -54,6 +54,7 @@ from builders.models import (
     MobDefinition,
     MobTemplate,
     MobTemplateInventory,
+    MerchantProfile,
     MerchantInventory,
     TransformationTemplate,
     Loader,
@@ -2879,6 +2880,38 @@ item_definition_detail = ItemDefinitionViewSet.as_view({
 })
 
 
+class ItemBundleViewSet(BaseWorldBuilderViewSet):
+    serializer_class = builder_serializers.ItemBundleSerializer
+    http_method_names = ['get', 'head', 'options']
+
+    def _serialize_item_bundle_response(self, item_bundle):
+        payload = builder_manifests.serialize_item_bundle_payload(item_bundle)
+        payload["modified_ts"] = item_bundle.modified_ts
+        payload["model_type"] = item_bundle.model_type
+        payload["entry_count"] = item_bundle.entries.count()
+        return payload
+
+    def get_queryset(self):
+        context = self.world
+        if context.instance_of:
+            context = context.instance_of
+
+        qs = ItemBundle.objects.filter(world=context).prefetch_related("entries").order_by('-modified_ts')
+        return self.search_queryset(qs)
+
+    def retrieve(self, request, *args, **kwargs):
+        item_bundle = self.get_object()
+        return Response(self._serialize_item_bundle_response(item_bundle))
+
+
+item_bundle_list = ItemBundleViewSet.as_view({
+    'get': 'list',
+})
+item_bundle_detail = ItemBundleViewSet.as_view({
+    'get': 'retrieve',
+})
+
+
 class ItemActionViewSet(BaseWorldBuilderViewSet):
 
     serializer_class = builder_serializers.ItemActionSerializer
@@ -3256,6 +3289,55 @@ mob_definition_list = MobDefinitionViewSet.as_view({
     'get': 'list',
 })
 mob_definition_detail = MobDefinitionViewSet.as_view({
+    'get': 'retrieve',
+})
+
+
+class MerchantProfileViewSet(BaseWorldBuilderViewSet):
+    serializer_class = builder_serializers.MerchantProfileSerializer
+    http_method_names = ['get', 'head', 'options']
+
+    def _serialize_merchant_profile_response(self, merchant_profile):
+        payload = builder_manifests.serialize_merchant_profile_payload(merchant_profile)
+        payload["modified_ts"] = merchant_profile.modified_ts
+        payload["model_type"] = merchant_profile.model_type
+        payload["stock_count"] = merchant_profile.stock_slots.count()
+        return payload
+
+    def get_queryset(self):
+        context = self.world
+        if context.instance_of:
+            context = context.instance_of
+
+        qs = (
+            MerchantProfile.objects
+            .filter(world=context)
+            .select_related("funds_currency")
+            .prefetch_related("stock_slots")
+            .order_by('-modified_ts')
+        )
+
+        funds_mode = self.request.query_params.get('funds_mode')
+        if funds_mode in MerchantProfile.FUNDS_MODES:
+            qs = qs.filter(funds_mode=funds_mode)
+
+        buyback_enabled = self.request.query_params.get('buyback_enabled')
+        if buyback_enabled == 'true':
+            qs = qs.filter(buyback_enabled=True)
+        elif buyback_enabled == 'false':
+            qs = qs.filter(buyback_enabled=False)
+
+        return self.search_queryset(qs)
+
+    def retrieve(self, request, *args, **kwargs):
+        merchant_profile = self.get_object()
+        return Response(self._serialize_merchant_profile_response(merchant_profile))
+
+
+merchant_profile_list = MerchantProfileViewSet.as_view({
+    'get': 'list',
+})
+merchant_profile_detail = MerchantProfileViewSet.as_view({
     'get': 'retrieve',
 })
 

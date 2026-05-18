@@ -186,6 +186,24 @@ const configLinks = computed(() => [
     },
   },
   {
+    title: "Item Bundles",
+    description: "Weighted item definition bundles for random drops, loads, and merchant stock.",
+    rootOnly: true,
+    to: {
+      name: "builder_item_bundle_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
+    title: "Merchant Profiles",
+    description: "Shop stock, restock rules, buyback, pricing, and purchasing funds.",
+    rootOnly: true,
+    to: {
+      name: "builder_merchant_profile_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
     title: "Transformations",
     description: "One-off template changes applied through loader rules.",
     rootOnly: true,

@@ -146,6 +146,65 @@ spec:
         self.assertEqual(definition.base_properties["health_max"], 120)
 
 
+class TestMerchantProfileBuilderEndpoints(MerchantTestCase):
+    def setUp(self):
+        super().setUp()
+        self.list_ep = reverse("builder-merchant-profile-list", args=[self.world.pk])
+
+    def test_list_merchant_profiles_for_builder_ui(self):
+        sword = self._item_definition("iron-sword", "an iron sword", keywords="iron sword")
+        profile = MerchantProfile.objects.create(
+            world=self.world,
+            slug="garron-smithy",
+            name="Garron's Smithy",
+            funds_mode=MerchantProfile.FUNDS_MODE_FINITE,
+            funds_currency=self.currency,
+            purchase_budget=500,
+            buyback_enabled=True,
+            buyback_max_items=3,
+            restock_interval_seconds=3600,
+        )
+        MerchantStockSlot.objects.create(
+            profile=profile,
+            key="swords",
+            item_definition=sword,
+            count=2,
+        )
+
+        resp = self.client.get(self.list_ep, {"sort_by": "slug"})
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data["count"], 1)
+        self.assertEqual(resp.data["results"][0]["slug"], "garron-smithy")
+        self.assertEqual(resp.data["results"][0]["stock_count"], 1)
+        self.assertEqual(resp.data["results"][0]["funds_mode"], MerchantProfile.FUNDS_MODE_FINITE)
+        self.assertTrue(resp.data["results"][0]["buyback_enabled"])
+
+    def test_retrieve_merchant_profile_includes_yaml(self):
+        sword = self._item_definition("iron-sword", "an iron sword", keywords="iron sword")
+        profile = MerchantProfile.objects.create(
+            world=self.world,
+            slug="garron-smithy",
+            name="Garron's Smithy",
+            funds_currency=self.currency,
+        )
+        MerchantStockSlot.objects.create(
+            profile=profile,
+            key="swords",
+            item_definition=sword,
+            count=2,
+        )
+
+        resp = self.client.get(
+            reverse("builder-merchant-profile-detail", args=[self.world.pk, profile.pk])
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data["slug"], "garron-smithy")
+        self.assertEqual(resp.data["stock_count"], 1)
+        self.assertIn("kind: merchantprofile", resp.data["yaml"])
+        self.assertEqual(resp.data["manifest"]["kind"], "merchantprofile")
+
+
 class TestMerchantRuntime(MerchantTestCase):
     def test_non_attackable_fixed_stock_merchant_can_sell_but_not_be_killed(self):
         sword = self._item_definition("iron-sword", "an iron sword", keywords="iron sword")

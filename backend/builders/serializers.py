@@ -45,6 +45,7 @@ from builders.models import (
     ItemTemplateInventory,
     ItemAction,
     MobDefinition,
+    MerchantProfile,
     Loader,
     MobTemplate,
     MobTemplateInventory,
@@ -1797,6 +1798,20 @@ class ItemDefinitionSerializer(serializers.ModelSerializer):
         return bool(randomization.get('attributes'))
 
 
+class ItemBundleSerializer(serializers.ModelSerializer):
+    entry_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ItemBundle
+        fields = [
+            'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
+            'notes', 'entry_count',
+        ]
+
+    def get_entry_count(self, item_bundle):
+        return item_bundle.entries.count()
+
+
 class ItemTemplateInventorySerializer(serializers.ModelSerializer):
     container = ReferenceField(required=False, allow_null=False)
     item_template = ReferenceField(required=True, allow_null=False)
@@ -2011,6 +2026,29 @@ class MobDefinitionSerializer(serializers.ModelSerializer):
     def get_randomized(self, mob_definition):
         randomization = mob_definition.randomization or {}
         return bool(randomization.get('attributes'))
+
+
+class MerchantProfileSerializer(serializers.ModelSerializer):
+    stock_count = serializers.SerializerMethodField()
+    funds_currency = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MerchantProfile
+        fields = [
+            'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
+            'notes', 'sell_markup', 'buy_multiplier',
+            'restock_interval_seconds', 'funds_mode', 'funds_currency',
+            'purchase_budget', 'buyback_enabled', 'buyback_max_items',
+            'stock_count',
+        ]
+
+    def get_stock_count(self, merchant_profile):
+        return merchant_profile.stock_slots.count()
+
+    def get_funds_currency(self, merchant_profile):
+        if merchant_profile.funds_currency_id:
+            return merchant_profile.funds_currency.code
+        return ''
 
 
 class MobTemplateInventorySerializer(serializers.ModelSerializer):

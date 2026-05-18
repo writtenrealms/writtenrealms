@@ -543,3 +543,59 @@ class TestItemDefinitionBuilderEndpoints(WorldTestCase):
         self.assertEqual(resp.data["attributes"], {"brawn": 2})
         self.assertIn("kind: itemdefinition", resp.data["yaml"])
         self.assertEqual(resp.data["manifest"]["kind"], "itemdefinition")
+
+
+class TestItemBundleBuilderEndpoints(WorldTestCase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_authenticate(self.user)
+        apply_basic_stat_system(self.world)
+        self.list_ep = reverse("builder-item-bundle-list", args=[self.world.pk])
+
+    def test_list_item_bundles_for_builder_ui(self):
+        sword = ItemDefinition.objects.create(
+            world=self.world,
+            slug="bronze-sword",
+            name="a bronze sword",
+        )
+        dagger = ItemDefinition.objects.create(
+            world=self.world,
+            slug="rusty-dagger",
+            name="a rusty dagger",
+        )
+        bundle = ItemBundle.objects.create(
+            world=self.world,
+            slug="bandit-weapon-drop",
+            name="Bandit weapon drop",
+        )
+        bundle.entries.create(item_definition=sword, weight=5)
+        bundle.entries.create(item_definition=dagger, weight=3)
+
+        resp = self.client.get(self.list_ep, {"sort_by": "slug"})
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data["count"], 1)
+        self.assertEqual(resp.data["results"][0]["slug"], "bandit-weapon-drop")
+        self.assertEqual(resp.data["results"][0]["entry_count"], 2)
+
+    def test_retrieve_item_bundle_includes_yaml(self):
+        sword = ItemDefinition.objects.create(
+            world=self.world,
+            slug="bronze-sword",
+            name="a bronze sword",
+        )
+        bundle = ItemBundle.objects.create(
+            world=self.world,
+            slug="bandit-weapon-drop",
+            name="Bandit weapon drop",
+        )
+        bundle.entries.create(item_definition=sword, weight=5)
+
+        resp = self.client.get(
+            reverse("builder-item-bundle-detail", args=[self.world.pk, bundle.pk])
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data["slug"], "bandit-weapon-drop")
+        self.assertEqual(resp.data["entry_count"], 1)
+        self.assertIn("kind: itembundle", resp.data["yaml"])
+        self.assertEqual(resp.data["manifest"]["kind"], "itembundle")

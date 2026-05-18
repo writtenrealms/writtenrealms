@@ -213,6 +213,8 @@ api_v1_urls = [
     path('builder/worlds/<world_pk>/itemtemplates/<item_template_pk>/actions/<pk>/clone/', builder_views.item_action_clone, name='builder-item-action-clone'),
     path('builder/worlds/<world_pk>/itemdefinitions/', builder_views.item_definition_list, name='builder-item-definition-list'),
     path('builder/worlds/<world_pk>/itemdefinitions/<pk>/', builder_views.item_definition_detail, name='builder-item-definition-detail'),
+    path('builder/worlds/<world_pk>/itembundles/', builder_views.item_bundle_list, name='builder-item-bundle-list'),
+    path('builder/worlds/<world_pk>/itembundles/<pk>/', builder_views.item_bundle_detail, name='builder-item-bundle-detail'),
 
     # Mob Templates
     path('builder/worlds/<world_pk>/mobtemplates/', builder_views.mob_template_list, name='builder-mob-template-list'),
@@ -229,6 +231,8 @@ api_v1_urls = [
     path('builder/worlds/<world_pk>/mobtemplates/<mob_template_pk>/factions/<pk>/', builder_views.mob_template_faction_detail, name='builder-mob-template-faction-detail'),
     path('builder/worlds/<world_pk>/mobdefinitions/', builder_views.mob_definition_list, name='builder-mob-definition-list'),
     path('builder/worlds/<world_pk>/mobdefinitions/<pk>/', builder_views.mob_definition_detail, name='builder-mob-definition-detail'),
+    path('builder/worlds/<world_pk>/merchantprofiles/', builder_views.merchant_profile_list, name='builder-merchant-profile-list'),
+    path('builder/worlds/<world_pk>/merchantprofiles/<pk>/', builder_views.merchant_profile_detail, name='builder-merchant-profile-detail'),
 
     # Loaders
     path('builder/worlds/<world_pk>/loaders/', builder_views.loader_list, name='builder-loader-list'),

@@ -2,7 +2,7 @@
   <div id="edit-world-manifest">
     <h2>{{ world.name.toUpperCase() }} EDIT WORLD</h2>
     <div class="color-text-60 mb-6">
-      Paste one or more YAML manifests. Each YAML document is applied in order. Supported kinds: world, currency, zone, room, itemtemplate, itemdefinition, itembundle, mobtemplate, mobdefinition, ability, abilities, quest, questarc, and trigger.
+      Paste one or more YAML manifests. Each YAML document is applied in order. Supported kinds: world, currency, zone, room, itemtemplate, itemdefinition, itembundle, merchantprofile, mobtemplate, mobdefinition, ability, abilities, quest, questarc, and trigger.
     </div>
 
     <textarea
@@ -39,8 +39,14 @@
       <template v-else-if="appliedKind === 'itemdefinition' && appliedItemDefinition">
         {{ capfirst(lastOperation) }} {{ appliedItemDefinition.slug || appliedItemDefinition.name }}.
       </template>
+      <template v-else-if="appliedKind === 'itembundle' && appliedItemBundle">
+        {{ capfirst(lastOperation) }} {{ appliedItemBundle.slug || appliedItemBundle.name }}.
+      </template>
       <template v-else-if="appliedKind === 'mobdefinition' && appliedMobDefinition">
         {{ capfirst(lastOperation) }} {{ appliedMobDefinition.slug || appliedMobDefinition.name }}.
+      </template>
+      <template v-else-if="appliedKind === 'merchantprofile' && appliedMerchantProfile">
+        {{ capfirst(lastOperation) }} {{ appliedMerchantProfile.slug || appliedMerchantProfile.name }}.
       </template>
       <template v-else>
         {{ capfirst(lastOperation) }} manifest.
@@ -66,7 +72,9 @@ const appliedKind = ref<string>("");
 const appliedTrigger = ref<any | null>(null);
 const appliedItemTemplate = ref<any | null>(null);
 const appliedItemDefinition = ref<any | null>(null);
+const appliedItemBundle = ref<any | null>(null);
 const appliedMobDefinition = ref<any | null>(null);
+const appliedMerchantProfile = ref<any | null>(null);
 const appliedBatchSummary = ref<any | null>(null);
 const lastOperation = ref<string>("");
 
@@ -109,7 +117,42 @@ metadata:
   slug: new-item
   name: a new item
 spec:
+  description: ''
+  ground_description: A new item lies here.
+  notes: ''
+  keywords: item
   type: inert
+  quality: normal
+  is_persistent: false
+  is_pickable: true
+  cost: 0
+  food_value: 0
+  equipment_type:
+  armor_class: light
+  weapon_damage: 0
+  health_max: 0
+  health_regen: 0
+  energy_max: 0
+  energy_regen: 0
+  stamina_max: 0
+  stamina_regen: 0
+  attack_power: 0
+  ability_power: 0
+  resilience: 0
+  dodge: 0
+  crit: 0
+  attributes: {}
+  randomization:
+    attributes: []
+`;
+
+const newItemBundleYaml = `kind: itembundle
+metadata:
+  slug: new-item-bundle
+  name: New Item Bundle
+spec:
+  notes: ''
+  entries: []
 `;
 
 const newMobDefinitionYaml = `kind: mobdefinition
@@ -146,6 +189,28 @@ spec:
     attributes: []
 `;
 
+const newMerchantProfileYaml = `kind: merchantprofile
+metadata:
+  slug: new-merchant-profile
+  name: New Merchant Profile
+spec:
+  notes: ''
+  pricing:
+    sell_markup: 1
+    buy_multiplier: 0.4
+  restock:
+    interval_seconds:
+  funds:
+    mode: unlimited
+    currency: ''
+    purchase_budget: 0
+  buyback:
+    enabled: false
+    max_items: 0
+    expires: on_restock
+  stock: []
+`;
+
 const loadItemDefinitionYaml = async () => {
   const rawItemDefinitionId = route.query.item_definition_id;
   const itemDefinitionId = Array.isArray(rawItemDefinitionId)
@@ -158,6 +223,25 @@ const loadItemDefinitionYaml = async () => {
   try {
     const resp = await axios.get(
       `/builder/worlds/${route.params.world_id}/itemdefinitions/${itemDefinitionId}/`
+    );
+    manifestText.value = resp.data?.yaml || "";
+  } catch (error: any) {
+    store.commit("ui/notification_set_error", extractError(error));
+  }
+};
+
+const loadItemBundleYaml = async () => {
+  const rawItemBundleId = route.query.item_bundle_id;
+  const itemBundleId = Array.isArray(rawItemBundleId)
+    ? rawItemBundleId[0]
+    : rawItemBundleId;
+  if (!itemBundleId) {
+    manifestText.value = "";
+    return;
+  }
+  try {
+    const resp = await axios.get(
+      `/builder/worlds/${route.params.world_id}/itembundles/${itemBundleId}/`
     );
     manifestText.value = resp.data?.yaml || "";
   } catch (error: any) {
@@ -184,6 +268,25 @@ const loadMobDefinitionYaml = async () => {
   }
 };
 
+const loadMerchantProfileYaml = async () => {
+  const rawMerchantProfileId = route.query.merchant_profile_id;
+  const merchantProfileId = Array.isArray(rawMerchantProfileId)
+    ? rawMerchantProfileId[0]
+    : rawMerchantProfileId;
+  if (!merchantProfileId) {
+    manifestText.value = "";
+    return;
+  }
+  try {
+    const resp = await axios.get(
+      `/builder/worlds/${route.params.world_id}/merchantprofiles/${merchantProfileId}/`
+    );
+    manifestText.value = resp.data?.yaml || "";
+  } catch (error: any) {
+    store.commit("ui/notification_set_error", extractError(error));
+  }
+};
+
 onMounted(async () => {
   if (route.query.prefill === "world-config") {
     await loadWorldConfigYaml();
@@ -191,10 +294,18 @@ onMounted(async () => {
     await loadItemDefinitionYaml();
   } else if (route.query.prefill === "new-item-definition") {
     manifestText.value = newItemDefinitionYaml;
+  } else if (route.query.prefill === "item-bundle") {
+    await loadItemBundleYaml();
+  } else if (route.query.prefill === "new-item-bundle") {
+    manifestText.value = newItemBundleYaml;
   } else if (route.query.prefill === "mob-definition") {
     await loadMobDefinitionYaml();
   } else if (route.query.prefill === "new-mob-definition") {
     manifestText.value = newMobDefinitionYaml;
+  } else if (route.query.prefill === "merchant-profile") {
+    await loadMerchantProfileYaml();
+  } else if (route.query.prefill === "new-merchant-profile") {
+    manifestText.value = newMerchantProfileYaml;
   }
 });
 
@@ -212,37 +323,65 @@ const submitManifest = async () => {
       appliedTrigger.value = resp.data.trigger || null;
       appliedItemTemplate.value = null;
       appliedItemDefinition.value = null;
+      appliedItemBundle.value = null;
       appliedMobDefinition.value = null;
+      appliedMerchantProfile.value = null;
     } else if (appliedKind.value === "world") {
       appliedTrigger.value = null;
       appliedItemTemplate.value = null;
       appliedItemDefinition.value = null;
+      appliedItemBundle.value = null;
       appliedMobDefinition.value = null;
+      appliedMerchantProfile.value = null;
     } else if (appliedKind.value === "itemtemplate") {
       appliedTrigger.value = null;
       appliedItemTemplate.value = resp.data.item_template || null;
       appliedItemDefinition.value = null;
+      appliedItemBundle.value = null;
       appliedMobDefinition.value = null;
+      appliedMerchantProfile.value = null;
     } else if (appliedKind.value === "itemdefinition") {
       appliedTrigger.value = null;
       appliedItemTemplate.value = null;
       appliedItemDefinition.value = resp.data.item_definition || null;
+      appliedItemBundle.value = null;
       appliedMobDefinition.value = null;
+      appliedMerchantProfile.value = null;
+    } else if (appliedKind.value === "itembundle") {
+      appliedTrigger.value = null;
+      appliedItemTemplate.value = null;
+      appliedItemDefinition.value = null;
+      appliedItemBundle.value = resp.data.item_bundle || null;
+      appliedMobDefinition.value = null;
+      appliedMerchantProfile.value = null;
     } else if (appliedKind.value === "mobdefinition") {
       appliedTrigger.value = null;
       appliedItemTemplate.value = null;
       appliedItemDefinition.value = null;
+      appliedItemBundle.value = null;
       appliedMobDefinition.value = resp.data.mob_definition || null;
+      appliedMerchantProfile.value = null;
+    } else if (appliedKind.value === "merchantprofile") {
+      appliedTrigger.value = null;
+      appliedItemTemplate.value = null;
+      appliedItemDefinition.value = null;
+      appliedItemBundle.value = null;
+      appliedMobDefinition.value = null;
+      appliedMerchantProfile.value = resp.data.merchant_profile || null;
     } else if (appliedKind.value === "batch") {
       appliedTrigger.value = null;
       appliedItemTemplate.value = null;
       appliedItemDefinition.value = null;
+      appliedItemBundle.value = null;
       appliedMobDefinition.value = null;
+      appliedMerchantProfile.value = null;
     } else {
       appliedTrigger.value = null;
       appliedItemTemplate.value = null;
       appliedItemDefinition.value = null;
+      appliedItemBundle.value = null;
       appliedMobDefinition.value = null;
+      appliedMerchantProfile.value = null;
     }
 
     const freshWorld = await store.dispatch("builder/fetch_world", route.params.world_id);
