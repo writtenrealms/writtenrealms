@@ -1983,6 +1983,46 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
         )
 
+    def _apply_merchant_profile_manifest(self, manifest):
+        self._assert_can_edit_item_definitions()
+        operation = builder_manifests.parse_manifest_operation(manifest)
+        if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+            parsed_delete = builder_manifests.parse_merchant_profile_delete_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            merchant_profile = parsed_delete.merchant_profile
+            merchant_profile_payload = {
+                "id": merchant_profile.id,
+                "key": merchant_profile.key,
+                "slug": merchant_profile.slug,
+                "name": merchant_profile.name,
+            }
+            merchant_profile.delete()
+            return Response(
+                {
+                    "kind": builder_manifests.MERCHANT_PROFILE_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "merchant_profile": merchant_profile_payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        merchant_profile, is_create = builder_world_export.apply_merchant_profile_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        return Response(
+            {
+                "kind": builder_manifests.MERCHANT_PROFILE_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "merchant_profile": builder_manifests.serialize_merchant_profile_payload(
+                    merchant_profile
+                ),
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
     def _apply_ability_manifest(self, manifest):
         self._assert_can_edit_abilities()
         operation = builder_manifests.parse_manifest_operation(manifest)
@@ -2195,6 +2235,8 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             return self._apply_item_definition_manifest(manifest)
         if manifest_kind == builder_manifests.ITEM_BUNDLE_MANIFEST_KIND:
             return self._apply_item_bundle_manifest(manifest)
+        if manifest_kind == builder_manifests.MERCHANT_PROFILE_MANIFEST_KIND:
+            return self._apply_merchant_profile_manifest(manifest)
         if manifest_kind == builder_manifests.MOB_DEFINITION_MANIFEST_KIND:
             return self._apply_mob_definition_manifest(manifest)
         if manifest_kind == builder_manifests.ABILITY_MANIFEST_KIND:

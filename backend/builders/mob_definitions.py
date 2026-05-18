@@ -172,6 +172,7 @@ def spawn_mob_from_definition(
         definition=definition,
         definition_slug_snapshot=definition.slug,
         roll_metadata=roll_metadata,
+        attackable=definition.attackable,
         health=mob_fields.get("health_max") or 1,
         stamina=mob_fields.get("stamina_max") or 0,
         energy=mob_fields.get("energy_max") or 0,
@@ -181,6 +182,10 @@ def spawn_mob_from_definition(
         **mob_fields,
     )
     mob.create_corpse()
+    if definition.merchant_profile_id:
+        from spawns.merchants import create_or_update_merchant_runtime
+
+        create_or_update_merchant_runtime(mob)
     return mob
 
 
@@ -209,6 +214,7 @@ def sync_spawned_mobs_from_definition(definition) -> int:
             mob_fields.pop(field_name, None)
         for field_name, value in mob_fields.items():
             setattr(mob, field_name, value)
+        mob.attackable = definition.attackable
         mob.health = mob.health_max
         mob.stamina = mob.stamina_max
         mob.energy = mob.energy_max
@@ -224,10 +230,14 @@ def sync_spawned_mobs_from_definition(definition) -> int:
                 "health",
                 "stamina",
                 "energy",
+                "attackable",
                 "roll_metadata",
                 "definition_slug_snapshot",
                 "modified_ts",
             ]
         )
+        from spawns.merchants import create_or_update_merchant_runtime
+
+        create_or_update_merchant_runtime(mob)
         updated += 1
     return updated

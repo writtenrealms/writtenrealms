@@ -67,6 +67,7 @@ A new world-level **Edit World** view accepts a YAML manifest textarea.
   - `kind: itemtemplate`
   - `kind: itemdefinition`
   - `kind: itembundle`
+  - `kind: merchantprofile`
   - `kind: mobtemplate`
   - `kind: mobdefinition`
   - `kind: quest`
@@ -88,6 +89,11 @@ Item definition authoring details, including stackable plain items, fixed stat
 items, randomized stat items, and item bundles, live in:
 
 - [docs/guides/item-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/item-definition-builder-guide.md)
+
+Merchant authoring details, including fixed stock, item-bundle stock, buyback,
+finite funds, and killable versus non-killable shopkeepers, live in:
+
+- [docs/guides/merchant-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/merchant-builder-guide.md)
 
 Mob definition authoring details, including plain mobs, fixed stat mobs, and
 randomized stat mobs, live in:

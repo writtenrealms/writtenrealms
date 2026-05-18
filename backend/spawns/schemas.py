@@ -162,6 +162,8 @@ class Char(BaseModel):
     is_invisible: bool = False
     is_linkless: bool = False
     is_elite: bool = False
+    is_merchant: bool = False
+    attackable: bool = True
 
     char_type: Literal["player", "mob"] = "mob"
 

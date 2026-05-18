@@ -656,6 +656,7 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
 
     is_pending_deletion = models.BooleanField(default=False)
     pending_deletion_ts = models.DateTimeField(db_index=True, **optional)
+    attackable = models.BooleanField(default=True)
 
     class Meta:
         indexes = [
@@ -710,6 +711,102 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
 
 models.signals.post_save.connect(Mob.post_char_save, Mob)
 models.signals.post_delete.connect(Mob.post_char_delete, Mob)
+
+
+class MerchantRuntime(AdventBaseModel):
+    world = models.ForeignKey('worlds.World',
+                              on_delete=models.CASCADE,
+                              related_name='merchant_runtimes')
+    mob = models.OneToOneField('spawns.Mob',
+                               on_delete=models.CASCADE,
+                               related_name='merchant_runtime')
+    profile = models.ForeignKey('builders.MerchantProfile',
+                                on_delete=models.CASCADE,
+                                related_name='merchant_runtimes')
+    is_active = models.BooleanField(default=True)
+    last_restocked_ts = models.DateTimeField(**optional)
+    next_restock_ts = models.DateTimeField(db_index=True, **optional)
+    remaining_purchase_budget = models.IntegerField(**optional)
+
+    inventory = GenericRelation(
+        'spawns.Item',
+        content_type_field='container_type',
+        object_id_field='container_id')
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['is_active']),
+            models.Index(fields=['next_restock_ts']),
+        ]
+
+
+class MerchantStockEntry(AdventBaseModel):
+    STATUS_AVAILABLE = "available"
+    STATUS_SOLD = "sold"
+    STATUS_EXPIRED = "expired"
+    STATUS_RETIRED = "retired"
+    STATUS_CHOICES = [
+        STATUS_AVAILABLE,
+        STATUS_SOLD,
+        STATUS_EXPIRED,
+        STATUS_RETIRED,
+    ]
+
+    runtime = models.ForeignKey('spawns.MerchantRuntime',
+                                on_delete=models.CASCADE,
+                                related_name='stock_entries')
+    stock_slot = models.ForeignKey('builders.MerchantStockSlot',
+                                   on_delete=models.SET_NULL,
+                                   related_name='runtime_entries',
+                                   **optional)
+    item = models.OneToOneField('spawns.Item',
+                                on_delete=models.CASCADE,
+                                related_name='merchant_stock_entry')
+    bundle_roll_id = models.TextField(**optional)
+    price = models.PositiveIntegerField(default=0)
+    status = models.TextField(
+        choices=list_to_choice(STATUS_CHOICES),
+        default=STATUS_AVAILABLE,
+        db_index=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['status']),
+            models.Index(fields=['bundle_roll_id']),
+        ]
+
+
+class MerchantBuybackEntry(AdventBaseModel):
+    STATUS_ACTIVE = "active"
+    STATUS_EXPIRED = "expired"
+    STATUS_BOUGHT_BACK = "bought_back"
+    STATUS_CHOICES = [
+        STATUS_ACTIVE,
+        STATUS_EXPIRED,
+        STATUS_BOUGHT_BACK,
+    ]
+
+    runtime = models.ForeignKey('spawns.MerchantRuntime',
+                                on_delete=models.CASCADE,
+                                related_name='buyback_entries')
+    player = models.ForeignKey('spawns.Player',
+                               on_delete=models.CASCADE,
+                               related_name='merchant_buyback_entries')
+    item = models.OneToOneField('spawns.Item',
+                                on_delete=models.CASCADE,
+                                related_name='merchant_buyback_entry')
+    sold_price = models.PositiveIntegerField(default=0)
+    buyback_price = models.PositiveIntegerField(default=0)
+    status = models.TextField(
+        choices=list_to_choice(STATUS_CHOICES),
+        default=STATUS_ACTIVE,
+        db_index=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['status']),
+            models.Index(fields=['created_ts']),
+        ]
 
 
 class Item(ItemMixin, AdventBaseModel):

@@ -463,6 +463,8 @@ def serialize_char_from_mob(
         char_type="mob",
         is_elite=getattr(mob, "is_elite", False),
         is_invisible=getattr(mob, "is_invisible", False),
+        is_merchant=hasattr(mob, "merchant_runtime"),
+        attackable=getattr(mob, "attackable", True),
         equipment=serialize_equipment(mob.equipment, viewer=viewer) if include_equipment else None,
         actions=actions,
         quest_data=QuestData(

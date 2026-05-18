@@ -520,6 +520,9 @@ def _handle_mob_defeated(
     exp_reward = int(target_mob.exp_worth or 0)
     gold_reward = int(target_mob.gold or 0)
     _finish_encounter(encounter)
+    from spawns.merchants import deactivate_merchant_runtime
+
+    deactivate_merchant_runtime(target_mob)
     target_mob.delete()
 
     reward_update_fields: list[str] = []
@@ -1518,6 +1521,8 @@ class KillAction:
             )
             if not target_mob:
                 raise ActionError("You don't see them here.", code="target_missing")
+            if not getattr(target_mob, "attackable", True):
+                raise ActionError("You cannot attack them.", code="not_attackable")
 
             interval = _combat_interval(config)
 

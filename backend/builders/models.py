@@ -323,6 +323,94 @@ class ItemBundleEntry(AdventBaseModel):
         ordering = ['created_ts', 'id']
 
 
+class MerchantProfile(AdventBaseModel):
+    FUNDS_MODE_UNLIMITED = "unlimited"
+    FUNDS_MODE_FINITE = "finite"
+    FUNDS_MODES = [
+        FUNDS_MODE_UNLIMITED,
+        FUNDS_MODE_FINITE,
+    ]
+    BUYBACK_EXPIRES_ON_RESTOCK = "on_restock"
+    BUYBACK_EXPIRES_OPTIONS = [
+        BUYBACK_EXPIRES_ON_RESTOCK,
+    ]
+
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='merchant_profiles')
+    slug = models.SlugField(max_length=120, blank=True)
+    name = models.TextField(default='Unnamed Merchant')
+    notes = models.TextField(**optional)
+
+    sell_markup = models.FloatField(default=1.0)
+    buy_multiplier = models.FloatField(default=0.4)
+
+    restock_interval_seconds = models.PositiveIntegerField(**optional)
+
+    funds_mode = models.TextField(
+        choices=list_to_choice(FUNDS_MODES),
+        default=FUNDS_MODE_UNLIMITED)
+    funds_currency = models.ForeignKey(
+        'builders.Currency',
+        on_delete=models.SET_NULL,
+        related_name='merchant_funds_profiles',
+        **optional)
+    purchase_budget = models.PositiveIntegerField(default=0)
+
+    buyback_enabled = models.BooleanField(default=False)
+    buyback_max_items = models.PositiveIntegerField(default=0)
+    buyback_expires = models.TextField(
+        choices=list_to_choice(BUYBACK_EXPIRES_OPTIONS),
+        default=BUYBACK_EXPIRES_ON_RESTOCK)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('world', 'slug')]
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = _generate_unique_world_slug(
+                self,
+                fallback_prefix="merchant-profile",
+            )
+        super().save(*args, **kwargs)
+
+
+class MerchantStockSlot(AdventBaseModel):
+    SOURCE_ITEM_DEFINITION = "item_definition"
+    SOURCE_ITEM_BUNDLE = "item_bundle"
+    REFRESH_FILL_MISSING = "fill_missing"
+    REFRESH_REROLL_ON_RESTOCK = "reroll_on_restock"
+    REFRESH_MODES = [
+        REFRESH_FILL_MISSING,
+        REFRESH_REROLL_ON_RESTOCK,
+    ]
+
+    profile = models.ForeignKey(
+        'builders.MerchantProfile',
+        on_delete=models.CASCADE,
+        related_name='stock_slots')
+    key = models.SlugField(max_length=120)
+    item_definition = models.ForeignKey(
+        'builders.ItemDefinition',
+        on_delete=models.CASCADE,
+        related_name='merchant_stock_slots',
+        **optional)
+    item_bundle = models.ForeignKey(
+        'builders.ItemBundle',
+        on_delete=models.CASCADE,
+        related_name='merchant_stock_slots',
+        **optional)
+    count = models.PositiveIntegerField(default=1)
+    refresh = models.TextField(
+        choices=list_to_choice(REFRESH_MODES),
+        default=REFRESH_FILL_MISSING)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('profile', 'key')]
+        ordering = ['created_ts', 'id']
+
+
 class MobDefinition(AdventBaseModel):
     world = models.ForeignKey(
         'worlds.World',
@@ -341,6 +429,15 @@ class MobDefinition(AdventBaseModel):
     base_properties = models.JSONField(default=dict, blank=True)
     attributes = models.JSONField(default=dict, blank=True)
     randomization = models.JSONField(default=dict, blank=True)
+    attackable = models.BooleanField(default=True)
+    merchant_profile = models.ForeignKey(
+        'builders.MerchantProfile',
+        on_delete=models.SET_NULL,
+        related_name='mob_definitions',
+        **optional)
+    merchant_availability = models.TextField(
+        default='present',
+        blank=True)
 
     class Meta(AdventBaseModel.Meta):
         unique_together = [('world', 'slug')]
