@@ -364,6 +364,58 @@ class TestEquipmentCommands(WorldTestCase):
         self.assertEqual(message["data"]["actor"]["equipment"]["head"]["key"], helmet.key)
         self.assertIn("You wear Iron Helmet on your head.", message.get("text", ""))
 
+    def test_eq_without_arguments_lists_current_equipment(self):
+        sword = self._make_equipment_item(
+            "Short Sword",
+            adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
+        )
+        helmet = self._make_equipment_item(
+            "Iron Helmet",
+            adv_consts.EQUIPMENT_TYPE_HEAD,
+        )
+        self.player.equipment.equip(sword, adv_consts.EQUIPMENT_SLOT_WEAPON)
+        self.player.equipment.equip(helmet, adv_consts.EQUIPMENT_SLOT_HEAD)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "eq")
+
+        message = self._message_by_type(messages, "cmd.equipment.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(
+            message["data"]["equipment"]["weapon"]["key"],
+            sword.key,
+        )
+        self.assertEqual(
+            message["data"]["equipment"]["head"]["key"],
+            helmet.key,
+        )
+        self.assertIn("<wielded> Short Sword", message.get("text", ""))
+        self.assertIn("<worn on head> Iron Helmet", message.get("text", ""))
+        self.assertIsNone(self._message_by_type(messages, "cmd.equip.error"))
+
+    def test_equipment_command_lists_nothing_when_empty(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "equipment")
+
+        message = self._message_by_type(messages, "cmd.equipment.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message.get("text"), "You are using:\nNothing.")
+
+    def test_eq_with_arguments_still_equips_item(self):
+        helmet = self._make_equipment_item(
+            "Iron Helmet",
+            adv_consts.EQUIPMENT_TYPE_HEAD,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "eq helmet")
+
+        helmet.refresh_from_db()
+        self.player.equipment.refresh_from_db()
+        self.assertEqual(self.player.equipment.head_id, helmet.id)
+        self.assertIsNotNone(self._message_by_type(messages, "cmd.equip.success"))
+        self.assertIsNone(self._message_by_type(messages, "cmd.equipment.success"))
+
     def test_wield_swaps_existing_weapon(self):
         sword = self._make_equipment_item(
             "Short Sword",

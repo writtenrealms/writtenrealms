@@ -10,6 +10,7 @@ from spawns.actions.items import (
     PutAction,
     RemoveEquipmentAction,
 )
+from spawns.actions.information import EquipmentAction
 from spawns.events import publish_events
 from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.registry import register_handler
@@ -212,6 +213,31 @@ class RemoveHandler(CommandHandler):
                     "data": {"error": err.message, "code": err.code, **err.data},
                 }
             )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.player.key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class EquipmentHandler(CommandHandler):
+    command_type = "equipment"
+    text_commands = ("equipment",)
+    help = {
+        "name": "Equipment",
+        "format": "equipment | eq",
+        "description": "Show items currently equipped by your character.",
+        "examples": ["equipment", "eq"],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        try:
+            result = EquipmentAction().execute(ctx.player.id)
+        except ActionError as err:
+            ctx.publish_error("equipment", err.message)
             return
 
         publish_events(

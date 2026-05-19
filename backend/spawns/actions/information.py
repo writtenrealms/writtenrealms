@@ -218,6 +218,29 @@ class InventoryAction:
         )
 
 
+class EquipmentAction:
+    def execute(self, player_id: int) -> ActionResult:
+        player = get_player_with_related(player_id)
+        actor_payload = serialize_actor(player, player.room)
+        actor_data = actor_payload.model_dump()
+        data = {
+            "actor": actor_data,
+            "equipment": actor_data.get("equipment") or {},
+        }
+        text = render_event_text("cmd.equipment.success", data, viewer=player)
+
+        return ActionResult(
+            events=[
+                GameEvent(
+                    type="cmd.equipment.success",
+                    recipients=[player.key],
+                    data=data,
+                    text=text,
+                )
+            ]
+        )
+
+
 class StatsAction:
     def execute(self, player_id: int) -> ActionResult:
         player = get_player_with_related(player_id)

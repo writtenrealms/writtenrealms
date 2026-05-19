@@ -155,6 +155,34 @@ def _render_inventory_text(actor: dict | None) -> str | None:
     return "You are carrying:\nNothing."
 
 
+def _render_equipment_text(data: dict) -> str | None:
+    equipment = data.get("equipment") or (data.get("actor") or {}).get("equipment") or {}
+    slot_labels = (
+        ("weapon", "<wielded>"),
+        ("offhand", "<held in offhand>"),
+        ("head", "<worn on head>"),
+        ("body", "<worn on body>"),
+        ("arms", "<worn on arms>"),
+        ("hands", "<worn on hands>"),
+        ("waist", "<worn about waist>"),
+        ("legs", "<worn on legs>"),
+        ("feet", "<worn on feet>"),
+        ("accessory", "<worn as accessory>"),
+    )
+    lines = []
+    for slot, label in slot_labels:
+        item = equipment.get(slot)
+        if not item:
+            continue
+        name = item.get("name")
+        if name:
+            lines.append(f"{label} {name}")
+
+    if lines:
+        return "You are using:\n" + "\n".join(lines)
+    return "You are using:\nNothing."
+
+
 def _render_stats_text(data: dict) -> str | None:
     actor = data.get("actor") or {}
     if not actor.get("key"):
@@ -477,6 +505,9 @@ def render_event_text(
 
     if event_type == "cmd.inventory.success":
         return _render_inventory_text(data.get("actor"))
+
+    if event_type == "cmd.equipment.success":
+        return _render_equipment_text(data)
 
     if event_type == "cmd.stats.success":
         return _render_stats_text(data)

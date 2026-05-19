@@ -34,6 +34,15 @@ class TestHelpCommands(WorldTestCase):
         self.assertEqual(message["data"]["command"]["command"], "drop")
         self.assertNotIn("help", message["data"])
 
+    def test_help_eq_alias_shows_equipment_topic(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "help eq")
+
+        message = self._message_by_type(messages, "cmd.help.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["command"]["command"], "equipment")
+        self.assertIn("Show items currently equipped", message.get("text", ""))
+
     def test_help_builder_command_requires_builder_permissions(self):
         other_user = self.create_user("other@example.com")
         other_player = self.create_player("Other", user=other_user)

@@ -40,6 +40,9 @@ class TextCommandHandler(CommandHandler):
         if not command:
             return
 
+        if command == "eq" and not args:
+            command = "equipment"
+
         ctx.payload["args"] = args
         ctx.payload["command"] = command
         ctx.payload["raw_text"] = raw_text
