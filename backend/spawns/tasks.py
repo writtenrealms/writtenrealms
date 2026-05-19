@@ -31,7 +31,7 @@ from worlds.serializers import WorldSerializer
 from fastapi_app.game_ws import publish_to_player
 from fastapi_app.forge_ws import complete_job, exit_world as notify_exit_world
 
-WR2_STANDING_REGEN_RATE = 2
+WR2_STANDING_REGEN_RATE = adv_config.PLAYER_STARTING_STAMINA_REGEN
 HEARTBEAT_REGEN_LOCK_KEY = "heartbeat_regen_lock"
 
 
@@ -125,7 +125,7 @@ def _regen_player(player: Player) -> dict[str, int | str] | None:
 
     health_add = math.ceil(health_max * WR2_STANDING_REGEN_RATE / 100) + health_regen
     energy_add = math.ceil(energy_base * WR2_STANDING_REGEN_RATE / 100) + energy_regen
-    stamina_add = WR2_STANDING_REGEN_RATE + stamina_regen
+    stamina_add = stamina_regen or WR2_STANDING_REGEN_RATE
 
     changed = _apply_regen(
         player,

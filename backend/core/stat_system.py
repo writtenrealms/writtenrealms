@@ -115,9 +115,14 @@ DEFAULT_STAT_SYSTEM = {
     },
     "class_profiles": {},
     "formulas": {
+        "base_stats": {
+            "stamina_regen": config.PLAYER_STARTING_STAMINA_REGEN,
+        },
         "base_resources": {
             "energy": {},
-            "stamina": {},
+            "stamina": {
+                "flat": config.PLAYER_STARTING_MAX_STAMINA,
+            },
             "health": {},
         },
         "global_rules": [],
@@ -134,6 +139,10 @@ DEFAULT_STAT_SYSTEM = {
         },
     },
 }
+
+
+def default_stat_system() -> dict[str, Any]:
+    return deepcopy(DEFAULT_STAT_SYSTEM)
 
 
 def _is_number(value: Any) -> bool:
@@ -393,6 +402,32 @@ def _coerce_base_resource_config(
     return {}
 
 
+def _coerce_base_stats_config(
+    value: Any,
+    *,
+    field_name: str,
+    default_value: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized = deepcopy(default_value or {})
+    if value in (None, ""):
+        return normalized
+    if not isinstance(value, dict):
+        raise StatSystemValidationError(f"{field_name} must be a mapping.")
+
+    for raw_key, raw_value in value.items():
+        key = str(raw_key or "").strip()
+        if key not in DIRECT_STAT_KEYS:
+            raise StatSystemValidationError(
+                f"{field_name}.{key} must be a supported stat."
+            )
+        if not _is_number(raw_value):
+            raise StatSystemValidationError(
+                f"{field_name}.{key} must be a number."
+            )
+        normalized[key] = float(raw_value)
+    return normalized
+
+
 def normalize_stat_system(value: Any) -> dict[str, Any]:
     if value in (None, ""):
         value = {}
@@ -505,6 +540,12 @@ def normalize_stat_system(value: Any) -> dict[str, Any]:
     raw_formulas = value.get("formulas") or {}
     if raw_formulas not in ({}, None) and not isinstance(raw_formulas, dict):
         raise StatSystemValidationError("stats.formulas must be a mapping.")
+
+    formulas["base_stats"] = _coerce_base_stats_config(
+        raw_formulas.get("base_stats"),
+        field_name="stats.formulas.base_stats",
+        default_value=formulas.get("base_stats"),
+    )
 
     raw_base_resources = (raw_formulas or {}).get("base_resources") or {}
     if raw_base_resources not in ({}, None) and not isinstance(raw_base_resources, dict):
@@ -911,6 +952,9 @@ def compute_stats(
     own_attributes = {key: float(stats.get(key, 0.0) or 0.0) for key in attribute_keys}
 
     formulas = stat_system["formulas"]
+    for key, value in formulas.get("base_stats", {}).items():
+        stats[key] += float(value or 0.0)
+
     base_resources = formulas["base_resources"]
     stats["energy_base"] = _evaluate_base_resource(
         base_resources.get("energy", {}),

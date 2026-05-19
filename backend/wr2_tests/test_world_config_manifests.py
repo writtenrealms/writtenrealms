@@ -3,6 +3,7 @@ import yaml
 from rest_framework.reverse import reverse
 
 from builders.models import WorldBuilder
+from config import game_settings as adv_config
 from tests.base import WorldTestCase
 from worlds.models import Room
 
@@ -43,7 +44,15 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(config_resp.data["config"]["max_level"], 20)
         self.assertEqual(config_resp.data["config"]["leveling_curve"][1], 30)
         self.assertEqual(config_resp.data["config"]["combat_resolution_interval"], 0)
-        self.assertEqual(config_resp.data["config"]["stat_system"], {})
+        stat_system = config_resp.data["config"]["stat_system"]
+        self.assertEqual(
+            stat_system["formulas"]["base_resources"]["stamina"]["flat"],
+            adv_config.PLAYER_STARTING_MAX_STAMINA,
+        )
+        self.assertEqual(
+            stat_system["formulas"]["base_stats"]["stamina_regen"],
+            adv_config.PLAYER_STARTING_STAMINA_REGEN,
+        )
         self.assertEqual(config_resp.data["config"]["combat_system"], {})
 
         export_resp = self.client.get(self.export_ep)
@@ -63,7 +72,14 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(world_manifest["spec"]["death_room"], "room@0,0,0")
         self.assertEqual(world_manifest["spec"]["combat_resolution_interval"], 0)
         self.assertNotIn("is_classless", world_manifest["spec"])
-        self.assertNotIn("stats", world_manifest["spec"])
+        self.assertEqual(
+            world_manifest["spec"]["stats"]["formulas"]["base_resources"]["stamina"]["flat"],
+            adv_config.PLAYER_STARTING_MAX_STAMINA,
+        )
+        self.assertEqual(
+            world_manifest["spec"]["stats"]["formulas"]["base_stats"]["stamina_regen"],
+            adv_config.PLAYER_STARTING_STAMINA_REGEN,
+        )
         self.assertNotIn("combat", world_manifest["spec"])
 
     def test_apply_world_config_manifest_updates_world_and_config(self):
@@ -157,6 +173,8 @@ spec:
           willpower: 1
           insight: 2
     formulas:
+      base_stats:
+        stamina_regen: 4
       global_rules:
         - source: grit
           target: health_max
@@ -245,6 +263,7 @@ spec:
             config.stat_system["labels"]["classes"]["warrior"],
             "Vanguard",
         )
+        self.assertEqual(config.stat_system["formulas"]["base_stats"]["stamina_regen"], 4.0)
         primary_keys = [
             entry["key"] for entry in config.stat_system["attributes"]
         ]

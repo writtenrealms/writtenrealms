@@ -284,8 +284,9 @@ stat system for that world:
 - class or archetype profiles
 - bounded formula rules
 
-New worlds do not get authored attributes by default. Builders add only
-the attributes they want, then map those attributes into stats.
+New worlds do not get authored attributes by default. Blank worlds do include
+minimal stamina defaults so a new character can move and regenerate stamina.
+Builders add only the attributes they want, then map those attributes into stats.
 Class selection is implied by `spec.stats.class_profiles`: if no class profiles
 are defined, the world has no classes.
 

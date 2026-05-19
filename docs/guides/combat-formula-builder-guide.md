@@ -166,12 +166,14 @@ weapon's `weapon_damage` is read separately from the weapon slot. Use the
 `stats` command before testing combat if you want to confirm the exact effective
 numbers the engine is using.
 
-On a completely blank new world, there are no authored attributes or stat
-formulas, so a new unarmed player usually has `attack_power: 0`. With the
-default physical profile, that means the player needs either a weapon with
-`weapon_damage` or a stat formula that produces `attack_power` before their
-basic attack deals damage. Mobs without weapons use the default level-based
-fallback described below, so they can still hit even without authored stats.
+On a completely blank new world, there are no authored attributes or combat
+power formulas. The default world config still gives players baseline stamina
+and stamina regeneration so they can move, but a new unarmed player usually has
+`attack_power: 0`. With the default physical profile, that means the player
+needs either a weapon with `weapon_damage` or a stat formula that produces
+`attack_power` before their basic attack deals damage. Mobs without weapons use
+the default level-based fallback described below, so they can still hit even
+without authored stats.
 
 For the default physical attack profile, the base damage starts from weapon
 damage plus attack power:

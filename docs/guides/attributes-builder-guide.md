@@ -129,6 +129,8 @@ spec:
         ability_power: Spell Power
 
     formulas:
+      base_stats:
+        stamina_regen: 2
       base_resources:
         health:
           flat: 30
