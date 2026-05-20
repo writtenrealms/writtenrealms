@@ -2462,6 +2462,16 @@ class SuggestMobSerializer(serializers.Serializer):
                                         default=adv_consts.ARCHETYPE_WARRIOR)
 
 
+class MobDefinitionSuggestionSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=255)
+    slug = serializers.SlugField(max_length=120)
+    type = serializers.ChoiceField(
+        choices=adv_consts.MOB_TYPES,
+        default=adv_consts.MOB_TYPE_BEAST,
+    )
+    level = serializers.IntegerField(default=1, min_value=1)
+
+
 class RandomItemProfileSerializer(serializers.ModelSerializer):
 
     class Meta:

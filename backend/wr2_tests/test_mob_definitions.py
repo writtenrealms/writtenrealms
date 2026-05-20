@@ -224,6 +224,8 @@ class TestMobDefinitionBuilderEndpoints(WorldTestCase):
         self.client.force_authenticate(self.user)
         apply_basic_stat_system(self.world)
         self.list_ep = reverse("builder-mob-definition-list", args=[self.world.pk])
+        self.suggestion_ep = reverse("builder-mob-definition-suggestion", args=[self.world.pk])
+        self.apply_ep = reverse("builder-world-manifest-apply", args=[self.world.pk])
 
     def test_list_mob_definitions_for_builder_ui(self):
         MobDefinition.objects.create(
@@ -272,3 +274,56 @@ class TestMobDefinitionBuilderEndpoints(WorldTestCase):
         self.assertEqual(resp.data["attributes"], {"brawn": 2})
         self.assertIn("kind: mobdefinition", resp.data["yaml"])
         self.assertEqual(resp.data["manifest"]["kind"], "mobdefinition")
+
+    def test_suggest_mob_definition_returns_applyable_yaml(self):
+        resp = self.client.post(
+            self.suggestion_ep,
+            {
+                "name": "a cave wolf",
+                "slug": "cave-wolf",
+                "type": adv_consts.MOB_TYPE_BEAST,
+                "level": 4,
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertFalse(MobDefinition.objects.filter(slug="cave-wolf").exists())
+        self.assertEqual(resp.data["manifest"]["kind"], "mobdefinition")
+        self.assertEqual(resp.data["manifest"]["metadata"]["slug"], "cave-wolf")
+        self.assertEqual(resp.data["manifest"]["spec"]["level"], 4)
+        self.assertEqual(resp.data["manifest"]["spec"]["type"], adv_consts.MOB_TYPE_BEAST)
+        self.assertEqual(resp.data["manifest"]["spec"]["attributes"], {})
+        self.assertGreater(resp.data["suggested_stats"]["health_max"], 0)
+        self.assertGreater(resp.data["suggested_stats"]["attack_power"], 0)
+        self.assertIn("kind: mobdefinition", resp.data["yaml"])
+
+        apply_resp = self.client.post(
+            self.apply_ep,
+            {"manifest": resp.data["yaml"]},
+            format="json",
+        )
+
+        self.assertEqual(apply_resp.status_code, 201, apply_resp.data)
+        definition = MobDefinition.objects.get(world=self.world, slug="cave-wolf")
+        self.assertEqual(definition.name, "a cave wolf")
+        self.assertEqual(definition.base_properties["level"], 4)
+        self.assertEqual(
+            definition.base_properties["health_max"],
+            resp.data["suggested_stats"]["health_max"],
+        )
+
+    def test_suggest_mob_definition_validates_level(self):
+        resp = self.client.post(
+            self.suggestion_ep,
+            {
+                "name": "a cave wolf",
+                "slug": "cave-wolf",
+                "type": adv_consts.MOB_TYPE_BEAST,
+                "level": 999,
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400, resp.data)
+        self.assertIn("level", resp.data)

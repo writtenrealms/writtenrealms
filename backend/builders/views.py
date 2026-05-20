@@ -25,10 +25,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from config import constants as adv_consts
+from builders.balance.mob_suggestions import suggest_mob_definition_manifest
 from core.utils.mobs import suggest_stats
 
 from config import constants as api_consts
 from config import game_settings as adv_config
+from core.leveling import LevelingConfigError
 from core.scoped_state import STATE_SCOPE_WORLD, get_state_snapshot
 from core.serializers import KeyNameSerializer, ReferenceField
 from core.view_mixins import (
@@ -4112,6 +4114,29 @@ class SuggestMob(APIView):
                 archetype=serializer.validated_data['archetype']))
 
 suggest_mob = SuggestMob.as_view()
+
+
+class MobDefinitionSuggestion(BaseWorldBuilderView):
+
+    def post(self, request, world_pk, format=None):
+        serializer = builder_serializers.MobDefinitionSuggestionSerializer(
+            data=request.data,
+        )
+        serializer.is_valid(raise_exception=True)
+        try:
+            payload = suggest_mob_definition_manifest(
+                self.world,
+                name=serializer.validated_data["name"],
+                slug=serializer.validated_data["slug"],
+                mob_type=serializer.validated_data["type"],
+                level=serializer.validated_data["level"],
+            )
+        except LevelingConfigError as exc:
+            raise serializers.ValidationError({"level": [str(exc)]})
+        return Response(payload)
+
+
+mob_definition_suggestion = MobDefinitionSuggestion.as_view()
 
 
 class UserViewSet(BaseWorldBuilderViewSet):
