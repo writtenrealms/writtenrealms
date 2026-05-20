@@ -238,7 +238,7 @@ class TestStateSyncText(WorldTestCase):
                 "resources": {
                     "energy": "Focus",
                 },
-                "derived": {
+                "stats": {
                     "ability_power": "Ability Power",
                 },
                 "classes": {
@@ -294,7 +294,7 @@ class TestStateSyncText(WorldTestCase):
 
         self.assertEqual(world_data["labels"]["resources"]["energy"], "Focus")
         self.assertEqual(
-            world_data["labels"]["derived"]["ability_power"],
+            world_data["labels"]["stats"]["ability_power"],
             "Ability Power",
         )
         self.assertEqual(world_data["labels"]["classes"]["warrior"], "Vanguard")

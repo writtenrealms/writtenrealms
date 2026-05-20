@@ -48,8 +48,8 @@
 
       <div class="right-side">
         <div
-          v-for="stat in derivedEntries"
-          :key="`derived-${stat.key}`"
+          v-for="stat in statEntries"
+          :key="`stat-${stat.key}`"
           class="stat-entry"
         >
           <div class="label">{{ stat.label }}</div>
@@ -103,9 +103,9 @@ const attributeEntries = computed(() => {
     }));
 });
 
-const derivedLabels = computed(() => world.value?.labels?.derived || {});
-const derivedOrder = computed(() => world.value?.labels?.order?.derived || Object.keys(player.value?.derived_stats || {}));
-const formatDerivedValue = (key: string, value: number) => {
+const statLabels = computed(() => world.value?.labels?.stats || {});
+const statOrder = computed(() => world.value?.labels?.order?.stats || Object.keys(player.value?.stats || {}));
+const formatStatValue = (key: string, value: number) => {
   const percentMap: Record<string, number | undefined> = {
     armor: player.value?.armor_perc,
     crit: player.value?.crit_perc,
@@ -118,14 +118,14 @@ const formatDerivedValue = (key: string, value: number) => {
   }
   return `${value}`;
 };
-const derivedEntries = computed(() => {
-  const values = player.value?.derived_stats || {};
-  return derivedOrder.value
+const statEntries = computed(() => {
+  const values = player.value?.stats || {};
+  return statOrder.value
     .filter((key: string) => values[key] !== undefined)
     .map((key: string) => ({
       key,
-      label: derivedLabels.value[key] || capfirst(key.replace(/_/g, " ")),
-      value: formatDerivedValue(key, values[key]),
+      label: statLabels.value[key] || capfirst(key.replace(/_/g, " ")),
+      value: formatStatValue(key, values[key]),
     }));
 });
 

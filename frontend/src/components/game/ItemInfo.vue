@@ -129,7 +129,7 @@ const props = defineProps({
 
 const world = computed(() => store.state.game.world);
 const resourceLabels = computed(() => world.value?.labels?.resources || {});
-const derivedLabels = computed(() => world.value?.labels?.derived || {});
+const statLabels = computed(() => world.value?.labels?.stats || {});
 const attributeLabels = computed(() => world.value?.labels?.attributes || {});
 
 const ITEM_STAT_LABELS = {
@@ -150,7 +150,7 @@ const ITEM_STAT_LABELS = {
 
 const statLabel = (statName: string) => {
   if (statName === "ability_power") {
-    return derivedLabels.value.ability_power || ITEM_STAT_LABELS[statName];
+    return statLabels.value.ability_power || ITEM_STAT_LABELS[statName];
   }
   if (statName === "energy_max") {
     const energy = resourceLabels.value.energy || "Energy";
@@ -163,8 +163,8 @@ const statLabel = (statName: string) => {
   if (attributeLabels.value[statName]) {
     return attributeLabels.value[statName];
   }
-  if (derivedLabels.value[statName]) {
-    return derivedLabels.value[statName];
+  if (statLabels.value[statName]) {
+    return statLabels.value[statName];
   }
   if (ITEM_STAT_LABELS[statName]) return ITEM_STAT_LABELS[statName];
   const label = statName.replace(/_/g, " ");

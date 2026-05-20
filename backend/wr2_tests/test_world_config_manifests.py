@@ -149,7 +149,7 @@ spec:
     labels:
       resources:
         energy: Focus
-      derived:
+      stats:
         ability_power: Ability Power
     attributes:
       - key: grit
@@ -251,7 +251,7 @@ spec:
         self.assertEqual(config.name_exclusions.strip().splitlines(), ["admin", "system"])
         self.assertEqual(config.stat_system["labels"]["resources"]["energy"], "Focus")
         self.assertEqual(
-            config.stat_system["labels"]["derived"]["ability_power"],
+            config.stat_system["labels"]["stats"]["ability_power"],
             "Ability Power",
         )
         self.assertFalse(config.combat_system["variance"]["enabled"])
@@ -321,6 +321,25 @@ spec:
         self.assertEqual(resp.status_code, 400)
         self.assertIn("max_level", str(resp.data))
 
+    def test_apply_world_config_manifest_rejects_legacy_derived_stat_labels(self):
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{self.world.id}
+spec:
+  stats:
+    labels:
+      derived:
+        ability_power: Spell Power
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("Unsupported stats.labels field(s): derived", str(resp.data))
+
     def test_empty_stats_create_clean_world_without_class_profiles(self):
         manifest = f"""
 kind: world
@@ -332,7 +351,7 @@ spec:
       label: ""
       main_attribute: ''
       attribute_weights: {{}}
-      derived_rules: []
+      stat_rules: []
     class_profiles: {{}}
 """
         resp = self.client.post(

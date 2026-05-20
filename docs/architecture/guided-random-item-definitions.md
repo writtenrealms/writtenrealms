@@ -261,8 +261,7 @@ canonical item stat fields, not through fixed STR/DEX/CON/INT columns.
 
 Each random attribute entry should be small and declarative:
 
-- `key`: attribute key from the world's stat system, not a canonical
-  derived stat
+- `key`: attribute key from the world's stat system, not a canonical stat
 - `min`: inclusive minimum integer
 - `max`: inclusive maximum integer
 - `mode`: distribution mode
@@ -677,11 +676,11 @@ procedural content engine.
 ## Open Questions
 
 - Should cost be rollable in phase 1, or recomputed from rolled stats later?
-- Should `weapon_damage` be a rollable canonical item field, or remain derived
+- Should `weapon_damage` be a rollable canonical item field, or remain computed
   from item level and equipment type?
 - Should bundle entries support "choose N distinct entries" immediately, or
   only one weighted roll per entry?
 - Merchant restock timing is specified in
   [merchant-system.md](/Users/teebes/code/writtenrealms/docs/architecture/merchant-system.md).
 - Should player-facing item inspection show rolled attributes directly,
-  or only the derived effective stats after formulas apply?
+  or only the effective stats after formulas apply?

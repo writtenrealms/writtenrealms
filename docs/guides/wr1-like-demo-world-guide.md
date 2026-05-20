@@ -53,7 +53,7 @@ spec:
         health: Health
         energy: Mana
         stamina: Stamina
-      derived:
+      stats:
         attack_power: Attack Power
         ability_power: Spell Power
         armor: Armor
@@ -69,7 +69,7 @@ spec:
         assassin: Assassin
         cleric: Cleric
 
-    derived_display_order:
+    stat_display_order:
       - attack_power
       - ability_power
       - crit
@@ -88,7 +88,7 @@ spec:
         strength: 2
         dexterity: 2
         intelligence: 2
-      derived_rules: []
+      stat_rules: []
 
     class_profiles:
       warrior:
@@ -99,7 +99,7 @@ spec:
           strength: 4
           dexterity: 1
           intelligence: 1
-        derived_rules:
+        stat_rules:
           - source: strength
             target: crit
             multiplier: 1
@@ -112,7 +112,7 @@ spec:
           strength: 1
           dexterity: 1
           intelligence: 4
-        derived_rules: []
+        stat_rules: []
 
       assassin:
         label: Assassin
@@ -122,7 +122,7 @@ spec:
           strength: 1
           dexterity: 4
           intelligence: 1
-        derived_rules:
+        stat_rules:
           - source: dexterity
             target: attack_power
             multiplier: 1
@@ -135,7 +135,7 @@ spec:
           strength: 1
           dexterity: 1
           intelligence: 4
-        derived_rules: []
+        stat_rules: []
 
     formulas:
       base_resources:

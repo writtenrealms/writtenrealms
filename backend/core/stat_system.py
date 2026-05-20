@@ -7,7 +7,7 @@ to customize:
 - attribute definitions, labels, and ordering
 - class/archetype attribute weight profiles
 - formula coefficients that map attributes into stats
-- player-facing labels for resources and derived stats
+- player-facing labels for resources and stats
 
 Runtime names intentionally use WR2 terminology:
 
@@ -30,7 +30,7 @@ class StatSystemValidationError(ValueError):
 
 
 CANONICAL_RESOURCE_LABEL_KEYS = ("health", "energy", "stamina")
-CANONICAL_DERIVED_LABEL_KEYS = (
+CANONICAL_STAT_LABEL_KEYS = (
     "attack_power",
     "ability_power",
     "armor",
@@ -83,7 +83,7 @@ DEFAULT_STAT_SYSTEM = {
             "energy": "Energy",
             "stamina": "Stamina",
         },
-        "derived": {
+        "stats": {
             "attack_power": "Attack Power",
             "ability_power": "Ability Power",
             "armor": "Armor",
@@ -96,7 +96,7 @@ DEFAULT_STAT_SYSTEM = {
         },
         "classes": {},
     },
-    "derived_display_order": [
+    "stat_display_order": [
         "attack_power",
         "ability_power",
         "crit",
@@ -111,7 +111,7 @@ DEFAULT_STAT_SYSTEM = {
         "label": "",
         "main_attribute": "",
         "attribute_weights": {},
-        "derived_rules": [],
+        "stat_rules": [],
     },
     "class_profiles": {},
     "formulas": {
@@ -323,7 +323,7 @@ def _coerce_profile(
         "label",
         "main_attribute",
         "attribute_weights",
-        "derived_rules",
+        "stat_rules",
     }
     unknown_profile_keys = sorted(set(raw_profile.keys()) - allowed_profile_keys)
     if unknown_profile_keys:
@@ -348,8 +348,8 @@ def _coerce_profile(
         attribute_keys=attribute_keys,
     )
     rules = _coerce_rule_list(
-        raw_profile.get("derived_rules", base_profile.get("derived_rules")),
-        field_name=f"{field_name}.derived_rules",
+        raw_profile.get("stat_rules", base_profile.get("stat_rules")),
+        field_name=f"{field_name}.stat_rules",
         allowed_sources=set(attribute_keys),
     )
 
@@ -357,7 +357,7 @@ def _coerce_profile(
         "label": label,
         "main_attribute": main_attribute,
         "attribute_weights": weights,
-        "derived_rules": rules,
+        "stat_rules": rules,
     }
 
 
@@ -436,7 +436,7 @@ def normalize_stat_system(value: Any) -> dict[str, Any]:
     allowed_top_level_keys = {
         "attributes",
         "labels",
-        "derived_display_order",
+        "stat_display_order",
         "default_profile",
         "class_profiles",
         "formulas",
@@ -456,6 +456,16 @@ def normalize_stat_system(value: Any) -> dict[str, Any]:
     raw_labels = value.get("labels") or {}
     if raw_labels not in ({}, None) and not isinstance(raw_labels, dict):
         raise StatSystemValidationError("stats.labels must be a mapping.")
+    allowed_label_keys = {
+        "resources",
+        "stats",
+        "classes",
+    }
+    unknown_label_keys = sorted(set(raw_labels.keys()) - allowed_label_keys)
+    if unknown_label_keys:
+        raise StatSystemValidationError(
+            f"Unsupported stats.labels field(s): {', '.join(unknown_label_keys)}."
+        )
     raw_class_labels = _coerce_label_map(
         (raw_labels or {}).get("classes"),
         field_name="stats.labels.classes",
@@ -469,12 +479,12 @@ def normalize_stat_system(value: Any) -> dict[str, Any]:
             allowed_keys=CANONICAL_RESOURCE_LABEL_KEYS,
         ),
     )
-    normalized["labels"]["derived"] = _merge_dict(
-        normalized["labels"]["derived"],
+    normalized["labels"]["stats"] = _merge_dict(
+        normalized["labels"]["stats"],
         _coerce_label_map(
-            (raw_labels or {}).get("derived"),
-            field_name="stats.labels.derived",
-            allowed_keys=CANONICAL_DERIVED_LABEL_KEYS,
+            (raw_labels or {}).get("stats"),
+            field_name="stats.labels.stats",
+            allowed_keys=CANONICAL_STAT_LABEL_KEYS,
         ),
     )
     class_profiles_declared = "class_profiles" in value
@@ -489,26 +499,26 @@ def normalize_stat_system(value: Any) -> dict[str, Any]:
             raw_class_labels,
         )
 
-    display_order = value.get("derived_display_order")
+    display_order = value.get("stat_display_order")
     if display_order is not None:
         if not isinstance(display_order, list) or not display_order:
             raise StatSystemValidationError(
-                "stats.derived_display_order must be a non-empty list."
+                "stats.stat_display_order must be a non-empty list."
             )
         normalized_order: list[str] = []
         seen: set[str] = set()
-        allowed = set(CANONICAL_DERIVED_LABEL_KEYS)
+        allowed = set(CANONICAL_STAT_LABEL_KEYS)
         for index, raw_entry in enumerate(display_order):
             entry = str(raw_entry or "").strip()
             if entry not in allowed:
                 raise StatSystemValidationError(
-                    f"stats.derived_display_order[{index}] is not a supported derived stat."
+                    f"stats.stat_display_order[{index}] is not a supported stat."
                 )
             if entry in seen:
                 continue
             seen.add(entry)
             normalized_order.append(entry)
-        normalized["derived_display_order"] = normalized_order
+        normalized["stat_display_order"] = normalized_order
 
     normalized["default_profile"] = _coerce_profile(
         value.get("default_profile"),
@@ -659,12 +669,12 @@ def get_world_label_bundle(world) -> dict[str, Any]:
             entry["key"]: entry["label"]
             for entry in stat_system["attributes"]
         },
-        "derived": deepcopy(stat_system["labels"]["derived"]),
+        "stats": deepcopy(stat_system["labels"]["stats"]),
         "classes": deepcopy(stat_system["labels"]["classes"]),
         "order": {
             "resources": list(CANONICAL_RESOURCE_LABEL_KEYS),
             "attributes": get_attribute_order(stat_system),
-            "derived": list(stat_system["derived_display_order"]),
+            "stats": list(stat_system["stat_display_order"]),
         },
     }
 
@@ -823,7 +833,7 @@ def compute_attribute_formula_stats(
     )
     _apply_rules(
         stats,
-        rules=profile["derived_rules"],
+        rules=profile["stat_rules"],
         total_attributes=own_attributes,
         own_attributes=own_attributes,
     )
@@ -917,7 +927,7 @@ def compute_stats(
     world=None,
 ):
     """
-    Compute derived stats for a character against the world-authored stat
+    Compute stats for a character against the world-authored stat
     system.
 
     The returned payload uses WR2 stat names only.
@@ -1032,7 +1042,7 @@ def compute_stats(
     )
     _apply_rules(
         stats,
-        rules=profile["derived_rules"],
+        rules=profile["stat_rules"],
         total_attributes=total_attributes,
         own_attributes=own_attributes,
     )
@@ -1051,7 +1061,7 @@ def compute_stats(
 
     stats["health_base"] = _compute_rule_total(
         target="health_max",
-        rules=global_rules + profile["derived_rules"],
+        rules=global_rules + profile["stat_rules"],
         total_attributes=own_attributes,
         own_attributes=own_attributes,
     )
@@ -1093,7 +1103,7 @@ def build_player_stat_payload(player) -> dict[str, Any]:
         world=runtime_world,
     )
     attribute_order = get_attribute_order(stat_system)
-    derived_order = list(stat_system["derived_display_order"])
+    stat_order = list(stat_system["stat_display_order"])
     health_max = max(
         int(stats.get("health_max") or 0),
         int(getattr(player, "health", 0) or 0),
@@ -1111,9 +1121,9 @@ def build_player_stat_payload(player) -> dict[str, Any]:
             key: int(stats.get(key) or 0)
             for key in attribute_order
         },
-        "derived_stats": {
+        "stats": {
             key: int(stats.get(key) or 0)
-            for key in derived_order
+            for key in stat_order
         },
         "energy": int(getattr(player, "energy", 0) or 0),
         "energy_base": int(stats.get("energy_base") or 0),

@@ -649,7 +649,7 @@ or other physical attacks.
 Use resilience when you want protection from magic, psionics, tech abilities,
 mental strain, elemental force, or other non-weapon ability attacks.
 
-If your world is not fantasy, rename the labels in `spec.stats.labels.derived`.
+If your world is not fantasy, rename the labels in `spec.stats.labels.stats`.
 For example:
 
 ```yaml
@@ -657,7 +657,7 @@ kind: world
 spec:
   stats:
     labels:
-      derived:
+      stats:
         ability_power: Technique
         resilience: Focus
 ```
@@ -711,7 +711,7 @@ spec:
     labels:
       resources:
         energy: Grit
-      derived:
+      stats:
         ability_power: Technique
         resilience: Nerve
   combat:

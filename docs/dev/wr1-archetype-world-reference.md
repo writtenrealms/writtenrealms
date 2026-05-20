@@ -26,7 +26,7 @@ That stat system currently controls:
 
 - attribute definitions and labels
 - resource labels
-- derived stat labels
+- stat labels
 - class profile labels
 - attribute weights per class profile
 - formula rules mapping attributes into stats
@@ -73,7 +73,7 @@ For a WR1-style world:
 - label `energy` as `Mana`
 - label `ability_power` as `Spell Power`
 - use WR1 archetype ids for class profiles
-- use the WR1-style weights and derived rules shown below
+- use the WR1-style weights and stat rules shown below
 
 ## Reference World Manifest
 
@@ -123,7 +123,7 @@ spec:
         health: Health
         energy: Mana
         stamina: Stamina
-      derived:
+      stats:
         attack_power: Attack Power
         ability_power: Spell Power
         armor: Armor
@@ -139,7 +139,7 @@ spec:
         mage: Mage
         cleric: Cleric
 
-    derived_display_order:
+    stat_display_order:
       - attack_power
       - ability_power
       - crit
@@ -168,7 +168,7 @@ spec:
           strength: 4
           dexterity: 1
           intelligence: 1
-        derived_rules:
+        stat_rules:
           - source: strength
             target: crit
             multiplier: 1
@@ -181,7 +181,7 @@ spec:
           strength: 1
           dexterity: 4
           intelligence: 1
-        derived_rules:
+        stat_rules:
           - source: dexterity
             target: attack_power
             multiplier: 1
@@ -276,7 +276,7 @@ This reference configuration preserves the major WR1 patterns:
   - dexterity `2`
   - intelligence `2`
 
-Derived rules also mirror WR1:
+Stat rules also mirror WR1:
 
 - constitution:
   - `health_max += constitution * 2`
@@ -333,7 +333,7 @@ spec:
     labels:
       resources:
         energy: Energy
-      derived:
+      stats:
         ability_power: Tech Power
 ```
 

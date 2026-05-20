@@ -163,7 +163,7 @@ class StatsHandler(CommandHandler):
     help = {
         "name": "Stats",
         "format": "stats",
-        "description": "Show your current vitals, attributes, and derived combat stats.",
+        "description": "Show your current vitals, attributes, and stats.",
         "examples": ["stats"],
     }
 

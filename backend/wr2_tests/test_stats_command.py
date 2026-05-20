@@ -15,7 +15,7 @@ class TestStatsCommand(WorldTestCase):
                 "resources": {
                     "energy": "Focus",
                 },
-                "derived": {
+                "stats": {
                     "ability_power": "Ability Power",
                 },
                 "classes": {
@@ -49,11 +49,11 @@ class TestStatsCommand(WorldTestCase):
         self.assertEqual(actor["experience"], self.player.experience)
         self.assertEqual(actor["experience_needed"], 30)
         self.assertEqual(actor["attributes"], {})
-        self.assertIn("attack_power", actor["derived_stats"])
+        self.assertIn("attack_power", actor["stats"])
 
         self.assertEqual(world["labels"]["resources"]["energy"], "Focus")
         self.assertEqual(
-            world["labels"]["derived"]["ability_power"],
+            world["labels"]["stats"]["ability_power"],
             "Ability Power",
         )
         self.assertEqual(world["labels"]["classes"]["warrior"], "Vanguard")

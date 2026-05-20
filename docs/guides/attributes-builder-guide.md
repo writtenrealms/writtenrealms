@@ -43,7 +43,7 @@ to see a more specific name, label it in world YAML:
 spec:
   stats:
     labels:
-      derived:
+      stats:
         ability_power: Spell Power
 ```
 
@@ -97,11 +97,15 @@ spec:
     labels:
       resources:
         energy: Mana
-      derived:
+      stats:
         ability_power: Spell Power
         attack_power: Attack Power
         armor: Armor
 ```
+
+`resources` labels the resource families shown as bars or vitals. `stats`
+labels the fixed WR2 stat keys shown as stat rows. Both are presentation labels;
+neither creates new stats or attributes.
 
 The key stays `ability_power`; players can see `Spell Power`.
 
@@ -125,7 +129,7 @@ spec:
     labels:
       resources:
         energy: Mana
-      derived:
+      stats:
         ability_power: Spell Power
 
     formulas:

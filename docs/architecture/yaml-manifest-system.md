@@ -280,7 +280,7 @@ World manifests now also support `spec.stats`, which holds the authored WR2
 stat system for that world:
 
 - attribute definitions
-- resource and derived stat labels
+- resource and stat labels
 - class or archetype profiles
 - bounded formula rules
 

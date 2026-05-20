@@ -232,7 +232,7 @@ class Actor(BaseModel):
     resilience: int = 0
     resilience_perc: float = 0.0
     attributes: Dict[str, float] = Field(default_factory=dict)
-    derived_stats: Dict[str, int] = Field(default_factory=dict)
+    stats: Dict[str, int] = Field(default_factory=dict)
 
     # Equipment & inventory
     equipment: Equipment = Field(default_factory=Equipment)

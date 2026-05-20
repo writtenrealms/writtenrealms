@@ -61,7 +61,7 @@ replace them with an infinitely malleable stat soup.
 - Allow world-specific player-facing labels without changing engine semantics.
 - Keep formula evaluation deterministic, inspectable, and cheap.
 - Avoid arbitrary code execution in builder-authored formula definitions.
-- Make combat resolution depend on a persisted derived stat snapshot, not on
+- Make combat resolution depend on a persisted stat snapshot, not on
   repeated full recomputation during every command.
 
 ## Non-Goals
@@ -327,12 +327,12 @@ through the same formula pipeline.
 
 ## Runtime Model
 
-### Derived Stat Snapshot
+### Stat Snapshot
 
-WR2 combat should not recompute full stat derivation from scratch on every
+WR2 combat should not recompute full stat calculation from scratch on every
 single command or combat step.
 
-Instead, the engine should compute and persist a derived stat snapshot whenever
+Instead, the engine should compute and persist a stat snapshot whenever
 relevant inputs change.
 
 Typical recompute triggers:
@@ -344,12 +344,12 @@ Typical recompute triggers:
 - authored formula profile changed
 - character attribute values changed
 
-Combat and regen systems should read from that persisted derived snapshot.
+Combat and regen systems should read from that persisted stat snapshot.
 
 This is the correct tradeoff:
 
 - computation moves to the moments when inputs change
-- encounter resolution reads stable derived values cheaply
+- encounter resolution reads stable stat values cheaply
 - debugging is easier because the effective current stats are inspectable
 
 ### Runtime Boundary
@@ -429,7 +429,7 @@ combat resolution should operate on a simple, explicit runtime contract.
 
 ## Why Not Fully Dynamic Engine Stats
 
-It is tempting to let builders define every input and every derived stat
+It is tempting to let builders define every input and every stat
 freely, but that would create major problems:
 
 - combat actions would need per-world semantic lookup
