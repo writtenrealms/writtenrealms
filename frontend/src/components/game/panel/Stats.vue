@@ -58,6 +58,7 @@
 import { computed } from "vue";
 import { useStore } from 'vuex';
 import Summary from "@/components/game/panel/Summary.vue";
+import { formatCombatStatValue } from "@/core/utils.ts";
 
 const store = useStore();
 
@@ -82,17 +83,7 @@ const attributeEntries = computed(() => {
 });
 
 const formatStatValue = (key: string, value: number) => {
-  const percentMap: Record<string, number | undefined> = {
-    armor: player.value?.armor_perc,
-    crit: player.value?.crit_perc,
-    dodge: player.value?.dodge_perc,
-    resilience: player.value?.resilience_perc,
-  };
-  const perc = percentMap[key];
-  if (perc !== undefined && perc !== null) {
-    return `${value} (${perc}%)`;
-  }
-  return value;
+  return formatCombatStatValue(world.value, player.value, key, value, "paren");
 };
 
 const statEntries = computed(() => {

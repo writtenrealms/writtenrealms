@@ -185,7 +185,7 @@ profile edits into the engine defaults.
 ## Important Stat Semantics
 
 `weapon_damage` is a first-class item stat. Basic weapon attacks can use it
-directly, and builders can set it on item templates. This fixes the WR1
+directly, and builders can set it on item definitions. This fixes the WR1
 awkwardness where weapon damage was effectively hidden inside level.
 
 `attack_power` remains the physical throughput stat. It can add to weapon
@@ -264,9 +264,19 @@ value = rating / (opponent_scale * constant) + base
 
 The result is also clamped between `0` and `cap`.
 
+Worlds that prefer transparent percentage-point stats can use
+`percentage_points` for any rating. This type ignores opponent level and treats
+`1` stat point as one percentage point:
+
+```text
+value = rating / 100 + base
+```
+
+The result is clamped between `0` and `cap`, and `constant` is not used.
+
 ## Weapon Damage
 
-Weapon damage is stored on item templates and spawned items as
+Weapon damage is stored on item definitions and spawned items as
 `weapon_damage`.
 
 For physical profiles using weapon damage:

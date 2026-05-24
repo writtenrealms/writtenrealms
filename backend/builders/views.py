@@ -4,6 +4,7 @@ import json
 
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
+from django.core.cache import cache
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Count, Q
 from django.utils import timezone
@@ -37,6 +38,7 @@ from core.view_mixins import (
     KeyedRetrieveMixin,
     RequestDataMixin,
     WorldValidatorMixin)
+from lobby.cache import LOBBY_FIXED_SECTIONS_CACHE_KEY
 
 from builders import manifests as builder_manifests
 from builders import permissions as builder_permissions
@@ -365,6 +367,7 @@ class WorldViewSet(BaseWorldBuilderViewSet):
                 "Cannot delete a world with running spawn worlds.")
         world.lifecycle = api_consts.WORLD_STATE_ARCHIVED
         world.save(update_fields=['lifecycle'])
+        cache.delete(LOBBY_FIXED_SECTIONS_CACHE_KEY)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=False)

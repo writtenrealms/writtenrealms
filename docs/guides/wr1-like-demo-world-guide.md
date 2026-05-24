@@ -210,13 +210,13 @@ Notes:
 
 ## Step 3: Add A Starter Weapon
 
-This weapon gives `slice` something to scale from and demonstrates item input
-attributes.
+This weapon gives `slice` something to scale from and demonstrates item
+definition attributes.
 
 Paste and apply:
 
 ```yaml
-kind: itemtemplate
+kind: itemdefinition
 metadata:
   slug: training-sword
   name: a training sword
@@ -240,10 +240,10 @@ spec:
 
 ## Step 4: Add A Sparring Mob
 
-Add a simple mob template so the abilities have a target:
+Add a simple mob definition so the abilities have a target:
 
 ```yaml
-kind: mobtemplate
+kind: mobdefinition
 metadata:
   slug: sparring-goblin
   name: a sparring goblin
@@ -252,7 +252,6 @@ spec:
   keywords: goblin sparring
   description: A wiry goblin watches for an opening.
   room_description: A sparring goblin waits here.
-  default_stats: false
   fights_back: true
   use_abilities: false
   health_max: 80

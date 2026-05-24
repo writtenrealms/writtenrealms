@@ -58,6 +58,63 @@ class TestStatsCommand(WorldTestCase):
         )
         self.assertEqual(world["labels"]["classes"]["warrior"], "Vanguard")
 
+    def test_stats_command_uses_combat_rating_percentages(self):
+        self.world.config.stat_system = {
+            "class_profiles": {},
+            "formulas": {
+                "base_stats": {
+                    "crit": 13,
+                    "dodge": 13,
+                    "resilience": 19,
+                },
+            },
+        }
+        self.world.config.combat_system = {
+            "ratings": {
+                "crit": {
+                    "type": "percentage_points",
+                    "base": 0,
+                    "cap": 1.0,
+                },
+                "dodge": {
+                    "type": "percentage_points",
+                    "base": 0,
+                    "cap": 0.75,
+                },
+                "armor": {
+                    "type": "percentage_points",
+                    "base": 0,
+                    "cap": 0.75,
+                },
+                "resilience": {
+                    "type": "percentage_points",
+                    "base": 0,
+                    "cap": 0.75,
+                },
+            },
+        }
+        self.world.config.save(update_fields=["stat_system", "combat_system"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "stats")
+
+        message = self._message_by_type(messages, "cmd.stats.success")
+        self.assertIsNotNone(message)
+
+        actor = message["data"]["actor"]
+        world = message["data"]["world"]
+
+        self.assertTrue(world["is_classless"])
+        self.assertTrue(world["classless"])
+        self.assertEqual(world["combat"]["ratings"]["crit"]["type"], "percentage_points")
+        self.assertEqual(actor["stats"]["crit"], 13)
+        self.assertEqual(actor["crit_perc"], 13)
+        self.assertEqual(actor["stats"]["dodge"], 13)
+        self.assertEqual(actor["dodge_perc"], 13)
+        self.assertEqual(actor["stats"]["resilience"], 19)
+        self.assertEqual(actor["resilience_perc"], 19)
+        self.assertEqual(actor["armor_perc"], 0)
+
     def test_help_stats_topic_is_available(self):
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "help stats")

@@ -8,13 +8,24 @@ WR2 world editing is moving toward an authored-manifest workflow inspired by Kub
 - canonical edit format is YAML
 - import/export is straightforward because authored entities can round-trip through manifests
 
-Implemented entities currently include:
+Implemented manifest kinds currently include the current WR2 authoring path:
 
 - `trigger`
 - `world`
-- `itemtemplate`
+- `currency`
+- `zone`
+- `room`
+- `itemdefinition`
+- `itembundle`
+- `merchantprofile`
+- `mobdefinition`
+- `ability`
+- `abilities`
 - `quest`
 - `questarc`
+
+The legacy `itemtemplate` and `mobtemplate` kinds are still supported during the
+transition for old content and legacy-only builder surfaces.
 
 Builder-facing trigger authoring guidance lives in:
 
@@ -43,16 +54,18 @@ In room navigation, **Triggers** now replaces **Actions**.
 - Each trigger includes **Copy YAML** and **Copy Delete YAML** actions.
 - Recommended workflow: copy template YAML, tweak it, ingest in **Edit World**.
 
-### 3. Item Template Details Screen
+### 3. Item Definition Details Screen
 
-In **World > Items > Item Template**, the detail screen can expose the current
-item template as YAML.
+In **World > Items**, the item definition detail screen can expose the current
+item definition as YAML.
 
-- It includes **Copy YAML** for the selected item template.
-- The manifest excludes legacy `ItemAction` data because item actions are being
-  retired in favor of the Trigger system.
+- It includes **Copy YAML** for the selected item definition.
+- New authored items should use `kind: itemdefinition`.
 - Recommended workflow: copy the YAML, edit it, then ingest it in
   **World > Edit World**.
+
+The legacy **Item Templates** screens still expose `kind: itemtemplate` YAML for
+old content and legacy-only surfaces.
 
 ### 4. World Edit Screen
 
@@ -64,15 +77,17 @@ A new world-level **Edit World** view accepts a YAML manifest textarea.
   - `kind: currency`
   - `kind: zone`
   - `kind: room`
-  - `kind: itemtemplate`
   - `kind: itemdefinition`
   - `kind: itembundle`
   - `kind: merchantprofile`
-  - `kind: mobtemplate`
   - `kind: mobdefinition`
+  - `kind: ability`
+  - `kind: abilities`
   - `kind: quest`
   - `kind: questarc`
   - `kind: trigger`
+  - `kind: itemtemplate` for legacy item-template content
+  - `kind: mobtemplate` for legacy mob-template content
   - `kind` is case-insensitive (`trigger`, `Trigger`, `TRIGGER` all work).
 - Trigger manifests now support both:
   - **create** (no `metadata.id` / `metadata.key`)
@@ -358,7 +373,7 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 
 ## Validation Rules (Current)
 
-- `kind` must resolve to `trigger`, `world`, `currency`, `zone`, `room`, `itemtemplate`, `itemdefinition`, `itembundle`, `mobtemplate`, `mobdefinition`, `ability`, `abilities`, `quest`, or `questarc`.
+- `kind` must resolve to `trigger`, `world`, `currency`, `zone`, `room`, `itemdefinition`, `itembundle`, `merchantprofile`, `mobdefinition`, `ability`, `abilities`, `quest`, or `questarc`. The legacy `itemtemplate` and `mobtemplate` kinds are also accepted during the transition.
 - For update: `metadata.id` or `metadata.key` must reference an existing trigger in the selected world.
 - For create: omit both `metadata.id` and `metadata.key`.
 - For delete: set `operation: delete` and include `metadata.id` or `metadata.key`.
@@ -448,7 +463,7 @@ spec:
 
 ## Guidelines For Extending To Other Entities
 
-When adding YAML support for another entity (ItemTemplate, MobTemplate, Quest, etc.):
+When adding YAML support for another entity (ItemDefinition, MobDefinition, Quest, etc.):
 
 1. Add serializer/parser/apply helpers in `backend/builders/manifests.py` (or a sibling module per domain if it grows large).
 2. Support both create and update semantics up front:

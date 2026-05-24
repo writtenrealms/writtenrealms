@@ -68,7 +68,7 @@
 <script lang='ts' setup>
 import { computed } from "vue";
 import { useStore } from "vuex";
-import { capfirst } from "@/core/utils.ts";
+import { capfirst, formatCombatStatValue } from "@/core/utils.ts";
 
 const props = defineProps({
   message: {
@@ -106,17 +106,7 @@ const attributeEntries = computed(() => {
 const statLabels = computed(() => world.value?.labels?.stats || {});
 const statOrder = computed(() => world.value?.labels?.order?.stats || Object.keys(player.value?.stats || {}));
 const formatStatValue = (key: string, value: number) => {
-  const percentMap: Record<string, number | undefined> = {
-    armor: player.value?.armor_perc,
-    crit: player.value?.crit_perc,
-    dodge: player.value?.dodge_perc,
-    resilience: player.value?.resilience_perc,
-  };
-  const perc = percentMap[key];
-  if (perc !== undefined && perc !== null) {
-    return `${value} - ${perc}%`;
-  }
-  return `${value}`;
+  return formatCombatStatValue(world.value, player.value, key, value);
 };
 const statEntries = computed(() => {
   const values = player.value?.stats || {};

@@ -479,6 +479,7 @@ class World(BaseModel):
     auto_equip: bool = True
     globals_enabled: bool = False
     classless: bool = False
+    is_classless: bool = False
 
     # Room references
     starting_room: Optional[str] = None
@@ -505,6 +506,7 @@ class World(BaseModel):
 
     # Game data
     labels: Dict[str, Any] = Field(default_factory=dict)
+    combat: Dict[str, Any] = Field(default_factory=dict)
     factions: Dict[str, Faction] = Field(default_factory=dict)
     abilities: Dict[str, Any] = Field(default_factory=dict)
     facts: Dict[str, Any] = Field(default_factory=dict)

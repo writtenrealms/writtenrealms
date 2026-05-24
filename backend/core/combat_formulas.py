@@ -26,7 +26,7 @@ class CombatFormulaValidationError(ValueError):
 
 SUPPORTED_COMBAT_VERSION = 1
 PROFILE_KINDS = ("damage", "healing")
-RATING_TYPES = ("mitigation_curve", "linear_rating")
+RATING_TYPES = ("mitigation_curve", "linear_rating", "percentage_points")
 PROFILE_VARIANCE_STRATEGIES = ("default", "none")
 LEVEL_SCALE_TYPES = ("exponential", "linear", "flat", "ilf")
 ALLOWED_POWER_STATS = (
@@ -386,15 +386,10 @@ def _coerce_rating(value: Any, *, field_name: str) -> dict[str, Any]:
         raise CombatFormulaValidationError(
             f"{field_name}.type must be one of {', '.join(RATING_TYPES)}."
         )
-    return {
+    normalized = {
         "stat": stat,
         "type": rating_type,
         "base": _coerce_number(value.get("base", 0), field_name=f"{field_name}.base"),
-        "constant": _coerce_number(
-            value.get("constant"),
-            field_name=f"{field_name}.constant",
-            minimum=0.0001,
-        ),
         "cap": _coerce_number(
             value.get("cap", 1),
             field_name=f"{field_name}.cap",
@@ -402,6 +397,13 @@ def _coerce_rating(value: Any, *, field_name: str) -> dict[str, Any]:
             maximum=1,
         ),
     }
+    if rating_type != "percentage_points":
+        normalized["constant"] = _coerce_number(
+            value.get("constant"),
+            field_name=f"{field_name}.constant",
+            minimum=0.0001,
+        )
+    return normalized
 
 
 def _coerce_ratings(value: Any) -> dict[str, Any]:
@@ -792,8 +794,12 @@ def _rating_percent(
     combat_system: dict[str, Any],
 ) -> float:
     base = float(rating_config["base"])
-    constant = float(rating_config["constant"])
     cap = float(rating_config["cap"])
+
+    if rating_config["type"] == "percentage_points":
+        return min(cap, max(0.0, rating / 100.0 + base))
+
+    constant = float(rating_config["constant"])
     opponent_scale = max(0.0001, _level_scale(opponent_level, combat_system))
 
     if rating_config["type"] == "linear_rating":
@@ -804,6 +810,21 @@ def _rating_percent(
         value = numerator / denominator if denominator else 0
 
     return min(cap, max(0.0, value))
+
+
+def rating_display_percent(
+    *,
+    rating_config: dict[str, Any],
+    rating: float,
+    opponent_level: int,
+    combat_system: dict[str, Any],
+) -> float:
+    return _rating_percent(
+        rating_config=rating_config,
+        rating=rating,
+        opponent_level=opponent_level,
+        combat_system=combat_system,
+    ) * 100.0
 
 
 def _random_value(rng: Callable[[], float]) -> float:

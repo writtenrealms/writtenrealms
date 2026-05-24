@@ -45,6 +45,43 @@ export const formatRelativeModifiedDate = (value?: string) => {
   return priorYearDateFormatter.format(modifiedAt);
 };
 
+export const formatPercent = value => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return String(value || 0);
+  const rounded = Math.round(numeric * 100) / 100;
+  return String(rounded).replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1");
+};
+
+export const getRatingConfigForStat = (world, key) => {
+  const ratings = world?.combat?.ratings || {};
+  const direct = ratings[key];
+  if (direct && (!direct.stat || direct.stat === key)) return direct;
+  return Object.values(ratings).find((rating: any) => rating?.stat === key);
+};
+
+export const formatCombatStatValue = (world, player, key, value, mode = "dash") => {
+  const percentMap: any = {
+    armor: player?.armor_perc,
+    crit: player?.crit_perc,
+    dodge: player?.dodge_perc,
+    resilience: player?.resilience_perc,
+  };
+  const perc = percentMap[key];
+  const ratingConfig: any = getRatingConfigForStat(world, key);
+
+  if (ratingConfig?.type === "percentage_points") {
+    const percentValue = perc !== undefined && perc !== null ? perc : value;
+    return `${formatPercent(percentValue)}%`;
+  }
+
+  if (perc !== undefined && perc !== null) {
+    const formatted = formatPercent(perc);
+    return mode === "paren" ? `${value} (${formatted}%)` : `${value} - ${formatted}%`;
+  }
+
+  return `${value}`;
+};
+
 export const stackedInventory = function(inv) {
   /*
     Takes a list of items and consolidates those with identical backend-provided

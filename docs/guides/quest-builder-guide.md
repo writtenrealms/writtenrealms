@@ -188,6 +188,10 @@ Supported discovery source shapes:
 | `room_prompt`  | `room` or `room_id`, plus `callout`     | Shows as an opportunity when the player is in that room. The room reference can be an integer id, `room.<id>`, or portable `room@x,y,z`. The room view shows the authored callout line with `[ ! ]` and the player can use `inspect` to see the quest pitch. |
 | `npc_dialogue` | `mob_template` or `mob_template_id` | Shows through NPC dialogue and room UI markers. Mob refs can be ids, `mobtemplate.<id>`, `mobtemplate.<slug>`, or bare slugs. |
 
+Quest discovery and step room-item bindings are still legacy-template-backed
+surfaces during the WR2 transition. Use `itemdefinition` and `mobdefinition`
+for new general item and mob authoring, but use the documented template refs in
+quest fields until those quest surfaces are migrated.
 
 ### Condition DSL
 
@@ -607,8 +611,9 @@ The authoring pattern is:
 - Put the memory aid and immediate player-facing summary in `recap`.
 - For item turn-ins, progress from `quest.item.delivered`.
 - For report-back steps, progress from `cmd.talk.success`.
-- Use slugs for mob and item template references whenever possible. The runtime
-accepts ids too, but slugs are much easier to read.
+- Where quest fields still require legacy mob or item template references, use
+slugs whenever possible. The runtime accepts ids too, but slugs are much easier
+to read.
 
 ## Testing Your Quest
 

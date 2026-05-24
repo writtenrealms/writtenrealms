@@ -146,7 +146,7 @@ definition authored in one world can be copied into another world through
 
 `MobDefinition` is a transition name while WR2 still has the older
 `MobTemplate` model. The long-term direction is to remove the old template path
-and let the clean definition model become the normal mob template concept.
+and let the clean definition model become the normal authored mob concept.
 
 For now, legacy mob-template-only surfaces such as reactions, quest NPC
 bindings, equipment profiles, merchant setup, and template inventory still live

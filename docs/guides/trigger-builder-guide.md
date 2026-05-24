@@ -327,7 +327,9 @@ metadata:
 
 ## Other Trigger Shapes
 
-The same manifest format also powers mob reaction triggers.
+The same manifest format also powers mob reaction triggers. Mob reactions are
+still a legacy-template-backed surface during the WR2 transition, so event
+trigger targets currently use `mobtemplate` refs.
 
 Example:
 

@@ -18,7 +18,7 @@ to be added when the builder wants to tune that model.
 
 Most builders should only need to tune a few combat values:
 
-- `weapon_damage` on weapon item templates
+- `weapon_damage` on weapon item definitions
 - `power_scale` for how much attack power or ability power matters
 - `can_dodge` and `can_crit`
 - `crit_multiplier`
@@ -53,10 +53,10 @@ spec:
     ...
 ```
 
-Weapons are edited on item template manifests:
+Weapons are edited on item definition manifests:
 
 ```yaml
-kind: itemtemplate
+kind: itemdefinition
 metadata:
   slug: iron-sword
   name: an iron sword
@@ -375,8 +375,8 @@ after armor, resilience, and minimum damage.
 
 ### Dodge, Crit, Armor, And Resilience Ratings
 
-Dodge, crit, armor, and resilience use rating configs. Each config has the same
-shape, though the default values differ by rating:
+Dodge, crit, armor, and resilience use rating configs. The default configs use
+level-scaled ratings:
 
 ```yaml
 base: 0
@@ -408,6 +408,26 @@ percent = (rating + opponent_scale * constant * base)
         / (rating + opponent_scale * constant)
 percent = clamp(percent, 0, cap)
 ```
+
+Worlds that want stat values to mean percentage points can use
+`percentage_points` instead. This type ignores opponent level and does not use
+`constant`:
+
+```yaml
+type: percentage_points
+base: 0
+cap: 0.75
+```
+
+The formula is:
+
+```text
+percent = rating / 100 + base
+percent = clamp(percent, 0, cap)
+```
+
+With this type, `dodge: 1` means 1% dodge against a level 1 opponent or a level
+20 opponent. `armor: 25` means 25% armor mitigation before the cap.
 
 For a default physical attack, only armor mitigates damage. Resilience is
 ignored unless `mitigation.resilience` is set to `true`. For a default ability
@@ -524,7 +544,7 @@ spec:
 Then give weapons clear `weapon_damage` values:
 
 ```yaml
-kind: itemtemplate
+kind: itemdefinition
 metadata:
   slug: frontier-rifle
   name: a frontier rifle
@@ -736,7 +756,7 @@ spec:
 Example weapon:
 
 ```yaml
-kind: itemtemplate
+kind: itemdefinition
 metadata:
   slug: rusted-revolver
   name: a rusted revolver
@@ -830,7 +850,7 @@ the problem is health, weapon damage, attack power scaling, or mitigation.
 
 - Use `ability_power` in combat configs. Worlds can label it as `Spell Power`
   if that fits the setting.
-- Do not set `constant` to zero in ratings.
+- Do not set `constant` to zero in level-scaled ratings.
 - Do not make armor and resilience both apply everywhere unless that is a
   deliberate WR1-like choice.
 - Do not use huge `weapon_damage` values and huge `attack_power` scaling at the

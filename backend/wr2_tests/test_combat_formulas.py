@@ -3,6 +3,7 @@ from config import game_settings as adv_config
 from core.combat_formulas import (
     CombatFormulaValidationError,
     _level_scale,
+    _rating_percent,
     normalize_combat_system,
     resolve_attack,
 )
@@ -55,6 +56,68 @@ class TestCombatFormulaResolution(WorldTestCase):
         self.assertGreater(
             _level_scale(60, combat_system),
             _level_scale(20, combat_system),
+        )
+
+    def test_default_rating_types_keep_rating_curve_behavior(self):
+        combat_system = normalize_combat_system({})
+
+        self.assertEqual(
+            combat_system["ratings"]["dodge"]["type"],
+            "mitigation_curve",
+        )
+        self.assertEqual(
+            combat_system["ratings"]["crit"]["type"],
+            "linear_rating",
+        )
+        self.assertEqual(
+            combat_system["ratings"]["armor"]["type"],
+            "mitigation_curve",
+        )
+        self.assertEqual(
+            combat_system["ratings"]["resilience"]["type"],
+            "mitigation_curve",
+        )
+
+    def test_percentage_point_rating_ignores_opponent_level(self):
+        combat_system = normalize_combat_system({
+            "ratings": {
+                "dodge": {
+                    "stat": "dodge",
+                    "type": "percentage_points",
+                    "base": 0,
+                    "cap": 0.75,
+                },
+            },
+        })
+        rating_config = combat_system["ratings"]["dodge"]
+
+        self.assertNotIn("constant", rating_config)
+        self.assertAlmostEqual(
+            _rating_percent(
+                rating_config=rating_config,
+                rating=1,
+                opponent_level=1,
+                combat_system=combat_system,
+            ),
+            0.01,
+        )
+        self.assertAlmostEqual(
+            _rating_percent(
+                rating_config=rating_config,
+                rating=1,
+                opponent_level=20,
+                combat_system=combat_system,
+            ),
+            0.01,
+        )
+        self.assertAlmostEqual(
+            _rating_percent(
+                rating_config=rating_config,
+                rating=1000,
+                opponent_level=20,
+                combat_system=combat_system,
+            ),
+            0.75,
         )
 
     def test_linear_level_scale_is_configurable(self):

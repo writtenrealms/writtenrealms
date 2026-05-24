@@ -14,6 +14,7 @@ from django.utils import timezone
 
 from builders.models import AbilityDefinition
 from config import constants as adv_consts
+from core.combat_formulas import get_world_combat_system, rating_display_percent
 from core.scoped_state import STATE_SCOPE_WORLD, get_state_snapshot
 from core.leveling import (
     get_world_leveling_config,
@@ -139,6 +140,48 @@ def _serialize_ability_definitions(world: World) -> dict[str, dict]:
         "definitions": definitions,
         "order": order,
     }
+
+
+def _round_percent(value: float) -> float | int:
+    rounded = round(float(value or 0.0), 2)
+    if rounded.is_integer():
+        return int(rounded)
+    return rounded
+
+
+def _serialize_combat_system(world: World) -> dict[str, dict]:
+    combat_system = get_world_combat_system(world)
+    ratings = {}
+    for key, rating in (combat_system.get("ratings") or {}).items():
+        rating_payload = {
+            "stat": rating["stat"],
+            "type": rating["type"],
+            "base": rating["base"],
+            "cap": rating["cap"],
+        }
+        if "constant" in rating:
+            rating_payload["constant"] = rating["constant"]
+        ratings[key] = rating_payload
+    return {"ratings": ratings}
+
+
+def _combat_rating_percentages(world: World, level: int, stats: dict[str, int]) -> dict[str, float | int]:
+    combat_system = get_world_combat_system(world)
+    payload = {}
+    for rating_key in ("armor", "crit", "dodge", "resilience"):
+        rating_config = (combat_system.get("ratings") or {}).get(rating_key)
+        if not rating_config:
+            continue
+        stat_key = rating_config["stat"]
+        payload[f"{rating_key}_perc"] = _round_percent(
+            rating_display_percent(
+                rating_config=rating_config,
+                rating=float(stats.get(stat_key) or 0),
+                opponent_level=level,
+                combat_system=combat_system,
+            )
+        )
+    return payload
 
 
 def get_player_with_related(player_id: int) -> Player:
@@ -711,7 +754,15 @@ def serialize_actor(player: Player, room: Optional[Room]) -> Actor:
             "factions": getattr(player, "factions", {}) or {},
             "room": None,
         }
-    actor_data.update(build_player_stat_payload(player))
+    stat_payload = build_player_stat_payload(player)
+    actor_data.update(stat_payload)
+    actor_data.update(
+        _combat_rating_percentages(
+            player.world,
+            int(stat_payload.get("level") or getattr(player, "level", 1) or 1),
+            stat_payload.get("stats") or {},
+        )
+    )
     leveling_config = get_world_leveling_config(player.world)
     progress = progress_for_experience(
         getattr(player, "experience", 0),
@@ -772,6 +823,7 @@ def serialize_world(world: World) -> Dict:
             "players_can_set_title": config.players_can_set_title if config else False,
             "facts": get_state_snapshot(STATE_SCOPE_WORLD, world),
             "classless": not world_uses_classes(world) if config else False,
+            "is_classless": not world_uses_classes(world) if config else False,
             "tier": world.tier,
             "socials": {"cmds": {}, "order": []},
             "currencies": {},
@@ -783,6 +835,8 @@ def serialize_world(world: World) -> Dict:
 
     data["labels"] = get_world_label_bundle(world)
     data["abilities"] = _serialize_ability_definitions(world)
+    data["combat"] = _serialize_combat_system(world)
+    data["is_classless"] = bool(data.get("classless"))
 
     # Normalize world-config room references to the same room key contract used
     # across WR2 room/map payloads.
