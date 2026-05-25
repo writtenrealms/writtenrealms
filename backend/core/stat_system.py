@@ -114,6 +114,10 @@ DEFAULT_STAT_SYSTEM = {
         "stat_rules": [],
     },
     "class_profiles": {},
+    "class_selection": {
+        "enabled": True,
+        "default": "",
+    },
     "formulas": {
         "base_stats": {
             "stamina_regen": config.PLAYER_STARTING_STAMINA_REGEN,
@@ -428,6 +432,43 @@ def _coerce_base_stats_config(
     return normalized
 
 
+def _coerce_class_selection(
+    value: Any,
+    *,
+    field_name: str,
+    class_profiles: dict[str, Any],
+) -> dict[str, Any]:
+    normalized = deepcopy(DEFAULT_STAT_SYSTEM["class_selection"])
+    if value in (None, ""):
+        return normalized
+    if not isinstance(value, dict):
+        raise StatSystemValidationError(f"{field_name} must be a mapping.")
+
+    allowed_keys = {
+        "enabled",
+        "default",
+    }
+    unknown_keys = sorted(set(value.keys()) - allowed_keys)
+    if unknown_keys:
+        raise StatSystemValidationError(
+            f"Unsupported {field_name} field(s): {', '.join(unknown_keys)}."
+        )
+
+    if "enabled" in value:
+        enabled = value.get("enabled")
+        if not isinstance(enabled, bool):
+            raise StatSystemValidationError(f"{field_name}.enabled must be a boolean.")
+        normalized["enabled"] = enabled
+
+    default_class = str(value.get("default") or "").strip()
+    if default_class and default_class not in class_profiles:
+        raise StatSystemValidationError(
+            f"{field_name}.default must reference a declared class profile."
+        )
+    normalized["default"] = default_class
+    return normalized
+
+
 def normalize_stat_system(value: Any) -> dict[str, Any]:
     if value in (None, ""):
         value = {}
@@ -439,6 +480,7 @@ def normalize_stat_system(value: Any) -> dict[str, Any]:
         "stat_display_order",
         "default_profile",
         "class_profiles",
+        "class_selection",
         "formulas",
     }
     unknown_keys = sorted(set(value.keys()) - allowed_top_level_keys)
@@ -546,6 +588,11 @@ def normalize_stat_system(value: Any) -> dict[str, Any]:
         if class_profiles[normalized_key]["label"]:
             normalized["labels"]["classes"][normalized_key] = class_profiles[normalized_key]["label"]
     normalized["class_profiles"] = class_profiles
+    normalized["class_selection"] = _coerce_class_selection(
+        value.get("class_selection"),
+        field_name="stats.class_selection",
+        class_profiles=class_profiles,
+    )
     formulas = deepcopy(normalized["formulas"])
     raw_formulas = value.get("formulas") or {}
     if raw_formulas not in ({}, None) and not isinstance(raw_formulas, dict):
@@ -655,6 +702,17 @@ def world_uses_classes(world) -> bool:
     except StatSystemValidationError:
         return False
     return bool(stat_system.get("class_profiles"))
+
+
+def get_world_class_selection(world) -> dict[str, Any]:
+    stat_system = get_world_stat_system(world)
+    class_selection = deepcopy(stat_system.get("class_selection") or {})
+    class_selection.setdefault("enabled", True)
+    class_selection.setdefault("default", "")
+    class_profiles = stat_system.get("class_profiles") or {}
+    if not class_selection["default"] and class_profiles:
+        class_selection["default"] = next(iter(class_profiles.keys()))
+    return class_selection
 
 
 def get_attribute_order(stat_system: dict[str, Any]) -> list[str]:

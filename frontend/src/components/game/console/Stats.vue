@@ -112,6 +112,7 @@ const statEntries = computed(() => {
   const values = player.value?.stats || {};
   return statOrder.value
     .filter((key: string) => values[key] !== undefined)
+    .filter((key: string) => key !== "energy_regen" || hasEnergy.value)
     .map((key: string) => ({
       key,
       label: statLabels.value[key] || capfirst(key.replace(/_/g, " ")),

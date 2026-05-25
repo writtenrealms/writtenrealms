@@ -22,6 +22,7 @@ from core.leveling import (
 )
 from core.stat_system import (
     build_player_stat_payload,
+    get_world_class_selection,
     get_world_label_bundle,
     world_uses_classes,
 )
@@ -834,6 +835,7 @@ def serialize_world(world: World) -> Dict:
         data["currencies"] = {str(k): v for k, v in data["currencies"].items()}
 
     data["labels"] = get_world_label_bundle(world)
+    data["class_selection"] = get_world_class_selection(world)
     data["abilities"] = _serialize_ability_definitions(world)
     data["combat"] = _serialize_combat_system(world)
     data["is_classless"] = bool(data.get("classless"))

@@ -49,7 +49,12 @@ from core.serializers import (
     InstanceOrTemplateValueField,
     ContainerTypeField,
     ReferenceField)
-from core.stat_system import world_uses_classes
+from core.stat_system import (
+    StatSystemValidationError,
+    get_world_class_selection,
+    get_world_stat_system,
+    world_uses_classes,
+)
 from spawns import instances
 from spawns.models import (
     Player,
@@ -68,6 +73,7 @@ from worlds.models import World, Zone, Room, RoomDetail
 
 class PlayerSerializer(serializers.ModelSerializer):
 
+    archetype = serializers.CharField(required=False, allow_blank=True)
     can_transfer = serializers.SerializerMethodField()
     core_faction = serializers.SerializerMethodField()
     world_name = serializers.CharField(source='world.name', required=False)
@@ -129,6 +135,41 @@ class PlayerSerializer(serializers.ModelSerializer):
                 and not is_ascii(self.initial_data['name'])):
                 raise serializers.ValidationError(
                     "Names must be ASCII characters only.")
+
+        try:
+            stat_system = get_world_stat_system(world)
+        except StatSystemValidationError:
+            stat_system = {}
+        class_profiles = stat_system.get("class_profiles") or {}
+        if class_profiles:
+            class_selection = get_world_class_selection(world)
+            requested_archetype = str(
+                validated_data.get(
+                    "archetype",
+                    self.initial_data.get("archetype", ""),
+                ) or ""
+            ).strip()
+            default_archetype = (
+                class_selection.get("default")
+                or next(iter(class_profiles.keys()))
+            )
+            if class_selection.get("enabled", True):
+                archetype = requested_archetype or default_archetype
+                if archetype not in class_profiles:
+                    raise serializers.ValidationError({
+                        "archetype": "Invalid class for this world."
+                    })
+            else:
+                archetype = default_archetype
+            validated_data["archetype"] = archetype
+        else:
+            if "archetype" in validated_data or "archetype" in self.initial_data:
+                validated_data["archetype"] = str(
+                    validated_data.get(
+                        "archetype",
+                        self.initial_data.get("archetype", ""),
+                    ) or ""
+                ).strip()
 
         return validated_data
 

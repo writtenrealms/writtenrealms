@@ -123,6 +123,8 @@ spec:
   death_route: nearest_in_zone
   pvp_mode: zone
   can_select_faction: false
+  can_select_gender: false
+  default_gender: male
   auto_equip: false
   is_narrative: true
   players_can_set_title: false
@@ -172,6 +174,9 @@ spec:
           grace: 1
           willpower: 1
           insight: 2
+    class_selection:
+      enabled: false
+      default: warrior
     formulas:
       base_stats:
         stamina_regen: 4
@@ -236,6 +241,8 @@ spec:
         self.assertEqual(config.death_route, "nearest_in_zone")
         self.assertEqual(config.pvp_mode, "zone")
         self.assertFalse(config.can_select_faction)
+        self.assertFalse(config.can_select_gender)
+        self.assertEqual(config.default_gender, "male")
         self.assertFalse(config.auto_equip)
         self.assertTrue(config.is_narrative)
         self.assertFalse(config.allow_combat)
@@ -263,6 +270,8 @@ spec:
             config.stat_system["labels"]["classes"]["warrior"],
             "Vanguard",
         )
+        self.assertFalse(config.stat_system["class_selection"]["enabled"])
+        self.assertEqual(config.stat_system["class_selection"]["default"], "warrior")
         self.assertEqual(config.stat_system["formulas"]["base_stats"]["stamina_regen"], 4.0)
         primary_keys = [
             entry["key"] for entry in config.stat_system["attributes"]

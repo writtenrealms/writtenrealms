@@ -1040,7 +1040,7 @@ class WorldConfig(BaseModel):
         default=adv_consts.PVP_MODE_FFA)
     default_gender = models.TextField(
         choices=list_to_choice(adv_consts.GENDERS),
-        default=adv_consts.GENDER_FEMALE)
+        default=adv_consts.GENDER_MALE)
 
     # Values
     built_by = models.TextField(**optional)

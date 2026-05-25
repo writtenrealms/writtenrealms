@@ -76,6 +76,8 @@ class LobbyWorldSerializer(WorldSerializer):
             'core_factions',
             'allow_combat', 'is_narrative',
             'default_gender', 'can_select_gender',
+            'labels',
+            'class_selection',
             'is_classless',
             'instance_of',
         ]

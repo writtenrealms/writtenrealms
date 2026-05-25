@@ -22,6 +22,11 @@ from core.scoped_state import (
     resolve_scope_owner,
     set_state_value,
 )
+from core.stat_system import (
+    StatSystemValidationError,
+    compute_stats,
+    get_world_stat_system,
+)
 from core.utils import format_actor_msg
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
@@ -268,6 +273,43 @@ def _collect_room_player_targets(room: Room, selector: str) -> list[Player]:
 
     room_players = list(room.players.select_related("world", "world__config", "user"))
     return [player for player in room_players if _player_matches(player, normalized)]
+
+
+def _resolve_player_class_key(world, selector: str) -> str:
+    normalized = str(selector or "").strip().lower()
+    if not normalized:
+        raise ActionError("Class is required.", code="invalid_args")
+
+    try:
+        stat_system = get_world_stat_system(world)
+    except StatSystemValidationError as exc:
+        raise ActionError(str(exc), code="invalid_stat_system")
+
+    class_profiles = stat_system.get("class_profiles") or {}
+    if not class_profiles:
+        raise ActionError("This world has no class profiles.", code="classless_world")
+
+    class_labels = (stat_system.get("labels") or {}).get("classes") or {}
+    lookup: dict[str, str] = {}
+    for class_key in class_profiles.keys():
+        key = str(class_key or "").strip()
+        if not key:
+            continue
+        lookup[key.lower()] = key
+        label = str(class_labels.get(key) or class_profiles[key].get("label") or "").strip()
+        if label:
+            lookup[label.lower()] = key
+
+    exact = lookup.get(normalized)
+    if exact:
+        return exact
+
+    matches = sorted({class_key for label, class_key in lookup.items() if label.startswith(normalized)})
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ActionError("Class is ambiguous.", code="ambiguous_class")
+    raise ActionError("Class not found.", code="invalid_class")
 
 
 def _actor_kind(actor: Player | Mob) -> str:
@@ -803,6 +845,86 @@ class SetLevelAction:
                         "experience_progress": experience_progress,
                         "experience_needed": experience_needed,
                         "max_level": leveling_config.max_level,
+                    },
+                    text=text,
+                )
+            ]
+        )
+
+
+class SetClassAction:
+    def _resolve_target(
+        self,
+        *,
+        actor: Player,
+        target_selector: str | None,
+    ) -> Player:
+        room = actor.room
+        if not room:
+            raise ActionError("You are nowhere. Cannot set classes.", code="no_room")
+
+        normalized_target = str(target_selector or "").strip().lower()
+        if not normalized_target or normalized_target in {"self", "me"}:
+            return actor
+
+        targets = _collect_room_player_targets(room, normalized_target)
+        if not targets:
+            raise ActionError("Player not found in this room.", code="invalid_target")
+        if len(targets) > 1:
+            raise ActionError("Player target is ambiguous.", code="ambiguous_target")
+        return targets[0]
+
+    def execute(
+        self,
+        *,
+        actor: Player,
+        class_selector: str,
+        target_selector: str | None = None,
+    ) -> ActionResult:
+        target = self._resolve_target(
+            actor=actor,
+            target_selector=target_selector,
+        )
+        new_class = _resolve_player_class_key(target.world, class_selector)
+        previous_class = str(target.archetype or "")
+
+        with transaction.atomic():
+            target = Player.objects.select_for_update().get(pk=target.pk)
+            target.archetype = new_class
+            stats = compute_stats(
+                target.level,
+                target.archetype,
+                char=target,
+                world=target.world,
+            )
+            target.health = max(1, int(stats.get("health_max") or 1))
+            target.energy = int(stats.get("energy_max") or 0)
+            target.stamina = int(stats.get("stamina_max") or 0)
+            target.save(update_fields=["archetype", "health", "energy", "stamina"])
+
+        updated_actor = get_player_with_related(actor.id)
+        updated_target = get_player_with_related(target.id)
+        actor_payload = serialize_actor(updated_actor, updated_actor.room)
+        room_payload = _get_single_room_payload(updated_actor)
+        target_payload = serialize_actor(updated_target, updated_target.room)
+        class_labels = get_world_stat_system(updated_target.world)["labels"]["classes"]
+        class_label = class_labels.get(new_class, new_class)
+        target_name = getattr(updated_target, "name", None) or "target"
+        text = f"Set {target_name}'s class to {class_label}."
+
+        return ActionResult(
+            events=[
+                GameEvent(
+                    type="cmd./setclass.success",
+                    recipients=[updated_actor.key],
+                    data={
+                        "actor": actor_payload.model_dump(),
+                        "room": room_payload.model_dump(),
+                        "target": target_payload.model_dump(),
+                        "target_type": "player",
+                        "previous_class": previous_class,
+                        "new_class": new_class,
+                        "class_label": class_label,
                     },
                     text=text,
                 )

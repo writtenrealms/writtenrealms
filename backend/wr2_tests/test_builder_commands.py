@@ -10,6 +10,7 @@ from core.scoped_state import (
     STATE_SCOPE_WORLD,
     get_state_snapshot,
 )
+from spawns.handlers import dispatch_command
 from spawns.models import Item, Mob
 from tests.base import WorldTestCase
 from wr2_tests.utils import (
@@ -533,6 +534,131 @@ class TestBuilderSetLevel(WorldTestCase):
         message = self._message_by_type(messages, "cmd./setlevel.error")
         self.assertIsNotNone(message)
         self.assertIn("permission", message.get("text", "").lower())
+
+
+class TestBuilderSetClass(WorldTestCase):
+    def setUp(self):
+        super().setUp()
+        self.world.config.stat_system = {
+            "attributes": [
+                {"key": "constitution", "label": "Constitution"},
+                {"key": "intelligence", "label": "Intelligence"},
+            ],
+            "labels": {
+                "classes": {
+                    "hoplite": "Hoplite",
+                    "warlord": "Warlord",
+                },
+            },
+            "class_profiles": {
+                "hoplite": {
+                    "label": "Hoplite",
+                    "main_attribute": "constitution",
+                    "attribute_weights": {
+                        "constitution": 4,
+                        "intelligence": 0,
+                    },
+                },
+                "warlord": {
+                    "label": "Warlord",
+                    "main_attribute": "constitution",
+                    "attribute_weights": {
+                        "constitution": 2,
+                        "intelligence": 2,
+                    },
+                },
+            },
+            "class_selection": {
+                "enabled": False,
+                "default": "hoplite",
+            },
+            "formulas": {
+                "base_resources": {
+                    "energy": {"source": "intelligence", "multiplier": 2},
+                    "stamina": {"flat": 100},
+                    "health": {},
+                },
+                "global_rules": [
+                    {"source": "constitution", "target": "health_max", "multiplier": 2},
+                ],
+            },
+        }
+        self.world.config.save(update_fields=["stat_system"])
+
+    def _message_by_type(self, messages, message_type):
+        for msg in messages:
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def test_setclass_updates_player_class_and_recomputed_resources(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/setclass hoplite")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.archetype, "hoplite")
+        self.assertEqual(self.player.energy, 0)
+
+        message = self._message_by_type(messages, "cmd./setclass.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["new_class"], "hoplite")
+        self.assertEqual(message["data"]["target"]["energy_max"], 0)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/setclass warlord")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.archetype, "warlord")
+        self.assertGreater(self.player.energy, 0)
+        message = self._message_by_type(messages, "cmd./setclass.success")
+        self.assertEqual(message["data"]["class_label"], "Warlord")
+        self.assertGreater(message["data"]["target"]["energy_max"], 0)
+
+    def test_setclass_updates_room_player_target_by_class_label(self):
+        target = self.create_player("Target", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/setclass target Warlord")
+
+        target.refresh_from_db()
+        self.assertEqual(target.archetype, "warlord")
+        self.assertGreater(target.energy, 0)
+        message = self._message_by_type(messages, "cmd./setclass.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target"]["key"], target.key)
+        self.assertIn("Target", message["text"])
+
+    def test_setclass_requires_builder_permissions(self):
+        other_user = self.create_user("other-setclass@example.com")
+        other_player = self.create_player("Other", user=other_user)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(other_player.id, "/setclass hoplite")
+
+        other_player.refresh_from_db()
+        self.assertNotEqual(other_player.archetype, "hoplite")
+        message = self._message_by_type(messages, "cmd./setclass.error")
+        self.assertIsNotNone(message)
+        self.assertIn("permission", message.get("text", "").lower())
+
+    def test_setclass_allows_room_trigger_source(self):
+        other_user = self.create_user("trigger-setclass@example.com")
+        other_player = self.create_player("TriggerTarget", user=other_user)
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=other_player.id,
+                payload={
+                    "text": "/setclass hoplite",
+                    "__trigger_source": True,
+                },
+            )
+
+        other_player.refresh_from_db()
+        self.assertEqual(other_player.archetype, "hoplite")
+        message = self._message_by_type(messages, "cmd./setclass.success")
+        self.assertIsNotNone(message)
 
 
 class TestBuilderResync(WorldTestCase):

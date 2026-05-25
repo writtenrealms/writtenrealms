@@ -132,6 +132,7 @@ _WORLD_CONFIG_CONFIG_TEXT_FIELDS = (
 )
 _WORLD_CONFIG_CONFIG_BOOL_FIELDS = (
     "can_select_faction",
+    "can_select_gender",
     "auto_equip",
     "is_narrative",
     "players_can_set_title",
@@ -155,6 +156,7 @@ _WORLD_CONFIG_CONFIG_CHOICE_FIELDS = {
     "death_mode": adv_consts.DEATH_MODES,
     "death_route": adv_consts.DEATH_ROUTES,
     "pvp_mode": adv_consts.PVP_MODES,
+    "default_gender": adv_consts.GENDERS,
 }
 _WORLD_CONFIG_CONFIG_ROOM_FIELDS = (
     "starting_room",

@@ -377,6 +377,54 @@ class TestCreatePlayerCharacter(WorldTestCase):
         john = Player.objects.get(pk=resp.data['id'])
         self.assertEqual(john.archetype, '')
 
+    def test_create_char_uses_locked_world_default_class(self):
+        self.world.config.stat_system = {
+            "attributes": [
+                {"key": "constitution", "label": "Constitution"},
+                {"key": "intelligence", "label": "Intelligence"},
+            ],
+            "class_profiles": {
+                "hoplite": {
+                    "label": "Hoplite",
+                    "attribute_weights": {
+                        "constitution": 4,
+                        "intelligence": 0,
+                    },
+                },
+                "warlord": {
+                    "label": "Warlord",
+                    "attribute_weights": {
+                        "constitution": 2,
+                        "intelligence": 2,
+                    },
+                },
+            },
+            "class_selection": {
+                "enabled": False,
+                "default": "hoplite",
+            },
+            "formulas": {
+                "base_resources": {
+                    "energy": {"source": "intelligence", "multiplier": 2},
+                    "stamina": {"flat": 100},
+                    "health": {},
+                },
+                "global_rules": [
+                    {"source": "constitution", "target": "health_max", "multiplier": 2},
+                ],
+            },
+        }
+        self.world.config.save(update_fields=["stat_system"])
+
+        resp = self.client.post(self.endpoint, {
+            'name': 'John',
+            'archetype': 'warlord',
+        })
+        self.assertEqual(resp.status_code, 201)
+        john = Player.objects.get(pk=resp.data['id'])
+        self.assertEqual(john.archetype, 'hoplite')
+        self.assertEqual(john.energy, 0)
+
     def test_name_exclusions(self):
         self.world.is_multiplayer = True
         self.world.save()

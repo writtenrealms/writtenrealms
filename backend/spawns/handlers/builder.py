@@ -12,6 +12,7 @@ from spawns.actions.builder import (
     PurgeAction,
     ResyncItemTemplatesAction,
     ResyncMobTemplatesAction,
+    SetClassAction,
     SetLevelAction,
     StateAction,
 )
@@ -153,6 +154,20 @@ def _parse_setlevel_args(ctx: CommandContext) -> tuple[str | None, str | None]:
     target = ctx.payload.get("target")
     if level is not None:
         return str(level), str(target).strip() if target else None
+
+    args = [str(arg).strip() for arg in list(ctx.payload.get("args", [])) if str(arg).strip()]
+    if not args:
+        return None, None
+    if len(args) == 1:
+        return args[0], None
+    return args[-1], " ".join(args[:-1]).strip()
+
+
+def _parse_setclass_args(ctx: CommandContext) -> tuple[str | None, str | None]:
+    class_name = ctx.payload.get("class")
+    target = ctx.payload.get("target")
+    if class_name is not None:
+        return str(class_name), str(target).strip() if target else None
 
     args = [str(arg).strip() for arg in list(ctx.payload.get("args", [])) if str(arg).strip()]
     if not args:
@@ -509,6 +524,71 @@ class SetLevelHandler(CommandHandler):
             ctx.publish(
                 {
                     "type": "cmd./setlevel.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.player.key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class SetClassHandler(CommandHandler):
+    command_type = "/setclass"
+    text_commands = ("/setclass",)
+    builder_only = True
+    help = {
+        "name": "Set Class",
+        "format": "/setclass <class> | /setclass <player> <class>",
+        "description": (
+            "Set your class, or set a player in the current room to a class. "
+            "The player's vitals are restored from the newly computed stats."
+        ),
+        "examples": [
+            "/setclass hoplite",
+            "/setclass mystic",
+            "/setclass aria tidecaller",
+            "/setclass player.123 warlord",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        if not has_builder_access(ctx.player) and not _is_trigger_source(ctx):
+            ctx.publish(
+                {
+                    "type": "cmd./setclass.error",
+                    "text": "You do not have permission to use builder commands.",
+                    "data": {"error": "Builder permissions required."},
+                }
+            )
+            return
+
+        class_name, target = _parse_setclass_args(ctx)
+        if not class_name:
+            ctx.publish(
+                {
+                    "type": "cmd./setclass.error",
+                    "text": "Usage: /setclass <class> | /setclass <player> <class>",
+                    "data": {"error": "Missing class.", "code": "invalid_args"},
+                }
+            )
+            return
+
+        try:
+            result = SetClassAction().execute(
+                actor=ctx.player,
+                class_selector=class_name,
+                target_selector=target,
+            )
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd./setclass.error",
                     "text": err.message,
                     "data": {"error": err.message, "code": err.code, **err.data},
                 }
