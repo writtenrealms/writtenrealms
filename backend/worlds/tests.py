@@ -244,7 +244,7 @@ class TestCreateWorld(APITestCase):
         # When creating a SPW, a builder character is automatically created
         # for the author
         builder_char = new_world.spawned_worlds.get().players.get()
-        self.assertTrue(builder_char.is_immortal)
+        self.assertTrue(builder_char.is_builder)
         self.assertEqual(builder_char.user, self.user)
 
     def test_cannot_create_world_as_guest_user(self):

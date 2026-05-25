@@ -96,7 +96,7 @@ class PlayerSerializer(serializers.ModelSerializer):
             'key', 'name', 'description',
             'id', 'level', 'gender', 'title', 'glory',
             'archetype', 'core_faction', 'display_faction',
-            'is_immortal', 'is_staff', 'is_confirmed', 'link_id',
+            'is_builder', 'is_staff', 'is_confirmed', 'link_id',
             # For single player worlds only, indicates whether the player
             # is eligible for a transfer.
             'can_transfer',
@@ -925,7 +925,6 @@ class AnimatePlayerSerializer(serializers.ModelSerializer):
 
     # User properties
     is_temporary = serializers.BooleanField(source='user.is_temporary')
-    is_builder = serializers.BooleanField(source='user.is_builder')
     player_housing = serializers.BooleanField(source='user.player_housing')
     name_recognition = serializers.BooleanField(source='user.name_recognition')
     is_staff = serializers.BooleanField(source='user.is_staff')
@@ -963,12 +962,12 @@ class AnimatePlayerSerializer(serializers.ModelSerializer):
             'description',
             'factions', 'aliases', 'language_proficiency',
             'gold', 'glory', 'medals', 'currencies',
-            'is_immortal', 'is_invisible', 'autoflee',
+            'is_builder', 'is_invisible', 'autoflee',
             #'notell',
             #'noplay',
             'nochat', 'is_muted',
             'archetype', 'room', 'user_id',
-            'experience', 'is_temporary', 'is_builder',
+            'experience', 'is_temporary',
             'health', 'stamina', 'energy',
             'room_description',
             'trophy', 'config', 'effects', 'marks',

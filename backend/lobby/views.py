@@ -596,7 +596,7 @@ class WorldLeaders(WorldLobbyBase, generics.ListAPIView):
 
     def get_queryset(self):
         qs = Player.objects.filter(
-            is_immortal=False,
+            is_builder=False,
             world__context=self.world,
             pending_deletion_ts__isnull=True,
         ).order_by(

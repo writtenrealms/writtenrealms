@@ -593,7 +593,6 @@ def execute_trigger_script_segments(
         payload: dict[str, object] = {
             "text": segment_text,
             "skip_triggers": True,
-            "__trigger_source": True,
         }
         if issuer_scope:
             payload["issuer_scope"] = issuer_scope
@@ -605,6 +604,7 @@ def execute_trigger_script_segments(
                 actor_id=actor_id,
                 payload=payload,
                 connection_id=connection_id,
+                script_source=True,
             )
         except (ActorNotFoundError, HandlerNotFoundError, ValueError):
             return

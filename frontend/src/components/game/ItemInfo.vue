@@ -2,7 +2,7 @@
   <div>
     <div class="name" :class="[item.quality]">
       {{ capfirst(item.name) }}
-      <span class='ml-2 color-text-50 font-text-light' v-if="item.template_id && player.is_immortal">
+      <span class='ml-2 color-text-50 font-text-light' v-if="item.template_id && player.is_builder">
         [ {{ item.template_id }} ]
       </span>
     </div>

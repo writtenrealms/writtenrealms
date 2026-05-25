@@ -35,7 +35,7 @@
           v-for="player in who_list"
           :key="player.key"
           class='hover'
-          :class="{ 'color-secondary': player.name_recognition, 'color-primary': player.is_immortal }"
+          :class="{ 'color-secondary': player.name_recognition, 'color-primary': player.is_builder }"
           @click="onClickWhoPlayer(player)"
         >
           {{ player.name }} {{ player.title }}

@@ -140,7 +140,7 @@ class Player(CharMixin, AdventBaseModel):
                                on_delete=models.CASCADE,
                                **optional)
 
-    is_immortal = models.BooleanField(default=False)
+    is_builder = models.BooleanField(default=False)
     is_invisible = models.BooleanField(default=False)
 
     language_proficiency = models.DecimalField(max_digits=2, decimal_places=1,

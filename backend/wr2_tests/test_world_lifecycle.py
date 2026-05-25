@@ -170,14 +170,14 @@ class TestMonitorWorldsIdlePlayers(WorldTestCase):
         mock_disconnect.assert_not_called()
         mock_stop.assert_not_called()
 
-    def test_monitor_worlds_uses_builder_idle_timeout_for_immortals(self):
+    def test_monitor_worlds_uses_builder_idle_timeout_for_builders(self):
         self.spawn_world.last_played_ts = timezone.now() - timezone.timedelta(minutes=6)
         self.spawn_world.save(update_fields=["last_played_ts"])
-        self.player.is_immortal = True
+        self.player.is_builder = True
         self.player.last_action_ts = timezone.now() - timezone.timedelta(
             seconds=api_consts.IDLE_TIMEOUT + 1
         )
-        self.player.save(update_fields=["is_immortal", "last_action_ts"])
+        self.player.save(update_fields=["is_builder", "last_action_ts"])
 
         with patch("worlds.tasks._disconnect_idle_player") as mock_disconnect, patch(
             "worlds.tasks.WorldSmith.stop"

@@ -3825,17 +3825,17 @@ class WorldManagePlayerTests(BuilderTestCase):
         world editor.
         """
         self.client.force_authenticate(self.user)
-        self.assertFalse(self.player.is_immortal)
+        self.assertFalse(self.player.is_builder)
         resp = self.client.put(
             reverse('builder-player-detail', args=[
                 self.world.pk, self.player.pk]),
             {
                 'id': self.player.id,
-                'is_immortal': True
+                'is_builder': True
             })
         self.assertEqual(resp.status_code, 200)
         self.player.refresh_from_db()
-        self.assertTrue(self.player.is_immortal)
+        self.assertTrue(self.player.is_builder)
 
     def test_reset_player_in_other_world_returns_404(self):
         other_user = self.create_user('other@example.com')

@@ -169,7 +169,7 @@
           >
             <div class="player-topline">
               <div class="player-name">{{ player.name }}</div>
-              <div v-if="player.is_immortal" class="player-flag">Builder</div>
+              <div v-if="player.is_builder" class="player-flag">Builder</div>
             </div>
 
             <div class="color-text-60">

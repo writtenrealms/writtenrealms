@@ -17,7 +17,7 @@
 
           <div class="char-name">
             {{ char.name }}
-            <span v-if="char.is_immortal" class="color-text-50 ml-2">[ Builder ]</span>
+            <span v-if="char.is_builder" class="color-text-50 ml-2">[ Builder ]</span>
             <span v-if="world.is_multiplayer && !char.world_is_multi" class='color-text-50 ml-2'>[ SPW ]</span>
           </div>
           <div class="char-info" v-if="world.allow_combat">{{ charInfo(char) }}</div>

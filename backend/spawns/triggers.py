@@ -476,7 +476,6 @@ def _dispatch_trigger_script_segment(
     payload: dict[str, object] = {
         "text": rendered_segment,
         "skip_triggers": True,
-        "__trigger_source": True,
     }
     if issuer_scope:
         payload["issuer_scope"] = issuer_scope
@@ -488,6 +487,7 @@ def _dispatch_trigger_script_segment(
             actor_id=actor.id,
             payload=payload,
             connection_id=connection_id,
+            script_source=True,
             published_messages=dispatched_messages,
         )
     except (ActorNotFoundError, HandlerNotFoundError, ValueError) as err:

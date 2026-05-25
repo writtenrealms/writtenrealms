@@ -27,7 +27,7 @@
 
     <div>
       <span class='room-name'>{{ room.name }}</span>
-      <span class='room-id ml-2 color-text-50' v-if="player.is_immortal">[ {{ room.id }} ]</span>
+      <span class='room-id ml-2 color-text-50' v-if="player.is_builder">[ {{ room.id }} ]</span>
     </div>
 
     <!-- Description -->

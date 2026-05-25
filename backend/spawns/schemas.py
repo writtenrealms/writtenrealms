@@ -263,7 +263,6 @@ class Actor(BaseModel):
 
     # Player-specific fields
     is_builder: bool = False
-    is_immortal: bool = False
     is_temporary: bool = False
     is_invisible: bool = False
     is_idle: bool = False
@@ -526,7 +525,7 @@ class WhoListEntry(BaseModel):
     title: Optional[str] = ""
     level: int = 1
     gender: str = "male"
-    is_immortal: bool = False
+    is_builder: bool = False
     is_invisible: bool = False
     is_idle: bool = False
     is_linkless: bool = False
@@ -1064,7 +1063,6 @@ def build_mock_state_sync(
         trophy={1: 5, 2: 3, 3: 1},  # mob_template_id -> kill count
         # Player flags
         is_builder=False,
-        is_immortal=False,
         is_temporary=False,
         is_invisible=False,
         is_idle=False,
@@ -1217,7 +1215,7 @@ def build_mock_state_sync(
             title="the Wanderer",
             level=8,
             gender="male",
-            is_immortal=False,
+            is_builder=False,
             is_invisible=False,
             is_idle=False,
             is_linkless=False,
@@ -1230,7 +1228,7 @@ def build_mock_state_sync(
             title="the Brave",
             level=12,
             gender="male",
-            is_immortal=False,
+            is_builder=False,
             is_invisible=False,
             is_idle=False,
             is_linkless=False,
@@ -1243,7 +1241,7 @@ def build_mock_state_sync(
             title="the Wise",
             level=15,
             gender="female",
-            is_immortal=True,
+            is_builder=True,
             is_invisible=False,
             is_idle=True,
             is_linkless=False,

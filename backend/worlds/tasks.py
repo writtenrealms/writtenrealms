@@ -35,7 +35,7 @@ def _loader_lock_timeout_seconds() -> int:
 
 
 def _player_idle_timeout_seconds(player) -> int:
-    if player.is_immortal:
+    if player.is_builder:
         return api_consts.BUILDER_IDLE_TIMEOUT
     return api_consts.IDLE_TIMEOUT
 

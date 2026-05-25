@@ -10,7 +10,7 @@ from core.scoped_state import (
     STATE_SCOPE_WORLD,
     get_state_snapshot,
 )
-from spawns.handlers import dispatch_command
+from spawns.handlers import dispatch_command, get_registered_handlers
 from spawns.models import Item, Mob
 from tests.base import WorldTestCase
 from wr2_tests.utils import (
@@ -20,7 +20,103 @@ from wr2_tests.utils import (
 )
 
 
-class TestBuilderLoad(WorldTestCase):
+class TestBuilderCommandPermissions(WorldTestCase):
+    def _message_by_type(self, messages, message_type):
+        for msg in messages:
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def _builder_command_handlers(self):
+        return {
+            command_type: handler
+            for command_type, handler in get_registered_handlers().items()
+            if getattr(handler, "builder_only", False)
+        }
+
+    def test_text_builder_commands_require_builder_character(self):
+        # self.player belongs to the world author, but is not the builder character.
+        self.assertFalse(self.player.is_builder)
+
+        for command_type, handler in self._builder_command_handlers().items():
+            text_commands = getattr(handler, "text_commands", ()) or ()
+            if not text_commands:
+                continue
+
+            with self.subTest(command=command_type):
+                with capture_game_messages() as messages:
+                    dispatch_text_command(self.player.id, text_commands[0])
+
+                message = self._message_by_type(messages, f"cmd.{command_type}.error")
+                self.assertIsNotNone(message)
+                self.assertIn("permission", message.get("text", "").lower())
+
+    def test_structured_builder_commands_require_builder_character(self):
+        self.assertFalse(self.player.is_builder)
+
+        for command_type in self._builder_command_handlers():
+            with self.subTest(command=command_type):
+                with capture_game_messages() as messages:
+                    dispatch_command(
+                        command_type=command_type,
+                        player_id=self.player.id,
+                        payload={},
+                    )
+
+                message = self._message_by_type(messages, f"cmd.{command_type}.error")
+                self.assertIsNotNone(message)
+                self.assertIn("permission", message.get("text", "").lower())
+
+    def test_payload_cannot_spoof_script_source(self):
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                payload={
+                    "text": "/echo -- spoofed",
+                    "__trigger_source": True,
+                },
+            )
+
+        self.assertIsNone(self._message_by_type(messages, "cmd./echo.success"))
+        message = self._message_by_type(messages, "cmd./echo.error")
+        self.assertIsNotNone(message)
+        self.assertIn("permission", message.get("text", "").lower())
+
+    def test_script_source_allows_echo_but_not_level_changes(self):
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                payload={"text": "/echo -- scripted"},
+                script_source=True,
+            )
+
+        self.assertIsNotNone(self._message_by_type(messages, "cmd./echo.success"))
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                payload={"text": "/setlevel 20"},
+                script_source=True,
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.level, 1)
+        message = self._message_by_type(messages, "cmd./setlevel.error")
+        self.assertIsNotNone(message)
+        self.assertIn("permission", message.get("text", "").lower())
+
+
+class BuilderCommandTestCase(WorldTestCase):
+    def setUp(self):
+        super().setUp()
+        self.player.is_builder = True
+        self.player.save(update_fields=["is_builder"])
+
+
+class TestBuilderLoad(BuilderCommandTestCase):
     def setUp(self):
         super().setUp()
         self.item_template = ItemTemplate.objects.create(
@@ -172,7 +268,7 @@ class TestBuilderLoad(WorldTestCase):
         self.assertTrue(message.get("text"))
 
 
-class TestBuilderPurge(WorldTestCase):
+class TestBuilderPurge(BuilderCommandTestCase):
     def _message_by_type(self, messages, message_type):
         for msg in messages:
             if msg["message"].get("type") == message_type:
@@ -315,7 +411,7 @@ class TestBuilderPurge(WorldTestCase):
         self.assertIn("permission", message.get("text", "").lower())
 
 
-class TestBuilderJump(WorldTestCase):
+class TestBuilderJump(BuilderCommandTestCase):
     def _message_by_type(self, messages, message_type):
         for msg in messages:
             if msg["message"].get("type") == message_type:
@@ -449,7 +545,7 @@ class TestBuilderJump(WorldTestCase):
         )
 
 
-class TestBuilderSetLevel(WorldTestCase):
+class TestBuilderSetLevel(BuilderCommandTestCase):
     def _message_by_type(self, messages, message_type):
         for msg in messages:
             if msg["message"].get("type") == message_type:
@@ -536,7 +632,7 @@ class TestBuilderSetLevel(WorldTestCase):
         self.assertIn("permission", message.get("text", "").lower())
 
 
-class TestBuilderSetClass(WorldTestCase):
+class TestBuilderSetClass(BuilderCommandTestCase):
     def setUp(self):
         super().setUp()
         self.world.config.stat_system = {
@@ -641,9 +737,10 @@ class TestBuilderSetClass(WorldTestCase):
         self.assertIsNotNone(message)
         self.assertIn("permission", message.get("text", "").lower())
 
-    def test_setclass_allows_room_trigger_source(self):
+    def test_setclass_rejects_spoofed_trigger_source(self):
         other_user = self.create_user("trigger-setclass@example.com")
         other_player = self.create_player("TriggerTarget", user=other_user)
+        original_class = other_player.archetype
 
         with capture_game_messages() as messages:
             dispatch_command(
@@ -656,12 +753,32 @@ class TestBuilderSetClass(WorldTestCase):
             )
 
         other_player.refresh_from_db()
-        self.assertEqual(other_player.archetype, "hoplite")
-        message = self._message_by_type(messages, "cmd./setclass.success")
+        self.assertEqual(other_player.archetype, original_class)
+        message = self._message_by_type(messages, "cmd./setclass.error")
         self.assertIsNotNone(message)
+        self.assertIn("permission", message.get("text", "").lower())
+
+    def test_setclass_rejects_internal_script_source(self):
+        other_user = self.create_user("script-setclass@example.com")
+        other_player = self.create_player("ScriptTarget", user=other_user)
+        original_class = other_player.archetype
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=other_player.id,
+                payload={"text": "/setclass hoplite"},
+                script_source=True,
+            )
+
+        other_player.refresh_from_db()
+        self.assertEqual(other_player.archetype, original_class)
+        message = self._message_by_type(messages, "cmd./setclass.error")
+        self.assertIsNotNone(message)
+        self.assertIn("permission", message.get("text", "").lower())
 
 
-class TestBuilderResync(WorldTestCase):
+class TestBuilderResync(BuilderCommandTestCase):
     def _message_by_type(self, messages, message_type):
         for msg in messages:
             if msg["message"].get("type") == message_type:
@@ -850,7 +967,7 @@ class TestBuilderResync(WorldTestCase):
         self.assertIn("template does not belong", message.get("text", "").lower())
 
 
-class TestBuilderEcho(WorldTestCase):
+class TestBuilderEcho(BuilderCommandTestCase):
     def _messages_by_type(self, messages, message_type):
         return [msg for msg in messages if msg["message"].get("type") == message_type]
 
@@ -1006,7 +1123,7 @@ class TestBuilderEcho(WorldTestCase):
         self.assertEqual(far_notify[0]["message"].get("data", {}).get("scope"), "world")
 
 
-class TestBuilderState(WorldTestCase):
+class TestBuilderState(BuilderCommandTestCase):
     def _messages_by_type(self, messages, message_type):
         return [msg for msg in messages if msg["message"].get("type") == message_type]
 
@@ -1049,7 +1166,7 @@ class TestBuilderState(WorldTestCase):
         )
 
 
-class TestBuilderCmd(WorldTestCase):
+class TestBuilderCmd(BuilderCommandTestCase):
     def _messages_by_type(self, messages, message_type):
         return [msg for msg in messages if msg["message"].get("type") == message_type]
 
@@ -1078,7 +1195,7 @@ class TestBuilderCmd(WorldTestCase):
         self.assertEqual(cmd_errors[0]["player_key"], other_player.key)
         self.assertIn("permission", cmd_errors[0]["message"].get("text", "").lower())
 
-    def test_builder_can_cmd_mob_to_run_cmd(self):
+    def test_builder_cannot_cmd_mob_to_run_builder_cmd(self):
         target = Mob.objects.create(
             world=self.spawn_world,
             room=self.room,
@@ -1100,13 +1217,12 @@ class TestBuilderCmd(WorldTestCase):
 
         builder_success = self._messages_for_key_and_type(messages, self.player.key, "cmd./cmd.success")
         self.assertEqual(len(builder_success), 1)
-        self.assertFalse(builder_success[0]["message"].get("text"))
+        self.assertIn("permission", builder_success[0]["message"].get("text", "").lower())
 
         mob_success = self._messages_for_key_and_type(messages, target.key, "cmd./cmd.success")
-        self.assertEqual(len(mob_success), 1)
-        self.assertIn("unknown command", mob_success[0]["message"].get("text", "").lower())
+        self.assertEqual(mob_success, [])
 
-    def test_mob_can_use_cmd_without_builder_permissions(self):
+    def test_mob_cannot_use_cmd_without_builder_permissions(self):
         first_mob = Mob.objects.create(
             world=self.spawn_world,
             room=self.room,
@@ -1124,8 +1240,10 @@ class TestBuilderCmd(WorldTestCase):
             dispatch_text_command_as_mob(first_mob.id, f"/cmd {second_mob.key} -- dance")
 
         mob_success = self._messages_for_key_and_type(messages, first_mob.key, "cmd./cmd.success")
-        self.assertEqual(len(mob_success), 1)
-        self.assertIn("unknown command", mob_success[0]["message"].get("text", "").lower())
+        self.assertEqual(mob_success, [])
+        mob_error = self._messages_for_key_and_type(messages, first_mob.key, "cmd./cmd.error")
+        self.assertEqual(len(mob_error), 1)
+        self.assertIn("permission", mob_error[0]["message"].get("text", "").lower())
 
     def test_cmd_can_trigger_mob_say_and_emote(self):
         self.player.in_game = True

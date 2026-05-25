@@ -865,17 +865,17 @@ def build_who_list(world: World, actor: Player) -> List[WhoListEntry]:
         .prefetch_related("faction_assignments__faction", "clan_memberships__clan")
     )
     who_list: List[WhoListEntry] = []
-    actor_is_immortal = getattr(actor, "is_immortal", False)
+    actor_is_builder = getattr(actor, "is_builder", False)
     actor_core = (actor.factions or {}).get("core")
 
     for player in qs:
-        if player.is_invisible and not actor_is_immortal:
+        if player.is_invisible and not actor_is_builder:
             continue
 
         player_core = (player.factions or {}).get("core")
         if (
-            not actor_is_immortal
-            and not player.is_immortal
+            not actor_is_builder
+            and not player.is_builder
             and actor_core
             and player_core
             and actor_core != player_core
@@ -889,7 +889,7 @@ def build_who_list(world: World, actor: Player) -> List[WhoListEntry]:
                 title=player.title,
                 level=player.level,
                 gender=player.gender or "male",
-                is_immortal=player.is_immortal,
+                is_builder=player.is_builder,
                 is_invisible=player.is_invisible,
                 is_idle=(not player.last_action_ts or player.last_action_ts <= idle_cutoff),
                 is_linkless=False,

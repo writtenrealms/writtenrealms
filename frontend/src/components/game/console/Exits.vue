@@ -5,7 +5,7 @@
       <div v-for="(room_data, direction) in message.data" :key="direction">
         {{ direction }} - {{ room_data.name }}
         <span
-          v-if="player.is_immortal"
+          v-if="player.is_builder"
           class="color-text-50 ml-4"
         >[ {{ room_data.id }} ]</span>
       </div>

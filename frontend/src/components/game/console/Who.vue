@@ -3,7 +3,7 @@
     <h3 class="my-2">{{ message.data.players.length }} PLAYERS IN WORLD</h3>
     <div v-for="player in message.data.players" :key="player.id" :class="playerClasses(player)">
 
-      <span v-if="viewer.is_immortal && player.core_faction" class="ml-2 color-text-50">[ {{ player.core_faction }} ]</span>
+      <span v-if="viewer.is_builder && player.core_faction" class="ml-2 color-text-50">[ {{ player.core_faction }} ]</span>
       {{ player.name }} {{ player.title }} ({{ player.level }})
       <span v-if="player.clan" class="ml-2">[ {{ player.clan.name }} ]</span>
       <span v-if="player.is_invisible" class="ml-1 color-text-50">[invisible]</span>
@@ -28,7 +28,7 @@ defineProps<{
 const viewer = computed(() => store.state.game.player);
 
 const playerClasses = (player) => {
-  if (player.is_immortal)
+  if (player.is_builder)
     return {"color-primary": true}
   else if (player.name_recognition)
     return {"color-secondary": true}

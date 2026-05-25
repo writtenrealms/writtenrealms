@@ -103,7 +103,7 @@ const onClickSettings = () => {
     },
   ];
 
-  if (world.is_multiplayer && player.is_immortal) {
+  if (world.is_multiplayer && player.is_builder) {
     schema.push({
       attr: "idle_logout",
       label: "Idle Auto-Logout",

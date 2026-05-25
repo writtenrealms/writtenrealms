@@ -1539,6 +1539,113 @@ class RoomTriggerListView(BaseWorldBuilderView):
 room_triggers = RoomTriggerListView.as_view()
 
 
+class WorldTriggerViewSet(BaseWorldBuilderViewSet):
+    serializer_class = serializers.Serializer
+    http_method_names = ['get', 'head', 'options']
+
+    def _assert_can_view_world_triggers(self):
+        if self._builder_rank >= 3:
+            return
+        raise drf_exceptions.PermissionDenied(
+            "You do not have permission to view world triggers."
+        )
+
+    def _serialize_trigger_response(self, trigger):
+        payload = builder_manifests.serialize_trigger_manifest(trigger)
+        manifest_spec = payload["manifest"].get("spec") or {}
+        payload.update({
+            "conditions": manifest_spec.get("conditions", ""),
+            "script": manifest_spec.get("script", ""),
+            "show_details_on_failure": bool(manifest_spec.get("show_details_on_failure")),
+            "failure_message": manifest_spec.get("failure_message", ""),
+            "display_action_in_room": bool(manifest_spec.get("display_action_in_room")),
+            "gate_delay": int(manifest_spec.get("gate_delay") or 0),
+            "order": int(manifest_spec.get("order") or 0),
+            "is_active": bool(manifest_spec.get("is_active")),
+            "created_ts": trigger.created_ts,
+            "modified_ts": trigger.modified_ts,
+        })
+        return payload
+
+    def get_queryset(self):
+        self._assert_can_view_world_triggers()
+
+        qs = Trigger.objects.filter(world=self.world).select_related("target_type")
+
+        scope = self.request.query_params.get('scope')
+        if scope in adv_consts.TRIGGER_SCOPES:
+            qs = qs.filter(scope=scope)
+
+        kind = self.request.query_params.get('kind')
+        if kind in adv_consts.TRIGGER_KINDS:
+            qs = qs.filter(kind=kind)
+
+        event = self.request.query_params.get('event')
+        if event in adv_consts.MOB_REACTION_EVENTS:
+            qs = qs.filter(event=event)
+
+        is_active = self.request.query_params.get('is_active')
+        if is_active in ('true', '1'):
+            qs = qs.filter(is_active=True)
+        elif is_active in ('false', '0'):
+            qs = qs.filter(is_active=False)
+
+        query = self.request.query_params.get('query')
+        if query:
+            try:
+                query_id = int(query)
+            except ValueError:
+                qs = qs.filter(
+                    Q(name__icontains=query)
+                    | Q(match__icontains=query)
+                    | Q(event__icontains=query)
+                    | Q(script__icontains=query)
+                )
+            else:
+                qs = qs.filter(pk=query_id)
+
+        sort_by = self.request.query_params.get('sort_by')
+        allowed_sort_fields = {
+            'id',
+            'name',
+            'scope',
+            'kind',
+            'event',
+            'match',
+            'order',
+            'gate_delay',
+            'is_active',
+            'created_ts',
+            'modified_ts',
+        }
+        if sort_by and sort_by.lstrip('-') in allowed_sort_fields:
+            return qs.order_by(sort_by)
+
+        return qs.order_by('scope', 'kind', 'order', 'created_ts', 'id')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            data = [self._serialize_trigger_response(trigger) for trigger in page]
+            return self.get_paginated_response(data)
+
+        data = [self._serialize_trigger_response(trigger) for trigger in queryset]
+        return Response(data)
+
+    def retrieve(self, request, *args, **kwargs):
+        trigger = self.get_object()
+        return Response(self._serialize_trigger_response(trigger))
+
+
+world_trigger_list = WorldTriggerViewSet.as_view({
+    'get': 'list',
+})
+world_trigger_detail = WorldTriggerViewSet.as_view({
+    'get': 'retrieve',
+})
+
+
 class WorldExportView(BaseWorldBuilderView):
 
     def get(self, request, pk, format=None):

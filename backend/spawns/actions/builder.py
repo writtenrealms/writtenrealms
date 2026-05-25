@@ -944,7 +944,7 @@ class CmdAction:
         segment: str,
         issuer_scope: str | None = None,
         skip_triggers: bool = False,
-        trigger_source: bool = False,
+        script_source: bool = False,
     ) -> str | None:
         rendered_segment = _render_command_segment(segment, actor=dispatch_actor)
         command_token = _first_token(rendered_segment)
@@ -966,8 +966,6 @@ class CmdAction:
             payload["issuer_scope"] = issuer_scope
         if skip_triggers:
             payload["skip_triggers"] = True
-        if trigger_source:
-            payload["__trigger_source"] = True
 
         try:
             dispatch_command(
@@ -975,6 +973,7 @@ class CmdAction:
                 actor_type=dispatch_actor_type,
                 actor_id=dispatch_actor_id,
                 payload=payload,
+                script_source=script_source,
                 published_messages=dispatched_messages,
             )
         except (ActorNotFoundError, HandlerNotFoundError, ValueError) as err:
@@ -988,7 +987,7 @@ class CmdAction:
         target_selector: str,
         cmd: str,
         skip_triggers: bool = False,
-        trigger_source: bool = False,
+        script_source: bool = False,
     ) -> ActionResult:
         room = getattr(actor, "room", None)
         if not room:
@@ -1036,7 +1035,7 @@ class CmdAction:
                 segment=segment,
                 issuer_scope=issuer_scope,
                 skip_triggers=skip_triggers,
-                trigger_source=trigger_source,
+                script_source=script_source,
             )
             if dispatched_error:
                 errors.append(dispatched_error)

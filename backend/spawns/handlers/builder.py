@@ -1,7 +1,7 @@
 """
 Builder command handlers.
 
-Builder commands start with "/" and require world builder or author access.
+Builder commands start with "/" and require a builder character.
 """
 from spawns.actions.base import ActionError
 from spawns.actions.builder import (
@@ -23,7 +23,10 @@ from spawns.handlers.base import (
     CommandHandler,
     resolve_unambiguous_choice,
 )
-from spawns.handlers.permissions import has_builder_access
+from spawns.handlers.permissions import (
+    builder_permission_error,
+    can_execute_builder_command,
+)
 from spawns.handlers.registry import register_handler
 
 SCOPED_ECHO_ALIASES = {
@@ -35,10 +38,6 @@ SCOPED_CMD_ALIASES = {
     "/wcmd": "world",
     "/zcmd": "zone",
 }
-
-
-def _is_trigger_source(ctx: CommandContext) -> bool:
-    return bool(ctx.payload.get("__trigger_source"))
 
 
 def _split_delimited_args(args: list[str]) -> tuple[str, str] | tuple[None, None]:
@@ -199,14 +198,8 @@ class LoadHandler(CommandHandler):
     }
 
     def handle(self, ctx: CommandContext) -> None:
-        if not has_builder_access(ctx.player):
-            ctx.publish(
-                {
-                    "type": "cmd./load.error",
-                    "text": "You do not have permission to use builder commands.",
-                    "data": {"error": "Builder permissions required."},
-                }
-            )
+        if not can_execute_builder_command(ctx, self):
+            ctx.publish(builder_permission_error(self.command_type))
             return
 
         template_type = ctx.payload.get("template_type")
@@ -289,14 +282,8 @@ class PurgeHandler(CommandHandler):
     }
 
     def handle(self, ctx: CommandContext) -> None:
-        if not has_builder_access(ctx.player):
-            ctx.publish(
-                {
-                    "type": "cmd./purge.error",
-                    "text": "You do not have permission to use builder commands.",
-                    "data": {"error": "Builder permissions required."},
-                }
-            )
+        if not can_execute_builder_command(ctx, self):
+            ctx.publish(builder_permission_error(self.command_type))
             return
 
         target = ctx.payload.get("target")
@@ -332,6 +319,7 @@ class EchoHandler(CommandHandler):
     command_type = "/echo"
     text_commands = ("/echo", "/zecho", "/wecho")
     builder_only = True
+    allow_script_source = True
     supported_actor_types = ("player", "mob")
     help = {
         "name": "Echo",
@@ -349,18 +337,8 @@ class EchoHandler(CommandHandler):
     }
 
     def handle(self, ctx: CommandContext) -> None:
-        if (
-            ctx.actor_type == "player"
-            and not has_builder_access(ctx.player)
-            and not _is_trigger_source(ctx)
-        ):
-            ctx.publish(
-                {
-                    "type": "cmd./echo.error",
-                    "text": "You do not have permission to use builder commands.",
-                    "data": {"error": "Builder permissions required."},
-                }
-            )
+        if not can_execute_builder_command(ctx, self):
+            ctx.publish(builder_permission_error(self.command_type))
             return
 
         scope, message = _parse_echo_scope_and_message(ctx)
@@ -402,6 +380,7 @@ class StateHandler(CommandHandler):
     command_type = "/state"
     text_commands = ("/state",)
     builder_only = True
+    allow_script_source = True
     supported_actor_types = ("player", "mob")
     help = {
         "name": "State",
@@ -421,18 +400,8 @@ class StateHandler(CommandHandler):
     }
 
     def handle(self, ctx: CommandContext) -> None:
-        if (
-            ctx.actor_type == "player"
-            and not has_builder_access(ctx.player)
-            and not _is_trigger_source(ctx)
-        ):
-            ctx.publish(
-                {
-                    "type": "cmd./state.error",
-                    "text": "You do not have permission to use builder commands.",
-                    "data": {"error": "Builder permissions required."},
-                }
-            )
+        if not can_execute_builder_command(ctx, self):
+            ctx.publish(builder_permission_error(self.command_type))
             return
 
         operation, scope, key, value = _parse_state_args(ctx)
@@ -493,14 +462,8 @@ class SetLevelHandler(CommandHandler):
     }
 
     def handle(self, ctx: CommandContext) -> None:
-        if not has_builder_access(ctx.player):
-            ctx.publish(
-                {
-                    "type": "cmd./setlevel.error",
-                    "text": "You do not have permission to use builder commands.",
-                    "data": {"error": "Builder permissions required."},
-                }
-            )
+        if not can_execute_builder_command(ctx, self):
+            ctx.publish(builder_permission_error(self.command_type))
             return
 
         level, target = _parse_setlevel_args(ctx)
@@ -558,14 +521,8 @@ class SetClassHandler(CommandHandler):
     }
 
     def handle(self, ctx: CommandContext) -> None:
-        if not has_builder_access(ctx.player) and not _is_trigger_source(ctx):
-            ctx.publish(
-                {
-                    "type": "cmd./setclass.error",
-                    "text": "You do not have permission to use builder commands.",
-                    "data": {"error": "Builder permissions required."},
-                }
-            )
+        if not can_execute_builder_command(ctx, self):
+            ctx.publish(builder_permission_error(self.command_type))
             return
 
         class_name, target = _parse_setclass_args(ctx)
@@ -607,6 +564,7 @@ class CmdHandler(CommandHandler):
     command_type = "/cmd"
     text_commands = ("/cmd", "/force", "/rcmd", "/zcmd", "/wcmd")
     builder_only = True
+    allow_script_source = True
     supported_actor_types = ("player", "mob")
     help = {
         "name": "Cmd",
@@ -624,18 +582,8 @@ class CmdHandler(CommandHandler):
     }
 
     def handle(self, ctx: CommandContext) -> None:
-        if (
-            ctx.actor_type == "player"
-            and not has_builder_access(ctx.player)
-            and not _is_trigger_source(ctx)
-        ):
-            ctx.publish(
-                {
-                    "type": "cmd./cmd.error",
-                    "text": "You do not have permission to use builder commands.",
-                    "data": {"error": "Builder permissions required."},
-                }
-            )
+        if not can_execute_builder_command(ctx, self):
+            ctx.publish(builder_permission_error(self.command_type))
             return
 
         target_selector, cmd = _parse_cmd_target_and_command(ctx)
@@ -655,7 +603,7 @@ class CmdHandler(CommandHandler):
                 target_selector=target_selector,
                 cmd=cmd,
                 skip_triggers=bool(ctx.payload.get("skip_triggers")),
-                trigger_source=_is_trigger_source(ctx),
+                script_source=ctx.script_source,
             )
         except ActionError as err:
             ctx.publish(
@@ -690,14 +638,8 @@ class JumpHandler(CommandHandler):
     }
 
     def handle(self, ctx: CommandContext) -> None:
-        if not has_builder_access(ctx.player):
-            ctx.publish(
-                {
-                    "type": "cmd./jump.error",
-                    "text": "You do not have permission to use builder commands.",
-                    "data": {"error": "Builder permissions required."},
-                }
-            )
+        if not can_execute_builder_command(ctx, self):
+            ctx.publish(builder_permission_error(self.command_type))
             return
 
         room_selector = ctx.payload.get("to")
@@ -756,14 +698,8 @@ class ResyncHandler(CommandHandler):
     }
 
     def handle(self, ctx: CommandContext) -> None:
-        if not has_builder_access(ctx.player):
-            ctx.publish(
-                {
-                    "type": "cmd./resync.error",
-                    "text": "You do not have permission to use builder commands.",
-                    "data": {"error": "Builder permissions required."},
-                }
-            )
+        if not can_execute_builder_command(ctx, self):
+            ctx.publish(builder_permission_error(self.command_type))
             return
 
         args = ctx.payload.get("args", [])

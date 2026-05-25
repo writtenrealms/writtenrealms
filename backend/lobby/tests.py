@@ -493,14 +493,14 @@ class TestLobbyCharacterPermissions(WorldTestCase):
         resp = self.client.patch(endpoint, data={
             'glory': 999,
             'level': 50,
-            'is_immortal': True,
+            'is_builder': True,
         }, format='json')
 
         self.assertEqual(resp.status_code, 403)
         player.refresh_from_db()
         self.assertEqual(player.glory, 0)
         self.assertEqual(player.level, 1)
-        self.assertEqual(player.is_immortal, False)
+        self.assertEqual(player.is_builder, False)
 
 
 class TestPlayerTransfer(WorldTestCase):

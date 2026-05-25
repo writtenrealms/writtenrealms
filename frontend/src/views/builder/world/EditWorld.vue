@@ -169,6 +169,12 @@ const routeForEntity = (
   if (kind === "ability") {
     return { name: "builder_world_ability_list", params: { world_id: worldId } };
   }
+  if (kind === "trigger" && id && world.value?.builder_info?.builder_rank > 2) {
+    return {
+      name: "builder_world_trigger_details",
+      params: { world_id: worldId, trigger_id: id },
+    };
+  }
   if (kind === "trigger" && target.type === "room" && targetId) {
     return {
       name: "builder_room_trigger_list",
@@ -427,6 +433,32 @@ spec:
   stock: []
 `;
 
+const newTriggerYaml = () => {
+  const roomId = store.state.builder.room?.id || "ROOM_ID";
+  return `kind: trigger
+metadata:
+  world: world.${route.params.world_id}
+  name: New Room Trigger
+spec:
+  scope: room
+  kind: command
+  target:
+    type: room
+    key: room.${roomId}
+  match: pull lever
+  script: |
+    /cmd room -- /echo -- The lever clicks.
+    /cmd room -- /echo -- Something happens.
+  conditions: ""
+  show_details_on_failure: false
+  failure_message: ""
+  display_action_in_room: true
+  gate_delay: 10
+  order: 0
+  is_active: true
+`;
+};
+
 const loadItemDefinitionYaml = async () => {
   clearApplyResult();
   const rawItemDefinitionId = route.query.item_definition_id;
@@ -519,6 +551,26 @@ const loadMerchantProfileYaml = async () => {
   }
 };
 
+const loadTriggerYaml = async () => {
+  clearApplyResult();
+  const rawTriggerId = route.query.trigger_id;
+  const triggerId = Array.isArray(rawTriggerId)
+    ? rawTriggerId[0]
+    : rawTriggerId;
+  if (!triggerId) {
+    manifestText.value = "";
+    return;
+  }
+  try {
+    const resp = await axios.get(
+      `/builder/worlds/${route.params.world_id}/triggers/${triggerId}/`
+    );
+    manifestText.value = resp.data?.yaml || "";
+  } catch (error: any) {
+    store.commit("ui/notification_set_error", extractError(error));
+  }
+};
+
 onMounted(async () => {
   if (route.query.prefill === "world-config") {
     await loadWorldConfigYaml();
@@ -544,6 +596,11 @@ onMounted(async () => {
   } else if (route.query.prefill === "new-merchant-profile") {
     clearApplyResult();
     manifestText.value = newMerchantProfileYaml;
+  } else if (route.query.prefill === "trigger") {
+    await loadTriggerYaml();
+  } else if (route.query.prefill === "new-trigger") {
+    clearApplyResult();
+    manifestText.value = newTriggerYaml();
   }
 });
 

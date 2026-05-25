@@ -356,7 +356,7 @@ class WorldSerializer(serializers.ModelSerializer):
                 world=spawn_world,
                 user=self.context['request'].user,
                 name='Builder',
-                is_immortal=True,
+                is_builder=True,
                 room=world.config.starting_room,
                 last_connection_ts=timezone.now())
             player.initialize()
@@ -537,7 +537,7 @@ class WorldAdminInstancePlayerSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'name',
-            'is_immortal',
+            'is_builder',
             'last_connection_ts',
             'last_action_ts',
             'room',
@@ -2971,7 +2971,7 @@ class PlayerDetailSerializer(serializers.ModelSerializer):
             'trophy',
             'factions',
             'animation_data',
-            'is_immortal',
+            'is_builder',
             'world',
             'instance_details',
             'power',

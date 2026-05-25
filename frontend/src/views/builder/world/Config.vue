@@ -267,6 +267,15 @@ const configLinks = computed(() => [
     },
   },
   {
+    title: "Triggers",
+    description: "WR2 command handlers and event reactions authored through YAML.",
+    rootOnly: true,
+    to: {
+      name: "builder_world_trigger_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
     title: "Instances",
     description: "Private instance contexts created from this world.",
     rootOnly: true,

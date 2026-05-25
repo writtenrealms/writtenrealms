@@ -29,6 +29,7 @@ class CommandContext:
     player: Player | None = None
     mob: Mob | None = None
     published_messages: list[dict] | None = None
+    script_source: bool = False
 
     def publish(self, message: dict) -> None:
         """Publish a message to this actor channel (if connected) and optional capture sink."""
@@ -76,6 +77,7 @@ class CommandHandler(ABC):
     text_commands: tuple[str, ...] = ()
     text_aliases: Mapping[str, str] = {}
     builder_only: bool = False
+    allow_script_source: bool = False
     supported_actor_types: tuple[str, ...] = ("player",)
     help: dict[str, Any] | None = None
 

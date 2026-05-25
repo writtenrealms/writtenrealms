@@ -3,6 +3,11 @@ from wr2_tests.utils import capture_game_messages, dispatch_text_command
 
 
 class TestHelpCommands(WorldTestCase):
+    def setUp(self):
+        super().setUp()
+        self.player.is_builder = True
+        self.player.save(update_fields=["is_builder"])
+
     def _message_by_type(self, messages, message_type):
         for msg in messages:
             if msg["message"].get("type") == message_type:
