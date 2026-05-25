@@ -4,6 +4,7 @@ from core.combat_formulas import (
     CombatFormulaValidationError,
     _level_scale,
     _rating_percent,
+    get_world_combat_system,
     normalize_combat_system,
     resolve_attack,
 )
@@ -60,6 +61,28 @@ class TestCombatFormulaResolution(WorldTestCase):
 
     def test_default_rating_types_keep_rating_curve_behavior(self):
         combat_system = normalize_combat_system({})
+
+        self.assertEqual(
+            combat_system["ratings"]["dodge"]["type"],
+            "mitigation_curve",
+        )
+        self.assertEqual(
+            combat_system["ratings"]["crit"]["type"],
+            "linear_rating",
+        )
+        self.assertEqual(
+            combat_system["ratings"]["armor"]["type"],
+            "mitigation_curve",
+        )
+        self.assertEqual(
+            combat_system["ratings"]["resilience"]["type"],
+            "mitigation_curve",
+        )
+
+    def test_empty_world_combat_config_uses_rating_curve_defaults(self):
+        self.assertEqual(self.world.config.combat_system, {})
+
+        combat_system = get_world_combat_system(self.spawn_world)
 
         self.assertEqual(
             combat_system["ratings"]["dodge"]["type"],

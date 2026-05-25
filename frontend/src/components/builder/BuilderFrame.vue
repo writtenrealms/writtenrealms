@@ -32,6 +32,10 @@
         <template v-if="viewType === 'world'">
 
           <router-link
+              :to="{name: 'lobby_world_details', params: {world_id: route.params.world_id}}"
+          >Lobby</router-link>
+
+          <router-link
             :to="{name: 'builder_mob_definition_list', params: {world_id: route.params.world_id}}" :class="{ 'router-link-active': isWorldMobsRoute }"
           >Mobs</router-link>
 
@@ -53,10 +57,6 @@
 
           <div class="mobile-hidden">
             <div class="line-divider my-2"></div>
-
-            <router-link
-              :to="{name: 'lobby_world_details', params: {world_id: route.params.world_id}}"
-            >Lobby</router-link>
 
             <router-link
               :to="{name: 'builder_zone_list', params: { world_id: route.params.world_id}}"
