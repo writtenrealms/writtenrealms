@@ -758,10 +758,9 @@ class TestBuilderSetClass(BuilderCommandTestCase):
         self.assertIsNotNone(message)
         self.assertIn("permission", message.get("text", "").lower())
 
-    def test_setclass_rejects_internal_script_source(self):
+    def test_setclass_allows_internal_script_source(self):
         other_user = self.create_user("script-setclass@example.com")
         other_player = self.create_player("ScriptTarget", user=other_user)
-        original_class = other_player.archetype
 
         with capture_game_messages() as messages:
             dispatch_command(
@@ -772,10 +771,10 @@ class TestBuilderSetClass(BuilderCommandTestCase):
             )
 
         other_player.refresh_from_db()
-        self.assertEqual(other_player.archetype, original_class)
-        message = self._message_by_type(messages, "cmd./setclass.error")
+        self.assertEqual(other_player.archetype, "hoplite")
+        message = self._message_by_type(messages, "cmd./setclass.success")
         self.assertIsNotNone(message)
-        self.assertIn("permission", message.get("text", "").lower())
+        self.assertEqual(message["data"]["new_class"], "hoplite")
 
 
 class TestBuilderResync(BuilderCommandTestCase):

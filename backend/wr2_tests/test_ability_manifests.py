@@ -93,6 +93,36 @@ spec:
         self.assertTrue(AbilityDefinition.objects.filter(world=self.world, slug="mend").exists())
         self.assertTrue(AbilityDefinition.objects.filter(world=self.world, slug="stun-bash").exists())
 
+    def test_apply_ability_manifest_accepts_condition_requirements(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: shield-slam
+  name: Shield Slam
+spec:
+  command:
+    verbs: [slam]
+  target:
+    type: hostile
+    default: current_target
+  requirements:
+    eq:
+      - actor.equipment.offhand.equipment_type
+      - shield
+  components:
+    - type: damage
+      profile: basic_physical
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201)
+        ability = AbilityDefinition.objects.get(world=self.world, slug="shield-slam")
+        self.assertEqual(
+            ability.requirements,
+            {"eq": ["actor.equipment.offhand.equipment_type", "shield"]},
+        )
+
     def test_world_manifest_accepts_ability_progression(self):
         manifest = f"""
 kind: world

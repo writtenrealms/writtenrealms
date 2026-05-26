@@ -12,6 +12,11 @@ from builders.models import AbilityDefinition
 from core.abilities import definition_world, max_known_abilities_for_world
 from core.combat_formulas import resolve_attack
 from core.computations import compute_stats
+from core.condition_dsl import (
+    ConditionContext,
+    evaluate_condition,
+    is_structured_condition_mapping,
+)
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.targeting import resolve_room_mob_target
 from spawns.events import GameEvent
@@ -209,6 +214,59 @@ def player_knows_ability(player: Player, ability: AbilityDefinition) -> bool:
     return ability.slug in set(known_ability_slugs(player))
 
 
+def _legacy_ability_requirements_condition(requirements: dict[str, Any]) -> Any:
+    equipment = requirements.get("equipment")
+    if not isinstance(equipment, dict):
+        return {}
+
+    conditions: list[dict[str, Any]] = []
+    offhand_type = str(equipment.get("offhand_type") or "").strip()
+    if offhand_type:
+        conditions.append({
+            "eq": ["actor.equipment.offhand.equipment_type", offhand_type],
+        })
+
+    weapon_type = str(equipment.get("weapon_type") or "").strip()
+    if weapon_type:
+        conditions.append({
+            "eq": ["actor.equipment.weapon.weapon_type", weapon_type],
+        })
+
+    if not conditions:
+        return {}
+    if len(conditions) == 1:
+        return conditions[0]
+    return {"all": conditions}
+
+
+def ability_requirements_condition(ability: AbilityDefinition) -> Any:
+    requirements = ability.requirements or {}
+    if not isinstance(requirements, dict):
+        return {}
+    if "conditions" in requirements:
+        return requirements.get("conditions") or {}
+    if is_structured_condition_mapping(requirements):
+        return requirements
+    return _legacy_ability_requirements_condition(requirements)
+
+
+def ability_requirements_met(player: Player, ability: AbilityDefinition) -> bool:
+    condition = ability_requirements_condition(ability)
+    if condition in (None, {}, []):
+        return True
+    return evaluate_condition(
+        condition,
+        context=ConditionContext(
+            actor=player,
+            player=player,
+            room=getattr(player, "room", None),
+            zone=getattr(getattr(player, "room", None), "zone", None),
+            world=getattr(player, "world", None),
+            ability=ability,
+        ),
+    )
+
+
 def ability_is_available_to_player(player: Player, ability: AbilityDefinition) -> tuple[bool, str]:
     availability = ability.availability or {}
     min_level = int(availability.get("min_level") or 1)
@@ -224,6 +282,9 @@ def ability_is_available_to_player(player: Player, ability: AbilityDefinition) -
         archetype = str(player.archetype or "").strip().lower()
         if archetype not in classes:
             return False, f"{ability.name} is not available to your class."
+
+    if not ability_requirements_met(player, ability):
+        return False, f"You do not meet the requirements for {ability.name}."
 
     return True, ""
 

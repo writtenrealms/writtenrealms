@@ -134,10 +134,15 @@ def _coerce_attribute_map(value):
 # Common to both RoomActionSerializer and RoomCheckSerializer
 def validate_conditions(self, conditions):
         if isinstance(conditions, (dict, list)):
+            from core.condition_dsl import validate_condition_payload
             try:
                 json.dumps(conditions)
             except TypeError:
                 raise serializers.ValidationError("Conditions must be JSON-serializable.")
+            try:
+                validate_condition_payload(conditions, field_name="conditions")
+            except ValueError as exc:
+                raise serializers.ValidationError(str(exc))
             return conditions
         from backend.core.conditions import (
             break_text, BREAK_TOKENS, CONDITIONS)

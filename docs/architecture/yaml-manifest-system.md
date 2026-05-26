@@ -389,7 +389,9 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   - `spec.event` must be one of the supported mob reaction event codes.
 - For command triggers, `spec.target` must match scope type (`room`, `zone`, `world`) and exist in world.
 - For event triggers, `spec.target.type` is currently `mobtemplate` and must exist in world.
-- `conditions` are validated through the WR2 conditions parser in `backend/core/conditions.py`.
+- structured `conditions` are validated through the shared WR2 condition DSL in
+  `backend/core/condition_dsl.py`; legacy trigger text conditions still pass
+  through `backend/core/conditions.py`.
 - For world config manifests:
   - only `operation: apply` is supported
   - `spec` fields are validated against the world schema

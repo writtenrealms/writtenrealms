@@ -57,7 +57,19 @@ class TestCombatAbilities(WorldTestCase):
         })
         self.world.config.save(update_fields=["combat_resolution_interval", "combat_system"])
 
-    def _ability(self, *, slug, name, verbs, components, target=None, cost=None, cooldown=None):
+    def _ability(
+        self,
+        *,
+        slug,
+        name,
+        verbs,
+        components,
+        target=None,
+        availability=None,
+        requirements=None,
+        cost=None,
+        cooldown=None,
+    ):
         return AbilityDefinition.objects.create(
             world=self.world,
             slug=slug,
@@ -69,8 +81,8 @@ class TestCombatAbilities(WorldTestCase):
                 "default": "current_target",
                 "allow_out_of_combat": False,
             },
-            availability={"classes": [], "min_level": 1},
-            requirements={},
+            availability=availability or {"classes": [], "min_level": 1},
+            requirements=requirements or {},
             cost=cost or {},
             cooldown=cooldown or {"rounds": 0},
             components=components,
@@ -116,6 +128,40 @@ class TestCombatAbilities(WorldTestCase):
         success = self._messages_by_type(messages, "cmd.ability.learn.success")[0]
         self.assertEqual(success["data"]["ability"]["hotkey"], "1")
         self.assertEqual(success["data"]["actor"]["ability_hotkeys"], {"1": "power-strike"})
+
+    def test_learning_ability_checks_condition_requirements(self):
+        self._ability(
+            slug="power-strike",
+            name="Power Strike",
+            verbs=["strike"],
+            requirements={"eq": ["actor.archetype", "not-a-real-class"]},
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "learn power strike")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.known_abilities, [])
+        errors = self._messages_by_type(messages, "cmd.ability.learn.error")
+        self.assertEqual(errors[0]["data"]["code"], "ability_unavailable")
+
+    def test_using_ability_checks_condition_requirements(self):
+        self._ability(
+            slug="power-strike",
+            name="Power Strike",
+            verbs=["strike"],
+            requirements={"eq": ["actor.archetype", "not-a-real-class"]},
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+        self.player.known_abilities = ["power-strike"]
+        self.player.save(update_fields=["known_abilities"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "strike")
+
+        errors = self._messages_by_type(messages, "cmd.ability.error")
+        self.assertEqual(errors[0]["data"]["code"], "ability_unavailable")
 
     def test_hotkey_command_reassigns_known_ability(self):
         self._ability(

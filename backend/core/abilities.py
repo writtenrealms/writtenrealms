@@ -12,6 +12,11 @@ import math
 import re
 from typing import Any
 
+from core.condition_dsl import (
+    is_structured_condition_mapping,
+    validate_condition_payload,
+)
+
 
 class AbilityValidationError(ValueError):
     pass
@@ -257,7 +262,21 @@ def _normalize_requirements(value: Any) -> dict[str, Any]:
         return {}
     if not isinstance(value, dict):
         raise AbilityValidationError("spec.requirements must be a mapping.")
-    return deepcopy(value)
+    normalized = deepcopy(value)
+    if "conditions" in normalized:
+        try:
+            validate_condition_payload(
+                normalized.get("conditions"),
+                field_name="spec.requirements.conditions",
+            )
+        except ValueError as exc:
+            raise AbilityValidationError(str(exc))
+    elif is_structured_condition_mapping(normalized):
+        try:
+            validate_condition_payload(normalized, field_name="spec.requirements")
+        except ValueError as exc:
+            raise AbilityValidationError(str(exc))
+    return normalized
 
 
 def _normalize_cost(value: Any) -> dict[str, Any]:

@@ -7,6 +7,10 @@ wired into the runtime for player commands, encounter-round queueing, direct
 damage, healing, stun, damage-over-time, heal-over-time, and out-of-combat
 self utility.
 
+Ability `requirements` use the shared WR2 condition DSL. For condition
+operators and paths, read
+[condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md).
+
 ## Mental Model
 
 An ability is an authored command that resolves one or more components:
@@ -207,8 +211,9 @@ spec:
     type: hostile
     default: current_target
   requirements:
-    equipment:
-      offhand_type: shield
+    eq:
+      - actor.equipment.offhand.equipment_type
+      - shield
   cooldown:
     rounds: 4
   components:
@@ -330,6 +335,20 @@ spec:
 
 Worlds without classes can grant abilities through trainers, quests, starting
 loadout, items, or builder tools instead.
+
+Use `availability` for class and level gates. Use `requirements` for the
+shared condition DSL:
+
+```yaml
+requirements:
+  all:
+    - eq:
+        - actor.equipment.offhand.equipment_type
+        - shield
+    - eq:
+        - state.character.oath_sworn
+        - true
+```
 
 ## Queueing Behavior
 

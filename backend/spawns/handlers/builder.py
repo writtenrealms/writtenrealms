@@ -505,6 +505,7 @@ class SetClassHandler(CommandHandler):
     command_type = "/setclass"
     text_commands = ("/setclass",)
     builder_only = True
+    allow_script_source = True
     help = {
         "name": "Set Class",
         "format": "/setclass <class> | /setclass <player> <class>",

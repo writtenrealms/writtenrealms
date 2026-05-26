@@ -87,8 +87,10 @@ Triggers can both read and write state.
 
 For full trigger authoring guidance aimed at builders, also read
 [trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md).
+For condition operators and paths, also read
+[condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md).
 
-Use structured conditions with the same condition DSL used by quests:
+Use structured conditions with the shared WR2 condition DSL:
 
 ```yaml
 kind: trigger
@@ -124,7 +126,7 @@ Quests can read state in conditions and write state in effects.
 
 ### Conditions
 
-Use state paths anywhere the quest condition DSL accepts a path:
+Use state paths anywhere the shared condition DSL accepts a path:
 
 ```yaml
 visible_if:

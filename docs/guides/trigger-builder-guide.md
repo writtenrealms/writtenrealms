@@ -10,6 +10,8 @@ World**.
 For shared runtime state used by triggers, quests, and builder commands, also
 read
 [state-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/state-builder-guide.md).
+For the shared condition syntax used by triggers, quests, and abilities, read
+[condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md).
 
 ## Mental Model
 
@@ -167,7 +169,7 @@ Authoring guidance:
 Two formats are currently supported:
 
 - legacy text conditions such as `level 5` or `not level 1`
-- structured condition mappings, which are better for new state-aware content
+- structured condition mappings from the shared WR2 condition DSL
 
 Legacy example:
 
@@ -201,10 +203,15 @@ conditions:
 Behavior notes:
 
 - blank `conditions` means the trigger is always eligible
+- structured conditions can read `actor.*`, `room.*`, `world.*`, and `state.*`
+  paths
 - if conditions fail and `show_details_on_failure` is `false`, the trigger
   quietly does nothing
 - if conditions fail and `show_details_on_failure` is `true`, the player sees
   `failure_message` or a generated detail message
+
+For the full operator and path reference, see
+[condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md).
 
 ## Writing `spec.script`
 

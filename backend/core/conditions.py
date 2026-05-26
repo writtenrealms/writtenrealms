@@ -2,13 +2,17 @@ import json
 import jsonschema
 import re
 
+from core.condition_dsl import (
+    ConditionContext,
+    evaluate_condition as evaluate_structured_condition,
+    structured_condition_payload,
+)
 from core.scoped_state import (
     STATE_SCOPE_CHARACTER,
     STATE_SCOPE_ROOM,
     STATE_SCOPE_WORLD,
     STATE_SCOPE_ZONE,
     get_state_snapshot,
-    resolve_state_path,
 )
 from worlds.models import World
 
@@ -285,182 +289,6 @@ def _build_world_data(world):
     }
 
 
-def _structured_condition_payload(value):
-    if isinstance(value, (dict, list)):
-        return value
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text:
-        return None
-    if not (
-        (text.startswith('{') and text.endswith('}'))
-        or (text.startswith('[') and text.endswith(']'))
-    ):
-        return None
-    try:
-        return json.loads(text)
-    except (TypeError, ValueError):
-        return None
-
-
-def _walk_structured_value(value, segments):
-    current = value
-    for segment in segments:
-        if current is None:
-            return None
-        if isinstance(current, dict):
-            current = current.get(segment)
-            continue
-        if isinstance(current, list):
-            if not str(segment).isdigit():
-                return None
-            idx = int(segment)
-            if idx < 0 or idx >= len(current):
-                return None
-            current = current[idx]
-            continue
-        current = getattr(current, segment, None)
-    return current
-
-
-def _resolve_structured_path(path, *, actor, actor_data, room_data, world_data):
-    normalized = str(path or '').strip()
-    if not normalized:
-        return None
-    if normalized.startswith('state.'):
-        return resolve_state_path(normalized, actor=actor)
-    if normalized.startswith('player.') or normalized.startswith('actor.'):
-        return _walk_structured_value(actor_data, normalized.split('.')[1:])
-    if normalized.startswith('room.'):
-        return _walk_structured_value(room_data, normalized.split('.')[1:])
-    if normalized.startswith('world.'):
-        return _walk_structured_value(world_data, normalized.split('.')[1:])
-    return None
-
-
-def _resolve_structured_value(value, *, actor, actor_data, room_data, world_data):
-    if isinstance(value, str):
-        text = value.strip()
-        if text.startswith('{') and text.endswith('}') and len(text) >= 3:
-            return _resolve_structured_path(
-                text[1:-1],
-                actor=actor,
-                actor_data=actor_data,
-                room_data=room_data,
-                world_data=world_data,
-            )
-    return value
-
-
-def _evaluate_structured_condition(condition, *, actor, actor_data, room_data, world_data):
-    if condition in (None, {}, []):
-        return True
-    if isinstance(condition, bool):
-        return condition
-    if isinstance(condition, list):
-        return all(
-            _evaluate_structured_condition(
-                item,
-                actor=actor,
-                actor_data=actor_data,
-                room_data=room_data,
-                world_data=world_data,
-            )
-            for item in condition
-        )
-    if not isinstance(condition, dict):
-        return bool(condition)
-
-    if 'always' in condition:
-        return bool(condition.get('always'))
-
-    if 'all' in condition:
-        return all(
-            _evaluate_structured_condition(
-                item,
-                actor=actor,
-                actor_data=actor_data,
-                room_data=room_data,
-                world_data=world_data,
-            )
-            for item in condition.get('all') or []
-        )
-
-    if 'any' in condition:
-        return any(
-            _evaluate_structured_condition(
-                item,
-                actor=actor,
-                actor_data=actor_data,
-                room_data=room_data,
-                world_data=world_data,
-            )
-            for item in condition.get('any') or []
-        )
-
-    if 'not' in condition:
-        return not _evaluate_structured_condition(
-            condition.get('not'),
-            actor=actor,
-            actor_data=actor_data,
-            room_data=room_data,
-            world_data=world_data,
-        )
-
-    comparisons = (
-        ('eq', lambda left, right: left == right),
-        ('ne', lambda left, right: left != right),
-        ('gte', lambda left, right: left is not None and right is not None and left >= right),
-        ('lte', lambda left, right: left is not None and right is not None and left <= right),
-    )
-    for operator, predicate in comparisons:
-        if operator not in condition:
-            continue
-        raw_args = condition.get(operator) or []
-        if not isinstance(raw_args, (list, tuple)) or len(raw_args) != 2:
-            return False
-        left = _resolve_structured_path(
-            raw_args[0],
-            actor=actor,
-            actor_data=actor_data,
-            room_data=room_data,
-            world_data=world_data,
-        )
-        right = _resolve_structured_value(
-            raw_args[1],
-            actor=actor,
-            actor_data=actor_data,
-            room_data=room_data,
-            world_data=world_data,
-        )
-        return predicate(left, right)
-
-    if 'in' in condition:
-        raw_args = condition.get('in') or []
-        if not isinstance(raw_args, (list, tuple)) or len(raw_args) != 2:
-            return False
-        left = _resolve_structured_path(
-            raw_args[0],
-            actor=actor,
-            actor_data=actor_data,
-            room_data=room_data,
-            world_data=world_data,
-        )
-        candidates = _resolve_structured_value(
-            raw_args[1],
-            actor=actor,
-            actor_data=actor_data,
-            room_data=room_data,
-            world_data=world_data,
-        )
-        if not isinstance(candidates, (list, tuple, set)):
-            return False
-        return left in list(candidates)
-
-    return False
-
-
 def evaluate_conditions(actor, text):
     """
     Top level call for evaluating conditions. Multiple condition blocks can be chained
@@ -476,7 +304,7 @@ def evaluate_conditions(actor, text):
     }
     """
 
-    structured_condition = _structured_condition_payload(text)
+    structured_condition = structured_condition_payload(text)
 
     # We fetch this data up front so that each condition has all of the data it needs.
     actor_data = {}
@@ -504,12 +332,17 @@ def evaluate_conditions(actor, text):
 
     if structured_condition is not None:
         return {
-            'result': _evaluate_structured_condition(
-                structured_condition,
-                actor=actor,
-                actor_data=actor_data,
-                room_data=room_data,
-                world_data=world_data,
+            'result': evaluate_structured_condition(
+                condition=structured_condition,
+                context=ConditionContext(
+                    actor=actor,
+                    actor_data=actor_data,
+                    room_data=room_data,
+                    world_data=world_data,
+                    room=getattr(actor, 'room', None),
+                    zone=getattr(getattr(actor, 'room', None), 'zone', None),
+                    world=getattr(actor, 'world', actor if isinstance(actor, World) else None),
+                ),
             ),
             'detail': '',
         }

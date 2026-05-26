@@ -461,8 +461,9 @@ spec:
     type: hostile
     default: current_target
   requirements:
-    equipment:
-      offhand_type: shield
+    eq:
+      - actor.equipment.offhand.equipment_type
+      - shield
   cooldown:
     rounds: 4
   components:

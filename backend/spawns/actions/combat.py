@@ -15,6 +15,7 @@ from core.leveling import ExperienceGrant, apply_experience
 from builders.models import AbilityDefinition
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.abilities import (
+    ability_is_available_to_player,
     ability_state_event,
     cooldown_remaining,
     decrement_ability_cooldowns,
@@ -948,6 +949,16 @@ def _execute_pending_player_ability(
                 player,
                 f"You do not know {ability.name}.",
                 code="ability_unknown",
+            )
+        ], AbilityRoundResult(consumed_primary=False)
+
+    available, reason = ability_is_available_to_player(player, ability)
+    if not available:
+        return [
+            _combat_failure_event(
+                player,
+                reason,
+                code="ability_unavailable",
             )
         ], AbilityRoundResult(consumed_primary=False)
 

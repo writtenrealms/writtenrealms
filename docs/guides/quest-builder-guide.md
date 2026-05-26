@@ -7,6 +7,8 @@ author the common quest loops that are already supported in game.
 For the shared mutable runtime data model used across quests, triggers, and
 builder commands, also read
 [state-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/state-builder-guide.md).
+For shared condition syntax, read
+[condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md).
 
 ## Mental Model
 
@@ -195,8 +197,11 @@ quest fields until those quest surfaces are migrated.
 
 ### Condition DSL
 
-These operators are shared across `visible_if`, `accept_if`, objective tracker
-`where`, choice `if`, and transition `when`.
+Quests use the shared WR2 condition DSL documented in
+[condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md).
+
+Quest conditions appear in `visible_if`, `accept_if`, objective tracker
+`where`, story choice `if`, and transition `when`.
 
 Some operators are only meaningful in certain contexts:
 
@@ -205,36 +210,6 @@ Some operators are only meaningful in certain contexts:
 - Objective tracker `where` conditions run with event data.
 - Choice `if` and transition `when` conditions run with an active quest
   instance.
-
-
-| Operator             | Shape                                  | Meaning                                                       |
-| -------------------- | -------------------------------------- | ------------------------------------------------------------- |
-| `always`             | `{always: true}`                       | Always true or false.                                         |
-| `all`                | `{all: [<condition>, ...]}`            | Logical AND.                                                  |
-| `any`                | `{any: [<condition>, ...]}`            | Logical OR.                                                   |
-| `not`                | `{not: <condition>}`                   | Logical negation.                                             |
-| `quest_completed`    | `{quest_completed: <quest_ref>}`       | True when the player has a resolved `complete` run of that quest template. |
-| `objective_complete` | `{objective_complete: <objective_id>}` | True when that objective is complete on the current instance. |
-| `eq`                 | `{eq: [<path>, <value>]}`              | Equality.                                                     |
-| `ne`                 | `{ne: [<path>, <value>]}`              | Inequality.                                                   |
-| `gte`                | `{gte: [<path>, <value>]}`             | Greater than or equal.                                        |
-| `lte`                | `{lte: [<path>, <value>]}`             | Less than or equal.                                           |
-| `in`                 | `{in: [<path>, [<value>, ...]]}`       | Membership in a candidate list.                               |
-
-
-Supported path prefixes today:
-
-- `player.<field>`
-- `template.<field>`
-- `event.<field>`
-- `state.world.<key>`
-- `state.zone.<key>`
-- `state.room.<key>`
-- `state.character.<key>`
-- `state.quest.<key>`
-- `quest.local_state.<key>`
-- `quest.slot_bindings.<slot_name>`
-- `quest.current_step_id`
 
 Notes:
 
