@@ -122,6 +122,7 @@ const routes = [
       { path: 'rooms/:room_id', name: 'builder_room_index', component: () => import('@/views/builder/room/Room.vue') },
       { path: 'rooms/:room_id/checks', name: 'builder_room_check_list', component: () => import('@/views/builder/room/RoomCheckList.vue') },
       { path: 'rooms/:room_id/triggers', name: 'builder_room_trigger_list', component: () => import('@/views/builder/room/RoomTriggerList.vue') },
+      { path: 'rooms/:room_id/triggers/:trigger_id', name: 'builder_room_trigger_details', component: () => import('@/views/builder/world/TriggerDetails.vue') },
       {
         path: 'rooms/:room_id/actions',
         name: 'builder_room_action_list',

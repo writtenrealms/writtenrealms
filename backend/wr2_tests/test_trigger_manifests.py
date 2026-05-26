@@ -41,6 +41,10 @@ class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
             "builder-room-trigger-list",
             args=[self.world.pk, self.room.pk],
         )
+        self.detail_ep = reverse(
+            "builder-room-trigger-detail",
+            args=[self.world.pk, self.room.pk, self.trigger.pk],
+        )
         self.world_list_ep = reverse(
             "builder-world-trigger-list",
             args=[self.world.pk],
@@ -53,10 +57,12 @@ class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
     def test_room_trigger_list_includes_yaml_manifest(self):
         resp = self.client.get(self.list_ep)
         self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["count"], 1)
+        self.assertEqual(len(resp.data["results"]), 1)
         self.assertEqual(len(resp.data["triggers"]), 1)
         self.assertIn("new_trigger_template", resp.data)
 
-        trigger_data = resp.data["triggers"][0]
+        trigger_data = resp.data["results"][0]
         self.assertEqual(trigger_data["id"], self.trigger.id)
         self.assertEqual(trigger_data["key"], self.trigger.key)
         self.assertIn("kind: trigger", trigger_data["yaml"])
@@ -87,6 +93,58 @@ class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(parsed_template_yaml["kind"], "trigger")
         self.assertEqual(parsed_template_yaml["metadata"]["world"], f"world.{self.world.id}")
         self.assertEqual(parsed_template_yaml["spec"]["target"]["key"], f"room.{self.room.id}")
+
+    def test_room_trigger_detail_includes_yaml_manifest(self):
+        resp = self.client.get(self.detail_ep)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["id"], self.trigger.id)
+        self.assertEqual(resp.data["key"], self.trigger.key)
+        self.assertEqual(resp.data["target"]["type"], "room")
+        self.assertEqual(resp.data["target"]["key"], self.room.key)
+        self.assertIn("kind: trigger", resp.data["yaml"])
+        self.assertIn("operation: delete", resp.data["delete_yaml"])
+
+    def test_room_trigger_list_supports_filters_and_search(self):
+        other_room = Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Other Room",
+            x=self.room.x + 1,
+            y=self.room.y,
+            z=self.room.z,
+        )
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=other_room.id,
+            name="Other Room Trigger",
+            match="touch stone",
+            script="/cmd room -- /echo -- Other message.",
+            display_action_in_room=True,
+        )
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=self.room.id,
+            name="Inactive Room Trigger",
+            match="pull chain",
+            script="/cmd room -- /echo -- Chain message.",
+            is_active=False,
+            display_action_in_room=True,
+        )
+
+        resp = self.client.get(self.list_ep, {"query": "touch stone"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([trigger["id"] for trigger in resp.data["results"]], [self.trigger.id])
+
+        resp = self.client.get(self.list_ep, {"is_active": "false"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["count"], 1)
+        self.assertEqual(resp.data["results"][0]["name"], "Inactive Room Trigger")
 
     def test_world_trigger_list_includes_yaml_manifest(self):
         mob_template = MobTemplate.objects.create(

@@ -83,7 +83,9 @@ const store = useStore();
 const trigger = ref<any | null>(null);
 const isLoading = ref(false);
 const endpoint = computed(() => (
-  `/builder/worlds/${route.params.world_id}/triggers/${route.params.trigger_id}/`
+  route.params.room_id
+    ? `/builder/worlds/${route.params.world_id}/rooms/${route.params.room_id}/triggers/${route.params.trigger_id}/`
+    : `/builder/worlds/${route.params.world_id}/triggers/${route.params.trigger_id}/`
 ));
 
 const extractError = (error: any): string => {
@@ -142,6 +144,7 @@ const editYaml = () => {
     query: {
       prefill: "trigger",
       trigger_id: trigger.value.id,
+      ...(route.params.room_id ? { room_id: String(route.params.room_id) } : {}),
     },
   });
 };

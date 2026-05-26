@@ -1505,38 +1505,127 @@ class CloneRoomAction(BaseWorldBuilderView):
 room_action_clone = CloneRoomAction.as_view()
 
 
-class RoomTriggerListView(BaseWorldBuilderView):
+def _serialize_builder_trigger_response(trigger):
+    payload = builder_manifests.serialize_trigger_manifest(trigger)
+    manifest_spec = payload["manifest"].get("spec") or {}
+    payload.update({
+        "conditions": manifest_spec.get("conditions", ""),
+        "script": manifest_spec.get("script", ""),
+        "show_details_on_failure": bool(manifest_spec.get("show_details_on_failure")),
+        "failure_message": manifest_spec.get("failure_message", ""),
+        "display_action_in_room": bool(manifest_spec.get("display_action_in_room")),
+        "gate_delay": int(manifest_spec.get("gate_delay") or 0),
+        "order": int(manifest_spec.get("order") or 0),
+        "is_active": bool(manifest_spec.get("is_active")),
+        "created_ts": trigger.created_ts,
+        "modified_ts": trigger.modified_ts,
+    })
+    return payload
 
-    def get(self, request, world_pk, room_pk, format=None):
+
+class RoomTriggerViewSet(BaseWorldBuilderViewSet):
+    serializer_class = serializers.Serializer
+    http_method_names = ['get', 'head', 'options']
+
+    def _get_room(self):
         room = generics.get_object_or_404(
             Room.objects.filter(world=self.world),
-            pk=room_pk,
+            pk=self.kwargs.get("room_pk"),
         )
         _assert_can_view_room(view=self, room=room)
+        return room
 
+    def get_queryset(self):
+        room = self._get_room()
         room_ct = ContentType.objects.get_for_model(Room)
-        triggers = Trigger.objects.filter(
+        qs = Trigger.objects.filter(
             world=self.world,
             scope=adv_consts.TRIGGER_SCOPE_ROOM,
             target_type=room_ct,
             target_id=room.id,
-        ).order_by("order", "created_ts", "id")
+        ).select_related("target_type")
 
+        kind = self.request.query_params.get('kind')
+        if kind in adv_consts.TRIGGER_KINDS:
+            qs = qs.filter(kind=kind)
+
+        is_active = self.request.query_params.get('is_active')
+        if is_active in ('true', '1'):
+            qs = qs.filter(is_active=True)
+        elif is_active in ('false', '0'):
+            qs = qs.filter(is_active=False)
+
+        query = self.request.query_params.get('query')
+        if query:
+            try:
+                query_id = int(query)
+            except ValueError:
+                qs = qs.filter(
+                    Q(name__icontains=query)
+                    | Q(match__icontains=query)
+                    | Q(event__icontains=query)
+                    | Q(script__icontains=query)
+                )
+            else:
+                qs = qs.filter(pk=query_id)
+
+        sort_by = self.request.query_params.get('sort_by')
+        allowed_sort_fields = {
+            'id',
+            'name',
+            'kind',
+            'event',
+            'match',
+            'order',
+            'gate_delay',
+            'is_active',
+            'created_ts',
+            'modified_ts',
+        }
+        if sort_by and sort_by.lstrip('-') in allowed_sort_fields:
+            return qs.order_by(sort_by)
+
+        return qs.order_by('order', 'created_ts', 'id')
+
+    def _template_payload(self):
+        return builder_manifests.serialize_room_trigger_template(
+            world=self.world,
+            room=self._get_room(),
+        )
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            data = [_serialize_builder_trigger_response(trigger) for trigger in page]
+            response = self.get_paginated_response(data)
+            response.data["new_trigger_template"] = self._template_payload()
+            response.data["triggers"] = data
+            return response
+
+        data = [_serialize_builder_trigger_response(trigger) for trigger in queryset]
         return Response(
             {
-                "new_trigger_template": builder_manifests.serialize_room_trigger_template(
-                    world=self.world,
-                    room=room,
-                ),
-                "triggers": [
-                    builder_manifests.serialize_trigger_manifest(trigger)
-                    for trigger in triggers
-                ]
+                "count": len(data),
+                "next": None,
+                "previous": None,
+                "results": data,
+                "new_trigger_template": self._template_payload(),
+                "triggers": data,
             }
         )
 
+    def retrieve(self, request, *args, **kwargs):
+        trigger = self.get_object()
+        return Response(_serialize_builder_trigger_response(trigger))
 
-room_triggers = RoomTriggerListView.as_view()
+
+room_triggers = RoomTriggerViewSet.as_view({
+    'get': 'list',
+})
+room_trigger_detail = RoomTriggerViewSet.as_view({
+    'get': 'retrieve',
+})
 
 
 class WorldTriggerViewSet(BaseWorldBuilderViewSet):
@@ -1549,23 +1638,6 @@ class WorldTriggerViewSet(BaseWorldBuilderViewSet):
         raise drf_exceptions.PermissionDenied(
             "You do not have permission to view world triggers."
         )
-
-    def _serialize_trigger_response(self, trigger):
-        payload = builder_manifests.serialize_trigger_manifest(trigger)
-        manifest_spec = payload["manifest"].get("spec") or {}
-        payload.update({
-            "conditions": manifest_spec.get("conditions", ""),
-            "script": manifest_spec.get("script", ""),
-            "show_details_on_failure": bool(manifest_spec.get("show_details_on_failure")),
-            "failure_message": manifest_spec.get("failure_message", ""),
-            "display_action_in_room": bool(manifest_spec.get("display_action_in_room")),
-            "gate_delay": int(manifest_spec.get("gate_delay") or 0),
-            "order": int(manifest_spec.get("order") or 0),
-            "is_active": bool(manifest_spec.get("is_active")),
-            "created_ts": trigger.created_ts,
-            "modified_ts": trigger.modified_ts,
-        })
-        return payload
 
     def get_queryset(self):
         self._assert_can_view_world_triggers()
@@ -1627,15 +1699,15 @@ class WorldTriggerViewSet(BaseWorldBuilderViewSet):
         queryset = self.filter_queryset(self.get_queryset())
         page = self.paginate_queryset(queryset)
         if page is not None:
-            data = [self._serialize_trigger_response(trigger) for trigger in page]
+            data = [_serialize_builder_trigger_response(trigger) for trigger in page]
             return self.get_paginated_response(data)
 
-        data = [self._serialize_trigger_response(trigger) for trigger in queryset]
+        data = [_serialize_builder_trigger_response(trigger) for trigger in queryset]
         return Response(data)
 
     def retrieve(self, request, *args, **kwargs):
         trigger = self.get_object()
-        return Response(self._serialize_trigger_response(trigger))
+        return Response(_serialize_builder_trigger_response(trigger))
 
 
 world_trigger_list = WorldTriggerViewSet.as_view({

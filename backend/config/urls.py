@@ -194,6 +194,7 @@ api_v1_urls = [
     path('builder/worlds/<world_pk>/rooms/<room_pk>/checks/', builder_views.room_checks, name='builder-room-checks'),
     path('builder/worlds/<world_pk>/rooms/<room_pk>/checks/<pk>/', builder_views.room_check_detail, name='builder-room-check-detail'),
     path('builder/worlds/<world_pk>/rooms/<room_pk>/triggers/', builder_views.room_triggers, name='builder-room-trigger-list'),
+    path('builder/worlds/<world_pk>/rooms/<room_pk>/triggers/<pk>/', builder_views.room_trigger_detail, name='builder-room-trigger-detail'),
     path('builder/worlds/<world_pk>/rooms/<room_pk>/actions/', builder_views.room_action_list, name='builder-room-action-list'),
     path('builder/worlds/<world_pk>/rooms/<room_pk>/actions/<pk>/', builder_views.room_action_detail, name='builder-room-action-detail'),
     path('builder/worlds/<world_pk>/rooms/<room_pk>/actions/<pk>/clone/', builder_views.room_action_clone, name='builder-room-action-clone'),

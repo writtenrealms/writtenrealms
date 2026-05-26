@@ -169,16 +169,22 @@ const routeForEntity = (
   if (kind === "ability") {
     return { name: "builder_world_ability_list", params: { world_id: worldId } };
   }
+  if (kind === "trigger" && target.type === "room" && targetId) {
+    if (id) {
+      return {
+        name: "builder_room_trigger_details",
+        params: { world_id: worldId, room_id: targetId, trigger_id: id },
+      };
+    }
+    return {
+      name: "builder_room_trigger_list",
+      params: { world_id: worldId, room_id: targetId },
+    };
+  }
   if (kind === "trigger" && id && world.value?.builder_info?.builder_rank > 2) {
     return {
       name: "builder_world_trigger_details",
       params: { world_id: worldId, trigger_id: id },
-    };
-  }
-  if (kind === "trigger" && target.type === "room" && targetId) {
-    return {
-      name: "builder_room_trigger_list",
-      params: { world_id: worldId, room_id: targetId },
     };
   }
   if (kind === "trigger" && target.type === "zone" && targetId) {
@@ -433,8 +439,8 @@ spec:
   stock: []
 `;
 
-const newTriggerYaml = () => {
-  const roomId = store.state.builder.room?.id || "ROOM_ID";
+const newTriggerYaml = (roomIdOverride?: string) => {
+  const roomId = roomIdOverride || store.state.builder.room?.id || "ROOM_ID";
   return `kind: trigger
 metadata:
   world: world.${route.params.world_id}
@@ -571,6 +577,27 @@ const loadTriggerYaml = async () => {
   }
 };
 
+const loadNewRoomTriggerYaml = async () => {
+  clearApplyResult();
+  const rawRoomId = route.query.room_id;
+  const roomId = Array.isArray(rawRoomId)
+    ? rawRoomId[0]
+    : rawRoomId;
+  if (!roomId) {
+    manifestText.value = newTriggerYaml();
+    return;
+  }
+  try {
+    const resp = await axios.get(
+      `/builder/worlds/${route.params.world_id}/rooms/${roomId}/triggers/`
+    );
+    manifestText.value = resp.data?.new_trigger_template?.yaml || newTriggerYaml(roomId);
+  } catch (error: any) {
+    manifestText.value = newTriggerYaml(roomId);
+    store.commit("ui/notification_set_error", extractError(error));
+  }
+};
+
 onMounted(async () => {
   if (route.query.prefill === "world-config") {
     await loadWorldConfigYaml();
@@ -598,6 +625,8 @@ onMounted(async () => {
     manifestText.value = newMerchantProfileYaml;
   } else if (route.query.prefill === "trigger") {
     await loadTriggerYaml();
+  } else if (route.query.prefill === "new-room-trigger") {
+    await loadNewRoomTriggerYaml();
   } else if (route.query.prefill === "new-trigger") {
     clearApplyResult();
     manifestText.value = newTriggerYaml();
