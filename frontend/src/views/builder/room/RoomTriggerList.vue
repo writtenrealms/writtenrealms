@@ -43,6 +43,7 @@ const listSchema: any[] = [
   { name: "id", label: "ID", sortable: true },
   { name: "name", label: "Name", nowrap: true, sortable: true, format: formatName },
   { name: "kind", label: "Kind", light: true, sortable: true },
+  { name: "event", label: "Event", light: true, sortable: true },
   { name: "match", label: "Match", light: true, sortable: true },
   { name: "order", label: "Order", light: true, sortable: true },
   { name: "gate_delay", label: "Delay", light: true, sortable: true },
@@ -63,6 +64,7 @@ const listFilters: any[] = [
     filter_options: [
       { key: "command", name: "Command" },
       { key: "event", name: "Event" },
+      { key: "policy", name: "Policy" },
     ],
   },
   {

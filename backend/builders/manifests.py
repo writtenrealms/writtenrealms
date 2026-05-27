@@ -1700,10 +1700,42 @@ def parse_trigger_manifest(
         field_name="spec.kind",
     )
     kind = _canonical_trigger_kind(kind)
-    if kind == adv_consts.TRIGGER_KIND_EVENT and scope != adv_consts.TRIGGER_SCOPE_WORLD:
-        raise serializers.ValidationError("Event triggers must use scope 'world'.")
 
-    if kind == adv_consts.TRIGGER_KIND_EVENT:
+    event = _coerce_text(spec.get("event", trigger.event if trigger else "")).strip().lower()
+    if kind == adv_consts.TRIGGER_KIND_POLICY:
+        if scope != adv_consts.TRIGGER_SCOPE_ROOM:
+            raise serializers.ValidationError("Policy triggers must use scope 'room'.")
+        if not event:
+            raise serializers.ValidationError("spec.event is required for kind 'policy'.")
+        event = _coerce_choice(
+            event,
+            choices=adv_consts.TRIGGER_POLICY_EVENTS,
+            field_name="spec.event",
+        )
+    elif kind == adv_consts.TRIGGER_KIND_EVENT:
+        if not event:
+            raise serializers.ValidationError("spec.event is required for kind 'event'.")
+        event = _coerce_choice(
+            event,
+            choices=adv_consts.MOB_REACTION_EVENTS + adv_consts.TRIGGER_ROOM_EVENT_EVENTS,
+            field_name="spec.event",
+        )
+        if event in adv_consts.MOB_REACTION_EVENTS and scope != adv_consts.TRIGGER_SCOPE_WORLD:
+            raise serializers.ValidationError(
+                "Mob reaction event triggers must use scope 'world'."
+            )
+        if event in adv_consts.TRIGGER_ROOM_EVENT_EVENTS and scope != adv_consts.TRIGGER_SCOPE_ROOM:
+            raise serializers.ValidationError(
+                "Room movement event triggers must use scope 'room'."
+            )
+    elif event:
+        event = _coerce_choice(
+            event,
+            choices=adv_consts.TRIGGER_EVENTS,
+            field_name="spec.event",
+        )
+
+    if kind == adv_consts.TRIGGER_KIND_EVENT and event in adv_consts.MOB_REACTION_EVENTS:
         target_type, target_id = _resolve_event_target(
             world=world,
             target_data=spec.get("target"),
@@ -1722,7 +1754,10 @@ def parse_trigger_manifest(
     if (
         is_create
         and spec.get("target") is None
-        and (kind == adv_consts.TRIGGER_KIND_EVENT or scope != adv_consts.TRIGGER_SCOPE_WORLD)
+        and (
+            kind in (adv_consts.TRIGGER_KIND_EVENT, adv_consts.TRIGGER_KIND_POLICY)
+            or scope != adv_consts.TRIGGER_SCOPE_WORLD
+        )
     ):
         raise serializers.ValidationError("spec.target is required when creating a trigger.")
 
@@ -1736,22 +1771,6 @@ def parse_trigger_manifest(
             trigger_matcher.validate_match_expression(match)
         except trigger_matcher.MatchExpressionError as err:
             raise serializers.ValidationError(f"Invalid spec.match matcher expression: {err}")
-
-    event = _coerce_text(spec.get("event", trigger.event if trigger else "")).strip().lower()
-    if kind == adv_consts.TRIGGER_KIND_EVENT:
-        if not event:
-            raise serializers.ValidationError("spec.event is required for kind 'event'.")
-        event = _coerce_choice(
-            event,
-            choices=adv_consts.MOB_REACTION_EVENTS,
-            field_name="spec.event",
-        )
-    elif event:
-        event = _coerce_choice(
-            event,
-            choices=adv_consts.MOB_REACTION_EVENTS,
-            field_name="spec.event",
-        )
 
     if kind == adv_consts.TRIGGER_KIND_COMMAND and not match.strip():
         raise serializers.ValidationError("spec.match is required for kind 'command'.")
@@ -1793,7 +1812,9 @@ def parse_trigger_manifest(
         display_action_in_room=_coerce_bool(
             spec.get(
                 "display_action_in_room",
-                trigger.display_action_in_room if trigger else True,
+                trigger.display_action_in_room
+                if trigger
+                else kind == adv_consts.TRIGGER_KIND_COMMAND,
             ),
             "spec.display_action_in_room",
         ),

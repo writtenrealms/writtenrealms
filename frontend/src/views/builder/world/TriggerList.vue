@@ -74,6 +74,7 @@ const listFilters: any[] = [
     filter_options: [
       { key: "command", name: "Command" },
       { key: "event", name: "Event" },
+      { key: "policy", name: "Policy" },
     ],
   },
   {

@@ -66,7 +66,7 @@ Common paths:
 | `state.quest.<key>` | Quest-instance runtime state. |
 | `template.<field>` | Current quest or ability template, where available. |
 | `ability.<field>` | Current ability definition, in ability requirements. |
-| `event.<field>` | Event payload data, in quest tracker conditions. |
+| `event.<field>` | Event payload data, in quest trackers and event/policy triggers. |
 | `quest.current_step_id` | Current quest step id. |
 | `quest.slot_bindings.<slot>` | Current quest slot binding. |
 
@@ -155,6 +155,21 @@ spec:
 Trigger conditions can read actor, room, zone, world, and `state.*` paths. If a
 trigger shows a room action, the same condition also controls whether that
 action appears in the room action list.
+
+Movement policy and movement event triggers receive extra event paths:
+
+| Path | Meaning |
+| --- | --- |
+| `event.direction` | Direction the player moved or tried to move. |
+| `event.origin_room.id` | Room id the player moved from. |
+| `event.origin_room.key` | Room key the player moved from. |
+| `event.destination_room.id` | Room id the player moved toward. |
+| `event.destination_room.key` | Room key the player moved toward. |
+| `event.target.id` | The room this trigger is attached to. |
+
+For `before_move_enter` and `after_move_enter`, `room.*` and `state.room.*`
+refer to the destination room. For `before_move_exit` and `after_move_exit`,
+they refer to the origin room.
 
 Legacy trigger/action text conditions still work for old content:
 

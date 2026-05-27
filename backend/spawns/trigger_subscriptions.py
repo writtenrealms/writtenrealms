@@ -4,7 +4,7 @@ from typing import Callable
 
 from config import constants as adv_consts
 from spawns.models import Player
-from spawns.triggers import execute_mob_event_triggers
+from spawns.triggers import execute_mob_event_triggers, execute_room_event_triggers
 
 
 TriggerSubscriptionHandler = Callable[[dict, str | None, str | None], None]
@@ -70,10 +70,37 @@ def _on_cmd_move_success(
     if not room_id:
         return
 
+    direction = event_data.get("direction")
+    origin_room_id = None
+    origin_room_data = event_data.get("origin_room")
+    if isinstance(origin_room_data, dict):
+        origin_room_id = origin_room_data.get("id")
+
+    if origin_room_id:
+        execute_room_event_triggers(
+            event=adv_consts.TRIGGER_EVENT_AFTER_MOVE_EXIT,
+            actor=player,
+            room=origin_room_id,
+            origin_room_id=origin_room_id,
+            destination_room_id=room_id,
+            direction=direction,
+            connection_id=connection_id,
+        )
+
     execute_mob_event_triggers(
         event=adv_consts.MOB_REACTION_EVENT_ENTERING,
         actor=player,
         room=room_id,
+        connection_id=connection_id,
+    )
+
+    execute_room_event_triggers(
+        event=adv_consts.TRIGGER_EVENT_AFTER_MOVE_ENTER,
+        actor=player,
+        room=room_id,
+        origin_room_id=origin_room_id,
+        destination_room_id=room_id,
+        direction=direction,
         connection_id=connection_id,
     )
 

@@ -504,6 +504,111 @@ spec:
         self.assertEqual(created_trigger.event, adv_consts.MOB_REACTION_EVENT_SAYING)
         self.assertEqual(created_trigger.match, "hello and (traveler or friend)")
 
+    def test_apply_trigger_manifest_can_create_room_policy_trigger(self):
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  name: Warlord Gate
+spec:
+  scope: room
+  kind: policy
+  target:
+    type: room
+    key: room.{self.room.id}
+  event: before_move_enter
+  conditions:
+    eq:
+      - actor.archetype
+      - warlord
+  failure_message: Only warlords may enter.
+  order: 0
+  is_active: true
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["operation"], "created")
+
+        created_trigger = Trigger.objects.get(pk=resp.data["trigger"]["id"])
+        self.assertEqual(created_trigger.kind, adv_consts.TRIGGER_KIND_POLICY)
+        self.assertEqual(created_trigger.scope, adv_consts.TRIGGER_SCOPE_ROOM)
+        self.assertEqual(created_trigger.target_type, ContentType.objects.get_for_model(Room))
+        self.assertEqual(created_trigger.target_id, self.room.id)
+        self.assertEqual(created_trigger.event, adv_consts.TRIGGER_EVENT_BEFORE_MOVE_ENTER)
+        self.assertIn("actor.archetype", created_trigger.conditions)
+        self.assertFalse(created_trigger.display_action_in_room)
+
+    def test_apply_trigger_manifest_can_create_room_movement_event_trigger(self):
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  name: Spear Trap
+spec:
+  scope: room
+  kind: event
+  target:
+    type: room
+    key: room.{self.room.id}
+  event: after_move_enter
+  conditions:
+    not:
+      eq:
+        - state.room.trap_sprung
+        - true
+  script: |
+    /cmd room -- /echo -- Spears snap out from the walls.
+    /cmd room -- /state set room trap_sprung true
+  order: 0
+  is_active: true
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["operation"], "created")
+
+        created_trigger = Trigger.objects.get(pk=resp.data["trigger"]["id"])
+        self.assertEqual(created_trigger.kind, adv_consts.TRIGGER_KIND_EVENT)
+        self.assertEqual(created_trigger.scope, adv_consts.TRIGGER_SCOPE_ROOM)
+        self.assertEqual(created_trigger.target_type, ContentType.objects.get_for_model(Room))
+        self.assertEqual(created_trigger.target_id, self.room.id)
+        self.assertEqual(created_trigger.event, adv_consts.TRIGGER_EVENT_AFTER_MOVE_ENTER)
+        self.assertIn("/cmd room -- /echo", created_trigger.script)
+        self.assertFalse(created_trigger.display_action_in_room)
+
+    def test_apply_trigger_manifest_rejects_policy_outside_room_scope(self):
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  name: World Policy
+spec:
+  scope: world
+  kind: policy
+  target:
+    type: world
+    key: world.{self.world.id}
+  event: before_move_enter
+  conditions:
+    always: true
+  failure_message: No.
+  is_active: true
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("scope 'room'", str(resp.data))
+
     def test_apply_trigger_manifest_rejects_invalid_matcher_expression(self):
         manifest = f"""
 kind: trigger

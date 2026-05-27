@@ -1653,7 +1653,7 @@ class WorldTriggerViewSet(BaseWorldBuilderViewSet):
             qs = qs.filter(kind=kind)
 
         event = self.request.query_params.get('event')
-        if event in adv_consts.MOB_REACTION_EVENTS:
+        if event in adv_consts.TRIGGER_EVENTS:
             qs = qs.filter(event=event)
 
         is_active = self.request.query_params.get('is_active')

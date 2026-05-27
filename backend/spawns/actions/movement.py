@@ -46,6 +46,7 @@ class MoveContext:
     direction: str
     origin_room_id: int
     dest_room_id: int
+    trigger_world_id: int
     movement_cost: int
 
 
@@ -87,6 +88,7 @@ class ResolveMoveAction:
             direction=direction,
             origin_room_id=current_room.id,
             dest_room_id=dest_room.id,
+            trigger_world_id=dest_room.world_id,
             movement_cost=movement_cost,
         )
         return ActionResult(data={"context": context})
@@ -105,10 +107,23 @@ class AdjustStaminaAction:
         return ActionResult(data={"stamina_delta": delta})
 
 
+def _room_ref_payload(room: Room | None, fallback_id: int) -> dict:
+    payload = {"id": fallback_id}
+    if room:
+        payload["key"] = room.key
+        payload["name"] = room.name or ""
+    return payload
+
+
 class BuildMoveEventsAction:
     def execute(self, context: MoveContext) -> ActionResult:
         player = get_player_with_related(context.player_id)
         dest_room = _room_with_exits(context.dest_room_id)
+        origin_room = Room.objects.filter(pk=context.origin_room_id).only(
+            "id",
+            "relative_id",
+            "name",
+        ).first()
 
         room_world = dest_room.world or (player.world.context or player.world)
         room_ids, _ = collect_map_room_ids(player, room_world, dest_room)
@@ -136,6 +151,8 @@ class BuildMoveEventsAction:
         move_data = {
             "direction": context.direction,
             "room": room_payload.model_dump(),
+            "origin_room": _room_ref_payload(origin_room, context.origin_room_id),
+            "destination_room": _room_ref_payload(dest_room, context.dest_room_id),
             "actor": actor_payload.model_dump(),
             "map": [room.model_dump() for room in map_rooms],
             "door_states": door_state_updates,

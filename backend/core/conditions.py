@@ -289,7 +289,15 @@ def _build_world_data(world):
     }
 
 
-def evaluate_conditions(actor, text):
+def evaluate_conditions(
+    actor,
+    text,
+    *,
+    room=None,
+    zone=None,
+    world=None,
+    event_data=None,
+):
     """
     Top level call for evaluating conditions. Multiple condition blocks can be chained
     with 'and', 'or', 'not', or parentheses.
@@ -319,18 +327,33 @@ def evaluate_conditions(actor, text):
 
     if Player and Mob and (isinstance(actor, Player) or isinstance(actor, Mob)):
         actor_data = _build_actor_data(actor)
-        room_data = _build_room_data(getattr(actor, 'room', None))
-        world_data = _build_world_data(getattr(actor, 'world', None))
+        condition_room = room if room is not None else getattr(actor, 'room', None)
+        condition_world = world if world is not None else getattr(actor, 'world', None)
+        room_data = _build_room_data(condition_room)
+        world_data = _build_world_data(condition_world)
     elif isinstance(actor, World):
-        world_data = _build_world_data(actor)
+        condition_world = world if world is not None else actor
+        world_data = _build_world_data(condition_world)
     else:
         # We can't test for an API world object as the legacy game module doesn't
         # have access to the API. So we just make sure that the model's name is
         # correct and then make the assumption it's an API world.
         if actor.__class__.__name__ == 'World':
-            world_data = _build_world_data(actor)
+            condition_world = world if world is not None else actor
+            world_data = _build_world_data(condition_world)
 
     if structured_condition is not None:
+        condition_room = room if room is not None else getattr(actor, 'room', None)
+        condition_zone = (
+            zone
+            if zone is not None
+            else getattr(condition_room, 'zone', None)
+        )
+        condition_world = (
+            world
+            if world is not None
+            else getattr(actor, 'world', actor if isinstance(actor, World) else None)
+        )
         return {
             'result': evaluate_structured_condition(
                 condition=structured_condition,
@@ -339,9 +362,10 @@ def evaluate_conditions(actor, text):
                     actor_data=actor_data,
                     room_data=room_data,
                     world_data=world_data,
-                    room=getattr(actor, 'room', None),
-                    zone=getattr(getattr(actor, 'room', None), 'zone', None),
-                    world=getattr(actor, 'world', actor if isinstance(actor, World) else None),
+                    room=condition_room,
+                    zone=condition_zone,
+                    world=condition_world,
+                    event_data=event_data if isinstance(event_data, dict) else {},
                 ),
             ),
             'detail': '',

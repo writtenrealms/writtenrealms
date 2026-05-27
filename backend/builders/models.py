@@ -973,7 +973,7 @@ class Trigger(AdventBaseModel):
     script = models.TextField(**optional)
     conditions = models.TextField(**optional)
     event = models.TextField(
-        choices=list_to_choice(api_consts.MOB_REACTION_EVENTS),
+        choices=list_to_choice(api_consts.TRIGGER_EVENTS),
         **optional,
     )
 
@@ -986,6 +986,41 @@ class Trigger(AdventBaseModel):
 
     order = models.IntegerField(default=0)
     is_active = models.BooleanField(default=True)
+
+    class Meta(AdventBaseModel.Meta):
+        indexes = [
+            models.Index(
+                fields=[
+                    'world',
+                    'kind',
+                    'event',
+                    'scope',
+                    'target_type',
+                    'target_id',
+                    'is_active',
+                    'order',
+                ],
+                name='trigger_hook_lookup_idx',
+            ),
+        ]
+
+
+def post_trigger_policy_cache_bump(sender, **kwargs):
+    from core.trigger_policy_cache import bump_trigger_policy_cache_version
+
+    bump_trigger_policy_cache_version(kwargs['instance'].world_id)
+
+
+models.signals.post_save.connect(
+    post_trigger_policy_cache_bump,
+    Trigger,
+    dispatch_uid='builders.trigger.policy_cache.post_save',
+)
+models.signals.post_delete.connect(
+    post_trigger_policy_cache_bump,
+    Trigger,
+    dispatch_uid='builders.trigger.policy_cache.post_delete',
+)
 
 
 class ActionBase(AdventBaseModel):

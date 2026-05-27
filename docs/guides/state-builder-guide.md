@@ -120,6 +120,20 @@ Common trigger patterns:
 - flip a room flag-like runtime value with `/state set room ...`
 - broadcast dynamic text with `{{ state.* }}` substitutions
 
+For post-entry room events such as traps, use room state to keep the event from
+repeating:
+
+```yaml
+conditions:
+  not:
+    eq:
+      - state.room.trap_sprung
+      - true
+script: |
+  /cmd room -- /echo -- Spears snap out from the walls.
+  /cmd room -- /state set room trap_sprung true
+```
+
 ## Quests
 
 Quests can read state in conditions and write state in effects.

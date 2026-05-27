@@ -164,6 +164,57 @@ spec:
   is_active: true
 ```
 
+### Create Room Movement Policy Trigger
+
+```yaml
+kind: trigger
+metadata:
+  world: world.1
+  name: Warlord Gate
+spec:
+  scope: room
+  kind: policy
+  target:
+    type: room
+    key: room.10
+  event: before_move_enter
+  conditions:
+    eq:
+      - actor.archetype
+      - warlord
+  failure_message: Only warlords may enter.
+  order: 0
+  is_active: true
+```
+
+### Create Room Movement Event Trigger
+
+```yaml
+kind: trigger
+metadata:
+  world: world.1
+  name: Spear Trap
+spec:
+  scope: room
+  kind: event
+  target:
+    type: room
+    key: room.10
+  event: after_move_enter
+  conditions:
+    not:
+      eq:
+        - state.room.trap_sprung
+        - true
+  script: |
+    /cmd room -- /echo -- Spears snap out from the walls.
+    /cmd room -- /state set room trap_sprung true
+  display_action_in_room: false
+  gate_delay: 0
+  order: 0
+  is_active: true
+```
+
 ### Update Trigger
 
 ```yaml
@@ -386,9 +437,16 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   - `spec.target` is required for room/zone scope.
 - For `spec.kind: event`:
   - `spec.event` is required.
-  - `spec.event` must be one of the supported mob reaction event codes.
+  - mob reaction events such as `say` use `scope: world` and a `mobtemplate`
+    target.
+  - room movement events such as `after_move_enter` and `after_move_exit` use
+    `scope: room` and a `room` target.
+- For `spec.kind: policy`:
+  - `spec.event` is required.
+  - `spec.event` must be `before_move_enter` or `before_move_exit`.
+  - v1 policy triggers use `scope: room` and a `room` target.
 - For command triggers, `spec.target` must match scope type (`room`, `zone`, `world`) and exist in world.
-- For event triggers, `spec.target.type` is currently `mobtemplate` and must exist in world.
+- For event triggers, `spec.target.type` must match the event family and exist in world.
 - structured `conditions` are validated through the shared WR2 condition DSL in
   `backend/core/condition_dsl.py`; legacy trigger text conditions still pass
   through `backend/core/conditions.py`.

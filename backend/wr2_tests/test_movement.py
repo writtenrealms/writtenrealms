@@ -1,7 +1,13 @@
+import json
+
+from django.contrib.contenttypes.models import ContentType
+
+from builders.models import Trigger
 from config import constants as adv_consts
 from config import game_settings as adv_config
 from spawns.handlers import dispatch_command
 from tests.base import WorldTestCase
+from worlds.models import Room
 from wr2_tests.utils import capture_game_messages, dispatch_text_command
 
 
@@ -159,3 +165,146 @@ class TestMovementCommands(WorldTestCase):
         char_names = {char["name"] for char in move_message["data"]["room"]["chars"]}
         self.assertIn("Online Player", char_names)
         self.assertNotIn("Offline Player", char_names)
+
+    def test_before_move_enter_policy_blocks_when_condition_fails(self):
+        dest_room = self.room.create_at(adv_consts.DIRECTION_EAST)
+        room_ct = ContentType.objects.get_for_model(Room)
+        trigger = Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_POLICY,
+            target_type=room_ct,
+            target_id=dest_room.id,
+            event=adv_consts.TRIGGER_EVENT_BEFORE_MOVE_ENTER,
+            conditions=json.dumps({"eq": ["actor.archetype", "warlord"]}),
+            failure_message="Only warlords may enter.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="move",
+                player_id=self.player.id,
+                payload={"direction": "east"},
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.room.id)
+        self.assertEqual(self.player.stamina, 10)
+
+        error_message = self._message_by_type(messages, "cmd.move.error")
+        self.assertIsNotNone(error_message)
+        self.assertEqual(error_message["text"], "Only warlords may enter.")
+        self.assertEqual(error_message["data"]["code"], "policy_blocked")
+        self.assertEqual(error_message["data"]["trigger_id"], trigger.id)
+
+    def test_before_move_enter_policy_allows_when_condition_passes(self):
+        dest_room = self.room.create_at(adv_consts.DIRECTION_EAST)
+        room_ct = ContentType.objects.get_for_model(Room)
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_POLICY,
+            target_type=room_ct,
+            target_id=dest_room.id,
+            event=adv_consts.TRIGGER_EVENT_BEFORE_MOVE_ENTER,
+            conditions=json.dumps({"eq": ["actor.archetype", "warlord"]}),
+            failure_message="Only warlords may enter.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+        self.player.archetype = "warlord"
+        self.player.save(update_fields=["archetype"])
+        expected_cost = movement_cost(dest_room.type)
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="move",
+                player_id=self.player.id,
+                payload={"direction": "east"},
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, dest_room.id)
+        self.assertEqual(self.player.stamina, 10 - expected_cost)
+        self.assertTrue("cmd.move.success" in self._message_types(messages))
+
+    def test_before_move_exit_policy_match_limits_direction(self):
+        self.room.create_at(adv_consts.DIRECTION_NORTH)
+        east_room = self.room.create_at(adv_consts.DIRECTION_EAST)
+        room_ct = ContentType.objects.get_for_model(Room)
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_POLICY,
+            target_type=room_ct,
+            target_id=self.room.id,
+            event=adv_consts.TRIGGER_EVENT_BEFORE_MOVE_EXIT,
+            match="north",
+            conditions=json.dumps({"always": False}),
+            failure_message="The northern guard bars your path.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+
+        with capture_game_messages() as allowed_messages:
+            dispatch_command(
+                command_type="move",
+                player_id=self.player.id,
+                payload={"direction": "east"},
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, east_room.id)
+        self.assertTrue("cmd.move.success" in self._message_types(allowed_messages))
+
+        self.player.room = self.room
+        self.player.stamina = 10
+        self.player.save(update_fields=["room", "stamina"])
+
+        with capture_game_messages() as blocked_messages:
+            dispatch_command(
+                command_type="move",
+                player_id=self.player.id,
+                payload={"direction": "north"},
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.room.id)
+        self.assertEqual(self.player.stamina, 10)
+        error_message = self._message_by_type(blocked_messages, "cmd.move.error")
+        self.assertIsNotNone(error_message)
+        self.assertEqual(error_message["text"], "The northern guard bars your path.")
+
+    def test_after_move_enter_room_event_trigger_runs_script(self):
+        self.player.in_game = True
+        self.player.stamina = 10
+        self.player.save(update_fields=["in_game", "stamina"])
+        dest_room = self.room.create_at(adv_consts.DIRECTION_EAST)
+        room_ct = ContentType.objects.get_for_model(Room)
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=room_ct,
+            target_id=dest_room.id,
+            event=adv_consts.TRIGGER_EVENT_AFTER_MOVE_ENTER,
+            script="/cmd room -- /echo -- Spears snap out from the walls.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="move",
+                player_id=self.player.id,
+                payload={"direction": "east"},
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, dest_room.id)
+
+        echo_message = self._message_by_type(messages, "cmd./echo.success")
+        self.assertIsNotNone(echo_message, [msg["message"] for msg in messages])
+        self.assertIn("Spears snap out", echo_message["text"])
