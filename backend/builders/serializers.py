@@ -2025,7 +2025,7 @@ class MobDefinitionSerializer(serializers.ModelSerializer):
             'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
             'description', 'room_description', 'notes', 'keywords',
             'type', 'assists', 'base_properties', 'attributes',
-            'randomization', 'randomized',
+            'randomization', 'randomized', 'trainer',
         ]
 
     def get_randomized(self, mob_definition):

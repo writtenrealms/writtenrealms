@@ -142,6 +142,31 @@ World export includes mob definitions as `kind: mobdefinition` documents, so a
 definition authored in one world can be copied into another world through
 **World > Edit**.
 
+## Ability Trainers
+
+A mob definition can teach abilities by adding a `trainer` block. Trainer
+abilities are stored by ability slug so exported worlds remain portable.
+
+```yaml
+kind: mobdefinition
+metadata:
+  slug: arms-trainer
+  name: an arms trainer
+spec:
+  type: humanoid
+  keywords: trainer arms
+  trainer:
+    availability: present
+    abilities:
+      - power-strike
+      - shield-slam
+```
+
+Once any trainer in the world offers an ability, `learn <ability>` and
+`unlearn <ability>` require an eligible spawned trainer in the player's current
+room. Use `availability: alive_and_present` when a pending-deletion or defeated
+trainer should not teach.
+
 ## Transition Notes
 
 `MobDefinition` is a transition name while WR2 still has the older

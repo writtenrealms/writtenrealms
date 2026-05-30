@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 from django.test import override_settings
 
-from builders.models import ItemDefinition, ItemTemplate, MobTemplate
+from builders.models import AbilityDefinition, ItemDefinition, ItemTemplate, MobTemplate
 from config import constants as api_consts
 from core.scoped_state import (
     STATE_SCOPE_CHARACTER,
@@ -11,7 +11,7 @@ from core.scoped_state import (
     get_state_snapshot,
 )
 from spawns.handlers import dispatch_command, get_registered_handlers
-from spawns.models import Item, Mob
+from spawns.models import CombatEncounter, Item, Mob
 from tests.base import WorldTestCase
 from wr2_tests.utils import (
     capture_game_messages,
@@ -723,6 +723,47 @@ class TestBuilderSetClass(BuilderCommandTestCase):
         self.assertIsNotNone(message)
         self.assertEqual(message["data"]["target"]["key"], target.key)
         self.assertIn("Target", message["text"])
+
+    def test_setclass_unlearns_target_abilities(self):
+        AbilityDefinition.objects.create(
+            world=self.world,
+            slug="power-strike",
+            name="Power Strike",
+            command_verbs=["strike"],
+            action_type="primary",
+            target={"type": "hostile", "default": "current_target", "allow_out_of_combat": False},
+            availability={"classes": [], "min_level": 1},
+            requirements={},
+            cost={},
+            cooldown={"rounds": 0},
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+        target = self.create_player("Target", room=self.room)
+        target.known_abilities = ["power-strike"]
+        target.ability_hotkeys = {"1": "power-strike"}
+        target.ability_cooldowns = {"power-strike": 2}
+        target.save(update_fields=["known_abilities", "ability_hotkeys", "ability_cooldowns"])
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=target,
+            pending_player_ability={"ability": "power-strike"},
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/setclass target Warlord")
+
+        target.refresh_from_db()
+        encounter.refresh_from_db()
+        self.assertEqual(target.archetype, "warlord")
+        self.assertEqual(target.known_abilities, [])
+        self.assertEqual(target.ability_hotkeys, {})
+        self.assertEqual(target.ability_cooldowns, {})
+        self.assertEqual(encounter.pending_player_ability, {})
+        message = self._message_by_type(messages, "cmd./setclass.success")
+        self.assertEqual(message["data"]["unlearned_abilities"], ["power-strike"])
+        self.assertEqual(message["data"]["target"]["known_abilities"], [])
+        self.assertEqual(message["data"]["target"]["ability_hotkeys"], {})
 
     def test_setclass_requires_builder_permissions(self):
         other_user = self.create_user("other-setclass@example.com")

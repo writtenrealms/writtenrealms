@@ -45,7 +45,7 @@ from spawns.handlers.registry import (
     dispatch_command,
     resolve_text_handler,
 )
-from spawns.models import Equipment, Item, Mob, Player
+from spawns.models import CombatEncounter, Equipment, Item, Mob, Player
 from spawns.serializers import LoadTemplateSerializer
 from spawns.state_payloads import (
     door_state_lookup,
@@ -890,6 +890,7 @@ class SetClassAction:
 
         with transaction.atomic():
             target = Player.objects.select_for_update().get(pk=target.pk)
+            previous_abilities = list(target.known_abilities or [])
             target.archetype = new_class
             stats = compute_stats(
                 target.level,
@@ -900,7 +901,22 @@ class SetClassAction:
             target.health = max(1, int(stats.get("health_max") or 1))
             target.energy = int(stats.get("energy_max") or 0)
             target.stamina = int(stats.get("stamina_max") or 0)
-            target.save(update_fields=["archetype", "health", "energy", "stamina"])
+            target.known_abilities = []
+            target.ability_hotkeys = {}
+            target.ability_cooldowns = {}
+            target.save(update_fields=[
+                "archetype",
+                "health",
+                "energy",
+                "stamina",
+                "known_abilities",
+                "ability_hotkeys",
+                "ability_cooldowns",
+            ])
+            CombatEncounter.objects.filter(
+                player=target,
+                status=CombatEncounter.STATUS_ACTIVE,
+            ).exclude(pending_player_ability={}).update(pending_player_ability={})
 
         updated_actor = get_player_with_related(actor.id)
         updated_target = get_player_with_related(target.id)
@@ -925,6 +941,7 @@ class SetClassAction:
                         "previous_class": previous_class,
                         "new_class": new_class,
                         "class_label": class_label,
+                        "unlearned_abilities": previous_abilities,
                     },
                     text=text,
                 )

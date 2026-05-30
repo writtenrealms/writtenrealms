@@ -277,6 +277,7 @@ _MOB_DEFINITION_SPEC_FIELDS = (
     "randomization",
     "combat",
     "merchant",
+    "trainer",
     *_MOB_DEFINITION_BASE_PROPERTY_FIELDS,
 )
 
@@ -1011,6 +1012,8 @@ def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[st
             "profile": f"merchantprofile.{mob_definition.merchant_profile.slug}",
             "availability": mob_definition.merchant_availability or "present",
         }
+    if mob_definition.trainer:
+        spec["trainer"] = mob_definition.trainer or {}
     spec["attributes"] = mob_definition.attributes or {}
     spec["randomization"] = mob_definition.randomization or {}
     return spec
@@ -1062,6 +1065,7 @@ def serialize_mob_definition_payload(mob_definition: MobDefinition) -> dict[str,
         "attributes": mob_definition.attributes or {},
         "randomization": mob_definition.randomization or {},
         "attackable": bool(mob_definition.attackable),
+        "trainer": mob_definition.trainer or {},
         "merchant_profile": (
             {
                 "id": mob_definition.merchant_profile_id,
@@ -2508,6 +2512,134 @@ def _coerce_item_definition_fields(*, world: World, spec_patch: dict[str, Any], 
     }
 
 
+def _resolve_ability_slug_reference(*, world: World, value: Any, field_name: str) -> str:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(
+            f"{field_name} must be an ability slug, id, or ability.<id> key."
+        )
+
+    text = str(value or "").strip()
+    if isinstance(value, int) or text.isdigit() or text.startswith("ability."):
+        ability_id = _parse_entity_ref(
+            value,
+            expected_type="ability",
+            field_name=field_name,
+        )
+        ability = AbilityDefinition.objects.filter(world=world, pk=ability_id).first()
+        if not ability:
+            raise serializers.ValidationError(f"Ability referenced by {field_name} was not found.")
+        return ability.slug
+
+    slug = _slug_or_error(text, field_name)
+    ability = AbilityDefinition.objects.filter(world=world, slug=slug).first()
+    if not ability:
+        raise serializers.ValidationError(f"Ability referenced by {field_name} was not found.")
+    return ability.slug
+
+
+def _coerce_trainer_ability_slug(*, world: World, entry: Any, index: int) -> str:
+    field_name = f"spec.trainer.abilities[{index}]"
+    if isinstance(entry, dict):
+        unknown_fields = sorted(set(entry.keys()) - {"ability"})
+        if unknown_fields:
+            raise serializers.ValidationError(
+                f"Unsupported {field_name} field(s): {', '.join(unknown_fields)}."
+            )
+        if "ability" not in entry:
+            raise serializers.ValidationError(f"{field_name}.ability is required.")
+        value = entry.get("ability")
+    else:
+        value = entry
+    return _resolve_ability_slug_reference(
+        world=world,
+        value=value,
+        field_name=field_name if not isinstance(entry, dict) else f"{field_name}.ability",
+    )
+
+
+def _normalize_existing_trainer(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    abilities = []
+    for raw_slug in value.get("abilities") or []:
+        slug = str(raw_slug or "").strip().lower()
+        if slug and slug not in abilities:
+            abilities.append(slug)
+    if not abilities:
+        return {}
+    availability = str(value.get("availability") or "present").strip().lower()
+    if availability not in {"present", "alive_and_present"}:
+        availability = "present"
+    return {
+        "abilities": abilities,
+        "availability": availability,
+    }
+
+
+def _coerce_trainer_config(
+    *,
+    world: World,
+    spec_patch: dict[str, Any],
+    existing: MobDefinition | None,
+) -> dict[str, Any]:
+    existing_trainer = _normalize_existing_trainer(
+        existing.trainer if existing else {}
+    )
+    if "trainer" not in spec_patch:
+        return existing_trainer
+
+    raw_trainer = spec_patch.get("trainer")
+    if raw_trainer in (None, ""):
+        return {}
+    if not isinstance(raw_trainer, dict):
+        raise serializers.ValidationError("spec.trainer must be a mapping.")
+
+    unknown_fields = sorted(set(raw_trainer.keys()) - {"abilities", "availability"})
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported spec.trainer field(s): {', '.join(unknown_fields)}."
+        )
+
+    if "abilities" in raw_trainer:
+        raw_abilities = raw_trainer.get("abilities")
+        if raw_abilities in (None, ""):
+            raw_abilities = []
+        elif isinstance(raw_abilities, (str, int)):
+            raw_abilities = [raw_abilities]
+        elif not isinstance(raw_abilities, list):
+            raise serializers.ValidationError("spec.trainer.abilities must be a list.")
+
+        abilities = []
+        for index, entry in enumerate(raw_abilities):
+            slug = _coerce_trainer_ability_slug(
+                world=world,
+                entry=entry,
+                index=index,
+            )
+            if slug not in abilities:
+                abilities.append(slug)
+    else:
+        abilities = list(existing_trainer.get("abilities") or [])
+
+    availability = str(
+        raw_trainer.get(
+            "availability",
+            existing_trainer.get("availability", "present"),
+        )
+    ).strip().lower() or "present"
+    if availability not in {"present", "alive_and_present"}:
+        raise serializers.ValidationError(
+            "spec.trainer.availability must be one of: present, alive_and_present."
+        )
+
+    if not abilities:
+        return {}
+    return {
+        "abilities": abilities,
+        "availability": availability,
+    }
+
+
 def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], existing: MobDefinition | None) -> dict[str, Any]:
     mob_type = spec_patch.get(
         "type",
@@ -2586,6 +2718,11 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         if "randomization" in spec_patch
         else dict(existing.randomization or {}) if existing else {}
     )
+    trainer = _coerce_trainer_config(
+        world=world,
+        spec_patch=spec_patch,
+        existing=existing,
+    )
 
     return {
         "description": _coerce_text(
@@ -2623,6 +2760,7 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         "attackable": attackable,
         "merchant_profile": merchant_profile,
         "merchant_availability": merchant_availability,
+        "trainer": trainer,
     }
 
 

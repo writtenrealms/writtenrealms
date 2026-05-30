@@ -336,6 +336,33 @@ spec:
 Worlds without classes can grant abilities through trainers, quests, starting
 loadout, items, or builder tools instead.
 
+## Ability Trainers
+
+Mob definitions can act as trainers by listing the abilities they teach. If at
+least one trainer in the world teaches an ability, players can only learn or
+unlearn that ability while an eligible trainer mob is present in their current
+room. Abilities with no trainer remain learnable and unlearnable through the
+existing commands.
+
+```yaml
+kind: mobdefinition
+metadata:
+  slug: arms-trainer
+  name: an arms trainer
+spec:
+  type: humanoid
+  keywords: trainer arms
+  trainer:
+    availability: alive_and_present
+    abilities:
+      - power-strike
+      - shield-slam
+```
+
+Use `availability: present` when the spawned trainer only needs to be in the
+room. Use `availability: alive_and_present` when a pending-deletion or defeated
+trainer should not teach.
+
 Use `availability` for class and level gates. Use `requirements` for the
 shared condition DSL:
 

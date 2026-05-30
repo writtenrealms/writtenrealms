@@ -511,7 +511,8 @@ class SetClassHandler(CommandHandler):
         "format": "/setclass <class> | /setclass <player> <class>",
         "description": (
             "Set your class, or set a player in the current room to a class. "
-            "The player's vitals are restored from the newly computed stats."
+            "The player's vitals are restored from the newly computed stats, "
+            "and known abilities are cleared."
         ),
         "examples": [
             "/setclass hoplite",

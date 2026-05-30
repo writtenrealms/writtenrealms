@@ -4,7 +4,7 @@ import yaml
 from django.contrib.contenttypes.models import ContentType
 from rest_framework.reverse import reverse
 
-from builders.models import Loader, MobDefinition, Rule
+from builders.models import AbilityDefinition, Loader, MobDefinition, Rule
 from config import constants as adv_consts
 from spawns.loading import LoaderRun
 from spawns.models import Mob
@@ -192,13 +192,77 @@ spec:
         self.assertEqual(definition.attributes, {"brawn": 2})
         self.assertEqual(definition.randomization["attributes"][0]["mode"], "favor_high")
 
+    def test_apply_mob_definition_manifest_can_create_ability_trainer(self):
+        AbilityDefinition.objects.create(
+            world=self.world,
+            slug="power-strike",
+            name="Power Strike",
+            command_verbs=["strike"],
+            action_type="primary",
+            target={"type": "hostile", "default": "current_target", "allow_out_of_combat": False},
+            availability={"classes": [], "min_level": 1},
+            requirements={},
+            cost={},
+            cooldown={"rounds": 0},
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+        manifest = f"""
+kind: mobdefinition
+metadata:
+  world: world.{self.world.id}
+  slug: arms-trainer
+  name: an arms trainer
+spec:
+  type: humanoid
+  keywords: trainer arms
+  trainer:
+    availability: alive_and_present
+    abilities:
+      - power-strike
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        definition = MobDefinition.objects.get(world=self.world, slug="arms-trainer")
+        self.assertEqual(
+            definition.trainer,
+            {
+                "abilities": ["power-strike"],
+                "availability": "alive_and_present",
+            },
+        )
+        self.assertEqual(
+            resp.data["mob_definition"]["trainer"],
+            {
+                "abilities": ["power-strike"],
+                "availability": "alive_and_present",
+            },
+        )
+
     def test_world_export_includes_mob_definition_documents(self):
+        AbilityDefinition.objects.create(
+            world=self.world,
+            slug="power-strike",
+            name="Power Strike",
+            command_verbs=["strike"],
+            action_type="primary",
+            target={"type": "hostile", "default": "current_target", "allow_out_of_combat": False},
+            availability={"classes": [], "min_level": 1},
+            requirements={},
+            cost={},
+            cooldown={"rounds": 0},
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
         MobDefinition.objects.create(
             world=self.world,
             slug="bandit",
             name="a bandit",
             mob_type=adv_consts.MOB_TYPE_HUMANOID,
             base_properties={"attack_power": 7},
+            trainer={
+                "abilities": ["power-strike"],
+                "availability": "present",
+            },
             randomization={
                 "attributes": [
                     {"key": "brawn", "min": 10, "max": 20, "mode": "uniform"},
@@ -216,6 +280,7 @@ spec:
         mob_doc = next(doc for doc in docs if doc["kind"] == "mobdefinition")
         self.assertEqual(mob_doc["metadata"]["slug"], "bandit")
         self.assertEqual(mob_doc["spec"]["attack_power"], 7)
+        self.assertEqual(mob_doc["spec"]["trainer"]["abilities"], ["power-strike"])
 
 
 class TestMobDefinitionBuilderEndpoints(WorldTestCase):

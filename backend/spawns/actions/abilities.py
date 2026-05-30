@@ -8,7 +8,7 @@ from django.db import transaction
 from django.db.utils import NotSupportedError
 from django.utils import timezone
 
-from builders.models import AbilityDefinition
+from builders.models import AbilityDefinition, MobDefinition
 from core.abilities import definition_world, max_known_abilities_for_world
 from core.combat_formulas import resolve_attack
 from core.computations import compute_stats
@@ -267,6 +267,84 @@ def ability_requirements_met(player: Player, ability: AbilityDefinition) -> bool
     )
 
 
+def _trainer_config(definition: MobDefinition | None) -> dict[str, Any]:
+    if not definition or not isinstance(definition.trainer, dict):
+        return {}
+    abilities = []
+    for raw_slug in definition.trainer.get("abilities") or []:
+        slug = str(raw_slug or "").strip().lower()
+        if slug and slug not in abilities:
+            abilities.append(slug)
+    if not abilities:
+        return {}
+    availability = str(definition.trainer.get("availability") or "present").strip().lower()
+    if availability not in {"present", "alive_and_present"}:
+        availability = "present"
+    return {
+        "abilities": abilities,
+        "availability": availability,
+    }
+
+
+def _trainer_teaches_ability(definition: MobDefinition | None, ability: AbilityDefinition) -> bool:
+    return ability.slug in set(_trainer_config(definition).get("abilities") or [])
+
+
+def ability_has_trainers(world, ability: AbilityDefinition) -> bool:
+    for definition in MobDefinition.objects.filter(
+        world_id=_definition_world_id(world),
+    ).only("id", "trainer"):
+        if _trainer_teaches_ability(definition, ability):
+            return True
+    return False
+
+
+def _mob_can_train_ability(mob: Mob, ability: AbilityDefinition) -> bool:
+    config = _trainer_config(mob.definition)
+    if ability.slug not in set(config.get("abilities") or []):
+        return False
+    if config.get("availability") == "alive_and_present":
+        if mob.is_pending_deletion:
+            return False
+        try:
+            if int(mob.health or 0) <= 0:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def trainer_for_ability_change(player: Player, ability: AbilityDefinition) -> Mob | None:
+    if not player.room_id:
+        return None
+    for mob in Mob.objects.filter(
+        room_id=player.room_id,
+        is_pending_deletion=False,
+        definition__world_id=_definition_world_id(player.world),
+    ).select_related("definition").order_by("id"):
+        if _mob_can_train_ability(mob, ability):
+            return mob
+    return None
+
+
+def require_trainer_for_ability_change(
+    player: Player,
+    ability: AbilityDefinition,
+    *,
+    verb: str,
+) -> Mob | None:
+    if not ability_has_trainers(player.world, ability):
+        return None
+    trainer = trainer_for_ability_change(player, ability)
+    if trainer:
+        return trainer
+    raise ActionError(
+        f"You need a trainer to {verb} {ability.name}.",
+        code="ability_trainer_required",
+        data={"ability": ability.slug},
+    )
+
+
 def ability_is_available_to_player(player: Player, ability: AbilityDefinition) -> tuple[bool, str]:
     availability = ability.availability or {}
     min_level = int(availability.get("min_level") or 1)
@@ -490,10 +568,16 @@ class LearnAbilityAction:
                 raise ActionError(reason, code="ability_unavailable")
 
             known = known_ability_slugs(player)
+            trainer = None
             assigned_hotkey = None
             if ability.slug in known:
                 text = f"You already know {ability.name}."
             else:
+                trainer = require_trainer_for_ability_change(
+                    player,
+                    ability,
+                    verb="learn",
+                )
                 max_known = max_known_abilities_for_world(player.world)
                 if max_known is not None and len(known) >= max_known:
                     raise ActionError(
@@ -522,6 +606,10 @@ class LearnAbilityAction:
                         "name": ability.name,
                         "hotkey": assigned_hotkey,
                     },
+                    "trainer": (
+                        {"id": trainer.id, "name": trainer.name}
+                        if trainer else None
+                    ),
                     "actor": ability_state_payload(player),
                 },
                 text=text,
@@ -538,9 +626,15 @@ class UnlearnAbilityAction:
                 raise ActionError("Unlearn what ability?", code="ability_missing")
 
             known = known_ability_slugs(player)
+            trainer = None
             if ability.slug not in known:
                 text = f"You do not know {ability.name}."
             else:
+                trainer = require_trainer_for_ability_change(
+                    player,
+                    ability,
+                    verb="unlearn",
+                )
                 known.remove(ability.slug)
                 player.known_abilities = known
                 hotkey_removed = _remove_ability_hotkey(player, ability)
@@ -561,6 +655,10 @@ class UnlearnAbilityAction:
                 recipients=[player.key],
                 data={
                     "ability": {"slug": ability.slug, "name": ability.name},
+                    "trainer": (
+                        {"id": trainer.id, "name": trainer.name}
+                        if trainer else None
+                    ),
                     "actor": ability_state_payload(player),
                 },
                 text=text,

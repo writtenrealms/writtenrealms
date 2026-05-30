@@ -438,6 +438,7 @@ class MobDefinition(AdventBaseModel):
     merchant_availability = models.TextField(
         default='present',
         blank=True)
+    trainer = models.JSONField(default=dict, blank=True)
 
     class Meta(AdventBaseModel.Meta):
         unique_together = [('world', 'slug')]

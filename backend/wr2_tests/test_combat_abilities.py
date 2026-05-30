@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from builders.models import AbilityDefinition
+from builders.models import AbilityDefinition, MobDefinition
 from core.combat_formulas import normalize_combat_system
 from core.computations import compute_stats
 from django.utils import timezone
@@ -128,6 +128,83 @@ class TestCombatAbilities(WorldTestCase):
         success = self._messages_by_type(messages, "cmd.ability.learn.success")[0]
         self.assertEqual(success["data"]["ability"]["hotkey"], "1")
         self.assertEqual(success["data"]["actor"]["ability_hotkeys"], {"1": "power-strike"})
+
+    def test_learning_trainer_gated_ability_requires_present_trainer(self):
+        self._ability(
+            slug="power-strike",
+            name="Power Strike",
+            verbs=["strike"],
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+        trainer_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="arms-trainer",
+            name="an arms trainer",
+            keywords="trainer arms",
+            base_properties={"health_max": 10},
+            trainer={
+                "abilities": ["power-strike"],
+                "availability": "present",
+            },
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "learn power strike")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.known_abilities, [])
+        errors = self._messages_by_type(messages, "cmd.ability.learn.error")
+        self.assertEqual(errors[0]["data"]["code"], "ability_trainer_required")
+
+        trainer_definition.spawn(self.room, self.spawn_world)
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "learn power strike")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.known_abilities, ["power-strike"])
+        success = self._messages_by_type(messages, "cmd.ability.learn.success")[0]
+        self.assertEqual(success["data"]["trainer"]["name"], "an arms trainer")
+
+    def test_unlearning_trainer_gated_ability_requires_present_trainer(self):
+        self._ability(
+            slug="power-strike",
+            name="Power Strike",
+            verbs=["strike"],
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+        trainer_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="arms-trainer",
+            name="an arms trainer",
+            keywords="trainer arms",
+            base_properties={"health_max": 10},
+            trainer={
+                "abilities": ["power-strike"],
+                "availability": "present",
+            },
+        )
+        self.player.known_abilities = ["power-strike"]
+        self.player.ability_hotkeys = {"1": "power-strike"}
+        self.player.save(update_fields=["known_abilities", "ability_hotkeys"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "unlearn power strike")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.known_abilities, ["power-strike"])
+        self.assertEqual(self.player.ability_hotkeys, {"1": "power-strike"})
+        errors = self._messages_by_type(messages, "cmd.ability.unlearn.error")
+        self.assertEqual(errors[0]["data"]["code"], "ability_trainer_required")
+
+        trainer_definition.spawn(self.room, self.spawn_world)
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "unlearn power strike")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.known_abilities, [])
+        self.assertEqual(self.player.ability_hotkeys, {})
+        success = self._messages_by_type(messages, "cmd.ability.unlearn.success")[0]
+        self.assertEqual(success["data"]["trainer"]["name"], "an arms trainer")
 
     def test_learning_ability_checks_condition_requirements(self):
         self._ability(
