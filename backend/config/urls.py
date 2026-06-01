@@ -125,9 +125,6 @@ api_v1_urls = [
     path('game/system/cpromote/', system_views.clan_promote, name='game-cpromote'),
     path('game/system/ckick/', system_views.clan_kick, name='game-ckick'),
     path('game/system/cmembers/', system_views.clan_members, name='game-cmembers'),
-    path('internal/ai/intents/', spawn_views.AIIntentIngress.as_view(), name='internal-ai-intents'),
-
-
     # General endpoints
     path('worlds/<pk>/', world_views.world_detail, name='world_delete'),
 

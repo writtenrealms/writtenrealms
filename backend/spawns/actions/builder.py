@@ -33,10 +33,6 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers as drf_serializers
 
-from spawns.ai_sidecar import (
-    maybe_enqueue_ai_sidecar_mob_destroyed,
-    maybe_enqueue_ai_sidecar_mob_spawned,
-)
 from spawns.actions.base import ActionError, ActionResult
 from spawns.events import GameEvent
 from spawns.handlers.registry import (
@@ -173,19 +169,7 @@ def _collect_nested_item_ids(items: list[Item]) -> set[int]:
     return item_ids
 
 
-def _purge_mob_cleanly(
-    *,
-    mob: Mob,
-    source: str,
-    trigger_actor_key: str | None = None,
-) -> None:
-    maybe_enqueue_ai_sidecar_mob_destroyed(
-        mob=mob,
-        source=source,
-        trigger_actor_key=trigger_actor_key,
-        reason="purge",
-    )
-
+def _purge_mob_cleanly(*, mob: Mob) -> None:
     item_ids = _collect_nested_item_ids(list(mob.inventory.all()))
     if mob.equipment_id:
         equipment_type = ContentType.objects.get_for_model(Equipment)
@@ -477,11 +461,6 @@ class LoadTemplateAction:
         elif vd["template_type"] == "mob":
             room = vd["room"] if vd["actor_type"] == "room" else vd["actor"].room
             mob = vd["template"].spawn(room, vd["spawn_world"])
-            maybe_enqueue_ai_sidecar_mob_spawned(
-                mob=mob,
-                source="builder.load_command",
-                trigger_actor_key=player.key,
-            )
             loaded_key = mob.key
             loaded_name = (
                 mob.name
@@ -541,11 +520,7 @@ class PurgeAction:
                 for item in items:
                     item.delete()
                 for mob in mobs:
-                    _purge_mob_cleanly(
-                        mob=mob,
-                        source="builder.purge_command",
-                        trigger_actor_key=player.key,
-                    )
+                    _purge_mob_cleanly(mob=mob)
 
                 out_text = "The world feels a little cleaner."
 
@@ -558,11 +533,7 @@ class PurgeAction:
             elif normalized_target == "mobs":
                 mobs = list(room.mobs.all())
                 for mob in mobs:
-                    _purge_mob_cleanly(
-                        mob=mob,
-                        source="builder.purge_command",
-                        trigger_actor_key=player.key,
-                    )
+                    _purge_mob_cleanly(mob=mob)
                 out_text = "You purge all mobs in the room."
 
             else:
@@ -574,11 +545,7 @@ class PurgeAction:
                 for entity in targets:
                     lines.append(f"You purge {_entity_name(entity)} from this world.")
                     if isinstance(entity, Mob):
-                        _purge_mob_cleanly(
-                            mob=entity,
-                            source="builder.purge_command",
-                            trigger_actor_key=player.key,
-                        )
+                        _purge_mob_cleanly(mob=entity)
                     else:
                         entity.delete()
                 out_text = "\n".join(lines)

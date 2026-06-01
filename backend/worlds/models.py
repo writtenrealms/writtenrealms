@@ -276,25 +276,7 @@ class World(AdventBaseModel):
 
         # Remove all mobs
         lifecycle_logger.debug("Deleting mobs...")
-        from spawns.ai_sidecar import maybe_enqueue_ai_sidecar_mob_destroyed
-
         mobs_qs = self.mobs.filter(is_pending_deletion=True) if spw else self.mobs.all()
-        destroy_reason = "world_stop" if self.lifecycle == api_consts.WORLD_STATE_STOPPED else "world_cleanup"
-        for mob in mobs_qs.select_related("room", "world").only(
-            "id",
-            "name",
-            "template_id",
-            "room_id",
-            "world_id",
-            "room__id",
-            "world__id",
-            "room__relative_id",
-        ):
-            maybe_enqueue_ai_sidecar_mob_destroyed(
-                mob=mob,
-                source="world.cleanup",
-                reason=destroy_reason,
-            )
         batch_deletion(mobs_qs)
 
         items_qs = self.items.all()

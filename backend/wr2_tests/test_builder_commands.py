@@ -1,7 +1,3 @@
-from unittest.mock import patch
-
-from django.test import override_settings
-
 from builders.models import AbilityDefinition, ItemDefinition, ItemTemplate, MobTemplate
 from config import constants as api_consts
 from core.scoped_state import (
@@ -227,30 +223,6 @@ class TestBuilderLoad(BuilderCommandTestCase):
             self.mob_template.name,
         )
 
-    @override_settings(
-        WR_AI_EVENT_FORWARD_URL="http://localhost:8071/v1/events",
-        WR_AI_EVENT_TYPES="mob.spawned",
-    )
-    @patch("spawns.tasks.forward_event_to_ai_sidecar.delay")
-    def test_load_mob_enqueues_sidecar_spawn_signal(self, mock_forward_delay):
-        with self.captureOnCommitCallbacks(execute=True):
-            with capture_game_messages():
-                dispatch_text_command(self.player.id, f"/lo mob {self.mob_template.id}")
-
-        loaded_mob = Mob.objects.get(
-            template=self.mob_template,
-            room=self.room,
-            world=self.spawn_world,
-        )
-
-        mock_forward_delay.assert_called_once()
-        kwargs = mock_forward_delay.call_args.kwargs
-        self.assertEqual(kwargs["event_type"], "mob.spawned")
-        self.assertEqual(kwargs["actor_key"], loaded_mob.key)
-        self.assertEqual(kwargs["event_data"]["source"], "builder.load_command")
-        self.assertEqual(kwargs["event_data"]["trigger_actor_key"], self.player.key)
-        self.assertEqual(kwargs["event_data"]["mob"]["key"], loaded_mob.key)
-
     def test_load_requires_builder(self):
         other_user = self.create_user("other@example.com")
         other_player = self.create_player("Other", user=other_user)
@@ -345,32 +317,6 @@ class TestBuilderPurge(BuilderCommandTestCase):
                 type=api_consts.ITEM_TYPE_CORPSE,
             ).exists()
         )
-
-    @override_settings(
-        WR_AI_EVENT_FORWARD_URL="http://localhost:8071/v1/events",
-        WR_AI_EVENT_TYPES="mob.destroyed",
-    )
-    @patch("spawns.tasks.forward_event_to_ai_sidecar.delay")
-    def test_purge_mobs_enqueues_sidecar_destroy_signal(self, mock_forward_delay):
-        mob = Mob.objects.create(
-            world=self.spawn_world,
-            room=self.room,
-            name="Guard",
-            keywords="guard",
-        )
-
-        with self.captureOnCommitCallbacks(execute=True):
-            with capture_game_messages():
-                dispatch_text_command(self.player.id, "/purge mobs")
-
-        mock_forward_delay.assert_called_once()
-        kwargs = mock_forward_delay.call_args.kwargs
-        self.assertEqual(kwargs["event_type"], "mob.destroyed")
-        self.assertEqual(kwargs["actor_key"], mob.key)
-        self.assertEqual(kwargs["event_data"]["source"], "builder.purge_command")
-        self.assertEqual(kwargs["event_data"]["reason"], "purge")
-        self.assertEqual(kwargs["event_data"]["trigger_actor_key"], self.player.key)
-        self.assertEqual(kwargs["event_data"]["mob"]["key"], mob.key)
 
     def test_purge_target_can_remove_inventory_item(self):
         item_template = ItemTemplate.objects.create(world=self.world, name="Relic")

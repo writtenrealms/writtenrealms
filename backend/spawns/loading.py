@@ -405,8 +405,6 @@ class LoaderRun:
 
         should_load = rule.num_copies - num_loaded
 
-        from spawns.ai_sidecar import maybe_enqueue_ai_sidecar_mob_spawned
-
         for i in range(0, should_load):
 
             room = None
@@ -454,13 +452,6 @@ class LoaderRun:
                 rule=rule,
             )
             output.append(spawned_mob)
-
-            maybe_enqueue_ai_sidecar_mob_spawned(
-                mob=spawned_mob,
-                source="loader",
-                loader_id=self.loader.id,
-                rule_id=rule.id,
-            )
 
         return output
 
