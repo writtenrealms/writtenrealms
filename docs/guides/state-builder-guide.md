@@ -213,6 +213,40 @@ steps:
         goto: resolved
 ```
 
+## Ability State
+
+Abilities can also write state with `type: state` components. This is commonly
+used for combo points or charges:
+
+```yaml
+components:
+  - type: state
+    scope: character
+    key: combo_points
+    op: increment
+    amount: 1
+    max: 5
+    apply: on_hit
+```
+
+Ability damage and healing components can read state with `scaling.from`:
+
+```yaml
+components:
+  - type: damage
+    profile: basic_physical
+    scaling:
+      from: state.character.combo_points
+      multiplier_per_point: 0.5
+  - type: state
+    scope: character
+    key: combo_points
+    op: clear
+```
+
+See [ability-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/ability-builder-guide.md)
+for full examples and ordering notes.
+
 ## Zone Manifests
 
 Zone manifests now use `spec.state` for zone-scoped mutable state.

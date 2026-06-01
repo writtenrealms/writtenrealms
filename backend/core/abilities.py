@@ -31,9 +31,11 @@ TARGET_TYPES = ("hostile", "self", "ally")
 TARGET_DEFAULTS = ("current_target", "self")
 COST_RESOURCES = ("health", "energy", "stamina")
 COST_CALCS = ("fixed", "percent_max")
-COMPONENT_TYPES = ("damage", "healing", "effect")
+COMPONENT_TYPES = ("damage", "healing", "effect", "state")
 EFFECT_TYPES = ("stun", "dot", "hot")
 EFFECT_APPLY_POLICIES = ("on_resolve", "on_hit")
+STATE_COMPONENT_SCOPES = ("world", "zone", "room", "character")
+STATE_COMPONENT_OPERATIONS = ("set", "increment", "clear")
 
 ABILITY_DEFINITION_FIELDS = {
     "version",
@@ -346,12 +348,101 @@ def _normalize_output_component(
         overrides = {}
     if not isinstance(overrides, dict):
         raise AbilityValidationError(f"{field_name}.overrides must be a mapping.")
-    return {
+    normalized = {
         "type": component_type,
         "profile": profile,
         "overrides": deepcopy(overrides),
         "text": _normalize_text(value.get("text"), default_label=default_label),
     }
+    scaling = _normalize_output_scaling(
+        value.get("scaling"),
+        field_name=f"{field_name}.scaling",
+    )
+    if scaling:
+        normalized["scaling"] = scaling
+    return normalized
+
+
+def _normalize_output_scaling(value: Any, *, field_name: str) -> dict[str, Any]:
+    if value in (None, ""):
+        return {}
+    if not isinstance(value, dict):
+        raise AbilityValidationError(f"{field_name} must be a mapping.")
+
+    unknown_fields = sorted(set(value.keys()) - {"from", "multiplier_per_point", "max_points"})
+    if unknown_fields:
+        raise AbilityValidationError(
+            f"{field_name} has unsupported field(s): {', '.join(unknown_fields)}."
+        )
+
+    source = str(value.get("from") or "").strip()
+    if not source.startswith("state."):
+        raise AbilityValidationError(f"{field_name}.from must be a state.* path.")
+    normalized = {
+        "from": source,
+        "multiplier_per_point": _coerce_number(
+            value.get("multiplier_per_point", 0),
+            field_name=f"{field_name}.multiplier_per_point",
+        ),
+    }
+    if "max_points" in value:
+        normalized["max_points"] = _coerce_number(
+            value.get("max_points"),
+            field_name=f"{field_name}.max_points",
+            minimum=0,
+        )
+    return normalized
+
+
+def _normalize_state_component(
+    value: dict[str, Any],
+    *,
+    field_name: str,
+    default_label: str,
+) -> dict[str, Any]:
+    operation = _coerce_choice(
+        value.get("op", value.get("operation", "increment")),
+        choices=STATE_COMPONENT_OPERATIONS,
+        field_name=f"{field_name}.op",
+    )
+    normalized: dict[str, Any] = {
+        "type": "state",
+        "scope": _coerce_choice(
+            value.get("scope", "character"),
+            choices=STATE_COMPONENT_SCOPES,
+            field_name=f"{field_name}.scope",
+        ),
+        "key": _coerce_text(value.get("key")).strip(),
+        "op": operation,
+        "apply": _coerce_choice(
+            value.get("apply", "on_resolve"),
+            choices=EFFECT_APPLY_POLICIES,
+            field_name=f"{field_name}.apply",
+        ),
+        "text": _normalize_text(value.get("text"), default_label=default_label),
+    }
+    if not normalized["key"]:
+        raise AbilityValidationError(f"{field_name}.key cannot be empty.")
+    if operation == "set":
+        normalized["value"] = deepcopy(value.get("value"))
+    elif operation == "increment":
+        normalized["amount"] = _coerce_number(
+            value.get("amount", 1),
+            field_name=f"{field_name}.amount",
+        )
+        if "min" in value:
+            normalized["min"] = _coerce_number(
+                value.get("min"),
+                field_name=f"{field_name}.min",
+            )
+        if "max" in value:
+            normalized["max"] = _coerce_number(
+                value.get("max"),
+                field_name=f"{field_name}.max",
+            )
+        if "min" in normalized and "max" in normalized and normalized["min"] > normalized["max"]:
+            raise AbilityValidationError(f"{field_name}.min must be <= {field_name}.max.")
+    return normalized
 
 
 def _duration_rounds(value: Any, *, field_name: str) -> int:
@@ -430,6 +521,12 @@ def _normalize_component(value: Any, *, field_name: str, default_label: str) -> 
             value,
             field_name=field_name,
             component_type=component_type,
+            default_label=default_label,
+        )
+    if component_type == "state":
+        return _normalize_state_component(
+            value,
+            field_name=field_name,
             default_label=default_label,
         )
     return _normalize_effect_component(

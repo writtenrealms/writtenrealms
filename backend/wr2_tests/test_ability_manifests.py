@@ -123,6 +123,62 @@ spec:
             {"eq": ["actor.equipment.offhand.equipment_type", "shield"]},
         )
 
+    def test_apply_ability_manifest_accepts_state_components_and_scaling(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: quick-jab
+  name: Quick Jab
+spec:
+  command:
+    verbs: [jab]
+  target:
+    type: hostile
+    default: current_target
+  components:
+    - type: damage
+      profile: basic_physical
+      overrides:
+        multiplier: 1
+      scaling:
+        from: state.character.combo_points
+        multiplier_per_point: 0.5
+        max_points: 5
+    - type: state
+      scope: character
+      key: combo_points
+      op: increment
+      amount: 1
+      max: 5
+      apply: on_hit
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        ability = AbilityDefinition.objects.get(world=self.world, slug="quick-jab")
+        self.assertEqual(
+            ability.components[0]["scaling"],
+            {
+                "from": "state.character.combo_points",
+                "multiplier_per_point": 0.5,
+                "max_points": 5.0,
+            },
+        )
+        self.assertEqual(
+            ability.components[1],
+            {
+                "type": "state",
+                "scope": "character",
+                "key": "combo_points",
+                "op": "increment",
+                "apply": "on_hit",
+                "text": {"label": "Quick Jab"},
+                "amount": 1.0,
+                "max": 5.0,
+            },
+        )
+
     def test_world_manifest_accepts_ability_progression(self):
         manifest = f"""
 kind: world

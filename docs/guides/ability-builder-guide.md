@@ -160,6 +160,88 @@ spec:
 `basic_ability` means "use ability power and ability mitigation rules." It does
 not imply a fantasy spell. Worlds can label `ability_power` however they want.
 
+## State Components And Combo Points
+
+Abilities can write scoped state as part of their component list. This is useful
+for combo points, charges, stance counters, room-state toggles, and similar
+small runtime values.
+
+Use `type: state` with one of these operations:
+
+- `op: increment` adds `amount` and can clamp with `min` or `max`.
+- `op: set` writes `value`.
+- `op: clear` removes the key.
+
+Supported scopes are `character`, `room`, `zone`, and `world`. For combo points,
+use `character` so each player tracks their own points.
+
+Builder example:
+
+```yaml
+kind: ability
+metadata:
+  slug: quick-jab
+  name: Quick Jab
+spec:
+  command:
+    verbs: [jab]
+  target:
+    type: hostile
+    default: current_target
+  components:
+    - type: damage
+      profile: basic_physical
+      overrides:
+        multiplier: 1
+    - type: state
+      scope: character
+      key: combo_points
+      op: increment
+      amount: 1
+      max: 5
+      apply: on_hit
+```
+
+`apply: on_hit` means the state component only runs if an earlier damage or
+healing component in the same ability actually landed. Use `apply: on_resolve`
+when the state change should happen whenever the ability resolves.
+
+A spender can require points, scale its damage from the current state value,
+and then clear the points:
+
+```yaml
+kind: ability
+metadata:
+  slug: finisher
+  name: Finisher
+spec:
+  command:
+    verbs: [finish]
+  target:
+    type: hostile
+    default: current_target
+  requirements:
+    gte:
+      - state.character.combo_points
+      - 1
+  components:
+    - type: damage
+      profile: basic_physical
+      overrides:
+        multiplier: 1
+      scaling:
+        from: state.character.combo_points
+        multiplier_per_point: 0.5
+        max_points: 5
+    - type: state
+      scope: character
+      key: combo_points
+      op: clear
+```
+
+Components resolve in authored order. Put the damage component before the clear
+component when the damage needs to read the points being spent.
+
 ## Healing Abilities
 
 Healing uses the same ability shape:

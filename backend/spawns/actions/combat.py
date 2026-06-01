@@ -15,10 +15,12 @@ from core.leveling import ExperienceGrant, apply_experience
 from builders.models import AbilityDefinition
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.abilities import (
+    ability_component_overrides,
     ability_is_available_to_player,
     ability_state_event,
     cooldown_remaining,
     decrement_ability_cooldowns,
+    execute_state_component,
     pay_ability_cost,
     player_knows_ability,
     start_ability_cooldown,
@@ -791,7 +793,12 @@ def _execute_output_component(
             target=player,
             world=player.world,
             profile_key=component.get("profile"),
-            overrides=component.get("overrides") or {},
+            overrides=ability_component_overrides(
+                component,
+                player=player,
+                ability=ability,
+                room=room,
+            ) if ability else component.get("overrides") or {},
         )
         _apply_healing(
             actor=player,
@@ -825,7 +832,12 @@ def _execute_output_component(
         target=target_mob,
         world=player.world,
         profile_key=component.get("profile"),
-        overrides=component.get("overrides") or {},
+        overrides=ability_component_overrides(
+            component,
+            player=player,
+            ability=ability,
+            room=room,
+        ) if ability else component.get("overrides") or {},
     )
     if result.damage_taken > 0:
         target_mob.health = max(0, int(target_mob.health or 0) - result.damage_taken)
@@ -1010,6 +1022,19 @@ def _execute_pending_player_ability(
             health_changed = health_changed or component_type == "healing"
             if target_mob.health <= 0:
                 break
+            continue
+
+        if component_type == "state":
+            state_event = execute_state_component(
+                component=component,
+                player=player,
+                ability=ability,
+                room=room,
+                hit_landed=hit_landed,
+                round_id=round_id,
+            )
+            if state_event:
+                events.append(state_event)
             continue
 
         if component_type != "effect":

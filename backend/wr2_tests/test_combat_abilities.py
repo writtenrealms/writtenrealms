@@ -3,6 +3,7 @@ from unittest.mock import patch
 from builders.models import AbilityDefinition, MobDefinition
 from core.combat_formulas import normalize_combat_system
 from core.computations import compute_stats
+from core.scoped_state import STATE_SCOPE_CHARACTER, get_state_value
 from django.utils import timezone
 from spawns.models import CombatEncounter, Mob
 from spawns.tasks import resolve_combat_encounter
@@ -386,6 +387,82 @@ class TestCombatAbilities(WorldTestCase):
 
         mob.refresh_from_db()
         self.assertEqual(mob.health, self.stats["attack_power"] * 4)
+
+    def test_ability_can_build_and_spend_character_state(self):
+        self._ability(
+            slug="quick-jab",
+            name="Quick Jab",
+            verbs=["jab"],
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 1},
+                    "text": {"label": "Quick Jab"},
+                },
+                {
+                    "type": "state",
+                    "scope": "character",
+                    "key": "combo_points",
+                    "op": "increment",
+                    "amount": 1,
+                    "max": 5,
+                    "apply": "on_hit",
+                },
+            ],
+        )
+        self._ability(
+            slug="finisher",
+            name="Finisher",
+            verbs=["finish"],
+            requirements={"gte": ["state.character.combo_points", 1]},
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 1},
+                    "scaling": {
+                        "from": "state.character.combo_points",
+                        "multiplier_per_point": 1,
+                    },
+                    "text": {"label": "Finisher"},
+                },
+                {
+                    "type": "state",
+                    "scope": "character",
+                    "key": "combo_points",
+                    "op": "clear",
+                },
+            ],
+        )
+        self.player.known_abilities = ["quick-jab", "finisher"]
+        self.player.save(update_fields=["known_abilities"])
+        mob = self._mob(health=self.stats["attack_power"] * 10)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "jab rat")
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.health, self.stats["attack_power"] * 9)
+        self.assertEqual(
+            get_state_value(STATE_SCOPE_CHARACTER, self.player, "combo_points"),
+            1,
+        )
+        state_updates = self._messages_by_type(messages, "notification.ability.state")
+        self.assertEqual(state_updates[-1]["data"]["value"], 1)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "finish")
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.health, self.stats["attack_power"] * 7)
+        self.assertIsNone(
+            get_state_value(STATE_SCOPE_CHARACTER, self.player, "combo_points")
+        )
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertEqual(attacks[0]["data"]["damage_taken"], self.stats["attack_power"] * 2)
+        state_updates = self._messages_by_type(messages, "notification.ability.state")
+        self.assertTrue(state_updates[-1]["data"]["cleared"])
 
     def test_invalid_queued_ability_falls_back_to_auto_attack(self):
         self.world.config.combat_resolution_interval = 1.5

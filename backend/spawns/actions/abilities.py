@@ -16,6 +16,13 @@ from core.condition_dsl import (
     ConditionContext,
     evaluate_condition,
     is_structured_condition_mapping,
+    resolve_path,
+)
+from core.scoped_state import (
+    clear_state_value,
+    increment_state_value,
+    resolve_scope_owner,
+    set_state_value,
 )
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.targeting import resolve_room_mob_target
@@ -264,6 +271,159 @@ def ability_requirements_met(player: Player, ability: AbilityDefinition) -> bool
             world=getattr(player, "world", None),
             ability=ability,
         ),
+    )
+
+
+def _ability_condition_context(
+    *,
+    player: Player,
+    ability: AbilityDefinition,
+    room: Room | None = None,
+) -> ConditionContext:
+    current_room = room or getattr(player, "room", None)
+    return ConditionContext(
+        actor=player,
+        player=player,
+        room=current_room,
+        zone=getattr(current_room, "zone", None),
+        world=getattr(player, "world", None),
+        ability=ability,
+    )
+
+
+def ability_component_overrides(
+    component: dict,
+    *,
+    player: Player,
+    ability: AbilityDefinition,
+    room: Room | None = None,
+) -> dict[str, Any]:
+    overrides = dict(component.get("overrides") or {})
+    scaling = component.get("scaling") or {}
+    if not isinstance(scaling, dict):
+        return overrides
+
+    source = str(scaling.get("from") or "").strip()
+    if not source:
+        return overrides
+    raw_value = resolve_path(
+        source,
+        _ability_condition_context(player=player, ability=ability, room=room),
+    )
+    try:
+        points = float(raw_value or 0)
+    except (TypeError, ValueError):
+        points = 0.0
+    points = max(0.0, points)
+    if "max_points" in scaling:
+        try:
+            points = min(points, max(0.0, float(scaling.get("max_points") or 0)))
+        except (TypeError, ValueError):
+            pass
+
+    try:
+        base_multiplier = float(overrides.get("multiplier", 1))
+    except (TypeError, ValueError):
+        base_multiplier = 1.0
+    try:
+        multiplier_per_point = float(scaling.get("multiplier_per_point") or 0)
+    except (TypeError, ValueError):
+        multiplier_per_point = 0.0
+    overrides["multiplier"] = base_multiplier + points * multiplier_per_point
+    return overrides
+
+
+def _state_owner_for_ability_component(
+    *,
+    component: dict,
+    player: Player,
+    room: Room | None,
+):
+    scope = str(component.get("scope") or "character").strip().lower()
+    current_room = room or getattr(player, "room", None)
+    return resolve_scope_owner(
+        scope,
+        actor=player,
+        world=getattr(player, "world", None),
+        zone=getattr(current_room, "zone", None),
+        room=current_room,
+        character=player,
+    )
+
+
+def _clamp_state_component_value(value: Any, component: dict) -> Any:
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return value
+    if "min" in component:
+        try:
+            numeric_value = max(numeric_value, float(component.get("min")))
+        except (TypeError, ValueError):
+            pass
+    if "max" in component:
+        try:
+            numeric_value = min(numeric_value, float(component.get("max")))
+        except (TypeError, ValueError):
+            pass
+    if numeric_value.is_integer():
+        return int(numeric_value)
+    return numeric_value
+
+
+def execute_state_component(
+    *,
+    component: dict,
+    player: Player,
+    ability: AbilityDefinition,
+    room: Room | None = None,
+    hit_landed: bool = False,
+    round_id: str | None = None,
+) -> GameEvent | None:
+    if component.get("type") != "state":
+        return None
+    if component.get("apply") == "on_hit" and not hit_landed:
+        return None
+
+    scope = str(component.get("scope") or "character").strip().lower()
+    key = str(component.get("key") or "").strip()
+    owner = _state_owner_for_ability_component(
+        component=component,
+        player=player,
+        room=room,
+    )
+    if owner is None or not key:
+        return None
+
+    operation = str(component.get("op") or "increment").strip().lower()
+    data: dict[str, Any] = {
+        "ability": ability.slug,
+        "scope": scope,
+        "key": key,
+        "operation": operation,
+    }
+    if round_id:
+        data["round_id"] = round_id
+
+    if operation == "clear":
+        data["cleared"] = clear_state_value(scope, owner, key)
+        text = f"{ability.name} clears {scope}.{key}."
+    elif operation == "set":
+        data["value"] = set_state_value(scope, owner, key, component.get("value"))
+        text = f"{ability.name} sets {scope}.{key}."
+    else:
+        value = increment_state_value(scope, owner, key, component.get("amount", 1))
+        clamped = _clamp_state_component_value(value, component)
+        if clamped != value:
+            value = set_state_value(scope, owner, key, clamped)
+        data["value"] = value
+        text = f"{ability.name} updates {scope}.{key}."
+
+    return GameEvent(
+        type="notification.ability.state",
+        recipients=[player.key],
+        data=data,
+        text=text,
     )
 
 
@@ -741,18 +901,38 @@ class AbilityAction:
         player.health = min(int(player.health or 0), health_max)
 
         events: list[GameEvent] = []
+        hit_landed = False
         for component in ability.components or []:
-            if component.get("type") != "healing":
+            component_type = component.get("type")
+            if component_type == "state":
+                state_event = execute_state_component(
+                    component=component,
+                    player=player,
+                    ability=ability,
+                    room=getattr(player, "room", None),
+                    hit_landed=hit_landed,
+                )
+                if state_event:
+                    events.append(state_event)
+                continue
+
+            if component_type != "healing":
                 continue
             result = resolve_attack(
                 actor=player,
                 target=player,
                 world=player.world,
                 profile_key=component.get("profile"),
-                overrides=component.get("overrides") or {},
+                overrides=ability_component_overrides(
+                    component,
+                    player=player,
+                    ability=ability,
+                    room=getattr(player, "room", None),
+                ),
             )
             if result.healing_done > 0:
                 player.health = min(health_max, int(player.health or 0) + result.healing_done)
+                hit_landed = True
             label = (component.get("text") or {}).get("label") or ability.name
             data = {
                 "ability": ability.slug,
