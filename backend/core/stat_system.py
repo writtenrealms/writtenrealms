@@ -1032,10 +1032,11 @@ def compute_stats(
         base_resources.get("stamina", {}),
         own_attributes=own_attributes,
     )
-    stats["health_max"] += _evaluate_base_resource(
+    stats["health_base"] = _evaluate_base_resource(
         base_resources.get("health", {}),
         own_attributes=own_attributes,
     )
+    stats["health_max"] += stats["health_base"]
     stats["energy_max"] += stats["energy_base"]
     stats["stamina_max"] += stats["stamina_base"]
 
@@ -1117,7 +1118,7 @@ def compute_stats(
         for stat_key, multiplier in formulas["two_handed_multipliers"].items():
             stats[stat_key] = math.ceil(float(stats.get(stat_key, 0.0) or 0.0) * float(multiplier))
 
-    stats["health_base"] = _compute_rule_total(
+    stats["health_base"] += _compute_rule_total(
         target="health_max",
         rules=global_rules + profile["stat_rules"],
         total_attributes=own_attributes,

@@ -105,6 +105,19 @@ spec:
 Bundled `kind: abilities` manifests are also supported for import convenience,
 but one ability per manifest should be the default authoring style.
 
+## Costs
+
+`spec.cost.resource` supports `health`, `energy`, and `stamina`.
+
+`spec.cost.calc` supports:
+
+- `fixed`: spend `amount` directly.
+- `percent_max`: spend `amount` percent of the actor's current maximum pool
+  after stat modifiers.
+- `percent_base`: spend `amount` percent of the actor's base pool before
+  equipment and other maximum-pool modifiers. For energy, `amount: 5` costs 5
+  energy when the actor's base energy pool is 100.
+
 ## Damage Abilities
 
 A physical weapon technique should usually use `basic_physical`:

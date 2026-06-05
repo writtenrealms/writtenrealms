@@ -417,6 +417,10 @@ spec:
     max_known: uncapped
 ```
 
+Ability costs support `fixed`, `percent_max`, and `percent_base` calculations.
+`percent_base` uses the base resource pool before equipment and other max-pool
+modifiers; for energy, a 100 base pool and `amount: 5` means a 5 energy cost.
+
 Healing should use the same shape:
 
 ```yaml

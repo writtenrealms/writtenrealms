@@ -123,6 +123,33 @@ spec:
             {"eq": ["actor.equipment.offhand.equipment_type", "shield"]},
         )
 
+    def test_apply_ability_manifest_accepts_percent_base_cost(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: arcane-bolt
+  name: Arcane Bolt
+spec:
+  command:
+    verbs: [bolt]
+  cost:
+    resource: energy
+    amount: 5
+    calc: percent_base
+  components:
+    - type: damage
+      profile: basic_ability
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        ability = AbilityDefinition.objects.get(world=self.world, slug="arcane-bolt")
+        self.assertEqual(
+            ability.cost,
+            {"resource": "energy", "amount": 5.0, "calc": "percent_base"},
+        )
+
     def test_apply_ability_manifest_accepts_state_components_and_scaling(self):
         manifest = f"""
 kind: ability

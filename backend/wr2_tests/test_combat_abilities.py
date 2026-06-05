@@ -1,14 +1,17 @@
+from copy import deepcopy
 from unittest.mock import patch
 
-from builders.models import AbilityDefinition, MobDefinition
+from builders.models import AbilityDefinition, ItemTemplate, MobDefinition
+from config import constants as adv_consts
 from core.combat_formulas import normalize_combat_system
 from core.computations import compute_stats
 from core.scoped_state import STATE_SCOPE_CHARACTER, get_state_value
 from django.utils import timezone
-from spawns.models import CombatEncounter, Mob
+from spawns.models import CombatEncounter, Item, Mob
 from spawns.tasks import resolve_combat_encounter
 from tests.base import WorldTestCase
 from wr2_tests.utils import (
+    BASIC_TEST_STAT_SYSTEM,
     apply_basic_stat_system,
     capture_game_messages,
     dispatch_text_command,
@@ -111,6 +114,107 @@ class TestCombatAbilities(WorldTestCase):
             if msg["player_key"] == self.player.key
             and msg["message"].get("type") == message_type
         ]
+
+    def test_percent_base_cost_uses_energy_base_before_equipment_modifiers(self):
+        from spawns.actions.abilities import ability_cost_amount
+
+        stat_system = deepcopy(BASIC_TEST_STAT_SYSTEM)
+        stat_system["formulas"]["base_resources"]["energy"] = {"flat": 100}
+        self.world.config.stat_system = stat_system
+        self.world.config.save(update_fields=["stat_system"])
+
+        template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Focus Ring",
+            type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            equipment_type=adv_consts.EQUIPMENT_TYPE_ACCESSORY,
+        )
+        ring = Item.objects.create(
+            world=self.spawn_world,
+            container=self.player,
+            template=template,
+            name=template.name,
+            type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            equipment_type=adv_consts.EQUIPMENT_TYPE_ACCESSORY,
+            energy_max=100,
+        )
+        self.player.equipment.equip(ring, adv_consts.EQUIPMENT_SLOT_ACCESSORY)
+
+        stats = compute_stats(
+            self.player.level,
+            self.player.archetype,
+            char=self.player,
+            world=self.world,
+        )
+        self.assertEqual(stats["energy_base"], 100)
+        self.assertEqual(stats["energy_max"], 200)
+
+        ability = self._ability(
+            slug="arcane-bolt",
+            name="Arcane Bolt",
+            verbs=["bolt"],
+            cost={"resource": "energy", "amount": 5, "calc": "percent_base"},
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+
+        self.assertEqual(ability_cost_amount(self.player, ability), ("energy", 5))
+
+    def test_percent_base_cost_uses_health_and_stamina_base_before_equipment_modifiers(self):
+        from spawns.actions.abilities import ability_cost_amount
+
+        stat_system = deepcopy(BASIC_TEST_STAT_SYSTEM)
+        stat_system["formulas"]["base_resources"]["health"] = {"flat": 100}
+        stat_system["formulas"]["base_resources"]["stamina"] = {"flat": 100}
+        stat_system["formulas"]["global_rules"] = []
+        self.world.config.stat_system = stat_system
+        self.world.config.save(update_fields=["stat_system"])
+
+        template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Vital Ring",
+            type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            equipment_type=adv_consts.EQUIPMENT_TYPE_ACCESSORY,
+        )
+        ring = Item.objects.create(
+            world=self.spawn_world,
+            container=self.player,
+            template=template,
+            name=template.name,
+            type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            equipment_type=adv_consts.EQUIPMENT_TYPE_ACCESSORY,
+            health_max=100,
+            stamina_max=100,
+        )
+        self.player.equipment.equip(ring, adv_consts.EQUIPMENT_SLOT_ACCESSORY)
+
+        stats = compute_stats(
+            self.player.level,
+            self.player.archetype,
+            char=self.player,
+            world=self.world,
+        )
+        self.assertEqual(stats["health_base"], 100)
+        self.assertEqual(stats["health_max"], 200)
+        self.assertEqual(stats["stamina_base"], 100)
+        self.assertEqual(stats["stamina_max"], 200)
+
+        health_ability = self._ability(
+            slug="blood-price",
+            name="Blood Price",
+            verbs=["bloodprice"],
+            cost={"resource": "health", "amount": 5, "calc": "percent_base"},
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+        stamina_ability = self._ability(
+            slug="quick-step",
+            name="Quick Step",
+            verbs=["quickstep"],
+            cost={"resource": "stamina", "amount": 5, "calc": "percent_base"},
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+
+        self.assertEqual(ability_cost_amount(self.player, health_ability), ("health", 5))
+        self.assertEqual(ability_cost_amount(self.player, stamina_ability), ("stamina", 5))
 
     def test_learning_ability_assigns_next_available_hotkey(self):
         self._ability(

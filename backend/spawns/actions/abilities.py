@@ -594,14 +594,31 @@ def _resource_max(player: Player, resource: str) -> int:
     return max(0, int(stats.get("energy_max") or getattr(player, "energy_max", 0) or 0))
 
 
+def _resource_base(player: Player, resource: str) -> int:
+    stats = compute_stats(
+        player.level,
+        player.archetype,
+        char=player,
+        world=player.world,
+    )
+    if resource == "health":
+        return max(0, int(stats.get("health_base") or 0))
+    if resource == "stamina":
+        return max(0, int(stats.get("stamina_base") or 0))
+    return max(0, int(stats.get("energy_base") or 0))
+
+
 def ability_cost_amount(player: Player, ability: AbilityDefinition) -> tuple[str, int]:
     cost = ability.cost or {}
     if not cost:
         return "", 0
     resource = str(cost.get("resource") or "").strip().lower()
     amount = float(cost.get("amount") or 0)
-    if str(cost.get("calc") or "fixed") == "percent_max":
+    calc = str(cost.get("calc") or "fixed").strip().lower()
+    if calc == "percent_max":
         amount = _resource_max(player, resource) * (amount / 100)
+    elif calc == "percent_base":
+        amount = _resource_base(player, resource) * (amount / 100)
     return resource, max(0, int(amount))
 
 
