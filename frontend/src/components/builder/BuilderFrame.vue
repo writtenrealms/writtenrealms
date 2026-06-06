@@ -252,6 +252,7 @@ const isWorldConfigRoute = computed(() => {
     'builder_world_transformation_template_list',
     'builder_world_fact_list',
     'builder_world_ability_list',
+    'builder_world_ability_details',
     'builder_world_trigger_list',
     'builder_world_trigger_details',
     'builder_item_bundle_list',

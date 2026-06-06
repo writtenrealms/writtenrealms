@@ -166,6 +166,12 @@ const routeForEntity = (
   if (kind === "currency") {
     return { name: "builder_world_currency_list", params: { world_id: worldId } };
   }
+  if (kind === "ability" && id) {
+    return {
+      name: "builder_world_ability_details",
+      params: { world_id: worldId, ability_id: id },
+    };
+  }
   if (kind === "ability") {
     return { name: "builder_world_ability_list", params: { world_id: worldId } };
   }
@@ -439,6 +445,33 @@ spec:
   stock: []
 `;
 
+const newAbilityYaml = `kind: ability
+metadata:
+  world: world.${route.params.world_id}
+  slug: new-ability
+  name: New Ability
+spec:
+  command:
+    verbs: [newability]
+  action_type: primary
+  target:
+    type: hostile
+    default: current_target
+  availability:
+    classes: []
+    min_level: 1
+  requirements: {}
+  cost: {}
+  cooldown:
+    rounds: 0
+  components:
+    - type: damage
+      profile: basic_ability
+      text:
+        label: New Ability
+  is_active: true
+`;
+
 const newTriggerYaml = (roomIdOverride?: string) => {
   const roomId = roomIdOverride || store.state.builder.room?.id || "ROOM_ID";
   return `kind: trigger
@@ -557,6 +590,26 @@ const loadMerchantProfileYaml = async () => {
   }
 };
 
+const loadAbilityYaml = async () => {
+  clearApplyResult();
+  const rawAbilityId = route.query.ability_id;
+  const abilityId = Array.isArray(rawAbilityId)
+    ? rawAbilityId[0]
+    : rawAbilityId;
+  if (!abilityId) {
+    manifestText.value = "";
+    return;
+  }
+  try {
+    const resp = await axios.get(
+      `/builder/worlds/${route.params.world_id}/abilities/${abilityId}/`
+    );
+    manifestText.value = resp.data?.yaml || "";
+  } catch (error: any) {
+    store.commit("ui/notification_set_error", extractError(error));
+  }
+};
+
 const loadTriggerYaml = async () => {
   clearApplyResult();
   const rawTriggerId = route.query.trigger_id;
@@ -623,6 +676,11 @@ onMounted(async () => {
   } else if (route.query.prefill === "new-merchant-profile") {
     clearApplyResult();
     manifestText.value = newMerchantProfileYaml;
+  } else if (route.query.prefill === "ability") {
+    await loadAbilityYaml();
+  } else if (route.query.prefill === "new-ability") {
+    clearApplyResult();
+    manifestText.value = newAbilityYaml;
   } else if (route.query.prefill === "trigger") {
     await loadTriggerYaml();
   } else if (route.query.prefill === "new-room-trigger") {

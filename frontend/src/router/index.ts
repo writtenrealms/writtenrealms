@@ -98,6 +98,7 @@ const routes = [
       { path: 'factions', name: 'builder_world_faction_list', component: () => import('@/views/builder/world/FactionList.vue') },
       { path: 'factions/:faction_id/ranks', name: 'builder_world_faction_rank_list', component: () => import('@/views/builder/world/FactionRankList.vue') },
       { path: 'abilities', name: 'builder_world_ability_list', component: () => import('@/views/builder/world/Abilities.vue') },
+      { path: 'abilities/:ability_id', name: 'builder_world_ability_details', component: () => import('@/views/builder/world/AbilityDetails.vue') },
       { path: 'triggers', name: 'builder_world_trigger_list', component: () => import('@/views/builder/world/TriggerList.vue') },
       { path: 'triggers/:trigger_id', name: 'builder_world_trigger_details', component: () => import('@/views/builder/world/TriggerDetails.vue') },
       { path: 'startingeq', name: 'builder_world_starting_eq_list', component: () => import('@/views/builder/world/StartingEqList.vue') },

@@ -1,188 +1,107 @@
 <template>
-  <div id="world-abilities" v-if="store.state.builder.world.builder_info.builder_rank > 2">
-    <div class="section-header">
-      <h1>{{ world.name.toUpperCase() }} ABILITIES</h1>
-      <router-link :to="editWorldLink">Edit World</router-link>
-    </div>
-
-    <div v-if="isLoading" class="color-text-60">Loading abilities...</div>
-    <div v-else-if="!abilities.length" class="color-text-60">No abilities configured.</div>
-
-    <div v-else class="ability-list">
-      <section
-        v-for="ability in abilities"
-        :key="ability.metadata?.slug || ability.metadata?.name"
-        class="ability-entry"
-      >
-        <div class="ability-heading">
-          <div>
-            <h2>{{ ability.metadata?.name || ability.metadata?.slug }}</h2>
-            <div class="color-text-60">{{ ability.metadata?.slug }}</div>
-          </div>
-          <span class="ability-status" :class="{ inactive: ability.spec?.is_active === false }">
-            {{ ability.spec?.is_active === false ? "Inactive" : "Active" }}
-          </span>
-        </div>
-
-        <div class="ability-summary">
-          <div>
-            <div class="summary-label">Commands</div>
-            <ManifestValue :value="ability.spec?.command?.verbs || []" />
-          </div>
-          <div>
-            <div class="summary-label">Action Type</div>
-            <ManifestValue :value="ability.spec?.action_type" />
-          </div>
-          <div>
-            <div class="summary-label">Target</div>
-            <ManifestValue :value="ability.spec?.target || {}" />
-          </div>
-        </div>
-
-        <div class="ability-spec">
-          <div
-            v-for="entry in abilitySpecEntries(ability)"
-            :key="entry.key"
-            class="ability-spec-row"
-          >
-            <div class="spec-label">{{ entry.label }}</div>
-            <ManifestValue :value="entry.value" />
-          </div>
-        </div>
-      </section>
-    </div>
-  </div>
-  <div v-else>
-    You do not have permission to view abilities for this world.
-  </div>
+  <ElementList
+    title="Abilities"
+    :schema="listSchema"
+    :filters="listFilters"
+    :endpoint="endpoint"
+    :resolve_route="resolveRoute"
+    filter-display="dropdown"
+    table-variant="data"
+    default-sort="slug"
+    @add="onClickAdd"
+  />
 </template>
 
 <script lang="ts" setup>
-import axios from "axios";
-import { computed, onMounted, ref } from "vue";
-import { useRoute } from "vue-router";
+import { useRouter } from "vue-router";
 import { useStore } from "vuex";
-import ManifestValue from "@/components/builder/world/ManifestValue.vue";
+import ElementList from "@/components/elementlist/ElementList.vue";
+import { formatRelativeModifiedDate } from "@/core/utils.ts";
 
 const store = useStore();
-const route = useRoute();
+const router = useRouter();
 
-const exportPayload = ref<any | null>(null);
-const isLoading = ref(false);
-const world = computed(() => store.state.builder.world);
-const exportEndpoint = computed(() => `/builder/worlds/${route.params.world_id}/export/`);
+const endpoint = `/builder/worlds/${store.state.builder.world.id}/abilities/`;
 
-const abilities = computed(() => {
-  const documents = exportPayload.value?.documents || [];
-  return documents.filter((document) => String(document.kind || "").toLowerCase() === "ability");
-});
+const resolveRoute = (element) => {
+  return {
+    name: "builder_world_ability_details",
+    params: {
+      world_id: store.state.builder.world.id,
+      ability_id: element.id,
+    },
+  };
+};
 
-const editWorldLink = computed(() => ({
-  name: "builder_world_edit",
-  params: { world_id: route.params.world_id },
-}));
+const formatCommands = (value) => {
+  if (!Array.isArray(value)) return "";
+  return value.join(", ");
+};
 
-const labelForKey = (key: string) => {
-  return key
+const formatActionType = (value) => {
+  return String(value || "")
     .replace(/_/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 };
 
-const abilitySpecEntries = (ability) => {
-  const hiddenSummaryKeys = new Set(["command", "action_type", "target", "is_active"]);
-  return Object.entries(ability.spec || {})
-    .filter(([key]) => !hiddenSummaryKeys.has(key))
-    .map(([key, value]) => ({
-      key,
-      label: labelForKey(key),
-      value,
-    }));
+const formatTarget = (value) => {
+  if (!value || typeof value !== "object") return "";
+  const parts = [value.type, value.default].filter(Boolean);
+  return parts.join(" / ");
 };
 
-onMounted(async () => {
-  isLoading.value = true;
-  try {
-    const resp = await axios.get(exportEndpoint.value);
-    exportPayload.value = resp.data;
-  } catch {
-    store.commit("ui/notification_set_error", "Unable to load abilities.");
-  } finally {
-    isLoading.value = false;
-  }
-});
+const formatStatus = (value) => value ? "Active" : "Inactive";
+const formatComponentCount = (_value, ability) => {
+  const count = Array.isArray(ability.components) ? ability.components.length : 0;
+  return `${count}`;
+};
+
+const listSchema: any[] = [
+  { name: "id", label: "ID", sortable: true },
+  { name: "name", label: "Name", nowrap: true, sortable: true },
+  { name: "slug", label: "Slug", nowrap: true, sortable: true },
+  { name: "command_verbs", label: "Commands", light: true, format: formatCommands },
+  { name: "action_type", label: "Action Type", light: true, sortable: true, format: formatActionType },
+  { name: "target", label: "Target", light: true, format: formatTarget },
+  { name: "components", label: "Components", light: true, format: formatComponentCount },
+  { name: "is_active", label: "Status", light: true, sortable: true, format: formatStatus },
+  {
+    name: "modified_ts",
+    label: "Modified",
+    nowrap: true,
+    sortable: true,
+    format: formatRelativeModifiedDate,
+  },
+];
+
+const listFilters: any[] = [
+  {
+    label: "Action Type",
+    attr: "action_type",
+    filter_options: [
+      { key: "primary", name: "Primary" },
+      { key: "utility", name: "Utility" },
+    ],
+  },
+  {
+    label: "Status",
+    attr: "is_active",
+    filter_options: [
+      { key: "true", name: "Active" },
+      { key: "false", name: "Inactive" },
+    ],
+  },
+];
+
+const onClickAdd = () => {
+  router.push({
+    name: "builder_world_edit",
+    params: {
+      world_id: store.state.builder.world.id,
+    },
+    query: {
+      prefill: "new-ability",
+    },
+  });
+};
 </script>
-
-<style lang="scss" scoped>
-@import "@/styles/colors.scss";
-@import "@/styles/layout.scss";
-
-.section-header {
-  align-items: baseline;
-  display: flex;
-  gap: 1rem;
-  justify-content: space-between;
-  margin-bottom: 1.5rem;
-
-  @media ($mobile-site) {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-}
-
-.ability-list {
-  display: grid;
-  gap: 1.5rem;
-  max-width: 960px;
-}
-
-.ability-entry {
-  border-top: 1px solid $color-background-light-border;
-  padding-top: 1.25rem;
-}
-
-.ability-heading {
-  display: flex;
-  gap: 1rem;
-  justify-content: space-between;
-  margin-bottom: 1rem;
-
-  h2 {
-    margin-bottom: 0.25rem;
-  }
-}
-
-.ability-status {
-  border: 1px solid $color-green;
-  color: $color-green;
-  height: fit-content;
-  padding: 0.2rem 0.5rem;
-
-  &.inactive {
-    border-color: $color-text-hex-50;
-    color: $color-text-hex-50;
-  }
-}
-
-.ability-summary {
-  display: grid;
-  gap: 1rem;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  margin-bottom: 1rem;
-}
-
-.summary-label,
-.spec-label {
-  color: $color-text-hex-60;
-  margin-bottom: 0.35rem;
-}
-
-.ability-spec {
-  display: grid;
-  gap: 1rem;
-}
-
-.ability-spec-row {
-  border-left: 1px solid $color-background-light-border;
-  padding-left: 1rem;
-}
-</style>

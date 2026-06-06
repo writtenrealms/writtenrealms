@@ -46,6 +46,7 @@ from builders import serializers as builder_serializers
 from builders import world_export as builder_world_export
 from quests import manifests as quest_manifests
 from builders.models import (
+    AbilityDefinition,
     BuilderAction,
     BuilderAssignment,
     Currency,
@@ -1714,6 +1715,92 @@ world_trigger_list = WorldTriggerViewSet.as_view({
     'get': 'list',
 })
 world_trigger_detail = WorldTriggerViewSet.as_view({
+    'get': 'retrieve',
+})
+
+
+def _serialize_builder_ability_response(ability):
+    payload = builder_manifests.serialize_ability_payload(ability)
+    payload.update({
+        "created_ts": ability.created_ts,
+        "modified_ts": ability.modified_ts,
+    })
+    return payload
+
+
+class WorldAbilityViewSet(BaseWorldBuilderViewSet):
+    serializer_class = serializers.Serializer
+    http_method_names = ['get', 'head', 'options']
+
+    def _assert_can_view_abilities(self):
+        if self._builder_rank >= 3:
+            return
+        raise drf_exceptions.PermissionDenied(
+            "You do not have permission to view abilities."
+        )
+
+    def get_queryset(self):
+        self._assert_can_view_abilities()
+
+        qs = AbilityDefinition.objects.filter(world=self.world)
+
+        action_type = self.request.query_params.get('action_type')
+        if action_type in ('primary', 'utility'):
+            qs = qs.filter(action_type=action_type)
+
+        is_active = self.request.query_params.get('is_active')
+        if is_active in ('true', '1'):
+            qs = qs.filter(is_active=True)
+        elif is_active in ('false', '0'):
+            qs = qs.filter(is_active=False)
+
+        query = self.request.query_params.get('query')
+        if query:
+            try:
+                query_id = int(query)
+            except ValueError:
+                qs = qs.filter(
+                    Q(name__icontains=query)
+                    | Q(slug__icontains=query)
+                    | Q(command_verbs__contains=[query])
+                )
+            else:
+                qs = qs.filter(pk=query_id)
+
+        sort_by = self.request.query_params.get('sort_by')
+        allowed_sort_fields = {
+            'id',
+            'name',
+            'slug',
+            'action_type',
+            'is_active',
+            'created_ts',
+            'modified_ts',
+        }
+        if sort_by and sort_by.lstrip('-') in allowed_sort_fields:
+            return qs.order_by(sort_by)
+
+        return qs.order_by('slug', 'id')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            data = [_serialize_builder_ability_response(ability) for ability in page]
+            return self.get_paginated_response(data)
+
+        data = [_serialize_builder_ability_response(ability) for ability in queryset]
+        return Response(data)
+
+    def retrieve(self, request, *args, **kwargs):
+        ability = self.get_object()
+        return Response(_serialize_builder_ability_response(ability))
+
+
+world_ability_list = WorldAbilityViewSet.as_view({
+    'get': 'list',
+})
+world_ability_detail = WorldAbilityViewSet.as_view({
     'get': 'retrieve',
 })
 

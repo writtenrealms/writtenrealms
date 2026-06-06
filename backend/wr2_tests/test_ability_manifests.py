@@ -2,7 +2,7 @@ import yaml
 
 from rest_framework.reverse import reverse
 
-from builders.models import AbilityDefinition
+from builders.models import AbilityDefinition, WorldBuilder
 from tests.base import WorldTestCase
 
 
@@ -23,6 +23,35 @@ class TestAbilityManifests(AuthenticatedBuilderWorldTestCase):
             "builder-world-export",
             args=[self.world.pk],
         )
+        self.list_ep = reverse(
+            "builder-world-ability-list",
+            args=[self.world.pk],
+        )
+
+    def _create_ability(self, **overrides):
+        fields = {
+            "world": self.world,
+            "slug": "power-strike",
+            "name": "Power Strike",
+            "command_verbs": ["strike"],
+            "action_type": "primary",
+            "target": {"type": "hostile", "default": "current_target"},
+            "availability": {"classes": [], "min_level": 1},
+            "requirements": {},
+            "cost": {},
+            "cooldown": {"rounds": 2},
+            "components": [
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {},
+                    "text": {"label": "Power Strike"},
+                },
+            ],
+            "is_active": True,
+        }
+        fields.update(overrides)
+        return AbilityDefinition.objects.create(**fields)
 
     def test_apply_ability_manifest_can_create_ability(self):
         manifest = f"""
@@ -222,18 +251,13 @@ spec:
         self.assertEqual(self.world.config.ability_progression["max_known"], "uncapped")
 
     def test_world_export_includes_ability_documents(self):
-        AbilityDefinition.objects.create(
-            world=self.world,
-            slug="power-strike",
-            name="Power Strike",
-            command_verbs=["strike"],
-            action_type="primary",
-            target={"type": "hostile", "default": "current_target", "allow_out_of_combat": False},
-            availability={"classes": [], "min_level": 1},
-            requirements={},
-            cost={},
+        self._create_ability(
+            target={
+                "type": "hostile",
+                "default": "current_target",
+                "allow_out_of_combat": False,
+            },
             cooldown={"rounds": 0},
-            components=[{"type": "damage", "profile": "basic_physical", "overrides": {}, "text": {"label": "Power Strike"}}],
         )
 
         resp = self.client.get(self.export_ep)
@@ -244,3 +268,80 @@ spec:
         self.assertEqual(len(ability_docs), 1)
         self.assertEqual(ability_docs[0]["metadata"]["slug"], "power-strike")
         self.assertEqual(resp.data["summary"]["abilities"], 1)
+
+    def test_world_ability_list_includes_yaml_manifest(self):
+        ability = self._create_ability()
+
+        resp = self.client.get(self.list_ep)
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["count"], 1)
+        ability_data = resp.data["results"][0]
+        self.assertEqual(ability_data["id"], ability.id)
+        self.assertEqual(ability_data["key"], f"ability.{ability.id}")
+        self.assertEqual(ability_data["slug"], "power-strike")
+        self.assertEqual(ability_data["command_verbs"], ["strike"])
+        self.assertEqual(ability_data["action_type"], "primary")
+        self.assertEqual(ability_data["target"]["type"], "hostile")
+        self.assertTrue(ability_data["is_active"])
+        self.assertIn("kind: ability", ability_data["yaml"])
+        self.assertIn("slug: power-strike", ability_data["yaml"])
+        self.assertIn("operation: delete", ability_data["delete_yaml"])
+
+        detail_ep = reverse(
+            "builder-world-ability-detail",
+            args=[self.world.pk, ability.pk],
+        )
+        detail_resp = self.client.get(detail_ep)
+        self.assertEqual(detail_resp.status_code, 200)
+        self.assertEqual(detail_resp.data["id"], ability.id)
+
+    def test_world_ability_list_supports_filters_search_and_sort(self):
+        power_strike = self._create_ability()
+        mend = self._create_ability(
+            slug="mend",
+            name="Mend",
+            command_verbs=["mend"],
+            action_type="utility",
+            target={"type": "self", "default": "self"},
+            is_active=False,
+            components=[
+                {
+                    "type": "healing",
+                    "profile": "basic_heal",
+                    "overrides": {},
+                    "text": {"label": "Mend"},
+                },
+            ],
+        )
+
+        resp = self.client.get(self.list_ep, {"action_type": "utility"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([ability["id"] for ability in resp.data["results"]], [mend.id])
+
+        resp = self.client.get(self.list_ep, {"is_active": "false"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([ability["id"] for ability in resp.data["results"]], [mend.id])
+
+        resp = self.client.get(self.list_ep, {"query": "power"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([ability["id"] for ability in resp.data["results"]], [power_strike.id])
+
+        resp = self.client.get(self.list_ep, {"sort_by": "-slug"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            [ability["slug"] for ability in resp.data["results"]],
+            ["power-strike", "mend"],
+        )
+
+    def test_rank_2_builder_cannot_view_world_ability_list(self):
+        builder_user = self.create_user("ability-list-builder@example.com")
+        WorldBuilder.objects.create(
+            world=self.world,
+            user=builder_user,
+            builder_rank=2,
+        )
+        self.client.force_authenticate(builder_user)
+
+        resp = self.client.get(self.list_ep)
+        self.assertEqual(resp.status_code, 403)
