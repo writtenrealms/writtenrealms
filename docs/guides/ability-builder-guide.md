@@ -4,8 +4,8 @@
 
 This guide describes the WR2 ability authoring model. Ability manifests are
 wired into the runtime for player commands, encounter-round queueing, direct
-damage, healing, stun, damage-over-time, heal-over-time, and out-of-combat
-self utility.
+damage, healing, cast times, stun, damage-over-time, heal-over-time, and
+out-of-combat self utility.
 
 Ability `requirements` use the shared WR2 condition DSL. For condition
 operators and paths, read
@@ -23,6 +23,11 @@ An ability is an authored command that resolves one or more components:
 
 In combat, an ability is queued as the actor's primary action for the next
 encounter round. It replaces the auto-attack for that round.
+
+If an ability has `cast_time.rounds`, the queued ability consumes that many
+encounter rounds charging before its components resolve. For `rounds: 1`, the
+sequence is: prepare the ability, spend the next encounter round charging, then
+resolve the damage or healing on the following encounter round.
 
 If no ability is queued, the actor uses the normal auto-attack.
 
@@ -91,6 +96,8 @@ spec:
     resource: stamina
     amount: 10
     calc: fixed
+  cast_time:
+    rounds: 0
   cooldown:
     rounds: 3
   components:
@@ -117,6 +124,49 @@ but one ability per manifest should be the default authoring style.
 - `percent_base`: spend `amount` percent of the actor's base pool before
   equipment and other maximum-pool modifiers. For energy, `amount: 5` costs 5
   energy when the actor's base energy pool is 100.
+
+## Cast Times
+
+Use `spec.cast_time.rounds` when an ability should charge across encounter
+rounds before its components resolve:
+
+```yaml
+kind: ability
+metadata:
+  slug: charged-bolt
+  name: Charged Bolt
+spec:
+  command:
+    verbs: [bolt]
+  action_type: primary
+  target:
+    type: hostile
+    default: current_target
+  cost:
+    resource: energy
+    amount: 15
+    calc: fixed
+  cast_time:
+    rounds: 1
+  cooldown:
+    rounds: 3
+  components:
+    - type: damage
+      profile: basic_ability
+      overrides:
+        multiplier: 2
+```
+
+With `rounds: 1`, the player sees the prepare acknowledgement immediately, the
+next encounter round is spent charging, and the ability resolves on the
+following encounter round. The charging round consumes the player's primary
+action, so they do not auto-attack during that round.
+
+Players may replace a queued ability before the first encounter round starts.
+Once the ability is actively charging, it cannot be replaced by another ability.
+
+Out-of-combat utility abilities currently resolve immediately; cast times are
+combat-round behavior.
 
 ## Damage Abilities
 

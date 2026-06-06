@@ -45,6 +45,7 @@ ABILITY_DEFINITION_FIELDS = {
     "availability",
     "requirements",
     "cost",
+    "cast_time",
     "cooldown",
     "components",
     "is_active",
@@ -322,6 +323,27 @@ def _normalize_cooldown(value: Any) -> dict[str, Any]:
     }
 
 
+def _normalize_cast_time(value: Any) -> dict[str, Any]:
+    if value in (None, "", {}):
+        return {"rounds": 0}
+    if not isinstance(value, dict):
+        raise AbilityValidationError("spec.cast_time must be a mapping.")
+    unknown_fields = sorted(set(value.keys()) - {"rounds"})
+    if unknown_fields:
+        raise AbilityValidationError(
+            "spec.cast_time has unsupported field(s): "
+            + ", ".join(unknown_fields)
+            + "."
+        )
+    return {
+        "rounds": _coerce_positive_int(
+            value.get("rounds", 0),
+            field_name="spec.cast_time.rounds",
+            minimum=0,
+        )
+    }
+
+
 def _normalize_text(value: Any, *, default_label: str) -> dict[str, str]:
     if value in (None, ""):
         value = {}
@@ -575,6 +597,7 @@ def normalize_ability_definition(
         "availability": _normalize_availability(value.get("availability")),
         "requirements": _normalize_requirements(value.get("requirements")),
         "cost": _normalize_cost(value.get("cost")),
+        "cast_time": _normalize_cast_time(value.get("cast_time")),
         "cooldown": _normalize_cooldown(value.get("cooldown")),
         "components": [
             _normalize_component(

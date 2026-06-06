@@ -72,6 +72,7 @@ class TestCombatAbilities(WorldTestCase):
         availability=None,
         requirements=None,
         cost=None,
+        cast_time=None,
         cooldown=None,
     ):
         return AbilityDefinition.objects.create(
@@ -88,6 +89,7 @@ class TestCombatAbilities(WorldTestCase):
             availability=availability or {"classes": [], "min_level": 1},
             requirements=requirements or {},
             cost=cost or {},
+            cast_time=cast_time or {},
             cooldown=cooldown or {"rounds": 0},
             components=components,
         )
@@ -528,6 +530,7 @@ class TestCombatAbilities(WorldTestCase):
             slug="power-strike",
             name="Power Strike",
             verbs=["strike"],
+            cast_time={"rounds": 1},
             cooldown={"rounds": 2},
             components=[{"type": "damage", "profile": "basic_physical"}],
         )
@@ -544,6 +547,10 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(
             payload["world"]["abilities"]["definitions"]["power-strike"]["cooldown"],
             {"rounds": 2},
+        )
+        self.assertEqual(
+            payload["world"]["abilities"]["definitions"]["power-strike"]["cast_time"],
+            {"rounds": 1},
         )
 
     def test_queued_ability_replaces_auto_attack_for_the_round(self):
@@ -573,6 +580,93 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(len(attacks), 1)
         self.assertEqual(attacks[0]["data"]["attack"], "power-strike")
         self.assertEqual(attacks[0]["data"]["damage_taken"], self.stats["attack_power"] * 2)
+
+    def test_cast_time_ability_charges_one_round_before_resolving(self):
+        self._ability(
+            slug="charged-strike",
+            name="Charged Strike",
+            verbs=["charge"],
+            cast_time={"rounds": 1},
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 2},
+                    "text": {"label": "Charged Strike"},
+                }
+            ],
+        )
+        self.player.known_abilities = ["charged-strike"]
+        self.player.save(update_fields=["known_abilities"])
+        mob = self._mob(health=self.stats["attack_power"] * 5)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "charge rat")
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.health, self.stats["attack_power"] * 5)
+        casts = self._messages_by_type(messages, "notification.combat.ability_casting")
+        self.assertEqual(len(casts), 1)
+        self.assertEqual(casts[0]["data"]["ability"]["slug"], "charged-strike")
+        self.assertEqual(casts[0]["data"]["rounds_remaining"], 0)
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertEqual(attacks, [])
+
+        encounter = CombatEncounter.objects.get(player=self.player, mob=mob, status=CombatEncounter.STATUS_ACTIVE)
+        self.assertEqual(encounter.pending_player_ability["status"], "casting")
+        self.assertEqual(encounter.pending_player_ability["cast_rounds_remaining"], 0)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "kill rat")
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.health, self.stats["attack_power"] * 3)
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertEqual(len(attacks), 1)
+        self.assertEqual(attacks[0]["data"]["attack"], "charged-strike")
+        self.assertEqual(attacks[0]["data"]["damage_taken"], self.stats["attack_power"] * 2)
+
+    def test_charging_ability_cannot_be_replaced_mid_cast(self):
+        self._ability(
+            slug="charged-strike",
+            name="Charged Strike",
+            verbs=["charge"],
+            cast_time={"rounds": 1},
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 2},
+                    "text": {"label": "Charged Strike"},
+                }
+            ],
+        )
+        self._ability(
+            slug="quick-jab",
+            name="Quick Jab",
+            verbs=["jab"],
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 1},
+                    "text": {"label": "Quick Jab"},
+                }
+            ],
+        )
+        self.player.known_abilities = ["charged-strike", "quick-jab"]
+        self.player.save(update_fields=["known_abilities"])
+        mob = self._mob(health=self.stats["attack_power"] * 5)
+
+        dispatch_text_command(self.player.id, "charge rat")
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "jab rat")
+
+        errors = self._messages_by_type(messages, "cmd.ability.error")
+        self.assertEqual(errors[0]["data"]["code"], "ability_cast_in_progress")
+        encounter = CombatEncounter.objects.get(player=self.player, mob=mob, status=CombatEncounter.STATUS_ACTIVE)
+        self.assertEqual(encounter.pending_player_ability["ability"], "charged-strike")
 
     def test_queued_ability_can_be_replaced_before_scheduled_resolution(self):
         self.world.config.combat_resolution_interval = 1.5

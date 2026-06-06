@@ -39,6 +39,7 @@ class TestAbilityManifests(AuthenticatedBuilderWorldTestCase):
             "availability": {"classes": [], "min_level": 1},
             "requirements": {},
             "cost": {},
+            "cast_time": {"rounds": 1},
             "cooldown": {"rounds": 2},
             "components": [
                 {
@@ -67,6 +68,8 @@ spec:
   target:
     type: hostile
     default: current_target
+  cast_time:
+    rounds: 1
   cooldown:
     rounds: 2
   components:
@@ -84,6 +87,7 @@ spec:
         ability = AbilityDefinition.objects.get(world=self.world, slug="power-strike")
         self.assertEqual(ability.name, "Power Strike")
         self.assertEqual(ability.command_verbs, ["strike"])
+        self.assertEqual(ability.cast_time["rounds"], 1)
         self.assertEqual(ability.cooldown["rounds"], 2)
         self.assertEqual(ability.components[0]["overrides"]["multiplier"], 1.5)
 
@@ -267,6 +271,7 @@ spec:
         ability_docs = [doc for doc in docs if doc["kind"] == "ability"]
         self.assertEqual(len(ability_docs), 1)
         self.assertEqual(ability_docs[0]["metadata"]["slug"], "power-strike")
+        self.assertEqual(ability_docs[0]["spec"]["cast_time"], {"rounds": 1})
         self.assertEqual(resp.data["summary"]["abilities"], 1)
 
     def test_world_ability_list_includes_yaml_manifest(self):
@@ -295,6 +300,7 @@ spec:
         detail_resp = self.client.get(detail_ep)
         self.assertEqual(detail_resp.status_code, 200)
         self.assertEqual(detail_resp.data["id"], ability.id)
+        self.assertEqual(detail_resp.data["manifest"]["spec"]["cast_time"], {"rounds": 1})
 
     def test_world_ability_list_supports_filters_search_and_sort(self):
         power_strike = self._create_ability()

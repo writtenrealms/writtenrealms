@@ -8,9 +8,9 @@ direction for features that build on it.
 The initial runtime is wired: player ability commands can be learned, queued,
 substituted before scheduled resolution, resolved in encounter rounds, and used
 for out-of-combat self utility. The current implementation covers direct
-damage, healing, stun, damage-over-time, and heal-over-time. Multi-participant
-frays, class grant manifests, feat-style choice slots, and richer effect
-primitives remain roadmap items.
+damage, healing, cast-time windups, stun, damage-over-time, and heal-over-time.
+Multi-participant frays, class grant manifests, feat-style choice slots, and
+richer effect primitives remain roadmap items.
 
 The goal is to make abilities:
 
@@ -681,18 +681,16 @@ channel:
   component_interval_rounds: 1
 ```
 
-Initial implementation should probably skip windups and channels. Start with
-abilities that resolve on the next encounter round.
-
-When windups are added:
+Cast-time windups are implemented for primary combat abilities with
+`cast_time.rounds`.
 
 - a windup should occupy the actor's primary action
 - the pending ability should become a committed casting intent
-- interruption rules should be explicit effect rules, not hidden timing side
+- interruption rules should remain explicit effect rules, not hidden timing side
   effects
 - completing the windup should resolve the ability component list
 
-When channels are added:
+Channels remain future work:
 
 - a channel should be represented as repeated scheduled components across
   encounter rounds
@@ -923,13 +921,14 @@ pre-normalized data.
 - resolve healing abilities through the combat formula result shape
 - pay simple resource costs at resolution time
 - start simple round-based cooldowns at resolution time
+- support simple cast-time windups with `cast_time.rounds`
 - make queued ability replace auto-attack
 - fall back to auto-attack if the queued ability is invalid
 - emit queue and resolution events
 - keep round resolution bounded to preloaded encounter state
 
-Limit Phase 1 to direct damage and direct healing. Skip windups, channels,
-reactions, bonus actions, and complex effects.
+Limit Phase 1 to direct damage, direct healing, and simple cast-time windups.
+Skip channels, reactions, bonus actions, and complex effects.
 
 ### Phase 2: First Effects
 

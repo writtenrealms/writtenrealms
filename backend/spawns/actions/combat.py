@@ -16,6 +16,7 @@ from builders.models import AbilityDefinition
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.abilities import (
     ability_component_overrides,
+    ability_cast_rounds,
     ability_is_available_to_player,
     ability_state_event,
     cooldown_remaining,
@@ -667,6 +668,42 @@ def _combat_failure_event(player: Player, text: str, *, code: str) -> GameEvent:
     )
 
 
+def _pending_cast_rounds_remaining(pending: dict, ability: AbilityDefinition) -> int:
+    if "cast_rounds_remaining" in pending:
+        try:
+            return max(0, int(pending.get("cast_rounds_remaining") or 0))
+        except (TypeError, ValueError):
+            return 0
+    return ability_cast_rounds(ability)
+
+
+def _ability_casting_event(
+    *,
+    player: Player,
+    ability: AbilityDefinition,
+    round_id: str,
+    rounds_remaining: int,
+) -> GameEvent:
+    if rounds_remaining > 0:
+        text = f"You continue charging {ability.name}."
+    else:
+        text = f"You charge {ability.name}."
+    return GameEvent(
+        type="notification.combat.ability_casting",
+        recipients=[player.key],
+        data={
+            "ability": {
+                "slug": ability.slug,
+                "name": ability.name,
+                "action_type": ability.action_type,
+            },
+            "round_id": round_id,
+            "rounds_remaining": rounds_remaining,
+        },
+        text=text,
+    )
+
+
 def _effect_applies_to(effect: dict, *, target_type: str, target_id: int) -> bool:
     target = effect.get("target") or {}
     return target.get("type") == target_type and int(target.get("id") or 0) == target_id
@@ -993,6 +1030,23 @@ def _execute_pending_player_ability(
                 code="target_invalid",
             )
         ], AbilityRoundResult(consumed_primary=False)
+
+    cast_rounds_remaining = _pending_cast_rounds_remaining(pending, ability)
+    if cast_rounds_remaining > 0:
+        next_remaining = cast_rounds_remaining - 1
+        encounter.pending_player_ability = {
+            **pending,
+            "status": "casting",
+            "cast_rounds_remaining": next_remaining,
+        }
+        return [
+            _ability_casting_event(
+                player=player,
+                ability=ability,
+                round_id=round_id,
+                rounds_remaining=next_remaining,
+            )
+        ], AbilityRoundResult(consumed_primary=True)
 
     try:
         cost_paid = pay_ability_cost(player, ability)

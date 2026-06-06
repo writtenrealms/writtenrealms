@@ -50,6 +50,10 @@
           <ManifestValue :value="ability.cost || {}" />
         </div>
         <div class="summary-row">
+          <div class="summary-label">Cast Time</div>
+          <ManifestValue :value="ability.cast_time || {}" />
+        </div>
+        <div class="summary-row">
           <div class="summary-label">Cooldown</div>
           <ManifestValue :value="ability.cooldown || {}" />
         </div>

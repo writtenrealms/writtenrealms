@@ -85,6 +85,7 @@ def resolve_ability_for_command(world, command: str) -> AbilityDefinition | None
         "availability",
         "requirements",
         "cost",
+        "cast_time",
         "cooldown",
         "components",
         "is_active",
@@ -684,6 +685,13 @@ def start_ability_cooldown(player: Player, ability: AbilityDefinition) -> bool:
     return True
 
 
+def ability_cast_rounds(ability: AbilityDefinition) -> int:
+    try:
+        return max(0, int((ability.cast_time or {}).get("rounds") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _resource_max(player: Player, resource: str) -> int:
     stats = compute_stats(
         player.level,
@@ -816,7 +824,7 @@ def _pending_payload(
     target_id: int,
     queued_round: int,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "ability": ability.slug,
         "command": command,
         "target": {
@@ -825,6 +833,27 @@ def _pending_payload(
         },
         "queued_round": queued_round,
     }
+    cast_rounds = ability_cast_rounds(ability)
+    if cast_rounds > 0:
+        payload["status"] = "queued"
+        payload["cast_rounds_remaining"] = cast_rounds
+    return payload
+
+
+def _pending_ability_is_casting(pending: Any) -> bool:
+    return isinstance(pending, dict) and pending.get("status") == "casting"
+
+
+def _raise_if_ability_casting(pending: Any) -> None:
+    if not _pending_ability_is_casting(pending):
+        return
+    ability_slug = str((pending or {}).get("ability") or "").strip().lower()
+    data = {"ability": ability_slug} if ability_slug else {}
+    raise ActionError(
+        "You are already charging an ability.",
+        code="ability_cast_in_progress",
+        data=data,
+    )
 
 
 def _combat_interval(config) -> float:
@@ -1120,26 +1149,22 @@ class AbilityAction:
             _ability_ack(player=player, ability=ability, replaced=False, target=target_mob)
         ]
         room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
+        encounter = CombatEncounter(
+            world=player.world,
+            room=room,
+            player=player,
+            mob=target_mob,
+            resolution_interval=0,
+            round_number=0,
+            pending_player_ability=_pending_payload(
+                ability=ability,
+                command=command,
+                target_type="mob",
+                target_id=target_mob.id,
+                queued_round=0,
+            ),
+        )
         for round_no in range(1, combat_actions.MAX_AUTO_RESOLVE_ROUNDS + 1):
-            encounter = CombatEncounter(
-                world=player.world,
-                room=room,
-                player=player,
-                mob=target_mob,
-                resolution_interval=0,
-                round_number=round_no - 1,
-                pending_player_ability=(
-                    _pending_payload(
-                        ability=ability,
-                        command=command,
-                        target_type="mob",
-                        target_id=target_mob.id,
-                        queued_round=round_no - 1,
-                    )
-                    if round_no == 1
-                    else {}
-                ),
-            )
             step = combat_actions._apply_encounter_round(
                 encounter=encounter,
                 player=player,
@@ -1179,6 +1204,7 @@ class AbilityAction:
 
             if target_type in {"self", "ally"}:
                 if active_encounter:
+                    _raise_if_ability_casting(active_encounter.pending_player_ability)
                     replaced = bool(active_encounter.pending_player_ability)
                     active_encounter.pending_player_ability = _pending_payload(
                         ability=ability,
@@ -1206,6 +1232,7 @@ class AbilityAction:
 
             room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
             if active_encounter:
+                _raise_if_ability_casting(active_encounter.pending_player_ability)
                 if not active_encounter.mob_id:
                     raise ActionError("You are already in combat.", code="combat_in_progress")
                 target_mob = (

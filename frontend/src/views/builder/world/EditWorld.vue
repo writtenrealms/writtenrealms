@@ -462,6 +462,8 @@ spec:
     min_level: 1
   requirements: {}
   cost: {}
+  cast_time:
+    rounds: 0
   cooldown:
     rounds: 0
   components:
