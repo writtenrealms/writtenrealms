@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import TypeVar
 
 from config import constants as adv_consts
@@ -216,12 +217,20 @@ def resolve_room_mob_target(
     empty_error: str,
     not_found_error: str,
     allow_single_match_when_empty: bool = False,
+    allow_first_match_when_empty: bool = False,
+    empty_candidate_filter: Callable[[Mob], bool] | None = None,
 ) -> Mob:
     normalized = _normalize_selector(selector)
     room_mobs = list(room.mobs.select_related("definition", "template"))
     if not normalized:
-        if allow_single_match_when_empty and len(room_mobs) == 1:
-            return room_mobs[0]
+        if allow_single_match_when_empty:
+            candidates = room_mobs
+            if empty_candidate_filter:
+                candidates = [mob for mob in room_mobs if empty_candidate_filter(mob)]
+            if allow_first_match_when_empty and candidates:
+                return candidates[0]
+            if len(candidates) == 1:
+                return candidates[0]
         raise ActionError(empty_error, code="missing_target")
 
     if normalized.startswith("mob."):

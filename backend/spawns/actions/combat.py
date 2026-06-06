@@ -1558,6 +1558,14 @@ class FleeAction:
 
 
 class KillAction:
+    @staticmethod
+    def _is_implicit_target_candidate(mob: Mob) -> bool:
+        return (
+            not getattr(mob, "is_pending_deletion", False)
+            and getattr(mob, "attackable", True)
+            and int(getattr(mob, "health", 0) or 0) > 0
+        )
+
     def _resolve_immediately(self, *, player: Player, target_mob: Mob, config) -> ActionResult:
         events: list[GameEvent] = []
         room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
@@ -1603,6 +1611,9 @@ class KillAction:
                 target_selector,
                 empty_error="Kill what?",
                 not_found_error="You don't see them here.",
+                allow_single_match_when_empty=True,
+                allow_first_match_when_empty=True,
+                empty_candidate_filter=self._is_implicit_target_candidate,
             )
             target_mob = (
                 Mob.objects.select_for_update()

@@ -262,6 +262,108 @@ class TestKillCommand(WorldTestCase):
         )
         self.assertEqual(schedule_mock.call_args.kwargs["countdown"], 1.5)
 
+    def test_bare_k_targets_single_attackable_room_mob(self):
+        self.world.config.combat_resolution_interval = 1.5
+        self.world.config.save(update_fields=["combat_resolution_interval"])
+
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Persian Guard",
+            keywords="persian guard",
+            health=self.stats["attack_power"] + 5,
+            health_max=self.stats["attack_power"] + 5,
+            attack_power=4,
+            exp_worth=17,
+        )
+        Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Blacksmith",
+            keywords="blacksmith",
+            attackable=False,
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async") as schedule_mock:
+            with self.captureOnCommitCallbacks(execute=True):
+                with capture_game_messages() as messages:
+                    dispatch_text_command(self.player.id, "k")
+
+        encounter = CombatEncounter.objects.get(
+            player=self.player,
+            mob=mob,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        engage_message = self._message_by_type(messages, "cmd.kill.success", self.player.key)
+        self.assertIsNotNone(engage_message)
+        self.assertEqual(engage_message["text"], "You engage Persian Guard.")
+        self.assertEqual(engage_message["data"]["actor"]["target"]["key"], mob.key)
+        schedule_mock.assert_called_once()
+        self.assertEqual(
+            schedule_mock.call_args.kwargs["kwargs"]["encounter_id"],
+            encounter.id,
+        )
+
+    def test_bare_k_targets_first_attackable_room_mob(self):
+        self.world.config.combat_resolution_interval = 1.5
+        self.world.config.save(update_fields=["combat_resolution_interval"])
+
+        first_soldier = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Soldier",
+            keywords="soldier",
+            health=self.stats["attack_power"],
+            health_max=self.stats["attack_power"],
+        )
+        Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Soldier",
+            keywords="soldier",
+            health=self.stats["attack_power"],
+            health_max=self.stats["attack_power"],
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with self.captureOnCommitCallbacks(execute=True):
+                with capture_game_messages() as messages:
+                    dispatch_text_command(self.player.id, "k")
+
+        encounter = CombatEncounter.objects.get(
+            player=self.player,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        self.assertEqual(encounter.mob_id, first_soldier.id)
+        engage_message = self._message_by_type(messages, "cmd.kill.success", self.player.key)
+        self.assertIsNotNone(engage_message)
+        self.assertEqual(engage_message["data"]["actor"]["target"]["key"], first_soldier.key)
+
+    def test_bare_k_does_not_target_single_non_attackable_mob(self):
+        Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Blacksmith",
+            keywords="blacksmith",
+            health=self.stats["attack_power"],
+            health_max=self.stats["attack_power"],
+            attackable=False,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "k")
+
+        error = self._message_by_type(messages, "cmd.kill.error", self.player.key)
+        self.assertIsNotNone(error)
+        self.assertEqual(error["text"], "Kill what?")
+        self.assertEqual(error["data"]["code"], "missing_target")
+        self.assertFalse(
+            CombatEncounter.objects.filter(
+                player=self.player,
+                status=CombatEncounter.STATUS_ACTIVE,
+            ).exists()
+        )
+
     def test_scheduled_combat_round_advances_one_step_and_reschedules(self):
         self.world.config.combat_resolution_interval = 1.5
         self.world.config.save(update_fields=["combat_resolution_interval"])
