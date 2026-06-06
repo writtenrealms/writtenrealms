@@ -12,7 +12,26 @@ from django.utils.text import slugify
 from rest_framework import serializers
 
 from builders import serializers as builder_serializers
-from builders.models import AbilityDefinition, Currency, ItemTemplate, MobTemplate, Trigger
+from builders.item_definitions import (
+    ItemDefinitionError,
+    item_definition_property_fields,
+    normalize_attribute_map,
+    normalize_item_randomization,
+)
+from builders.mob_definitions import mob_definition_property_fields
+from builders.models import (
+    AbilityDefinition,
+    Currency,
+    ItemBundle,
+    ItemBundleEntry,
+    ItemDefinition,
+    ItemTemplate,
+    MerchantProfile,
+    MerchantStockSlot,
+    MobDefinition,
+    MobTemplate,
+    Trigger,
+)
 from config import constants as adv_consts
 from core.abilities import (
     AbilityValidationError,
@@ -45,6 +64,10 @@ WORLD_MANIFEST_KIND = "world"
 QUEST_MANIFEST_KIND = "quest"
 QUEST_ARC_MANIFEST_KIND = "questarc"
 ITEM_TEMPLATE_MANIFEST_KIND = "itemtemplate"
+ITEM_DEFINITION_MANIFEST_KIND = "itemdefinition"
+ITEM_BUNDLE_MANIFEST_KIND = "itembundle"
+MERCHANT_PROFILE_MANIFEST_KIND = "merchantprofile"
+MOB_DEFINITION_MANIFEST_KIND = "mobdefinition"
 ABILITY_MANIFEST_KIND = "ability"
 ABILITIES_MANIFEST_KIND = "abilities"
 TRIGGER_MANIFEST_OPERATION_APPLY = "apply"
@@ -62,6 +85,26 @@ _ITEM_TEMPLATE_MANIFEST_KIND_ALIASES = {
     ITEM_TEMPLATE_MANIFEST_KIND,
     "item-template",
     "item_template",
+}
+_ITEM_DEFINITION_MANIFEST_KIND_ALIASES = {
+    ITEM_DEFINITION_MANIFEST_KIND,
+    "item-definition",
+    "item_definition",
+}
+_ITEM_BUNDLE_MANIFEST_KIND_ALIASES = {
+    ITEM_BUNDLE_MANIFEST_KIND,
+    "item-bundle",
+    "item_bundle",
+}
+_MERCHANT_PROFILE_MANIFEST_KIND_ALIASES = {
+    MERCHANT_PROFILE_MANIFEST_KIND,
+    "merchant-profile",
+    "merchant_profile",
+}
+_MOB_DEFINITION_MANIFEST_KIND_ALIASES = {
+    MOB_DEFINITION_MANIFEST_KIND,
+    "mob-definition",
+    "mob_definition",
 }
 _ABILITY_MANIFEST_KIND_ALIASES = {
     ABILITY_MANIFEST_KIND,
@@ -89,14 +132,17 @@ _WORLD_CONFIG_CONFIG_TEXT_FIELDS = (
 )
 _WORLD_CONFIG_CONFIG_BOOL_FIELDS = (
     "can_select_faction",
+    "can_select_gender",
     "auto_equip",
     "is_narrative",
     "players_can_set_title",
     "allow_pvp",
-    "is_classless",
     "non_ascii_names",
     "decay_glory",
     "globals_enabled",
+)
+_WORLD_CONFIG_LEGACY_BOOL_FIELDS = (
+    "is_classless",
 )
 _WORLD_CONFIG_CONFIG_INT_FIELDS = (
     "starting_gold",
@@ -110,6 +156,7 @@ _WORLD_CONFIG_CONFIG_CHOICE_FIELDS = {
     "death_mode": adv_consts.DEATH_MODES,
     "death_route": adv_consts.DEATH_ROUTES,
     "pvp_mode": adv_consts.PVP_MODES,
+    "default_gender": adv_consts.GENDERS,
 }
 _WORLD_CONFIG_CONFIG_ROOM_FIELDS = (
     "starting_room",
@@ -126,6 +173,30 @@ _WORLD_FIELDS_PROPAGATED_TO_SPAWNS = {
     "motd",
     "is_public",
 }
+
+
+def _has_authored_world_config_map(value: Any) -> bool:
+    return isinstance(value, dict) and bool(value)
+
+
+def _export_stat_system(world: World) -> dict[str, Any] | None:
+    config = world.config
+    if not config or not _has_authored_world_config_map(config.stat_system):
+        return None
+    try:
+        return get_world_stat_system(world)
+    except StatSystemValidationError:
+        return None
+
+
+def _export_combat_system(world: World) -> dict[str, Any] | None:
+    config = world.config
+    if not config or not _has_authored_world_config_map(config.combat_system):
+        return None
+    try:
+        return get_world_combat_system(world)
+    except CombatFormulaValidationError:
+        return None
 
 _SCOPE_TO_TARGET_MODEL = {
     adv_consts.TRIGGER_SCOPE_ROOM: Room,
@@ -172,19 +243,42 @@ _ITEM_TEMPLATE_SPEC_FIELDS = (
     "on_use_equipped",
     "health_max",
     "health_regen",
-    "mana_max",
-    "mana_regen",
+    "energy_max",
+    "energy_regen",
     "stamina_max",
     "stamina_regen",
-    "strength",
-    "constitution",
-    "dexterity",
-    "intelligence",
+    "attributes",
     "attack_power",
-    "spell_power",
+    "ability_power",
     "resilience",
     "dodge",
     "crit",
+)
+_ITEM_DEFINITION_BASE_PROPERTY_FIELDS = item_definition_property_fields()
+_ITEM_DEFINITION_SPEC_FIELDS = (
+    "description",
+    "ground_description",
+    "notes",
+    "keywords",
+    "type",
+    "attributes",
+    "randomization",
+    *_ITEM_DEFINITION_BASE_PROPERTY_FIELDS,
+)
+_MOB_DEFINITION_BASE_PROPERTY_FIELDS = mob_definition_property_fields()
+_MOB_DEFINITION_SPEC_FIELDS = (
+    "description",
+    "room_description",
+    "notes",
+    "keywords",
+    "type",
+    "assists",
+    "attributes",
+    "randomization",
+    "combat",
+    "merchant",
+    "trainer",
+    *_MOB_DEFINITION_BASE_PROPERTY_FIELDS,
 )
 
 
@@ -252,6 +346,76 @@ class ParsedItemTemplateDeleteManifest:
     world: World
     item_template: ItemTemplate
     item_template_id: int
+
+
+@dataclass
+class ParsedItemDefinitionManifest:
+    world: World
+    item_definition: ItemDefinition | None
+    item_definition_id: int | None
+    slug: str
+    name: str
+    fields: dict[str, Any]
+
+
+@dataclass
+class ParsedItemDefinitionDeleteManifest:
+    world: World
+    item_definition: ItemDefinition
+    item_definition_id: int
+
+
+@dataclass
+class ParsedItemBundleManifest:
+    world: World
+    item_bundle: ItemBundle | None
+    item_bundle_id: int | None
+    slug: str
+    name: str
+    fields: dict[str, Any]
+    entries: list[dict[str, Any]] | None
+
+
+@dataclass
+class ParsedItemBundleDeleteManifest:
+    world: World
+    item_bundle: ItemBundle
+    item_bundle_id: int
+
+
+@dataclass
+class ParsedMerchantProfileManifest:
+    world: World
+    merchant_profile: MerchantProfile | None
+    merchant_profile_id: int | None
+    slug: str
+    name: str
+    fields: dict[str, Any]
+    stock_slots: list[dict[str, Any]] | None
+
+
+@dataclass
+class ParsedMerchantProfileDeleteManifest:
+    world: World
+    merchant_profile: MerchantProfile
+    merchant_profile_id: int
+
+
+@dataclass
+class ParsedMobDefinitionManifest:
+    world: World
+    mob_definition: MobDefinition | None
+    mob_definition_id: int | None
+    slug: str
+    name: str
+    fields: dict[str, Any]
+
+
+@dataclass
+class ParsedMobDefinitionDeleteManifest:
+    world: World
+    mob_definition: MobDefinition
+    mob_definition_id: int
 
 
 @dataclass
@@ -374,6 +538,14 @@ def parse_manifest_kind(manifest: dict[str, Any]) -> str:
         return WORLD_MANIFEST_KIND
     if manifest_kind in _ITEM_TEMPLATE_MANIFEST_KIND_ALIASES:
         return ITEM_TEMPLATE_MANIFEST_KIND
+    if manifest_kind in _ITEM_DEFINITION_MANIFEST_KIND_ALIASES:
+        return ITEM_DEFINITION_MANIFEST_KIND
+    if manifest_kind in _ITEM_BUNDLE_MANIFEST_KIND_ALIASES:
+        return ITEM_BUNDLE_MANIFEST_KIND
+    if manifest_kind in _MERCHANT_PROFILE_MANIFEST_KIND_ALIASES:
+        return MERCHANT_PROFILE_MANIFEST_KIND
+    if manifest_kind in _MOB_DEFINITION_MANIFEST_KIND_ALIASES:
+        return MOB_DEFINITION_MANIFEST_KIND
     if manifest_kind in _ABILITY_MANIFEST_KIND_ALIASES:
         return ABILITY_MANIFEST_KIND
     if manifest_kind in _ABILITIES_MANIFEST_KIND_ALIASES:
@@ -384,7 +556,7 @@ def parse_manifest_kind(manifest: dict[str, Any]) -> str:
         return QUEST_ARC_MANIFEST_KIND
     raise serializers.ValidationError(
         f"Unsupported manifest kind '{manifest_kind}'. "
-        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_MANIFEST_KIND}, {ITEM_TEMPLATE_MANIFEST_KIND}, {ABILITY_MANIFEST_KIND}, {ABILITIES_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
+        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_MANIFEST_KIND}, {ITEM_TEMPLATE_MANIFEST_KIND}, {ITEM_DEFINITION_MANIFEST_KIND}, {ITEM_BUNDLE_MANIFEST_KIND}, {MERCHANT_PROFILE_MANIFEST_KIND}, {MOB_DEFINITION_MANIFEST_KIND}, {ABILITY_MANIFEST_KIND}, {ABILITIES_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
     )
 
 
@@ -519,53 +691,58 @@ def world_config_to_manifest(
     if not config:
         raise serializers.ValidationError("World has no config to serialize.")
 
+    spec = {
+        "name": world.name or "",
+        "short_description": world.short_description or "",
+        "description": world.description or "",
+        "motd": world.motd or "",
+        "is_public": bool(world.is_public),
+        "starting_gold": int(config.starting_gold),
+        "starting_level": int(config.starting_level),
+        _WORLD_CONFIG_LEVELING_FIELD: normalize_leveling_curve(
+            config.leveling_curve
+        ),
+        _WORLD_CONFIG_ABILITY_PROGRESS_FIELD: normalize_ability_progression(
+            config.ability_progression
+        ),
+        "max_level": int(config.max_level),
+        "combat_resolution_interval": _serialize_number(
+            config.combat_resolution_interval
+        ),
+        "starting_room": _serialize_world_room_reference(
+            room=config.starting_room,
+            mode=room_reference_mode,
+        ),
+        "death_room": _serialize_world_room_reference(
+            room=config.death_room,
+            mode=room_reference_mode,
+        ),
+        "death_mode": config.death_mode,
+        "death_route": config.death_route,
+        "pvp_mode": config.pvp_mode,
+        "can_select_faction": bool(config.can_select_faction),
+        "auto_equip": bool(config.auto_equip),
+        "is_narrative": bool(config.is_narrative),
+        "players_can_set_title": bool(config.players_can_set_title),
+        "allow_pvp": bool(config.allow_pvp),
+        "non_ascii_names": bool(config.non_ascii_names),
+        "globals_enabled": bool(config.globals_enabled),
+        "decay_glory": bool(config.decay_glory),
+        "built_by": config.built_by or "",
+        "small_background": config.small_background or "",
+        "large_background": config.large_background or "",
+        "name_exclusions": config.name_exclusions or "",
+    }
+    stat_system = _export_stat_system(world)
+    if stat_system:
+        spec[_WORLD_CONFIG_STATS_FIELD] = stat_system
+    combat_system = _export_combat_system(world)
+    if combat_system:
+        spec[_WORLD_CONFIG_COMBAT_FIELD] = combat_system
+
     manifest = {
         "kind": manifest_kind,
-        "spec": {
-            "name": world.name or "",
-            "short_description": world.short_description or "",
-            "description": world.description or "",
-            "motd": world.motd or "",
-            "is_public": bool(world.is_public),
-            "starting_gold": int(config.starting_gold),
-            "starting_level": int(config.starting_level),
-            _WORLD_CONFIG_LEVELING_FIELD: normalize_leveling_curve(
-                config.leveling_curve
-            ),
-            _WORLD_CONFIG_ABILITY_PROGRESS_FIELD: normalize_ability_progression(
-                config.ability_progression
-            ),
-            "max_level": int(config.max_level),
-            "combat_resolution_interval": _serialize_number(
-                config.combat_resolution_interval
-            ),
-            "starting_room": _serialize_world_room_reference(
-                room=config.starting_room,
-                mode=room_reference_mode,
-            ),
-            "death_room": _serialize_world_room_reference(
-                room=config.death_room,
-                mode=room_reference_mode,
-            ),
-            "death_mode": config.death_mode,
-            "death_route": config.death_route,
-            "pvp_mode": config.pvp_mode,
-            "can_select_faction": bool(config.can_select_faction),
-            "auto_equip": bool(config.auto_equip),
-            "is_narrative": bool(config.is_narrative),
-            "players_can_set_title": bool(config.players_can_set_title),
-            "allow_pvp": bool(config.allow_pvp),
-            "is_classless": bool(config.is_classless),
-            "non_ascii_names": bool(config.non_ascii_names),
-            "globals_enabled": bool(config.globals_enabled),
-            "decay_glory": bool(config.decay_glory),
-            "built_by": config.built_by or "",
-            "small_background": config.small_background or "",
-            "large_background": config.large_background or "",
-            "name_exclusions": config.name_exclusions or "",
-            _WORLD_CONFIG_STATS_FIELD: get_world_stat_system(world),
-            _WORLD_CONFIG_COMBAT_FIELD: get_world_combat_system(world),
-        },
+        "spec": spec,
     }
     if include_metadata:
         manifest["metadata"] = {
@@ -641,13 +818,12 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
             "allow_pvp": bool(config.allow_pvp),
             "pvp_mode": config.pvp_mode,
             "built_by": config.built_by or "",
-            "is_classless": bool(config.is_classless),
             "non_ascii_names": bool(config.non_ascii_names),
             "decay_glory": bool(config.decay_glory),
             "name_exclusions": config.name_exclusions or "",
             "globals_enabled": bool(config.globals_enabled),
-            "stat_system": get_world_stat_system(world),
-            "combat_system": get_world_combat_system(world),
+            "stat_system": _export_stat_system(world) or {},
+            "combat_system": _export_combat_system(world) or {},
             "ability_progression": normalize_ability_progression(
                 config.ability_progression
             ),
@@ -737,6 +913,324 @@ def serialize_item_template_payload(item_template: ItemTemplate) -> dict[str, An
     payload["delete_manifest"] = delete_manifest
     payload["delete_yaml"] = manifest_to_yaml(delete_manifest)
     return payload
+
+
+def _item_definition_spec_from_instance(item_definition: ItemDefinition) -> dict[str, Any]:
+    spec = {
+        "description": item_definition.description or "",
+        "ground_description": item_definition.ground_description or "",
+        "notes": item_definition.notes or "",
+        "keywords": item_definition.keywords or "",
+        "type": item_definition.item_type or adv_consts.ITEM_TYPE_INERT,
+    }
+    for field_name, value in (item_definition.base_properties or {}).items():
+        if value is None:
+            spec[field_name] = ""
+        else:
+            spec[field_name] = value
+    if item_definition.attributes:
+        spec["attributes"] = item_definition.attributes
+    else:
+        spec["attributes"] = {}
+    if item_definition.randomization:
+        spec["randomization"] = item_definition.randomization
+    else:
+        spec["randomization"] = {}
+    return spec
+
+
+def item_definition_to_manifest(item_definition: ItemDefinition) -> dict[str, Any]:
+    return {
+        "kind": ITEM_DEFINITION_MANIFEST_KIND,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, item_definition.world_id),
+            "id": item_definition.id,
+            "key": item_definition.key,
+            "slug": item_definition.slug,
+            "name": item_definition.name or "",
+        },
+        "spec": _item_definition_spec_from_instance(item_definition),
+    }
+
+
+def item_definition_delete_manifest(item_definition: ItemDefinition) -> dict[str, Any]:
+    return {
+        "kind": ITEM_DEFINITION_MANIFEST_KIND,
+        "operation": TRIGGER_MANIFEST_OPERATION_DELETE,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, item_definition.world_id),
+            "id": item_definition.id,
+            "key": item_definition.key,
+            "slug": item_definition.slug,
+            "name": item_definition.name or "",
+        },
+    }
+
+
+def serialize_item_definition_payload(item_definition: ItemDefinition) -> dict[str, Any]:
+    manifest = item_definition_to_manifest(item_definition)
+    delete_manifest = item_definition_delete_manifest(item_definition)
+    return {
+        "id": item_definition.id,
+        "key": item_definition.key,
+        "slug": item_definition.slug,
+        "name": item_definition.name or "",
+        "description": item_definition.description or "",
+        "ground_description": item_definition.ground_description or "",
+        "keywords": item_definition.keywords or "",
+        "notes": item_definition.notes or "",
+        "type": item_definition.item_type,
+        "base_properties": item_definition.base_properties or {},
+        "attributes": item_definition.attributes or {},
+        "randomization": item_definition.randomization or {},
+        "manifest": manifest,
+        "yaml": manifest_to_yaml(manifest),
+        "delete_manifest": delete_manifest,
+        "delete_yaml": manifest_to_yaml(delete_manifest),
+    }
+
+
+def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[str, Any]:
+    spec = {
+        "description": mob_definition.description or "",
+        "room_description": mob_definition.room_description or "",
+        "notes": mob_definition.notes or "",
+        "keywords": mob_definition.keywords or "",
+        "type": mob_definition.mob_type or adv_consts.MOB_TYPE_BEAST,
+        "assists": bool(mob_definition.assists),
+    }
+    for field_name, value in (mob_definition.base_properties or {}).items():
+        if value is None:
+            spec[field_name] = ""
+        else:
+            spec[field_name] = value
+    spec["combat"] = {
+        "attackable": bool(mob_definition.attackable),
+    }
+    if mob_definition.merchant_profile_id:
+        spec["merchant"] = {
+            "profile": f"merchantprofile.{mob_definition.merchant_profile.slug}",
+            "availability": mob_definition.merchant_availability or "present",
+        }
+    if mob_definition.trainer:
+        spec["trainer"] = mob_definition.trainer or {}
+    spec["attributes"] = mob_definition.attributes or {}
+    spec["randomization"] = mob_definition.randomization or {}
+    return spec
+
+
+def mob_definition_to_manifest(mob_definition: MobDefinition) -> dict[str, Any]:
+    return {
+        "kind": MOB_DEFINITION_MANIFEST_KIND,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, mob_definition.world_id),
+            "id": mob_definition.id,
+            "key": mob_definition.key,
+            "slug": mob_definition.slug,
+            "name": mob_definition.name or "",
+        },
+        "spec": _mob_definition_spec_from_instance(mob_definition),
+    }
+
+
+def mob_definition_delete_manifest(mob_definition: MobDefinition) -> dict[str, Any]:
+    return {
+        "kind": MOB_DEFINITION_MANIFEST_KIND,
+        "operation": TRIGGER_MANIFEST_OPERATION_DELETE,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, mob_definition.world_id),
+            "id": mob_definition.id,
+            "key": mob_definition.key,
+            "slug": mob_definition.slug,
+            "name": mob_definition.name or "",
+        },
+    }
+
+
+def serialize_mob_definition_payload(mob_definition: MobDefinition) -> dict[str, Any]:
+    manifest = mob_definition_to_manifest(mob_definition)
+    delete_manifest = mob_definition_delete_manifest(mob_definition)
+    return {
+        "id": mob_definition.id,
+        "key": mob_definition.key,
+        "slug": mob_definition.slug,
+        "name": mob_definition.name or "",
+        "description": mob_definition.description or "",
+        "room_description": mob_definition.room_description or "",
+        "keywords": mob_definition.keywords or "",
+        "notes": mob_definition.notes or "",
+        "type": mob_definition.mob_type,
+        "assists": bool(mob_definition.assists),
+        "base_properties": mob_definition.base_properties or {},
+        "attributes": mob_definition.attributes or {},
+        "randomization": mob_definition.randomization or {},
+        "attackable": bool(mob_definition.attackable),
+        "trainer": mob_definition.trainer or {},
+        "merchant_profile": (
+            {
+                "id": mob_definition.merchant_profile_id,
+                "key": mob_definition.merchant_profile.key,
+                "slug": mob_definition.merchant_profile.slug,
+                "name": mob_definition.merchant_profile.name,
+            }
+            if mob_definition.merchant_profile_id else None
+        ),
+        "merchant_availability": mob_definition.merchant_availability or "present",
+        "manifest": manifest,
+        "yaml": manifest_to_yaml(manifest),
+        "delete_manifest": delete_manifest,
+        "delete_yaml": manifest_to_yaml(delete_manifest),
+    }
+
+
+def item_bundle_to_manifest(item_bundle: ItemBundle) -> dict[str, Any]:
+    return {
+        "kind": ITEM_BUNDLE_MANIFEST_KIND,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, item_bundle.world_id),
+            "id": item_bundle.id,
+            "key": item_bundle.key,
+            "slug": item_bundle.slug,
+            "name": item_bundle.name or "",
+        },
+        "spec": {
+            "notes": item_bundle.notes or "",
+            "entries": [
+                {
+                    "item_definition": entry.item_definition.slug,
+                    "weight": int(entry.weight),
+                    "min_quantity": int(entry.min_quantity),
+                    "max_quantity": int(entry.max_quantity),
+                    "probability": int(entry.probability),
+                }
+                for entry in item_bundle.entries.select_related("item_definition").all().order_by(
+                    "created_ts", "id"
+                )
+            ],
+        },
+    }
+
+
+def item_bundle_delete_manifest(item_bundle: ItemBundle) -> dict[str, Any]:
+    return {
+        "kind": ITEM_BUNDLE_MANIFEST_KIND,
+        "operation": TRIGGER_MANIFEST_OPERATION_DELETE,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, item_bundle.world_id),
+            "id": item_bundle.id,
+            "key": item_bundle.key,
+            "slug": item_bundle.slug,
+            "name": item_bundle.name or "",
+        },
+    }
+
+
+def serialize_item_bundle_payload(item_bundle: ItemBundle) -> dict[str, Any]:
+    manifest = item_bundle_to_manifest(item_bundle)
+    delete_manifest = item_bundle_delete_manifest(item_bundle)
+    return {
+        "id": item_bundle.id,
+        "key": item_bundle.key,
+        "slug": item_bundle.slug,
+        "name": item_bundle.name or "",
+        "notes": item_bundle.notes or "",
+        "entries": manifest["spec"]["entries"],
+        "manifest": manifest,
+        "yaml": manifest_to_yaml(manifest),
+        "delete_manifest": delete_manifest,
+        "delete_yaml": manifest_to_yaml(delete_manifest),
+    }
+
+
+def merchant_profile_to_manifest(merchant_profile: MerchantProfile) -> dict[str, Any]:
+    return {
+        "kind": MERCHANT_PROFILE_MANIFEST_KIND,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, merchant_profile.world_id),
+            "id": merchant_profile.id,
+            "key": merchant_profile.key,
+            "slug": merchant_profile.slug,
+            "name": merchant_profile.name or "",
+        },
+        "spec": {
+            "notes": merchant_profile.notes or "",
+            "pricing": {
+                "sell_markup": _serialize_number(merchant_profile.sell_markup),
+                "buy_multiplier": _serialize_number(merchant_profile.buy_multiplier),
+            },
+            "restock": {
+                "interval_seconds": merchant_profile.restock_interval_seconds,
+            },
+            "funds": {
+                "mode": merchant_profile.funds_mode,
+                "currency": merchant_profile.funds_currency.code if merchant_profile.funds_currency else "",
+                "purchase_budget": int(merchant_profile.purchase_budget or 0),
+            },
+            "buyback": {
+                "enabled": bool(merchant_profile.buyback_enabled),
+                "max_items": int(merchant_profile.buyback_max_items or 0),
+                "expires": merchant_profile.buyback_expires,
+            },
+            "stock": [
+                {
+                    **{
+                        "key": slot.key,
+                        "count": int(slot.count),
+                        "refresh": slot.refresh,
+                    },
+                    **(
+                        {"item_definition": slot.item_definition.slug}
+                        if slot.item_definition_id
+                        else {"item_bundle": slot.item_bundle.slug}
+                    ),
+                }
+                for slot in merchant_profile.stock_slots.select_related(
+                    "item_definition",
+                    "item_bundle",
+                ).all().order_by("created_ts", "id")
+            ],
+        },
+    }
+
+
+def merchant_profile_delete_manifest(merchant_profile: MerchantProfile) -> dict[str, Any]:
+    return {
+        "kind": MERCHANT_PROFILE_MANIFEST_KIND,
+        "operation": TRIGGER_MANIFEST_OPERATION_DELETE,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, merchant_profile.world_id),
+            "id": merchant_profile.id,
+            "key": merchant_profile.key,
+            "slug": merchant_profile.slug,
+            "name": merchant_profile.name or "",
+        },
+    }
+
+
+def serialize_merchant_profile_payload(merchant_profile: MerchantProfile) -> dict[str, Any]:
+    manifest = merchant_profile_to_manifest(merchant_profile)
+    delete_manifest = merchant_profile_delete_manifest(merchant_profile)
+    return {
+        "id": merchant_profile.id,
+        "key": merchant_profile.key,
+        "slug": merchant_profile.slug,
+        "name": merchant_profile.name or "",
+        "notes": merchant_profile.notes or "",
+        "sell_markup": merchant_profile.sell_markup,
+        "buy_multiplier": merchant_profile.buy_multiplier,
+        "restock_interval_seconds": merchant_profile.restock_interval_seconds,
+        "funds_mode": merchant_profile.funds_mode,
+        "funds_currency": merchant_profile.funds_currency.code if merchant_profile.funds_currency else "",
+        "purchase_budget": merchant_profile.purchase_budget,
+        "buyback_enabled": bool(merchant_profile.buyback_enabled),
+        "buyback_max_items": merchant_profile.buyback_max_items,
+        "buyback_expires": merchant_profile.buyback_expires,
+        "stock": manifest["spec"]["stock"],
+        "manifest": manifest,
+        "yaml": manifest_to_yaml(manifest),
+        "delete_manifest": delete_manifest,
+        "delete_yaml": manifest_to_yaml(delete_manifest),
+    }
 
 
 def ability_to_manifest(ability: AbilityDefinition) -> dict[str, Any]:
@@ -1210,10 +1704,42 @@ def parse_trigger_manifest(
         field_name="spec.kind",
     )
     kind = _canonical_trigger_kind(kind)
-    if kind == adv_consts.TRIGGER_KIND_EVENT and scope != adv_consts.TRIGGER_SCOPE_WORLD:
-        raise serializers.ValidationError("Event triggers must use scope 'world'.")
 
-    if kind == adv_consts.TRIGGER_KIND_EVENT:
+    event = _coerce_text(spec.get("event", trigger.event if trigger else "")).strip().lower()
+    if kind == adv_consts.TRIGGER_KIND_POLICY:
+        if scope != adv_consts.TRIGGER_SCOPE_ROOM:
+            raise serializers.ValidationError("Policy triggers must use scope 'room'.")
+        if not event:
+            raise serializers.ValidationError("spec.event is required for kind 'policy'.")
+        event = _coerce_choice(
+            event,
+            choices=adv_consts.TRIGGER_POLICY_EVENTS,
+            field_name="spec.event",
+        )
+    elif kind == adv_consts.TRIGGER_KIND_EVENT:
+        if not event:
+            raise serializers.ValidationError("spec.event is required for kind 'event'.")
+        event = _coerce_choice(
+            event,
+            choices=adv_consts.MOB_REACTION_EVENTS + adv_consts.TRIGGER_ROOM_EVENT_EVENTS,
+            field_name="spec.event",
+        )
+        if event in adv_consts.MOB_REACTION_EVENTS and scope != adv_consts.TRIGGER_SCOPE_WORLD:
+            raise serializers.ValidationError(
+                "Mob reaction event triggers must use scope 'world'."
+            )
+        if event in adv_consts.TRIGGER_ROOM_EVENT_EVENTS and scope != adv_consts.TRIGGER_SCOPE_ROOM:
+            raise serializers.ValidationError(
+                "Room movement event triggers must use scope 'room'."
+            )
+    elif event:
+        event = _coerce_choice(
+            event,
+            choices=adv_consts.TRIGGER_EVENTS,
+            field_name="spec.event",
+        )
+
+    if kind == adv_consts.TRIGGER_KIND_EVENT and event in adv_consts.MOB_REACTION_EVENTS:
         target_type, target_id = _resolve_event_target(
             world=world,
             target_data=spec.get("target"),
@@ -1232,7 +1758,10 @@ def parse_trigger_manifest(
     if (
         is_create
         and spec.get("target") is None
-        and (kind == adv_consts.TRIGGER_KIND_EVENT or scope != adv_consts.TRIGGER_SCOPE_WORLD)
+        and (
+            kind in (adv_consts.TRIGGER_KIND_EVENT, adv_consts.TRIGGER_KIND_POLICY)
+            or scope != adv_consts.TRIGGER_SCOPE_WORLD
+        )
     ):
         raise serializers.ValidationError("spec.target is required when creating a trigger.")
 
@@ -1246,22 +1775,6 @@ def parse_trigger_manifest(
             trigger_matcher.validate_match_expression(match)
         except trigger_matcher.MatchExpressionError as err:
             raise serializers.ValidationError(f"Invalid spec.match matcher expression: {err}")
-
-    event = _coerce_text(spec.get("event", trigger.event if trigger else "")).strip().lower()
-    if kind == adv_consts.TRIGGER_KIND_EVENT:
-        if not event:
-            raise serializers.ValidationError("spec.event is required for kind 'event'.")
-        event = _coerce_choice(
-            event,
-            choices=adv_consts.MOB_REACTION_EVENTS,
-            field_name="spec.event",
-        )
-    elif event:
-        event = _coerce_choice(
-            event,
-            choices=adv_consts.MOB_REACTION_EVENTS,
-            field_name="spec.event",
-        )
 
     if kind == adv_consts.TRIGGER_KIND_COMMAND and not match.strip():
         raise serializers.ValidationError("spec.match is required for kind 'command'.")
@@ -1303,7 +1816,9 @@ def parse_trigger_manifest(
         display_action_in_room=_coerce_bool(
             spec.get(
                 "display_action_in_room",
-                trigger.display_action_in_room if trigger else True,
+                trigger.display_action_in_room
+                if trigger
+                else kind == adv_consts.TRIGGER_KIND_COMMAND,
             ),
             "spec.display_action_in_room",
         ),
@@ -1437,6 +1952,290 @@ def _resolve_item_template_reference(
     if item_template is None:
         return None, None
     return item_template, item_template.id
+
+
+def _parse_item_definition_reference(value: Any, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or an item definition key."
+        )
+    if isinstance(value, int):
+        return value
+
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or an item definition key."
+        )
+    if text.isdigit():
+        return int(text)
+
+    entity_type, sep, raw_id = text.partition(".")
+    if sep != "." or not raw_id.isdigit():
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or an item definition key."
+        )
+    if entity_type not in {"itemdefinition", "item_definition"}:
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or an item definition key."
+        )
+    return int(raw_id)
+
+
+def _resolve_item_definition_reference(
+    *,
+    world: World,
+    metadata: dict[str, Any],
+) -> tuple[ItemDefinition | None, int | None]:
+    definition_id = metadata.get("id")
+    definition_key = metadata.get("key")
+    definition_slug = str(metadata.get("slug") or "").strip()
+
+    resolved_by_id = None
+    if definition_id is not None:
+        parsed_id = _parse_item_definition_reference(definition_id, "metadata.id")
+        resolved_by_id = ItemDefinition.objects.filter(world=world, pk=parsed_id).first()
+        if not resolved_by_id:
+            raise serializers.ValidationError(
+                "Item definition referenced by metadata.id was not found."
+            )
+
+    resolved_by_key = None
+    if definition_key not in (None, ""):
+        parsed_key_id = _parse_item_definition_reference(definition_key, "metadata.key")
+        resolved_by_key = ItemDefinition.objects.filter(world=world, pk=parsed_key_id).first()
+        if not resolved_by_key:
+            raise serializers.ValidationError(
+                "Item definition referenced by metadata.key was not found."
+            )
+
+    resolved_by_slug = None
+    if definition_slug:
+        resolved_by_slug = ItemDefinition.objects.filter(world=world, slug=definition_slug).first()
+
+    resolved = [item for item in (resolved_by_id, resolved_by_key, resolved_by_slug) if item]
+    if len({item.pk for item in resolved}) > 1:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, and metadata.slug refer to different item definitions."
+        )
+
+    item_definition = resolved_by_id or resolved_by_key or resolved_by_slug
+    if item_definition is None:
+        return None, None
+    return item_definition, item_definition.id
+
+
+def _parse_mob_definition_reference(value: Any, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or a mob definition key."
+        )
+    if isinstance(value, int):
+        return value
+
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or a mob definition key."
+        )
+    if text.isdigit():
+        return int(text)
+
+    entity_type, sep, raw_id = text.partition(".")
+    if sep != "." or not raw_id.isdigit():
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or a mob definition key."
+        )
+    if entity_type not in {"mobdefinition", "mob_definition"}:
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or a mob definition key."
+        )
+    return int(raw_id)
+
+
+def _resolve_mob_definition_reference(
+    *,
+    world: World,
+    metadata: dict[str, Any],
+) -> tuple[MobDefinition | None, int | None]:
+    definition_id = metadata.get("id")
+    definition_key = metadata.get("key")
+    definition_slug = str(metadata.get("slug") or "").strip()
+
+    resolved_by_id = None
+    if definition_id is not None:
+        parsed_id = _parse_mob_definition_reference(definition_id, "metadata.id")
+        resolved_by_id = MobDefinition.objects.filter(world=world, pk=parsed_id).first()
+        if not resolved_by_id:
+            raise serializers.ValidationError(
+                "Mob definition referenced by metadata.id was not found."
+            )
+
+    resolved_by_key = None
+    if definition_key not in (None, ""):
+        parsed_key_id = _parse_mob_definition_reference(definition_key, "metadata.key")
+        resolved_by_key = MobDefinition.objects.filter(world=world, pk=parsed_key_id).first()
+        if not resolved_by_key:
+            raise serializers.ValidationError(
+                "Mob definition referenced by metadata.key was not found."
+            )
+
+    resolved_by_slug = None
+    if definition_slug:
+        resolved_by_slug = MobDefinition.objects.filter(world=world, slug=definition_slug).first()
+
+    resolved = [item for item in (resolved_by_id, resolved_by_key, resolved_by_slug) if item]
+    if len({item.pk for item in resolved}) > 1:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, and metadata.slug refer to different mob definitions."
+        )
+
+    mob_definition = resolved_by_id or resolved_by_key or resolved_by_slug
+    if mob_definition is None:
+        return None, None
+    return mob_definition, mob_definition.id
+
+
+def _parse_item_bundle_reference(value: Any, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or an item bundle key."
+        )
+    if isinstance(value, int):
+        return value
+
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or an item bundle key."
+        )
+    if text.isdigit():
+        return int(text)
+
+    entity_type, sep, raw_id = text.partition(".")
+    if sep != "." or not raw_id.isdigit():
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or an item bundle key."
+        )
+    if entity_type not in {"itembundle", "item_bundle"}:
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or an item bundle key."
+        )
+    return int(raw_id)
+
+
+def _resolve_item_bundle_reference(
+    *,
+    world: World,
+    metadata: dict[str, Any],
+) -> tuple[ItemBundle | None, int | None]:
+    bundle_id = metadata.get("id")
+    bundle_key = metadata.get("key")
+    bundle_slug = str(metadata.get("slug") or "").strip()
+
+    resolved_by_id = None
+    if bundle_id is not None:
+        parsed_id = _parse_item_bundle_reference(bundle_id, "metadata.id")
+        resolved_by_id = ItemBundle.objects.filter(world=world, pk=parsed_id).first()
+        if not resolved_by_id:
+            raise serializers.ValidationError(
+                "Item bundle referenced by metadata.id was not found."
+            )
+
+    resolved_by_key = None
+    if bundle_key not in (None, ""):
+        parsed_key_id = _parse_item_bundle_reference(bundle_key, "metadata.key")
+        resolved_by_key = ItemBundle.objects.filter(world=world, pk=parsed_key_id).first()
+        if not resolved_by_key:
+            raise serializers.ValidationError(
+                "Item bundle referenced by metadata.key was not found."
+            )
+
+    resolved_by_slug = None
+    if bundle_slug:
+        resolved_by_slug = ItemBundle.objects.filter(world=world, slug=bundle_slug).first()
+
+    resolved = [item for item in (resolved_by_id, resolved_by_key, resolved_by_slug) if item]
+    if len({item.pk for item in resolved}) > 1:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, and metadata.slug refer to different item bundles."
+        )
+
+    item_bundle = resolved_by_id or resolved_by_key or resolved_by_slug
+    if item_bundle is None:
+        return None, None
+    return item_bundle, item_bundle.id
+
+
+def _parse_merchant_profile_reference(value: Any, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or a merchant profile key."
+        )
+    if isinstance(value, int):
+        return value
+
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or a merchant profile key."
+        )
+    if text.isdigit():
+        return int(text)
+
+    entity_type, sep, raw_id = text.partition(".")
+    if sep != "." or not raw_id.isdigit():
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or a merchant profile key."
+        )
+    if entity_type not in {"merchantprofile", "merchant_profile"}:
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or a merchant profile key."
+        )
+    return int(raw_id)
+
+
+def _resolve_merchant_profile_reference(
+    *,
+    world: World,
+    metadata: dict[str, Any],
+) -> tuple[MerchantProfile | None, int | None]:
+    profile_id = metadata.get("id")
+    profile_key = metadata.get("key")
+    profile_slug = str(metadata.get("slug") or "").strip()
+
+    resolved_by_id = None
+    if profile_id is not None:
+        parsed_id = _parse_merchant_profile_reference(profile_id, "metadata.id")
+        resolved_by_id = MerchantProfile.objects.filter(world=world, pk=parsed_id).first()
+        if not resolved_by_id:
+            raise serializers.ValidationError(
+                "Merchant profile referenced by metadata.id was not found."
+            )
+
+    resolved_by_key = None
+    if profile_key not in (None, ""):
+        parsed_key_id = _parse_merchant_profile_reference(profile_key, "metadata.key")
+        resolved_by_key = MerchantProfile.objects.filter(world=world, pk=parsed_key_id).first()
+        if not resolved_by_key:
+            raise serializers.ValidationError(
+                "Merchant profile referenced by metadata.key was not found."
+            )
+
+    resolved_by_slug = None
+    if profile_slug:
+        resolved_by_slug = MerchantProfile.objects.filter(world=world, slug=profile_slug).first()
+
+    resolved = [item for item in (resolved_by_id, resolved_by_key, resolved_by_slug) if item]
+    if len({item.pk for item in resolved}) > 1:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, and metadata.slug refer to different merchant profiles."
+        )
+
+    merchant_profile = resolved_by_id or resolved_by_key or resolved_by_slug
+    if merchant_profile is None:
+        return None, None
+    return merchant_profile, merchant_profile.id
 
 
 def _resolve_currency_reference(*, world: World, value: Any, field_name: str) -> Currency | None:
@@ -1635,6 +2434,1206 @@ def parse_item_template_delete_manifest(
         world=world,
         item_template=item_template,
         item_template_id=item_template_id,
+    )
+
+
+def _coerce_item_definition_fields(*, world: World, spec_patch: dict[str, Any], existing: ItemDefinition | None) -> dict[str, Any]:
+    item_type = spec_patch.get(
+        "type",
+        existing.item_type if existing else adv_consts.ITEM_TYPE_INERT,
+    )
+    item_type = _coerce_choice(
+        item_type,
+        choices=adv_consts.ITEM_TYPES,
+        field_name="spec.type",
+    )
+
+    base_properties = dict(existing.base_properties or {}) if existing else {}
+    for field_name in _ITEM_DEFINITION_BASE_PROPERTY_FIELDS:
+        if field_name not in spec_patch:
+            continue
+        value = spec_patch.get(field_name)
+        if field_name == "currency":
+            if value in (None, ""):
+                base_properties.pop("currency", None)
+            else:
+                currency = _resolve_currency_reference(
+                    world=world,
+                    value=value,
+                    field_name="spec.currency",
+                )
+                base_properties["currency"] = currency.code if currency else ""
+            continue
+        base_properties[field_name] = value
+
+    attributes = (
+        normalize_attribute_map(
+            spec_patch.get("attributes"),
+            field_name="spec.attributes",
+        )
+        if "attributes" in spec_patch
+        else dict(existing.attributes or {}) if existing else {}
+    )
+    randomization = (
+        normalize_item_randomization(spec_patch.get("randomization"))
+        if "randomization" in spec_patch
+        else dict(existing.randomization or {}) if existing else {}
+    )
+
+    return {
+        "description": _coerce_text(
+            spec_patch.get(
+                "description",
+                existing.description if existing else "",
+            )
+        ),
+        "ground_description": _coerce_text(
+            spec_patch.get(
+                "ground_description",
+                existing.ground_description if existing else "",
+            )
+        ),
+        "notes": _coerce_text(
+            spec_patch.get(
+                "notes",
+                existing.notes if existing else "",
+            )
+        ),
+        "keywords": _coerce_text(
+            spec_patch.get(
+                "keywords",
+                existing.keywords if existing else "",
+            )
+        ),
+        "item_type": item_type,
+        "base_properties": base_properties,
+        "attributes": attributes,
+        "randomization": randomization,
+    }
+
+
+def _resolve_ability_slug_reference(*, world: World, value: Any, field_name: str) -> str:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(
+            f"{field_name} must be an ability slug, id, or ability.<id> key."
+        )
+
+    text = str(value or "").strip()
+    if isinstance(value, int) or text.isdigit() or text.startswith("ability."):
+        ability_id = _parse_entity_ref(
+            value,
+            expected_type="ability",
+            field_name=field_name,
+        )
+        ability = AbilityDefinition.objects.filter(world=world, pk=ability_id).first()
+        if not ability:
+            raise serializers.ValidationError(f"Ability referenced by {field_name} was not found.")
+        return ability.slug
+
+    slug = _slug_or_error(text, field_name)
+    ability = AbilityDefinition.objects.filter(world=world, slug=slug).first()
+    if not ability:
+        raise serializers.ValidationError(f"Ability referenced by {field_name} was not found.")
+    return ability.slug
+
+
+def _coerce_trainer_ability_slug(*, world: World, entry: Any, index: int) -> str:
+    field_name = f"spec.trainer.abilities[{index}]"
+    if isinstance(entry, dict):
+        unknown_fields = sorted(set(entry.keys()) - {"ability"})
+        if unknown_fields:
+            raise serializers.ValidationError(
+                f"Unsupported {field_name} field(s): {', '.join(unknown_fields)}."
+            )
+        if "ability" not in entry:
+            raise serializers.ValidationError(f"{field_name}.ability is required.")
+        value = entry.get("ability")
+    else:
+        value = entry
+    return _resolve_ability_slug_reference(
+        world=world,
+        value=value,
+        field_name=field_name if not isinstance(entry, dict) else f"{field_name}.ability",
+    )
+
+
+def _normalize_existing_trainer(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    abilities = []
+    for raw_slug in value.get("abilities") or []:
+        slug = str(raw_slug or "").strip().lower()
+        if slug and slug not in abilities:
+            abilities.append(slug)
+    if not abilities:
+        return {}
+    availability = str(value.get("availability") or "present").strip().lower()
+    if availability not in {"present", "alive_and_present"}:
+        availability = "present"
+    return {
+        "abilities": abilities,
+        "availability": availability,
+    }
+
+
+def _coerce_trainer_config(
+    *,
+    world: World,
+    spec_patch: dict[str, Any],
+    existing: MobDefinition | None,
+) -> dict[str, Any]:
+    existing_trainer = _normalize_existing_trainer(
+        existing.trainer if existing else {}
+    )
+    if "trainer" not in spec_patch:
+        return existing_trainer
+
+    raw_trainer = spec_patch.get("trainer")
+    if raw_trainer in (None, ""):
+        return {}
+    if not isinstance(raw_trainer, dict):
+        raise serializers.ValidationError("spec.trainer must be a mapping.")
+
+    unknown_fields = sorted(set(raw_trainer.keys()) - {"abilities", "availability"})
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported spec.trainer field(s): {', '.join(unknown_fields)}."
+        )
+
+    if "abilities" in raw_trainer:
+        raw_abilities = raw_trainer.get("abilities")
+        if raw_abilities in (None, ""):
+            raw_abilities = []
+        elif isinstance(raw_abilities, (str, int)):
+            raw_abilities = [raw_abilities]
+        elif not isinstance(raw_abilities, list):
+            raise serializers.ValidationError("spec.trainer.abilities must be a list.")
+
+        abilities = []
+        for index, entry in enumerate(raw_abilities):
+            slug = _coerce_trainer_ability_slug(
+                world=world,
+                entry=entry,
+                index=index,
+            )
+            if slug not in abilities:
+                abilities.append(slug)
+    else:
+        abilities = list(existing_trainer.get("abilities") or [])
+
+    availability = str(
+        raw_trainer.get(
+            "availability",
+            existing_trainer.get("availability", "present"),
+        )
+    ).strip().lower() or "present"
+    if availability not in {"present", "alive_and_present"}:
+        raise serializers.ValidationError(
+            "spec.trainer.availability must be one of: present, alive_and_present."
+        )
+
+    if not abilities:
+        return {}
+    return {
+        "abilities": abilities,
+        "availability": availability,
+    }
+
+
+def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], existing: MobDefinition | None) -> dict[str, Any]:
+    mob_type = spec_patch.get(
+        "type",
+        existing.mob_type if existing else adv_consts.MOB_TYPE_BEAST,
+    )
+    mob_type = _coerce_choice(
+        mob_type,
+        choices=adv_consts.MOB_TYPES,
+        field_name="spec.type",
+    )
+
+    base_properties = dict(existing.base_properties or {}) if existing else {}
+    for field_name in _MOB_DEFINITION_BASE_PROPERTY_FIELDS:
+        if field_name not in spec_patch:
+            continue
+        base_properties[field_name] = spec_patch.get(field_name)
+
+    combat = spec_patch.get("combat", {})
+    if combat in (None, ""):
+        combat = {}
+    if not isinstance(combat, dict):
+        raise serializers.ValidationError("spec.combat must be a mapping.")
+    combat_unknown = sorted(set(combat.keys()) - {"attackable", "health", *_MOB_DEFINITION_BASE_PROPERTY_FIELDS})
+    if combat_unknown:
+        raise serializers.ValidationError(
+            f"Unsupported spec.combat field(s): {', '.join(combat_unknown)}."
+        )
+    for field_name, value in combat.items():
+        if field_name == "attackable":
+            continue
+        if field_name == "health":
+            base_properties["health_max"] = value
+        elif field_name in _MOB_DEFINITION_BASE_PROPERTY_FIELDS:
+            base_properties[field_name] = value
+
+    merchant = spec_patch.get("merchant", {})
+    if merchant in (None, ""):
+        merchant = {}
+    if not isinstance(merchant, dict):
+        raise serializers.ValidationError("spec.merchant must be a mapping.")
+    merchant_unknown = sorted(set(merchant.keys()) - {"profile", "availability"})
+    if merchant_unknown:
+        raise serializers.ValidationError(
+            f"Unsupported spec.merchant field(s): {', '.join(merchant_unknown)}."
+        )
+    merchant_profile = existing.merchant_profile if existing else None
+    if "profile" in merchant:
+        merchant_profile = _resolve_profile_ref(
+            world=world,
+            value=merchant.get("profile"),
+            field_name="spec.merchant.profile",
+        )
+    merchant_availability = str(
+        merchant.get("availability", existing.merchant_availability if existing else "present")
+    ).strip().lower() or "present"
+    if merchant_availability not in {"present", "alive_and_present"}:
+        raise serializers.ValidationError(
+            "spec.merchant.availability must be one of: present, alive_and_present."
+        )
+
+    attackable = _coerce_bool(
+        combat.get("attackable", existing.attackable if existing else True),
+        "spec.combat.attackable",
+    )
+
+    attributes = (
+        normalize_attribute_map(
+            spec_patch.get("attributes"),
+            field_name="spec.attributes",
+        )
+        if "attributes" in spec_patch
+        else dict(existing.attributes or {}) if existing else {}
+    )
+    randomization = (
+        normalize_item_randomization(spec_patch.get("randomization"))
+        if "randomization" in spec_patch
+        else dict(existing.randomization or {}) if existing else {}
+    )
+    trainer = _coerce_trainer_config(
+        world=world,
+        spec_patch=spec_patch,
+        existing=existing,
+    )
+
+    return {
+        "description": _coerce_text(
+            spec_patch.get(
+                "description",
+                existing.description if existing else "",
+            )
+        ),
+        "room_description": _coerce_text(
+            spec_patch.get(
+                "room_description",
+                existing.room_description if existing else "",
+            )
+        ),
+        "notes": _coerce_text(
+            spec_patch.get(
+                "notes",
+                existing.notes if existing else "",
+            )
+        ),
+        "keywords": _coerce_text(
+            spec_patch.get(
+                "keywords",
+                existing.keywords if existing else "",
+            )
+        ),
+        "mob_type": mob_type,
+        "assists": _coerce_bool(
+            spec_patch.get("assists", existing.assists if existing else False),
+            "spec.assists",
+        ),
+        "base_properties": base_properties,
+        "attributes": attributes,
+        "randomization": randomization,
+        "attackable": attackable,
+        "merchant_profile": merchant_profile,
+        "merchant_availability": merchant_availability,
+        "trainer": trainer,
+    }
+
+
+def parse_item_definition_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedItemDefinitionManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != ITEM_DEFINITION_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{ITEM_DEFINITION_MANIFEST_KIND}'."
+        )
+
+    operation = parse_manifest_operation(manifest)
+    if operation != TRIGGER_MANIFEST_OPERATION_APPLY:
+        raise serializers.ValidationError(
+            f"Item definition manifests only support operation '{TRIGGER_MANIFEST_OPERATION_APPLY}' in this parser."
+        )
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError("Manifest world does not match the selected world.")
+
+    item_definition, item_definition_id = _resolve_item_definition_reference(
+        world=world,
+        metadata=metadata,
+    )
+
+    spec_patch = manifest.get("spec") or {}
+    if not isinstance(spec_patch, dict):
+        raise serializers.ValidationError("spec must be a mapping.")
+    if item_definition is None and not spec_patch:
+        raise serializers.ValidationError("spec is required when creating an item definition.")
+
+    unknown_fields = sorted(set(spec_patch.keys()) - set(_ITEM_DEFINITION_SPEC_FIELDS))
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported spec field(s): {', '.join(unknown_fields)}."
+        )
+
+    slug_source = metadata.get("slug")
+    if slug_source is None:
+        slug_source = item_definition.slug if item_definition else metadata.get("name")
+    slug = _slug_or_error(str(slug_source or ""), "metadata.slug")
+    if ItemDefinition.objects.filter(world=world, slug=slug).exclude(pk=item_definition_id).exists():
+        raise serializers.ValidationError(
+            "metadata.slug is already used by another item definition."
+        )
+
+    default_name = item_definition.name if item_definition else slug.replace("-", " ").title()
+    name = _coerce_text(metadata.get("name", default_name))
+    if not name.strip():
+        raise serializers.ValidationError("metadata.name cannot be empty.")
+
+    try:
+        fields = _coerce_item_definition_fields(
+            world=world,
+            spec_patch=spec_patch,
+            existing=item_definition,
+        )
+    except ItemDefinitionError as exc:
+        raise serializers.ValidationError(str(exc))
+
+    fields["slug"] = slug
+    fields["name"] = name
+
+    return ParsedItemDefinitionManifest(
+        world=world,
+        item_definition=item_definition,
+        item_definition_id=item_definition_id,
+        slug=slug,
+        name=name,
+        fields=fields,
+    )
+
+
+def parse_item_definition_delete_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedItemDefinitionDeleteManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != ITEM_DEFINITION_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{ITEM_DEFINITION_MANIFEST_KIND}'."
+        )
+
+    operation = parse_manifest_operation(manifest)
+    if operation != TRIGGER_MANIFEST_OPERATION_DELETE:
+        raise serializers.ValidationError("Delete parser requires operation: delete.")
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError("Manifest world does not match the selected world.")
+
+    item_definition, item_definition_id = _resolve_item_definition_reference(
+        world=world,
+        metadata=metadata,
+    )
+    if item_definition is None or item_definition_id is None:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, or metadata.slug is required for operation: delete."
+        )
+
+    spec = manifest.get("spec")
+    if spec not in (None, {}):
+        raise serializers.ValidationError("spec is not allowed for operation: delete.")
+
+    return ParsedItemDefinitionDeleteManifest(
+        world=world,
+        item_definition=item_definition,
+        item_definition_id=item_definition_id,
+    )
+
+
+def parse_mob_definition_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedMobDefinitionManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != MOB_DEFINITION_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{MOB_DEFINITION_MANIFEST_KIND}'."
+        )
+
+    operation = parse_manifest_operation(manifest)
+    if operation != TRIGGER_MANIFEST_OPERATION_APPLY:
+        raise serializers.ValidationError(
+            f"Mob definition manifests only support operation '{TRIGGER_MANIFEST_OPERATION_APPLY}' in this parser."
+        )
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError("Manifest world does not match the selected world.")
+
+    mob_definition, mob_definition_id = _resolve_mob_definition_reference(
+        world=world,
+        metadata=metadata,
+    )
+
+    spec_patch = manifest.get("spec") or {}
+    if not isinstance(spec_patch, dict):
+        raise serializers.ValidationError("spec must be a mapping.")
+    if mob_definition is None and not spec_patch:
+        raise serializers.ValidationError("spec is required when creating a mob definition.")
+
+    unknown_fields = sorted(set(spec_patch.keys()) - set(_MOB_DEFINITION_SPEC_FIELDS))
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported spec field(s): {', '.join(unknown_fields)}."
+        )
+
+    slug_source = metadata.get("slug")
+    if slug_source is None:
+        slug_source = mob_definition.slug if mob_definition else metadata.get("name")
+    slug = _slug_or_error(str(slug_source or ""), "metadata.slug")
+    if MobDefinition.objects.filter(world=world, slug=slug).exclude(pk=mob_definition_id).exists():
+        raise serializers.ValidationError(
+            "metadata.slug is already used by another mob definition."
+        )
+
+    default_name = mob_definition.name if mob_definition else slug.replace("-", " ").title()
+    name = _coerce_text(metadata.get("name", default_name))
+    if not name.strip():
+        raise serializers.ValidationError("metadata.name cannot be empty.")
+
+    try:
+        fields = _coerce_mob_definition_fields(
+            world=world,
+            spec_patch=spec_patch,
+            existing=mob_definition,
+        )
+    except ItemDefinitionError as exc:
+        raise serializers.ValidationError(str(exc))
+    fields["slug"] = slug
+    fields["name"] = name
+
+    return ParsedMobDefinitionManifest(
+        world=world,
+        mob_definition=mob_definition,
+        mob_definition_id=mob_definition_id,
+        slug=slug,
+        name=name,
+        fields=fields,
+    )
+
+
+def parse_mob_definition_delete_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedMobDefinitionDeleteManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != MOB_DEFINITION_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{MOB_DEFINITION_MANIFEST_KIND}'."
+        )
+
+    operation = parse_manifest_operation(manifest)
+    if operation != TRIGGER_MANIFEST_OPERATION_DELETE:
+        raise serializers.ValidationError("Delete parser requires operation: delete.")
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError("Manifest world does not match the selected world.")
+
+    mob_definition, mob_definition_id = _resolve_mob_definition_reference(
+        world=world,
+        metadata=metadata,
+    )
+    if mob_definition is None or mob_definition_id is None:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, or metadata.slug is required for operation: delete."
+        )
+
+    spec = manifest.get("spec")
+    if spec not in (None, {}):
+        raise serializers.ValidationError("spec is not allowed for operation: delete.")
+
+    return ParsedMobDefinitionDeleteManifest(
+        world=world,
+        mob_definition=mob_definition,
+        mob_definition_id=mob_definition_id,
+    )
+
+
+def _resolve_bundle_entry_definition(*, world: World, value: Any, field_name: str) -> ItemDefinition:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(f"{field_name} must reference an item definition.")
+    if isinstance(value, int):
+        definition = ItemDefinition.objects.filter(world=world, pk=value).first()
+        if definition:
+            return definition
+        raise serializers.ValidationError(f"{field_name} references an unknown item definition.")
+
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(f"{field_name} is required.")
+    if text.isdigit():
+        definition = ItemDefinition.objects.filter(world=world, pk=int(text)).first()
+        if definition:
+            return definition
+        raise serializers.ValidationError(f"{field_name} references an unknown item definition.")
+
+    prefix, sep, raw = text.partition(".")
+    if sep == ".":
+        if prefix not in {"itemdefinition", "item_definition"}:
+            raise serializers.ValidationError(
+                f"{field_name} must reference an item definition slug."
+            )
+        text = raw
+
+    slug = _slug_or_error(text, field_name)
+    definition = ItemDefinition.objects.filter(world=world, slug=slug).first()
+    if definition:
+        return definition
+    raise serializers.ValidationError(f"{field_name} references an unknown item definition.")
+
+
+def _resolve_stock_slot_bundle(*, world: World, value: Any, field_name: str) -> ItemBundle:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(f"{field_name} must reference an item bundle.")
+    if isinstance(value, int):
+        bundle = ItemBundle.objects.filter(world=world, pk=value).first()
+        if bundle:
+            return bundle
+        raise serializers.ValidationError(f"{field_name} references an unknown item bundle.")
+
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(f"{field_name} is required.")
+    if text.isdigit():
+        bundle = ItemBundle.objects.filter(world=world, pk=int(text)).first()
+        if bundle:
+            return bundle
+        raise serializers.ValidationError(f"{field_name} references an unknown item bundle.")
+
+    prefix, sep, raw = text.partition(".")
+    if sep == ".":
+        if prefix not in {"itembundle", "item_bundle"}:
+            raise serializers.ValidationError(
+                f"{field_name} must reference an item bundle slug."
+            )
+        text = raw
+
+    slug = _slug_or_error(text, field_name)
+    bundle = ItemBundle.objects.filter(world=world, slug=slug).first()
+    if bundle:
+        return bundle
+    raise serializers.ValidationError(f"{field_name} references an unknown item bundle.")
+
+
+def _resolve_profile_ref(*, world: World, value: Any, field_name: str) -> MerchantProfile:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(f"{field_name} must reference a merchant profile.")
+    if isinstance(value, int):
+        profile = MerchantProfile.objects.filter(world=world, pk=value).first()
+        if profile:
+            return profile
+        raise serializers.ValidationError(f"{field_name} references an unknown merchant profile.")
+
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(f"{field_name} is required.")
+    if text.isdigit():
+        profile = MerchantProfile.objects.filter(world=world, pk=int(text)).first()
+        if profile:
+            return profile
+        raise serializers.ValidationError(f"{field_name} references an unknown merchant profile.")
+
+    prefix, sep, raw = text.partition(".")
+    if sep == ".":
+        if prefix not in {"merchantprofile", "merchant_profile"}:
+            raise serializers.ValidationError(
+                f"{field_name} must reference a merchant profile slug."
+            )
+        text = raw
+
+    slug = _slug_or_error(text, field_name)
+    profile = MerchantProfile.objects.filter(world=world, slug=slug).first()
+    if profile:
+        return profile
+    raise serializers.ValidationError(f"{field_name} references an unknown merchant profile.")
+
+
+def parse_item_bundle_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedItemBundleManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != ITEM_BUNDLE_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{ITEM_BUNDLE_MANIFEST_KIND}'."
+        )
+
+    operation = parse_manifest_operation(manifest)
+    if operation != TRIGGER_MANIFEST_OPERATION_APPLY:
+        raise serializers.ValidationError(
+            f"Item bundle manifests only support operation '{TRIGGER_MANIFEST_OPERATION_APPLY}' in this parser."
+        )
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError("Manifest world does not match the selected world.")
+
+    item_bundle, item_bundle_id = _resolve_item_bundle_reference(
+        world=world,
+        metadata=metadata,
+    )
+
+    spec = manifest.get("spec") or {}
+    if not isinstance(spec, dict):
+        raise serializers.ValidationError("spec must be a mapping.")
+
+    unknown_fields = sorted(set(spec.keys()) - {"notes", "entries"})
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported spec field(s): {', '.join(unknown_fields)}."
+        )
+
+    slug_source = metadata.get("slug")
+    if slug_source is None:
+        slug_source = item_bundle.slug if item_bundle else metadata.get("name")
+    slug = _slug_or_error(str(slug_source or ""), "metadata.slug")
+    if ItemBundle.objects.filter(world=world, slug=slug).exclude(pk=item_bundle_id).exists():
+        raise serializers.ValidationError(
+            "metadata.slug is already used by another item bundle."
+        )
+
+    default_name = item_bundle.name if item_bundle else slug.replace("-", " ").title()
+    name = _coerce_text(metadata.get("name", default_name))
+    if not name.strip():
+        raise serializers.ValidationError("metadata.name cannot be empty.")
+
+    raw_entries = spec.get("entries", [] if item_bundle is None else None)
+    entries: list[dict[str, Any]] | None = None
+    if raw_entries is not None:
+        entries = []
+        if not isinstance(raw_entries, list):
+            raise serializers.ValidationError("spec.entries must be a list.")
+        for index, raw_entry in enumerate(raw_entries):
+            field_prefix = f"spec.entries[{index}]"
+            if not isinstance(raw_entry, dict):
+                raise serializers.ValidationError(f"{field_prefix} must be a mapping.")
+            definition = _resolve_bundle_entry_definition(
+                world=world,
+                value=raw_entry.get("item_definition"),
+                field_name=f"{field_prefix}.item_definition",
+            )
+            min_quantity = _coerce_int(
+                raw_entry.get("min_quantity", 1),
+                field_name=f"{field_prefix}.min_quantity",
+            )
+            max_quantity = _coerce_int(
+                raw_entry.get("max_quantity", min_quantity),
+                field_name=f"{field_prefix}.max_quantity",
+            )
+            if min_quantity < 0:
+                raise serializers.ValidationError(f"{field_prefix}.min_quantity cannot be negative.")
+            if max_quantity < min_quantity:
+                raise serializers.ValidationError(
+                    f"{field_prefix}.max_quantity cannot be less than min_quantity."
+                )
+            probability = _coerce_int(
+                raw_entry.get("probability", 100),
+                field_name=f"{field_prefix}.probability",
+            )
+            if probability < 0 or probability > 100:
+                raise serializers.ValidationError(f"{field_prefix}.probability must be 0-100.")
+            weight = _coerce_int(raw_entry.get("weight", 1), field_name=f"{field_prefix}.weight")
+            if weight <= 0:
+                raise serializers.ValidationError(f"{field_prefix}.weight must be positive.")
+            entries.append(
+                {
+                    "item_definition": definition,
+                    "weight": weight,
+                    "min_quantity": min_quantity,
+                    "max_quantity": max_quantity,
+                    "probability": probability,
+                }
+            )
+
+    return ParsedItemBundleManifest(
+        world=world,
+        item_bundle=item_bundle,
+        item_bundle_id=item_bundle_id,
+        slug=slug,
+        name=name,
+        fields={
+            "slug": slug,
+            "name": name,
+            "notes": _coerce_text(spec.get("notes", item_bundle.notes if item_bundle else "")),
+        },
+        entries=entries,
+    )
+
+
+def parse_item_bundle_delete_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedItemBundleDeleteManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != ITEM_BUNDLE_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{ITEM_BUNDLE_MANIFEST_KIND}'."
+        )
+
+    operation = parse_manifest_operation(manifest)
+    if operation != TRIGGER_MANIFEST_OPERATION_DELETE:
+        raise serializers.ValidationError("Delete parser requires operation: delete.")
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError("Manifest world does not match the selected world.")
+
+    item_bundle, item_bundle_id = _resolve_item_bundle_reference(
+        world=world,
+        metadata=metadata,
+    )
+    if item_bundle is None or item_bundle_id is None:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, or metadata.slug is required for operation: delete."
+        )
+
+    spec = manifest.get("spec")
+    if spec not in (None, {}):
+        raise serializers.ValidationError("spec is not allowed for operation: delete.")
+
+    return ParsedItemBundleDeleteManifest(
+        world=world,
+        item_bundle=item_bundle,
+        item_bundle_id=item_bundle_id,
+    )
+
+
+def _coerce_merchant_profile_fields(
+    *,
+    world: World,
+    spec: dict[str, Any],
+    existing: MerchantProfile | None,
+) -> dict[str, Any]:
+    unknown_fields = sorted(set(spec.keys()) - {"notes", "pricing", "restock", "funds", "buyback", "stock"})
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported spec field(s): {', '.join(unknown_fields)}."
+        )
+
+    pricing = spec.get("pricing", {})
+    if pricing in (None, ""):
+        pricing = {}
+    if not isinstance(pricing, dict):
+        raise serializers.ValidationError("spec.pricing must be a mapping.")
+    pricing_unknown = sorted(set(pricing.keys()) - {"sell_markup", "buy_multiplier"})
+    if pricing_unknown:
+        raise serializers.ValidationError(
+            f"Unsupported spec.pricing field(s): {', '.join(pricing_unknown)}."
+        )
+
+    restock = spec.get("restock", {})
+    if restock in (None, ""):
+        restock = {}
+    if not isinstance(restock, dict):
+        raise serializers.ValidationError("spec.restock must be a mapping.")
+    restock_unknown = sorted(set(restock.keys()) - {"interval_seconds"})
+    if restock_unknown:
+        raise serializers.ValidationError(
+            f"Unsupported spec.restock field(s): {', '.join(restock_unknown)}."
+        )
+
+    funds = spec.get("funds", {})
+    if funds in (None, ""):
+        funds = {}
+    if not isinstance(funds, dict):
+        raise serializers.ValidationError("spec.funds must be a mapping.")
+    funds_unknown = sorted(set(funds.keys()) - {"mode", "currency", "purchase_budget"})
+    if funds_unknown:
+        raise serializers.ValidationError(
+            f"Unsupported spec.funds field(s): {', '.join(funds_unknown)}."
+        )
+
+    buyback = spec.get("buyback", {})
+    if buyback in (None, ""):
+        buyback = {}
+    if not isinstance(buyback, dict):
+        raise serializers.ValidationError("spec.buyback must be a mapping.")
+    buyback_unknown = sorted(set(buyback.keys()) - {"enabled", "max_items", "expires"})
+    if buyback_unknown:
+        raise serializers.ValidationError(
+            f"Unsupported spec.buyback field(s): {', '.join(buyback_unknown)}."
+        )
+
+    interval = restock.get(
+        "interval_seconds",
+        existing.restock_interval_seconds if existing else None,
+    )
+    if interval in ("", None):
+        interval = None
+    else:
+        interval = _coerce_int(interval, "spec.restock.interval_seconds")
+        if interval <= 0:
+            raise serializers.ValidationError("spec.restock.interval_seconds must be positive.")
+
+    funds_mode = str(funds.get("mode", existing.funds_mode if existing else MerchantProfile.FUNDS_MODE_UNLIMITED)).strip().lower()
+    if funds_mode not in MerchantProfile.FUNDS_MODES:
+        raise serializers.ValidationError(
+            f"spec.funds.mode must be one of: {', '.join(MerchantProfile.FUNDS_MODES)}."
+        )
+    funds_currency = existing.funds_currency if existing else None
+    if "currency" in funds:
+        funds_currency = _resolve_currency_reference(
+            world=world,
+            value=funds.get("currency"),
+            field_name="spec.funds.currency",
+        )
+    elif funds_mode == MerchantProfile.FUNDS_MODE_FINITE and funds_currency is None:
+        funds_currency = Currency.objects.filter(world=world, is_default=True).first()
+
+    purchase_budget = _coerce_int(
+        funds.get("purchase_budget", existing.purchase_budget if existing else 0),
+        "spec.funds.purchase_budget",
+    )
+    if purchase_budget < 0:
+        raise serializers.ValidationError("spec.funds.purchase_budget cannot be negative.")
+    if funds_mode == MerchantProfile.FUNDS_MODE_FINITE and funds_currency is None:
+        raise serializers.ValidationError("spec.funds.currency is required when funds.mode is finite.")
+
+    buyback_max_items = _coerce_int(
+        buyback.get("max_items", existing.buyback_max_items if existing else 0),
+        "spec.buyback.max_items",
+    )
+    if buyback_max_items < 0 or buyback_max_items > 10:
+        raise serializers.ValidationError("spec.buyback.max_items must be between 0 and 10.")
+
+    buyback_enabled = _coerce_bool(
+        buyback.get("enabled", existing.buyback_enabled if existing else False),
+        "spec.buyback.enabled",
+    )
+    buyback_expires = str(
+        buyback.get("expires", existing.buyback_expires if existing else MerchantProfile.BUYBACK_EXPIRES_ON_RESTOCK)
+    ).strip().lower()
+    if buyback_expires not in MerchantProfile.BUYBACK_EXPIRES_OPTIONS:
+        raise serializers.ValidationError(
+            f"spec.buyback.expires must be one of: {', '.join(MerchantProfile.BUYBACK_EXPIRES_OPTIONS)}."
+        )
+
+    sell_markup = _coerce_float(
+        pricing.get("sell_markup", existing.sell_markup if existing else 1.0),
+        "spec.pricing.sell_markup",
+    )
+    buy_multiplier = _coerce_float(
+        pricing.get("buy_multiplier", existing.buy_multiplier if existing else 0.4),
+        "spec.pricing.buy_multiplier",
+    )
+    if sell_markup < 0:
+        raise serializers.ValidationError("spec.pricing.sell_markup cannot be negative.")
+    if buy_multiplier < 0:
+        raise serializers.ValidationError("spec.pricing.buy_multiplier cannot be negative.")
+
+    return {
+        "notes": _coerce_text(spec.get("notes", existing.notes if existing else "")),
+        "sell_markup": sell_markup,
+        "buy_multiplier": buy_multiplier,
+        "restock_interval_seconds": interval,
+        "funds_mode": funds_mode,
+        "funds_currency": funds_currency,
+        "purchase_budget": purchase_budget,
+        "buyback_enabled": buyback_enabled,
+        "buyback_max_items": buyback_max_items if buyback_enabled else 0,
+        "buyback_expires": buyback_expires,
+    }
+
+
+def _coerce_merchant_stock_slots(*, world: World, raw_stock: Any) -> list[dict[str, Any]]:
+    if raw_stock in (None, ""):
+        return []
+    if not isinstance(raw_stock, list):
+        raise serializers.ValidationError("spec.stock must be a list.")
+
+    slots: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    for index, raw_slot in enumerate(raw_stock):
+        field_prefix = f"spec.stock[{index}]"
+        if not isinstance(raw_slot, dict):
+            raise serializers.ValidationError(f"{field_prefix} must be a mapping.")
+        unknown_fields = sorted(set(raw_slot.keys()) - {"key", "item_definition", "item_bundle", "count", "refresh"})
+        if unknown_fields:
+            raise serializers.ValidationError(
+                f"Unsupported {field_prefix} field(s): {', '.join(unknown_fields)}."
+            )
+        key = _slug_or_error(raw_slot.get("key"), f"{field_prefix}.key")
+        if key in seen_keys:
+            raise serializers.ValidationError(f"{field_prefix}.key is duplicated.")
+        seen_keys.add(key)
+
+        sources = [
+            name
+            for name in ("item_definition", "item_bundle")
+            if raw_slot.get(name) not in (None, "")
+        ]
+        if len(sources) != 1:
+            raise serializers.ValidationError(
+                f"{field_prefix} must define exactly one of item_definition or item_bundle."
+            )
+
+        count = _coerce_int(raw_slot.get("count", 1), f"{field_prefix}.count")
+        if count <= 0:
+            raise serializers.ValidationError(f"{field_prefix}.count must be positive.")
+
+        item_definition = None
+        item_bundle = None
+        if sources[0] == "item_definition":
+            item_definition = _resolve_bundle_entry_definition(
+                world=world,
+                value=raw_slot.get("item_definition"),
+                field_name=f"{field_prefix}.item_definition",
+            )
+            default_refresh = MerchantStockSlot.REFRESH_FILL_MISSING
+        else:
+            item_bundle = _resolve_stock_slot_bundle(
+                world=world,
+                value=raw_slot.get("item_bundle"),
+                field_name=f"{field_prefix}.item_bundle",
+            )
+            default_refresh = MerchantStockSlot.REFRESH_REROLL_ON_RESTOCK
+
+        refresh = str(raw_slot.get("refresh", default_refresh)).strip().lower()
+        if refresh not in MerchantStockSlot.REFRESH_MODES:
+            raise serializers.ValidationError(
+                f"{field_prefix}.refresh must be one of: {', '.join(MerchantStockSlot.REFRESH_MODES)}."
+            )
+
+        slots.append(
+            {
+                "key": key,
+                "item_definition": item_definition,
+                "item_bundle": item_bundle,
+                "count": count,
+                "refresh": refresh,
+            }
+        )
+    return slots
+
+
+def parse_merchant_profile_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedMerchantProfileManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != MERCHANT_PROFILE_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{MERCHANT_PROFILE_MANIFEST_KIND}'."
+        )
+
+    operation = parse_manifest_operation(manifest)
+    if operation != TRIGGER_MANIFEST_OPERATION_APPLY:
+        raise serializers.ValidationError(
+            f"Merchant profile manifests only support operation '{TRIGGER_MANIFEST_OPERATION_APPLY}' in this parser."
+        )
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError("Manifest world does not match the selected world.")
+
+    merchant_profile, merchant_profile_id = _resolve_merchant_profile_reference(
+        world=world,
+        metadata=metadata,
+    )
+
+    spec = manifest.get("spec") or {}
+    if not isinstance(spec, dict):
+        raise serializers.ValidationError("spec must be a mapping.")
+    if merchant_profile is None and not spec:
+        raise serializers.ValidationError("spec is required when creating a merchant profile.")
+
+    slug_source = metadata.get("slug")
+    if slug_source is None:
+        slug_source = merchant_profile.slug if merchant_profile else metadata.get("name")
+    slug = _slug_or_error(str(slug_source or ""), "metadata.slug")
+    if MerchantProfile.objects.filter(world=world, slug=slug).exclude(pk=merchant_profile_id).exists():
+        raise serializers.ValidationError(
+            "metadata.slug is already used by another merchant profile."
+        )
+
+    default_name = merchant_profile.name if merchant_profile else slug.replace("-", " ").title()
+    name = _coerce_text(metadata.get("name", default_name))
+    if not name.strip():
+        raise serializers.ValidationError("metadata.name cannot be empty.")
+
+    fields = _coerce_merchant_profile_fields(
+        world=world,
+        spec=spec,
+        existing=merchant_profile,
+    )
+    fields["slug"] = slug
+    fields["name"] = name
+    stock_slots = (
+        _coerce_merchant_stock_slots(world=world, raw_stock=spec.get("stock"))
+        if "stock" in spec or merchant_profile is None
+        else None
+    )
+
+    return ParsedMerchantProfileManifest(
+        world=world,
+        merchant_profile=merchant_profile,
+        merchant_profile_id=merchant_profile_id,
+        slug=slug,
+        name=name,
+        fields=fields,
+        stock_slots=stock_slots,
+    )
+
+
+def parse_merchant_profile_delete_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedMerchantProfileDeleteManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != MERCHANT_PROFILE_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{MERCHANT_PROFILE_MANIFEST_KIND}'."
+        )
+
+    operation = parse_manifest_operation(manifest)
+    if operation != TRIGGER_MANIFEST_OPERATION_DELETE:
+        raise serializers.ValidationError("Delete parser requires operation: delete.")
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError("Manifest world does not match the selected world.")
+
+    merchant_profile, merchant_profile_id = _resolve_merchant_profile_reference(
+        world=world,
+        metadata=metadata,
+    )
+    if merchant_profile is None or merchant_profile_id is None:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, or metadata.slug is required for operation: delete."
+        )
+
+    spec = manifest.get("spec")
+    if spec not in (None, {}):
+        raise serializers.ValidationError("spec is not allowed for operation: delete.")
+
+    return ParsedMerchantProfileDeleteManifest(
+        world=world,
+        merchant_profile=merchant_profile,
+        merchant_profile_id=merchant_profile_id,
     )
 
 
@@ -1944,6 +3943,7 @@ def parse_world_config_manifest(
     allowed_fields.update(_WORLD_CONFIG_WORLD_BOOL_FIELDS)
     allowed_fields.update(_WORLD_CONFIG_CONFIG_TEXT_FIELDS)
     allowed_fields.update(_WORLD_CONFIG_CONFIG_BOOL_FIELDS)
+    allowed_fields.update(_WORLD_CONFIG_LEGACY_BOOL_FIELDS)
     allowed_fields.update(_WORLD_CONFIG_CONFIG_INT_FIELDS)
     allowed_fields.update(_WORLD_CONFIG_CONFIG_FLOAT_FIELDS)
     allowed_fields.update(_WORLD_CONFIG_CONFIG_CHOICE_FIELDS.keys())
@@ -1980,6 +3980,13 @@ def parse_world_config_manifest(
             config_updates[field_name] = _coerce_text(spec.get(field_name))
 
     for field_name in _WORLD_CONFIG_CONFIG_BOOL_FIELDS:
+        if field_name in spec:
+            config_updates[field_name] = _coerce_bool(
+                spec.get(field_name),
+                f"spec.{field_name}",
+            )
+
+    for field_name in _WORLD_CONFIG_LEGACY_BOOL_FIELDS:
         if field_name in spec:
             config_updates[field_name] = _coerce_bool(
                 spec.get(field_name),
@@ -2030,9 +4037,11 @@ def parse_world_config_manifest(
 
     if _WORLD_CONFIG_STATS_FIELD in spec:
         try:
-            config_updates["stat_system"] = normalize_stat_system(
+            stat_system = normalize_stat_system(
                 spec.get(_WORLD_CONFIG_STATS_FIELD)
             )
+            config_updates["stat_system"] = stat_system
+            config_updates["is_classless"] = not bool(stat_system.get("class_profiles"))
         except StatSystemValidationError as exc:
             raise serializers.ValidationError(str(exc))
 
@@ -2128,6 +4137,64 @@ def apply_item_template_manifest(parsed: ParsedItemTemplateManifest) -> ItemTemp
     if parsed.item_template is None:
         return serializer.save(world=parsed.world)
     return serializer.save()
+
+
+def apply_item_definition_manifest(parsed: ParsedItemDefinitionManifest) -> ItemDefinition:
+    if parsed.item_definition is None:
+        return ItemDefinition.objects.create(world=parsed.world, **parsed.fields)
+
+    item_definition = parsed.item_definition
+    for field_name, value in parsed.fields.items():
+        setattr(item_definition, field_name, value)
+    item_definition.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
+    return item_definition
+
+
+def apply_mob_definition_manifest(parsed: ParsedMobDefinitionManifest) -> MobDefinition:
+    if parsed.mob_definition is None:
+        return MobDefinition.objects.create(world=parsed.world, **parsed.fields)
+
+    mob_definition = parsed.mob_definition
+    for field_name, value in parsed.fields.items():
+        setattr(mob_definition, field_name, value)
+    mob_definition.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
+    return mob_definition
+
+
+def apply_item_bundle_manifest(parsed: ParsedItemBundleManifest) -> ItemBundle:
+    with transaction.atomic():
+        if parsed.item_bundle is None:
+            item_bundle = ItemBundle.objects.create(world=parsed.world, **parsed.fields)
+        else:
+            item_bundle = parsed.item_bundle
+            for field_name, value in parsed.fields.items():
+                setattr(item_bundle, field_name, value)
+            item_bundle.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
+
+        if parsed.entries is not None:
+            ItemBundleEntry.objects.filter(bundle=item_bundle).delete()
+            for entry in parsed.entries:
+                ItemBundleEntry.objects.create(bundle=item_bundle, **entry)
+
+        return item_bundle
+
+
+def apply_merchant_profile_manifest(parsed: ParsedMerchantProfileManifest) -> MerchantProfile:
+    with transaction.atomic():
+        if parsed.merchant_profile is None:
+            merchant_profile = MerchantProfile.objects.create(world=parsed.world, **parsed.fields)
+        else:
+            merchant_profile = parsed.merchant_profile
+            for field_name, value in parsed.fields.items():
+                setattr(merchant_profile, field_name, value)
+            merchant_profile.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
+
+        if parsed.stock_slots is not None:
+            MerchantStockSlot.objects.filter(profile=merchant_profile).delete()
+            for slot in parsed.stock_slots:
+                MerchantStockSlot.objects.create(profile=merchant_profile, **slot)
+
+        return merchant_profile
 
 
 def apply_ability_manifest(parsed: ParsedAbilityManifest) -> AbilityDefinition:

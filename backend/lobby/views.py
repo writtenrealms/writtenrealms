@@ -30,6 +30,7 @@ from core.view_mixins import (
     WorldValidatorMixin)
 
 from lobby import serializers as lobby_serializers
+from lobby.cache import LOBBY_FIXED_SECTIONS_CACHE_KEY
 from lobby.serializers import LobbyWorldSerializer, LobbyWorldCardSerializer
 from lobby.models import FeaturedWorld, DiscoverWorld, InDevelopmentWorld
 from spawns.models import Player
@@ -42,6 +43,13 @@ from users.models import User
 from worlds.models import World
 
 
+def exclude_archived_player_worlds(qs):
+    return qs.exclude(
+        Q(world__lifecycle=api_consts.WORLD_STATE_ARCHIVED) |
+        Q(world__context__lifecycle=api_consts.WORLD_STATE_ARCHIVED)
+    )
+
+
 class WorldCardListView(generics.ListAPIView):
 
     serializer_class = LobbyWorldCardSerializer
@@ -52,14 +60,23 @@ class WorldCardListView(generics.ListAPIView):
         players_count_subquery = Player.objects.filter(
             world__context_id=OuterRef('pk'),
             user__is_temporary=False
+        ).exclude(
+            world__lifecycle=api_consts.WORLD_STATE_ARCHIVED,
         ).values('world__context_id').annotate(
             cnt=Count('id')
         ).values('cnt')
 
-        return qs_by_pks(World, world_ids).annotate(
-            num_characters=Subquery(players_count_subquery[:1],
-                                    output_field=IntegerField())
-        ).select_related('config')
+        return (
+            qs_by_pks(World, world_ids)
+            .exclude(lifecycle=api_consts.WORLD_STATE_ARCHIVED)
+            .annotate(
+                num_characters=Subquery(
+                    players_count_subquery[:1],
+                    output_field=IntegerField()
+                )
+            )
+            .select_related('config')
+        )
 
 
 class RecentChars(generics.ListAPIView):
@@ -68,12 +85,10 @@ class RecentChars(generics.ListAPIView):
     queryset = Player.objects.all()
 
     def get_queryset(self):
-        return Player.objects.filter(
+        return exclude_archived_player_worlds(Player.objects.filter(
             user=self.request.user,
             pending_deletion_ts__isnull=True,
-        ).exclude(
-            world__context__lifecycle=api_consts.WORLD_STATE_ARCHIVED,
-        ).order_by('-last_connection_ts')[0:4]
+        )).order_by('-last_connection_ts')[0:4]
 
 
 class FeaturedWorlds(WorldCardListView):
@@ -113,7 +128,9 @@ class AllWorlds(generics.ListAPIView):
             id__in=(4, 83),
         ).values_list('id', flat=True)
         world_ids = [4] + list(world_ids)
-        return qs_by_pks(World, world_ids)
+        return qs_by_pks(World, world_ids).exclude(
+            lifecycle=api_consts.WORLD_STATE_ARCHIVED,
+        )
 
 
 class OnlineWorlds(generics.ListAPIView):
@@ -206,7 +223,9 @@ class UserWorlds(generics.ListAPIView):
             i for i in world_ids if i not in world_order
         ]
 
-        return qs_by_pks(World, world_order)
+        return qs_by_pks(World, world_order).exclude(
+            lifecycle=api_consts.WORLD_STATE_ARCHIVED,
+        )
 
 
 class PlayingWorlds(WorldCardListView):
@@ -223,12 +242,10 @@ class PlayingWorlds(WorldCardListView):
 
         # Worlds where the user has a player
         world_ids.extend(
-            Player.objects.filter(
+            exclude_archived_player_worlds(Player.objects.filter(
                 user=user,
                 world__context_id__isnull=False,
-            ).exclude(
-                world__lifecycle=api_consts.WORLD_STATE_ARCHIVED,
-            ).order_by(
+            )).order_by(
                 '-last_connection_ts'
             ).values_list('world__context_id', flat=True))
 
@@ -295,7 +312,9 @@ class BuildingWorlds(WorldCardListView):
             ).values_list('world_id', flat=True))
 
         sorted_world_ids = LastViewedRoom.objects.filter(
-            world_id__in=world_ids
+            world_id__in=world_ids,
+        ).exclude(
+            world__lifecycle=api_consts.WORLD_STATE_ARCHIVED,
         ).order_by('-modified_ts').values_list('world_id', flat=True)
 
         return self.get_annotated_queryset(sorted_world_ids)
@@ -320,7 +339,9 @@ class ReviewedWorlds(generics.ListAPIView):
             '-modified_ts'
         ).values_list('world_id', flat=True)
 
-        return qs_by_pks(World, world_ids)
+        return qs_by_pks(World, world_ids).exclude(
+            lifecycle=api_consts.WORLD_STATE_ARCHIVED,
+        )
 
 
 class IntroWorlds(WorldCardListView):
@@ -348,7 +369,9 @@ class PublishedWorlds(WorldCardListView):
         ).order_by(
             '-last_entered_ts', 'name'
         ).values_list('id', flat=True)
-        return qs_by_pks(World, world_ids)
+        return qs_by_pks(World, world_ids).exclude(
+            lifecycle=api_consts.WORLD_STATE_ARCHIVED,
+        )
 
 
 class PublicWorlds(WorldCardListView):
@@ -410,12 +433,10 @@ class SearchWorlds(generics.ListAPIView):
             ).values_list('world_id', flat=True))
         # Player
         world_ids.extend(
-            Player.objects.filter(
+            exclude_archived_player_worlds(Player.objects.filter(
                 user=self.request.user,
                 world__context_id__isnull=False,
-            ).exclude(
-                world__lifecycle=api_consts.WORLD_STATE_ARCHIVED,
-            ).order_by(
+            )).order_by(
                 '-last_connection_ts'
             ).values_list('world__context_id', flat=True))
         # Public Worlds
@@ -423,6 +444,8 @@ class SearchWorlds(generics.ListAPIView):
             World.objects.filter(
                 context__isnull=True,
                 is_public=True
+            ).exclude(
+                lifecycle=api_consts.WORLD_STATE_ARCHIVED,
             ).order_by('-modified_ts').values_list('id', flat=True)
         )
 
@@ -441,7 +464,9 @@ class SearchWorlds(generics.ListAPIView):
 
         world_ids = distinct_list(matched_ids)
 
-        return qs_by_pks(World, world_ids)
+        return qs_by_pks(World, world_ids).exclude(
+            lifecycle=api_consts.WORLD_STATE_ARCHIVED,
+        )
 
 
 class WorldLobbyBase(RequestDataMixin, WorldValidatorMixin):
@@ -571,7 +596,7 @@ class WorldLeaders(WorldLobbyBase, generics.ListAPIView):
 
     def get_queryset(self):
         qs = Player.objects.filter(
-            is_immortal=False,
+            is_builder=False,
             world__context=self.world,
             pending_deletion_ts__isnull=True,
         ).order_by(
@@ -651,8 +676,7 @@ class Lobby(APIView):
 
         # First, look into the cache for the fixed sections, and if the cache
         # is not older than 15 minutes, return the cached data.
-        cache_key = 'lobby_fixed_sections'
-        cached_data = cache.get(cache_key)
+        cached_data = cache.get(LOBBY_FIXED_SECTIONS_CACHE_KEY)
 
         ctx = {'request': request}
 
@@ -720,27 +744,25 @@ class Lobby(APIView):
                 'intro': intro_data,
             }
 
-            cache.set(cache_key, fixed_sections, 900)
+            cache.set(LOBBY_FIXED_SECTIONS_CACHE_KEY, fixed_sections, 900)
         else:
             fixed_sections = cached_data
 
         # Variable sections
 
         # Recent Characters
-        recent_characters = Player.objects.filter(
+        recent_characters = exclude_archived_player_worlds(Player.objects.filter(
             user=request.user,
             pending_deletion_ts__isnull=True,
-        ).order_by('-last_connection_ts')[0:4]
+        )).order_by('-last_connection_ts')[0:4]
         recent_characters_data = PlayerSerializer(
             recent_characters, many=True, context=ctx).data
 
         # Playing
-        playing_world_ids = list(Player.objects.filter(
+        playing_world_ids = list(exclude_archived_player_worlds(Player.objects.filter(
             user=request.user,
             world__context_id__isnull=False,
-        ).exclude(
-            world__lifecycle=api_consts.WORLD_STATE_ARCHIVED,
-        ).order_by(
+        )).order_by(
             '-last_connection_ts'
         ).values_list('world__context_id', flat=True)[0:20])
 
@@ -750,6 +772,8 @@ class Lobby(APIView):
         # Building
         building_world_ids = list(LastViewedRoom.objects.filter(
             user=request.user,
+        ).exclude(
+            world__lifecycle=api_consts.WORLD_STATE_ARCHIVED,
         ).order_by(
             '-modified_ts'
         ).values_list('world_id', flat=True)[0:3])

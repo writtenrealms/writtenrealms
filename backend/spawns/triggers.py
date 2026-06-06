@@ -10,6 +10,7 @@ from builders.models import ItemTemplate, MobTemplate, Trigger
 from config import constants as adv_consts
 from config import game_settings as adv_config
 from core.conditions import evaluate_conditions
+from core.trigger_policy_cache import get_trigger_policy_cache_version
 from core.utils import format_actor_msg
 from spawns.handlers.registry import (
     ActorNotFoundError,
@@ -29,6 +30,7 @@ from worlds.models import Room, World, Zone
 
 TRIGGER_GATED_TEXT = "More time is needed."
 DEFAULT_CONDITION_FAILURE_TEXT = "Action could not be completed."
+DEFAULT_POLICY_FAILURE_TEXT = "You cannot go that way."
 TRIGGER_SCOPE_PRIORITY = {
     adv_consts.TRIGGER_SCOPE_ROOM: 0,
     adv_consts.TRIGGER_SCOPE_ZONE: 1,
@@ -41,6 +43,14 @@ _scope_content_types_cache: dict[type, ContentType] | None = None
 class TriggerExecutionResult:
     handled: bool
     feedback: str | None = None
+
+
+@dataclass(frozen=True)
+class PolicyEvaluationResult:
+    allowed: bool
+    feedback: str | None = None
+    trigger_id: int | None = None
+    code: str = "policy_blocked"
 
 
 def _normalized_text(value: str | None) -> str:
@@ -283,6 +293,316 @@ def _event_match_expression_matches(
     return True
 
 
+def _hook_match_expression_matches(match_text: str | None, value: str | None) -> bool:
+    trigger_match = _normalized_text(match_text)
+    if not trigger_match:
+        return True
+    return evaluate_match_expression(
+        trigger_match,
+        term_matcher=lambda term: exact_term_match(value, term),
+        empty_expression=True,
+    )
+
+
+def _movement_event_data(
+    *,
+    event: str,
+    direction: str,
+    origin_room: Room,
+    destination_room: Room,
+    target_room: Room,
+) -> dict:
+    return {
+        "event": event,
+        "direction": direction,
+        "target_type": "room",
+        "target_id": target_room.id,
+        "target": {
+            "type": "room",
+            "id": target_room.id,
+            "key": target_room.key,
+            "name": target_room.name or "",
+        },
+        "origin_room": {
+            "id": origin_room.id,
+            "key": origin_room.key,
+            "name": origin_room.name or "",
+        },
+        "destination_room": {
+            "id": destination_room.id,
+            "key": destination_room.key,
+            "name": destination_room.name or "",
+        },
+    }
+
+
+def _room_hook_cache_key(
+    *,
+    world_id: int,
+    room_id: int,
+    kind: str,
+    event: str,
+) -> str:
+    version = get_trigger_policy_cache_version(world_id)
+    return f"spawns.trigger_hooks.{version}.{world_id}.{room_id}.{kind}.{event}"
+
+
+def _serialize_cached_hook(trigger: Trigger) -> dict:
+    return {
+        "id": trigger.id,
+        "key": trigger.key,
+        "name": trigger.name or "",
+        "scope": trigger.scope,
+        "kind": trigger.kind,
+        "event": trigger.event or "",
+        "match": trigger.match or "",
+        "script": trigger.script or "",
+        "conditions": trigger.conditions or "",
+        "show_details_on_failure": bool(trigger.show_details_on_failure),
+        "failure_message": trigger.failure_message or "",
+        "gate_delay": int(trigger.gate_delay or 0),
+        "order": int(trigger.order or 0),
+    }
+
+
+def _cached_room_hooks(
+    *,
+    world_id: int | None,
+    room_id: int | None,
+    kind: str,
+    event: str,
+) -> list[dict]:
+    if not world_id or not room_id or not event:
+        return []
+
+    normalized_kind = _normalized_text(kind)
+    normalized_event = _normalized_text(event)
+    cache_key = _room_hook_cache_key(
+        world_id=int(world_id),
+        room_id=int(room_id),
+        kind=normalized_kind,
+        event=normalized_event,
+    )
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    room_ct = _scope_content_types()[Room]
+    hooks = [
+        _serialize_cached_hook(trigger)
+        for trigger in Trigger.objects.filter(
+            world_id=world_id,
+            kind=normalized_kind,
+            event=normalized_event,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            target_type=room_ct,
+            target_id=room_id,
+            is_active=True,
+        ).order_by("order", "created_ts", "id")
+    ]
+    cache.set(cache_key, hooks, timeout=None)
+    return hooks
+
+
+def _cached_trigger_gate_cache_key(hook: dict, scope_key: str) -> str:
+    return f"spawns.trigger_gate.{hook.get('id')}.{scope_key}"
+
+
+def _cached_gate_delay(hook: dict) -> int:
+    try:
+        return int(hook.get("gate_delay") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _is_cached_gate_allowed(hook: dict, scope_key: str) -> bool:
+    gate_delay = _cached_gate_delay(hook)
+    if gate_delay == 0:
+        return True
+    gate_key = _cached_trigger_gate_cache_key(hook, scope_key)
+    return not bool(cache.get(gate_key))
+
+
+def _consume_cached_gate(hook: dict, scope_key: str) -> None:
+    gate_delay = _cached_gate_delay(hook)
+    if gate_delay == 0:
+        return
+    gate_key = _cached_trigger_gate_cache_key(hook, scope_key)
+    timeout = None if gate_delay < 0 else gate_delay
+    cache.set(gate_key, 1, timeout=timeout)
+
+
+def _load_movement_rooms(origin_room_id: int, destination_room_id: int) -> tuple[Room | None, Room | None]:
+    rooms = {
+        room.id: room
+        for room in Room.objects.select_related("zone", "world").filter(
+            pk__in=[origin_room_id, destination_room_id],
+        )
+    }
+    return rooms.get(origin_room_id), rooms.get(destination_room_id)
+
+
+def evaluate_movement_policies(
+    *,
+    actor: Player,
+    event: str,
+    direction: str,
+    origin_room_id: int,
+    destination_room_id: int,
+    world_id: int | None = None,
+) -> PolicyEvaluationResult:
+    normalized_event = _normalized_text(event)
+    if normalized_event not in adv_consts.TRIGGER_POLICY_EVENTS:
+        return PolicyEvaluationResult(allowed=True)
+
+    target_room_id = (
+        origin_room_id
+        if normalized_event == adv_consts.TRIGGER_EVENT_BEFORE_MOVE_EXIT
+        else destination_room_id
+    )
+    hooks = _cached_room_hooks(
+        world_id=world_id,
+        room_id=target_room_id,
+        kind=adv_consts.TRIGGER_KIND_POLICY,
+        event=normalized_event,
+    )
+    if not hooks:
+        return PolicyEvaluationResult(allowed=True)
+
+    origin_room, destination_room = _load_movement_rooms(origin_room_id, destination_room_id)
+    if not origin_room or not destination_room:
+        return PolicyEvaluationResult(
+            allowed=False,
+            feedback=DEFAULT_POLICY_FAILURE_TEXT,
+        )
+
+    target_room = origin_room if target_room_id == origin_room.id else destination_room
+    world = target_room.world
+    event_data = _movement_event_data(
+        event=normalized_event,
+        direction=direction,
+        origin_room=origin_room,
+        destination_room=destination_room,
+        target_room=target_room,
+    )
+
+    for hook in hooks:
+        if not _hook_match_expression_matches(hook.get("match"), direction):
+            continue
+
+        conditions = hook.get("conditions")
+        if conditions:
+            evaluated = evaluate_conditions(
+                actor,
+                conditions,
+                room=target_room,
+                zone=target_room.zone,
+                world=world,
+                event_data=event_data,
+            )
+            if not evaluated.get("result"):
+                return PolicyEvaluationResult(
+                    allowed=False,
+                    feedback=(
+                        hook.get("failure_message")
+                        or evaluated.get("detail")
+                        or DEFAULT_POLICY_FAILURE_TEXT
+                    ),
+                    trigger_id=hook.get("id"),
+                )
+
+    return PolicyEvaluationResult(allowed=True)
+
+
+def execute_room_event_triggers(
+    *,
+    event: str,
+    actor: Player | Mob | None,
+    room: Room | int | None,
+    origin_room_id: int | None = None,
+    destination_room_id: int | None = None,
+    direction: str | None = None,
+    connection_id: str | None = None,
+) -> None:
+    normalized_event = _normalized_text(event)
+    if normalized_event not in adv_consts.TRIGGER_ROOM_EVENT_EVENTS:
+        return
+
+    resolved_room = _coerce_room(room) or getattr(actor, "room", None)
+    if not resolved_room:
+        return
+
+    trigger_world = _resolve_trigger_world(actor, resolved_room) if actor else _resolve_room_world(resolved_room)
+    if not trigger_world:
+        return
+
+    hooks = _cached_room_hooks(
+        world_id=trigger_world.id,
+        room_id=resolved_room.id,
+        kind=adv_consts.TRIGGER_KIND_EVENT,
+        event=normalized_event,
+    )
+    if not hooks:
+        return
+
+    origin_room, destination_room = _load_movement_rooms(
+        origin_room_id or resolved_room.id,
+        destination_room_id or resolved_room.id,
+    )
+    origin_room = origin_room or resolved_room
+    destination_room = destination_room or resolved_room
+    event_data = _movement_event_data(
+        event=normalized_event,
+        direction=str(direction or ""),
+        origin_room=origin_room,
+        destination_room=destination_room,
+        target_room=resolved_room,
+    )
+    scope_key = f"room:{resolved_room.id}"
+
+    for hook in hooks:
+        if not _hook_match_expression_matches(hook.get("match"), direction):
+            continue
+
+        conditions = hook.get("conditions")
+        if conditions and actor:
+            evaluated = evaluate_conditions(
+                actor,
+                conditions,
+                room=resolved_room,
+                zone=resolved_room.zone,
+                world=trigger_world,
+                event_data=event_data,
+            )
+            if not evaluated.get("result"):
+                continue
+
+        if not _is_cached_gate_allowed(hook, scope_key):
+            continue
+        _consume_cached_gate(hook, scope_key)
+
+        script_lines = _split_trigger_script_lines(hook.get("script"))
+        if not script_lines or not actor:
+            continue
+
+        first_line_segments = script_lines[0]
+        _dispatch_trigger_script_segments(
+            actor=actor,
+            segments=first_line_segments,
+            issuer_scope=hook.get("scope"),
+            connection_id=connection_id,
+        )
+
+        for line_index, line_segments in enumerate(script_lines[1:], start=1):
+            _schedule_trigger_script_line_segments(
+                actor=actor,
+                line_segments=line_segments,
+                line_index=line_index,
+                issuer_scope=hook.get("scope"),
+                connection_id=connection_id,
+            )
+
+
 def _resolve_room_world(room: Room | None) -> World | None:
     if not room:
         return None
@@ -476,7 +796,6 @@ def _dispatch_trigger_script_segment(
     payload: dict[str, object] = {
         "text": rendered_segment,
         "skip_triggers": True,
-        "__trigger_source": True,
     }
     if issuer_scope:
         payload["issuer_scope"] = issuer_scope
@@ -488,6 +807,7 @@ def _dispatch_trigger_script_segment(
             actor_id=actor.id,
             payload=payload,
             connection_id=connection_id,
+            script_source=True,
             published_messages=dispatched_messages,
         )
     except (ActorNotFoundError, HandlerNotFoundError, ValueError) as err:

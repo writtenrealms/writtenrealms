@@ -7,6 +7,7 @@ from config import constants as api_consts
 from builders import serializers as builder_serializers
 from builders.models import WorldBuilder
 from core.serializers import AuthorField
+from core.stat_system import world_uses_classes
 from spawns.models import Player
 from spawns.models import Item, Player
 from worlds.models import World
@@ -43,8 +44,7 @@ class LobbyWorldSerializer(WorldSerializer):
     can_select_gender = serializers.BooleanField(
         source='config.can_select_gender', read_only=True)
 
-    is_classless = serializers.BooleanField(
-        source='config.is_classless', read_only=True)
+    is_classless = serializers.SerializerMethodField()
 
     instance_of = serializers.SerializerMethodField()
 
@@ -55,6 +55,9 @@ class LobbyWorldSerializer(WorldSerializer):
             return world.author.name
         else:
             return 'Anonymous User'
+
+    def get_is_classless(self, world):
+        return not world_uses_classes(world)
 
     class Meta:
         model = World
@@ -73,6 +76,8 @@ class LobbyWorldSerializer(WorldSerializer):
             'core_factions',
             'allow_combat', 'is_narrative',
             'default_gender', 'can_select_gender',
+            'labels',
+            'class_selection',
             'is_classless',
             'instance_of',
         ]

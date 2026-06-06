@@ -140,7 +140,7 @@ class Player(CharMixin, AdventBaseModel):
                                on_delete=models.CASCADE,
                                **optional)
 
-    is_immortal = models.BooleanField(default=False)
+    is_builder = models.BooleanField(default=False)
     is_invisible = models.BooleanField(default=False)
 
     language_proficiency = models.DecimalField(max_digits=2, decimal_places=1,
@@ -328,9 +328,9 @@ class Player(CharMixin, AdventBaseModel):
             char=self,
             world=self.world,
         )
-        self.health = stats['health_max']
-        self.mana = stats['mana_max']
-        self.stamina = stats['stamina_max']
+        self.health = max(1, int(stats.get('health_max') or 1))
+        self.energy = int(stats.get('energy_max') or 0)
+        self.stamina = int(stats.get('stamina_max') or 0)
         self.save()
 
         if starting_eq:
@@ -626,6 +626,12 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
                                  on_delete=models.SET_NULL,
                                  related_name='template_mobs',
                                  **optional)
+    definition = models.ForeignKey('builders.MobDefinition',
+                                   on_delete=models.SET_NULL,
+                                   related_name='spawned_mobs',
+                                   **optional)
+    definition_slug_snapshot = models.SlugField(max_length=120, blank=True)
+    roll_metadata = models.JSONField(default=dict, blank=True)
     equipment = models.OneToOneField('spawns.Equipment',
                                      related_name='mob',
                                      on_delete=models.CASCADE,
@@ -650,6 +656,7 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
 
     is_pending_deletion = models.BooleanField(default=False)
     pending_deletion_ts = models.DateTimeField(db_index=True, **optional)
+    attackable = models.BooleanField(default=True)
 
     class Meta:
         indexes = [
@@ -658,7 +665,12 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
         ]
 
     def create_corpse(self):
-        name = self.template.name if self.template else self.name
+        if self.template:
+            name = self.template.name
+        elif self.definition:
+            name = self.definition.name
+        else:
+            name = self.name
         return Item.objects.create(
             name='the corpse of %s' % name,
             keywords='corpse',
@@ -701,6 +713,102 @@ models.signals.post_save.connect(Mob.post_char_save, Mob)
 models.signals.post_delete.connect(Mob.post_char_delete, Mob)
 
 
+class MerchantRuntime(AdventBaseModel):
+    world = models.ForeignKey('worlds.World',
+                              on_delete=models.CASCADE,
+                              related_name='merchant_runtimes')
+    mob = models.OneToOneField('spawns.Mob',
+                               on_delete=models.CASCADE,
+                               related_name='merchant_runtime')
+    profile = models.ForeignKey('builders.MerchantProfile',
+                                on_delete=models.CASCADE,
+                                related_name='merchant_runtimes')
+    is_active = models.BooleanField(default=True)
+    last_restocked_ts = models.DateTimeField(**optional)
+    next_restock_ts = models.DateTimeField(db_index=True, **optional)
+    remaining_purchase_budget = models.IntegerField(**optional)
+
+    inventory = GenericRelation(
+        'spawns.Item',
+        content_type_field='container_type',
+        object_id_field='container_id')
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['is_active']),
+            models.Index(fields=['next_restock_ts']),
+        ]
+
+
+class MerchantStockEntry(AdventBaseModel):
+    STATUS_AVAILABLE = "available"
+    STATUS_SOLD = "sold"
+    STATUS_EXPIRED = "expired"
+    STATUS_RETIRED = "retired"
+    STATUS_CHOICES = [
+        STATUS_AVAILABLE,
+        STATUS_SOLD,
+        STATUS_EXPIRED,
+        STATUS_RETIRED,
+    ]
+
+    runtime = models.ForeignKey('spawns.MerchantRuntime',
+                                on_delete=models.CASCADE,
+                                related_name='stock_entries')
+    stock_slot = models.ForeignKey('builders.MerchantStockSlot',
+                                   on_delete=models.SET_NULL,
+                                   related_name='runtime_entries',
+                                   **optional)
+    item = models.OneToOneField('spawns.Item',
+                                on_delete=models.CASCADE,
+                                related_name='merchant_stock_entry')
+    bundle_roll_id = models.TextField(**optional)
+    price = models.PositiveIntegerField(default=0)
+    status = models.TextField(
+        choices=list_to_choice(STATUS_CHOICES),
+        default=STATUS_AVAILABLE,
+        db_index=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['status']),
+            models.Index(fields=['bundle_roll_id']),
+        ]
+
+
+class MerchantBuybackEntry(AdventBaseModel):
+    STATUS_ACTIVE = "active"
+    STATUS_EXPIRED = "expired"
+    STATUS_BOUGHT_BACK = "bought_back"
+    STATUS_CHOICES = [
+        STATUS_ACTIVE,
+        STATUS_EXPIRED,
+        STATUS_BOUGHT_BACK,
+    ]
+
+    runtime = models.ForeignKey('spawns.MerchantRuntime',
+                                on_delete=models.CASCADE,
+                                related_name='buyback_entries')
+    player = models.ForeignKey('spawns.Player',
+                               on_delete=models.CASCADE,
+                               related_name='merchant_buyback_entries')
+    item = models.OneToOneField('spawns.Item',
+                                on_delete=models.CASCADE,
+                                related_name='merchant_buyback_entry')
+    sold_price = models.PositiveIntegerField(default=0)
+    buyback_price = models.PositiveIntegerField(default=0)
+    status = models.TextField(
+        choices=list_to_choice(STATUS_CHOICES),
+        default=STATUS_ACTIVE,
+        db_index=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['status']),
+            models.Index(fields=['created_ts']),
+        ]
+
+
 class Item(ItemMixin, AdventBaseModel):
     """
     There are two kinds of items. Templated items and procedural items.
@@ -715,6 +823,14 @@ class Item(ItemMixin, AdventBaseModel):
                                  on_delete=models.SET_NULL,
                                  related_name='template_items',
                                  **optional)
+
+    # For clean WR2 authored item definitions.
+    definition = models.ForeignKey('builders.ItemDefinition',
+                                   on_delete=models.SET_NULL,
+                                   related_name='spawned_items',
+                                   **optional)
+    definition_slug_snapshot = models.SlugField(max_length=120, blank=True)
+    roll_metadata = models.JSONField(default=dict, blank=True)
 
     # For procedural items
     profile = models.ForeignKey('builders.RandomItemProfile',
@@ -783,7 +899,25 @@ class Item(ItemMixin, AdventBaseModel):
 
     def boost(self, amount=20):
         "Boost the stats on an item by a percentage amount."
-        for attr in [*adv_consts.ATTRIBUTES, adv_consts.ATTR_WEAPON_DAMAGE]:
+        attributes = dict(self.attributes or {})
+        for key, value in attributes.items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value:
+                attributes[key] = math.ceil(value * 120 / 100)
+        self.attributes = attributes
+        for attr in [
+            adv_consts.ATTR_AP,
+            adv_consts.ATTR_ABILITY_POWER,
+            adv_consts.ATTR_CRIT,
+            adv_consts.ATTR_DODGE,
+            adv_consts.ATTR_RESILIENCE,
+            adv_consts.ATTR_MAX_HEALTH,
+            adv_consts.ATTR_MAX_ENERGY,
+            adv_consts.ATTR_MAX_STAMINA,
+            adv_consts.ATTR_REGEN_HEALTH,
+            adv_consts.ATTR_REGEN_ENERGY,
+            adv_consts.ATTR_REGEN_STAMINA,
+            adv_consts.ATTR_WEAPON_DAMAGE,
+        ]:
             value = getattr(self, attr, None)
             if value:
                 value = math.ceil(value * 120 / 100)
@@ -795,11 +929,26 @@ class Item(ItemMixin, AdventBaseModel):
     @property
     def budget_spent(self):
         spent_budget = 0
-        for attr in [*adv_consts.ATTRIBUTES, adv_consts.ATTR_WEAPON_DAMAGE]:
-            if getattr(self, attr):
-                spent_budget += (
-                    adv_consts.ATTR_BUDGET[attr]
-                    * getattr(self, attr))
+        for value in (self.attributes or {}).values():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                spent_budget += 10 * value
+        for attr in [
+            adv_consts.ATTR_AP,
+            adv_consts.ATTR_ABILITY_POWER,
+            adv_consts.ATTR_CRIT,
+            adv_consts.ATTR_DODGE,
+            adv_consts.ATTR_RESILIENCE,
+            adv_consts.ATTR_MAX_HEALTH,
+            adv_consts.ATTR_MAX_ENERGY,
+            adv_consts.ATTR_MAX_STAMINA,
+            adv_consts.ATTR_REGEN_HEALTH,
+            adv_consts.ATTR_REGEN_ENERGY,
+            adv_consts.ATTR_REGEN_STAMINA,
+            adv_consts.ATTR_WEAPON_DAMAGE,
+        ]:
+            value = getattr(self, attr, 0)
+            if value:
+                spent_budget += adv_consts.ATTR_BUDGET[attr] * value
         return spent_budget
 
 class RoomCommandCheckState(BaseModel):

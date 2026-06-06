@@ -321,6 +321,7 @@ def _run_allowed_mob_commands(
             actor_type="mob",
             actor_id=mob.id,
             payload={"text": command_text},
+            script_source=True,
         )
 
 

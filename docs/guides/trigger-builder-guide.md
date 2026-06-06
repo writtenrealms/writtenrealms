@@ -10,14 +10,17 @@ World**.
 For shared runtime state used by triggers, quests, and builder commands, also
 read
 [state-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/state-builder-guide.md).
+For the shared condition syntax used by triggers, quests, and abilities, read
+[condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md).
 
 ## Mental Model
 
-A trigger has three jobs:
+A trigger has one of three jobs:
 
-- watch for a command or event
-- optionally block that interaction behind conditions
-- run one or more scripted commands when it fires
+- `command`: watch for player-entered text such as `pull lever`, optionally
+  check conditions, then run a script
+- `policy`: decide whether a core action may happen, such as entering a room
+- `event`: react after something happened, such as a player entering a room
 
 For room builders, the most common trigger is a room-scoped command trigger:
 
@@ -26,9 +29,8 @@ For room builders, the most common trigger is a room-scoped command trigger:
 - the trigger checks `conditions`
 - the trigger runs `script`
 
-The same manifest system also supports other trigger shapes, including
-world-scoped event triggers for mob reactions, but room command triggers are the
-main builder-facing entry point today.
+Room triggers also support movement policies and post-move room events. Those
+use the same YAML screen and the same shared condition system.
 
 ## Builder Workflow
 
@@ -110,21 +112,22 @@ If neither is present, the manifest creates a new trigger.
 ### `spec`
 
 - `scope`: where the trigger lives. The room template uses `room`.
-- `kind`: usually `command` for room triggers. Event-driven triggers use
-  `event`.
+- `kind`: `command`, `policy`, or `event`.
 - `target`: what object the trigger is attached to. In room templates, this
   points at the current room and usually should stay that way.
 - `match`: the authored matcher expression. Required for command triggers.
-- `script`: the commands to run when the trigger fires.
+- `script`: the commands to run when a command or event trigger fires. Policy
+  triggers do not run scripts.
 - `conditions`: optional gate. Leave blank for no gate.
 - `show_details_on_failure`: if `true`, condition failure can send feedback to
   the player.
 - `failure_message`: custom feedback when conditions fail.
 - `display_action_in_room`: if `true`, the command shows up in room actions.
-- `gate_delay`: cooldown in seconds. Use `0` for no cooldown.
+- `gate_delay`: cooldown in seconds for command/event triggers. Use `0` for
+  no cooldown. Policy triggers ignore this.
 - `order`: lower values run earlier when multiple matching triggers are in play.
 - `is_active`: if `false`, the trigger stays authored but does not run.
-- `event`: required for `kind: event` triggers.
+- `event`: required for `kind: policy` and `kind: event` triggers.
 
 ## Matching Commands With `spec.match`
 
@@ -159,6 +162,21 @@ Authoring guidance:
 - keep expressions short
 - use parentheses when mixing `and` and `or`
 - split unrelated behavior across separate triggers instead of one long matcher
+- if the literal command contains `and`, `or`, or `not`, quote that literal
+  inside the match expression
+
+Example literal phrase:
+
+```yaml
+match: '"Hit and Run"'
+```
+
+For movement policy and room movement event triggers, `match` is optional. If
+you set it, it is matched exactly against the movement direction:
+
+```yaml
+match: north
+```
 
 ## Gating With `spec.conditions`
 
@@ -167,7 +185,7 @@ Authoring guidance:
 Two formats are currently supported:
 
 - legacy text conditions such as `level 5` or `not level 1`
-- structured condition mappings, which are better for new state-aware content
+- structured condition mappings from the shared WR2 condition DSL
 
 Legacy example:
 
@@ -201,10 +219,17 @@ conditions:
 Behavior notes:
 
 - blank `conditions` means the trigger is always eligible
+- structured conditions can read `actor.*`, `room.*`, `world.*`, and `state.*`
+  paths
+- movement policies and room movement events also receive `event.direction`,
+  `event.origin_room`, and `event.destination_room`
 - if conditions fail and `show_details_on_failure` is `false`, the trigger
   quietly does nothing
 - if conditions fail and `show_details_on_failure` is `true`, the player sees
   `failure_message` or a generated detail message
+
+For the full operator and path reference, see
+[condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md).
 
 ## Writing `spec.script`
 
@@ -227,6 +252,8 @@ Current runtime behavior:
 - line 2 and later run with a short fixed delay between lines
 - empty lines are ignored
 - scripted commands do not recursively fire other triggers
+- policy triggers ignore `script`; they only evaluate `conditions` and
+  `failure_message`
 
 Practical guidance:
 
@@ -243,6 +270,125 @@ Common commands you will often use in trigger scripts:
 - `/cmd room -- /echo -- ...`
 
 ## Common Patterns
+
+### Class Pledge Action
+
+Use a command trigger when the player chooses to do something in the room.
+This example lets non-tidecallers pledge at a Poseidon altar:
+
+```yaml
+kind: trigger
+metadata:
+  world: world.23
+  name: Pledge to Poseidon
+spec:
+  scope: room
+  kind: command
+  target:
+    type: room
+    key: room.185
+    name: Altar of Poseidon
+  match: Pledge or Pledge to Poseidon
+  script: |
+    /cmd room -- /echo -- You feel Poseidon's tide answer in your blood.
+    /cmd room -- /setclass {{ actor_key }} tidecaller
+  conditions:
+    ne:
+      - actor.archetype
+      - tidecaller
+  show_details_on_failure: true
+  failure_message: You have already pledged yourself to Poseidon.
+  display_action_in_room: true
+  gate_delay: 10
+  order: 0
+  is_active: true
+```
+
+Use `{{ actor_key }}` when a script needs to pass the triggering character to a
+builder command such as `/setclass`.
+
+### Warlord-Only Room Entry
+
+Use a policy trigger when movement should be prevented unless a condition is
+met. Policy triggers do not run scripts; they either allow the action or return
+the failure message.
+
+```yaml
+kind: trigger
+metadata:
+  world: world.23
+  name: Warlord Gate
+spec:
+  scope: room
+  kind: policy
+  event: before_move_enter
+  target:
+    type: room
+    key: room.999
+  conditions:
+    eq:
+      - actor.archetype
+      - warlord
+  failure_message: Only warlords may enter.
+  order: 0
+  is_active: true
+```
+
+For a one-direction exit rule, attach the policy to the origin room and set
+`match` to the direction:
+
+```yaml
+kind: trigger
+metadata:
+  world: world.23
+  name: North Gate Requires Badge
+spec:
+  scope: room
+  kind: policy
+  event: before_move_exit
+  target:
+    type: room
+    key: room.120
+  match: north
+  conditions:
+    eq:
+      - state.character.has_badge
+      - true
+  failure_message: The northern guard bars your path.
+  order: 0
+  is_active: true
+```
+
+### Entry Trap
+
+Use an `after_move_enter` event trigger when movement should succeed and then
+the room should react.
+
+```yaml
+kind: trigger
+metadata:
+  world: world.23
+  name: Spear Trap
+spec:
+  scope: room
+  kind: event
+  event: after_move_enter
+  target:
+    type: room
+    key: room.999
+  conditions:
+    not:
+      eq:
+        - state.room.trap_sprung
+        - true
+  script: |
+    /cmd room -- /echo -- Spears snap out from the walls.
+    /cmd room -- /state set room trap_sprung true
+  display_action_in_room: false
+  gate_delay: 0
+  order: 0
+  is_active: true
+```
 
 ### One-Time Room Interaction
 
@@ -327,7 +473,9 @@ metadata:
 
 ## Other Trigger Shapes
 
-The same manifest format also powers mob reaction triggers.
+The same manifest format also powers mob reaction triggers. Mob reactions are
+still a legacy-template-backed surface during the WR2 transition, so event
+trigger targets currently use `mobtemplate` refs.
 
 Example:
 
@@ -354,8 +502,12 @@ spec:
 
 For builder work, the important distinction is:
 
-- room triggers usually use `kind: command`
-- mob reactions usually use `kind: event`
+- room actions usually use `kind: command`
+- movement gates use `kind: policy`
+- room reactions after movement use `kind: event` with `after_move_enter` or
+  `after_move_exit`
+- mob reactions use `kind: event` with `scope: world` and a `mobtemplate`
+  target
 
 ## Related Docs
 

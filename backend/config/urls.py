@@ -125,9 +125,6 @@ api_v1_urls = [
     path('game/system/cpromote/', system_views.clan_promote, name='game-cpromote'),
     path('game/system/ckick/', system_views.clan_kick, name='game-ckick'),
     path('game/system/cmembers/', system_views.clan_members, name='game-cmembers'),
-    path('internal/ai/intents/', spawn_views.AIIntentIngress.as_view(), name='internal-ai-intents'),
-
-
     # General endpoints
     path('worlds/<pk>/', world_views.world_detail, name='world_delete'),
 
@@ -141,6 +138,8 @@ api_v1_urls = [
     path('builder/worlds/<pk>/explore/', builder_views.world_explore, name='builder-world-explore'),
     path('builder/worlds/<pk>/map/', builder_views.world_map, name='builder-world-map'),
     path('builder/worlds/<world_pk>/manifests/apply/', builder_views.world_manifest_apply, name='builder-world-manifest-apply'),
+    path('builder/worlds/<world_pk>/triggers/', builder_views.world_trigger_list, name='builder-world-trigger-list'),
+    path('builder/worlds/<world_pk>/triggers/<pk>/', builder_views.world_trigger_detail, name='builder-world-trigger-detail'),
     path('builder/worlds/<world_pk>/builders/', builder_views.builder_list, name='builder-builder-list'),
     path('builder/worlds/<world_pk>/builders/<pk>/', builder_views.builder_detail, name='builder-builder-detail'),
     path('builder/worlds/<world_pk>/builders/<builder_pk>/assignments/', builder_views.builder_assignment_list, name='builder-assignment-list'),
@@ -192,6 +191,7 @@ api_v1_urls = [
     path('builder/worlds/<world_pk>/rooms/<room_pk>/checks/', builder_views.room_checks, name='builder-room-checks'),
     path('builder/worlds/<world_pk>/rooms/<room_pk>/checks/<pk>/', builder_views.room_check_detail, name='builder-room-check-detail'),
     path('builder/worlds/<world_pk>/rooms/<room_pk>/triggers/', builder_views.room_triggers, name='builder-room-trigger-list'),
+    path('builder/worlds/<world_pk>/rooms/<room_pk>/triggers/<pk>/', builder_views.room_trigger_detail, name='builder-room-trigger-detail'),
     path('builder/worlds/<world_pk>/rooms/<room_pk>/actions/', builder_views.room_action_list, name='builder-room-action-list'),
     path('builder/worlds/<world_pk>/rooms/<room_pk>/actions/<pk>/', builder_views.room_action_detail, name='builder-room-action-detail'),
     path('builder/worlds/<world_pk>/rooms/<room_pk>/actions/<pk>/clone/', builder_views.room_action_clone, name='builder-room-action-clone'),
@@ -211,6 +211,10 @@ api_v1_urls = [
     path('builder/worlds/<world_pk>/itemtemplates/<item_template_pk>/actions/', builder_views.item_action_list, name='builder-item-action-list'),
     path('builder/worlds/<world_pk>/itemtemplates/<item_template_pk>/actions/<pk>/', builder_views.item_action_detail, name='builder-item-action-detail'),
     path('builder/worlds/<world_pk>/itemtemplates/<item_template_pk>/actions/<pk>/clone/', builder_views.item_action_clone, name='builder-item-action-clone'),
+    path('builder/worlds/<world_pk>/itemdefinitions/', builder_views.item_definition_list, name='builder-item-definition-list'),
+    path('builder/worlds/<world_pk>/itemdefinitions/<pk>/', builder_views.item_definition_detail, name='builder-item-definition-detail'),
+    path('builder/worlds/<world_pk>/itembundles/', builder_views.item_bundle_list, name='builder-item-bundle-list'),
+    path('builder/worlds/<world_pk>/itembundles/<pk>/', builder_views.item_bundle_detail, name='builder-item-bundle-detail'),
 
     # Mob Templates
     path('builder/worlds/<world_pk>/mobtemplates/', builder_views.mob_template_list, name='builder-mob-template-list'),
@@ -225,6 +229,11 @@ api_v1_urls = [
     path('builder/worlds/<world_pk>/mobtemplates/<pk>/factions/', builder_views.mob_template_factions, name='builder-mob-template-factions'),
     path('builder/worlds/<world_pk>/mobtemplates/<pk>/quests/', builder_views.mob_template_quests, name='builder-mob-template-quests'),
     path('builder/worlds/<world_pk>/mobtemplates/<mob_template_pk>/factions/<pk>/', builder_views.mob_template_faction_detail, name='builder-mob-template-faction-detail'),
+    path('builder/worlds/<world_pk>/balance/mob-suggestions/', builder_views.mob_definition_suggestion, name='builder-mob-definition-suggestion'),
+    path('builder/worlds/<world_pk>/mobdefinitions/', builder_views.mob_definition_list, name='builder-mob-definition-list'),
+    path('builder/worlds/<world_pk>/mobdefinitions/<pk>/', builder_views.mob_definition_detail, name='builder-mob-definition-detail'),
+    path('builder/worlds/<world_pk>/merchantprofiles/', builder_views.merchant_profile_list, name='builder-merchant-profile-list'),
+    path('builder/worlds/<world_pk>/merchantprofiles/<pk>/', builder_views.merchant_profile_detail, name='builder-merchant-profile-detail'),
 
     # Loaders
     path('builder/worlds/<world_pk>/loaders/', builder_views.loader_list, name='builder-loader-list'),

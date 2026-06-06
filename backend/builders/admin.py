@@ -14,10 +14,14 @@ from builders.models import (
     HousingBlock,
     HousingLease,
     ItemAction,
+    ItemBundle,
+    ItemBundleEntry,
+    ItemDefinition,
     ItemTemplate,
     ItemTemplateInventory,
     Loader,
     MobEquipmentProfile,
+    MobDefinition,
     MerchantInventory,
     MobReaction,
     MobReactionCondition,
@@ -85,6 +89,31 @@ class ItemTemplateAdmin(BaseAdmin):
     ]
 
 
+class ItemDefinitionAdmin(BaseAdmin):
+    list_display = ('id', 'key', 'slug', 'name', 'item_type', 'world')
+    raw_id_fields = ['world']
+    list_filter = (DirectRootWorldFilter,)
+
+
+class ItemBundleEntryInline(admin.TabularInline):
+    model = ItemBundleEntry
+    raw_id_fields = ['item_definition']
+    extra = 0
+
+
+class ItemBundleAdmin(BaseAdmin):
+    list_display = ('id', 'key', 'slug', 'name', 'world')
+    raw_id_fields = ['world']
+    list_filter = (DirectRootWorldFilter,)
+    inlines = [ItemBundleEntryInline]
+
+
+class MobDefinitionAdmin(BaseAdmin):
+    list_display = ('id', 'key', 'slug', 'name', 'mob_type', 'world')
+    raw_id_fields = ['world']
+    list_filter = (DirectRootWorldFilter,)
+
+
 class ItemTemplateInventoryAdmin(BaseAdmin):
     list_display = ('id', 'container', 'item_template', 'probability')
 
@@ -108,8 +137,15 @@ class MobTemplateAdmin(BaseAdmin):
 
 
 class MobTemplateInventoryAdmin(BaseAdmin):
-    list_display = ('id', 'container', 'item_template', 'probability')
-    raw_id_fields = ['container', 'item_template']
+    list_display = (
+        'id',
+        'container',
+        'item_template',
+        'item_definition',
+        'item_bundle',
+        'probability',
+    )
+    raw_id_fields = ['container', 'item_template', 'item_definition', 'item_bundle']
 
 
 class TransformationTemplateAdmin(BaseAdmin):
@@ -117,8 +153,22 @@ class TransformationTemplateAdmin(BaseAdmin):
 
 
 class MerchantInventoryAdmin(BaseAdmin):
-    list_display = ('id', 'mob', 'item_template', 'random_item_profile', 'num')
-    raw_id_fields = ['mob', 'item_template', 'random_item_profile']
+    list_display = (
+        'id',
+        'mob',
+        'item_template',
+        'item_definition',
+        'item_bundle',
+        'random_item_profile',
+        'num',
+    )
+    raw_id_fields = [
+        'mob',
+        'item_template',
+        'item_definition',
+        'item_bundle',
+        'random_item_profile',
+    ]
 
 
 def mr_world(mob_reaction):
@@ -335,6 +385,8 @@ admin.site.register(FactSchedule, FactScheduleAdmin)
 admin.site.register(HousingBlock, HousingBlockAdmin)
 admin.site.register(HousingLease, HousingLeaseAdmin)
 admin.site.register(ItemAction, ItemActionAdmin)
+admin.site.register(ItemDefinition, ItemDefinitionAdmin)
+admin.site.register(ItemBundle, ItemBundleAdmin)
 admin.site.register(ItemTemplate, ItemTemplateAdmin)
 admin.site.register(ItemTemplateInventory, ItemTemplateInventoryAdmin)
 admin.site.register(Loader, LoaderAdmin)
@@ -342,6 +394,7 @@ admin.site.register(MerchantInventory, MerchantInventoryAdmin)
 admin.site.register(MobEquipmentProfile, MobEquipmentProfileAdmin)
 admin.site.register(MobReaction, MobReactionAdmin)
 admin.site.register(MobReactionCondition, MobReactionConditionAdmin)
+admin.site.register(MobDefinition, MobDefinitionAdmin)
 admin.site.register(MobTemplate, MobTemplateAdmin)
 admin.site.register(MobTemplateInventory, MobTemplateInventoryAdmin)
 admin.site.register(Objective, ObjectiveAdmin)

@@ -5,11 +5,11 @@ import random
 from config import constants
 
 """
-10 Points - CON, STR, DEX, INT, 1 Mana Per Tick
+10 Points - CON, STR, DEX, INT, 1 Energy Per Tick
 40 Points - 1 Health Per Tick
-20 Points - 1 Mana Per Tick
-4 Points - Resilience, Dodge Rating, Crit Rating, Attack Power, Spell Power, Weapon Damage, 1 Health
-2 Points - 1 Mana
+20 Points - 1 Energy Per Tick
+4 Points - Resilience, Dodge Rating, Crit Rating, Attack Power, Ability Power, Weapon Damage, 1 Health
+2 Points - 1 Energy
 """
 
 
@@ -21,10 +21,9 @@ def floor_with_factor(number, factor):
 
 def roll_attribute_in_range(budget, attr, min, max):
     """
-    For a given budget, rolls a random number of the desired attribute within
-    a certain range of use in the budget. For example, how many points of
-    strength should I have for a level 3 large item (budget 167)?
-    between 9 and 13.
+    For a given budget, rolls a random number of the desired generated stat
+    within a certain range of use in the budget. For example, how many points
+    should a level 3 large item spend from a budget of 167? Between 9 and 13.
     """
     cost = constants.ATTR_BUDGET[attr]
     min_attr_points = int(ceil_with_factor(budget * min, cost) / cost)

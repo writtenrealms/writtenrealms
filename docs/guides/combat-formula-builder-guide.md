@@ -11,9 +11,14 @@ There are two related systems:
 - `combat` decides how those numbers become damage, dodge, crits, and
   mitigation.
 
+A newly created world may not show a `combat` block in **World > Config > Copy
+YAML**. That means the builder has not authored any combat overrides yet. The
+runtime still uses the default combat model below, and `spec.combat` only needs
+to be added when the builder wants to tune that model.
+
 Most builders should only need to tune a few combat values:
 
-- `weapon_damage` on weapon item templates
+- `weapon_damage` on weapon item definitions
 - `power_scale` for how much attack power or ability power matters
 - `can_dodge` and `can_crit`
 - `crit_multiplier`
@@ -48,10 +53,10 @@ spec:
     ...
 ```
 
-Weapons are edited on item template manifests:
+Weapons are edited on item definition manifests:
 
 ```yaml
-kind: itemtemplate
+kind: itemdefinition
 metadata:
   slug: iron-sword
   name: an iron sword
@@ -68,8 +73,9 @@ attributes matter heavily, or something in between.
 
 ## Full Default Combat Shape
 
-The normalized world config will include a full combat block. This is the
-important part:
+The runtime normalizes missing combat config against this default shape. Copy
+YAML omits the block until the world has authored combat config; paste only the
+fields you want to change under `spec.combat`.
 
 ```yaml
 combat:
@@ -77,6 +83,10 @@ combat:
   default_attack_profile: basic_physical
   default_ability_profile: basic_ability
   default_healing_profile: basic_heal
+  level_scale:
+    type: exponential
+    base: 5.5
+    growth: 1.1
   variance:
     enabled: true
     percent: 12.5
@@ -156,6 +166,15 @@ weapon's `weapon_damage` is read separately from the weapon slot. Use the
 `stats` command before testing combat if you want to confirm the exact effective
 numbers the engine is using.
 
+On a completely blank new world, there are no authored attributes or combat
+power formulas. The default world config still gives players baseline stamina
+and stamina regeneration so they can move, but a new unarmed player usually has
+`attack_power: 0`. With the default physical profile, that means the player
+needs either a weapon with `weapon_damage` or a stat formula that produces
+`attack_power` before their basic attack deals damage. Mobs without weapons use
+the default level-based fallback described below, so they can still hit even
+without authored stats.
+
 For the default physical attack profile, the base damage starts from weapon
 damage plus attack power:
 
@@ -176,6 +195,142 @@ formula:
 base = level_scale(actor.level) * mob_unarmed_level_scale
      + power * power_scale
 ```
+
+### Level Scale
+
+`level_scale` is the combat system's way to make ratings and unarmed mob damage
+grow with level. Combat clamps levels below `1` up to `1` before applying the
+scale.
+
+This is separate from `leveling_curve`, which controls how much XP a player
+needs to reach each level.
+
+Combat uses `level_scale` in two places:
+
+- unarmed mob fallback damage:
+  `level_scale(actor.level) * mob_unarmed_level_scale`
+- rating math for dodge, crit, armor, and resilience:
+  `level_scale(opponent.level) * constant`
+
+#### Exponential
+
+`exponential` is the default. It keeps growing past the player level cap, which
+lets builders cap players at one level while still creating higher-level
+monsters or challenge content.
+
+```yaml
+combat:
+  level_scale:
+    type: exponential
+    base: 5.5
+    growth: 1.1
+```
+
+Formula:
+
+```text
+level_scale = base * growth^level
+```
+
+With the default `base: 5.5` and `growth: 1.1`:
+
+| Level | `level_scale` |
+| ---: | ---: |
+| 1 | 6.05 |
+| 5 | 8.86 |
+| 10 | 14.27 |
+| 15 | 22.97 |
+| 20 | 37.00 |
+| 30 | 95.97 |
+| 40 | 248.93 |
+| 60 | 1674.65 |
+
+#### Linear
+
+`linear` is easier to reason about and grows at the same amount every level.
+
+```yaml
+combat:
+  level_scale:
+    type: linear
+    base: 5.5
+    per_level: 1.25
+```
+
+Formula:
+
+```text
+level_scale = base + per_level * level
+```
+
+With the default linear values:
+
+| Level | `level_scale` |
+| ---: | ---: |
+| 1 | 6.75 |
+| 5 | 11.75 |
+| 10 | 18.00 |
+| 15 | 24.25 |
+| 20 | 30.50 |
+| 60 | 80.50 |
+
+#### Flat
+
+`flat` ignores level. Use it for worlds where ratings should mean the same
+thing at every level.
+
+```yaml
+combat:
+  level_scale:
+    type: flat
+    value: 1.0
+```
+
+Formula:
+
+```text
+level_scale = value
+```
+
+#### ILF
+
+`ilf` is the WR1 legacy scale. It preserves the original level 1-20 feel:
+levels 1-15 grow quickly, then levels 16-20 taper so that high-level content is
+not locked exclusively to capped characters. Values above level 20 currently use
+the same scale as level 20.
+
+```yaml
+combat:
+  level_scale:
+    type: ilf
+```
+
+Formula:
+
+```text
+if level < 17:
+  level_scale = 5.5 * 1.1^level
+else:
+  level_scale = 5.5 * 1.1^16
+  if level >= 17: level_scale *= 1.08
+  if level >= 18: level_scale *= 1.06
+  if level >= 19: level_scale *= 1.04
+  if level >= 20: level_scale *= 1.02
+```
+
+Approximate values:
+
+| Level | `level_scale` |
+| ---: | ---: |
+| 1 | 6.05 |
+| 5 | 8.86 |
+| 10 | 14.27 |
+| 15 | 22.97 |
+| 16 | 25.27 |
+| 17 | 27.29 |
+| 18 | 28.93 |
+| 19 | 30.09 |
+| 20 | 30.69 |
 
 The default ability profile does not use weapon damage:
 
@@ -220,8 +375,8 @@ after armor, resilience, and minimum damage.
 
 ### Dodge, Crit, Armor, And Resilience Ratings
 
-Dodge, crit, armor, and resilience use rating configs. Each config has the same
-shape, though the default values differ by rating:
+Dodge, crit, armor, and resilience use rating configs. The default configs use
+level-scaled ratings:
 
 ```yaml
 base: 0
@@ -253,6 +408,26 @@ percent = (rating + opponent_scale * constant * base)
         / (rating + opponent_scale * constant)
 percent = clamp(percent, 0, cap)
 ```
+
+Worlds that want stat values to mean percentage points can use
+`percentage_points` instead. This type ignores opponent level and does not use
+`constant`:
+
+```yaml
+type: percentage_points
+base: 0
+cap: 0.75
+```
+
+The formula is:
+
+```text
+percent = rating / 100 + base
+percent = clamp(percent, 0, cap)
+```
+
+With this type, `dodge: 1` means 1% dodge against a level 1 opponent or a level
+20 opponent. `armor: 25` means 25% armor mitigation before the cap.
 
 For a default physical attack, only armor mitigates damage. Resilience is
 ignored unless `mitigation.resilience` is set to `true`. For a default ability
@@ -369,7 +544,7 @@ spec:
 Then give weapons clear `weapon_damage` values:
 
 ```yaml
-kind: itemtemplate
+kind: itemdefinition
 metadata:
   slug: frontier-rifle
   name: a frontier rifle
@@ -494,7 +669,7 @@ or other physical attacks.
 Use resilience when you want protection from magic, psionics, tech abilities,
 mental strain, elemental force, or other non-weapon ability attacks.
 
-If your world is not fantasy, rename the labels in `spec.stats.labels.derived`.
+If your world is not fantasy, rename the labels in `spec.stats.labels.stats`.
 For example:
 
 ```yaml
@@ -502,7 +677,7 @@ kind: world
 spec:
   stats:
     labels:
-      derived:
+      stats:
         ability_power: Technique
         resilience: Focus
 ```
@@ -556,7 +731,7 @@ spec:
     labels:
       resources:
         energy: Grit
-      derived:
+      stats:
         ability_power: Technique
         resilience: Nerve
   combat:
@@ -581,7 +756,7 @@ spec:
 Example weapon:
 
 ```yaml
-kind: itemtemplate
+kind: itemdefinition
 metadata:
   slug: rusted-revolver
   name: a rusted revolver
@@ -673,9 +848,9 @@ the problem is health, weapon damage, attack power scaling, or mitigation.
 
 ## Common Mistakes
 
-- Do not use `spell_power` in new combat configs unless you are working around
-  old data. Use `ability_power`.
-- Do not set `constant` to zero in ratings.
+- Use `ability_power` in combat configs. Worlds can label it as `Spell Power`
+  if that fits the setting.
+- Do not set `constant` to zero in level-scaled ratings.
 - Do not make armor and resilience both apply everywhere unless that is a
   deliberate WR1-like choice.
 - Do not use huge `weapon_damage` values and huge `attack_power` scaling at the

@@ -1437,7 +1437,7 @@ class MobTemplateTests(BuilderTestCase):
 
         # Test use of suggested stats for non-provided values
         for stat, value in suggest_stats(level=1).items():
-            if stat in ('mana_base', 'health_base', 'stamina_base'):
+            if stat in ('energy_base', 'health_base', 'stamina_base'):
                 continue
             self.assertEqual(getattr(template, stat), value)
 
@@ -1797,7 +1797,10 @@ class MobTemplateMerchantInventoryTests(BuilderTestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(
             resp.data['non_field_errors'],
-            ['Either an item template or a random profile is required.'])
+            [
+                'Either an item template, item definition, item bundle, '
+                'or random profile is required.'
+            ])
 
         resp = self.client.post(self.list_ep, {
             'random_item_profile': {'key': self.random_item_profile.key},
@@ -1882,22 +1885,22 @@ class ItemTemplateTests(BuilderTestCase):
             equipment_type=adv_consts.EQUIPMENT_TYPE_WEAPON_1H)
         self.assertEqual(item_template.quality, adv_consts.ITEM_QUALITY_NORMAL)
 
-        # Boosting strength marks the item as Imbued
+        # Adding attributes marks the item as Imbued
         endpoint = reverse('builder-item-template-detail',
                            args=[self.world.pk, item_template.pk])
         resp = self.client.put(endpoint, {
-            'strength': 10,
-        })
+            'attributes': {'brawn': 10},
+        }, format='json')
         self.assertEqual(resp.status_code, 200)
         item_template.refresh_from_db()
         self.assertEqual(item_template.quality, adv_consts.ITEM_QUALITY_IMBUED)
 
-        # Boosting strength to a ridiculous amount marks it as Enchanted
+        # Boosting attributes to a ridiculous amount marks it as Enchanted
         endpoint = reverse('builder-item-template-detail',
                            args=[self.world.pk, item_template.pk])
         resp = self.client.put(endpoint, {
-            'strength': 1000000,
-        })
+            'attributes': {'brawn': 1000000},
+        }, format='json')
         self.assertEqual(resp.status_code, 200)
         item_template.refresh_from_db()
         self.assertEqual(item_template.quality, adv_consts.ITEM_QUALITY_ENCHANTED)
@@ -1906,8 +1909,8 @@ class ItemTemplateTests(BuilderTestCase):
         endpoint = reverse('builder-item-template-detail',
                            args=[self.world.pk, item_template.pk])
         resp = self.client.put(endpoint, {
-            'strength': 0,
-        })
+            'attributes': {},
+        }, format='json')
         self.assertEqual(resp.status_code, 200)
         item_template.refresh_from_db()
         self.assertEqual(item_template.quality, adv_consts.ITEM_QUALITY_NORMAL)
@@ -3822,17 +3825,17 @@ class WorldManagePlayerTests(BuilderTestCase):
         world editor.
         """
         self.client.force_authenticate(self.user)
-        self.assertFalse(self.player.is_immortal)
+        self.assertFalse(self.player.is_builder)
         resp = self.client.put(
             reverse('builder-player-detail', args=[
                 self.world.pk, self.player.pk]),
             {
                 'id': self.player.id,
-                'is_immortal': True
+                'is_builder': True
             })
         self.assertEqual(resp.status_code, 200)
         self.player.refresh_from_db()
-        self.assertTrue(self.player.is_immortal)
+        self.assertTrue(self.player.is_builder)
 
     def test_reset_player_in_other_world_returns_404(self):
         other_user = self.create_user('other@example.com')

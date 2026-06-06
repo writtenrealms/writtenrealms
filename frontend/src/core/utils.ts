@@ -45,33 +45,74 @@ export const formatRelativeModifiedDate = (value?: string) => {
   return priorYearDateFormatter.format(modifiedAt);
 };
 
+export const formatPercent = value => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return String(value || 0);
+  const rounded = Math.round(numeric * 100) / 100;
+  return String(rounded).replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1");
+};
+
+export const getRatingConfigForStat = (world, key) => {
+  const ratings = world?.combat?.ratings || {};
+  const direct = ratings[key];
+  if (direct && (!direct.stat || direct.stat === key)) return direct;
+  return Object.values(ratings).find((rating: any) => rating?.stat === key);
+};
+
+export const formatCombatStatValue = (world, player, key, value, mode = "dash") => {
+  const percentMap: any = {
+    armor: player?.armor_perc,
+    crit: player?.crit_perc,
+    dodge: player?.dodge_perc,
+    resilience: player?.resilience_perc,
+  };
+  const perc = percentMap[key];
+  const ratingConfig: any = getRatingConfigForStat(world, key);
+
+  if (ratingConfig?.type === "percentage_points") {
+    const percentValue = perc !== undefined && perc !== null ? perc : value;
+    return `${formatPercent(percentValue)}%`;
+  }
+
+  if (perc !== undefined && perc !== null) {
+    const formatted = formatPercent(perc);
+    return mode === "paren" ? `${value} (${formatted}%)` : `${value} - ${formatted}%`;
+  }
+
+  return `${value}`;
+};
+
 export const stackedInventory = function(inv) {
   /*
-    Takes a list of items and consolidates those with identical template IDs
-    to the count of the already encountered item.
+    Takes a list of items and consolidates those with identical backend-provided
+    stack keys to the count of the already encountered item.
   */
 
-  var c_inv: any[] = []; // the inventory with template id counts
-  var t_items = {}; // template items cache
+  var c_inv: any[] = []; // the inventory with stack counts
+  var t_items = {}; // stackable items cache
 
   for (let item of inv) {
     var tid = item.template_id;
+    var stackKey = item.stack_key;
+    if (stackKey === undefined && tid && !item.is_container) {
+      stackKey = `template:${tid}`;
+    }
 
-    // Templated item
-    if (tid && !item.is_container) {
-      if (t_items[tid] === undefined) {
-        item.display_key = tid;
-        t_items[tid] = item;
+    // Stackable item
+    if (stackKey) {
+      if (t_items[stackKey] === undefined) {
+        item.display_key = stackKey;
+        t_items[stackKey] = item;
         item.count = 1;
         item.showCount = false;
         c_inv.push(item);
       } else {
         // Modify item in cache
-        if (t_items[tid].count === 1) t_items[tid].showCount = true;
-        t_items[tid].count += 1;
+        if (t_items[stackKey].count === 1) t_items[stackKey].showCount = true;
+        t_items[stackKey].count += 1;
       }
 
-    // Generated Item
+    // Generated or otherwise unique item
     } else {
       item.display_key = item.key;
       c_inv.push(item);

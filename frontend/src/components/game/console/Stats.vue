@@ -22,8 +22,8 @@
         </div>
 
         <div
-          v-for="stat in primaryEntries"
-          :key="`primary-${stat.key}`"
+          v-for="stat in attributeEntries"
+          :key="`attribute-${stat.key}`"
           class="stat-entry"
         >
           <div class="label">{{ stat.label }}</div>
@@ -48,8 +48,8 @@
 
       <div class="right-side">
         <div
-          v-for="stat in derivedEntries"
-          :key="`derived-${stat.key}`"
+          v-for="stat in statEntries"
+          :key="`stat-${stat.key}`"
           class="stat-entry"
         >
           <div class="label">{{ stat.label }}</div>
@@ -68,7 +68,7 @@
 <script lang='ts' setup>
 import { computed } from "vue";
 import { useStore } from "vuex";
-import { capfirst } from "@/core/utils.ts";
+import { capfirst, formatCombatStatValue } from "@/core/utils.ts";
 
 const props = defineProps({
   message: {
@@ -86,46 +86,37 @@ const resourceLabels = computed(() => world.value?.labels?.resources || {});
 const healthLabel = computed(() => resourceLabels.value.health || "Health");
 const energyLabel = computed(() => resourceLabels.value.energy || "Energy");
 const staminaLabel = computed(() => resourceLabels.value.stamina || "Stamina");
-const energyCurrent = computed(() => player.value?.energy ?? player.value?.mana ?? 0);
-const energyMax = computed(() => player.value?.energy_max ?? player.value?.mana_max ?? 0);
+const energyCurrent = computed(() => player.value?.energy ?? 0);
+const energyMax = computed(() => player.value?.energy_max ?? 0);
 const hasEnergy = computed(() => energyMax.value > 0);
 
-const primaryLabels = computed(() => world.value?.labels?.primaries || {});
-const primaryOrder = computed(() => world.value?.labels?.order?.primaries || Object.keys(player.value?.primary_attributes || {}));
-const primaryEntries = computed(() => {
-  const values = player.value?.primary_attributes || {};
-  return primaryOrder.value
+const attributeLabels = computed(() => world.value?.labels?.attributes || {});
+const attributeOrder = computed(() => world.value?.labels?.order?.attributes || Object.keys(player.value?.attributes || {}));
+const attributeEntries = computed(() => {
+  const values = player.value?.attributes || {};
+  return attributeOrder.value
     .filter((key: string) => values[key] !== undefined)
     .map((key: string) => ({
       key,
-      label: primaryLabels.value[key] || capfirst(key.replace(/_/g, " ")),
+      label: attributeLabels.value[key] || capfirst(key.replace(/_/g, " ")),
       value: values[key],
     }));
 });
 
-const derivedLabels = computed(() => world.value?.labels?.derived || {});
-const derivedOrder = computed(() => world.value?.labels?.order?.derived || Object.keys(player.value?.derived_stats || {}));
-const formatDerivedValue = (key: string, value: number) => {
-  const percentMap: Record<string, number | undefined> = {
-    armor: player.value?.armor_perc,
-    crit: player.value?.crit_perc,
-    dodge: player.value?.dodge_perc,
-    resilience: player.value?.resilience_perc,
-  };
-  const perc = percentMap[key];
-  if (perc !== undefined && perc !== null) {
-    return `${value} - ${perc}%`;
-  }
-  return `${value}`;
+const statLabels = computed(() => world.value?.labels?.stats || {});
+const statOrder = computed(() => world.value?.labels?.order?.stats || Object.keys(player.value?.stats || {}));
+const formatStatValue = (key: string, value: number) => {
+  return formatCombatStatValue(world.value, player.value, key, value);
 };
-const derivedEntries = computed(() => {
-  const values = player.value?.derived_stats || {};
-  return derivedOrder.value
+const statEntries = computed(() => {
+  const values = player.value?.stats || {};
+  return statOrder.value
     .filter((key: string) => values[key] !== undefined)
+    .filter((key: string) => key !== "energy_regen" || hasEnergy.value)
     .map((key: string) => ({
       key,
-      label: derivedLabels.value[key] || capfirst(key.replace(/_/g, " ")),
-      value: formatDerivedValue(key, values[key]),
+      label: statLabels.value[key] || capfirst(key.replace(/_/g, " ")),
+      value: formatStatValue(key, values[key]),
     }));
 });
 

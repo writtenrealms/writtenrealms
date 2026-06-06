@@ -26,12 +26,12 @@ class CombatFormulaValidationError(ValueError):
 
 SUPPORTED_COMBAT_VERSION = 1
 PROFILE_KINDS = ("damage", "healing")
-RATING_TYPES = ("mitigation_curve", "linear_rating")
+RATING_TYPES = ("mitigation_curve", "linear_rating", "percentage_points")
 PROFILE_VARIANCE_STRATEGIES = ("default", "none")
+LEVEL_SCALE_TYPES = ("exponential", "linear", "flat", "ilf")
 ALLOWED_POWER_STATS = (
     "attack_power",
     "ability_power",
-    "spell_power",
     "weapon_damage",
     "armor",
     "crit",
@@ -39,13 +39,11 @@ ALLOWED_POWER_STATS = (
     "resilience",
     "health_max",
     "energy_max",
-    "mana_max",
     "stamina_max",
 )
 SNAPSHOT_STAT_KEYS = (
     "attack_power",
     "ability_power",
-    "spell_power",
     "weapon_damage",
     "armor",
     "crit",
@@ -53,7 +51,6 @@ SNAPSHOT_STAT_KEYS = (
     "resilience",
     "health_max",
     "energy_max",
-    "mana_max",
     "stamina_max",
 )
 PROFILE_FIELDS = {
@@ -91,7 +88,9 @@ DEFAULT_COMBAT_SYSTEM: dict[str, Any] = {
     "default_ability_profile": "basic_ability",
     "default_healing_profile": "basic_heal",
     "level_scale": {
-        "type": "ilf",
+        "type": "exponential",
+        "base": 5.5,
+        "growth": 1.1,
     },
     "variance": {
         "enabled": True,
@@ -291,10 +290,50 @@ def _coerce_level_scale(value: Any) -> dict[str, Any]:
         value = {}
     if not isinstance(value, dict):
         raise CombatFormulaValidationError("combat.level_scale must be a mapping.")
-    scale_type = str(value.get("type") or "ilf").strip()
-    if scale_type != "ilf":
-        raise CombatFormulaValidationError("combat.level_scale.type must be ilf.")
-    return {"type": scale_type}
+    scale_type = str(value.get("type") or DEFAULT_COMBAT_SYSTEM["level_scale"]["type"]).strip()
+    if scale_type not in LEVEL_SCALE_TYPES:
+        supported = ", ".join(LEVEL_SCALE_TYPES)
+        raise CombatFormulaValidationError(
+            f"combat.level_scale.type must be one of: {supported}."
+        )
+    if scale_type == "ilf":
+        return {"type": scale_type}
+    if scale_type == "exponential":
+        return {
+            "type": scale_type,
+            "base": _coerce_number(
+                value.get("base", DEFAULT_COMBAT_SYSTEM["level_scale"]["base"]),
+                field_name="combat.level_scale.base",
+                minimum=0.0001,
+            ),
+            "growth": _coerce_number(
+                value.get("growth", DEFAULT_COMBAT_SYSTEM["level_scale"]["growth"]),
+                field_name="combat.level_scale.growth",
+                minimum=0.0001,
+            ),
+        }
+    if scale_type == "linear":
+        return {
+            "type": scale_type,
+            "base": _coerce_number(
+                value.get("base", 5.5),
+                field_name="combat.level_scale.base",
+                minimum=0,
+            ),
+            "per_level": _coerce_number(
+                value.get("per_level", 1.25),
+                field_name="combat.level_scale.per_level",
+                minimum=0,
+            ),
+        }
+    return {
+        "type": scale_type,
+        "value": _coerce_number(
+            value.get("value", 1.0),
+            field_name="combat.level_scale.value",
+            minimum=0,
+        ),
+    }
 
 
 def _coerce_variance_block(value: Any, *, field_name: str) -> dict[str, Any]:
@@ -347,15 +386,10 @@ def _coerce_rating(value: Any, *, field_name: str) -> dict[str, Any]:
         raise CombatFormulaValidationError(
             f"{field_name}.type must be one of {', '.join(RATING_TYPES)}."
         )
-    return {
+    normalized = {
         "stat": stat,
         "type": rating_type,
         "base": _coerce_number(value.get("base", 0), field_name=f"{field_name}.base"),
-        "constant": _coerce_number(
-            value.get("constant"),
-            field_name=f"{field_name}.constant",
-            minimum=0.0001,
-        ),
         "cap": _coerce_number(
             value.get("cap", 1),
             field_name=f"{field_name}.cap",
@@ -363,6 +397,13 @@ def _coerce_rating(value: Any, *, field_name: str) -> dict[str, Any]:
             maximum=1,
         ),
     }
+    if rating_type != "percentage_points":
+        normalized["constant"] = _coerce_number(
+            value.get("constant"),
+            field_name=f"{field_name}.constant",
+            minimum=0.0001,
+        )
+    return normalized
 
 
 def _coerce_ratings(value: Any) -> dict[str, Any]:
@@ -438,8 +479,6 @@ def _coerce_profile(
             f"{field_name}.kind must be one of {', '.join(PROFILE_KINDS)}."
         )
     power_stat = str(profile.get("power_stat") or "").strip()
-    if power_stat == "spell_power":
-        power_stat = "ability_power"
     if power_stat not in ALLOWED_POWER_STATS:
         raise CombatFormulaValidationError(
             f"{field_name}.power_stat must be a canonical combat stat."
@@ -611,10 +650,20 @@ def get_world_combat_system(world) -> dict[str, Any]:
 
 
 def _level_scale(level: int, combat_system: dict[str, Any]) -> float:
-    scale_type = combat_system.get("level_scale", {}).get("type", "ilf")
+    normalized_level = max(1, int(level or 1))
+    level_scale = combat_system.get("level_scale", {})
+    scale_type = level_scale.get("type", DEFAULT_COMBAT_SYSTEM["level_scale"]["type"])
     if scale_type == "ilf":
-        return float(config.ILF(max(1, int(level or 1))))
-    return float(max(1, int(level or 1)))
+        return float(config.ILF(normalized_level))
+    if scale_type == "linear":
+        return float(level_scale.get("base", 5.5)) + (
+            float(level_scale.get("per_level", 1.25)) * normalized_level
+        )
+    if scale_type == "flat":
+        return float(level_scale.get("value", 1.0))
+    return float(level_scale.get("base", 5.5)) * (
+        float(level_scale.get("growth", 1.1)) ** normalized_level
+    )
 
 
 def _actor_type(actor: Any) -> str:
@@ -695,33 +744,29 @@ def _player_snapshot(actor: Any, world: Any) -> CombatantSnapshot:
 def _mob_snapshot(actor: Any) -> CombatantSnapshot:
     snapshot_stats = {
         "attack_power": _numeric_attr(actor, "attack_power"),
-        "spell_power": _numeric_attr(actor, "spell_power"),
-        "ability_power": _numeric_attr(actor, "spell_power"),
+        "ability_power": _numeric_attr(actor, "ability_power"),
         "weapon_damage": _weapon_damage(actor),
         "armor": _numeric_attr(actor, "armor"),
         "crit": _numeric_attr(actor, "crit"),
         "dodge": _numeric_attr(actor, "dodge"),
         "resilience": _numeric_attr(actor, "resilience"),
         "health_max": _numeric_attr(actor, "health_max"),
-        "energy_max": _numeric_attr(actor, "mana_max"),
-        "mana_max": _numeric_attr(actor, "mana_max"),
+        "energy_max": _numeric_attr(actor, "energy_max"),
         "stamina_max": _numeric_attr(actor, "stamina_max"),
     }
     for item in _iter_equipment_items(actor) or ():
         for stat_key in (
             "attack_power",
-            "spell_power",
+            "ability_power",
             "armor",
             "crit",
             "dodge",
             "resilience",
             "health_max",
-            "mana_max",
+            "energy_max",
             "stamina_max",
         ):
             snapshot_stats[stat_key] += _item_stat(item, stat_key)
-    snapshot_stats["ability_power"] = snapshot_stats["spell_power"]
-    snapshot_stats["energy_max"] = snapshot_stats["mana_max"]
     return CombatantSnapshot(
         actor_type="mob",
         level=max(1, int(getattr(actor, "level", 1) or 1)),
@@ -738,8 +783,6 @@ def combatant_snapshot(actor: Any, *, world: Any | None = None) -> CombatantSnap
 
 
 def _stat_value(snapshot: CombatantSnapshot, stat_key: str) -> float:
-    if stat_key == "spell_power":
-        stat_key = "ability_power"
     return float(snapshot.stats.get(stat_key, 0.0) or 0.0)
 
 
@@ -751,8 +794,12 @@ def _rating_percent(
     combat_system: dict[str, Any],
 ) -> float:
     base = float(rating_config["base"])
-    constant = float(rating_config["constant"])
     cap = float(rating_config["cap"])
+
+    if rating_config["type"] == "percentage_points":
+        return min(cap, max(0.0, rating / 100.0 + base))
+
+    constant = float(rating_config["constant"])
     opponent_scale = max(0.0001, _level_scale(opponent_level, combat_system))
 
     if rating_config["type"] == "linear_rating":
@@ -763,6 +810,21 @@ def _rating_percent(
         value = numerator / denominator if denominator else 0
 
     return min(cap, max(0.0, value))
+
+
+def rating_display_percent(
+    *,
+    rating_config: dict[str, Any],
+    rating: float,
+    opponent_level: int,
+    combat_system: dict[str, Any],
+) -> float:
+    return _rating_percent(
+        rating_config=rating_config,
+        rating=rating,
+        opponent_level=opponent_level,
+        combat_system=combat_system,
+    ) * 100.0
 
 
 def _random_value(rng: Callable[[], float]) -> float:

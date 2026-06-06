@@ -39,3 +39,6 @@ backend/.env
 backend/.env.local
 frontend/.env.local
 backend/celerybeat-schedule*
+
+# Local-only workspace notes and setup manifests
+docs/local/

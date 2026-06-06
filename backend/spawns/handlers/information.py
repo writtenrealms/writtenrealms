@@ -163,7 +163,7 @@ class StatsHandler(CommandHandler):
     help = {
         "name": "Stats",
         "format": "stats",
-        "description": "Show your current vitals, attributes, and derived combat stats.",
+        "description": "Show your current vitals, attributes, and stats.",
         "examples": ["stats"],
     }
 
@@ -264,10 +264,12 @@ class HelpHandler(CommandHandler):
     def _resolve_help_target(self, ctx: CommandContext) -> str | None:
         target = ctx.payload.get("target")
         if target:
-            return str(target).strip().lower() or None
+            normalized = str(target).strip().lower()
+            return "equipment" if normalized == "eq" else normalized or None
         args = ctx.payload.get("args", [])
         if args:
-            return str(args[0]).strip().lower() or None
+            normalized = str(args[0]).strip().lower()
+            return "equipment" if normalized == "eq" else normalized or None
         return None
 
     def _render_list_text(self, commands: list[dict]) -> str:

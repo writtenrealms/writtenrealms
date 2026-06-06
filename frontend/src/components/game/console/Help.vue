@@ -220,7 +220,7 @@ import { useStore } from "vuex";
 const store = useStore();
 const props = defineProps<{ message: any }>();
 
-const isBuilder = computed(() => store.state.game.player.is_immortal);
+const isBuilder = computed(() => store.state.game.player.is_builder);
 const canSetTitle = computed(() => store.state.game.world.players_can_set_title);
 const topicHelp = computed(() => {
   const data = props.message?.data || {};

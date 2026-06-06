@@ -186,6 +186,24 @@ const configLinks = computed(() => [
     },
   },
   {
+    title: "Item Bundles",
+    description: "Weighted item definition bundles for random drops, loads, and merchant stock.",
+    rootOnly: true,
+    to: {
+      name: "builder_item_bundle_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
+    title: "Merchant Profiles",
+    description: "Shop stock, restock rules, buyback, pricing, and purchasing funds.",
+    rootOnly: true,
+    to: {
+      name: "builder_merchant_profile_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
     title: "Transformations",
     description: "One-off template changes applied through loader rules.",
     rootOnly: true,
@@ -249,6 +267,15 @@ const configLinks = computed(() => [
     },
   },
   {
+    title: "Triggers",
+    description: "WR2 command handlers and event reactions authored through YAML.",
+    rootOnly: true,
+    to: {
+      name: "builder_world_trigger_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
     title: "Instances",
     description: "Private instance contexts created from this world.",
     rootOnly: true,
@@ -292,7 +319,6 @@ const manifestGroups = [
       "auto_equip",
       "is_narrative",
       "players_can_set_title",
-      "is_classless",
       "non_ascii_names",
       "globals_enabled",
       "decay_glory",

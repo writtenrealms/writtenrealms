@@ -24,6 +24,7 @@ from core.db import (
     list_to_choice,
     batch_deletion)
 from core.leveling import default_leveling_curve
+from core.stat_system import default_stat_system
 from core.abilities import default_ability_progression
 from worlds.managers import (
     WorldManager,
@@ -275,25 +276,7 @@ class World(AdventBaseModel):
 
         # Remove all mobs
         lifecycle_logger.debug("Deleting mobs...")
-        from spawns.ai_sidecar import maybe_enqueue_ai_sidecar_mob_destroyed
-
         mobs_qs = self.mobs.filter(is_pending_deletion=True) if spw else self.mobs.all()
-        destroy_reason = "world_stop" if self.lifecycle == api_consts.WORLD_STATE_STOPPED else "world_cleanup"
-        for mob in mobs_qs.select_related("room", "world").only(
-            "id",
-            "name",
-            "template_id",
-            "room_id",
-            "world_id",
-            "room__id",
-            "world__id",
-            "room__relative_id",
-        ):
-            maybe_enqueue_ai_sidecar_mob_destroyed(
-                mob=mob,
-                source="world.cleanup",
-                reason=destroy_reason,
-            )
         batch_deletion(mobs_qs)
 
         items_qs = self.items.all()
@@ -1020,9 +1003,9 @@ class WorldConfig(BaseModel):
     allow_pvp = models.BooleanField(default=True)
     is_narrative = models.BooleanField(default=False)
     non_ascii_names = models.BooleanField(default=False)
-    is_classless = models.BooleanField(default=False)
+    is_classless = models.BooleanField(default=True)
     globals_enabled = models.BooleanField(default=True)
-    stat_system = models.JSONField(default=dict)
+    stat_system = models.JSONField(default=default_stat_system)
 
     # If false, all chars will be default_gender gender
     can_select_gender = models.BooleanField(default=True)
@@ -1039,7 +1022,7 @@ class WorldConfig(BaseModel):
         default=adv_consts.PVP_MODE_FFA)
     default_gender = models.TextField(
         choices=list_to_choice(adv_consts.GENDERS),
-        default=adv_consts.GENDER_FEMALE)
+        default=adv_consts.GENDER_MALE)
 
     # Values
     built_by = models.TextField(**optional)

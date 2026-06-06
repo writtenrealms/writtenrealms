@@ -5,7 +5,10 @@ from django.contrib.contenttypes.models import ContentType
 
 from builders.models import (
     BuilderAssignment,
+    ItemBundle,
+    ItemDefinition,
     ItemTemplate,
+    MobDefinition,
     MobTemplate,
     TransformationTemplate,
     Loader,
@@ -90,6 +93,12 @@ class ReferenceField(Field):
         else:
             if rtype == 'mob_template':
                 return MobTemplate.objects.get(pk=rid)
+            elif rtype == 'mob_definition':
+                return MobDefinition.objects.get(pk=rid)
+            elif rtype == 'item_definition':
+                return ItemDefinition.objects.get(pk=rid)
+            elif rtype == 'item_bundle':
+                return ItemBundle.objects.get(pk=rid)
             elif rtype == 'item_template':
                 return ItemTemplate.objects.get(pk=rid)
             elif rtype == 'loader':

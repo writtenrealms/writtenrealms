@@ -417,6 +417,10 @@ spec:
     max_known: uncapped
 ```
 
+Ability costs support `fixed`, `percent_max`, and `percent_base` calculations.
+`percent_base` uses the base resource pool before equipment and other max-pool
+modifiers; for energy, a 100 base pool and `amount: 5` means a 5 energy cost.
+
 Healing should use the same shape:
 
 ```yaml
@@ -461,8 +465,9 @@ spec:
     type: hostile
     default: current_target
   requirements:
-    equipment:
-      offhand_type: shield
+    eq:
+      - actor.equipment.offhand.equipment_type
+      - shield
   cooldown:
     rounds: 4
   components:
@@ -539,8 +544,8 @@ does actor have access to ability X right now?
 It should not need a warrior code path, mage code path, or class-specific
 Python skill registry.
 
-Classless worlds should work by granting abilities through trainers, quests,
-items, starting loadouts, or direct builder configuration.
+Worlds without classes should work by granting abilities through trainers,
+quests, items, starting loadouts, or direct builder configuration.
 
 ## Ability Progression
 

@@ -30,7 +30,9 @@ from builders.models import (
     Quest,
     Objective,
     Reward,
+    ItemDefinition,
     ItemTemplate,
+    MobDefinition,
     MobTemplate,
     TransformationTemplate,
     MerchantInventory,
@@ -47,6 +49,12 @@ from core.serializers import (
     InstanceOrTemplateValueField,
     ContainerTypeField,
     ReferenceField)
+from core.stat_system import (
+    StatSystemValidationError,
+    get_world_class_selection,
+    get_world_stat_system,
+    world_uses_classes,
+)
 from spawns import instances
 from spawns.models import (
     Player,
@@ -65,6 +73,7 @@ from worlds.models import World, Zone, Room, RoomDetail
 
 class PlayerSerializer(serializers.ModelSerializer):
 
+    archetype = serializers.CharField(required=False, allow_blank=True)
     can_transfer = serializers.SerializerMethodField()
     core_faction = serializers.SerializerMethodField()
     world_name = serializers.CharField(source='world.name', required=False)
@@ -87,7 +96,7 @@ class PlayerSerializer(serializers.ModelSerializer):
             'key', 'name', 'description',
             'id', 'level', 'gender', 'title', 'glory',
             'archetype', 'core_faction', 'display_faction',
-            'is_immortal', 'is_staff', 'is_confirmed', 'link_id',
+            'is_builder', 'is_staff', 'is_confirmed', 'link_id',
             # For single player worlds only, indicates whether the player
             # is eligible for a transfer.
             'can_transfer',
@@ -126,6 +135,41 @@ class PlayerSerializer(serializers.ModelSerializer):
                 and not is_ascii(self.initial_data['name'])):
                 raise serializers.ValidationError(
                     "Names must be ASCII characters only.")
+
+        try:
+            stat_system = get_world_stat_system(world)
+        except StatSystemValidationError:
+            stat_system = {}
+        class_profiles = stat_system.get("class_profiles") or {}
+        if class_profiles:
+            class_selection = get_world_class_selection(world)
+            requested_archetype = str(
+                validated_data.get(
+                    "archetype",
+                    self.initial_data.get("archetype", ""),
+                ) or ""
+            ).strip()
+            default_archetype = (
+                class_selection.get("default")
+                or next(iter(class_profiles.keys()))
+            )
+            if class_selection.get("enabled", True):
+                archetype = requested_archetype or default_archetype
+                if archetype not in class_profiles:
+                    raise serializers.ValidationError({
+                        "archetype": "Invalid class for this world."
+                    })
+            else:
+                archetype = default_archetype
+            validated_data["archetype"] = archetype
+        else:
+            if "archetype" in validated_data or "archetype" in self.initial_data:
+                validated_data["archetype"] = str(
+                    validated_data.get(
+                        "archetype",
+                        self.initial_data.get("archetype", ""),
+                    ) or ""
+                ).strip()
 
         return validated_data
 
@@ -268,7 +312,6 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
     classless = serializers.SerializerMethodField()
     globals_enabled = serializers.BooleanField(
         source='config.globals_enabled')
-    #classless = serializers.BooleanField(source='config.is_classless')
 
     factions = serializers.SerializerMethodField()
     facts = serializers.SerializerMethodField()
@@ -383,7 +426,7 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
     def get_classless(self, spawn_world):
         root_world = spawn_world.context
         root_world = root_world.instance_of or root_world
-        return root_world.config.is_classless
+        return not world_uses_classes(root_world)
 
     def get_currencies(self, spawn_world):
         root_world = spawn_world.context
@@ -508,11 +551,11 @@ class AnimateItemSerializer(serializers.ModelSerializer):
             'is_boat', 'is_pickable', 'capacity',
             'equipment_type', 'armor_class', 'weapon_type',
             'weapon_grip', 'weapon_damage', 'hit_msg_first', 'hit_msg_third',
+            'attributes',
             'health_max', 'health_regen',
-            'mana_max', 'mana_regen',
+            'energy_max', 'energy_regen',
             'stamina_max', 'stamina_regen',
-            'strength', 'constitution', 'dexterity', 'intelligence',
-            'attack_power', 'spell_power', 'armor', 'crit',
+            'attack_power', 'ability_power', 'armor', 'crit',
             'resilience', 'dodge',
             'on_use_cmd', 'on_use_description', 'on_use_equipped',
         ]
@@ -618,6 +661,8 @@ class AnimateItemSerializer(serializers.ModelSerializer):
         if item.template:
             currency = item.template.currency
             return currency.code if currency else 'gold'
+        if item.currency:
+            return item.currency.code
         currency = Currency.objects.filter(
             world=item.world.context, is_default=True
         ).first()
@@ -673,7 +718,7 @@ class AnimateMobSerializer(serializers.ModelSerializer):
         model = Mob
         fields = [
             'id', 'key', 'room', 'template_id', 'rule_id',
-            'health', 'mana', 'stamina',
+            'health', 'energy', 'stamina',
             'has_quest', 'group_id',
             'room_description', 'keywords',
             'factions',
@@ -691,11 +736,11 @@ class AnimateMobSerializer(serializers.ModelSerializer):
             'alignment', 'aggression',
             'hit_msg_first', 'hit_msg_third',
             'health_max', 'health_regen',
-            'mana_max', 'mana_regen',
+            'energy_max', 'energy_regen',
             'stamina_max', 'stamina_regen',
             'regen_rate',
-            'strength', 'constitution', 'dexterity', 'intelligence',
-            'attack_power', 'spell_power', 'armor', 'crit',
+            'attributes',
+            'attack_power', 'ability_power', 'armor', 'crit',
             'resilience', 'dodge',
             'fights_back', 'use_abilities', 'combat_script',
             'roam_chance',
@@ -880,7 +925,6 @@ class AnimatePlayerSerializer(serializers.ModelSerializer):
 
     # User properties
     is_temporary = serializers.BooleanField(source='user.is_temporary')
-    is_builder = serializers.BooleanField(source='user.is_builder')
     player_housing = serializers.BooleanField(source='user.player_housing')
     name_recognition = serializers.BooleanField(source='user.name_recognition')
     is_staff = serializers.BooleanField(source='user.is_staff')
@@ -918,13 +962,13 @@ class AnimatePlayerSerializer(serializers.ModelSerializer):
             'description',
             'factions', 'aliases', 'language_proficiency',
             'gold', 'glory', 'medals', 'currencies',
-            'is_immortal', 'is_invisible', 'autoflee',
+            'is_builder', 'is_invisible', 'autoflee',
             #'notell',
             #'noplay',
             'nochat', 'is_muted',
             'archetype', 'room', 'user_id',
-            'experience', 'is_temporary', 'is_builder',
-            'health', 'stamina', 'mana',
+            'experience', 'is_temporary',
+            'health', 'stamina', 'energy',
             'room_description',
             'trophy', 'config', 'effects', 'marks',
             'user_name', 'is_staff', 'is_confirmed', 'link_id',
@@ -1353,7 +1397,7 @@ class ExtractPlayerSerializer(serializers.ModelSerializer):
             'experience',
             'level',
             'health',
-            'mana',
+            'energy',
             'stamina',
             'gold',
             'glory',
@@ -1483,6 +1527,28 @@ class LoadTemplateSerializer(serializers.Serializer):
                 slug=template_ref,
                 world=context,
             ).first()
+        if template is None and data['template_type'] == 'item':
+            if template_ref.isdigit():
+                template = ItemDefinition.objects.filter(
+                    pk=int(template_ref),
+                    world=context,
+                ).first()
+            if template is None:
+                template = ItemDefinition.objects.filter(
+                    slug=template_ref,
+                    world=context,
+                ).first()
+        if template is None and data['template_type'] == 'mob':
+            if template_ref.isdigit():
+                template = MobDefinition.objects.filter(
+                    pk=int(template_ref),
+                    world=context,
+                ).first()
+            if template is None:
+                template = MobDefinition.objects.filter(
+                    slug=template_ref,
+                    world=context,
+                ).first()
         if template is None:
             raise serializers.ValidationError(
                 "Template does not belong to this world")
@@ -1665,56 +1731,3 @@ class ExitInstanceSerializer(serializers.Serializer):
     def validate_player(self, player):
         return Player.objects.get(pk=player)
 
-
-class AIIntentIngressSerializer(serializers.Serializer):
-    intent_id = serializers.CharField()
-    world_key = serializers.CharField()
-    room_key = serializers.CharField(required=False, allow_blank=True, allow_null=True)
-    mob_key = serializers.CharField()
-    intent_type = serializers.ChoiceField(choices=["say", "emote"])
-    text = serializers.CharField()
-    source_event_id = serializers.CharField()
-    metadata = serializers.DictField(required=False)
-
-    def _resolve_mob(self, mob_key: str) -> Mob:
-        tokens = str(mob_key or "").strip().split(".", 1)
-        if len(tokens) != 2 or tokens[0] != "mob" or not tokens[1].isdigit():
-            raise serializers.ValidationError("mob_key must be in format 'mob.<id>'.")
-
-        mob = Mob.objects.select_related("world__context__instance_of").filter(
-            pk=int(tokens[1])
-        ).first()
-        if not mob:
-            raise serializers.ValidationError("Mob does not exist.")
-        return mob
-
-    def validate_world_key(self, world_key: str) -> str:
-        tokens = str(world_key or "").strip().split(".", 1)
-        if len(tokens) != 2 or tokens[0] != "world" or not tokens[1].isdigit():
-            raise serializers.ValidationError("world_key must be in format 'world.<id>'.")
-        return world_key
-
-    def validate(self, validated_data):
-        mob = self._resolve_mob(validated_data["mob_key"])
-
-        world_keys = {mob.world.key}
-        context_world = getattr(mob.world, "context", None)
-        if context_world:
-            world_keys.add(context_world.key)
-            root_world = getattr(context_world, "instance_of", None)
-            if root_world:
-                world_keys.add(root_world.key)
-        root_world = getattr(mob.world, "instance_of", None)
-        if root_world:
-            world_keys.add(root_world.key)
-
-        world_key = validated_data["world_key"]
-        if world_key not in world_keys:
-            raise serializers.ValidationError("world_key does not match mob world.")
-
-        validated_data["mob"] = mob
-        validated_data["text"] = str(validated_data.get("text") or "").strip()
-        if not validated_data["text"]:
-            raise serializers.ValidationError("text is required.")
-
-        return validated_data

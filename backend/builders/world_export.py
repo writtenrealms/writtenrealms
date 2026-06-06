@@ -15,8 +15,12 @@ from builders import serializers as builder_serializers
 from builders.models import (
     AbilityDefinition,
     Currency,
+    ItemBundle,
+    ItemDefinition,
     ItemTemplate,
     ItemTemplateInventory,
+    MerchantProfile,
+    MobDefinition,
     MobTemplate,
     MobTemplateInventory,
     Trigger,
@@ -40,7 +44,11 @@ _ZONE_KIND_ALIASES = {"zone"}
 _ROOM_KIND_ALIASES = {"room"}
 _CURRENCY_KIND_ALIASES = {"currency"}
 _ITEM_TEMPLATE_KIND_ALIASES = {"itemtemplate", "item-template", "item_template"}
+_ITEM_DEFINITION_KIND_ALIASES = {"itemdefinition", "item-definition", "item_definition"}
+_ITEM_BUNDLE_KIND_ALIASES = {"itembundle", "item-bundle", "item_bundle"}
+_MERCHANT_PROFILE_KIND_ALIASES = {"merchantprofile", "merchant-profile", "merchant_profile"}
 _MOB_TEMPLATE_KIND_ALIASES = {"mobtemplate", "mob-template", "mob_template"}
+_MOB_DEFINITION_KIND_ALIASES = {"mobdefinition", "mob-definition", "mob_definition"}
 _QUEST_KIND_ALIASES = {quest_manifests.QUEST_MANIFEST_KIND}
 _QUEST_ARC_KIND_ALIASES = {
     quest_manifests.QUEST_ARC_MANIFEST_KIND,
@@ -53,6 +61,9 @@ _ABILITIES_KIND_ALIASES = {builder_manifests.ABILITIES_MANIFEST_KIND}
 
 _ROOM_REF_PREFIX = "room@"
 _ITEM_REF_PREFIX = "itemtemplate."
+_ITEM_DEFINITION_REF_PREFIX = "itemdefinition."
+_ITEM_BUNDLE_REF_PREFIX = "itembundle."
+_MERCHANT_PROFILE_REF_PREFIX = "merchantprofile."
 _MOB_REF_PREFIX = "mobtemplate."
 
 _ZONE_SORT_KEY = lambda zone: ((zone.name or "").lower(), zone.id)
@@ -78,13 +89,13 @@ _MOB_TEMPLATE_SPEC_FIELDS = (
     "hit_msg_third",
     "health_max",
     "health_regen",
-    "mana_max",
-    "mana_regen",
+    "energy_max",
+    "energy_regen",
     "stamina_max",
     "stamina_regen",
     "regen_rate",
     "attack_power",
-    "spell_power",
+    "ability_power",
     "crit",
     "resilience",
     "dodge",
@@ -157,8 +168,16 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
         return ROOM_MANIFEST_KIND
     if raw_kind in _ITEM_TEMPLATE_KIND_ALIASES:
         return builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND
+    if raw_kind in _ITEM_DEFINITION_KIND_ALIASES:
+        return builder_manifests.ITEM_DEFINITION_MANIFEST_KIND
+    if raw_kind in _ITEM_BUNDLE_KIND_ALIASES:
+        return builder_manifests.ITEM_BUNDLE_MANIFEST_KIND
+    if raw_kind in _MERCHANT_PROFILE_KIND_ALIASES:
+        return builder_manifests.MERCHANT_PROFILE_MANIFEST_KIND
     if raw_kind in _MOB_TEMPLATE_KIND_ALIASES:
         return MOB_TEMPLATE_MANIFEST_KIND
+    if raw_kind in _MOB_DEFINITION_KIND_ALIASES:
+        return builder_manifests.MOB_DEFINITION_MANIFEST_KIND
     if raw_kind in _QUEST_ARC_KIND_ALIASES:
         return quest_manifests.QUEST_ARC_MANIFEST_KIND
     if raw_kind in _QUEST_KIND_ALIASES:
@@ -171,7 +190,7 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
         return builder_manifests.ABILITIES_MANIFEST_KIND
     raise serializers.ValidationError(
         "Unsupported manifest kind. Supported kinds: "
-        "world, currency, zone, room, itemtemplate, mobtemplate, questarc, quest, trigger, ability, abilities."
+        "world, currency, zone, room, itemtemplate, itemdefinition, itembundle, merchantprofile, mobtemplate, mobdefinition, questarc, quest, trigger, ability, abilities."
     )
 
 
@@ -209,6 +228,18 @@ def _item_ref(item_template: ItemTemplate | None) -> str:
     if item_template is None or not item_template.slug:
         return ""
     return f"{_ITEM_REF_PREFIX}{item_template.slug}"
+
+
+def _item_definition_ref(item_definition: ItemDefinition | None) -> str:
+    if item_definition is None or not item_definition.slug:
+        return ""
+    return f"{_ITEM_DEFINITION_REF_PREFIX}{item_definition.slug}"
+
+
+def _item_bundle_ref(item_bundle: ItemBundle | None) -> str:
+    if item_bundle is None or not item_bundle.slug:
+        return ""
+    return f"{_ITEM_BUNDLE_REF_PREFIX}{item_bundle.slug}"
 
 
 def _mob_ref(mob_template: MobTemplate | None) -> str:
@@ -363,11 +394,7 @@ def _serialize_item_template_manifest(item_template: ItemTemplate) -> dict[str, 
     manifest = builder_manifests.item_template_to_manifest(item_template)
     spec = copy.deepcopy(manifest["spec"])
     spec["inventory"] = [
-        {
-            "item_template": _item_ref(inventory.item_template),
-            "probability": int(inventory.probability),
-            "num_copies": int(inventory.num_copies),
-        }
+        _serialize_template_inventory_entry(inventory)
         for inventory in item_template.template_inventories.select_related("item_template").all().order_by(
             "item_template__slug", "id"
         )
@@ -382,18 +409,63 @@ def _serialize_item_template_manifest(item_template: ItemTemplate) -> dict[str, 
     }
 
 
+def _serialize_item_definition_manifest(item_definition: ItemDefinition) -> dict[str, Any]:
+    manifest = builder_manifests.item_definition_to_manifest(item_definition)
+    manifest["metadata"].pop("world", None)
+    manifest["metadata"].pop("id", None)
+    manifest["metadata"].pop("key", None)
+    return manifest
+
+
+def _serialize_template_inventory_entry(inventory) -> dict[str, Any]:
+    entry = {
+        "probability": int(inventory.probability),
+        "num_copies": int(inventory.num_copies),
+    }
+    if getattr(inventory, "item_template_id", None):
+        entry["item_template"] = _item_ref(inventory.item_template)
+    elif getattr(inventory, "item_definition_id", None):
+        entry["item_definition"] = _item_definition_ref(inventory.item_definition)
+    elif getattr(inventory, "item_bundle_id", None):
+        entry["item_bundle"] = _item_bundle_ref(inventory.item_bundle)
+    return entry
+
+
+def _serialize_item_bundle_manifest(item_bundle: ItemBundle) -> dict[str, Any]:
+    manifest = builder_manifests.item_bundle_to_manifest(item_bundle)
+    manifest["metadata"].pop("world", None)
+    manifest["metadata"].pop("id", None)
+    manifest["metadata"].pop("key", None)
+    for entry in manifest["spec"]["entries"]:
+        entry["item_definition"] = f"{_ITEM_DEFINITION_REF_PREFIX}{entry['item_definition']}"
+    return manifest
+
+
+def _serialize_merchant_profile_manifest(merchant_profile: MerchantProfile) -> dict[str, Any]:
+    manifest = builder_manifests.merchant_profile_to_manifest(merchant_profile)
+    manifest["metadata"].pop("world", None)
+    manifest["metadata"].pop("id", None)
+    manifest["metadata"].pop("key", None)
+    for slot in manifest["spec"]["stock"]:
+        if "item_definition" in slot:
+            slot["item_definition"] = f"{_ITEM_DEFINITION_REF_PREFIX}{slot['item_definition']}"
+        if "item_bundle" in slot:
+            slot["item_bundle"] = f"{_ITEM_BUNDLE_REF_PREFIX}{slot['item_bundle']}"
+    return manifest
+
+
 def _serialize_mob_template_manifest(mob_template: MobTemplate) -> dict[str, Any]:
     spec: dict[str, Any] = {}
     for field_name in _MOB_TEMPLATE_SPEC_FIELDS:
         value = getattr(mob_template, field_name)
         spec[field_name] = "" if value is None else value
     spec["inventory"] = [
-        {
-            "item_template": _item_ref(inventory.item_template),
-            "probability": int(inventory.probability),
-            "num_copies": int(inventory.num_copies),
-        }
-        for inventory in mob_template.template_inventories.select_related("item_template").all().order_by(
+        _serialize_template_inventory_entry(inventory)
+        for inventory in mob_template.template_inventories.select_related(
+            "item_template",
+            "item_definition",
+            "item_bundle",
+        ).all().order_by(
             "item_template__slug", "id"
         )
     ]
@@ -405,6 +477,14 @@ def _serialize_mob_template_manifest(mob_template: MobTemplate) -> dict[str, Any
         },
         "spec": spec,
     }
+
+
+def _serialize_mob_definition_manifest(mob_definition: MobDefinition) -> dict[str, Any]:
+    manifest = builder_manifests.mob_definition_to_manifest(mob_definition)
+    manifest["metadata"].pop("world", None)
+    manifest["metadata"].pop("id", None)
+    manifest["metadata"].pop("key", None)
+    return manifest
 
 
 def _serialize_ability_manifest(ability: AbilityDefinition) -> dict[str, Any]:
@@ -701,6 +781,23 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             ).order_by("slug", "id")
         ],
         *[
+            _serialize_item_definition_manifest(item_definition)
+            for item_definition in world.item_definitions.all().order_by("slug", "id")
+        ],
+        *[
+            _serialize_item_bundle_manifest(item_bundle)
+            for item_bundle in world.item_bundles.prefetch_related(
+                "entries__item_definition",
+            ).order_by("slug", "id")
+        ],
+        *[
+            _serialize_merchant_profile_manifest(merchant_profile)
+            for merchant_profile in world.merchant_profiles.prefetch_related(
+                "stock_slots__item_definition",
+                "stock_slots__item_bundle",
+            ).select_related("funds_currency").order_by("slug", "id")
+        ],
+        *[
             _serialize_zone_manifest(zone)
             for zone in world.zones.all().order_by("name", "id")
         ],
@@ -725,7 +822,13 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             _serialize_mob_template_manifest(mob_template)
             for mob_template in world.mob_templates.prefetch_related(
                 "template_inventories__item_template",
+                "template_inventories__item_definition",
+                "template_inventories__item_bundle",
             ).order_by("slug", "id")
+        ],
+        *[
+            _serialize_mob_definition_manifest(mob_definition)
+            for mob_definition in world.mob_definitions.all().order_by("slug", "id")
         ],
         *[
             _serialize_ability_manifest(ability)
@@ -756,7 +859,11 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
         "zones": 0,
         "rooms": 0,
         "item_templates": 0,
+        "item_definitions": 0,
+        "item_bundles": 0,
+        "merchant_profiles": 0,
         "mob_templates": 0,
+        "mob_definitions": 0,
         "abilities": 0,
         "quest_arcs": 0,
         "quests": 0,
@@ -772,8 +879,16 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
             counts["rooms"] += 1
         elif kind == builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND:
             counts["item_templates"] += 1
+        elif kind == builder_manifests.ITEM_DEFINITION_MANIFEST_KIND:
+            counts["item_definitions"] += 1
+        elif kind == builder_manifests.ITEM_BUNDLE_MANIFEST_KIND:
+            counts["item_bundles"] += 1
+        elif kind == builder_manifests.MERCHANT_PROFILE_MANIFEST_KIND:
+            counts["merchant_profiles"] += 1
         elif kind == MOB_TEMPLATE_MANIFEST_KIND:
             counts["mob_templates"] += 1
+        elif kind == builder_manifests.MOB_DEFINITION_MANIFEST_KIND:
+            counts["mob_definitions"] += 1
         elif kind == builder_manifests.ABILITY_MANIFEST_KIND:
             counts["abilities"] += 1
         elif kind == quest_manifests.QUEST_ARC_MANIFEST_KIND:
@@ -923,6 +1038,56 @@ def _get_or_create_item_template(*, world: World, value: Any, field_name: str) -
     }
     parsed = builder_manifests.parse_item_template_manifest(world=world, manifest=manifest)
     return builder_manifests.apply_item_template_manifest(parsed)
+
+
+def _get_item_definition(*, world: World, value: Any, field_name: str) -> ItemDefinition:
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(f"{field_name} is required.")
+    if text.isdigit():
+        item_definition = ItemDefinition.objects.filter(world=world, pk=int(text)).first()
+        if item_definition:
+            return item_definition
+        raise serializers.ValidationError(f"{field_name} references an unknown item definition.")
+
+    prefix, sep, raw = text.partition(".")
+    if sep == ".":
+        if prefix not in {"itemdefinition", "item_definition"}:
+            raise serializers.ValidationError(
+                f"{field_name} must reference an item definition slug."
+            )
+        text = raw
+
+    slug = _slug_or_error(text, field_name)
+    item_definition = ItemDefinition.objects.filter(world=world, slug=slug).first()
+    if item_definition:
+        return item_definition
+    raise serializers.ValidationError(f"{field_name} references an unknown item definition.")
+
+
+def _get_item_bundle(*, world: World, value: Any, field_name: str) -> ItemBundle:
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(f"{field_name} is required.")
+    if text.isdigit():
+        item_bundle = ItemBundle.objects.filter(world=world, pk=int(text)).first()
+        if item_bundle:
+            return item_bundle
+        raise serializers.ValidationError(f"{field_name} references an unknown item bundle.")
+
+    prefix, sep, raw = text.partition(".")
+    if sep == ".":
+        if prefix not in {"itembundle", "item_bundle"}:
+            raise serializers.ValidationError(
+                f"{field_name} must reference an item bundle slug."
+            )
+        text = raw
+
+    slug = _slug_or_error(text, field_name)
+    item_bundle = ItemBundle.objects.filter(world=world, slug=slug).first()
+    if item_bundle:
+        return item_bundle
+    raise serializers.ValidationError(f"{field_name} references an unknown item bundle.")
 
 
 def _get_or_create_mob_template(*, world: World, value: Any, field_name: str) -> MobTemplate:
@@ -1226,6 +1391,54 @@ def apply_item_template_manifest(*, world: World, manifest: dict[str, Any]) -> t
     return item_template, created
 
 
+def apply_item_definition_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[ItemDefinition, bool]:
+    if parse_document_kind(manifest) != builder_manifests.ITEM_DEFINITION_MANIFEST_KIND:
+        raise serializers.ValidationError("Unsupported manifest kind. Expected 'itemdefinition'.")
+
+    parsed = builder_manifests.parse_item_definition_manifest(
+        world=world,
+        manifest=manifest,
+    )
+    created = parsed.item_definition is None
+    return builder_manifests.apply_item_definition_manifest(parsed), created
+
+
+def apply_mob_definition_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[MobDefinition, bool]:
+    if parse_document_kind(manifest) != builder_manifests.MOB_DEFINITION_MANIFEST_KIND:
+        raise serializers.ValidationError("Unsupported manifest kind. Expected 'mobdefinition'.")
+
+    parsed = builder_manifests.parse_mob_definition_manifest(
+        world=world,
+        manifest=manifest,
+    )
+    created = parsed.mob_definition is None
+    return builder_manifests.apply_mob_definition_manifest(parsed), created
+
+
+def apply_item_bundle_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[ItemBundle, bool]:
+    if parse_document_kind(manifest) != builder_manifests.ITEM_BUNDLE_MANIFEST_KIND:
+        raise serializers.ValidationError("Unsupported manifest kind. Expected 'itembundle'.")
+
+    parsed = builder_manifests.parse_item_bundle_manifest(
+        world=world,
+        manifest=manifest,
+    )
+    created = parsed.item_bundle is None
+    return builder_manifests.apply_item_bundle_manifest(parsed), created
+
+
+def apply_merchant_profile_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[MerchantProfile, bool]:
+    if parse_document_kind(manifest) != builder_manifests.MERCHANT_PROFILE_MANIFEST_KIND:
+        raise serializers.ValidationError("Unsupported manifest kind. Expected 'merchantprofile'.")
+
+    parsed = builder_manifests.parse_merchant_profile_manifest(
+        world=world,
+        manifest=manifest,
+    )
+    created = parsed.merchant_profile is None
+    return builder_manifests.apply_merchant_profile_manifest(parsed), created
+
+
 def _apply_mob_template_inventory(*, world: World, container: MobTemplate, inventory: list[Any]) -> None:
     if not isinstance(inventory, list):
         raise serializers.ValidationError("spec.inventory must be a list.")
@@ -1233,16 +1446,41 @@ def _apply_mob_template_inventory(*, world: World, container: MobTemplate, inven
     for entry in inventory:
         if not isinstance(entry, dict):
             raise serializers.ValidationError("spec.inventory entries must be mappings.")
-        item_template = _get_or_create_item_template(
-            world=world,
-            value=entry.get("item_template"),
-            field_name="spec.inventory.item_template",
-        )
+        source_fields = [
+            key
+            for key in ("item_template", "item_definition", "item_bundle")
+            if entry.get(key)
+        ]
+        if len(source_fields) != 1:
+            raise serializers.ValidationError(
+                "spec.inventory entries must specify exactly one of item_template, "
+                "item_definition, or item_bundle."
+            )
+        create_kwargs = {
+            "container": container,
+            "probability": int(entry.get("probability", 100)),
+            "num_copies": int(entry.get("num_copies", 1)),
+        }
+        if source_fields[0] == "item_template":
+            create_kwargs["item_template"] = _get_or_create_item_template(
+                world=world,
+                value=entry.get("item_template"),
+                field_name="spec.inventory.item_template",
+            )
+        elif source_fields[0] == "item_definition":
+            create_kwargs["item_definition"] = _get_item_definition(
+                world=world,
+                value=entry.get("item_definition"),
+                field_name="spec.inventory.item_definition",
+            )
+        else:
+            create_kwargs["item_bundle"] = _get_item_bundle(
+                world=world,
+                value=entry.get("item_bundle"),
+                field_name="spec.inventory.item_bundle",
+            )
         MobTemplateInventory.objects.create(
-            container=container,
-            item_template=item_template,
-            probability=int(entry.get("probability", 100)),
-            num_copies=int(entry.get("num_copies", 1)),
+            **create_kwargs,
         )
 
 

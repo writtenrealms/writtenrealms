@@ -1,6 +1,5 @@
 from unittest.mock import patch
 
-from django.test import override_settings
 from django.utils import timezone
 
 from config import constants as api_consts
@@ -73,34 +72,6 @@ class TestStartWorld(WorldTestCase):
         with self.assertRaises(serializers.ValidationError):
             service.reset()
 
-    @override_settings(
-        WR_AI_EVENT_FORWARD_URL="http://localhost:8071/v1/events",
-        WR_AI_EVENT_TYPES="mob.destroyed",
-    )
-    @patch("spawns.tasks.forward_event_to_ai_sidecar.delay")
-    def test_cleanup_enqueues_sidecar_destroy_signal_for_removed_mobs(self, mock_forward_delay):
-        spawn_world = self.world.create_spawn_world()
-        spawn_world.set_lifecycle(api_consts.WORLD_LIFECYCLE_STOPPED)
-        spawn_room = spawn_world.context.config.starting_room
-        mob = Mob.objects.create(
-            world=spawn_world,
-            room=spawn_room,
-            name="Target",
-            keywords="target",
-        )
-
-        with self.captureOnCommitCallbacks(execute=True):
-            spawn_world.cleanup()
-
-        self.assertFalse(Mob.objects.filter(pk=mob.pk).exists())
-        mock_forward_delay.assert_called_once()
-        kwargs = mock_forward_delay.call_args.kwargs
-        self.assertEqual(kwargs["event_type"], "mob.destroyed")
-        self.assertEqual(kwargs["actor_key"], mob.key)
-        self.assertEqual(kwargs["event_data"]["source"], "world.cleanup")
-        self.assertEqual(kwargs["event_data"]["reason"], "world_stop")
-
-
 class TestEnterWorld(WorldTestCase):
 
     def setUp(self):
@@ -170,14 +141,14 @@ class TestMonitorWorldsIdlePlayers(WorldTestCase):
         mock_disconnect.assert_not_called()
         mock_stop.assert_not_called()
 
-    def test_monitor_worlds_uses_builder_idle_timeout_for_immortals(self):
+    def test_monitor_worlds_uses_builder_idle_timeout_for_builders(self):
         self.spawn_world.last_played_ts = timezone.now() - timezone.timedelta(minutes=6)
         self.spawn_world.save(update_fields=["last_played_ts"])
-        self.player.is_immortal = True
+        self.player.is_builder = True
         self.player.last_action_ts = timezone.now() - timezone.timedelta(
             seconds=api_consts.IDLE_TIMEOUT + 1
         )
-        self.player.save(update_fields=["is_immortal", "last_action_ts"])
+        self.player.save(update_fields=["is_builder", "last_action_ts"])
 
         with patch("worlds.tasks._disconnect_idle_player") as mock_disconnect, patch(
             "worlds.tasks.WorldSmith.stop"

@@ -38,18 +38,16 @@ class Item(BaseModel):
     equipment_type: Optional[str] = None  # "weapon_1h", "weapon_2h", "head", etc.
     template: Optional[str] = None
     template_id: Optional[int] = None
+    definition_id: Optional[int] = None
+    definition_slug: Optional[str] = None
+    is_stackable: bool = False
+    stack_key: Optional[str] = None
 
-    # Stats
-    strength: int = 0
-    agility: int = 0
-    constitution: int = 0
-    dexterity: int = 0
-    intelligence: int = 0
-    max_stamina: int = 0
+    # World-authored attributes
+    attributes: Dict[str, float] = Field(default_factory=dict)
 
     # Combat stats
     attack_power: int = 0
-    spell_power: int = 0
     ability_power: int = 0
     weapon_damage: float = 0
     armor: int = 0
@@ -59,8 +57,6 @@ class Item(BaseModel):
 
     health_max: int = 0
     health_regen: int = 0
-    mana_max: int = 0
-    mana_regen: int = 0
     energy_max: int = 0
     energy_regen: int = 0
     stamina_max: int = 0
@@ -134,6 +130,8 @@ class Char(BaseModel):
     key: str
     name: str
     template_id: Optional[int] = None
+    definition_id: Optional[int] = None
+    definition_slug: Optional[str] = None
     title: Optional[str] = ""
     description: Optional[str] = None
     archetype: Optional[str] = None
@@ -145,7 +143,7 @@ class Char(BaseModel):
 
     health: int = 0
     health_max: int = 0
-    mana: int = 0
+    energy: int = 0
     level: int = 1
     gender: str = "male"
     pronouns: Optional[str] = None
@@ -164,6 +162,8 @@ class Char(BaseModel):
     is_invisible: bool = False
     is_linkless: bool = False
     is_elite: bool = False
+    is_merchant: bool = False
+    attackable: bool = True
 
     char_type: Literal["player", "mob"] = "mob"
 
@@ -210,9 +210,6 @@ class Actor(BaseModel):
     stamina: int = 0
     stamina_max: int = 0
     stamina_regen: int = 0
-    mana: int = 0
-    mana_max: int = 0
-    mana_regen: int = 0
     energy: int = 0
     energy_base: int = 0
     energy_max: int = 0
@@ -226,12 +223,7 @@ class Actor(BaseModel):
     focus: Optional[str] = None
 
     # Stats
-    dexterity: int = 0
-    constitution: int = 0
-    strength: int = 0
-    intelligence: int = 0
     attack_power: int = 0
-    spell_power: int = 0
     ability_power: int = 0
     crit: int = 0
     crit_perc: float = 0.0
@@ -239,8 +231,8 @@ class Actor(BaseModel):
     dodge_perc: float = 0.0
     resilience: int = 0
     resilience_perc: float = 0.0
-    primary_attributes: Dict[str, int] = Field(default_factory=dict)
-    derived_stats: Dict[str, int] = Field(default_factory=dict)
+    attributes: Dict[str, float] = Field(default_factory=dict)
+    stats: Dict[str, int] = Field(default_factory=dict)
 
     # Equipment & inventory
     equipment: Equipment = Field(default_factory=Equipment)
@@ -271,7 +263,6 @@ class Actor(BaseModel):
 
     # Player-specific fields
     is_builder: bool = False
-    is_immortal: bool = False
     is_temporary: bool = False
     is_invisible: bool = False
     is_idle: bool = False
@@ -487,6 +478,7 @@ class World(BaseModel):
     auto_equip: bool = True
     globals_enabled: bool = False
     classless: bool = False
+    is_classless: bool = False
 
     # Room references
     starting_room: Optional[str] = None
@@ -513,6 +505,8 @@ class World(BaseModel):
 
     # Game data
     labels: Dict[str, Any] = Field(default_factory=dict)
+    class_selection: Dict[str, Any] = Field(default_factory=dict)
+    combat: Dict[str, Any] = Field(default_factory=dict)
     factions: Dict[str, Faction] = Field(default_factory=dict)
     abilities: Dict[str, Any] = Field(default_factory=dict)
     facts: Dict[str, Any] = Field(default_factory=dict)
@@ -531,7 +525,7 @@ class WhoListEntry(BaseModel):
     title: Optional[str] = ""
     level: int = 1
     gender: str = "male"
-    is_immortal: bool = False
+    is_builder: bool = False
     is_invisible: bool = False
     is_idle: bool = False
     is_linkless: bool = False
@@ -612,7 +606,7 @@ def build_mock_state_sync(
         keywords="leather helm armor",
         keyword="helm",
         armor=5,
-        constitution=2,
+        attributes={"grit": 2},
         cost=25,
     )
 
@@ -630,7 +624,7 @@ def build_mock_state_sync(
         keywords="chainmail armor body",
         keyword="chainmail",
         armor=20,
-        constitution=5,
+        attributes={"grit": 5},
         health_max=25,
         cost=200,
     )
@@ -662,8 +656,8 @@ def build_mock_state_sync(
         description="A golden ring set with a small ruby.",
         keywords="gold ring accessory ruby",
         keyword="ring",
-        intelligence=3,
-        spell_power=10,
+        attributes={"insight": 3},
+        ability_power=10,
         cost=150,
     )
 
@@ -696,7 +690,7 @@ def build_mock_state_sync(
         keywords="leather boots feet",
         keyword="boots",
         armor=3,
-        dexterity=1,
+        attributes={"dexterity": 1},
         cost=20,
     )
 
@@ -771,7 +765,7 @@ def build_mock_state_sync(
         stance="normal",
         health=250,
         health_max=250,
-        mana=50,
+        energy=50,
         level=10,
         gender="male",
         keywords="town guard human male mob.100",
@@ -796,7 +790,7 @@ def build_mock_state_sync(
         stance="normal",
         health=80,
         health_max=80,
-        mana=20,
+        energy=20,
         level=5,
         gender="male",
         keywords="gregor merchant human male mob.101",
@@ -821,7 +815,7 @@ def build_mock_state_sync(
         stance="normal",
         health=60,
         health_max=60,
-        mana=100,
+        energy=100,
         level=7,
         gender="female",
         pronouns="she/her",
@@ -845,7 +839,7 @@ def build_mock_state_sync(
         stance="defensive",
         health=180,
         health_max=200,
-        mana=30,
+        energy=30,
         level=12,
         gender="male",
         keywords="thorin brave dwarf male player.200",
@@ -1023,9 +1017,9 @@ def build_mock_state_sync(
         stamina=75,
         stamina_max=100,
         stamina_regen=8,
-        mana=40,
-        mana_max=60,
-        mana_regen=3,
+        energy=40,
+        energy_max=60,
+        energy_regen=3,
         # Combat
         target=None,
         damage=35,
@@ -1033,12 +1027,14 @@ def build_mock_state_sync(
         armor_perc=15.5,
         focus=None,
         # Stats
-        strength=18,
-        constitution=16,
-        dexterity=12,
-        intelligence=10,
+        attributes={
+            "strength": 18,
+            "constitution": 16,
+            "dexterity": 12,
+            "intelligence": 10,
+        },
         attack_power=42,
-        spell_power=15,
+        ability_power=15,
         crit=8,
         crit_perc=5.2,
         dodge=6,
@@ -1067,7 +1063,6 @@ def build_mock_state_sync(
         trophy={1: 5, 2: 3, 3: 1},  # mob_template_id -> kill count
         # Player flags
         is_builder=False,
-        is_immortal=False,
         is_temporary=False,
         is_invisible=False,
         is_idle=False,
@@ -1220,7 +1215,7 @@ def build_mock_state_sync(
             title="the Wanderer",
             level=8,
             gender="male",
-            is_immortal=False,
+            is_builder=False,
             is_invisible=False,
             is_idle=False,
             is_linkless=False,
@@ -1233,7 +1228,7 @@ def build_mock_state_sync(
             title="the Brave",
             level=12,
             gender="male",
-            is_immortal=False,
+            is_builder=False,
             is_invisible=False,
             is_idle=False,
             is_linkless=False,
@@ -1246,7 +1241,7 @@ def build_mock_state_sync(
             title="the Wise",
             level=15,
             gender="female",
-            is_immortal=True,
+            is_builder=True,
             is_invisible=False,
             is_idle=True,
             is_linkless=False,

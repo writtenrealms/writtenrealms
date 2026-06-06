@@ -110,7 +110,7 @@ const emit = defineEmits(["added", "input", "remove", "cancel"]);
 const edit_mode = ref(false);
 const order = ref(1);
 const num_copies = ref(1);
-const template_type = ref("mobtemplate");
+const template_type = ref("mobdefinition");
 const template_data = ref<Entity | null>(null);
 const target_type = ref("room");
 const target_data = ref<Entity | null>(null);
@@ -212,7 +212,15 @@ const template_link = computed(() => {
     world_id = store.state.builder.world.instance_of.id;
   }
 
-  if (props.rule.template.model_type == "mobtemplate") {
+  if (props.rule.template.model_type == "mobdefinition") {
+    return {
+      name: 'builder_mob_definition_details',
+      params: {
+        world_id: world_id,
+        mob_definition_id: props.rule.template.id
+      }
+    };
+  } else if (props.rule.template.model_type == "mobtemplate") {
     return {
       name: 'builder_mob_template_details',
       params: {

@@ -155,6 +155,34 @@ def _render_inventory_text(actor: dict | None) -> str | None:
     return "You are carrying:\nNothing."
 
 
+def _render_equipment_text(data: dict) -> str | None:
+    equipment = data.get("equipment") or (data.get("actor") or {}).get("equipment") or {}
+    slot_labels = (
+        ("weapon", "<wielded>"),
+        ("offhand", "<held in offhand>"),
+        ("head", "<worn on head>"),
+        ("body", "<worn on body>"),
+        ("arms", "<worn on arms>"),
+        ("hands", "<worn on hands>"),
+        ("waist", "<worn about waist>"),
+        ("legs", "<worn on legs>"),
+        ("feet", "<worn on feet>"),
+        ("accessory", "<worn as accessory>"),
+    )
+    lines = []
+    for slot, label in slot_labels:
+        item = equipment.get(slot)
+        if not item:
+            continue
+        name = item.get("name")
+        if name:
+            lines.append(f"{label} {name}")
+
+    if lines:
+        return "You are using:\n" + "\n".join(lines)
+    return "You are using:\nNothing."
+
+
 def _render_stats_text(data: dict) -> str | None:
     actor = data.get("actor") or {}
     if not actor.get("key"):
@@ -259,6 +287,87 @@ def _render_give_text(event_type: str, data: dict) -> str | None:
         name = item.get("name")
         if name:
             lines.append(f"{prefix}{name} to {target_name}.")
+    return "\n".join(lines) if lines else None
+
+
+def _equipment_action_line(prefix: str, item: dict, *, third_person: bool = False) -> str | None:
+    name = item.get("name")
+    if not name:
+        return None
+
+    eq_type = item.get("equipment_type") or ""
+    if eq_type.startswith("weapon"):
+        return f"{prefix}wields {name}." if third_person else f"{prefix}wield {name}."
+    if eq_type == adv_consts.EQUIPMENT_TYPE_SHIELD:
+        if third_person:
+            return f"{prefix}wears {name}."
+        return f"{prefix}strap {name} on your arm."
+    if eq_type == adv_consts.EQUIPMENT_TYPE_ACCESSORY:
+        return f"{prefix}puts on {name}." if third_person else f"{prefix}put on {name}."
+    if eq_type:
+        suffix = f"their {eq_type}" if third_person else f"your {eq_type}"
+        return f"{prefix}wears {name} on {suffix}." if third_person else f"{prefix}wear {name} on {suffix}."
+    return f"{prefix}equips {name}." if third_person else f"{prefix}equip {name}."
+
+
+def _render_equip_text(event_type: str, data: dict) -> str | None:
+    is_self = event_type.startswith("cmd.")
+    if is_self:
+        prefix = "You "
+        third_person = False
+    else:
+        actor = data.get("actor") or {}
+        actor_name = _capfirst(actor.get("name"))
+        if not actor_name:
+            return None
+        prefix = f"{actor_name} "
+        third_person = True
+
+    lines: list[str] = []
+    for item in data.get("items") or []:
+        line = _equipment_action_line(prefix, item, third_person=third_person)
+        if line:
+            lines.append(line)
+
+    for swap in data.get("swapped_items") or []:
+        removed = (swap.get("removed") or {}).get("name")
+        equipped = (swap.get("equipped") or {}).get("name")
+        if removed and equipped:
+            lines.append(f"{prefix}swap {removed} for {equipped}." if is_self else f"{prefix}swaps {removed} for {equipped}.")
+
+    if is_self:
+        verb = "wield" if event_type == "cmd.wield.success" else "wear"
+        for item in data.get("unequippable_items") or []:
+            name = item.get("name")
+            if name:
+                lines.append(f"You can't {verb} {name}.")
+
+    for item in data.get("removed_items") or []:
+        name = item.get("name")
+        if name:
+            lines.append(f"{prefix}remove {name}." if is_self else f"{prefix}removes {name}.")
+
+    return "\n".join(lines) if lines else None
+
+
+def _render_remove_text(event_type: str, data: dict) -> str | None:
+    items = data.get("items") or []
+    if not items:
+        return None
+    if event_type == "cmd.remove.success":
+        prefix = "You stop using "
+    else:
+        actor = data.get("actor") or {}
+        actor_name = _capfirst(actor.get("name"))
+        if not actor_name:
+            return None
+        prefix = f"{actor_name} stops using "
+
+    lines = []
+    for item in items:
+        name = item.get("name")
+        if name:
+            lines.append(f"{prefix}{name}.")
     return "\n".join(lines) if lines else None
 
 
@@ -397,6 +506,9 @@ def render_event_text(
     if event_type == "cmd.inventory.success":
         return _render_inventory_text(data.get("actor"))
 
+    if event_type == "cmd.equipment.success":
+        return _render_equipment_text(data)
+
     if event_type == "cmd.stats.success":
         return _render_stats_text(data)
 
@@ -428,6 +540,19 @@ def render_event_text(
 
     if event_type in ("cmd.give.success", "notification.cmd.give.success"):
         return _render_give_text(event_type, data)
+
+    if event_type in (
+        "cmd.equip.success",
+        "notification.cmd.equip.success",
+        "cmd.wear.success",
+        "notification.cmd.wear.success",
+        "cmd.wield.success",
+        "notification.cmd.wield.success",
+    ):
+        return _render_equip_text(event_type, data)
+
+    if event_type in ("cmd.remove.success", "notification.cmd.remove.success"):
+        return _render_remove_text(event_type, data)
 
     if event_type == "cmd.talk.success":
         return _render_talk_text(data)

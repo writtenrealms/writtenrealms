@@ -33,6 +33,7 @@ from core.db import (
     list_to_choice,
     optional)
 from core.model_mixins import CharMixin, ItemMixin, MobMixin
+from core.stat_system import fold_declared_attributes
 
 
 def _generate_unique_world_slug(instance, *, fallback_prefix: str) -> str:
@@ -168,11 +169,26 @@ class ItemTemplate(ItemMixin, AdventBaseModel):
     @property
     def budget_spent(self):
         spent_budget = 0
-        for attr in [*adv_consts.ATTRIBUTES, adv_consts.ATTR_WEAPON_DAMAGE]:
-            if getattr(self, attr):
-                spent_budget += (
-                    adv_consts.ATTR_BUDGET[attr]
-                    * getattr(self, attr))
+        for value in (self.attributes or {}).values():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                spent_budget += 10 * value
+        for attr in [
+            adv_consts.ATTR_AP,
+            adv_consts.ATTR_ABILITY_POWER,
+            adv_consts.ATTR_CRIT,
+            adv_consts.ATTR_DODGE,
+            adv_consts.ATTR_RESILIENCE,
+            adv_consts.ATTR_MAX_HEALTH,
+            adv_consts.ATTR_MAX_ENERGY,
+            adv_consts.ATTR_MAX_STAMINA,
+            adv_consts.ATTR_REGEN_HEALTH,
+            adv_consts.ATTR_REGEN_ENERGY,
+            adv_consts.ATTR_REGEN_STAMINA,
+            adv_consts.ATTR_WEAPON_DAMAGE,
+        ]:
+            value = getattr(self, attr, 0)
+            if value:
+                spent_budget += adv_consts.ATTR_BUDGET[attr] * value
         return spent_budget
 
     @property
@@ -204,6 +220,258 @@ class ItemTemplate(ItemMixin, AdventBaseModel):
 
 
 models.signals.post_save.connect(ItemTemplate.post_rule_save, ItemTemplate)
+
+
+class ItemDefinition(AdventBaseModel):
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='item_definitions')
+    slug = models.SlugField(max_length=120, blank=True)
+    name = models.TextField(default='Unnamed Item')
+    description = models.TextField(**optional)
+    ground_description = models.TextField(**optional)
+    keywords = models.TextField(**optional)
+    notes = models.TextField(**optional)
+    item_type = models.TextField(
+        choices=list_to_choice(adv_consts.ITEM_TYPES),
+        default=adv_consts.ITEM_TYPE_INERT)
+    base_properties = models.JSONField(default=dict, blank=True)
+    attributes = models.JSONField(default=dict, blank=True)
+    randomization = models.JSONField(default=dict, blank=True)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('world', 'slug')]
+
+    def save(self, *args, **kwargs):
+        is_create = self._state.adding
+        if not self.slug:
+            self.slug = _generate_unique_world_slug(
+                self,
+                fallback_prefix="item-definition",
+            )
+        if kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = list(dict.fromkeys([
+                *kwargs["update_fields"],
+                "modified_ts",
+            ]))
+        super().save(*args, **kwargs)
+        if not is_create:
+            from builders.item_definitions import sync_spawned_items_from_definition
+
+            sync_spawned_items_from_definition(self)
+
+    def spawn(self, target, spawn_world, rule=None, rng=None):
+        from builders.item_definitions import spawn_item_from_definition
+
+        return spawn_item_from_definition(
+            self,
+            target,
+            spawn_world,
+            rng=rng,
+            rule=rule,
+        )
+
+
+class ItemBundle(AdventBaseModel):
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='item_bundles')
+    slug = models.SlugField(max_length=120, blank=True)
+    name = models.TextField(default='Unnamed Item Bundle')
+    notes = models.TextField(**optional)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('world', 'slug')]
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = _generate_unique_world_slug(
+                self,
+                fallback_prefix="item-bundle",
+            )
+        super().save(*args, **kwargs)
+
+    def spawn(self, target, spawn_world, rule=None, rng=None):
+        from builders.item_definitions import spawn_item_from_bundle
+
+        return spawn_item_from_bundle(
+            self,
+            target,
+            spawn_world,
+            rng=rng,
+            rule=rule,
+        )
+
+
+class ItemBundleEntry(AdventBaseModel):
+    bundle = models.ForeignKey(
+        'builders.ItemBundle',
+        on_delete=models.CASCADE,
+        related_name='entries')
+    item_definition = models.ForeignKey(
+        'builders.ItemDefinition',
+        on_delete=models.CASCADE,
+        related_name='bundle_entries')
+    weight = models.PositiveIntegerField(default=1)
+    min_quantity = models.PositiveIntegerField(default=1)
+    max_quantity = models.PositiveIntegerField(default=1)
+    probability = models.PositiveIntegerField(default=100)
+
+    class Meta(AdventBaseModel.Meta):
+        ordering = ['created_ts', 'id']
+
+
+class MerchantProfile(AdventBaseModel):
+    FUNDS_MODE_UNLIMITED = "unlimited"
+    FUNDS_MODE_FINITE = "finite"
+    FUNDS_MODES = [
+        FUNDS_MODE_UNLIMITED,
+        FUNDS_MODE_FINITE,
+    ]
+    BUYBACK_EXPIRES_ON_RESTOCK = "on_restock"
+    BUYBACK_EXPIRES_OPTIONS = [
+        BUYBACK_EXPIRES_ON_RESTOCK,
+    ]
+
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='merchant_profiles')
+    slug = models.SlugField(max_length=120, blank=True)
+    name = models.TextField(default='Unnamed Merchant')
+    notes = models.TextField(**optional)
+
+    sell_markup = models.FloatField(default=1.0)
+    buy_multiplier = models.FloatField(default=0.4)
+
+    restock_interval_seconds = models.PositiveIntegerField(**optional)
+
+    funds_mode = models.TextField(
+        choices=list_to_choice(FUNDS_MODES),
+        default=FUNDS_MODE_UNLIMITED)
+    funds_currency = models.ForeignKey(
+        'builders.Currency',
+        on_delete=models.SET_NULL,
+        related_name='merchant_funds_profiles',
+        **optional)
+    purchase_budget = models.PositiveIntegerField(default=0)
+
+    buyback_enabled = models.BooleanField(default=False)
+    buyback_max_items = models.PositiveIntegerField(default=0)
+    buyback_expires = models.TextField(
+        choices=list_to_choice(BUYBACK_EXPIRES_OPTIONS),
+        default=BUYBACK_EXPIRES_ON_RESTOCK)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('world', 'slug')]
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = _generate_unique_world_slug(
+                self,
+                fallback_prefix="merchant-profile",
+            )
+        super().save(*args, **kwargs)
+
+
+class MerchantStockSlot(AdventBaseModel):
+    SOURCE_ITEM_DEFINITION = "item_definition"
+    SOURCE_ITEM_BUNDLE = "item_bundle"
+    REFRESH_FILL_MISSING = "fill_missing"
+    REFRESH_REROLL_ON_RESTOCK = "reroll_on_restock"
+    REFRESH_MODES = [
+        REFRESH_FILL_MISSING,
+        REFRESH_REROLL_ON_RESTOCK,
+    ]
+
+    profile = models.ForeignKey(
+        'builders.MerchantProfile',
+        on_delete=models.CASCADE,
+        related_name='stock_slots')
+    key = models.SlugField(max_length=120)
+    item_definition = models.ForeignKey(
+        'builders.ItemDefinition',
+        on_delete=models.CASCADE,
+        related_name='merchant_stock_slots',
+        **optional)
+    item_bundle = models.ForeignKey(
+        'builders.ItemBundle',
+        on_delete=models.CASCADE,
+        related_name='merchant_stock_slots',
+        **optional)
+    count = models.PositiveIntegerField(default=1)
+    refresh = models.TextField(
+        choices=list_to_choice(REFRESH_MODES),
+        default=REFRESH_FILL_MISSING)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('profile', 'key')]
+        ordering = ['created_ts', 'id']
+
+
+class MobDefinition(AdventBaseModel):
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='mob_definitions')
+    slug = models.SlugField(max_length=120, blank=True)
+    name = models.TextField(default='Unnamed Mob')
+    description = models.TextField(**optional)
+    room_description = models.TextField(**optional)
+    keywords = models.TextField(**optional)
+    notes = models.TextField(**optional)
+    mob_type = models.TextField(
+        choices=list_to_choice(adv_consts.MOB_TYPES),
+        default=adv_consts.MOB_TYPE_BEAST)
+    assists = models.BooleanField(default=False)
+    base_properties = models.JSONField(default=dict, blank=True)
+    attributes = models.JSONField(default=dict, blank=True)
+    randomization = models.JSONField(default=dict, blank=True)
+    attackable = models.BooleanField(default=True)
+    merchant_profile = models.ForeignKey(
+        'builders.MerchantProfile',
+        on_delete=models.SET_NULL,
+        related_name='mob_definitions',
+        **optional)
+    merchant_availability = models.TextField(
+        default='present',
+        blank=True)
+    trainer = models.JSONField(default=dict, blank=True)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('world', 'slug')]
+
+    def save(self, *args, **kwargs):
+        is_create = self._state.adding
+        if not self.slug:
+            self.slug = _generate_unique_world_slug(
+                self,
+                fallback_prefix="mob-definition",
+            )
+        if kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = list(dict.fromkeys([
+                *kwargs["update_fields"],
+                "modified_ts",
+            ]))
+        super().save(*args, **kwargs)
+        if not is_create:
+            from builders.mob_definitions import sync_spawned_mobs_from_definition
+
+            sync_spawned_mobs_from_definition(self)
+
+    def spawn(self, target, spawn_world, roams=None, rule=None, rng=None):
+        from builders.mob_definitions import spawn_mob_from_definition
+
+        return spawn_mob_from_definition(
+            self,
+            target,
+            spawn_world,
+            rng=rng,
+            roams=roams,
+            rule=rule,
+        )
 
 
 class MobTemplate(CharMixin, MobMixin, AdventBaseModel):
@@ -278,7 +546,7 @@ class MobTemplate(CharMixin, MobMixin, AdventBaseModel):
             template_fields[field.name] = getattr(self, field.name)
 
         # Runtime spawn state should not be copied from template directly.
-        for field_name in ('health', 'stamina', 'mana', 'group_id'):
+        for field_name in ('health', 'stamina', 'energy', 'group_id'):
             template_fields.pop(field_name, None)
 
         # Template fields can be nullable while spawn fields are not.
@@ -306,7 +574,7 @@ class MobTemplate(CharMixin, MobMixin, AdventBaseModel):
             **template_fields,
             health=self.health_max,
             stamina=self.stamina_max,
-            mana=self.mana_max,
+            energy=self.energy_max,
             group_id=group_id,
             #roaming_type=roaming,
             roams=roams,
@@ -322,14 +590,14 @@ class MobTemplate(CharMixin, MobMixin, AdventBaseModel):
 
             Note: closed over function
             """
-            if item.type == adv_consts.ITEM_TYPE_EQUIPPABLE:
+            if candidate_item.type == adv_consts.ITEM_TYPE_EQUIPPABLE:
                 slot = type_to_slot(
-                    eq_type=item.equipment_type,
+                    eq_type=candidate_item.equipment_type,
                     has_weapon=bool(mob.equipment.weapon),
                     has_offhand=bool(mob.equipment.offhand),
                     archetype=self.archetype)
                 if slot and not getattr(mob.equipment, slot, None):
-                    mob.equipment.equip(item=item, slot=slot)
+                    mob.equipment.equip(item=candidate_item, slot=slot)
 
         # process random item shortcut
         if self.drops_random_items:
@@ -353,10 +621,26 @@ class MobTemplate(CharMixin, MobMixin, AdventBaseModel):
                         inventory_record.probability)):
                         continue
 
-                item = inventory_record.item_template.spawn(
-                    target=mob,
-                    spawn_world=spawn_world)
-                equip_if_possible(item)
+                spawned_items = []
+                if inventory_record.item_template_id:
+                    spawned_items = [
+                        inventory_record.item_template.spawn(
+                            target=mob,
+                            spawn_world=spawn_world)
+                    ]
+                elif inventory_record.item_definition_id:
+                    spawned_items = [
+                        inventory_record.item_definition.spawn(
+                            target=mob,
+                            spawn_world=spawn_world)
+                    ]
+                elif inventory_record.item_bundle_id:
+                    spawned_items = inventory_record.item_bundle.spawn(
+                        target=mob,
+                        spawn_world=spawn_world)
+
+                for item in spawned_items:
+                    equip_if_possible(item)
 
         # For every mob, create a corpse item and load it in their
         # inventory.
@@ -443,7 +727,16 @@ class TemplateInventory(AdventBaseModel):
 class MobTemplateInventory(TemplateInventory):
     item_template = models.ForeignKey('builders.ItemTemplate',
                                       on_delete=models.CASCADE,
-                                      related_name='inventory_for_mobs')
+                                      related_name='inventory_for_mobs',
+                                      **optional)
+    item_definition = models.ForeignKey('builders.ItemDefinition',
+                                        on_delete=models.CASCADE,
+                                        related_name='inventory_for_mobs',
+                                        **optional)
+    item_bundle = models.ForeignKey('builders.ItemBundle',
+                                    on_delete=models.CASCADE,
+                                    related_name='inventory_for_mobs',
+                                    **optional)
     container = models.ForeignKey('builders.MobTemplate',
                                   on_delete=models.CASCADE,
                                   related_name='template_inventories')
@@ -681,7 +974,7 @@ class Trigger(AdventBaseModel):
     script = models.TextField(**optional)
     conditions = models.TextField(**optional)
     event = models.TextField(
-        choices=list_to_choice(api_consts.MOB_REACTION_EVENTS),
+        choices=list_to_choice(api_consts.TRIGGER_EVENTS),
         **optional,
     )
 
@@ -694,6 +987,41 @@ class Trigger(AdventBaseModel):
 
     order = models.IntegerField(default=0)
     is_active = models.BooleanField(default=True)
+
+    class Meta(AdventBaseModel.Meta):
+        indexes = [
+            models.Index(
+                fields=[
+                    'world',
+                    'kind',
+                    'event',
+                    'scope',
+                    'target_type',
+                    'target_id',
+                    'is_active',
+                    'order',
+                ],
+                name='trigger_hook_lookup_idx',
+            ),
+        ]
+
+
+def post_trigger_policy_cache_bump(sender, **kwargs):
+    from core.trigger_policy_cache import bump_trigger_policy_cache_version
+
+    bump_trigger_policy_cache_version(kwargs['instance'].world_id)
+
+
+models.signals.post_save.connect(
+    post_trigger_policy_cache_bump,
+    Trigger,
+    dispatch_uid='builders.trigger.policy_cache.post_save',
+)
+models.signals.post_delete.connect(
+    post_trigger_policy_cache_bump,
+    Trigger,
+    dispatch_uid='builders.trigger.policy_cache.post_delete',
+)
 
 
 class ActionBase(AdventBaseModel):
@@ -955,6 +1283,12 @@ class EquipmentProfile(models.Model):
                     eq_type=slot.slot_name,
                     armor_class=armor_class)
 
+            fold_declared_attributes(
+                attrs,
+                world=mob.world,
+                candidate_keys=adv_consts.PRIMARY_ATTRIBUTES,
+            )
+
             item = Item.objects.create(
                 world=mob.world,
                 quality=quality,
@@ -991,6 +1325,12 @@ class MerchantInventory(models.Model):
     item_template = models.ForeignKey('builders.ItemTemplate',
                                       on_delete=models.CASCADE,
                                       **optional)
+    item_definition = models.ForeignKey('builders.ItemDefinition',
+                                        on_delete=models.CASCADE,
+                                        **optional)
+    item_bundle = models.ForeignKey('builders.ItemBundle',
+                                    on_delete=models.CASCADE,
+                                    **optional)
     random_item_profile = models.ForeignKey('builders.RandomItemProfile',
                                        on_delete=models.CASCADE,
                                        **optional)

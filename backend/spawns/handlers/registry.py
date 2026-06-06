@@ -137,6 +137,7 @@ def dispatch_command(
     actor_type: str | None = None,
     actor_id: int | None = None,
     published_messages: list[dict] | None = None,
+    script_source: bool = False,
 ) -> None:
     """
     Dispatch a command to its registered handler.
@@ -204,6 +205,7 @@ def dispatch_command(
         player=player,
         mob=mob,
         published_messages=published_messages,
+        script_source=script_source,
     )
 
     # Guard direct dispatches that target unsupported actor types.
@@ -219,6 +221,16 @@ def dispatch_command(
             }
         )
         return
+
+    if getattr(handler, "builder_only", False):
+        from spawns.handlers.permissions import (
+            builder_permission_error,
+            can_execute_builder_command,
+        )
+
+        if not can_execute_builder_command(ctx, handler):
+            ctx.publish(builder_permission_error(command_type))
+            return
 
     # Execute
     handler.handle(ctx)

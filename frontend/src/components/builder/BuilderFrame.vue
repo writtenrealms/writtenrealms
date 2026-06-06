@@ -32,11 +32,15 @@
         <template v-if="viewType === 'world'">
 
           <router-link
-            :to="{name: 'builder_mob_template_list', params: {world_id: route.params.world_id}}" :class="{ 'router-link-active': isWorldMobsRoute }"
+              :to="{name: 'lobby_world_details', params: {world_id: route.params.world_id}}"
+          >Lobby</router-link>
+
+          <router-link
+            :to="{name: 'builder_mob_definition_list', params: {world_id: route.params.world_id}}" :class="{ 'router-link-active': isWorldMobsRoute }"
           >Mobs</router-link>
 
           <router-link
-            :to="{name: 'builder_item_template_list', params: {world_id: route.params.world_id}}" :class="{ 'router-link-active': isWorldItemsRoute }"
+            :to="{name: 'builder_item_definition_list', params: {world_id: route.params.world_id}}" :class="{ 'router-link-active': isWorldItemsRoute }"
           >Items</router-link>
 
           <router-link
@@ -53,10 +57,6 @@
 
           <div class="mobile-hidden">
             <div class="line-divider my-2"></div>
-
-            <router-link
-              :to="{name: 'lobby_world_details', params: {world_id: route.params.world_id}}"
-            >Lobby</router-link>
 
             <router-link
               :to="{name: 'builder_zone_list', params: { world_id: route.params.world_id}}"
@@ -220,8 +220,24 @@ const viewType = computed(() => {
 
 /* Active route checks */
 // World
-const isWorldItemsRoute = computed(() => { return route.name === 'builder_item_template_details'; });
-const isWorldMobsRoute = computed(() => { return route.name === 'builder_mob_template_details'; });
+const isWorldItemsRoute = computed(() => {
+  const routes = [
+    'builder_item_definition_list',
+    'builder_item_definition_details',
+    'builder_item_template_list',
+    'builder_item_template_details',
+  ];
+  return routes.includes(route.name as string);
+});
+const isWorldMobsRoute = computed(() => {
+  const routes = [
+    'builder_mob_definition_list',
+    'builder_mob_definition_details',
+    'builder_mob_template_list',
+    'builder_mob_template_details',
+  ];
+  return routes.includes(route.name as string);
+});
 const isWorldQuestRoute = computed(() => {
   const routes = [
     'builder_world_quest_template_list',
@@ -236,6 +252,12 @@ const isWorldConfigRoute = computed(() => {
     'builder_world_transformation_template_list',
     'builder_world_fact_list',
     'builder_world_ability_list',
+    'builder_world_trigger_list',
+    'builder_world_trigger_details',
+    'builder_item_bundle_list',
+    'builder_item_bundle_details',
+    'builder_merchant_profile_list',
+    'builder_merchant_profile_details',
     'builder_world_starting_eq_list',
     'builder_world_social_list',
     'builder_world_currency_list',

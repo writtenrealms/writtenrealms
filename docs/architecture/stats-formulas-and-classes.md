@@ -3,15 +3,15 @@
 ## Purpose
 
 This document describes the intended WR2 direction for character attributes,
-derived combat stats, formulas, and class-like progression.
+stats, formulas, and class-like progression.
 
 The goal is to keep the system flexible enough for different world genres and
 builder preferences without turning the runtime contract into a fully dynamic
 "anything can mean anything" engine.
 
-This is a future-facing architecture target. It is intentionally directional.
-It defines the shape the system should have, not the final field list or every
-schema detail.
+This is the WR2 direction implemented by the world `stats` configuration:
+worlds start with no authored attributes, and builders opt into only the
+attributes their world needs.
 
 Reference docs:
 
@@ -23,12 +23,12 @@ Reference docs:
 
 WR1 hard-coded several assumptions into the engine:
 
-- four primary attributes:
+- four attributes:
   - constitution
   - strength
   - dexterity
   - intelligence
-- several derived stats such as:
+- several stats such as:
   - attack power
   - spell power
   - armor
@@ -37,7 +37,7 @@ WR1 hard-coded several assumptions into the engine:
   - health
   - mana
   - stamina
-- archetype-specific formulas for how primaries map into derived stats
+- archetype-specific formulas for how attributes map into stats
 
 That worked for WR1, but it creates problems for WR2:
 
@@ -55,13 +55,13 @@ replace them with an infinitely malleable stat soup.
 ## Design Goals
 
 - Keep the runtime combat contract stable and predictable.
-- Let worlds define their own authored input attributes.
+- Let worlds define their own authored attributes.
 - Let worlds choose class-based or classless progression.
 - Remove fantasy-specific naming from canonical engine internals.
 - Allow world-specific player-facing labels without changing engine semantics.
 - Keep formula evaluation deterministic, inspectable, and cheap.
 - Avoid arbitrary code execution in builder-authored formula definitions.
-- Make combat resolution depend on a persisted derived stat snapshot, not on
+- Make combat resolution depend on a persisted stat snapshot, not on
   repeated full recomputation during every command.
 
 ## Non-Goals
@@ -76,8 +76,8 @@ replace them with an infinitely malleable stat soup.
 
 WR2 should separate the system into three layers:
 
-1. Authored input attributes
-2. Canonical engine combat stats
+1. Attributes
+2. Stats
 3. Player-facing labels and presentation
 
 This is the important line:
@@ -92,7 +92,7 @@ particular world every time combat runs.
 
 ## Core Mental Model
 
-### Layer 1: Input Attributes
+### Layer 1: Attributes
 
 These are the builder-authored attributes that players, mobs, items, buffs, and
 progression systems can modify directly.
@@ -100,21 +100,18 @@ progression systems can modify directly.
 Examples:
 
 - strength
-- grit
-- precision
-- intellect
-- willpower
-- faith
-- tech
+- dexterity
+- intelligence
+- constitution
 
 Different worlds may choose different sets.
 
 These are not the stats combat code should directly consume during attack
-resolution. They are inputs into formulas.
+resolution. Attributes feed formulas.
 
-### Layer 2: Canonical Engine Combat Stats
+### Layer 2: Stats
 
-These are the fixed internal stats the engine actually uses during combat,
+Stats are the fixed internal numbers the engine actually uses during combat,
 resource management, regen, and encounter resolution.
 
 They are the stable contract between:
@@ -126,7 +123,7 @@ They are the stable contract between:
 - UI payload assembly
 - tests and balancing tools
 
-These should have canonical internal identifiers with stable semantics.
+Stats should have stable internal identifiers and stable semantics.
 
 ### Layer 3: Player-Facing Labels
 
@@ -144,9 +141,9 @@ A world should be able to display:
 without changing the underlying engine stat identifiers.
 
 This should be handled as world-configured labels and UI text, not by making
-combat formulas or runtime storage dynamically rename core stats.
+combat formulas or runtime storage dynamically rename stats.
 
-## Canonical Internal Stat Contract
+## Stat Contract
 
 WR2 should move away from fantasy-specific internal names where reasonable.
 
@@ -219,14 +216,15 @@ design reason to distinguish:
 That may become worthwhile later. It should not be part of the base contract
 until there is a real balancing need.
 
-## Input Attribute Direction
+## Attribute Direction
 
-Worlds should be able to define their own primary or authored input attributes.
+Worlds define their own authored attributes. A newly created world has no
+fixed `strength`, `dexterity`, `constitution`, or `intelligence` attributes
+unless a builder explicitly adds those keys.
 
 Examples:
 
-- a classic fantasy world may define `strength`, `constitution`, `dexterity`,
-  and `intelligence`
+- a classic fantasy world may define `might`, `grit`, `finesse`, and `lore`
 - a sci-fi world may define `power`, `precision`, `systems`, and `will`
 - a classless survival world may define only `grit`, `awareness`, and
   `craft`
@@ -239,7 +237,7 @@ These authored attributes should be the layer builders think in when creating:
 - buffs and debuffs
 - progression rewards
 
-The important limit is that these input attributes should still feed into the
+The important limit is that these attributes should still feed into the
 same canonical combat stat contract.
 
 ## Formulas
@@ -262,14 +260,14 @@ layer that is:
 
 ### What Formulas Should Do
 
-Formulas should map from authored inputs into canonical engine combat stats.
+Formulas should map from authored attributes into stats.
 
 Examples:
 
 - `strength` contributes to `attack_power`
-- `willpower` contributes to `energy_max`
+- `intelligence` contributes to `energy_max`
 - `constitution` contributes to `health_max`
-- `precision` contributes to `crit`
+- `dexterity` contributes to `crit`
 - class profile modifiers change coefficients or grant bonuses
 
 Formulas may also incorporate:
@@ -324,17 +322,17 @@ The engine should not assume:
 - every character must pick one class
 - formulas are impossible without class context
 
-Classless worlds should simply omit that layer and still resolve cleanly through
-the same formula pipeline.
+Worlds without classes should simply omit that layer and still resolve cleanly
+through the same formula pipeline.
 
 ## Runtime Model
 
-### Derived Stat Snapshot
+### Stat Snapshot
 
-WR2 combat should not recompute full stat derivation from scratch on every
+WR2 combat should not recompute full stat calculation from scratch on every
 single command or combat step.
 
-Instead, the engine should compute and persist a derived stat snapshot whenever
+Instead, the engine should compute and persist a stat snapshot whenever
 relevant inputs change.
 
 Typical recompute triggers:
@@ -344,14 +342,14 @@ Typical recompute triggers:
 - class changed
 - buff or debuff changed
 - authored formula profile changed
-- base attribute values changed
+- character attribute values changed
 
-Combat and regen systems should read from that persisted derived snapshot.
+Combat and regen systems should read from that persisted stat snapshot.
 
 This is the correct tradeoff:
 
 - computation moves to the moments when inputs change
-- encounter resolution reads stable derived values cheaply
+- encounter resolution reads stable stat values cheaply
 - debugging is easier because the effective current stats are inspectable
 
 ### Runtime Boundary
@@ -360,14 +358,14 @@ At runtime, the combat engine should care about:
 
 - current resource values
 - canonical max and regen values
-- canonical combat stats
+- stats
 - temporary combat effects
 - encounter state
 
 It should not care about:
 
 - the user-facing label for a stat
-- whether `ability_power` came from intelligence, faith, tech, or gear
+- whether `ability_power` came from intelligence, gear, or another source
 - whether the world is class-based or classless
 
 That is formula-layer and presentation-layer work.
@@ -415,7 +413,7 @@ The engine remains stable while the world presentation changes.
 
 ## Combat Relationship
 
-Combat should consume canonical derived stats, not authored primaries directly.
+Combat should consume stats, not authored attributes directly.
 
 Examples:
 
@@ -431,7 +429,7 @@ combat resolution should operate on a simple, explicit runtime contract.
 
 ## Why Not Fully Dynamic Engine Stats
 
-It is tempting to let builders define every primary and every derived stat
+It is tempting to let builders define every input and every stat
 freely, but that would create major problems:
 
 - combat actions would need per-world semantic lookup
@@ -457,25 +455,25 @@ should make room for separate authored concepts such as:
 
 At a high level, worlds should be able to author:
 
-- which input attributes exist
+- which attributes exist
 - which classes exist, if any
-- how input attributes map into canonical combat stats
-- how canonical combat stats are labeled to players
+- how attributes map into stats
+- how stats are labeled to players
 
-What worlds should not author is the core meaning of canonical combat stats
+What worlds should not author is the core meaning of stats
 themselves.
 
 ## Practical Starting Point
 
 The recommended first practical WR2 contract is:
 
-- keep canonical combat stats fixed
-- rename internal `mana` concepts toward `energy`
-- rename internal `spell_power` concepts toward `ability_power`
+- keep stats fixed
+- use `energy` consistently for the third resource
+- use `ability_power` consistently for non-weapon combat power
 - let worlds define labels for those canonical stats
-- let worlds define authored input attributes
+- let worlds define authored attributes
 - let classes be optional
-- let formulas map authored inputs into canonical derived stats
+- let formulas map authored attributes into stats
 - have healing use `ability_power` until there is a strong reason to split it
 
 This is enough flexibility to support different world styles without paying the
@@ -501,7 +499,7 @@ worlds, not because the engine wants to feel theoretically complete.
 
 The WR2 stats system should be:
 
-- flexible in authored inputs
+- flexible in authored attributes
 - fixed in engine semantics
 - configurable in player-facing labels
 - optional in class structure

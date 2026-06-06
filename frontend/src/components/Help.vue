@@ -3,7 +3,7 @@
 
   elementSchema = {}
   elementSchema.help = `The mob's class determine how its stats are calculated. For
-                 example, warriors will roll more strength and thieves will roll
+                 example, warriors might roll more strength and assassins might roll
                  more dexterity.<br/>
                  If abilities are enabled, also informs which abilities are used.`,
 

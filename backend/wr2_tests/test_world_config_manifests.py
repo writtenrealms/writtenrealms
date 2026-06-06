@@ -3,6 +3,7 @@ import yaml
 from rest_framework.reverse import reverse
 
 from builders.models import WorldBuilder
+from config import game_settings as adv_config
 from tests.base import WorldTestCase
 from worlds.models import Room
 
@@ -43,14 +44,16 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(config_resp.data["config"]["max_level"], 20)
         self.assertEqual(config_resp.data["config"]["leveling_curve"][1], 30)
         self.assertEqual(config_resp.data["config"]["combat_resolution_interval"], 0)
+        stat_system = config_resp.data["config"]["stat_system"]
         self.assertEqual(
-            config_resp.data["config"]["stat_system"]["labels"]["resources"]["energy"],
-            "Mana",
+            stat_system["formulas"]["base_resources"]["stamina"]["flat"],
+            adv_config.PLAYER_STARTING_MAX_STAMINA,
         )
         self.assertEqual(
-            config_resp.data["config"]["combat_system"]["profiles"]["basic_physical"]["mitigation"]["resilience"],
-            False,
+            stat_system["formulas"]["base_stats"]["stamina_regen"],
+            adv_config.PLAYER_STARTING_STAMINA_REGEN,
         )
+        self.assertEqual(config_resp.data["config"]["combat_system"], {})
 
         export_resp = self.client.get(self.export_ep)
         self.assertEqual(export_resp.status_code, 200)
@@ -68,20 +71,16 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(world_manifest["spec"]["starting_room"], "room@0,0,0")
         self.assertEqual(world_manifest["spec"]["death_room"], "room@0,0,0")
         self.assertEqual(world_manifest["spec"]["combat_resolution_interval"], 0)
-        self.assertIn("stats", world_manifest["spec"])
-        self.assertIn("combat", world_manifest["spec"])
+        self.assertNotIn("is_classless", world_manifest["spec"])
         self.assertEqual(
-            world_manifest["spec"]["stats"]["labels"]["resources"]["energy"],
-            "Mana",
+            world_manifest["spec"]["stats"]["formulas"]["base_resources"]["stamina"]["flat"],
+            adv_config.PLAYER_STARTING_MAX_STAMINA,
         )
         self.assertEqual(
-            world_manifest["spec"]["stats"]["labels"]["derived"]["ability_power"],
-            "Spell Power",
+            world_manifest["spec"]["stats"]["formulas"]["base_stats"]["stamina_regen"],
+            adv_config.PLAYER_STARTING_STAMINA_REGEN,
         )
-        self.assertEqual(
-            world_manifest["spec"]["combat"]["profiles"]["basic_physical"]["mitigation"]["armor"],
-            True,
-        )
+        self.assertNotIn("combat", world_manifest["spec"])
 
     def test_apply_world_config_manifest_updates_world_and_config(self):
         spawn_world = self.world.spawned_worlds.first()
@@ -124,11 +123,12 @@ spec:
   death_route: nearest_in_zone
   pvp_mode: zone
   can_select_faction: false
+  can_select_gender: false
+  default_gender: male
   auto_equip: false
   is_narrative: true
   players_can_set_title: false
   allow_pvp: false
-  is_classless: true
   non_ascii_names: true
   globals_enabled: false
   decay_glory: true
@@ -151,53 +151,58 @@ spec:
     labels:
       resources:
         energy: Focus
-      derived:
+      stats:
         ability_power: Ability Power
-    primary_attributes:
-      - key: constitution
-        label: Constitution
-      - key: strength
-        label: Strength
-      - key: dexterity
-        label: Dexterity
-      - key: intelligence
-        label: Intelligence
-      - key: awareness
+    attributes:
+      - key: grit
+        label: Grit
+      - key: brawn
+        label: Brawn
+      - key: grace
+        label: Grace
+      - key: willpower
+        label: Willpower
+      - key: insight
         label: Awareness
     class_profiles:
       warrior:
         label: Vanguard
-        primary_attribute: strength
-        base_attribute_weights:
-          constitution: 3
-          strength: 4
-          dexterity: 1
-          intelligence: 1
-          awareness: 2
+        main_attribute: brawn
+        attribute_weights:
+          grit: 3
+          brawn: 4
+          grace: 1
+          willpower: 1
+          insight: 2
+    class_selection:
+      enabled: false
+      default: warrior
     formulas:
+      base_stats:
+        stamina_regen: 4
       global_rules:
-        - source: constitution
+        - source: grit
           target: health_max
           multiplier: 2
-        - source: constitution
+        - source: grit
           target: resilience
           multiplier: 1
-        - source: strength
+        - source: brawn
           target: attack_power
           multiplier: 1
-        - source: strength
+        - source: brawn
           target: health_max
           multiplier: 1
-        - source: dexterity
+        - source: grace
           target: dodge
           multiplier: 1
-        - source: dexterity
+        - source: grace
           target: crit
           multiplier: 1
-        - source: intelligence
+        - source: willpower
           target: ability_power
           multiplier: 2
-        - source: awareness
+        - source: insight
           target: energy_max
           multiplier: 2
 """
@@ -236,12 +241,14 @@ spec:
         self.assertEqual(config.death_route, "nearest_in_zone")
         self.assertEqual(config.pvp_mode, "zone")
         self.assertFalse(config.can_select_faction)
+        self.assertFalse(config.can_select_gender)
+        self.assertEqual(config.default_gender, "male")
         self.assertFalse(config.auto_equip)
         self.assertTrue(config.is_narrative)
         self.assertFalse(config.allow_combat)
         self.assertFalse(config.players_can_set_title)
         self.assertFalse(config.allow_pvp)
-        self.assertTrue(config.is_classless)
+        self.assertFalse(config.is_classless)
         self.assertTrue(config.non_ascii_names)
         self.assertFalse(config.globals_enabled)
         self.assertTrue(config.decay_glory)
@@ -251,7 +258,7 @@ spec:
         self.assertEqual(config.name_exclusions.strip().splitlines(), ["admin", "system"])
         self.assertEqual(config.stat_system["labels"]["resources"]["energy"], "Focus")
         self.assertEqual(
-            config.stat_system["labels"]["derived"]["ability_power"],
+            config.stat_system["labels"]["stats"]["ability_power"],
             "Ability Power",
         )
         self.assertFalse(config.combat_system["variance"]["enabled"])
@@ -263,10 +270,13 @@ spec:
             config.stat_system["labels"]["classes"]["warrior"],
             "Vanguard",
         )
+        self.assertFalse(config.stat_system["class_selection"]["enabled"])
+        self.assertEqual(config.stat_system["class_selection"]["default"], "warrior")
+        self.assertEqual(config.stat_system["formulas"]["base_stats"]["stamina_regen"], 4.0)
         primary_keys = [
-            entry["key"] for entry in config.stat_system["primary_attributes"]
+            entry["key"] for entry in config.stat_system["attributes"]
         ]
-        self.assertIn("awareness", primary_keys)
+        self.assertIn("insight", primary_keys)
 
     def test_apply_world_config_manifest_accepts_async_combat_pacing_sentinel(self):
         manifest = f"""
@@ -320,26 +330,37 @@ spec:
         self.assertEqual(resp.status_code, 400)
         self.assertIn("max_level", str(resp.data))
 
-    def test_explicit_empty_class_profiles_create_clean_classless_stat_system(self):
+    def test_apply_world_config_manifest_rejects_legacy_derived_stat_labels(self):
         manifest = f"""
 kind: world
 metadata:
   world: world.{self.world.id}
 spec:
-  is_classless: true
   stats:
     labels:
-      classes:
-        '': Classless
+      derived:
+        ability_power: Spell Power
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("Unsupported stats.labels field(s): derived", str(resp.data))
+
+    def test_empty_stats_create_clean_world_without_class_profiles(self):
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{self.world.id}
+spec:
+  stats:
     default_profile:
-      label: Classless
-      primary_attribute: ''
-      base_attribute_weights:
-        constitution: 3
-        strength: 2
-        dexterity: 2
-        intelligence: 2
-      derived_rules: []
+      label: ""
+      main_attribute: ''
+      attribute_weights: {{}}
+      stat_rules: []
     class_profiles: {{}}
 """
         resp = self.client.post(
@@ -352,19 +373,13 @@ spec:
         self.world.config.refresh_from_db()
         self.assertTrue(self.world.config.is_classless)
         self.assertEqual(self.world.config.stat_system["class_profiles"], {})
-        self.assertEqual(
-            self.world.config.stat_system["labels"]["classes"],
-            {"": "Classless"},
-        )
+        self.assertEqual(self.world.config.stat_system["labels"]["classes"], {})
 
         config_resp = self.client.get(self.config_ep)
         self.assertEqual(config_resp.status_code, 200)
         exported = yaml.safe_load(config_resp.data["yaml"])
         self.assertEqual(exported["spec"]["stats"]["class_profiles"], {})
-        self.assertEqual(
-            exported["spec"]["stats"]["labels"]["classes"],
-            {"": "Classless"},
-        )
+        self.assertEqual(exported["spec"]["stats"]["labels"]["classes"], {})
 
     def test_apply_exported_world_config_yaml_round_trips_unchanged(self):
         config_resp = self.client.get(self.config_ep)

@@ -16,7 +16,8 @@ This keeps trigger wiring out of individual command handlers and makes the
 
 - Event publisher: `backend/spawns/events.py`
 - Subscription router: `backend/spawns/trigger_subscriptions.py`
-- Trigger executor: `backend/spawns/triggers.py` (`execute_mob_event_triggers`)
+- Trigger executor: `backend/spawns/triggers.py`
+  (`execute_mob_event_triggers`, `execute_room_event_triggers`)
 
 `publish_events()` dispatches subscriptions once per emitted `GameEvent`.
 
@@ -24,9 +25,14 @@ This keeps trigger wiring out of individual command handlers and makes the
 
 - `cmd.say.success` -> `MOB_REACTION_EVENT_SAYING`
 - `cmd.move.success` -> `MOB_REACTION_EVENT_ENTERING`
+- `cmd.move.success` -> `after_move_exit` room event triggers
+- `cmd.move.success` -> `after_move_enter` room event triggers
 
-Subscriptions only trigger mob event reactions for **player-originated** events.
-This avoids recursion when mobs execute scripts that emit the same event types.
+Subscriptions only trigger reactions for **player-originated** events. This
+avoids recursion when mobs or room scripts emit the same event types.
+
+Movement policy hooks such as `before_move_enter` are not subscriptions. They
+run inside the movement handler before room and stamina state are changed.
 
 ## Why This Design
 

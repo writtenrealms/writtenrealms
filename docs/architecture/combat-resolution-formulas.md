@@ -59,12 +59,10 @@ weapon_damage + attack_power / 16
 WR1 spells generally used:
 
 ```text
-spell_power * 0.1 * attack_multiplier
+ability_power * 0.1 * attack_multiplier
 ```
 
-WR2 keeps the shape but uses `ability_power` as the canonical engine stat. The
-database still has `spell_power` in places for legacy compatibility, but
-builders should think of it as ability power.
+WR2 keeps the shape but uses `ability_power` as the combat stat.
 
 WR1 also used level-scaled rating curves for dodge, crit, armor, and
 resilience. WR2 keeps that idea because flat percentages scale poorly.
@@ -106,6 +104,10 @@ spec:
     default_attack_profile: basic_physical
     default_ability_profile: basic_ability
     default_healing_profile: basic_heal
+    level_scale:
+      type: exponential
+      base: 5.5
+      growth: 1.1
 
     variance:
       enabled: true
@@ -183,16 +185,14 @@ profile edits into the engine defaults.
 ## Important Stat Semantics
 
 `weapon_damage` is a first-class item stat. Basic weapon attacks can use it
-directly, and builders can set it on item templates. This fixes the WR1
+directly, and builders can set it on item definitions. This fixes the WR1
 awkwardness where weapon damage was effectively hidden inside level.
 
 `attack_power` remains the physical throughput stat. It can add to weapon
 damage or drive unarmed damage, depending on the attack profile.
 
-`ability_power` is the canonical WR2 replacement for `spell_power`. It is
-generic enough for magic, psionics, technology, tactics, rituals, or other
-world-specific ability systems. Legacy payloads may still expose
-`spell_power`, but the engine treats it as an alias.
+`ability_power` is generic enough for magic, psionics, technology, tactics,
+rituals, or other world-specific ability systems.
 
 `armor` mitigates physical damage by default.
 
@@ -234,11 +234,24 @@ intentional: predictable pipeline ordering keeps combat debuggable and cheap.
 
 ## Rating Curves
 
+Rating curves use `level_scale(opponent.level)` so the same rating value is more
+effective against lower-level opponents and less dominant against higher-level
+opponents. The default scale is open-ended exponential:
+
+```text
+level_scale = 5.5 * 1.1^level
+```
+
+Worlds can also choose `linear`, `flat`, or legacy WR1 `ilf` scaling under
+`spec.combat.level_scale`. See
+[combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md)
+for the builder-facing options.
+
 `mitigation_curve` is used for armor, dodge, and resilience:
 
 ```text
-value = (rating + opponent_ilf * constant * base)
-      / (rating + opponent_ilf * constant)
+value = (rating + opponent_scale * constant * base)
+      / (rating + opponent_scale * constant)
 ```
 
 The result is clamped between `0` and `cap`.
@@ -246,17 +259,24 @@ The result is clamped between `0` and `cap`.
 `linear_rating` is used for crit:
 
 ```text
-value = rating / (opponent_ilf * constant) + base
+value = rating / (opponent_scale * constant) + base
 ```
 
 The result is also clamped between `0` and `cap`.
 
-This means the same rating is more effective against lower-level opponents and
-less dominant against higher-level opponents.
+Worlds that prefer transparent percentage-point stats can use
+`percentage_points` for any rating. This type ignores opponent level and treats
+`1` stat point as one percentage point:
+
+```text
+value = rating / 100 + base
+```
+
+The result is clamped between `0` and `cap`, and `constant` is not used.
 
 ## Weapon Damage
 
-Weapon damage is stored on item templates and spawned items as
+Weapon damage is stored on item definitions and spawned items as
 `weapon_damage`.
 
 For physical profiles using weapon damage:
@@ -275,7 +295,7 @@ base = attack_power * unarmed_power_scale
 For spawned mobs without a weapon:
 
 ```text
-base = ilf(actor.level) * mob_unarmed_level_scale
+base = level_scale(actor.level) * mob_unarmed_level_scale
      + attack_power * power_scale
 ```
 

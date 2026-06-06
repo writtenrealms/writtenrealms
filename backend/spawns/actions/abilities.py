@@ -8,10 +8,22 @@ from django.db import transaction
 from django.db.utils import NotSupportedError
 from django.utils import timezone
 
-from builders.models import AbilityDefinition
+from builders.models import AbilityDefinition, MobDefinition
 from core.abilities import definition_world, max_known_abilities_for_world
 from core.combat_formulas import resolve_attack
 from core.computations import compute_stats
+from core.condition_dsl import (
+    ConditionContext,
+    evaluate_condition,
+    is_structured_condition_mapping,
+    resolve_path,
+)
+from core.scoped_state import (
+    clear_state_value,
+    increment_state_value,
+    resolve_scope_owner,
+    set_state_value,
+)
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.targeting import resolve_room_mob_target
 from spawns.events import GameEvent
@@ -209,6 +221,290 @@ def player_knows_ability(player: Player, ability: AbilityDefinition) -> bool:
     return ability.slug in set(known_ability_slugs(player))
 
 
+def _legacy_ability_requirements_condition(requirements: dict[str, Any]) -> Any:
+    equipment = requirements.get("equipment")
+    if not isinstance(equipment, dict):
+        return {}
+
+    conditions: list[dict[str, Any]] = []
+    offhand_type = str(equipment.get("offhand_type") or "").strip()
+    if offhand_type:
+        conditions.append({
+            "eq": ["actor.equipment.offhand.equipment_type", offhand_type],
+        })
+
+    weapon_type = str(equipment.get("weapon_type") or "").strip()
+    if weapon_type:
+        conditions.append({
+            "eq": ["actor.equipment.weapon.weapon_type", weapon_type],
+        })
+
+    if not conditions:
+        return {}
+    if len(conditions) == 1:
+        return conditions[0]
+    return {"all": conditions}
+
+
+def ability_requirements_condition(ability: AbilityDefinition) -> Any:
+    requirements = ability.requirements or {}
+    if not isinstance(requirements, dict):
+        return {}
+    if "conditions" in requirements:
+        return requirements.get("conditions") or {}
+    if is_structured_condition_mapping(requirements):
+        return requirements
+    return _legacy_ability_requirements_condition(requirements)
+
+
+def ability_requirements_met(player: Player, ability: AbilityDefinition) -> bool:
+    condition = ability_requirements_condition(ability)
+    if condition in (None, {}, []):
+        return True
+    return evaluate_condition(
+        condition,
+        context=ConditionContext(
+            actor=player,
+            player=player,
+            room=getattr(player, "room", None),
+            zone=getattr(getattr(player, "room", None), "zone", None),
+            world=getattr(player, "world", None),
+            ability=ability,
+        ),
+    )
+
+
+def _ability_condition_context(
+    *,
+    player: Player,
+    ability: AbilityDefinition,
+    room: Room | None = None,
+) -> ConditionContext:
+    current_room = room or getattr(player, "room", None)
+    return ConditionContext(
+        actor=player,
+        player=player,
+        room=current_room,
+        zone=getattr(current_room, "zone", None),
+        world=getattr(player, "world", None),
+        ability=ability,
+    )
+
+
+def ability_component_overrides(
+    component: dict,
+    *,
+    player: Player,
+    ability: AbilityDefinition,
+    room: Room | None = None,
+) -> dict[str, Any]:
+    overrides = dict(component.get("overrides") or {})
+    scaling = component.get("scaling") or {}
+    if not isinstance(scaling, dict):
+        return overrides
+
+    source = str(scaling.get("from") or "").strip()
+    if not source:
+        return overrides
+    raw_value = resolve_path(
+        source,
+        _ability_condition_context(player=player, ability=ability, room=room),
+    )
+    try:
+        points = float(raw_value or 0)
+    except (TypeError, ValueError):
+        points = 0.0
+    points = max(0.0, points)
+    if "max_points" in scaling:
+        try:
+            points = min(points, max(0.0, float(scaling.get("max_points") or 0)))
+        except (TypeError, ValueError):
+            pass
+
+    try:
+        base_multiplier = float(overrides.get("multiplier", 1))
+    except (TypeError, ValueError):
+        base_multiplier = 1.0
+    try:
+        multiplier_per_point = float(scaling.get("multiplier_per_point") or 0)
+    except (TypeError, ValueError):
+        multiplier_per_point = 0.0
+    overrides["multiplier"] = base_multiplier + points * multiplier_per_point
+    return overrides
+
+
+def _state_owner_for_ability_component(
+    *,
+    component: dict,
+    player: Player,
+    room: Room | None,
+):
+    scope = str(component.get("scope") or "character").strip().lower()
+    current_room = room or getattr(player, "room", None)
+    return resolve_scope_owner(
+        scope,
+        actor=player,
+        world=getattr(player, "world", None),
+        zone=getattr(current_room, "zone", None),
+        room=current_room,
+        character=player,
+    )
+
+
+def _clamp_state_component_value(value: Any, component: dict) -> Any:
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return value
+    if "min" in component:
+        try:
+            numeric_value = max(numeric_value, float(component.get("min")))
+        except (TypeError, ValueError):
+            pass
+    if "max" in component:
+        try:
+            numeric_value = min(numeric_value, float(component.get("max")))
+        except (TypeError, ValueError):
+            pass
+    if numeric_value.is_integer():
+        return int(numeric_value)
+    return numeric_value
+
+
+def execute_state_component(
+    *,
+    component: dict,
+    player: Player,
+    ability: AbilityDefinition,
+    room: Room | None = None,
+    hit_landed: bool = False,
+    round_id: str | None = None,
+) -> GameEvent | None:
+    if component.get("type") != "state":
+        return None
+    if component.get("apply") == "on_hit" and not hit_landed:
+        return None
+
+    scope = str(component.get("scope") or "character").strip().lower()
+    key = str(component.get("key") or "").strip()
+    owner = _state_owner_for_ability_component(
+        component=component,
+        player=player,
+        room=room,
+    )
+    if owner is None or not key:
+        return None
+
+    operation = str(component.get("op") or "increment").strip().lower()
+    data: dict[str, Any] = {
+        "ability": ability.slug,
+        "scope": scope,
+        "key": key,
+        "operation": operation,
+    }
+    if round_id:
+        data["round_id"] = round_id
+
+    if operation == "clear":
+        data["cleared"] = clear_state_value(scope, owner, key)
+        text = f"{ability.name} clears {scope}.{key}."
+    elif operation == "set":
+        data["value"] = set_state_value(scope, owner, key, component.get("value"))
+        text = f"{ability.name} sets {scope}.{key}."
+    else:
+        value = increment_state_value(scope, owner, key, component.get("amount", 1))
+        clamped = _clamp_state_component_value(value, component)
+        if clamped != value:
+            value = set_state_value(scope, owner, key, clamped)
+        data["value"] = value
+        text = f"{ability.name} updates {scope}.{key}."
+
+    return GameEvent(
+        type="notification.ability.state",
+        recipients=[player.key],
+        data=data,
+        text=text,
+    )
+
+
+def _trainer_config(definition: MobDefinition | None) -> dict[str, Any]:
+    if not definition or not isinstance(definition.trainer, dict):
+        return {}
+    abilities = []
+    for raw_slug in definition.trainer.get("abilities") or []:
+        slug = str(raw_slug or "").strip().lower()
+        if slug and slug not in abilities:
+            abilities.append(slug)
+    if not abilities:
+        return {}
+    availability = str(definition.trainer.get("availability") or "present").strip().lower()
+    if availability not in {"present", "alive_and_present"}:
+        availability = "present"
+    return {
+        "abilities": abilities,
+        "availability": availability,
+    }
+
+
+def _trainer_teaches_ability(definition: MobDefinition | None, ability: AbilityDefinition) -> bool:
+    return ability.slug in set(_trainer_config(definition).get("abilities") or [])
+
+
+def ability_has_trainers(world, ability: AbilityDefinition) -> bool:
+    for definition in MobDefinition.objects.filter(
+        world_id=_definition_world_id(world),
+    ).only("id", "trainer"):
+        if _trainer_teaches_ability(definition, ability):
+            return True
+    return False
+
+
+def _mob_can_train_ability(mob: Mob, ability: AbilityDefinition) -> bool:
+    config = _trainer_config(mob.definition)
+    if ability.slug not in set(config.get("abilities") or []):
+        return False
+    if config.get("availability") == "alive_and_present":
+        if mob.is_pending_deletion:
+            return False
+        try:
+            if int(mob.health or 0) <= 0:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def trainer_for_ability_change(player: Player, ability: AbilityDefinition) -> Mob | None:
+    if not player.room_id:
+        return None
+    for mob in Mob.objects.filter(
+        room_id=player.room_id,
+        is_pending_deletion=False,
+        definition__world_id=_definition_world_id(player.world),
+    ).select_related("definition").order_by("id"):
+        if _mob_can_train_ability(mob, ability):
+            return mob
+    return None
+
+
+def require_trainer_for_ability_change(
+    player: Player,
+    ability: AbilityDefinition,
+    *,
+    verb: str,
+) -> Mob | None:
+    if not ability_has_trainers(player.world, ability):
+        return None
+    trainer = trainer_for_ability_change(player, ability)
+    if trainer:
+        return trainer
+    raise ActionError(
+        f"You need a trainer to {verb} {ability.name}.",
+        code="ability_trainer_required",
+        data={"ability": ability.slug},
+    )
+
+
 def ability_is_available_to_player(player: Player, ability: AbilityDefinition) -> tuple[bool, str]:
     availability = ability.availability or {}
     min_level = int(availability.get("min_level") or 1)
@@ -224,6 +520,9 @@ def ability_is_available_to_player(player: Player, ability: AbilityDefinition) -
         archetype = str(player.archetype or "").strip().lower()
         if archetype not in classes:
             return False, f"{ability.name} is not available to your class."
+
+    if not ability_requirements_met(player, ability):
+        return False, f"You do not meet the requirements for {ability.name}."
 
     return True, ""
 
@@ -292,7 +591,21 @@ def _resource_max(player: Player, resource: str) -> int:
         return max(1, int(stats.get("health_max") or getattr(player, "health_max", 1) or 1))
     if resource == "stamina":
         return max(0, int(stats.get("stamina_max") or getattr(player, "stamina_max", 0) or 0))
-    return max(0, int(stats.get("mana_max") or getattr(player, "mana_max", 0) or 0))
+    return max(0, int(stats.get("energy_max") or getattr(player, "energy_max", 0) or 0))
+
+
+def _resource_base(player: Player, resource: str) -> int:
+    stats = compute_stats(
+        player.level,
+        player.archetype,
+        char=player,
+        world=player.world,
+    )
+    if resource == "health":
+        return max(0, int(stats.get("health_base") or 0))
+    if resource == "stamina":
+        return max(0, int(stats.get("stamina_base") or 0))
+    return max(0, int(stats.get("energy_base") or 0))
 
 
 def ability_cost_amount(player: Player, ability: AbilityDefinition) -> tuple[str, int]:
@@ -300,11 +613,12 @@ def ability_cost_amount(player: Player, ability: AbilityDefinition) -> tuple[str
     if not cost:
         return "", 0
     resource = str(cost.get("resource") or "").strip().lower()
-    if resource == "energy":
-        resource = "mana"
     amount = float(cost.get("amount") or 0)
-    if str(cost.get("calc") or "fixed") == "percent_max":
+    calc = str(cost.get("calc") or "fixed").strip().lower()
+    if calc == "percent_max":
         amount = _resource_max(player, resource) * (amount / 100)
+    elif calc == "percent_base":
+        amount = _resource_base(player, resource) * (amount / 100)
     return resource, max(0, int(amount))
 
 
@@ -431,10 +745,16 @@ class LearnAbilityAction:
                 raise ActionError(reason, code="ability_unavailable")
 
             known = known_ability_slugs(player)
+            trainer = None
             assigned_hotkey = None
             if ability.slug in known:
                 text = f"You already know {ability.name}."
             else:
+                trainer = require_trainer_for_ability_change(
+                    player,
+                    ability,
+                    verb="learn",
+                )
                 max_known = max_known_abilities_for_world(player.world)
                 if max_known is not None and len(known) >= max_known:
                     raise ActionError(
@@ -463,6 +783,10 @@ class LearnAbilityAction:
                         "name": ability.name,
                         "hotkey": assigned_hotkey,
                     },
+                    "trainer": (
+                        {"id": trainer.id, "name": trainer.name}
+                        if trainer else None
+                    ),
                     "actor": ability_state_payload(player),
                 },
                 text=text,
@@ -479,9 +803,15 @@ class UnlearnAbilityAction:
                 raise ActionError("Unlearn what ability?", code="ability_missing")
 
             known = known_ability_slugs(player)
+            trainer = None
             if ability.slug not in known:
                 text = f"You do not know {ability.name}."
             else:
+                trainer = require_trainer_for_ability_change(
+                    player,
+                    ability,
+                    verb="unlearn",
+                )
                 known.remove(ability.slug)
                 player.known_abilities = known
                 hotkey_removed = _remove_ability_hotkey(player, ability)
@@ -502,6 +832,10 @@ class UnlearnAbilityAction:
                 recipients=[player.key],
                 data={
                     "ability": {"slug": ability.slug, "name": ability.name},
+                    "trainer": (
+                        {"id": trainer.id, "name": trainer.name}
+                        if trainer else None
+                    ),
                     "actor": ability_state_payload(player),
                 },
                 text=text,
@@ -584,18 +918,38 @@ class AbilityAction:
         player.health = min(int(player.health or 0), health_max)
 
         events: list[GameEvent] = []
+        hit_landed = False
         for component in ability.components or []:
-            if component.get("type") != "healing":
+            component_type = component.get("type")
+            if component_type == "state":
+                state_event = execute_state_component(
+                    component=component,
+                    player=player,
+                    ability=ability,
+                    room=getattr(player, "room", None),
+                    hit_landed=hit_landed,
+                )
+                if state_event:
+                    events.append(state_event)
+                continue
+
+            if component_type != "healing":
                 continue
             result = resolve_attack(
                 actor=player,
                 target=player,
                 world=player.world,
                 profile_key=component.get("profile"),
-                overrides=component.get("overrides") or {},
+                overrides=ability_component_overrides(
+                    component,
+                    player=player,
+                    ability=ability,
+                    room=getattr(player, "room", None),
+                ),
             )
             if result.healing_done > 0:
                 player.health = min(health_max, int(player.health or 0) + result.healing_done)
+                hit_landed = True
             label = (component.get("text") or {}).get("label") or ability.name
             data = {
                 "ability": ability.slug,
@@ -616,7 +970,7 @@ class AbilityAction:
         cooldown_started = start_ability_cooldown(player, ability)
         update_fields = ["health"]
         if paid:
-            update_fields.append((ability.cost or {}).get("resource") or "mana")
+            update_fields.append((ability.cost or {}).get("resource") or "energy")
         if cooldown_started:
             update_fields.append("ability_cooldowns")
         player.save(update_fields=list(dict.fromkeys(update_fields)))

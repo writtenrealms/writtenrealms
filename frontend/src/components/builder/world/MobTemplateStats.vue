@@ -35,8 +35,8 @@
         <div class="value">{{ template.exp_worth }}</div>
       </div>
       <div class="stat">
-        <div class="label">Mana</div>
-        <div class="value">{{ template.mana_max }}</div>
+        <div class="label">Energy</div>
+        <div class="value">{{ template.energy_max }}</div>
       </div>
       <div class="stat">
         <div class="label">Attack Power</div>
@@ -44,7 +44,7 @@
       </div>
       <div class="stat">
         <div class="label">Ability Power</div>
-        <div class="value">{{ template.spell_power }}</div>
+        <div class="value">{{ template.ability_power }}</div>
       </div>
       <div class="stat">
         <div class="label">Crit Rating</div>

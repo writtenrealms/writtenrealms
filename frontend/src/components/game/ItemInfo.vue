@@ -2,7 +2,7 @@
   <div>
     <div class="name" :class="[item.quality]">
       {{ capfirst(item.name) }}
-      <span class='ml-2 color-text-50 font-text-light' v-if="item.template_id && player.is_immortal">
+      <span class='ml-2 color-text-50 font-text-light' v-if="item.template_id && player.is_builder">
         [ {{ item.template_id }} ]
       </span>
     </div>
@@ -129,46 +129,42 @@ const props = defineProps({
 
 const world = computed(() => store.state.game.world);
 const resourceLabels = computed(() => world.value?.labels?.resources || {});
-const derivedLabels = computed(() => world.value?.labels?.derived || {});
-const primaryLabels = computed(() => world.value?.labels?.primaries || {});
+const statLabels = computed(() => world.value?.labels?.stats || {});
+const attributeLabels = computed(() => world.value?.labels?.attributes || {});
 
 const ITEM_STAT_LABELS = {
   weapon_damage: "Weapon damage",
   armor: "Armor",
-  strength: "Strength",
-  constitution: "Constitution",
-  dexterity: "Dexterity",
-  intelligence: "Intelligence",
   attack_power: "Attack power",
-  spell_power: "Spell power",
+  ability_power: "Ability power",
   crit: "Crit",
   resilience: "Resilience",
   dodge: "Dodge",
   health_max: "Max health",
   health_regen: "Health regen",
-  mana_max: "Max mana",
-  mana_regen: "Mana regen",
+  energy_max: "Max energy",
+  energy_regen: "Energy regen",
   stamina_max: "Max stamina",
   stamina_regen: "Stamina regen",
 };
 
 const statLabel = (statName: string) => {
-  if (statName === "spell_power") {
-    return derivedLabels.value.ability_power || ITEM_STAT_LABELS[statName];
+  if (statName === "ability_power") {
+    return statLabels.value.ability_power || ITEM_STAT_LABELS[statName];
   }
-  if (statName === "mana_max") {
+  if (statName === "energy_max") {
     const energy = resourceLabels.value.energy || "Energy";
     return `Max ${energy}`;
   }
-  if (statName === "mana_regen") {
+  if (statName === "energy_regen") {
     const energy = resourceLabels.value.energy || "Energy";
     return `${energy} Regen`;
   }
-  if (primaryLabels.value[statName]) {
-    return primaryLabels.value[statName];
+  if (attributeLabels.value[statName]) {
+    return attributeLabels.value[statName];
   }
-  if (derivedLabels.value[statName]) {
-    return derivedLabels.value[statName];
+  if (statLabels.value[statName]) {
+    return statLabels.value[statName];
   }
   if (ITEM_STAT_LABELS[statName]) return ITEM_STAT_LABELS[statName];
   const label = statName.replace(/_/g, " ");
@@ -178,6 +174,14 @@ const statLabel = (statName: string) => {
 const getStatValue = (item: any, statName: string) => {
   if (!item || item[statName] === undefined || item[statName] === null) return 0;
   const parsed = Number(item[statName]);
+  if (Number.isNaN(parsed)) return 0;
+  return Math.round(parsed);
+};
+
+const getAttributeValue = (item: any, statName: string) => {
+  const values = item?.attributes || {};
+  if (values[statName] === undefined || values[statName] === null) return 0;
+  const parsed = Number(values[statName]);
   if (Number.isNaN(parsed)) return 0;
   return Math.round(parsed);
 };
@@ -193,27 +197,52 @@ const buildComparedStats = (item: any) => {
   const playerEquipment = (store.state.game.player && store.state.game.player.equipment) || {};
   const equippedItem = playerEquipment[slot];
   const offhandItem = eqType === "weapon_2h" ? playerEquipment.offhand : null;
+  const attributeOrder = world.value?.labels?.order?.attributes || Object.keys(item.attributes || {});
+  const attributeStats: any[] = attributeOrder
+    .filter((statName: string) => getAttributeValue(item, statName) || getAttributeValue(equippedItem, statName) || (offhandItem && getAttributeValue(offhandItem, statName)))
+    .map((statName: string) => {
+      const value = getAttributeValue(item, statName);
+      let equippedValue = getAttributeValue(equippedItem, statName);
+      if (offhandItem) {
+        equippedValue += getAttributeValue(offhandItem, statName);
+      }
+      const delta = value - equippedValue;
+      let change = "+0";
+      let changeDirection = "neutral";
+      if (delta > 0) {
+        change = `+${delta}`;
+        changeDirection = "positive";
+      } else if (delta < 0) {
+        change = `${delta}`;
+        changeDirection = "negative";
+      }
+      return {
+        name: statName,
+        label: statLabel(statName),
+        value,
+        change,
+        change_direction: changeDirection,
+        is_zero: value === 0,
+      };
+    });
+
   const statOrder = [
     "weapon_damage",
     "armor",
-    "strength",
-    "constitution",
-    "dexterity",
-    "intelligence",
     "attack_power",
-    "spell_power",
+    "ability_power",
     "crit",
     "resilience",
     "dodge",
     "health_max",
     "health_regen",
-    "mana_max",
-    "mana_regen",
+    "energy_max",
+    "energy_regen",
     "stamina_max",
     "stamina_regen",
   ];
 
-  const stats: any[] = [];
+  const stats: any[] = [...attributeStats];
   for (const statName of statOrder) {
     if (statName === "weapon_damage" && slot !== "weapon") continue;
     if (statName === "armor" && slot === "weapon") continue;

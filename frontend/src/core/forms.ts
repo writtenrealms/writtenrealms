@@ -14,7 +14,7 @@ export interface FormElement {
   attr: string;
   label: string;
   references?: string;
-  widget?: "text" | "textarea" | "reference" | "select" | "checkbox" | "custom";
+  widget?: "text" | "textarea" | "key_value_map" | "reference" | "select" | "checkbox" | "custom";
   widgetComponent?: any;
   autofocus?: boolean;
   context?: string;
@@ -382,7 +382,7 @@ export const GET_MOB_TEMPLATE_INFO = () => {
           label: "Mob Class",
           widget: "select",
           help: `The mob's class determine how its stats are calculated. For
-                 example, warriors will roll more strength and thieves will roll
+                 example, warriors might roll more strength and assassins might roll
                  more dexterity.<br/>
                  If abilities are enabled, also informs which abilities are used.
                 `,
@@ -405,7 +405,7 @@ export const GET_MOB_TEMPLATE_INFO = () => {
             },
             {
               value: "",
-              label: "Classless"
+              label: "None"
             },
           ],
         },
@@ -557,8 +557,8 @@ export const BUILDER_FORMS = {
           label: "Health",
         },
         {
-          attr: "mana_max",
-          label: "Mana",
+          attr: "energy_max",
+          label: "Energy",
         },
         {
           attr: "exp_worth",
@@ -575,7 +575,7 @@ export const BUILDER_FORMS = {
           label: "Attack Power",
         },
         {
-          attr: "spell_power",
+          attr: "ability_power",
           label: "Ability Power",
         },
         {
@@ -894,8 +894,8 @@ export const BUILDER_FORMS = {
           label: "HP Max",
         },
         {
-          attr: "mana_max",
-          label: "Mana Max",
+          attr: "energy_max",
+          label: "Energy Max",
         },
         {
           attr: "stamina_max",
@@ -910,8 +910,8 @@ export const BUILDER_FORMS = {
           label: "HP Regen",
         },
         {
-          attr: "mana_regen",
-          label: "Mana Regen",
+          attr: "energy_regen",
+          label: "Energy Regen",
         },
         {
           attr: "stamina_regen",
@@ -920,25 +920,10 @@ export const BUILDER_FORMS = {
       ]
     },
     {
-      row_name: "Primary Stats",
-      children: [
-        {
-          attr: "strength",
-          label: "Strength",
-        },
-        {
-          attr: "constitution",
-          label: "Constitution",
-        },
-        {
-          attr: "intelligence",
-          label: "Intelligence",
-        },
-        {
-          attr: "dexterity",
-          label: "Dexterity",
-        },
-      ],
+      attr: "attributes",
+      label: "Attributes",
+      widget: "key_value_map",
+      help: `One world-defined attribute per line, for example:<br/>strength: 3<br/>dexterity: 1`,
     },
     {
       row_name: "Attack Attributes",
@@ -952,7 +937,7 @@ export const BUILDER_FORMS = {
           label: "Weapon Damage",
         },
         {
-          attr: "spell_power",
+          attr: "ability_power",
           label: "Ability Power",
         },
         {
@@ -1058,8 +1043,12 @@ export const BUILDER_FORMS = {
       widget: "select",
       options: [
         {
-          value: "mobtemplate",
+          value: "mobdefinition",
           label: "Mob",
+        },
+        {
+          value: "mobtemplate",
+          label: "Mob Template",
         },
         {
           value: "itemtemplate",
@@ -1097,9 +1086,16 @@ export const BUILDER_FORMS = {
     },
 
     TEMPLATE_SCHEMAS: {
-      mobtemplate: {
+      mobdefinition: {
         attr: "template",
         label: "Load Mob",
+        references: "mob_definition",
+        widget: "reference",
+      },
+
+      mobtemplate: {
+        attr: "template",
+        label: "Load Mob Template",
         references: "mob_template",
         widget: "reference",
       },

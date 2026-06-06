@@ -22,16 +22,17 @@ from core.scoped_state import (
     resolve_scope_owner,
     set_state_value,
 )
+from core.stat_system import (
+    StatSystemValidationError,
+    compute_stats,
+    get_world_stat_system,
+)
 from core.utils import format_actor_msg
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers as drf_serializers
 
-from spawns.ai_sidecar import (
-    maybe_enqueue_ai_sidecar_mob_destroyed,
-    maybe_enqueue_ai_sidecar_mob_spawned,
-)
 from spawns.actions.base import ActionError, ActionResult
 from spawns.events import GameEvent
 from spawns.handlers.registry import (
@@ -40,7 +41,7 @@ from spawns.handlers.registry import (
     dispatch_command,
     resolve_text_handler,
 )
-from spawns.models import Equipment, Item, Mob, Player
+from spawns.models import CombatEncounter, Equipment, Item, Mob, Player
 from spawns.serializers import LoadTemplateSerializer
 from spawns.state_payloads import (
     door_state_lookup,
@@ -79,6 +80,8 @@ def _tokenize_keywords(value: str) -> list[str]:
 
 def _entity_tokens(entity: Item | Mob) -> set[str]:
     keywords = getattr(entity, "keywords", "") or ""
+    if not keywords and getattr(entity, "definition", None):
+        keywords = entity.definition.keywords or ""
     if not keywords and getattr(entity, "template", None):
         keywords = entity.template.keywords or ""
     if not keywords:
@@ -139,12 +142,12 @@ def _collect_purge_targets(player: Player, selector: str) -> list[Item | Mob]:
         item = room.inventory.filter(pk=item_id, is_pending_deletion=False).first()
         return [item] if item else []
 
-    room_mobs = list(room.mobs.select_related("template"))
+    room_mobs = list(room.mobs.select_related("definition", "template"))
     room_items = list(
-        room.inventory.filter(is_pending_deletion=False).select_related("template", "currency")
+        room.inventory.filter(is_pending_deletion=False).select_related("definition", "template", "currency")
     )
     inventory_items = list(
-        player.inventory.filter(is_pending_deletion=False).select_related("template", "currency")
+        player.inventory.filter(is_pending_deletion=False).select_related("definition", "template", "currency")
     )
 
     targets: list[Item | Mob] = [mob for mob in room_mobs if _entity_matches(mob, selector)]
@@ -166,19 +169,7 @@ def _collect_nested_item_ids(items: list[Item]) -> set[int]:
     return item_ids
 
 
-def _purge_mob_cleanly(
-    *,
-    mob: Mob,
-    source: str,
-    trigger_actor_key: str | None = None,
-) -> None:
-    maybe_enqueue_ai_sidecar_mob_destroyed(
-        mob=mob,
-        source=source,
-        trigger_actor_key=trigger_actor_key,
-        reason="purge",
-    )
-
+def _purge_mob_cleanly(*, mob: Mob) -> None:
     item_ids = _collect_nested_item_ids(list(mob.inventory.all()))
     if mob.equipment_id:
         equipment_type = ContentType.objects.get_for_model(Equipment)
@@ -232,10 +223,10 @@ def _collect_room_mob_targets(room: Room, selector: str) -> list[Mob]:
             mob_id = int(normalized.split(".", 1)[1])
         except (TypeError, ValueError):
             return []
-        mob = room.mobs.filter(pk=mob_id).first()
+        mob = room.mobs.select_related("definition", "template").filter(pk=mob_id).first()
         return [mob] if mob else []
 
-    room_mobs = list(room.mobs.select_related("template"))
+    room_mobs = list(room.mobs.select_related("definition", "template"))
     return [mob for mob in room_mobs if _entity_matches(mob, normalized)]
 
 
@@ -266,6 +257,43 @@ def _collect_room_player_targets(room: Room, selector: str) -> list[Player]:
 
     room_players = list(room.players.select_related("world", "world__config", "user"))
     return [player for player in room_players if _player_matches(player, normalized)]
+
+
+def _resolve_player_class_key(world, selector: str) -> str:
+    normalized = str(selector or "").strip().lower()
+    if not normalized:
+        raise ActionError("Class is required.", code="invalid_args")
+
+    try:
+        stat_system = get_world_stat_system(world)
+    except StatSystemValidationError as exc:
+        raise ActionError(str(exc), code="invalid_stat_system")
+
+    class_profiles = stat_system.get("class_profiles") or {}
+    if not class_profiles:
+        raise ActionError("This world has no class profiles.", code="classless_world")
+
+    class_labels = (stat_system.get("labels") or {}).get("classes") or {}
+    lookup: dict[str, str] = {}
+    for class_key in class_profiles.keys():
+        key = str(class_key or "").strip()
+        if not key:
+            continue
+        lookup[key.lower()] = key
+        label = str(class_labels.get(key) or class_profiles[key].get("label") or "").strip()
+        if label:
+            lookup[label.lower()] = key
+
+    exact = lookup.get(normalized)
+    if exact:
+        return exact
+
+    matches = sorted({class_key for label, class_key in lookup.items() if label.startswith(normalized)})
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ActionError("Class is ambiguous.", code="ambiguous_class")
+    raise ActionError("Class not found.", code="invalid_class")
 
 
 def _actor_kind(actor: Player | Mob) -> str:
@@ -352,7 +380,7 @@ def _item_template_field_names() -> list[str]:
 def _mob_template_field_names() -> list[str]:
     names: dict[str, bool] = {}
     for field in CharMixin._meta.fields:
-        if field.name in ("id", "health", "mana", "stamina", "group_id"):
+        if field.name in ("id", "health", "energy", "stamina", "group_id"):
             continue
         names[field.name] = True
     for field in MobMixin._meta.fields:
@@ -384,7 +412,7 @@ def _normalize_values_for_model(model_class, values: dict[str, object]) -> dict[
 def _mob_template_update_values(template: MobTemplate, field_names: list[str]) -> dict[str, object]:
     values = _template_update_values(template, field_names)
     values["health"] = template.health_max
-    values["mana"] = template.mana_max
+    values["energy"] = template.energy_max
     values["stamina"] = template.stamina_max
     return _normalize_values_for_model(Mob, values)
 
@@ -433,13 +461,12 @@ class LoadTemplateAction:
         elif vd["template_type"] == "mob":
             room = vd["room"] if vd["actor_type"] == "room" else vd["actor"].room
             mob = vd["template"].spawn(room, vd["spawn_world"])
-            maybe_enqueue_ai_sidecar_mob_spawned(
-                mob=mob,
-                source="builder.load_command",
-                trigger_actor_key=player.key,
-            )
             loaded_key = mob.key
-            loaded_name = mob.name or (mob.template.name if mob.template else "mob")
+            loaded_name = (
+                mob.name
+                or (mob.definition.name if mob.definition else "")
+                or (mob.template.name if mob.template else "mob")
+            )
         else:
             raise ActionError("Unknown template type.", code="invalid_type")
 
@@ -493,11 +520,7 @@ class PurgeAction:
                 for item in items:
                     item.delete()
                 for mob in mobs:
-                    _purge_mob_cleanly(
-                        mob=mob,
-                        source="builder.purge_command",
-                        trigger_actor_key=player.key,
-                    )
+                    _purge_mob_cleanly(mob=mob)
 
                 out_text = "The world feels a little cleaner."
 
@@ -510,11 +533,7 @@ class PurgeAction:
             elif normalized_target == "mobs":
                 mobs = list(room.mobs.all())
                 for mob in mobs:
-                    _purge_mob_cleanly(
-                        mob=mob,
-                        source="builder.purge_command",
-                        trigger_actor_key=player.key,
-                    )
+                    _purge_mob_cleanly(mob=mob)
                 out_text = "You purge all mobs in the room."
 
             else:
@@ -526,11 +545,7 @@ class PurgeAction:
                 for entity in targets:
                     lines.append(f"You purge {_entity_name(entity)} from this world.")
                     if isinstance(entity, Mob):
-                        _purge_mob_cleanly(
-                            mob=entity,
-                            source="builder.purge_command",
-                            trigger_actor_key=player.key,
-                        )
+                        _purge_mob_cleanly(mob=entity)
                     else:
                         entity.delete()
                 out_text = "\n".join(lines)
@@ -753,7 +768,7 @@ class SetLevelAction:
 
         if isinstance(target, Player):
             result = set_player_level(target, new_level, reset_resources=True)
-            target.save(update_fields=["level", "experience", "health", "mana", "stamina"])
+            target.save(update_fields=["level", "experience", "health", "energy", "stamina"])
             target.refresh_from_db()
             target_data = serialize_actor(target, target.room).model_dump()
             target_type = "player"
@@ -804,6 +819,103 @@ class SetLevelAction:
         )
 
 
+class SetClassAction:
+    def _resolve_target(
+        self,
+        *,
+        actor: Player,
+        target_selector: str | None,
+    ) -> Player:
+        room = actor.room
+        if not room:
+            raise ActionError("You are nowhere. Cannot set classes.", code="no_room")
+
+        normalized_target = str(target_selector or "").strip().lower()
+        if not normalized_target or normalized_target in {"self", "me"}:
+            return actor
+
+        targets = _collect_room_player_targets(room, normalized_target)
+        if not targets:
+            raise ActionError("Player not found in this room.", code="invalid_target")
+        if len(targets) > 1:
+            raise ActionError("Player target is ambiguous.", code="ambiguous_target")
+        return targets[0]
+
+    def execute(
+        self,
+        *,
+        actor: Player,
+        class_selector: str,
+        target_selector: str | None = None,
+    ) -> ActionResult:
+        target = self._resolve_target(
+            actor=actor,
+            target_selector=target_selector,
+        )
+        new_class = _resolve_player_class_key(target.world, class_selector)
+        previous_class = str(target.archetype or "")
+
+        with transaction.atomic():
+            target = Player.objects.select_for_update().get(pk=target.pk)
+            previous_abilities = list(target.known_abilities or [])
+            target.archetype = new_class
+            stats = compute_stats(
+                target.level,
+                target.archetype,
+                char=target,
+                world=target.world,
+            )
+            target.health = max(1, int(stats.get("health_max") or 1))
+            target.energy = int(stats.get("energy_max") or 0)
+            target.stamina = int(stats.get("stamina_max") or 0)
+            target.known_abilities = []
+            target.ability_hotkeys = {}
+            target.ability_cooldowns = {}
+            target.save(update_fields=[
+                "archetype",
+                "health",
+                "energy",
+                "stamina",
+                "known_abilities",
+                "ability_hotkeys",
+                "ability_cooldowns",
+            ])
+            CombatEncounter.objects.filter(
+                player=target,
+                status=CombatEncounter.STATUS_ACTIVE,
+            ).exclude(pending_player_ability={}).update(pending_player_ability={})
+
+        updated_actor = get_player_with_related(actor.id)
+        updated_target = get_player_with_related(target.id)
+        actor_payload = serialize_actor(updated_actor, updated_actor.room)
+        room_payload = _get_single_room_payload(updated_actor)
+        target_payload = serialize_actor(updated_target, updated_target.room)
+        class_labels = get_world_stat_system(updated_target.world)["labels"]["classes"]
+        class_label = class_labels.get(new_class, new_class)
+        target_name = getattr(updated_target, "name", None) or "target"
+        text = f"Set {target_name}'s class to {class_label}."
+
+        return ActionResult(
+            events=[
+                GameEvent(
+                    type="cmd./setclass.success",
+                    recipients=[updated_actor.key],
+                    data={
+                        "actor": actor_payload.model_dump(),
+                        "room": room_payload.model_dump(),
+                        "target": target_payload.model_dump(),
+                        "target_type": "player",
+                        "previous_class": previous_class,
+                        "new_class": new_class,
+                        "class_label": class_label,
+                        "unlearned_abilities": previous_abilities,
+                    },
+                    text=text,
+                )
+            ]
+        )
+
+
 class CmdAction:
     @staticmethod
     def _dispatch_actor_ref(actor: Player | Mob) -> tuple[str, int]:
@@ -816,7 +928,7 @@ class CmdAction:
         segment: str,
         issuer_scope: str | None = None,
         skip_triggers: bool = False,
-        trigger_source: bool = False,
+        script_source: bool = False,
     ) -> str | None:
         rendered_segment = _render_command_segment(segment, actor=dispatch_actor)
         command_token = _first_token(rendered_segment)
@@ -838,8 +950,6 @@ class CmdAction:
             payload["issuer_scope"] = issuer_scope
         if skip_triggers:
             payload["skip_triggers"] = True
-        if trigger_source:
-            payload["__trigger_source"] = True
 
         try:
             dispatch_command(
@@ -847,6 +957,7 @@ class CmdAction:
                 actor_type=dispatch_actor_type,
                 actor_id=dispatch_actor_id,
                 payload=payload,
+                script_source=script_source,
                 published_messages=dispatched_messages,
             )
         except (ActorNotFoundError, HandlerNotFoundError, ValueError) as err:
@@ -860,7 +971,7 @@ class CmdAction:
         target_selector: str,
         cmd: str,
         skip_triggers: bool = False,
-        trigger_source: bool = False,
+        script_source: bool = False,
     ) -> ActionResult:
         room = getattr(actor, "room", None)
         if not room:
@@ -908,7 +1019,7 @@ class CmdAction:
                 segment=segment,
                 issuer_scope=issuer_scope,
                 skip_triggers=skip_triggers,
-                trigger_source=trigger_source,
+                script_source=script_source,
             )
             if dispatched_error:
                 errors.append(dispatched_error)

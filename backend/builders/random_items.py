@@ -9,6 +9,7 @@ from spawns.models import Item
 
 from backend.core.drops import generate_equipment
 from backend.core.drops import generation as drops_generation
+from core.stat_system import fold_declared_attributes
 
 
 def generate_archetype_characteristics(archetype):
@@ -40,7 +41,7 @@ def generate_item(char, chance_imbued, chance_enchanted, specification,
     a normal item if neither the enchanted not the imbued roll land.
 
     If `for_archetype` is True, the generated item will
-    roll a desirable primary attribute based on the character's archetype, and
+    roll a desirable generated stat based on the character's archetype, and
     generate if rolling armor will generate the desired armor class.
     """
 
@@ -250,6 +251,11 @@ def generate_item(char, chance_imbued, chance_enchanted, specification,
         level=level,
         quality=quality,
         eq_type=attrs.get('equipment_type'))
+    fold_declared_attributes(
+        attrs,
+        world=char.world,
+        candidate_keys=adv_consts.PRIMARY_ATTRIBUTES,
+    )
 
     return Item.objects.create(
         world=char.world,

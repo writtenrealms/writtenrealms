@@ -8,11 +8,11 @@
       <form class @submit.prevent="createCharacter">
         <h1 class="form-title">CREATE NEW CHARACTER</h1>
         <div
-          class="flex creation-fields"
-          :class="{ selectableFaction: showFactions }"
+          class="creation-fields"
+          :class="{ 'has-factions': showFactions, 'has-archetype': showArchetype }"
         >
           <!-- Name -->
-          <div class="form-group">
+          <div class="form-group field-name">
             <label for="field-name">Name</label>
             <input
               id="field-name"
@@ -25,7 +25,7 @@
           </div>
 
           <!-- Gender -->
-          <div class="form-group">
+          <div class="form-group field-gender">
             <label for="field-gender">Gender</label>
             <select
               id="field-gender"
@@ -33,14 +33,14 @@
               :disabled="!world.can_select_gender"
               :readonly="!world.can_select_gender"
             >
-              <option value="female">Female</option>
               <option value="male">Male</option>
+              <option value="female">Female</option>
               <option value="non_binary">Non-Binary</option>
             </select>
           </div>
 
           <!-- Factions -->
-          <div class="form-group" v-if="showFactions">
+          <div class="form-group field-faction" v-if="showFactions">
             <label for="field-faction">Faction</label>
             <select id="field-faction" v-model="faction">
               <option
@@ -53,23 +53,28 @@
           </div>
 
           <!-- Archetype -->
-          <div class="form-group" v-if="showArchetype">
+          <div class="form-group field-archetype" v-if="showArchetype">
             <div class="flex">
               <label for="field-archetype">Class</label>
               <Help v-if="!showFactions" :help="archetypeHelp" />
             </div>
-            <select id="field-archetype" v-model="archetype">
-              <option value="warrior">Warrior</option>
-              <option value="mage">Mage</option>
-              <option value="cleric">Cleric</option>
-              <option value="assassin">Assassin</option>
+            <select
+              id="field-archetype"
+              v-model="archetype"
+              :disabled="!classChoiceEnabled"
+              :readonly="!classChoiceEnabled"
+            >
+              <option
+                v-for="option in classOptions"
+                :key="option.key"
+                :value="option.key"
+              >{{ option.label }}</option>
             </select>
           </div>
-          <div v-else>&nbsp;</div>
 
-          <!-- Faction Description -->
+          <!-- Descriptions -->
           <template v-if="showArchetype || showFactions">
-            <div class="form-group field-description" v-if="showFactions">
+            <div class="form-group field-description field-faction-description" v-if="showFactions">
               <div class="inner-description">
                 <div
                   v-for="(line, index) in factionDescriptionLines"
@@ -80,8 +85,7 @@
                 </div>
               </div>
             </div>
-            <div v-else>&nbsp;</div>
-            <div class="form-group field-description" v-if="showArchetype">
+            <div class="form-group field-description field-archetype-description" v-if="showArchetype">
               <div class="inner-description">
                 {{ archetypeDescription(archetype) }}
               </div>
@@ -97,7 +101,7 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, ref } from 'vue';
+import { computed, ref, watchEffect } from 'vue';
 import { useStore } from 'vuex';
 import { useRouter, useRoute } from 'vue-router';
 import axios from "axios";
@@ -114,9 +118,44 @@ const router = useRouter();
 const route = useRoute();
 const world = computed(() => store.state.lobby.world);
 const charname = ref("");
-const gender = ref(world.value.default_gender || "female");
-const archetype = ref("warrior");
+const defaultGender = () => {
+  if (world.value?.can_select_gender === false && world.value?.default_gender) {
+    return world.value.default_gender;
+  }
+  return "male";
+};
+const gender = ref(defaultGender());
+const archetype = ref("");
 const faction = ref(null);
+
+const fallbackClassOptions = [
+  { key: "warrior", label: "Warrior" },
+  { key: "mage", label: "Mage" },
+  { key: "cleric", label: "Cleric" },
+  { key: "assassin", label: "Assassin" },
+];
+
+const classOptions = computed(() => {
+  const labels = world.value?.labels?.classes || {};
+  const options = Object.entries(labels).map(([key, label]) => ({
+    key,
+    label: String(label || capfirst(key)),
+  }));
+  if (!options.length && world.value && !world.value.is_classless) {
+    return fallbackClassOptions;
+  }
+  return options;
+});
+
+const classChoiceEnabled = computed(() => world.value?.class_selection?.enabled !== false);
+
+const defaultArchetype = computed(() => {
+  const configured = world.value?.class_selection?.default;
+  if (configured && classOptions.value.some(option => option.key === configured)) {
+    return configured;
+  }
+  return classOptions.value[0]?.key || "warrior";
+});
 
 const worldFactions = computed(() => {
   const selectable = world.value.core_factions.filter(f => f.is_selectable);
@@ -129,7 +168,7 @@ const worldFactions = computed(() => {
 
 const showFactions = computed(() => world.value.core_factions.length > 0 && world.value.can_select_faction);
 const showSignup = computed(() => !store.state.auth.token);
-const showArchetype = computed(() => !(!world.value.allow_combat || world.value.is_classless || router.currentRoute.value.params.world_id == INTRO_WORLD_ID));
+const showArchetype = computed(() => !(!world.value.allow_combat || world.value.is_classless || router.currentRoute.value.params.world_id == INTRO_WORLD_ID) && classChoiceEnabled.value && classOptions.value.length > 0);
 const factionData = computed(() => world.value.core_factions.find(f => f.code === faction.value) || false);
 
 const factionDescriptionLines = computed(() => factionData.value.description ? factionData.value.description.split("\n") : []);
@@ -137,24 +176,41 @@ const factionDescriptionLines = computed(() => factionData.value.description ? f
 function archetypeDescription(archetype) {
   switch(archetype) {
     case "warrior": return "Warriors are hardened brawlers, smashing their enemies head-on.";
+    case "warlord": return "Warlords are hardened brawlers, smashing their enemies head-on.";
     case "mage": return "Mages are glass cannons, masters of elemental damage.";
+    case "tidecaller": return "Tidecallers are glass cannons, masters of elemental damage.";
     case "assassin": return "Assassins are masters of stealth and violence.";
     case "cleric": return "Clerics are masters of healing and survival.";
+    case "mystic": return "Mystics are masters of healing and survival.";
+    case "hoplite": return "Hoplites are disciplined front-line fighters.";
     default: return "";
   }
 }
 
 const archetypeHelp = computed(() => {
-  return ["warrior", "mage", "assassin", "cleric"]
-    .map(arch => `${capfirst(arch)} - ${archetypeDescription(arch)}`)
+  return classOptions.value
+    .map(option => {
+      const description = archetypeDescription(option.key);
+      return description ? `${option.label} - ${description}` : option.label;
+    })
     .join("<br/><br/>");
+});
+
+watchEffect(() => {
+  if (!showArchetype.value) {
+    return;
+  }
+  const selectedIsValid = classOptions.value.some(option => option.key === archetype.value);
+  if (!selectedIsValid || !classChoiceEnabled.value) {
+    archetype.value = defaultArchetype.value;
+  }
 });
 
 async function createCharacter() {
   const payload = {
     name: charname.value,
     gender: gender.value,
-    archetype: world.value.is_classless ? '' : archetype.value,
+    archetype: world.value.is_classless ? '' : archetype.value || defaultArchetype.value,
     faction: faction.value
   };
 
@@ -162,7 +218,7 @@ async function createCharacter() {
   if (response.status === 201) {
     store.commit('lobby/char_create', response.data);
     charname.value = "";
-    gender.value = world.value.default_gender || "female";
+    gender.value = defaultGender();
     emit('charcreated', response.data);
   }
 }
@@ -197,34 +253,67 @@ function onCancelCreate() {
     }
 
     .creation-fields {
-      &.selectableFaction {
-        flex-wrap: wrap;
-        .form-group {
-          flex: 0 48%;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      column-gap: 2rem;
+      align-items: start;
 
-          &:nth-child(even) {
-            margin-left: 2%;
-          }
-          &:nth-child(odd) {
-            margin-right: 2%;
-          }
-        }
+      .form-group {
+        min-width: 0;
       }
-      &:not(.selectableFaction) {
+
+      .field-name {
+        grid-column: 1;
+        grid-row: 1;
+      }
+
+      .field-gender {
+        grid-column: 2;
+        grid-row: 1;
+      }
+
+      .field-faction {
+        grid-column: 1;
+        grid-row: 2;
+      }
+
+      .field-archetype {
+        grid-column: 2;
+        grid-row: 2;
+      }
+
+      .field-faction-description {
+        grid-column: 1;
+        grid-row: 3;
+      }
+
+      &.has-factions .field-archetype-description {
+        grid-column: 2;
+        grid-row: 3;
+      }
+
+      &.has-archetype:not(.has-factions) .field-gender {
+        grid-column: 1;
+        grid-row: 2;
+      }
+
+      &.has-archetype:not(.has-factions) .field-archetype {
+        grid-column: 2;
+        grid-row: 1;
+      }
+
+      &.has-archetype:not(.has-factions) .field-archetype-description {
+        grid-column: 2;
+        grid-row: 2;
+      }
+
+      @media ($mobile-site) {
+        grid-template-columns: minmax(0, 1fr);
+        column-gap: 0;
+
         .form-group {
-          flex: 1;
-          &:first-child {
-            margin-right: 1rem;
-            @media ($mobile-site) {
-              margin-right: 0.5rem;
-            }
-          }
-          &:last-child {
-            margin-left: 1rem;
-            @media ($mobile-site) {
-              margin-left: 0.5rem;
-            }
-          }
+          grid-column: 1 !important;
+          grid-row: auto !important;
         }
       }
     }

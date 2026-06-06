@@ -15,9 +15,12 @@ from core.leveling import ExperienceGrant, apply_experience
 from builders.models import AbilityDefinition
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.abilities import (
+    ability_component_overrides,
+    ability_is_available_to_player,
     ability_state_event,
     cooldown_remaining,
     decrement_ability_cooldowns,
+    execute_state_component,
     pay_ability_cost,
     player_knows_ability,
     start_ability_cooldown,
@@ -46,7 +49,7 @@ MAX_AUTO_RESOLVE_ROUNDS = 100
 @dataclass(frozen=True)
 class CombatStats:
     player_health_max: int
-    player_mana_max: int
+    player_energy_max: int
     player_stamina_max: int
 
 
@@ -73,7 +76,7 @@ def _player_combat_stats(player: Player) -> CombatStats:
     )
     return CombatStats(
         player_health_max=max(1, int(stats.get("health_max") or 1)),
-        player_mana_max=int(stats.get("mana_max") or 0),
+        player_energy_max=int(stats.get("energy_max") or 0),
         player_stamina_max=int(stats.get("stamina_max") or 0),
     )
 
@@ -520,6 +523,9 @@ def _handle_mob_defeated(
     exp_reward = int(target_mob.exp_worth or 0)
     gold_reward = int(target_mob.gold or 0)
     _finish_encounter(encounter)
+    from spawns.merchants import deactivate_merchant_runtime
+
+    deactivate_merchant_runtime(target_mob)
     target_mob.delete()
 
     reward_update_fields: list[str] = []
@@ -787,7 +793,12 @@ def _execute_output_component(
             target=player,
             world=player.world,
             profile_key=component.get("profile"),
-            overrides=component.get("overrides") or {},
+            overrides=ability_component_overrides(
+                component,
+                player=player,
+                ability=ability,
+                room=room,
+            ) if ability else component.get("overrides") or {},
         )
         _apply_healing(
             actor=player,
@@ -821,7 +832,12 @@ def _execute_output_component(
         target=target_mob,
         world=player.world,
         profile_key=component.get("profile"),
-        overrides=component.get("overrides") or {},
+        overrides=ability_component_overrides(
+            component,
+            player=player,
+            ability=ability,
+            room=room,
+        ) if ability else component.get("overrides") or {},
     )
     if result.damage_taken > 0:
         target_mob.health = max(0, int(target_mob.health or 0) - result.damage_taken)
@@ -948,6 +964,16 @@ def _execute_pending_player_ability(
             )
         ], AbilityRoundResult(consumed_primary=False)
 
+    available, reason = ability_is_available_to_player(player, ability)
+    if not available:
+        return [
+            _combat_failure_event(
+                player,
+                reason,
+                code="ability_unavailable",
+            )
+        ], AbilityRoundResult(consumed_primary=False)
+
     remaining = cooldown_remaining(player, ability)
     if remaining > 0:
         return [
@@ -998,6 +1024,19 @@ def _execute_pending_player_ability(
                 break
             continue
 
+        if component_type == "state":
+            state_event = execute_state_component(
+                component=component,
+                player=player,
+                ability=ability,
+                room=room,
+                hit_landed=hit_landed,
+                round_id=round_id,
+            )
+            if state_event:
+                events.append(state_event)
+            continue
+
         if component_type != "effect":
             continue
         if component.get("apply") == "on_hit" and not hit_landed:
@@ -1035,7 +1074,7 @@ def _execute_pending_player_ability(
     update_fields: list[str] = []
     if cost_paid:
         resource = str((ability.cost or {}).get("resource") or "").strip().lower()
-        update_fields.append("mana" if resource == "energy" else resource)
+        update_fields.append(resource)
     if health_changed:
         update_fields.append("health")
     if cooldown_started:
@@ -1070,7 +1109,7 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
     room = Room.objects.select_related("world", "zone").get(pk=encounter.room_id)
     stats = _player_combat_stats(player)
     player.health_max = stats.player_health_max
-    player.mana_max = stats.player_mana_max
+    player.energy_max = stats.player_energy_max
     player.stamina_max = stats.player_stamina_max
 
     encounter.round_number = int(encounter.round_number or 0) + 1
@@ -1279,11 +1318,11 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
     if player.health <= 0:
         death_room = config.death_room if config and config.death_room_id else player.get_starting_room()
         player.health = stats.player_health_max
-        player.mana = stats.player_mana_max
+        player.energy = stats.player_energy_max
         player.stamina = stats.player_stamina_max
         player.room = death_room
         # TODO: Apply WR2 death penalties here once the penalty system exists.
-        player.save(update_fields=["health", "mana", "stamina", "room"])
+        player.save(update_fields=["health", "energy", "stamina", "room"])
 
         _finish_encounter(encounter)
 
@@ -1470,7 +1509,7 @@ class KillAction:
         room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
         stats = _player_combat_stats(player)
         player.health_max = stats.player_health_max
-        player.mana_max = stats.player_mana_max
+        player.energy_max = stats.player_energy_max
         player.stamina_max = stats.player_stamina_max
 
         for round_no in range(1, MAX_AUTO_RESOLVE_ROUNDS + 1):
@@ -1518,6 +1557,8 @@ class KillAction:
             )
             if not target_mob:
                 raise ActionError("You don't see them here.", code="target_missing")
+            if not getattr(target_mob, "attackable", True):
+                raise ActionError("You cannot attack them.", code="not_attackable")
 
             interval = _combat_interval(config)
 

@@ -34,6 +34,19 @@
         @blur="onBlur"
       ></textarea>
 
+      <textarea
+        v-else-if="elementSchema.widget == 'key_value_map'"
+        :id="'field-' + elementSchema.attr"
+        ref="focusEl"
+        :placeholder="elementSchema.label"
+        :autofocus="elementSchema.autofocus === true"
+        :value="keyValueText"
+        @input="onKeyValueInput"
+        @keyup="delete formErrors[elementSchema.attr]"
+        @focus="onFocus"
+        @blur="onBlur"
+      ></textarea>
+
       <!-- Select -->
       <template v-else-if="elementSchema.options">
         <input v-if="readonly" ref="focusEl" :readonly="true" :value="internalValue" :autofocus="elementSchema.autofocus === true" />
@@ -87,6 +100,14 @@ const store = useStore();
 const internalValue = ref(props.modelValue);
 const focusEl = ref<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null>(null);
 const hasFieldError = computed(() => props.elementSchema.attr in props.formErrors);
+const keyValueText = computed(() => {
+  const value = internalValue.value || {};
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  return Object.entries(value)
+    .map(([key, amount]) => `${key}: ${amount}`)
+    .join("\n");
+});
 
 const emit = defineEmits(['input', 'update:modelValue', 'update']);
 
@@ -125,6 +146,11 @@ const onUpdateReference = (value) => {
   */
   emit('update:modelValue', value);
 }
+
+const onKeyValueInput = (event: Event) => {
+  const target = event.target as HTMLTextAreaElement;
+  internalValue.value = target.value;
+};
 </script>
 
 <style lang="scss">

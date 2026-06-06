@@ -41,6 +41,14 @@ class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
             "builder-room-trigger-list",
             args=[self.world.pk, self.room.pk],
         )
+        self.detail_ep = reverse(
+            "builder-room-trigger-detail",
+            args=[self.world.pk, self.room.pk, self.trigger.pk],
+        )
+        self.world_list_ep = reverse(
+            "builder-world-trigger-list",
+            args=[self.world.pk],
+        )
         self.apply_ep = reverse(
             "builder-world-manifest-apply",
             args=[self.world.pk],
@@ -49,10 +57,12 @@ class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
     def test_room_trigger_list_includes_yaml_manifest(self):
         resp = self.client.get(self.list_ep)
         self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["count"], 1)
+        self.assertEqual(len(resp.data["results"]), 1)
         self.assertEqual(len(resp.data["triggers"]), 1)
         self.assertIn("new_trigger_template", resp.data)
 
-        trigger_data = resp.data["triggers"][0]
+        trigger_data = resp.data["results"][0]
         self.assertEqual(trigger_data["id"], self.trigger.id)
         self.assertEqual(trigger_data["key"], self.trigger.key)
         self.assertIn("kind: trigger", trigger_data["yaml"])
@@ -83,6 +93,152 @@ class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(parsed_template_yaml["kind"], "trigger")
         self.assertEqual(parsed_template_yaml["metadata"]["world"], f"world.{self.world.id}")
         self.assertEqual(parsed_template_yaml["spec"]["target"]["key"], f"room.{self.room.id}")
+
+    def test_room_trigger_detail_includes_yaml_manifest(self):
+        resp = self.client.get(self.detail_ep)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["id"], self.trigger.id)
+        self.assertEqual(resp.data["key"], self.trigger.key)
+        self.assertEqual(resp.data["target"]["type"], "room")
+        self.assertEqual(resp.data["target"]["key"], self.room.key)
+        self.assertIn("kind: trigger", resp.data["yaml"])
+        self.assertIn("operation: delete", resp.data["delete_yaml"])
+
+    def test_room_trigger_list_supports_filters_and_search(self):
+        other_room = Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Other Room",
+            x=self.room.x + 1,
+            y=self.room.y,
+            z=self.room.z,
+        )
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=other_room.id,
+            name="Other Room Trigger",
+            match="touch stone",
+            script="/cmd room -- /echo -- Other message.",
+            display_action_in_room=True,
+        )
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=self.room.id,
+            name="Inactive Room Trigger",
+            match="pull chain",
+            script="/cmd room -- /echo -- Chain message.",
+            is_active=False,
+            display_action_in_room=True,
+        )
+
+        resp = self.client.get(self.list_ep, {"query": "touch stone"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([trigger["id"] for trigger in resp.data["results"]], [self.trigger.id])
+
+        resp = self.client.get(self.list_ep, {"is_active": "false"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["count"], 1)
+        self.assertEqual(resp.data["results"][0]["name"], "Inactive Room Trigger")
+
+    def test_world_trigger_list_includes_yaml_manifest(self):
+        mob_template = MobTemplate.objects.create(
+            world=self.world,
+            name="Lorekeeper",
+        )
+        mob_trigger = Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_WORLD,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(MobTemplate),
+            target_id=mob_template.id,
+            name="Lorekeeper Reaction",
+            event=adv_consts.MOB_REACTION_EVENT_SAYING,
+            match="hello",
+            script="say Welcome.",
+            display_action_in_room=False,
+            gate_delay=5,
+            order=2,
+            is_active=False,
+        )
+
+        resp = self.client.get(self.world_list_ep)
+        self.assertEqual(resp.status_code, 200)
+        trigger_ids = {trigger["id"] for trigger in resp.data["results"]}
+        self.assertIn(self.trigger.id, trigger_ids)
+        self.assertIn(mob_trigger.id, trigger_ids)
+
+        mob_trigger_data = next(
+            trigger for trigger in resp.data["results"] if trigger["id"] == mob_trigger.id
+        )
+        self.assertEqual(mob_trigger_data["key"], mob_trigger.key)
+        self.assertEqual(mob_trigger_data["scope"], adv_consts.TRIGGER_SCOPE_WORLD)
+        self.assertEqual(mob_trigger_data["kind"], adv_consts.TRIGGER_KIND_EVENT)
+        self.assertEqual(mob_trigger_data["target"]["type"], "mobtemplate")
+        self.assertEqual(mob_trigger_data["target"]["name"], "Lorekeeper")
+        self.assertFalse(mob_trigger_data["is_active"])
+        self.assertIn("kind: trigger", mob_trigger_data["yaml"])
+        self.assertIn(f"key: {mob_trigger.key}", mob_trigger_data["yaml"])
+        self.assertIn("operation: delete", mob_trigger_data["delete_yaml"])
+
+        detail_ep = reverse(
+            "builder-world-trigger-detail",
+            args=[self.world.pk, mob_trigger.pk],
+        )
+        detail_resp = self.client.get(detail_ep)
+        self.assertEqual(detail_resp.status_code, 200)
+        self.assertEqual(detail_resp.data["id"], mob_trigger.id)
+        self.assertEqual(detail_resp.data["manifest"]["spec"]["event"], adv_consts.MOB_REACTION_EVENT_SAYING)
+
+    def test_world_trigger_list_supports_filters_and_search(self):
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_WORLD,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(MobTemplate),
+            target_id=MobTemplate.objects.create(world=self.world, name="Lorekeeper").id,
+            name="Lorekeeper Reaction",
+            event=adv_consts.MOB_REACTION_EVENT_SAYING,
+            match="hello",
+            script="say Welcome.",
+            display_action_in_room=False,
+            is_active=False,
+        )
+
+        resp = self.client.get(self.world_list_ep, {"scope": adv_consts.TRIGGER_SCOPE_ROOM})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([trigger["id"] for trigger in resp.data["results"]], [self.trigger.id])
+
+        resp = self.client.get(self.world_list_ep, {"kind": adv_consts.TRIGGER_KIND_EVENT})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["count"], 1)
+        self.assertEqual(resp.data["results"][0]["name"], "Lorekeeper Reaction")
+
+        resp = self.client.get(self.world_list_ep, {"is_active": "false"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["count"], 1)
+        self.assertEqual(resp.data["results"][0]["name"], "Lorekeeper Reaction")
+
+        resp = self.client.get(self.world_list_ep, {"query": "touch stone"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([trigger["id"] for trigger in resp.data["results"]], [self.trigger.id])
+
+    def test_rank_2_builder_cannot_view_world_trigger_list(self):
+        builder_user = self.create_user("trigger-list-builder@example.com")
+        WorldBuilder.objects.create(
+            world=self.world,
+            user=builder_user,
+            builder_rank=2,
+        )
+        self.client.force_authenticate(builder_user)
+
+        resp = self.client.get(self.world_list_ep)
+        self.assertEqual(resp.status_code, 403)
 
     def test_apply_trigger_manifest_updates_trigger(self):
         manifest = f"""
@@ -347,6 +503,111 @@ spec:
         self.assertEqual(created_trigger.target_id, mob_template.id)
         self.assertEqual(created_trigger.event, adv_consts.MOB_REACTION_EVENT_SAYING)
         self.assertEqual(created_trigger.match, "hello and (traveler or friend)")
+
+    def test_apply_trigger_manifest_can_create_room_policy_trigger(self):
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  name: Warlord Gate
+spec:
+  scope: room
+  kind: policy
+  target:
+    type: room
+    key: room.{self.room.id}
+  event: before_move_enter
+  conditions:
+    eq:
+      - actor.archetype
+      - warlord
+  failure_message: Only warlords may enter.
+  order: 0
+  is_active: true
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["operation"], "created")
+
+        created_trigger = Trigger.objects.get(pk=resp.data["trigger"]["id"])
+        self.assertEqual(created_trigger.kind, adv_consts.TRIGGER_KIND_POLICY)
+        self.assertEqual(created_trigger.scope, adv_consts.TRIGGER_SCOPE_ROOM)
+        self.assertEqual(created_trigger.target_type, ContentType.objects.get_for_model(Room))
+        self.assertEqual(created_trigger.target_id, self.room.id)
+        self.assertEqual(created_trigger.event, adv_consts.TRIGGER_EVENT_BEFORE_MOVE_ENTER)
+        self.assertIn("actor.archetype", created_trigger.conditions)
+        self.assertFalse(created_trigger.display_action_in_room)
+
+    def test_apply_trigger_manifest_can_create_room_movement_event_trigger(self):
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  name: Spear Trap
+spec:
+  scope: room
+  kind: event
+  target:
+    type: room
+    key: room.{self.room.id}
+  event: after_move_enter
+  conditions:
+    not:
+      eq:
+        - state.room.trap_sprung
+        - true
+  script: |
+    /cmd room -- /echo -- Spears snap out from the walls.
+    /cmd room -- /state set room trap_sprung true
+  order: 0
+  is_active: true
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["operation"], "created")
+
+        created_trigger = Trigger.objects.get(pk=resp.data["trigger"]["id"])
+        self.assertEqual(created_trigger.kind, adv_consts.TRIGGER_KIND_EVENT)
+        self.assertEqual(created_trigger.scope, adv_consts.TRIGGER_SCOPE_ROOM)
+        self.assertEqual(created_trigger.target_type, ContentType.objects.get_for_model(Room))
+        self.assertEqual(created_trigger.target_id, self.room.id)
+        self.assertEqual(created_trigger.event, adv_consts.TRIGGER_EVENT_AFTER_MOVE_ENTER)
+        self.assertIn("/cmd room -- /echo", created_trigger.script)
+        self.assertFalse(created_trigger.display_action_in_room)
+
+    def test_apply_trigger_manifest_rejects_policy_outside_room_scope(self):
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  name: World Policy
+spec:
+  scope: world
+  kind: policy
+  target:
+    type: world
+    key: world.{self.world.id}
+  event: before_move_enter
+  conditions:
+    always: true
+  failure_message: No.
+  is_active: true
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("scope 'room'", str(resp.data))
 
     def test_apply_trigger_manifest_rejects_invalid_matcher_expression(self):
         manifest = f"""

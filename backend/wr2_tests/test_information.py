@@ -5,7 +5,11 @@ from spawns.handlers import dispatch_command
 from spawns.models import Item
 from django.utils import timezone
 from tests.base import WorldTestCase
-from wr2_tests.utils import capture_game_messages, dispatch_text_command
+from wr2_tests.utils import (
+    apply_basic_stat_system,
+    capture_game_messages,
+    dispatch_text_command,
+)
 
 
 class TestLookCommandText(WorldTestCase):
@@ -205,12 +209,13 @@ class TestStateSyncText(WorldTestCase):
         self.assertNotIn(offline_player.key, who_keys)
 
     def test_state_sync_actor_includes_computed_vital_caps(self):
-        stats = compute_stats(self.player.level, self.player.archetype)
+        apply_basic_stat_system(self.world)
+        stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
 
         self.player.health = max(stats["health_max"] - 10, 1)
-        self.player.mana = max(stats["mana_max"] - 1, 0)
+        self.player.energy = max(stats["energy_max"] - 1, 0)
         self.player.stamina = max(stats["stamina_max"] - 1, 0)
-        self.player.save(update_fields=["health", "mana", "stamina"])
+        self.player.save(update_fields=["health", "energy", "stamina"])
 
         with capture_game_messages() as messages:
             dispatch_command(
@@ -224,7 +229,7 @@ class TestStateSyncText(WorldTestCase):
         actor = message["data"]["actor"]
 
         self.assertEqual(actor["health_max"], stats["health_max"])
-        self.assertEqual(actor["mana_max"], stats["mana_max"])
+        self.assertEqual(actor["energy_max"], stats["energy_max"])
         self.assertEqual(actor["stamina_max"], stats["stamina_max"])
 
     def test_state_sync_includes_world_stat_labels_and_aliases(self):
@@ -233,43 +238,43 @@ class TestStateSyncText(WorldTestCase):
                 "resources": {
                     "energy": "Focus",
                 },
-                "derived": {
+                "stats": {
                     "ability_power": "Ability Power",
                 },
                 "classes": {
                     "warrior": "Vanguard",
                 },
             },
-            "primary_attributes": [
-                {"key": "constitution", "label": "Constitution"},
-                {"key": "strength", "label": "Strength"},
-                {"key": "dexterity", "label": "Dexterity"},
-                {"key": "intelligence", "label": "Intelligence"},
-                {"key": "awareness", "label": "Awareness"},
+            "attributes": [
+                {"key": "grit", "label": "Grit"},
+                {"key": "brawn", "label": "Brawn"},
+                {"key": "grace", "label": "Grace"},
+                {"key": "willpower", "label": "Willpower"},
+                {"key": "insight", "label": "Awareness"},
             ],
             "class_profiles": {
                 "warrior": {
                     "label": "Vanguard",
-                    "primary_attribute": "strength",
-                    "base_attribute_weights": {
-                        "constitution": 3,
-                        "strength": 4,
-                        "dexterity": 1,
-                        "intelligence": 1,
-                        "awareness": 2,
+                    "main_attribute": "brawn",
+                    "attribute_weights": {
+                        "grit": 3,
+                        "brawn": 4,
+                        "grace": 1,
+                        "willpower": 1,
+                        "insight": 2,
                     },
                 },
             },
             "formulas": {
                 "global_rules": [
-                    {"source": "constitution", "target": "health_max", "multiplier": 2},
-                    {"source": "constitution", "target": "resilience", "multiplier": 1},
-                    {"source": "strength", "target": "attack_power", "multiplier": 1},
-                    {"source": "strength", "target": "health_max", "multiplier": 1},
-                    {"source": "dexterity", "target": "dodge", "multiplier": 1},
-                    {"source": "dexterity", "target": "crit", "multiplier": 1},
-                    {"source": "intelligence", "target": "ability_power", "multiplier": 2},
-                    {"source": "awareness", "target": "energy_max", "multiplier": 2},
+                    {"source": "grit", "target": "health_max", "multiplier": 2},
+                    {"source": "grit", "target": "resilience", "multiplier": 1},
+                    {"source": "brawn", "target": "attack_power", "multiplier": 1},
+                    {"source": "brawn", "target": "health_max", "multiplier": 1},
+                    {"source": "grace", "target": "dodge", "multiplier": 1},
+                    {"source": "grace", "target": "crit", "multiplier": 1},
+                    {"source": "willpower", "target": "ability_power", "multiplier": 2},
+                    {"source": "insight", "target": "energy_max", "multiplier": 2},
                 ],
             },
         }
@@ -289,15 +294,15 @@ class TestStateSyncText(WorldTestCase):
 
         self.assertEqual(world_data["labels"]["resources"]["energy"], "Focus")
         self.assertEqual(
-            world_data["labels"]["derived"]["ability_power"],
+            world_data["labels"]["stats"]["ability_power"],
             "Ability Power",
         )
         self.assertEqual(world_data["labels"]["classes"]["warrior"], "Vanguard")
-        self.assertEqual(actor["energy"], actor["mana"])
-        self.assertEqual(actor["energy_max"], actor["mana_max"])
-        self.assertEqual(actor["ability_power"], actor["spell_power"])
-        self.assertIn("awareness", actor["primary_attributes"])
-        self.assertGreater(actor["primary_attributes"]["awareness"], 0)
+        self.assertEqual(actor["energy"], actor["energy"])
+        self.assertEqual(actor["energy_max"], actor["energy_max"])
+        self.assertEqual(actor["ability_power"], actor["ability_power"])
+        self.assertIn("insight", actor["attributes"])
+        self.assertGreater(actor["attributes"]["insight"], 0)
 
     def test_state_sync_room_chars_include_primary_keyword(self):
         mob = self.create_mob("Gus Tone", keywords="gus tone")

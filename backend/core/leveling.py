@@ -282,7 +282,7 @@ def set_player_level(
             world=getattr(player, "world", None),
         )
         player.health = max(1, int(stats.get("health_max") or 1))
-        player.mana = int(stats.get("mana_max") or 0)
+        player.energy = int(stats.get("energy_max") or 0)
         player.stamina = int(stats.get("stamina_max") or 0)
 
     progress = progress_for_experience(

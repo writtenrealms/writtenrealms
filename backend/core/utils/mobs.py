@@ -12,13 +12,7 @@ def suggest_stats(level=1, archetype='warrior', adjust=True, is_elite=False):
         stats.pop('energy_max', None)
         stats.pop('energy_regen', None)
         stats.pop('ability_power', None)
-        if 'mana_base' in stats: stats.pop('mana_base', None)
-
-        # For mobs, we don't want the 4 base stats so we remove them here
-        stats.pop('strength', None)
-        stats.pop('dexterity', None)
-        stats.pop('intelligence', None)
-        stats.pop('constitution', None)
+        if 'energy_base' in stats: stats.pop('energy_base', None)
 
         # ==== Stats Reduction ====
         REDUCED_STATS = ['health_max']
@@ -54,10 +48,10 @@ mob_stat_keys = [
         'dodge',
         'resilience',
         'health_max',
-        'mana_max',
+        'energy_max',
         'attack_power',
-        'spell_power',
-        'mana_regen',
+        'ability_power',
+        'energy_regen',
         'health_regen']
 
 def stats_from_dictionary(mob_dict):

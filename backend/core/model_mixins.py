@@ -43,10 +43,12 @@ class CharMixin(models.Model):
     experience = models.IntegerField(default=1)
 
     health = models.IntegerField(default=1)
-    mana = models.IntegerField(default=0)
+    energy = models.IntegerField(default=0)
     stamina = models.IntegerField(default=0)
 
     group_id = models.TextField(**optional)
+
+    attributes = models.JSONField(default=dict, blank=True)
 
     gold = models.IntegerField(default=0)
 
@@ -251,8 +253,8 @@ class MobMixin(models.Model):
     health_regen = models.IntegerField(default=0)  # %
     stamina_max = models.IntegerField(default=50)
     stamina_regen = models.IntegerField(default=0)  # %
-    mana_max = models.IntegerField(default=1)
-    mana_regen = models.IntegerField(default=0)  # %
+    energy_max = models.IntegerField(default=1)
+    energy_regen = models.IntegerField(default=0)  # %
 
     # attributes
     armor = models.PositiveIntegerField(default=0)
@@ -260,7 +262,7 @@ class MobMixin(models.Model):
     crit = models.PositiveIntegerField(default=0)
     resilience = models.PositiveIntegerField(default=0)
     attack_power = models.PositiveIntegerField(default=1)
-    spell_power = models.PositiveIntegerField(default=0)
+    ability_power = models.PositiveIntegerField(default=0)
 
     regen_rate = models.IntegerField(default=4)
 
@@ -344,20 +346,16 @@ class ItemMixin(models.Model):
     # Points
     health_max = models.IntegerField(default=0)
     health_regen = models.IntegerField(default=0)
-    mana_max = models.IntegerField(default=0)
-    mana_regen = models.IntegerField(default=0)
+    energy_max = models.IntegerField(default=0)
+    energy_regen = models.IntegerField(default=0)
     stamina_max = models.IntegerField(default=0)
     stamina_regen = models.IntegerField(default=0)
 
-    # Base stats
-    strength = models.IntegerField(default=0)
-    constitution = models.IntegerField(default=0)
-    dexterity = models.IntegerField(default=0)
-    intelligence = models.IntegerField(default=0)
+    attributes = models.JSONField(default=dict, blank=True)
 
     # Computed Stats
     attack_power = models.IntegerField(default=0)
-    spell_power = models.IntegerField(default=0)
+    ability_power = models.IntegerField(default=0)
     resilience = models.IntegerField(default=0)
     dodge = models.IntegerField(default=0)
     crit = models.IntegerField(default=0)

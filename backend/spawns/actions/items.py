@@ -6,6 +6,7 @@ from typing import Callable
 from django.db import transaction
 
 from config import constants as adv_consts
+from core.utils.items import type_to_slot
 from quests.services.room_items import (
     QuestRoomItemProjection,
     claim_quest_room_item,
@@ -14,7 +15,7 @@ from quests.services.room_items import (
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.targeting import resolve_room_mob_target
 from spawns.events import GameEvent
-from spawns.models import Item, Mob, Player
+from spawns.models import Equipment, Item, Mob, Player
 from spawns.state_payloads import (
     get_player_with_related,
     room_payload_key_for,
@@ -59,6 +60,12 @@ def _candidate_type(item: Item | QuestRoomItemProjection) -> str:
     return str(item.type or "").strip()
 
 
+def _candidate_equipment_type(item: Item | QuestRoomItemProjection) -> str:
+    if isinstance(item, Item):
+        return item.equipment_type or (item.template.equipment_type if item.template else "")
+    return ""
+
+
 def _item_tokens(item: Item | QuestRoomItemProjection) -> set[str]:
     keywords = _candidate_keywords(item)
     tokens = set(_tokenize_keywords(keywords))
@@ -70,6 +77,15 @@ def _item_tokens(item: Item | QuestRoomItemProjection) -> set[str]:
         tokens.add("corpse")
     elif item_type == adv_consts.ITEM_TYPE_TRASH:
         tokens.add("trash")
+    eq_type = _candidate_equipment_type(item)
+    if eq_type:
+        tokens.add(eq_type)
+        if eq_type == adv_consts.EQUIPMENT_TYPE_SHIELD:
+            tokens.add("shield")
+        elif eq_type.startswith("weapon"):
+            tokens.add("weapon")
+        elif eq_type in adv_consts.EQUIPMENT_ARMOR:
+            tokens.add("armor")
     return tokens
 
 
@@ -158,6 +174,65 @@ def _select_inventory_items(player: Player, selector: str) -> list[Item]:
     )
 
 
+def _inventory_items(player: Player) -> list[Item]:
+    return [
+        item
+        for item in _container_items(player)
+        if item.type != adv_consts.ITEM_TYPE_CORPSE
+    ]
+
+
+def _select_equipment_candidates(player: Player, selector: str) -> list[Item]:
+    inventory_items = _inventory_items(player)
+    if selector and selector.strip().lower().startswith("all"):
+        inventory_items = [
+            item for item in inventory_items
+            if _candidate_equipment_type(item)
+        ]
+        if not inventory_items:
+            raise ActionError(
+                "You don't seem to have anything that can be equipped.",
+                code="nothing_equippable",
+            )
+
+    if not inventory_items:
+        raise ActionError("You aren't carrying anything.", code="empty_inventory")
+
+    return _select_items(
+        inventory_items,
+        selector,
+        empty_error="Equip what?",
+        not_found_error=lambda token: f"You don't seem to have a {token}.",
+    )
+
+
+def _equipment_items(player: Player) -> list[Item]:
+    equipment = player.equipment
+    if not equipment:
+        return []
+    items: list[Item] = []
+    seen_ids: set[int] = set()
+    for slot in adv_consts.EQUIPMENT_SLOTS:
+        item = getattr(equipment, slot, None)
+        if item and item.id not in seen_ids:
+            items.append(item)
+            seen_ids.add(item.id)
+    return items
+
+
+def _select_equipped_items(player: Player, selector: str) -> list[Item]:
+    equipped_items = _equipment_items(player)
+    if selector and selector.strip().lower() == "all" and not equipped_items:
+        raise ActionError("You're not using anything.", code="empty_equipment")
+
+    return _select_items(
+        equipped_items,
+        selector,
+        empty_error="Remove what?",
+        not_found_error=lambda token: f"You don't seem to be using a {token}.",
+    )
+
+
 def _container_items(container) -> list[Item]:
     return list(
         container.inventory.filter(is_pending_deletion=False)
@@ -232,6 +307,66 @@ def _room_visibility_target(item: Item | None, room: Room) -> bool:
     return item.container_type.model == "room" and item.container_id == room.id
 
 
+def _find_equipment_slot(equipment, item: Item) -> str | None:
+    for slot in adv_consts.EQUIPMENT_SLOTS:
+        if getattr(equipment, f"{slot}_id", None) == item.id:
+            return slot
+        slot_item = getattr(equipment, slot, None)
+        if slot_item and slot_item.id == item.id:
+            return slot
+    return None
+
+
+def _is_equippable_for_player(player: Player, item: Item, *, wield_only: bool = False) -> bool:
+    eq_type = _candidate_equipment_type(item)
+    item_type = _candidate_type(item)
+    if item_type != adv_consts.ITEM_TYPE_EQUIPPABLE or not eq_type:
+        return False
+
+    if wield_only and eq_type not in (
+        adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
+        adv_consts.EQUIPMENT_TYPE_WEAPON_2H,
+    ):
+        return False
+
+    if (
+        eq_type == adv_consts.EQUIPMENT_TYPE_WEAPON_2H
+        and player.archetype == adv_consts.ARCHETYPE_ASSASSIN
+    ):
+        return False
+
+    if (
+        eq_type in (*adv_consts.EQUIPMENT_ARMOR, adv_consts.EQUIPMENT_TYPE_SHIELD)
+        and item.armor_class == adv_consts.ARMOR_CLASS_HEAVY
+        and player.archetype != adv_consts.ARCHETYPE_WARRIOR
+    ):
+        return False
+
+    slot = _resolve_equipment_slot(player, item)
+    return slot in adv_consts.EQUIPMENT_SLOTS
+
+
+def _resolve_equipment_slot(player: Player, item: Item) -> str | None:
+    eq_type = _candidate_equipment_type(item)
+    equipment = player.equipment
+    if eq_type == adv_consts.EQUIPMENT_TYPE_WEAPON_1H:
+        if not getattr(equipment, "weapon", None):
+            return adv_consts.EQUIPMENT_SLOT_WEAPON
+        if (
+            not getattr(equipment, "offhand", None)
+            and player.archetype == adv_consts.ARCHETYPE_ASSASSIN
+        ):
+            return adv_consts.EQUIPMENT_SLOT_OFFHAND
+        return adv_consts.EQUIPMENT_SLOT_WEAPON
+
+    return type_to_slot(
+        eq_type=eq_type,
+        has_weapon=bool(getattr(player.equipment, "weapon", None)),
+        has_offhand=bool(getattr(player.equipment, "offhand", None)),
+        archetype=player.archetype,
+    )
+
+
 class DropAction:
     def execute(self, player_id: int, selector: str) -> ActionResult:
         with transaction.atomic():
@@ -299,6 +434,249 @@ class DropAction:
                 events.append(
                     GameEvent(
                         type="notification.cmd.drop.success",
+                        recipients=[f"player.{pid}" for pid in recipients],
+                        data=notify_data,
+                        text=notify_text,
+                    )
+                )
+
+        return ActionResult(events=events)
+
+
+class EquipAction:
+    def execute(
+        self,
+        player_id: int,
+        selector: str,
+        *,
+        command_type: str = "equip",
+        wield_only: bool = False,
+    ) -> ActionResult:
+        with transaction.atomic():
+            player = Player.objects.select_for_update().get(pk=player_id)
+            if not player.room_id:
+                raise ActionError("You are nowhere. Cannot equip items.", code="no_room")
+
+            room = Room.objects.get(pk=player.room_id)
+            equipment = Equipment.objects.select_for_update().get(pk=player.equipment_id)
+            player.equipment = equipment
+            selected_items = _select_equipment_candidates(player, selector)
+            selected_ids = [item.id for item in selected_items]
+            locked_items = {
+                item.id: item
+                for item in Item.objects.select_for_update()
+                .filter(pk__in=selected_ids)
+            }
+            selected_items = [locked_items[item_id] for item_id in selected_ids if item_id in locked_items]
+
+            equipped_items: list[Item] = []
+            swapped_items: list[dict[str, Item]] = []
+            unequippable_items: list[Item] = []
+            removed_items: list[Item] = []
+            touched_slots: set[str] = set()
+
+            def unequip(slot: str, item: Item) -> None:
+                setattr(equipment, slot, None)
+                touched_slots.add(slot)
+                item.container = player
+                item.save(update_fields=["container_type", "container_id"])
+
+            for item in selected_items:
+                if not _is_equippable_for_player(player, item, wield_only=wield_only):
+                    unequippable_items.append(item)
+                    continue
+
+                slot = _resolve_equipment_slot(player, item)
+                if slot not in adv_consts.EQUIPMENT_SLOTS:
+                    unequippable_items.append(item)
+                    continue
+
+                eq_type = _candidate_equipment_type(item)
+                extra_conflicts: list[tuple[str, Item]] = []
+                if eq_type == adv_consts.EQUIPMENT_TYPE_WEAPON_2H:
+                    offhand = getattr(equipment, adv_consts.EQUIPMENT_SLOT_OFFHAND, None)
+                    if offhand:
+                        extra_conflicts.append((adv_consts.EQUIPMENT_SLOT_OFFHAND, offhand))
+                elif eq_type == adv_consts.EQUIPMENT_TYPE_SHIELD:
+                    weapon = getattr(equipment, adv_consts.EQUIPMENT_SLOT_WEAPON, None)
+                    if (
+                        weapon
+                        and _candidate_equipment_type(weapon) == adv_consts.EQUIPMENT_TYPE_WEAPON_2H
+                    ):
+                        extra_conflicts.append((adv_consts.EQUIPMENT_SLOT_WEAPON, weapon))
+
+                replacement = getattr(equipment, slot, None)
+                if replacement and replacement.id == item.id:
+                    continue
+
+                primary_removed = replacement
+                primary_slot = slot
+                if primary_removed is None and extra_conflicts:
+                    primary_slot, primary_removed = extra_conflicts.pop(0)
+
+                if primary_removed:
+                    unequip(primary_slot, primary_removed)
+                    swapped_items.append({
+                        "equipped": item,
+                        "removed": primary_removed,
+                    })
+
+                for conflict_slot, conflict_item in extra_conflicts:
+                    if conflict_item.id == getattr(primary_removed, "id", None):
+                        continue
+                    unequip(conflict_slot, conflict_item)
+                    removed_items.append(conflict_item)
+
+                setattr(equipment, slot, item)
+                touched_slots.add(slot)
+                item.container = equipment
+                item.save(update_fields=["container_type", "container_id"])
+                if not primary_removed:
+                    equipped_items.append(item)
+
+            if touched_slots:
+                equipment.save(update_fields=sorted(touched_slots))
+
+            if not (equipped_items or swapped_items or removed_items or unequippable_items):
+                raise ActionError("You can't equip that.", code="not_equippable")
+
+        updated_player = get_player_with_related(player_id)
+        actor_payload = serialize_actor(updated_player, updated_player.room)
+        room_payload = serialize_room(
+            room,
+            {room.id: room_payload_key_for(room)},
+            {},
+            viewer=updated_player,
+        )
+
+        def item_payload(item: Item) -> dict:
+            return serialize_item(item).model_dump()
+
+        data = {
+            "actor": actor_payload.model_dump(),
+            "items": [item_payload(item) for item in equipped_items],
+            "swapped_items": [
+                {
+                    "equipped": item_payload(swap["equipped"]),
+                    "removed": item_payload(swap["removed"]),
+                }
+                for swap in swapped_items
+            ],
+            "unequippable_items": [item_payload(item) for item in unequippable_items],
+            "removed_items": [item_payload(item) for item in removed_items],
+            "room": room_payload.model_dump(),
+        }
+        event_type = f"cmd.{command_type}.success"
+        text = render_event_text(event_type, data, viewer=updated_player)
+
+        events = [
+            GameEvent(
+                type=event_type,
+                recipients=[updated_player.key],
+                data=data,
+                text=text,
+            )
+        ]
+
+        if not updated_player.is_invisible:
+            recipients = (
+                Player.objects.filter(room_id=room.id, in_game=True)
+                .exclude(pk=updated_player.id)
+                .values_list("id", flat=True)
+            )
+            if recipients:
+                notify_data = {
+                    "actor": serialize_char_from_player(updated_player).model_dump(),
+                    "items": data["items"],
+                    "swapped_items": data["swapped_items"],
+                    "removed_items": data["removed_items"],
+                }
+                notify_type = f"notification.cmd.{command_type}.success"
+                notify_text = render_event_text(notify_type, notify_data, viewer=None)
+                events.append(
+                    GameEvent(
+                        type=notify_type,
+                        recipients=[f"player.{pid}" for pid in recipients],
+                        data=notify_data,
+                        text=notify_text,
+                    )
+                )
+
+        return ActionResult(events=events)
+
+
+class RemoveEquipmentAction:
+    def execute(self, player_id: int, selector: str, *, command_type: str = "remove") -> ActionResult:
+        with transaction.atomic():
+            player = Player.objects.select_for_update().get(pk=player_id)
+            if not player.room_id:
+                raise ActionError("You are nowhere. Cannot remove equipment.", code="no_room")
+
+            room = Room.objects.get(pk=player.room_id)
+            equipment = Equipment.objects.select_for_update().get(pk=player.equipment_id)
+            player.equipment = equipment
+            selected_items = _select_equipped_items(player, selector)
+            touched_slots: set[str] = set()
+            removed_items: list[Item] = []
+
+            for item in selected_items:
+                slot = _find_equipment_slot(equipment, item)
+                if not slot:
+                    raise ActionError(
+                        f"You don't seem to be using {resolve_item_name(item)}.",
+                        code="item_not_found",
+                    )
+                setattr(equipment, slot, None)
+                touched_slots.add(slot)
+                item.container = player
+                item.save(update_fields=["container_type", "container_id"])
+                removed_items.append(item)
+
+            if touched_slots:
+                equipment.save(update_fields=sorted(touched_slots))
+
+        updated_player = get_player_with_related(player_id)
+        actor_payload = serialize_actor(updated_player, updated_player.room)
+        room_payload = serialize_room(
+            room,
+            {room.id: room_payload_key_for(room)},
+            {},
+            viewer=updated_player,
+        )
+        item_payloads = [serialize_item(item).model_dump() for item in removed_items]
+        data = {
+            "actor": actor_payload.model_dump(),
+            "items": item_payloads,
+            "room": room_payload.model_dump(),
+        }
+        event_type = f"cmd.{command_type}.success"
+        text = render_event_text(event_type, data, viewer=updated_player)
+
+        events = [
+            GameEvent(
+                type=event_type,
+                recipients=[updated_player.key],
+                data=data,
+                text=text,
+            )
+        ]
+
+        if not updated_player.is_invisible:
+            recipients = (
+                Player.objects.filter(room_id=room.id, in_game=True)
+                .exclude(pk=updated_player.id)
+                .values_list("id", flat=True)
+            )
+            if recipients:
+                notify_data = {
+                    "actor": serialize_char_from_player(updated_player).model_dump(),
+                    "items": item_payloads,
+                }
+                notify_type = f"notification.cmd.{command_type}.success"
+                notify_text = render_event_text(notify_type, notify_data, viewer=None)
+                events.append(
+                    GameEvent(
+                        type=notify_type,
                         recipients=[f"player.{pid}" for pid in recipients],
                         data=notify_data,
                         text=notify_text,

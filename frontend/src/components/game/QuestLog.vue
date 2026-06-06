@@ -28,7 +28,7 @@
         <div v-for="log_entry in log_entries" :key="log_entry.id" class="mt-4">
           <h2 @click="onClickName(log_entry)" class="mb-2">
             <span class="interactive">{{ log_entry.quest_name }}</span>
-            <span class='ml-2 color-text-50' v-if="store.state.game.player.is_immortal">[ {{ log_entry.id }} ]</span>
+            <span class='ml-2 color-text-50' v-if="store.state.game.player.is_builder">[ {{ log_entry.id }} ]</span>
           </h2>
           <template v-if="expanded == log_entry.id">
             <div

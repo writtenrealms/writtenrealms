@@ -9,7 +9,7 @@
       </span>
     </div>
     <div v-if="player.title">Title: {{ player.title }}</div>
-    <div v-if="player.is_immortal">This is a builder character.</div>
+    <div v-if="player.is_builder">This is a builder character.</div>
     <div>Power: {{ Number(player.power).toLocaleString() }}</div>
     <div>Spawn world details: {{ player.world.id }} ({{ player.world.state }})</div>
 
@@ -141,7 +141,7 @@ const editInfo = () => {
     data: entity,
     schema: [
       {
-        attr: "is_immortal",
+        attr: "is_builder",
         label: "Is Builder",
         widget: "checkbox",
       },

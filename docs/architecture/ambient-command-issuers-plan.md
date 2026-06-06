@@ -158,6 +158,9 @@ This prevents room/quest logic from directly crafting ad hoc command calls.
 WR1-style `RoomCheck` and `RoomCommandCheck` are legacy authored concepts and
 should not remain a permanent parallel system in WR2.
 
+Detailed design direction for the replacement lives in
+[pre-action-policy-hooks.md](/Users/teebes/code/writtenrealms/docs/architecture/pre-action-policy-hooks.md).
+
 This ambient issuer plan must account for replacing them with the trigger and
 command-policy model, not merely coexisting with them.
 
@@ -197,8 +200,8 @@ Migration direction:
   is proven by tests.
 
 Open TODOs for this plan:
-- Design the authored contract for veto-capable trigger or policy hooks,
-  including hook names and scope rules.
+- Extend the movement policy hook contract described in
+  `pre-action-policy-hooks.md` as new pre-action hooks are added.
 - Update command planning or handler dispatch so recognized commands consult
   pre-action hooks before normal execution.
 - Define issuer and subject semantics for `before_move_exit` and

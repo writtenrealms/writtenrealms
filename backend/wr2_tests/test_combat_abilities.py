@@ -1,24 +1,37 @@
+from copy import deepcopy
 from unittest.mock import patch
 
-from builders.models import AbilityDefinition
+from builders.models import AbilityDefinition, ItemTemplate, MobDefinition
+from config import constants as adv_consts
 from core.combat_formulas import normalize_combat_system
 from core.computations import compute_stats
+from core.scoped_state import STATE_SCOPE_CHARACTER, get_state_value
 from django.utils import timezone
-from spawns.models import CombatEncounter, Mob
+from spawns.models import CombatEncounter, Item, Mob
 from spawns.tasks import resolve_combat_encounter
 from tests.base import WorldTestCase
-from wr2_tests.utils import capture_game_messages, dispatch_text_command
+from wr2_tests.utils import (
+    BASIC_TEST_STAT_SYSTEM,
+    apply_basic_stat_system,
+    capture_game_messages,
+    dispatch_text_command,
+)
 
 
 class TestCombatAbilities(WorldTestCase):
     def setUp(self):
         super().setUp()
-        self.stats = compute_stats(self.player.level, self.player.archetype)
+        apply_basic_stat_system(self.world)
+        self.stats = compute_stats(
+            self.player.level,
+            self.player.archetype,
+            char=self.player,
+        )
         self.player.health = self.stats["health_max"]
-        self.player.mana = self.stats["mana_max"]
+        self.player.energy = self.stats["energy_max"]
         self.player.stamina = self.stats["stamina_max"]
         self.player.in_game = True
-        self.player.save(update_fields=["health", "mana", "stamina", "in_game"])
+        self.player.save(update_fields=["health", "energy", "stamina", "in_game"])
         self.world.config.combat_resolution_interval = -1
         self.world.config.combat_system = normalize_combat_system({
             "variance": {
@@ -48,7 +61,19 @@ class TestCombatAbilities(WorldTestCase):
         })
         self.world.config.save(update_fields=["combat_resolution_interval", "combat_system"])
 
-    def _ability(self, *, slug, name, verbs, components, target=None, cost=None, cooldown=None):
+    def _ability(
+        self,
+        *,
+        slug,
+        name,
+        verbs,
+        components,
+        target=None,
+        availability=None,
+        requirements=None,
+        cost=None,
+        cooldown=None,
+    ):
         return AbilityDefinition.objects.create(
             world=self.world,
             slug=slug,
@@ -60,8 +85,8 @@ class TestCombatAbilities(WorldTestCase):
                 "default": "current_target",
                 "allow_out_of_combat": False,
             },
-            availability={"classes": [], "min_level": 1},
-            requirements={},
+            availability=availability or {"classes": [], "min_level": 1},
+            requirements=requirements or {},
             cost=cost or {},
             cooldown=cooldown or {"rounds": 0},
             components=components,
@@ -90,6 +115,107 @@ class TestCombatAbilities(WorldTestCase):
             and msg["message"].get("type") == message_type
         ]
 
+    def test_percent_base_cost_uses_energy_base_before_equipment_modifiers(self):
+        from spawns.actions.abilities import ability_cost_amount
+
+        stat_system = deepcopy(BASIC_TEST_STAT_SYSTEM)
+        stat_system["formulas"]["base_resources"]["energy"] = {"flat": 100}
+        self.world.config.stat_system = stat_system
+        self.world.config.save(update_fields=["stat_system"])
+
+        template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Focus Ring",
+            type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            equipment_type=adv_consts.EQUIPMENT_TYPE_ACCESSORY,
+        )
+        ring = Item.objects.create(
+            world=self.spawn_world,
+            container=self.player,
+            template=template,
+            name=template.name,
+            type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            equipment_type=adv_consts.EQUIPMENT_TYPE_ACCESSORY,
+            energy_max=100,
+        )
+        self.player.equipment.equip(ring, adv_consts.EQUIPMENT_SLOT_ACCESSORY)
+
+        stats = compute_stats(
+            self.player.level,
+            self.player.archetype,
+            char=self.player,
+            world=self.world,
+        )
+        self.assertEqual(stats["energy_base"], 100)
+        self.assertEqual(stats["energy_max"], 200)
+
+        ability = self._ability(
+            slug="arcane-bolt",
+            name="Arcane Bolt",
+            verbs=["bolt"],
+            cost={"resource": "energy", "amount": 5, "calc": "percent_base"},
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+
+        self.assertEqual(ability_cost_amount(self.player, ability), ("energy", 5))
+
+    def test_percent_base_cost_uses_health_and_stamina_base_before_equipment_modifiers(self):
+        from spawns.actions.abilities import ability_cost_amount
+
+        stat_system = deepcopy(BASIC_TEST_STAT_SYSTEM)
+        stat_system["formulas"]["base_resources"]["health"] = {"flat": 100}
+        stat_system["formulas"]["base_resources"]["stamina"] = {"flat": 100}
+        stat_system["formulas"]["global_rules"] = []
+        self.world.config.stat_system = stat_system
+        self.world.config.save(update_fields=["stat_system"])
+
+        template = ItemTemplate.objects.create(
+            world=self.world,
+            name="Vital Ring",
+            type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            equipment_type=adv_consts.EQUIPMENT_TYPE_ACCESSORY,
+        )
+        ring = Item.objects.create(
+            world=self.spawn_world,
+            container=self.player,
+            template=template,
+            name=template.name,
+            type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            equipment_type=adv_consts.EQUIPMENT_TYPE_ACCESSORY,
+            health_max=100,
+            stamina_max=100,
+        )
+        self.player.equipment.equip(ring, adv_consts.EQUIPMENT_SLOT_ACCESSORY)
+
+        stats = compute_stats(
+            self.player.level,
+            self.player.archetype,
+            char=self.player,
+            world=self.world,
+        )
+        self.assertEqual(stats["health_base"], 100)
+        self.assertEqual(stats["health_max"], 200)
+        self.assertEqual(stats["stamina_base"], 100)
+        self.assertEqual(stats["stamina_max"], 200)
+
+        health_ability = self._ability(
+            slug="blood-price",
+            name="Blood Price",
+            verbs=["bloodprice"],
+            cost={"resource": "health", "amount": 5, "calc": "percent_base"},
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+        stamina_ability = self._ability(
+            slug="quick-step",
+            name="Quick Step",
+            verbs=["quickstep"],
+            cost={"resource": "stamina", "amount": 5, "calc": "percent_base"},
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+
+        self.assertEqual(ability_cost_amount(self.player, health_ability), ("health", 5))
+        self.assertEqual(ability_cost_amount(self.player, stamina_ability), ("stamina", 5))
+
     def test_learning_ability_assigns_next_available_hotkey(self):
         self._ability(
             slug="power-strike",
@@ -107,6 +233,117 @@ class TestCombatAbilities(WorldTestCase):
         success = self._messages_by_type(messages, "cmd.ability.learn.success")[0]
         self.assertEqual(success["data"]["ability"]["hotkey"], "1")
         self.assertEqual(success["data"]["actor"]["ability_hotkeys"], {"1": "power-strike"})
+
+    def test_learning_trainer_gated_ability_requires_present_trainer(self):
+        self._ability(
+            slug="power-strike",
+            name="Power Strike",
+            verbs=["strike"],
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+        trainer_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="arms-trainer",
+            name="an arms trainer",
+            keywords="trainer arms",
+            base_properties={"health_max": 10},
+            trainer={
+                "abilities": ["power-strike"],
+                "availability": "present",
+            },
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "learn power strike")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.known_abilities, [])
+        errors = self._messages_by_type(messages, "cmd.ability.learn.error")
+        self.assertEqual(errors[0]["data"]["code"], "ability_trainer_required")
+
+        trainer_definition.spawn(self.room, self.spawn_world)
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "learn power strike")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.known_abilities, ["power-strike"])
+        success = self._messages_by_type(messages, "cmd.ability.learn.success")[0]
+        self.assertEqual(success["data"]["trainer"]["name"], "an arms trainer")
+
+    def test_unlearning_trainer_gated_ability_requires_present_trainer(self):
+        self._ability(
+            slug="power-strike",
+            name="Power Strike",
+            verbs=["strike"],
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+        trainer_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="arms-trainer",
+            name="an arms trainer",
+            keywords="trainer arms",
+            base_properties={"health_max": 10},
+            trainer={
+                "abilities": ["power-strike"],
+                "availability": "present",
+            },
+        )
+        self.player.known_abilities = ["power-strike"]
+        self.player.ability_hotkeys = {"1": "power-strike"}
+        self.player.save(update_fields=["known_abilities", "ability_hotkeys"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "unlearn power strike")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.known_abilities, ["power-strike"])
+        self.assertEqual(self.player.ability_hotkeys, {"1": "power-strike"})
+        errors = self._messages_by_type(messages, "cmd.ability.unlearn.error")
+        self.assertEqual(errors[0]["data"]["code"], "ability_trainer_required")
+
+        trainer_definition.spawn(self.room, self.spawn_world)
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "unlearn power strike")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.known_abilities, [])
+        self.assertEqual(self.player.ability_hotkeys, {})
+        success = self._messages_by_type(messages, "cmd.ability.unlearn.success")[0]
+        self.assertEqual(success["data"]["trainer"]["name"], "an arms trainer")
+
+    def test_learning_ability_checks_condition_requirements(self):
+        self._ability(
+            slug="power-strike",
+            name="Power Strike",
+            verbs=["strike"],
+            requirements={"eq": ["actor.archetype", "not-a-real-class"]},
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "learn power strike")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.known_abilities, [])
+        errors = self._messages_by_type(messages, "cmd.ability.learn.error")
+        self.assertEqual(errors[0]["data"]["code"], "ability_unavailable")
+
+    def test_using_ability_checks_condition_requirements(self):
+        self._ability(
+            slug="power-strike",
+            name="Power Strike",
+            verbs=["strike"],
+            requirements={"eq": ["actor.archetype", "not-a-real-class"]},
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+        self.player.known_abilities = ["power-strike"]
+        self.player.save(update_fields=["known_abilities"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "strike")
+
+        errors = self._messages_by_type(messages, "cmd.ability.error")
+        self.assertEqual(errors[0]["data"]["code"], "ability_unavailable")
 
     def test_hotkey_command_reassigns_known_ability(self):
         self._ability(
@@ -255,17 +492,93 @@ class TestCombatAbilities(WorldTestCase):
         mob.refresh_from_db()
         self.assertEqual(mob.health, self.stats["attack_power"] * 4)
 
+    def test_ability_can_build_and_spend_character_state(self):
+        self._ability(
+            slug="quick-jab",
+            name="Quick Jab",
+            verbs=["jab"],
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 1},
+                    "text": {"label": "Quick Jab"},
+                },
+                {
+                    "type": "state",
+                    "scope": "character",
+                    "key": "combo_points",
+                    "op": "increment",
+                    "amount": 1,
+                    "max": 5,
+                    "apply": "on_hit",
+                },
+            ],
+        )
+        self._ability(
+            slug="finisher",
+            name="Finisher",
+            verbs=["finish"],
+            requirements={"gte": ["state.character.combo_points", 1]},
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 1},
+                    "scaling": {
+                        "from": "state.character.combo_points",
+                        "multiplier_per_point": 1,
+                    },
+                    "text": {"label": "Finisher"},
+                },
+                {
+                    "type": "state",
+                    "scope": "character",
+                    "key": "combo_points",
+                    "op": "clear",
+                },
+            ],
+        )
+        self.player.known_abilities = ["quick-jab", "finisher"]
+        self.player.save(update_fields=["known_abilities"])
+        mob = self._mob(health=self.stats["attack_power"] * 10)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "jab rat")
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.health, self.stats["attack_power"] * 9)
+        self.assertEqual(
+            get_state_value(STATE_SCOPE_CHARACTER, self.player, "combo_points"),
+            1,
+        )
+        state_updates = self._messages_by_type(messages, "notification.ability.state")
+        self.assertEqual(state_updates[-1]["data"]["value"], 1)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "finish")
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.health, self.stats["attack_power"] * 7)
+        self.assertIsNone(
+            get_state_value(STATE_SCOPE_CHARACTER, self.player, "combo_points")
+        )
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertEqual(attacks[0]["data"]["damage_taken"], self.stats["attack_power"] * 2)
+        state_updates = self._messages_by_type(messages, "notification.ability.state")
+        self.assertTrue(state_updates[-1]["data"]["cleared"])
+
     def test_invalid_queued_ability_falls_back_to_auto_attack(self):
         self.world.config.combat_resolution_interval = 1.5
         self.world.config.save(update_fields=["combat_resolution_interval"])
         self._ability(
-            slug="mana-strike",
-            name="Mana Strike",
+            slug="energy-strike",
+            name="Energy Strike",
             verbs=["mstrike"],
-            cost={"resource": "mana", "amount": 1, "calc": "fixed"},
-            components=[{"type": "damage", "profile": "basic_physical", "overrides": {"multiplier": 2}, "text": {"label": "Mana Strike"}}],
+            cost={"resource": "energy", "amount": 1, "calc": "fixed"},
+            components=[{"type": "damage", "profile": "basic_physical", "overrides": {"multiplier": 2}, "text": {"label": "Energy Strike"}}],
         )
-        self.player.known_abilities = ["mana-strike"]
+        self.player.known_abilities = ["energy-strike"]
         self.player.save(update_fields=["known_abilities"])
         mob = self._mob(health=self.stats["attack_power"] * 5)
 
@@ -273,8 +586,8 @@ class TestCombatAbilities(WorldTestCase):
             with self.captureOnCommitCallbacks(execute=True):
                 dispatch_text_command(self.player.id, "mstrike rat")
 
-        self.player.mana = 0
-        self.player.save(update_fields=["mana"])
+        self.player.energy = 0
+        self.player.save(update_fields=["energy"])
         encounter = CombatEncounter.objects.get(player=self.player, mob=mob, status=CombatEncounter.STATUS_ACTIVE)
         encounter.next_resolution_ts = timezone.now()
         encounter.save(update_fields=["next_resolution_ts"])

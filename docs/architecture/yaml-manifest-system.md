@@ -8,13 +8,24 @@ WR2 world editing is moving toward an authored-manifest workflow inspired by Kub
 - canonical edit format is YAML
 - import/export is straightforward because authored entities can round-trip through manifests
 
-Implemented entities currently include:
+Implemented manifest kinds currently include the current WR2 authoring path:
 
 - `trigger`
 - `world`
-- `itemtemplate`
+- `currency`
+- `zone`
+- `room`
+- `itemdefinition`
+- `itembundle`
+- `merchantprofile`
+- `mobdefinition`
+- `ability`
+- `abilities`
 - `quest`
 - `questarc`
+
+The legacy `itemtemplate` and `mobtemplate` kinds are still supported during the
+transition for old content and legacy-only builder surfaces.
 
 Builder-facing trigger authoring guidance lives in:
 
@@ -43,16 +54,18 @@ In room navigation, **Triggers** now replaces **Actions**.
 - Each trigger includes **Copy YAML** and **Copy Delete YAML** actions.
 - Recommended workflow: copy template YAML, tweak it, ingest in **Edit World**.
 
-### 3. Item Template Details Screen
+### 3. Item Definition Details Screen
 
-In **World > Items > Item Template**, the detail screen can expose the current
-item template as YAML.
+In **World > Items**, the item definition detail screen can expose the current
+item definition as YAML.
 
-- It includes **Copy YAML** for the selected item template.
-- The manifest excludes legacy `ItemAction` data because item actions are being
-  retired in favor of the Trigger system.
+- It includes **Copy YAML** for the selected item definition.
+- New authored items should use `kind: itemdefinition`.
 - Recommended workflow: copy the YAML, edit it, then ingest it in
   **World > Edit World**.
+
+The legacy **Item Templates** screens still expose `kind: itemtemplate` YAML for
+old content and legacy-only surfaces.
 
 ### 4. World Edit Screen
 
@@ -64,11 +77,17 @@ A new world-level **Edit World** view accepts a YAML manifest textarea.
   - `kind: currency`
   - `kind: zone`
   - `kind: room`
-  - `kind: itemtemplate`
-  - `kind: mobtemplate`
+  - `kind: itemdefinition`
+  - `kind: itembundle`
+  - `kind: merchantprofile`
+  - `kind: mobdefinition`
+  - `kind: ability`
+  - `kind: abilities`
   - `kind: quest`
   - `kind: questarc`
   - `kind: trigger`
+  - `kind: itemtemplate` for legacy item-template content
+  - `kind: mobtemplate` for legacy mob-template content
   - `kind` is case-insensitive (`trigger`, `Trigger`, `TRIGGER` all work).
 - Trigger manifests now support both:
   - **create** (no `metadata.id` / `metadata.key`)
@@ -80,6 +99,21 @@ runtime behavior notes, live in:
 
 - [docs/guides/quest-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/quest-builder-guide.md)
 - [docs/guides/quest-reference.md](/Users/teebes/code/writtenrealms/docs/guides/quest-reference.md)
+
+Item definition authoring details, including stackable plain items, fixed stat
+items, randomized stat items, and item bundles, live in:
+
+- [docs/guides/item-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/item-definition-builder-guide.md)
+
+Merchant authoring details, including fixed stock, item-bundle stock, buyback,
+finite funds, and killable versus non-killable shopkeepers, live in:
+
+- [docs/guides/merchant-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/merchant-builder-guide.md)
+
+Mob definition authoring details, including plain mobs, fixed stat mobs, and
+randomized stat mobs, live in:
+
+- [docs/guides/mob-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-definition-builder-guide.md)
 
 ## Trigger Manifest Shapes
 
@@ -126,6 +160,57 @@ spec:
   conditions: ""
   display_action_in_room: false
   gate_delay: 10
+  order: 0
+  is_active: true
+```
+
+### Create Room Movement Policy Trigger
+
+```yaml
+kind: trigger
+metadata:
+  world: world.1
+  name: Warlord Gate
+spec:
+  scope: room
+  kind: policy
+  target:
+    type: room
+    key: room.10
+  event: before_move_enter
+  conditions:
+    eq:
+      - actor.archetype
+      - warlord
+  failure_message: Only warlords may enter.
+  order: 0
+  is_active: true
+```
+
+### Create Room Movement Event Trigger
+
+```yaml
+kind: trigger
+metadata:
+  world: world.1
+  name: Spear Trap
+spec:
+  scope: room
+  kind: event
+  target:
+    type: room
+    key: room.10
+  event: after_move_enter
+  conditions:
+    not:
+      eq:
+        - state.room.trap_sprung
+        - true
+  script: |
+    /cmd room -- /echo -- Spears snap out from the walls.
+    /cmd room -- /state set room trap_sprung true
+  display_action_in_room: false
+  gate_delay: 0
   order: 0
   is_active: true
 ```
@@ -220,7 +305,6 @@ spec:
   is_narrative: false
   players_can_set_title: true
   allow_pvp: true
-  is_classless: false
   non_ascii_names: false
   globals_enabled: true
   decay_glory: false
@@ -261,20 +345,28 @@ See [leveling-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/lev
 World manifests now also support `spec.stats`, which holds the authored WR2
 stat system for that world:
 
-- primary attribute definitions
-- resource and derived stat labels
+- attribute definitions
+- resource and stat labels
 - class or archetype profiles
 - bounded formula rules
 
-For details and a working WR1-style reference configuration, see:
+New worlds do not get authored attributes by default. Blank worlds do include
+minimal stamina defaults so a new character can move and regenerate stamina.
+Builders add only the attributes they want, then map those attributes into stats.
+Class selection is implied by `spec.stats.class_profiles`: if no class profiles
+are defined, the world has no classes.
+
+For details and examples, see:
 
 - [stats-formulas-and-classes.md](/Users/teebes/code/writtenrealms/docs/architecture/stats-formulas-and-classes.md)
+- [attributes-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/attributes-builder-guide.md)
 - [wr1-archetype-world-reference.md](/Users/teebes/code/writtenrealms/docs/dev/wr1-archetype-world-reference.md)
 
 World manifests also support `spec.combat`, which holds the authored WR2
 combat formula system:
 
 - named attack/healing profiles
+- level scaling for rating curves and unarmed mob fallback damage
 - rating curves for dodge, crit, armor, and resilience
 - weapon damage, attack power, and ability power scaling
 - mitigation rules for physical and ability damage
@@ -332,7 +424,7 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 
 ## Validation Rules (Current)
 
-- `kind` must resolve to `trigger`, `world`, `currency`, `zone`, `room`, `itemtemplate`, `mobtemplate`, `quest`, or `questarc`.
+- `kind` must resolve to `trigger`, `world`, `currency`, `zone`, `room`, `itemdefinition`, `itembundle`, `merchantprofile`, `mobdefinition`, `ability`, `abilities`, `quest`, or `questarc`. The legacy `itemtemplate` and `mobtemplate` kinds are also accepted during the transition.
 - For update: `metadata.id` or `metadata.key` must reference an existing trigger in the selected world.
 - For create: omit both `metadata.id` and `metadata.key`.
 - For delete: set `operation: delete` and include `metadata.id` or `metadata.key`.
@@ -345,10 +437,19 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   - `spec.target` is required for room/zone scope.
 - For `spec.kind: event`:
   - `spec.event` is required.
-  - `spec.event` must be one of the supported mob reaction event codes.
+  - mob reaction events such as `say` use `scope: world` and a `mobtemplate`
+    target.
+  - room movement events such as `after_move_enter` and `after_move_exit` use
+    `scope: room` and a `room` target.
+- For `spec.kind: policy`:
+  - `spec.event` is required.
+  - `spec.event` must be `before_move_enter` or `before_move_exit`.
+  - v1 policy triggers use `scope: room` and a `room` target.
 - For command triggers, `spec.target` must match scope type (`room`, `zone`, `world`) and exist in world.
-- For event triggers, `spec.target.type` is currently `mobtemplate` and must exist in world.
-- `conditions` are validated through the WR2 conditions parser in `backend/core/conditions.py`.
+- For event triggers, `spec.target.type` must match the event family and exist in world.
+- structured `conditions` are validated through the shared WR2 condition DSL in
+  `backend/core/condition_dsl.py`; legacy trigger text conditions still pass
+  through `backend/core/conditions.py`.
 - For world config manifests:
   - only `operation: apply` is supported
   - `spec` fields are validated against the world schema
@@ -422,7 +523,7 @@ spec:
 
 ## Guidelines For Extending To Other Entities
 
-When adding YAML support for another entity (ItemTemplate, MobTemplate, Quest, etc.):
+When adding YAML support for another entity (ItemDefinition, MobDefinition, Quest, etc.):
 
 1. Add serializer/parser/apply helpers in `backend/builders/manifests.py` (or a sibling module per domain if it grows large).
 2. Support both create and update semantics up front:

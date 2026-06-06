@@ -12,12 +12,12 @@
         <div class="value">{{ template.health_regen }}</div>
       </div>
       <div class="stat">
-        <div class="label">Max Mana</div>
-        <div class="value">{{ template.mana_max }}</div>
+        <div class="label">Max Energy</div>
+        <div class="value">{{ template.energy_max }}</div>
       </div>
       <div class="stat">
-        <div class="label">Mana Regen</div>
-        <div class="value">{{ template.mana_regen }}</div>
+        <div class="label">Energy Regen</div>
+        <div class="value">{{ template.energy_regen }}</div>
       </div>
       <div class="stat">
         <div class="label">Max Stamina</div>
@@ -27,21 +27,9 @@
         <div class="label">Stamina Regen</div>
         <div class="value">{{ template.stamina_regen }}</div>
       </div>
-      <div class="stat">
-        <div class="label">Strength</div>
-        <div class="value">{{ template.strength }}</div>
-      </div>
-      <div class="stat">
-        <div class="label">Constitution</div>
-        <div class="value">{{ template.constitution }}</div>
-      </div>
-      <div class="stat">
-        <div class="label">Dexterity</div>
-        <div class="value">{{ template.dexterity }}</div>
-      </div>
-      <div class="stat">
-        <div class="label">Intelligence</div>
-        <div class="value">{{ template.intelligence }}</div>
+      <div class="stat" v-for="stat in attributeStats" :key="stat.key">
+        <div class="label">{{ stat.label }}</div>
+        <div class="value">{{ stat.value }}</div>
       </div>
       <div class="stat">
         <div class="label">Attack Power</div>
@@ -53,7 +41,7 @@
       </div>
       <div class="stat">
         <div class="label">Ability Power</div>
-        <div class="value">{{ template.spell_power }}</div>
+        <div class="value">{{ template.ability_power }}</div>
       </div>
       <div class="stat">
         <div class="label">Crit Rating</div>
@@ -91,6 +79,19 @@ import { BUILDER_FORMS } from "@/core/forms.ts";
 const store = useStore();
 
 const template = computed(() => store.state.builder.worlds.item_template);
+const world = computed(() => store.state.builder.worlds.world || store.state.game.world || {});
+const attributeLabels = computed(() => world.value?.labels?.attributes || {});
+const attributeOrder = computed(() => world.value?.labels?.order?.attributes || Object.keys(template.value?.attributes || {}));
+const attributeStats = computed(() => {
+  const values = template.value?.attributes || {};
+  return attributeOrder.value
+    .filter((key: string) => values[key] !== undefined)
+    .map((key: string) => ({
+      key,
+      label: attributeLabels.value[key] || key.replace(/_/g, " "),
+      value: values[key],
+    }));
+});
 
 const editStats = () => {
   const entity = template.value;

@@ -3,6 +3,11 @@ from wr2_tests.utils import capture_game_messages, dispatch_text_command
 
 
 class TestHelpCommands(WorldTestCase):
+    def setUp(self):
+        super().setUp()
+        self.player.is_builder = True
+        self.player.save(update_fields=["is_builder"])
+
     def _message_by_type(self, messages, message_type):
         for msg in messages:
             if msg["message"].get("type") == message_type:
@@ -33,6 +38,15 @@ class TestHelpCommands(WorldTestCase):
         self.assertIn("drop <item>", message.get("text", ""))
         self.assertEqual(message["data"]["command"]["command"], "drop")
         self.assertNotIn("help", message["data"])
+
+    def test_help_eq_alias_shows_equipment_topic(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "help eq")
+
+        message = self._message_by_type(messages, "cmd.help.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["command"]["command"], "equipment")
+        self.assertIn("Show items currently equipped", message.get("text", ""))
 
     def test_help_builder_command_requires_builder_permissions(self):
         other_user = self.create_user("other@example.com")

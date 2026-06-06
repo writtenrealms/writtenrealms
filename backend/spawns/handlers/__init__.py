@@ -57,6 +57,7 @@ from spawns.handlers import abilities
 from spawns.handlers import communication
 from spawns.handlers import builder
 from spawns.handlers import items
+from spawns.handlers import merchants
 from spawns.handlers import quests
 
 __all__ = [

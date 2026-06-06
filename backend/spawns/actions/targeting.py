@@ -22,6 +22,8 @@ def _normalize_selector(selector: str | None) -> str:
 
 def _mob_tokens(mob: Mob) -> set[str]:
     keywords = mob.keywords or ""
+    if not keywords and mob.definition:
+        keywords = mob.definition.keywords or ""
     if not keywords and mob.template:
         keywords = mob.template.keywords or ""
     if not keywords:
@@ -93,7 +95,7 @@ def find_room_char_target(
         .select_related("user", "equipment")
         .order_by("id")
     )
-    room_mobs = list(room.mobs.select_related("template", "equipment").order_by("id"))
+    room_mobs = list(room.mobs.select_related("definition", "template", "equipment").order_by("id"))
     chars: list[Player | Mob] = [*room_players, *room_mobs]
 
     if normalized.startswith("player.") or normalized.startswith("mob."):
@@ -114,11 +116,16 @@ def find_room_char_target(
 
 def _resolve_item_name(item: Item) -> str:
     instance_name = (item.name or "").strip()
+    definition_name = (item.definition.name if item.definition else "") or ""
     template_name = (item.template.name if item.template else "") or ""
+    if definition_name and (not instance_name or instance_name.lower() == "unnamed item"):
+        return definition_name
     if template_name and (not instance_name or instance_name.lower() == "unnamed item"):
         return template_name
     if instance_name:
         return instance_name
+    if definition_name:
+        return definition_name
     if template_name:
         return template_name
     return "Unnamed item"
@@ -126,6 +133,8 @@ def _resolve_item_name(item: Item) -> str:
 
 def _item_tokens(item: Item) -> set[str]:
     keywords = item.keywords or ""
+    if not keywords and item.definition:
+        keywords = item.definition.keywords or ""
     if not keywords and item.template:
         keywords = item.template.keywords or ""
     if not keywords:
@@ -133,7 +142,9 @@ def _item_tokens(item: Item) -> set[str]:
     tokens = set(_tokenize_keywords(keywords))
     tokens.add("item")
 
-    item_type = item.type or (item.template.type if item.template else "")
+    item_type = item.type or (
+        item.definition.item_type if item.definition else ""
+    ) or (item.template.type if item.template else "")
     if item_type == adv_consts.ITEM_TYPE_CONTAINER:
         tokens.add("container")
     elif item_type == adv_consts.ITEM_TYPE_CORPSE:
@@ -164,19 +175,19 @@ def find_accessible_item_target(
 
     room_items = list(
         room.inventory.filter(is_pending_deletion=False)
-        .select_related("template", "currency")
+        .select_related("definition", "template", "currency")
         .order_by("id")
     )
     carried_items = list(
         player.inventory.filter(is_pending_deletion=False)
-        .select_related("template", "currency")
+        .select_related("definition", "template", "currency")
         .order_by("id")
     )
     equipped_items = []
     if getattr(player, "equipment", None):
         equipped_items = list(
             player.equipment.inventory.filter(is_pending_deletion=False)
-            .select_related("template", "currency")
+            .select_related("definition", "template", "currency")
             .order_by("id")
         )
 
@@ -207,7 +218,7 @@ def resolve_room_mob_target(
     allow_single_match_when_empty: bool = False,
 ) -> Mob:
     normalized = _normalize_selector(selector)
-    room_mobs = list(room.mobs.select_related("template"))
+    room_mobs = list(room.mobs.select_related("definition", "template"))
     if not normalized:
         if allow_single_match_when_empty and len(room_mobs) == 1:
             return room_mobs[0]
@@ -218,7 +229,7 @@ def resolve_room_mob_target(
             mob_id = int(normalized.split(".", 1)[1])
         except (TypeError, ValueError):
             raise ActionError(not_found_error, code="target_not_found")
-        mob = room.mobs.select_related("template").filter(pk=mob_id).first()
+        mob = room.mobs.select_related("definition", "template").filter(pk=mob_id).first()
         if not mob:
             raise ActionError(not_found_error, code="target_not_found")
         return mob

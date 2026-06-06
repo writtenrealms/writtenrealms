@@ -14,6 +14,7 @@ from django.utils import timezone
 
 from builders.models import AbilityDefinition
 from config import constants as adv_consts
+from core.combat_formulas import get_world_combat_system, rating_display_percent
 from core.scoped_state import STATE_SCOPE_WORLD, get_state_snapshot
 from core.leveling import (
     get_world_leveling_config,
@@ -21,7 +22,9 @@ from core.leveling import (
 )
 from core.stat_system import (
     build_player_stat_payload,
+    get_world_class_selection,
     get_world_label_bundle,
+    world_uses_classes,
 )
 from quests.services.interactions import room_mob_quest_indicator_map, room_quest_callouts
 from quests.services.room_items import serialized_quest_room_items_for_room
@@ -140,12 +143,54 @@ def _serialize_ability_definitions(world: World) -> dict[str, dict]:
     }
 
 
+def _round_percent(value: float) -> float | int:
+    rounded = round(float(value or 0.0), 2)
+    if rounded.is_integer():
+        return int(rounded)
+    return rounded
+
+
+def _serialize_combat_system(world: World) -> dict[str, dict]:
+    combat_system = get_world_combat_system(world)
+    ratings = {}
+    for key, rating in (combat_system.get("ratings") or {}).items():
+        rating_payload = {
+            "stat": rating["stat"],
+            "type": rating["type"],
+            "base": rating["base"],
+            "cap": rating["cap"],
+        }
+        if "constant" in rating:
+            rating_payload["constant"] = rating["constant"]
+        ratings[key] = rating_payload
+    return {"ratings": ratings}
+
+
+def _combat_rating_percentages(world: World, level: int, stats: dict[str, int]) -> dict[str, float | int]:
+    combat_system = get_world_combat_system(world)
+    payload = {}
+    for rating_key in ("armor", "crit", "dodge", "resilience"):
+        rating_config = (combat_system.get("ratings") or {}).get(rating_key)
+        if not rating_config:
+            continue
+        stat_key = rating_config["stat"]
+        payload[f"{rating_key}_perc"] = _round_percent(
+            rating_display_percent(
+                rating_config=rating_config,
+                rating=float(stats.get(stat_key) or 0),
+                opponent_level=level,
+                combat_system=combat_system,
+            )
+        )
+    return payload
+
+
 def get_player_with_related(player_id: int) -> Player:
     """
     Reload the player with the relations we need for serialization to keep
     query counts low.
     """
-    inventory_qs = Item.objects.select_related("template", "currency")
+    inventory_qs = Item.objects.select_related("definition", "template", "currency")
     return (
         Player.objects.select_related(
             "world",
@@ -173,11 +218,17 @@ def get_player_with_related(player_id: int) -> Player:
 
 def resolve_item_name(item: Item) -> str:
     """
-    Prefer template names for templated items when instance name is empty
+    Prefer authored names for definition/template-backed items when instance name is empty
     or still the legacy default placeholder.
     """
     instance_name = (item.name or "").strip()
+    definition_name = (item.definition.name if item.definition else "") or ""
     template_name = (item.template.name if item.template else "") or ""
+    if definition_name and (
+        not instance_name
+        or instance_name.lower() == "unnamed item"
+    ):
+        return definition_name
     if template_name and (
         not instance_name
         or instance_name.lower() == "unnamed item"
@@ -190,6 +241,37 @@ def resolve_item_name(item: Item) -> str:
     return "Unnamed item"
 
 
+def item_stack_key(item: Item, *, item_type: str | None = None) -> str | None:
+    is_container = item_type in (
+        adv_consts.ITEM_TYPE_CONTAINER,
+        adv_consts.ITEM_TYPE_CORPSE,
+        adv_consts.ITEM_TYPE_TRASH,
+    )
+    if is_container:
+        return None
+    if getattr(item, "upgrade_count", 0) or getattr(item, "augment_id", None):
+        return None
+
+    if item.definition_id:
+        roll_metadata = item.roll_metadata if isinstance(item.roll_metadata, dict) else {}
+        if roll_metadata.get("randomized"):
+            return None
+        definition_slug = (
+            item.definition.slug
+            if item.definition
+            else item.definition_slug_snapshot
+        )
+        revision = roll_metadata.get("rolled_at_definition_modified_ts") or ""
+        if revision:
+            return f"definition:{definition_slug or item.definition_id}:{revision}"
+        return f"definition:{definition_slug or item.definition_id}"
+
+    if item.template_id:
+        return f"template:{item.template_id}"
+
+    return None
+
+
 def serialize_item(
     item: Item,
     *,
@@ -200,6 +282,8 @@ def serialize_item(
     name = resolve_item_name(item)
     currency = item.currency.code if item.currency else "gold"
     description = item.description
+    if not description and item.definition:
+        description = item.definition.description
     if not description and item.template:
         description = item.template.description
     armor_value = getattr(item, "armor", None)
@@ -209,11 +293,16 @@ def serialize_item(
         armor_value = 0
     actions = get_item_action_labels_for_actor(viewer, item)
     keywords = item.keywords or ""
+    if not keywords and item.definition:
+        keywords = item.definition.keywords or ""
     if not keywords and item.template:
         keywords = item.template.keywords or ""
     if not keywords:
         keywords = name.lower()
-    item_type = item.type or (item.template.type if item.template else None)
+    item_type = item.type or (
+        item.definition.item_type if item.definition else None
+    ) or (item.template.type if item.template else None)
+    stack_key = item_stack_key(item, item_type=item_type)
     inventory = []
     if include_inventory and item_type in (
         adv_consts.ITEM_TYPE_CONTAINER,
@@ -222,7 +311,7 @@ def serialize_item(
     ):
         inventory = serialize_inventory(
             item.inventory.filter(is_pending_deletion=False)
-            .select_related("template", "currency")
+            .select_related("definition", "template", "currency")
             .order_by("id"),
             viewer=viewer,
             include_inventory=True,
@@ -235,19 +324,27 @@ def serialize_item(
         type=item_type,
         armor_class=item.armor_class,
         description=description,
-        ground_description=item.ground_description or (item.template.ground_description if item.template else None),
+        ground_description=(
+            item.ground_description
+            or (item.definition.ground_description if item.definition else None)
+            or (item.template.ground_description if item.template else None)
+        ),
         level=item.level,
         quality=item.quality,
         is_magic=getattr(item, "is_magic", False),
         equipment_type=item.equipment_type,
         template_id=item.template_id,
-        strength=item.strength,
-        constitution=item.constitution,
-        dexterity=item.dexterity,
-        intelligence=item.intelligence,
+        definition_id=item.definition_id,
+        definition_slug=(
+            item.definition.slug
+            if item.definition
+            else item.definition_slug_snapshot or None
+        ),
+        stack_key=stack_key,
+        is_stackable=bool(stack_key),
+        attributes=item.attributes or {},
         attack_power=item.attack_power,
-        spell_power=item.spell_power,
-        ability_power=item.spell_power,
+        ability_power=item.ability_power,
         weapon_damage=item.weapon_damage,
         armor=armor_value,
         crit=item.crit,
@@ -255,10 +352,8 @@ def serialize_item(
         dodge=item.dodge,
         health_max=item.health_max,
         health_regen=item.health_regen,
-        mana_max=item.mana_max,
-        mana_regen=item.mana_regen,
-        energy_max=item.mana_max,
-        energy_regen=item.mana_regen,
+        energy_max=item.energy_max,
+        energy_regen=item.energy_regen,
         stamina_max=item.stamina_max,
         stamina_regen=item.stamina_regen,
         is_pickable=item.is_pickable,
@@ -338,7 +433,7 @@ def serialize_char_from_player(
         stance="normal",
         health=player.health,
         health_max=getattr(player, "health_max", player.health),
-        mana=player.mana,
+        energy=player.energy,
         level=player.level,
         gender=player.gender or "male",
         keywords=keywords,
@@ -356,15 +451,29 @@ def serialize_char_from_mob(
     quest_indicator_map: dict[int, dict[str, bool]] | None = None,
     include_equipment: bool = False,
 ) -> Char:
-    name = mob.name or (mob.template.name if mob.template else "Unnamed Mob")
-    keywords = mob.keywords or name.lower()
+    name = (
+        mob.name
+        or (mob.definition.name if mob.definition else "")
+        or (mob.template.name if mob.template else "Unnamed Mob")
+    )
+    keywords = mob.keywords or ""
+    if not keywords and mob.definition:
+        keywords = mob.definition.keywords or ""
+    if not keywords and mob.template:
+        keywords = mob.template.keywords or ""
+    if not keywords:
+        keywords = name.lower()
     title = mob.title
     if not title and mob.template:
         title = mob.template.title
     description = mob.description
+    if not description and mob.definition:
+        description = mob.definition.description
     if not description and mob.template:
         description = mob.template.description
     room_desc = mob.room_description
+    if not room_desc and mob.definition:
+        room_desc = mob.definition.room_description
     if not room_desc and mob.template:
         room_desc = mob.template.room_description
     factions = mob.template.factions if mob.template else mob.factions
@@ -383,15 +492,23 @@ def serialize_char_from_mob(
         stance="normal",
         health=mob.health,
         health_max=getattr(mob, "health_max", mob.health),
-        mana=mob.mana,
+        energy=mob.energy,
         level=mob.level,
         gender=mob.gender or "male",
         keywords=keywords,
         keyword=first_keyword(keywords, name),
         template_id=mob.template_id,
+        definition_id=mob.definition_id,
+        definition_slug=(
+            mob.definition.slug
+            if mob.definition
+            else mob.definition_slug_snapshot or None
+        ),
         char_type="mob",
         is_elite=getattr(mob, "is_elite", False),
         is_invisible=getattr(mob, "is_invisible", False),
+        is_merchant=hasattr(mob, "merchant_runtime"),
+        attackable=getattr(mob, "attackable", True),
         equipment=serialize_equipment(mob.equipment, viewer=viewer) if include_equipment else None,
         actions=actions,
         quest_data=QuestData(
@@ -546,7 +663,7 @@ def serialize_room(
         )
 
     room_inventory = serialize_inventory(
-        room.inventory.filter(is_pending_deletion=False).select_related("template", "currency"),
+        room.inventory.filter(is_pending_deletion=False).select_related("definition", "template", "currency"),
         viewer=viewer,
     )
     if isinstance(viewer, Player):
@@ -556,7 +673,7 @@ def serialize_room(
         )
 
     room_players = room.players.filter(in_game=True).select_related("user", "equipment")
-    room_mobs = list(room.mobs.select_related("template"))
+    room_mobs = list(room.mobs.select_related("definition", "template"))
     quest_indicator_map: dict[int, dict[str, bool]] = {}
     quest_callout_data: list[dict] = []
     if isinstance(viewer, Player):
@@ -638,7 +755,15 @@ def serialize_actor(player: Player, room: Optional[Room]) -> Actor:
             "factions": getattr(player, "factions", {}) or {},
             "room": None,
         }
-    actor_data.update(build_player_stat_payload(player))
+    stat_payload = build_player_stat_payload(player)
+    actor_data.update(stat_payload)
+    actor_data.update(
+        _combat_rating_percentages(
+            player.world,
+            int(stat_payload.get("level") or getattr(player, "level", 1) or 1),
+            stat_payload.get("stats") or {},
+        )
+    )
     leveling_config = get_world_leveling_config(player.world)
     progress = progress_for_experience(
         getattr(player, "experience", 0),
@@ -698,7 +823,8 @@ def serialize_world(world: World) -> Dict:
             "allow_combat": config.allow_combat if config else True,
             "players_can_set_title": config.players_can_set_title if config else False,
             "facts": get_state_snapshot(STATE_SCOPE_WORLD, world),
-            "classless": config.is_classless if config else False,
+            "classless": not world_uses_classes(world) if config else False,
+            "is_classless": not world_uses_classes(world) if config else False,
             "tier": world.tier,
             "socials": {"cmds": {}, "order": []},
             "currencies": {},
@@ -709,7 +835,10 @@ def serialize_world(world: World) -> Dict:
         data["currencies"] = {str(k): v for k, v in data["currencies"].items()}
 
     data["labels"] = get_world_label_bundle(world)
+    data["class_selection"] = get_world_class_selection(world)
     data["abilities"] = _serialize_ability_definitions(world)
+    data["combat"] = _serialize_combat_system(world)
+    data["is_classless"] = bool(data.get("classless"))
 
     # Normalize world-config room references to the same room key contract used
     # across WR2 room/map payloads.
@@ -736,17 +865,17 @@ def build_who_list(world: World, actor: Player) -> List[WhoListEntry]:
         .prefetch_related("faction_assignments__faction", "clan_memberships__clan")
     )
     who_list: List[WhoListEntry] = []
-    actor_is_immortal = getattr(actor, "is_immortal", False)
+    actor_is_builder = getattr(actor, "is_builder", False)
     actor_core = (actor.factions or {}).get("core")
 
     for player in qs:
-        if player.is_invisible and not actor_is_immortal:
+        if player.is_invisible and not actor_is_builder:
             continue
 
         player_core = (player.factions or {}).get("core")
         if (
-            not actor_is_immortal
-            and not player.is_immortal
+            not actor_is_builder
+            and not player.is_builder
             and actor_core
             and player_core
             and actor_core != player_core
@@ -760,7 +889,7 @@ def build_who_list(world: World, actor: Player) -> List[WhoListEntry]:
                 title=player.title,
                 level=player.level,
                 gender=player.gender or "male",
-                is_immortal=player.is_immortal,
+                is_builder=player.is_builder,
                 is_invisible=player.is_invisible,
                 is_idle=(not player.last_action_ts or player.last_action_ts <= idle_cutoff),
                 is_linkless=False,

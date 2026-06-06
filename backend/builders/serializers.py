@@ -33,14 +33,19 @@ from core.leveling import (
 from core.stat_system import (
     StatSystemValidationError,
     normalize_stat_system,
+    world_uses_classes,
 )
 from builders.models import (
     BuilderAssignment,
     Currency,
     LastViewedRoom,
+    ItemBundle,
+    ItemDefinition,
     ItemTemplate,
     ItemTemplateInventory,
     ItemAction,
+    MobDefinition,
+    MerchantProfile,
     Loader,
     MobTemplate,
     MobTemplateInventory,
@@ -85,13 +90,59 @@ from worlds.models import (
     WorldLocks)
 
 
+def _coerce_attribute_map(value):
+    if value in (None, ""):
+        return {}
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            parsed = {}
+            for line in value.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                key, sep, raw_amount = line.partition(":")
+                if not sep:
+                    raise serializers.ValidationError(
+                        "Attributes must be a JSON object or lines like `strength: 3`."
+                    )
+                key = key.strip()
+                raw_amount = raw_amount.strip()
+                try:
+                    parsed[key] = float(raw_amount) if "." in raw_amount else int(raw_amount)
+                except ValueError:
+                    raise serializers.ValidationError(
+                        f"Attribute '{key}' must have a numeric value."
+                    )
+            value = parsed
+    if not isinstance(value, dict):
+        raise serializers.ValidationError("Attributes must be a mapping.")
+    normalized = {}
+    for raw_key, raw_amount in value.items():
+        key = str(raw_key or "").strip()
+        if not key:
+            raise serializers.ValidationError("Attribute keys must be non-empty strings.")
+        if not isinstance(raw_amount, (int, float)) or isinstance(raw_amount, bool):
+            raise serializers.ValidationError(
+                f"Attribute '{key}' must have a numeric value."
+            )
+        normalized[key] = raw_amount
+    return normalized
+
+
 # Common to both RoomActionSerializer and RoomCheckSerializer
 def validate_conditions(self, conditions):
         if isinstance(conditions, (dict, list)):
+            from core.condition_dsl import validate_condition_payload
             try:
                 json.dumps(conditions)
             except TypeError:
                 raise serializers.ValidationError("Conditions must be JSON-serializable.")
+            try:
+                validate_condition_payload(conditions, field_name="conditions")
+            except ValueError as exc:
+                raise serializers.ValidationError(str(exc))
             return conditions
         from backend.core.conditions import (
             break_text, BREAK_TOKENS, CONDITIONS)
@@ -149,8 +200,7 @@ class WorldSerializer(serializers.ModelSerializer):
     author = AuthorField()
     factions = serializers.SerializerMethodField()
     facts = serializers.SerializerMethodField()
-    is_classless = serializers.BooleanField(source='config.is_classless',
-                                            read_only=True)
+    is_classless = serializers.SerializerMethodField()
     instance_of = serializers.SerializerMethodField()
     builder_info = serializers.SerializerMethodField()
     currencies = serializers.SerializerMethodField()
@@ -177,6 +227,9 @@ class WorldSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     "World creation is currently disabled.")
         return super().validate(*args, **kwargs)
+
+    def get_is_classless(self, world):
+        return not world_uses_classes(world)
 
     def get_last_viewed_room(self, world):
         #from builders.serializers import RoomBuilderSerializer
@@ -308,7 +361,7 @@ class WorldSerializer(serializers.ModelSerializer):
                 world=spawn_world,
                 user=self.context['request'].user,
                 name='Builder',
-                is_immortal=True,
+                is_builder=True,
                 room=world.config.starting_room,
                 last_connection_ts=timezone.now())
             player.initialize()
@@ -346,7 +399,6 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'allow_pvp',
             'pvp_mode',
             'built_by',
-            'is_classless',
             'non_ascii_names',
             'decay_glory',
             'name_exclusions',
@@ -490,7 +542,7 @@ class WorldAdminInstancePlayerSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'name',
-            'is_immortal',
+            'is_builder',
             'last_connection_ts',
             'last_action_ts',
             'room',
@@ -1547,10 +1599,10 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
             'cost', 'currency',
             'equipment_type', 'armor_class',
             'weapon_type', 'weapon_damage', 'hit_msg_first', 'hit_msg_third',
-            'health_max', 'health_regen', 'mana_max', 'mana_regen',
+            'health_max', 'health_regen', 'energy_max', 'energy_regen',
             'stamina_max', 'stamina_regen',
-            'strength', 'constitution', 'dexterity', 'intelligence',
-            'attack_power', 'spell_power', 'resilience', 'dodge', 'crit',
+            'attributes',
+            'attack_power', 'ability_power', 'resilience', 'dodge', 'crit',
             'budget', 'cost_budget', 'food_value', 'food_type',
             'has_assignment',
             'on_use_cmd', 'on_use_description', 'on_use_equipped',
@@ -1607,10 +1659,21 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
         # Do the actual update
         updated_instance = super().update(instance, validated_data)
 
-        # If any of the attributes being passed are boost attributes,
-        # see if the item quality needs to be updated
-        if (set(adv_consts.ATTRIBUTES) &
-            set(validated_data.keys())):
+        boost_fields = {
+            'attributes',
+            'attack_power',
+            'ability_power',
+            'crit',
+            'dodge',
+            'resilience',
+            'health_max',
+            'health_regen',
+            'energy_max',
+            'energy_regen',
+            'stamina_max',
+            'stamina_regen',
+        }
+        if boost_fields & set(validated_data.keys()):
             budget_spent = updated_instance.budget_spent
             budget = updated_instance.budget
             try:
@@ -1626,6 +1689,9 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
             updated_instance.save()
 
         return updated_instance
+
+    def validate_attributes(self, value):
+        return _coerce_attribute_map(value)
 
     def get_budget(self, item_template):
         "Return budget utilization"
@@ -1718,6 +1784,39 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
         return item_template.currency.code
 
 
+class ItemDefinitionSerializer(serializers.ModelSerializer):
+    type = serializers.CharField(source='item_type', read_only=True)
+    attributes = serializers.JSONField(read_only=True)
+    randomized = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ItemDefinition
+        fields = [
+            'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
+            'description', 'ground_description', 'notes', 'keywords',
+            'type', 'base_properties', 'attributes', 'randomization',
+            'randomized',
+        ]
+
+    def get_randomized(self, item_definition):
+        randomization = item_definition.randomization or {}
+        return bool(randomization.get('attributes'))
+
+
+class ItemBundleSerializer(serializers.ModelSerializer):
+    entry_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ItemBundle
+        fields = [
+            'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
+            'notes', 'entry_count',
+        ]
+
+    def get_entry_count(self, item_bundle):
+        return item_bundle.entries.count()
+
+
 class ItemTemplateInventorySerializer(serializers.ModelSerializer):
     container = ReferenceField(required=False, allow_null=False)
     item_template = ReferenceField(required=True, allow_null=False)
@@ -1783,9 +1882,10 @@ class MobTemplateSerializer(serializers.ModelSerializer):
             'roaming_type', 'alignment', 'aggression', 'use_abilities',
             'roam_chance',
             'hit_msg_first', 'hit_msg_third',
-            'health_max', 'health_regen', 'mana_max', 'mana_regen',
+            'attributes',
+            'health_max', 'health_regen', 'energy_max', 'energy_regen',
             'stamina_max', 'stamina_regen', 'regen_rate',
-            'attack_power', 'spell_power',  'crit',
+            'attack_power', 'ability_power',  'crit',
             'resilience', 'dodge', 'armor',
             'drops_random_items', 'num_items', 'is_crafter',
             'load_specification',
@@ -1801,6 +1901,9 @@ class MobTemplateSerializer(serializers.ModelSerializer):
             'upgrade_success_cmd', 'upgrade_failure_cmd',
             'merchant_profit',
         ]
+
+    def validate_attributes(self, value):
+        return _coerce_attribute_map(value)
 
     def validate_slug(self, value):
         return _normalize_template_slug(
@@ -1911,10 +2014,54 @@ class MobTemplateSerializer(serializers.ModelSerializer):
         return False
 
 
+class MobDefinitionSerializer(serializers.ModelSerializer):
+    type = serializers.CharField(source='mob_type', read_only=True)
+    attributes = serializers.JSONField(read_only=True)
+    randomized = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MobDefinition
+        fields = [
+            'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
+            'description', 'room_description', 'notes', 'keywords',
+            'type', 'assists', 'base_properties', 'attributes',
+            'randomization', 'randomized', 'trainer',
+        ]
+
+    def get_randomized(self, mob_definition):
+        randomization = mob_definition.randomization or {}
+        return bool(randomization.get('attributes'))
+
+
+class MerchantProfileSerializer(serializers.ModelSerializer):
+    stock_count = serializers.SerializerMethodField()
+    funds_currency = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MerchantProfile
+        fields = [
+            'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
+            'notes', 'sell_markup', 'buy_multiplier',
+            'restock_interval_seconds', 'funds_mode', 'funds_currency',
+            'purchase_budget', 'buyback_enabled', 'buyback_max_items',
+            'stock_count',
+        ]
+
+    def get_stock_count(self, merchant_profile):
+        return merchant_profile.stock_slots.count()
+
+    def get_funds_currency(self, merchant_profile):
+        if merchant_profile.funds_currency_id:
+            return merchant_profile.funds_currency.code
+        return ''
+
+
 class MobTemplateInventorySerializer(serializers.ModelSerializer):
 
     container = ReferenceField(required=False, allow_null=False)
-    item_template = ReferenceField(required=True, allow_null=False)
+    item_template = ReferenceField(required=False, allow_null=True)
+    item_definition = ReferenceField(required=False, allow_null=True)
+    item_bundle = ReferenceField(required=False, allow_null=True)
 
     class Meta:
         model = MobTemplateInventory
@@ -1923,6 +2070,8 @@ class MobTemplateInventorySerializer(serializers.ModelSerializer):
             'id',
             'container',
             'item_template',
+            'item_definition',
+            'item_bundle',
             'probability',
             'num_copies'
         ]
@@ -1934,10 +2083,30 @@ class MobTemplateInventorySerializer(serializers.ModelSerializer):
                     api_consts.MAX_RULE_SPAWNS))
         return num_copies
 
+    def validate(self, data):
+        validated_data = super().validate(data)
+        sources = [
+            validated_data.get('item_template', getattr(self.instance, 'item_template', None)),
+            validated_data.get('item_definition', getattr(self.instance, 'item_definition', None)),
+            validated_data.get('item_bundle', getattr(self.instance, 'item_bundle', None)),
+        ]
+        source_count = sum(1 for source in sources if source)
+        if source_count == 0:
+            raise serializers.ValidationError(
+                "Either an item template, item definition, or item bundle is required."
+            )
+        if source_count > 1:
+            raise serializers.ValidationError(
+                "Specify only one item template, item definition, or item bundle."
+            )
+        return validated_data
+
 
 class AddMobTemplateInventorySerializer(serializers.Serializer):
 
-    item_template = ReferenceField()
+    item_template = ReferenceField(required=False, allow_null=True)
+    item_definition = ReferenceField(required=False, allow_null=True)
+    item_bundle = ReferenceField(required=False, allow_null=True)
     probability = serializers.IntegerField(required=False)
     num_copies = serializers.IntegerField(required=False)
 
@@ -1957,10 +2126,30 @@ class AddMobTemplateInventorySerializer(serializers.Serializer):
                     api_consts.MAX_RULE_SPAWNS))
         return num_copies
 
+    def validate(self, data):
+        validated_data = super().validate(data)
+        sources = [
+            validated_data.get('item_template'),
+            validated_data.get('item_definition'),
+            validated_data.get('item_bundle'),
+        ]
+        source_count = sum(1 for source in sources if source)
+        if source_count == 0:
+            raise serializers.ValidationError(
+                "Either an item template, item definition, or item bundle is required."
+            )
+        if source_count > 1:
+            raise serializers.ValidationError(
+                "Specify only one item template, item definition, or item bundle."
+            )
+        return validated_data
+
 
 class MobTemplateMerchantInventorySerializer(serializers.ModelSerializer):
 
     item_template = ReferenceField(required=False, allow_null=True)
+    item_definition = ReferenceField(required=False, allow_null=True)
+    item_bundle = ReferenceField(required=False, allow_null=True)
     random_item_profile = ReferenceField(required=False, allow_null=True)
     name = serializers.SerializerMethodField()
 
@@ -1970,24 +2159,30 @@ class MobTemplateMerchantInventorySerializer(serializers.ModelSerializer):
         model = MerchantInventory
         fields = [
             'id', 'num', 'name',
-            'item_template', 'random_item_profile',
+            'item_template', 'item_definition', 'item_bundle',
+            'random_item_profile',
         ]
 
     def validate(self, data):
         validated_data = super().validate(data)
 
-        # have item or profile but neither nor both
-
-        if (not validated_data.get('item_template') and
-            not validated_data.get('random_item_profile')):
+        sources = [
+            validated_data.get('item_template', getattr(self.instance, 'item_template', None)),
+            validated_data.get('item_definition', getattr(self.instance, 'item_definition', None)),
+            validated_data.get('item_bundle', getattr(self.instance, 'item_bundle', None)),
+            validated_data.get('random_item_profile', getattr(self.instance, 'random_item_profile', None)),
+        ]
+        source_count = sum(1 for source in sources if source)
+        if source_count == 0:
             raise serializers.ValidationError(
-                "Either an item template or a random profile is required.")
-
-        if (validated_data.get('item_template') and
-            validated_data.get('random_item_profile')):
+                "Either an item template, item definition, item bundle, "
+                "or random profile is required."
+            )
+        if source_count > 1:
             raise serializers.ValidationError(
-                "Specify either an item template or a random profile "
-                "(but not both).")
+                "Specify only one item template, item definition, item bundle, "
+                "or random profile (not both)."
+            )
 
         return validated_data
 
@@ -2270,6 +2465,16 @@ class SuggestMobSerializer(serializers.Serializer):
     level = serializers.IntegerField(default=1)
     archetype = serializers.ChoiceField(choices=adv_consts.ARCHETYPES,
                                         default=adv_consts.ARCHETYPE_WARRIOR)
+
+
+class MobDefinitionSuggestionSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=255)
+    slug = serializers.SlugField(max_length=120)
+    type = serializers.ChoiceField(
+        choices=adv_consts.MOB_TYPES,
+        default=adv_consts.MOB_TYPE_BEAST,
+    )
+    level = serializers.IntegerField(default=1, min_value=1)
 
 
 class RandomItemProfileSerializer(serializers.ModelSerializer):
@@ -2771,7 +2976,7 @@ class PlayerDetailSerializer(serializers.ModelSerializer):
             'trophy',
             'factions',
             'animation_data',
-            'is_immortal',
+            'is_builder',
             'world',
             'instance_details',
             'power',

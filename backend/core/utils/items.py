@@ -36,9 +36,15 @@ def type_to_slot(eq_type, has_weapon=False, has_offhand=False, archetype=None):
 
 
 def get_main_primary_stat(stats):
-    "Returns the name of the primary stat that has the greatest value"
+    "Returns the attribute with the greatest value."
     max = 0
     max_stat = None
+    for stat, value in (stats.get("attributes") or {}).items():
+        if max < value:
+            max = value
+            max_stat = stat
+    # The old procedural drop generator still names items before generated
+    # values are folded into world-declared attributes.
     for stat in constants.PRIMARY_ATTRIBUTES:
         if max < stats.get(stat, 0):
             max = stats[stat]
@@ -55,88 +61,22 @@ def get_item_budget(level, eq_type, enchanted=False):
 
 def calculate_power(item, archetype):
     """
-    Given a certain archtype using an item, return an estimate for
+    Given a certain archetype using an item, return an estimate for
     how strong that item is compared to others.
 
-    This uses two weights:
-    1) the ATTR_BUDGET mapping in adv_consts, where for example
-    1 hp regen is worth 4 times more than 1 primary stat
-    2) A per-class map of how valuable each attribute is
+    World-authored attributes are intentionally generic here. Canonical
+    combat stats still use the existing budget weights.
     """
     from config import constants as adv_consts
 
-
-    CLASS_WEIGHTS = {
-        'warrior': {
-            adv_consts.ATTR_REGEN_HEALTH: 10,
-            adv_consts.ATTR_CON: 10,
-            adv_consts.ATTR_STR: 10,
-            adv_consts.ATTR_MAX_HEALTH: 8,
-            adv_consts.ATTR_AP: 7,
-            adv_consts.ATTR_RESILIENCE: 6,
-            adv_consts.ATTR_CRIT: 6,
-            adv_consts.ATTR_DEX: 4,
-            adv_consts.ATTR_DODGE: 4,
-            adv_consts.ATTR_REGEN_MANA: 0,
-            adv_consts.ATTR_INT: 0,
-            adv_consts.ATTR_MAX_MANA: 0,
-            adv_consts.ATTR_SP: 0,
-        },
-        'mage': {
-            adv_consts.ATTR_CON: 10,
-            adv_consts.ATTR_INT: 10,
-            adv_consts.ATTR_MAX_HEALTH: 8,
-            adv_consts.ATTR_SP: 8,
-            adv_consts.ATTR_MAX_MANA: 7,
-            adv_consts.ATTR_REGEN_HEALTH: 6,
-            adv_consts.ATTR_REGEN_MANA: 6,
-            adv_consts.ATTR_STR: 4,
-            adv_consts.ATTR_DEX: 4,
-            adv_consts.ATTR_CRIT: 3,
-            adv_consts.ATTR_RESILIENCE: 3,
-            adv_consts.ATTR_DODGE: 3,
-            adv_consts.ATTR_AP: 1,
-        },
-        'cleric': {
-            adv_consts.ATTR_INT: 10,
-            adv_consts.ATTR_CON: 10,
-            adv_consts.ATTR_REGEN_MANA: 8,
-            adv_consts.ATTR_MAX_HEALTH: 8,
-            adv_consts.ATTR_SP: 8,
-            adv_consts.ATTR_MAX_MANA: 7,
-            adv_consts.ATTR_REGEN_HEALTH: 6,
-            adv_consts.ATTR_STR: 4,
-            adv_consts.ATTR_DEX: 4,
-            adv_consts.ATTR_CRIT: 3,
-            adv_consts.ATTR_RESILIENCE: 3,
-            adv_consts.ATTR_DODGE: 3,
-            adv_consts.ATTR_AP: 1,
-        },
-        'assassin': {
-            adv_consts.ATTR_REGEN_HEALTH: 10,
-            adv_consts.ATTR_CON: 10,
-            adv_consts.ATTR_DEX: 10,
-            adv_consts.ATTR_AP: 8,
-            adv_consts.ATTR_MAX_HEALTH: 7,
-            adv_consts.ATTR_STR: 6,
-            adv_consts.ATTR_CRIT: 5,
-            adv_consts.ATTR_DODGE: 5,
-            adv_consts.ATTR_RESILIENCE: 4,
-            adv_consts.ATTR_REGEN_MANA: 0,
-            adv_consts.ATTR_MAX_MANA: 0,
-            adv_consts.ATTR_SP: 0,
-            adv_consts.ATTR_INT: 0,
-        },
-    }
-
-    boosted_stats = {}
     total_value = 0
+    for stat_value in (item.attributes or {}).values():
+        if stat_value:
+            total_value += stat_value * 10
     for stat, weight in adv_consts.ATTR_BUDGET.items():
-        stat_value = getattr(item, stat)
+        stat_value = getattr(item, stat, 0)
         if stat_value:
             stat_value = stat_value * weight
-            stat_value *= CLASS_WEIGHTS[archetype][stat]
-            boosted_stats[stat] = stat_value
             total_value += stat_value
     return total_value
 

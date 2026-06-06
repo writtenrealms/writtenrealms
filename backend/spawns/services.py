@@ -105,13 +105,13 @@ class WorldGate:
             raise ServiceError("World is disabled.")
 
         # Builder disabled world
-        if not player.is_immortal and world.context.maintenance_mode:
+        if not player.is_builder and world.context.maintenance_mode:
             if world.context.maintenance_msg:
                 raise ServiceError(world.context.maintenance_msg)
             raise ServiceError("World is temporarily closed.")
 
         # Check multicharing
-        if world.is_multiplayer and not player.is_immortal:
+        if world.is_multiplayer and not player.is_builder:
             if self.check_multicharing():
                 raise ServiceError("You are logged on another character.")
 
@@ -121,7 +121,7 @@ class WorldGate:
         cross_race_cooldown = world.config.cross_race_cooldown
         if (cross_race_cooldown
             and world.is_multiplayer
-            and not player.is_immortal):
+            and not player.is_builder):
             last_logout = PlayerEvent.objects.filter(
                 player__user=player.user,
                 player__world=world,
@@ -212,7 +212,7 @@ class WorldGate:
             user__in=user_ids,
             last_action_ts__gt=idle_ts,
             in_game=True,
-            is_immortal=False, # Exclude builder chars
+            is_builder=False, # Exclude builder chars
         ).exclude(id=player.id)
 
         return players_in_worlds

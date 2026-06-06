@@ -7,6 +7,10 @@ wired into the runtime for player commands, encounter-round queueing, direct
 damage, healing, stun, damage-over-time, heal-over-time, and out-of-combat
 self utility.
 
+Ability `requirements` use the shared WR2 condition DSL. For condition
+operators and paths, read
+[condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md).
+
 ## Mental Model
 
 An ability is an authored command that resolves one or more components:
@@ -101,6 +105,19 @@ spec:
 Bundled `kind: abilities` manifests are also supported for import convenience,
 but one ability per manifest should be the default authoring style.
 
+## Costs
+
+`spec.cost.resource` supports `health`, `energy`, and `stamina`.
+
+`spec.cost.calc` supports:
+
+- `fixed`: spend `amount` directly.
+- `percent_max`: spend `amount` percent of the actor's current maximum pool
+  after stat modifiers.
+- `percent_base`: spend `amount` percent of the actor's base pool before
+  equipment and other maximum-pool modifiers. For energy, `amount: 5` costs 5
+  energy when the actor's base energy pool is 100.
+
 ## Damage Abilities
 
 A physical weapon technique should usually use `basic_physical`:
@@ -156,6 +173,88 @@ spec:
 `basic_ability` means "use ability power and ability mitigation rules." It does
 not imply a fantasy spell. Worlds can label `ability_power` however they want.
 
+## State Components And Combo Points
+
+Abilities can write scoped state as part of their component list. This is useful
+for combo points, charges, stance counters, room-state toggles, and similar
+small runtime values.
+
+Use `type: state` with one of these operations:
+
+- `op: increment` adds `amount` and can clamp with `min` or `max`.
+- `op: set` writes `value`.
+- `op: clear` removes the key.
+
+Supported scopes are `character`, `room`, `zone`, and `world`. For combo points,
+use `character` so each player tracks their own points.
+
+Builder example:
+
+```yaml
+kind: ability
+metadata:
+  slug: quick-jab
+  name: Quick Jab
+spec:
+  command:
+    verbs: [jab]
+  target:
+    type: hostile
+    default: current_target
+  components:
+    - type: damage
+      profile: basic_physical
+      overrides:
+        multiplier: 1
+    - type: state
+      scope: character
+      key: combo_points
+      op: increment
+      amount: 1
+      max: 5
+      apply: on_hit
+```
+
+`apply: on_hit` means the state component only runs if an earlier damage or
+healing component in the same ability actually landed. Use `apply: on_resolve`
+when the state change should happen whenever the ability resolves.
+
+A spender can require points, scale its damage from the current state value,
+and then clear the points:
+
+```yaml
+kind: ability
+metadata:
+  slug: finisher
+  name: Finisher
+spec:
+  command:
+    verbs: [finish]
+  target:
+    type: hostile
+    default: current_target
+  requirements:
+    gte:
+      - state.character.combo_points
+      - 1
+  components:
+    - type: damage
+      profile: basic_physical
+      overrides:
+        multiplier: 1
+      scaling:
+        from: state.character.combo_points
+        multiplier_per_point: 0.5
+        max_points: 5
+    - type: state
+      scope: character
+      key: combo_points
+      op: clear
+```
+
+Components resolve in authored order. Put the damage component before the clear
+component when the damage needs to read the points being spent.
+
 ## Healing Abilities
 
 Healing uses the same ability shape:
@@ -207,8 +306,9 @@ spec:
     type: hostile
     default: current_target
   requirements:
-    equipment:
-      offhand_type: shield
+    eq:
+      - actor.equipment.offhand.equipment_type
+      - shield
   cooldown:
     rounds: 4
   components:
@@ -328,8 +428,49 @@ spec:
       profile: basic_physical
 ```
 
-Classless worlds can grant abilities through trainers, quests, starting loadout,
-items, or builder tools instead.
+Worlds without classes can grant abilities through trainers, quests, starting
+loadout, items, or builder tools instead.
+
+## Ability Trainers
+
+Mob definitions can act as trainers by listing the abilities they teach. If at
+least one trainer in the world teaches an ability, players can only learn or
+unlearn that ability while an eligible trainer mob is present in their current
+room. Abilities with no trainer remain learnable and unlearnable through the
+existing commands.
+
+```yaml
+kind: mobdefinition
+metadata:
+  slug: arms-trainer
+  name: an arms trainer
+spec:
+  type: humanoid
+  keywords: trainer arms
+  trainer:
+    availability: alive_and_present
+    abilities:
+      - power-strike
+      - shield-slam
+```
+
+Use `availability: present` when the spawned trainer only needs to be in the
+room. Use `availability: alive_and_present` when a pending-deletion or defeated
+trainer should not teach.
+
+Use `availability` for class and level gates. Use `requirements` for the
+shared condition DSL:
+
+```yaml
+requirements:
+  all:
+    - eq:
+        - actor.equipment.offhand.equipment_type
+        - shield
+    - eq:
+        - state.character.oath_sworn
+        - true
+```
 
 ## Queueing Behavior
 

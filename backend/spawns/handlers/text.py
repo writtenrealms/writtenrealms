@@ -4,6 +4,10 @@ Text command handler.
 Handles raw text input from players - the primary command interface.
 """
 from spawns.handlers.base import CommandHandler, CommandContext
+from spawns.handlers.permissions import (
+    builder_permission_error,
+    can_execute_builder_command,
+)
 from spawns.handlers.registry import register_handler, resolve_text_handler
 from spawns.triggers import execute_command_fallback_trigger
 
@@ -39,6 +43,9 @@ class TextCommandHandler(CommandHandler):
         command, args, raw_text = _parse_text_command(cmd_text)
         if not command:
             return
+
+        if command == "eq" and not args:
+            command = "equipment"
 
         ctx.payload["args"] = args
         ctx.payload["command"] = command
@@ -97,6 +104,10 @@ class TextCommandHandler(CommandHandler):
         resolved_command, handler = resolved
         ctx.payload["command"] = resolved_command
 
+        if getattr(handler, "builder_only", False) and not can_execute_builder_command(ctx, handler):
+            ctx.publish(builder_permission_error(resolved_command))
+            return
+
         if ctx.actor_type not in getattr(handler, "supported_actor_types", ("player",)):
             ctx.publish(
                 {
@@ -126,6 +137,8 @@ class TextCommandHandler(CommandHandler):
             ctx.payload["selector"] = args[0]
             if len(args) > 1:
                 ctx.payload["target"] = " ".join(args[1:])
+        elif handler.command_type in {"equip", "wear", "wield", "remove"} and args:
+            ctx.payload["selector"] = " ".join(args)
         elif handler.command_type == "help" and args:
             ctx.payload["target"] = args[0]
 

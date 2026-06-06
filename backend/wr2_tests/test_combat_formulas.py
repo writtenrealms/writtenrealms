@@ -1,5 +1,13 @@
 from config import constants as adv_consts
-from core.combat_formulas import normalize_combat_system, resolve_attack
+from config import game_settings as adv_config
+from core.combat_formulas import (
+    CombatFormulaValidationError,
+    _level_scale,
+    _rating_percent,
+    get_world_combat_system,
+    normalize_combat_system,
+    resolve_attack,
+)
 from spawns.models import Item, Mob
 from tests.base import WorldTestCase
 
@@ -18,7 +26,7 @@ class TestCombatFormulaResolution(WorldTestCase):
             "health": 100,
             "health_max": 100,
             "attack_power": 0,
-            "spell_power": 0,
+            "ability_power": 0,
             "armor": 0,
             "resilience": 0,
             "dodge": 0,
@@ -37,6 +45,159 @@ class TestCombatFormulaResolution(WorldTestCase):
         )
         self.player.equipment.equip(weapon, adv_consts.EQUIPMENT_SLOT_WEAPON)
         return weapon
+
+    def test_default_level_scale_is_open_ended_exponential(self):
+        combat_system = normalize_combat_system({})
+
+        self.assertEqual(combat_system["level_scale"]["type"], "exponential")
+        self.assertAlmostEqual(
+            _level_scale(20, combat_system),
+            5.5 * (1.1 ** 20),
+        )
+        self.assertGreater(
+            _level_scale(60, combat_system),
+            _level_scale(20, combat_system),
+        )
+
+    def test_default_rating_types_keep_rating_curve_behavior(self):
+        combat_system = normalize_combat_system({})
+
+        self.assertEqual(
+            combat_system["ratings"]["dodge"]["type"],
+            "mitigation_curve",
+        )
+        self.assertEqual(
+            combat_system["ratings"]["crit"]["type"],
+            "linear_rating",
+        )
+        self.assertEqual(
+            combat_system["ratings"]["armor"]["type"],
+            "mitigation_curve",
+        )
+        self.assertEqual(
+            combat_system["ratings"]["resilience"]["type"],
+            "mitigation_curve",
+        )
+
+    def test_empty_world_combat_config_uses_rating_curve_defaults(self):
+        self.assertEqual(self.world.config.combat_system, {})
+
+        combat_system = get_world_combat_system(self.spawn_world)
+
+        self.assertEqual(
+            combat_system["ratings"]["dodge"]["type"],
+            "mitigation_curve",
+        )
+        self.assertEqual(
+            combat_system["ratings"]["crit"]["type"],
+            "linear_rating",
+        )
+        self.assertEqual(
+            combat_system["ratings"]["armor"]["type"],
+            "mitigation_curve",
+        )
+        self.assertEqual(
+            combat_system["ratings"]["resilience"]["type"],
+            "mitigation_curve",
+        )
+
+    def test_percentage_point_rating_ignores_opponent_level(self):
+        combat_system = normalize_combat_system({
+            "ratings": {
+                "dodge": {
+                    "stat": "dodge",
+                    "type": "percentage_points",
+                    "base": 0,
+                    "cap": 0.75,
+                },
+            },
+        })
+        rating_config = combat_system["ratings"]["dodge"]
+
+        self.assertNotIn("constant", rating_config)
+        self.assertAlmostEqual(
+            _rating_percent(
+                rating_config=rating_config,
+                rating=1,
+                opponent_level=1,
+                combat_system=combat_system,
+            ),
+            0.01,
+        )
+        self.assertAlmostEqual(
+            _rating_percent(
+                rating_config=rating_config,
+                rating=1,
+                opponent_level=20,
+                combat_system=combat_system,
+            ),
+            0.01,
+        )
+        self.assertAlmostEqual(
+            _rating_percent(
+                rating_config=rating_config,
+                rating=1000,
+                opponent_level=20,
+                combat_system=combat_system,
+            ),
+            0.75,
+        )
+
+    def test_linear_level_scale_is_configurable(self):
+        combat_system = normalize_combat_system({
+            "level_scale": {
+                "type": "linear",
+                "base": 10,
+                "per_level": 2,
+            },
+        })
+
+        self.assertEqual(
+            combat_system["level_scale"],
+            {
+                "type": "linear",
+                "base": 10.0,
+                "per_level": 2.0,
+            },
+        )
+        self.assertEqual(_level_scale(5, combat_system), 20)
+
+    def test_flat_level_scale_is_configurable(self):
+        combat_system = normalize_combat_system({
+            "level_scale": {
+                "type": "flat",
+                "value": 7,
+            },
+        })
+
+        self.assertEqual(
+            combat_system["level_scale"],
+            {
+                "type": "flat",
+                "value": 7.0,
+            },
+        )
+        self.assertEqual(_level_scale(60, combat_system), 7)
+
+    def test_ilf_level_scale_keeps_wr1_taper(self):
+        combat_system = normalize_combat_system({
+            "level_scale": {
+                "type": "ilf",
+            },
+        })
+
+        self.assertEqual(combat_system["level_scale"], {"type": "ilf"})
+        self.assertAlmostEqual(_level_scale(16, combat_system), adv_config.ILF(16))
+        self.assertAlmostEqual(_level_scale(20, combat_system), adv_config.ILF(20))
+        self.assertAlmostEqual(_level_scale(60, combat_system), adv_config.ILF(20))
+
+    def test_unknown_level_scale_type_is_rejected(self):
+        with self.assertRaises(CombatFormulaValidationError):
+            normalize_combat_system({
+                "level_scale": {
+                    "type": "sqrt",
+                },
+            })
 
     def test_weapon_damage_is_first_class_damage_input(self):
         self._configure_combat({
@@ -120,7 +281,7 @@ class TestCombatFormulaResolution(WorldTestCase):
                 },
             },
         })
-        attacker = self._mob(name="Caster", spell_power=100)
+        attacker = self._mob(name="Caster", ability_power=100)
         armored_target = self._mob(name="Armored", armor=1000)
         resilient_target = self._mob(name="Resilient", resilience=1000)
 

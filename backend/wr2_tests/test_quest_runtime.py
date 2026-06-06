@@ -18,7 +18,11 @@ from quests.models import QuestInstance, QuestTemplate
 from quests.services.discovery import list_opportunities
 from tests.base import WorldTestCase
 from worlds.models import Room
-from wr2_tests.utils import capture_game_messages, dispatch_text_command
+from wr2_tests.utils import (
+    apply_basic_stat_system,
+    capture_game_messages,
+    dispatch_text_command,
+)
 
 
 def _runtime_rewards():
@@ -1500,7 +1504,8 @@ class TestQuestAcceptCommand(QuestRuntimeTestCase):
 class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
     def setUp(self):
         super().setUp()
-        stats = compute_stats(self.player.level, self.player.archetype)
+        apply_basic_stat_system(self.world)
+        stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
         self.player.health = stats["health_max"]
         self.player.save(update_fields=["health"])
         self.captain_template = MobTemplate.objects.create(
@@ -1512,6 +1517,9 @@ class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
             world=self.world,
             name="Tunnel Rat",
             keywords="rat tunnel rat",
+            health_max=1,
+            attack_power=0,
+            fights_back=False,
         )
         self.captain_template.spawn(self.room, self.spawn_world)
         self.rat_template.spawn(self.room, self.spawn_world)
@@ -1597,6 +1605,8 @@ class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
             dispatch_text_command(self.player.id, "kill rat")
         with capture_game_messages():
             dispatch_text_command(self.player.id, "kill rat")
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "look")
         with capture_game_messages() as final_messages:
             dispatch_text_command(self.player.id, "talk captain")
 

@@ -34,9 +34,10 @@ number of entries in `leveling_curve`.
 
 ## XP Rewards
 
-Mob combat rewards use the mob template or spawned mob `exp_worth` value. When
-the player crosses a threshold, combat updates the player's level and reward
-message:
+Mob combat rewards use the authored mob definition's `exp_worth` value. Legacy
+mob templates and already-spawned mobs can also carry `exp_worth` during the
+transition. When the player crosses a threshold, combat updates the player's
+level and reward message:
 
 ```text
 You gain 50 experience.

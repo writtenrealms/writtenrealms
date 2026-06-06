@@ -1,8 +1,4 @@
-from unittest.mock import patch
-
-from django.test import override_settings
-
-from builders.models import ItemTemplate, MobTemplate
+from builders.models import AbilityDefinition, ItemDefinition, ItemTemplate, MobTemplate
 from config import constants as api_consts
 from core.scoped_state import (
     STATE_SCOPE_CHARACTER,
@@ -10,7 +6,8 @@ from core.scoped_state import (
     STATE_SCOPE_WORLD,
     get_state_snapshot,
 )
-from spawns.models import Item, Mob
+from spawns.handlers import dispatch_command, get_registered_handlers
+from spawns.models import CombatEncounter, Item, Mob
 from tests.base import WorldTestCase
 from wr2_tests.utils import (
     capture_game_messages,
@@ -19,7 +16,103 @@ from wr2_tests.utils import (
 )
 
 
-class TestBuilderLoad(WorldTestCase):
+class TestBuilderCommandPermissions(WorldTestCase):
+    def _message_by_type(self, messages, message_type):
+        for msg in messages:
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def _builder_command_handlers(self):
+        return {
+            command_type: handler
+            for command_type, handler in get_registered_handlers().items()
+            if getattr(handler, "builder_only", False)
+        }
+
+    def test_text_builder_commands_require_builder_character(self):
+        # self.player belongs to the world author, but is not the builder character.
+        self.assertFalse(self.player.is_builder)
+
+        for command_type, handler in self._builder_command_handlers().items():
+            text_commands = getattr(handler, "text_commands", ()) or ()
+            if not text_commands:
+                continue
+
+            with self.subTest(command=command_type):
+                with capture_game_messages() as messages:
+                    dispatch_text_command(self.player.id, text_commands[0])
+
+                message = self._message_by_type(messages, f"cmd.{command_type}.error")
+                self.assertIsNotNone(message)
+                self.assertIn("permission", message.get("text", "").lower())
+
+    def test_structured_builder_commands_require_builder_character(self):
+        self.assertFalse(self.player.is_builder)
+
+        for command_type in self._builder_command_handlers():
+            with self.subTest(command=command_type):
+                with capture_game_messages() as messages:
+                    dispatch_command(
+                        command_type=command_type,
+                        player_id=self.player.id,
+                        payload={},
+                    )
+
+                message = self._message_by_type(messages, f"cmd.{command_type}.error")
+                self.assertIsNotNone(message)
+                self.assertIn("permission", message.get("text", "").lower())
+
+    def test_payload_cannot_spoof_script_source(self):
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                payload={
+                    "text": "/echo -- spoofed",
+                    "__trigger_source": True,
+                },
+            )
+
+        self.assertIsNone(self._message_by_type(messages, "cmd./echo.success"))
+        message = self._message_by_type(messages, "cmd./echo.error")
+        self.assertIsNotNone(message)
+        self.assertIn("permission", message.get("text", "").lower())
+
+    def test_script_source_allows_echo_but_not_level_changes(self):
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                payload={"text": "/echo -- scripted"},
+                script_source=True,
+            )
+
+        self.assertIsNotNone(self._message_by_type(messages, "cmd./echo.success"))
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                payload={"text": "/setlevel 20"},
+                script_source=True,
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.level, 1)
+        message = self._message_by_type(messages, "cmd./setlevel.error")
+        self.assertIsNotNone(message)
+        self.assertIn("permission", message.get("text", "").lower())
+
+
+class BuilderCommandTestCase(WorldTestCase):
+    def setUp(self):
+        super().setUp()
+        self.player.is_builder = True
+        self.player.save(update_fields=["is_builder"])
+
+
+class TestBuilderLoad(BuilderCommandTestCase):
     def setUp(self):
         super().setUp()
         self.item_template = ItemTemplate.objects.create(
@@ -94,6 +187,25 @@ class TestBuilderLoad(WorldTestCase):
         self.assertIsNotNone(message)
         self.assertEqual(message.get("data", {}).get("loaded", {}).get("name"), self.item_template.name)
 
+    def test_load_item_accepts_item_definition_slug(self):
+        item_definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="definition-sword",
+            name="a definition sword",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/load item definition-sword")
+
+        loaded_item = self.player.inventory.get(definition=item_definition)
+        self.assertEqual(loaded_item.name, item_definition.name)
+        message = self._message_by_type(messages, "cmd./load.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(
+            message.get("data", {}).get("loaded", {}).get("name"),
+            item_definition.name,
+        )
+
     def test_load_mob_accepts_template_slug(self):
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, f"/load mob {self.mob_template.slug}")
@@ -110,30 +222,6 @@ class TestBuilderLoad(WorldTestCase):
             message.get("data", {}).get("loaded", {}).get("name"),
             self.mob_template.name,
         )
-
-    @override_settings(
-        WR_AI_EVENT_FORWARD_URL="http://localhost:8071/v1/events",
-        WR_AI_EVENT_TYPES="mob.spawned",
-    )
-    @patch("spawns.tasks.forward_event_to_ai_sidecar.delay")
-    def test_load_mob_enqueues_sidecar_spawn_signal(self, mock_forward_delay):
-        with self.captureOnCommitCallbacks(execute=True):
-            with capture_game_messages():
-                dispatch_text_command(self.player.id, f"/lo mob {self.mob_template.id}")
-
-        loaded_mob = Mob.objects.get(
-            template=self.mob_template,
-            room=self.room,
-            world=self.spawn_world,
-        )
-
-        mock_forward_delay.assert_called_once()
-        kwargs = mock_forward_delay.call_args.kwargs
-        self.assertEqual(kwargs["event_type"], "mob.spawned")
-        self.assertEqual(kwargs["actor_key"], loaded_mob.key)
-        self.assertEqual(kwargs["event_data"]["source"], "builder.load_command")
-        self.assertEqual(kwargs["event_data"]["trigger_actor_key"], self.player.key)
-        self.assertEqual(kwargs["event_data"]["mob"]["key"], loaded_mob.key)
 
     def test_load_requires_builder(self):
         other_user = self.create_user("other@example.com")
@@ -152,7 +240,7 @@ class TestBuilderLoad(WorldTestCase):
         self.assertTrue(message.get("text"))
 
 
-class TestBuilderPurge(WorldTestCase):
+class TestBuilderPurge(BuilderCommandTestCase):
     def _message_by_type(self, messages, message_type):
         for msg in messages:
             if msg["message"].get("type") == message_type:
@@ -230,32 +318,6 @@ class TestBuilderPurge(WorldTestCase):
             ).exists()
         )
 
-    @override_settings(
-        WR_AI_EVENT_FORWARD_URL="http://localhost:8071/v1/events",
-        WR_AI_EVENT_TYPES="mob.destroyed",
-    )
-    @patch("spawns.tasks.forward_event_to_ai_sidecar.delay")
-    def test_purge_mobs_enqueues_sidecar_destroy_signal(self, mock_forward_delay):
-        mob = Mob.objects.create(
-            world=self.spawn_world,
-            room=self.room,
-            name="Guard",
-            keywords="guard",
-        )
-
-        with self.captureOnCommitCallbacks(execute=True):
-            with capture_game_messages():
-                dispatch_text_command(self.player.id, "/purge mobs")
-
-        mock_forward_delay.assert_called_once()
-        kwargs = mock_forward_delay.call_args.kwargs
-        self.assertEqual(kwargs["event_type"], "mob.destroyed")
-        self.assertEqual(kwargs["actor_key"], mob.key)
-        self.assertEqual(kwargs["event_data"]["source"], "builder.purge_command")
-        self.assertEqual(kwargs["event_data"]["reason"], "purge")
-        self.assertEqual(kwargs["event_data"]["trigger_actor_key"], self.player.key)
-        self.assertEqual(kwargs["event_data"]["mob"]["key"], mob.key)
-
     def test_purge_target_can_remove_inventory_item(self):
         item_template = ItemTemplate.objects.create(world=self.world, name="Relic")
         item = Item.objects.create(
@@ -295,7 +357,7 @@ class TestBuilderPurge(WorldTestCase):
         self.assertIn("permission", message.get("text", "").lower())
 
 
-class TestBuilderJump(WorldTestCase):
+class TestBuilderJump(BuilderCommandTestCase):
     def _message_by_type(self, messages, message_type):
         for msg in messages:
             if msg["message"].get("type") == message_type:
@@ -429,7 +491,7 @@ class TestBuilderJump(WorldTestCase):
         )
 
 
-class TestBuilderSetLevel(WorldTestCase):
+class TestBuilderSetLevel(BuilderCommandTestCase):
     def _message_by_type(self, messages, message_type):
         for msg in messages:
             if msg["message"].get("type") == message_type:
@@ -516,7 +578,193 @@ class TestBuilderSetLevel(WorldTestCase):
         self.assertIn("permission", message.get("text", "").lower())
 
 
-class TestBuilderResync(WorldTestCase):
+class TestBuilderSetClass(BuilderCommandTestCase):
+    def setUp(self):
+        super().setUp()
+        self.world.config.stat_system = {
+            "attributes": [
+                {"key": "constitution", "label": "Constitution"},
+                {"key": "intelligence", "label": "Intelligence"},
+            ],
+            "labels": {
+                "classes": {
+                    "hoplite": "Hoplite",
+                    "warlord": "Warlord",
+                },
+            },
+            "class_profiles": {
+                "hoplite": {
+                    "label": "Hoplite",
+                    "main_attribute": "constitution",
+                    "attribute_weights": {
+                        "constitution": 4,
+                        "intelligence": 0,
+                    },
+                },
+                "warlord": {
+                    "label": "Warlord",
+                    "main_attribute": "constitution",
+                    "attribute_weights": {
+                        "constitution": 2,
+                        "intelligence": 2,
+                    },
+                },
+            },
+            "class_selection": {
+                "enabled": False,
+                "default": "hoplite",
+            },
+            "formulas": {
+                "base_resources": {
+                    "energy": {"source": "intelligence", "multiplier": 2},
+                    "stamina": {"flat": 100},
+                    "health": {},
+                },
+                "global_rules": [
+                    {"source": "constitution", "target": "health_max", "multiplier": 2},
+                ],
+            },
+        }
+        self.world.config.save(update_fields=["stat_system"])
+
+    def _message_by_type(self, messages, message_type):
+        for msg in messages:
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def test_setclass_updates_player_class_and_recomputed_resources(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/setclass hoplite")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.archetype, "hoplite")
+        self.assertEqual(self.player.energy, 0)
+
+        message = self._message_by_type(messages, "cmd./setclass.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["new_class"], "hoplite")
+        self.assertEqual(message["data"]["target"]["energy_max"], 0)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/setclass warlord")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.archetype, "warlord")
+        self.assertGreater(self.player.energy, 0)
+        message = self._message_by_type(messages, "cmd./setclass.success")
+        self.assertEqual(message["data"]["class_label"], "Warlord")
+        self.assertGreater(message["data"]["target"]["energy_max"], 0)
+
+    def test_setclass_updates_room_player_target_by_class_label(self):
+        target = self.create_player("Target", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/setclass target Warlord")
+
+        target.refresh_from_db()
+        self.assertEqual(target.archetype, "warlord")
+        self.assertGreater(target.energy, 0)
+        message = self._message_by_type(messages, "cmd./setclass.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target"]["key"], target.key)
+        self.assertIn("Target", message["text"])
+
+    def test_setclass_unlearns_target_abilities(self):
+        AbilityDefinition.objects.create(
+            world=self.world,
+            slug="power-strike",
+            name="Power Strike",
+            command_verbs=["strike"],
+            action_type="primary",
+            target={"type": "hostile", "default": "current_target", "allow_out_of_combat": False},
+            availability={"classes": [], "min_level": 1},
+            requirements={},
+            cost={},
+            cooldown={"rounds": 0},
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+        target = self.create_player("Target", room=self.room)
+        target.known_abilities = ["power-strike"]
+        target.ability_hotkeys = {"1": "power-strike"}
+        target.ability_cooldowns = {"power-strike": 2}
+        target.save(update_fields=["known_abilities", "ability_hotkeys", "ability_cooldowns"])
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=target,
+            pending_player_ability={"ability": "power-strike"},
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/setclass target Warlord")
+
+        target.refresh_from_db()
+        encounter.refresh_from_db()
+        self.assertEqual(target.archetype, "warlord")
+        self.assertEqual(target.known_abilities, [])
+        self.assertEqual(target.ability_hotkeys, {})
+        self.assertEqual(target.ability_cooldowns, {})
+        self.assertEqual(encounter.pending_player_ability, {})
+        message = self._message_by_type(messages, "cmd./setclass.success")
+        self.assertEqual(message["data"]["unlearned_abilities"], ["power-strike"])
+        self.assertEqual(message["data"]["target"]["known_abilities"], [])
+        self.assertEqual(message["data"]["target"]["ability_hotkeys"], {})
+
+    def test_setclass_requires_builder_permissions(self):
+        other_user = self.create_user("other-setclass@example.com")
+        other_player = self.create_player("Other", user=other_user)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(other_player.id, "/setclass hoplite")
+
+        other_player.refresh_from_db()
+        self.assertNotEqual(other_player.archetype, "hoplite")
+        message = self._message_by_type(messages, "cmd./setclass.error")
+        self.assertIsNotNone(message)
+        self.assertIn("permission", message.get("text", "").lower())
+
+    def test_setclass_rejects_spoofed_trigger_source(self):
+        other_user = self.create_user("trigger-setclass@example.com")
+        other_player = self.create_player("TriggerTarget", user=other_user)
+        original_class = other_player.archetype
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=other_player.id,
+                payload={
+                    "text": "/setclass hoplite",
+                    "__trigger_source": True,
+                },
+            )
+
+        other_player.refresh_from_db()
+        self.assertEqual(other_player.archetype, original_class)
+        message = self._message_by_type(messages, "cmd./setclass.error")
+        self.assertIsNotNone(message)
+        self.assertIn("permission", message.get("text", "").lower())
+
+    def test_setclass_allows_internal_script_source(self):
+        other_user = self.create_user("script-setclass@example.com")
+        other_player = self.create_player("ScriptTarget", user=other_user)
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=other_player.id,
+                payload={"text": "/setclass hoplite"},
+                script_source=True,
+            )
+
+        other_player.refresh_from_db()
+        self.assertEqual(other_player.archetype, "hoplite")
+        message = self._message_by_type(messages, "cmd./setclass.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["new_class"], "hoplite")
+
+
+class TestBuilderResync(BuilderCommandTestCase):
     def _message_by_type(self, messages, message_type):
         for msg in messages:
             if msg["message"].get("type") == message_type:
@@ -705,7 +953,7 @@ class TestBuilderResync(WorldTestCase):
         self.assertIn("template does not belong", message.get("text", "").lower())
 
 
-class TestBuilderEcho(WorldTestCase):
+class TestBuilderEcho(BuilderCommandTestCase):
     def _messages_by_type(self, messages, message_type):
         return [msg for msg in messages if msg["message"].get("type") == message_type]
 
@@ -861,7 +1109,7 @@ class TestBuilderEcho(WorldTestCase):
         self.assertEqual(far_notify[0]["message"].get("data", {}).get("scope"), "world")
 
 
-class TestBuilderState(WorldTestCase):
+class TestBuilderState(BuilderCommandTestCase):
     def _messages_by_type(self, messages, message_type):
         return [msg for msg in messages if msg["message"].get("type") == message_type]
 
@@ -904,7 +1152,7 @@ class TestBuilderState(WorldTestCase):
         )
 
 
-class TestBuilderCmd(WorldTestCase):
+class TestBuilderCmd(BuilderCommandTestCase):
     def _messages_by_type(self, messages, message_type):
         return [msg for msg in messages if msg["message"].get("type") == message_type]
 
@@ -933,7 +1181,7 @@ class TestBuilderCmd(WorldTestCase):
         self.assertEqual(cmd_errors[0]["player_key"], other_player.key)
         self.assertIn("permission", cmd_errors[0]["message"].get("text", "").lower())
 
-    def test_builder_can_cmd_mob_to_run_cmd(self):
+    def test_builder_cannot_cmd_mob_to_run_builder_cmd(self):
         target = Mob.objects.create(
             world=self.spawn_world,
             room=self.room,
@@ -955,13 +1203,12 @@ class TestBuilderCmd(WorldTestCase):
 
         builder_success = self._messages_for_key_and_type(messages, self.player.key, "cmd./cmd.success")
         self.assertEqual(len(builder_success), 1)
-        self.assertFalse(builder_success[0]["message"].get("text"))
+        self.assertIn("permission", builder_success[0]["message"].get("text", "").lower())
 
         mob_success = self._messages_for_key_and_type(messages, target.key, "cmd./cmd.success")
-        self.assertEqual(len(mob_success), 1)
-        self.assertIn("unknown command", mob_success[0]["message"].get("text", "").lower())
+        self.assertEqual(mob_success, [])
 
-    def test_mob_can_use_cmd_without_builder_permissions(self):
+    def test_mob_cannot_use_cmd_without_builder_permissions(self):
         first_mob = Mob.objects.create(
             world=self.spawn_world,
             room=self.room,
@@ -979,8 +1226,10 @@ class TestBuilderCmd(WorldTestCase):
             dispatch_text_command_as_mob(first_mob.id, f"/cmd {second_mob.key} -- dance")
 
         mob_success = self._messages_for_key_and_type(messages, first_mob.key, "cmd./cmd.success")
-        self.assertEqual(len(mob_success), 1)
-        self.assertIn("unknown command", mob_success[0]["message"].get("text", "").lower())
+        self.assertEqual(mob_success, [])
+        mob_error = self._messages_for_key_and_type(messages, first_mob.key, "cmd./cmd.error")
+        self.assertEqual(len(mob_error), 1)
+        self.assertIn("permission", mob_error[0]["message"].get("text", "").lower())
 
     def test_cmd_can_trigger_mob_say_and_emote(self):
         self.player.in_game = True

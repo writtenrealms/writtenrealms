@@ -158,6 +158,8 @@ const determineEndpoint = () => {
   const world_id = store.state.builder.world.id;
   if (model_type.value === "item_template" || model_type.value === "itemtemplate") {
     return `builder/worlds/${world_id}/itemtemplates/`;
+  } else if (model_type.value === "mobdefinition" || model_type.value === "mob_definition") {
+    return `builder/worlds/${world_id}/mobdefinitions/`;
   } else if (model_type.value === "mobtemplate" || model_type.value === "mob_template") {
     return `builder/worlds/${world_id}/mobtemplates/`;
   } else if (model_type.value === "transformationtemplate" || model_type.value === "transformation_template") {

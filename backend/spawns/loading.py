@@ -15,7 +15,9 @@ from backend.core.conditions import evaluate_conditions
 from core.scoped_state import STATE_SCOPE_ZONE, get_state_snapshot
 
 from builders.models import (
+    ItemDefinition,
     Loader,
+    MobDefinition,
     Rule,
     ItemTemplate,
     MobTemplate,
@@ -358,17 +360,17 @@ class LoaderRun:
         #   those get applied as part of animation rather than during
         #   loading.
         # * the target has to be a room, rule or a zone.
-        valid_templates = (ItemTemplate, MobTemplate)
+        valid_templates = (ItemTemplate, ItemDefinition, MobTemplate, MobDefinition)
         valid_targets = (Room, Rule, Zone, Path)
         if (not isinstance(rule.template, valid_templates)
             or
             not isinstance(target, valid_targets)):
             return
 
-        if isinstance(rule.template, MobTemplate):
+        if isinstance(rule.template, (MobTemplate, MobDefinition)):
             self.rules_output[rule.id] = self.load_mob_template(rule)
             return
-        elif isinstance(rule.template, ItemTemplate):
+        elif isinstance(rule.template, (ItemTemplate, ItemDefinition)):
             self.rules_output[rule.id] = self.load_item_template(rule)
             return
 
@@ -380,14 +382,14 @@ class LoaderRun:
 
         from spawns.models import Item, Mob
 
-        if isinstance(rule.template, MobTemplate):
+        if isinstance(rule.template, (MobTemplate, MobDefinition)):
             return Mob.objects.filter(
                 world=self.world,
                 rule=rule,
                 is_pending_deletion=False,
             ).count()
 
-        if isinstance(rule.template, ItemTemplate):
+        if isinstance(rule.template, (ItemTemplate, ItemDefinition)):
             return Item.objects.filter(
                 world=self.world,
                 rule=rule,
@@ -402,8 +404,6 @@ class LoaderRun:
         num_loaded = self._num_loaded_for_rule(rule)
 
         should_load = rule.num_copies - num_loaded
-
-        from spawns.ai_sidecar import maybe_enqueue_ai_sidecar_mob_spawned
 
         for i in range(0, should_load):
 
@@ -452,13 +452,6 @@ class LoaderRun:
                 rule=rule,
             )
             output.append(spawned_mob)
-
-            maybe_enqueue_ai_sidecar_mob_spawned(
-                mob=spawned_mob,
-                source="loader",
-                loader_id=self.loader.id,
-                rule_id=rule.id,
-            )
 
         return output
 

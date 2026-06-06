@@ -17,6 +17,7 @@ from core.utils.items import price_item
 from config import constants as api_consts
 from builders.models import HousingLease, FactionAssignment
 from core.serializers import ref_field, ReferenceField
+from core.stat_system import fold_declared_attributes
 from spawns.loading import run_loaders
 from spawns.models import Item, Mob, Player, PlayerEvent, Clan, ClanMembership
 from spawns.serializers import PlayerSerializer
@@ -147,10 +148,12 @@ class UpdateMerchantsSerializer(RunningSpawnWorldOperation):
                 continue
 
             template_counts = collections.defaultdict(int)
+            definition_counts = collections.defaultdict(int)
+            bundle_roll_ids_by_key = collections.defaultdict(set)
             procedural_counts = collections.defaultdict(int)
             procedural_items = []
 
-            # Split up items into template and procedural groups
+            # Split up items into restock groups.
             for item_chunk in merchant_chunk['inventory']:
                 try:
                     item = Item.objects.get(pk=item_chunk['id'])
@@ -159,6 +162,25 @@ class UpdateMerchantsSerializer(RunningSpawnWorldOperation):
 
                 if item.template:
                     template_counts[item.template.id] += 1
+                elif item.definition:
+                    roll_metadata = item.roll_metadata or {}
+                    source_bundle_id = roll_metadata.get("source_bundle_id")
+                    source_bundle_slug = roll_metadata.get("source_bundle_slug")
+                    source_bundle_roll_id = (
+                        roll_metadata.get("source_bundle_roll_id")
+                        or item.id
+                    )
+                    if source_bundle_id or source_bundle_slug:
+                        if source_bundle_id:
+                            bundle_roll_ids_by_key[f"id:{source_bundle_id}"].add(
+                                source_bundle_roll_id
+                            )
+                        if source_bundle_slug:
+                            bundle_roll_ids_by_key[f"slug:{source_bundle_slug}"].add(
+                                source_bundle_roll_id
+                            )
+                    else:
+                        definition_counts[item.definition.id] += 1
                 elif item.profile:
                     procedural_counts[item.profile.id] += 1
                     procedural_items.append(item)
@@ -177,6 +199,39 @@ class UpdateMerchantsSerializer(RunningSpawnWorldOperation):
                         target=merchant,
                         spawn_world=self.world)
                     added_items.append(item)
+
+            # Fill or refill item definition inventory slots
+            definition_slots = merch_inv_qs.filter(
+                item_definition__isnull=False,
+                num__gt=0)
+            for definition_slot in definition_slots:
+                count = definition_counts[definition_slot.item_definition.id]
+                for i in range(count, definition_slot.num):
+                    item = definition_slot.item_definition.spawn(
+                        target=merchant,
+                        spawn_world=self.world)
+                    added_items.append(item)
+
+            # Fill or refill item bundle inventory slots. A bundle slot count
+            # tracks bundle rolls rather than individual items because one roll
+            # can intentionally create multiple items.
+            bundle_slots = merch_inv_qs.filter(
+                item_bundle__isnull=False,
+                num__gt=0)
+            for bundle_slot in bundle_slots:
+                existing_roll_ids = set()
+                existing_roll_ids.update(
+                    bundle_roll_ids_by_key.get(f"id:{bundle_slot.item_bundle.id}", set())
+                )
+                existing_roll_ids.update(
+                    bundle_roll_ids_by_key.get(f"slug:{bundle_slot.item_bundle.slug}", set())
+                )
+                count = len(existing_roll_ids)
+                for i in range(count, bundle_slot.num):
+                    items = bundle_slot.item_bundle.spawn(
+                        target=merchant,
+                        spawn_world=self.world)
+                    added_items.extend(items)
 
             # Fill or refill procedural inventory slots
             procedural_slots = merch_inv_qs.filter(
@@ -426,6 +481,11 @@ class CraftItemSerializer(serializers.Serializer):
             level=player.level,
             quality=quality,
             eq_type=eq_type)
+        fold_declared_attributes(
+            stats,
+            world=player.world,
+            candidate_keys=adv_consts.PRIMARY_ATTRIBUTES,
+        )
 
         item = Item.objects.create(
             world=player.world,

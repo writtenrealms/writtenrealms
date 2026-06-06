@@ -1,9 +1,5 @@
 import os
-import json
 import math
-import uuid
-from urllib import error as urllib_error
-from urllib import request as urllib_request
 
 from celery import shared_task
 
@@ -12,9 +8,7 @@ from config import game_settings as adv_config
 from backend.config.exceptions import ServiceError
 from core.computations import compute_stats
 from django.core.cache import cache
-from django.conf import settings
 from django.db.models import F, Q
-from django.utils import timezone
 from spawns.services import WorldGate
 from spawns.models import Mob, Player
 from spawns.serializers import PlayerConfigSerializer
@@ -31,7 +25,7 @@ from worlds.serializers import WorldSerializer
 from fastapi_app.game_ws import publish_to_player
 from fastapi_app.forge_ws import complete_job, exit_world as notify_exit_world
 
-WR2_STANDING_REGEN_RATE = 2
+WR2_STANDING_REGEN_RATE = adv_config.PLAYER_STARTING_STAMINA_REGEN
 HEARTBEAT_REGEN_LOCK_KEY = "heartbeat_regen_lock"
 
 
@@ -70,10 +64,10 @@ def _apply_regen(
     actor: Player | Mob,
     *,
     health_max: int,
-    mana_max: int,
+    energy_max: int,
     stamina_max: int,
     health_add: int,
-    mana_add: int,
+    energy_add: int,
     stamina_add: int,
 ) -> bool:
     update_fields: list[str] = []
@@ -83,10 +77,10 @@ def _apply_regen(
         actor.health = next_health
         update_fields.append("health")
 
-    next_mana = _regen_resource(actor.mana, mana_max, mana_add)
-    if next_mana != actor.mana:
-        actor.mana = next_mana
-        update_fields.append("mana")
+    next_energy = _regen_resource(actor.energy, energy_max, energy_add)
+    if next_energy != actor.energy:
+        actor.energy = next_energy
+        update_fields.append("energy")
 
     next_stamina = _regen_resource(actor.stamina, stamina_max, stamina_add)
     if next_stamina != actor.stamina:
@@ -109,31 +103,31 @@ def _regen_player(player: Player) -> dict[str, int | str] | None:
     )
 
     health_max = max(_as_non_negative_int(stats.get("health_max")), _as_non_negative_int(player.health))
-    mana_max = max(_as_non_negative_int(stats.get("mana_max")), _as_non_negative_int(player.mana))
+    energy_max = max(_as_non_negative_int(stats.get("energy_max")), _as_non_negative_int(player.energy))
     stamina_max = max(_as_non_negative_int(stats.get("stamina_max")), _as_non_negative_int(player.stamina))
-    mana_base = _as_non_negative_int(stats.get("mana_base"), default=mana_max)
+    energy_base = _as_non_negative_int(stats.get("energy_base"), default=energy_max)
 
     health_regen = _as_non_negative_int(getattr(player, "health_regen", 0)) + _as_non_negative_int(
         stats.get("health_regen")
     )
-    mana_regen = _as_non_negative_int(getattr(player, "mana_regen", 0)) + _as_non_negative_int(
-        stats.get("mana_regen")
+    energy_regen = _as_non_negative_int(getattr(player, "energy_regen", 0)) + _as_non_negative_int(
+        stats.get("energy_regen")
     )
     stamina_regen = _as_non_negative_int(getattr(player, "stamina_regen", 0)) + _as_non_negative_int(
         stats.get("stamina_regen")
     )
 
     health_add = math.ceil(health_max * WR2_STANDING_REGEN_RATE / 100) + health_regen
-    mana_add = math.ceil(mana_base * WR2_STANDING_REGEN_RATE / 100) + mana_regen
-    stamina_add = WR2_STANDING_REGEN_RATE + stamina_regen
+    energy_add = math.ceil(energy_base * WR2_STANDING_REGEN_RATE / 100) + energy_regen
+    stamina_add = stamina_regen or WR2_STANDING_REGEN_RATE
 
     changed = _apply_regen(
         player,
         health_max=health_max,
-        mana_max=mana_max,
+        energy_max=energy_max,
         stamina_max=stamina_max,
         health_add=health_add,
-        mana_add=mana_add,
+        energy_add=energy_add,
         stamina_add=stamina_add,
     )
     if not changed:
@@ -144,9 +138,9 @@ def _regen_player(player: Player) -> dict[str, int | str] | None:
         "health": player.health,
         "health_max": health_max,
         "health_regen": health_regen,
-        "mana": player.mana,
-        "mana_max": mana_max,
-        "mana_regen": mana_regen,
+        "energy": player.energy,
+        "energy_max": energy_max,
+        "energy_regen": energy_regen,
         "stamina": player.stamina,
         "stamina_max": stamina_max,
         "stamina_regen": stamina_regen,
@@ -155,25 +149,25 @@ def _regen_player(player: Player) -> dict[str, int | str] | None:
 
 def _regen_mob(mob: Mob) -> bool:
     health_max = _as_non_negative_int(getattr(mob, "health_max", mob.health), default=mob.health)
-    mana_max = _as_non_negative_int(getattr(mob, "mana_max", mob.mana), default=mob.mana)
+    energy_max = _as_non_negative_int(getattr(mob, "energy_max", mob.energy), default=mob.energy)
     stamina_max = _as_non_negative_int(getattr(mob, "stamina_max", mob.stamina), default=mob.stamina)
     regen_rate = _as_non_negative_int(getattr(mob, "regen_rate", WR2_STANDING_REGEN_RATE))
 
     health_add = math.ceil(health_max * regen_rate / 100) + _as_non_negative_int(
         getattr(mob, "health_regen", 0)
     )
-    mana_add = math.ceil(mana_max * regen_rate / 100) + _as_non_negative_int(
-        getattr(mob, "mana_regen", 0)
+    energy_add = math.ceil(energy_max * regen_rate / 100) + _as_non_negative_int(
+        getattr(mob, "energy_regen", 0)
     )
     stamina_add = WR2_STANDING_REGEN_RATE + _as_non_negative_int(getattr(mob, "stamina_regen", 0))
 
     return _apply_regen(
         mob,
         health_max=health_max,
-        mana_max=mana_max,
+        energy_max=energy_max,
         stamina_max=stamina_max,
         health_add=health_add,
-        mana_add=mana_add,
+        energy_add=energy_add,
         stamina_add=stamina_add,
     )
 
@@ -191,7 +185,7 @@ def run_heartbeat_regen() -> dict[str, int]:
         "level",
         "archetype",
         "health",
-        "mana",
+        "energy",
         "stamina",
     )
     active_world_ids = list(active_players.values_list("world_id", flat=True).distinct())
@@ -218,19 +212,19 @@ def run_heartbeat_regen() -> dict[str, int]:
             )
             .filter(
                 Q(health__lt=F("health_max"))
-                | Q(mana__lt=F("mana_max"))
+                | Q(energy__lt=F("energy_max"))
                 | Q(stamina__lt=F("stamina_max"))
             )
             .only(
                 "id",
                 "health",
-                "mana",
+                "energy",
                 "stamina",
                 "health_max",
-                "mana_max",
+                "energy_max",
                 "stamina_max",
                 "health_regen",
-                "mana_regen",
+                "energy_regen",
                 "stamina_regen",
                 "regen_rate",
                 "is_pending_deletion",
@@ -364,19 +358,6 @@ def exit_world(player_id, world_id,
         exit_to=world.context.id)
 
 
-def _normalize_event_type(event_type: str | None) -> str:
-    return str(event_type or "").strip().lower()
-
-
-def _parse_allowed_event_types(raw_types: str | None) -> set[str]:
-    values: set[str] = set()
-    for token in str(raw_types or "").split(","):
-        normalized = _normalize_event_type(token)
-        if normalized:
-            values.add(normalized)
-    return values
-
-
 def _parse_actor_ref(actor_key: str | None) -> tuple[str, int] | None:
     actor_ref = str(actor_key or "").strip()
     if "." not in actor_ref:
@@ -403,160 +384,6 @@ def _parse_player_id(player_key: str | None) -> int | None:
     if actor_kind != "player":
         return None
     return actor_id
-
-
-def _resolve_world_key_for_world(world: World | None) -> str:
-    if not world:
-        return ""
-
-    context_world = getattr(world, "context", None)
-    if context_world:
-        root_world = getattr(context_world, "instance_of", None) or context_world
-        return root_world.key
-
-    root_world = getattr(world, "instance_of", None) or world
-    return root_world.key
-
-
-def _resolve_ai_forward_actor(actor_key: str | None) -> dict | None:
-    parsed = _parse_actor_ref(actor_key)
-    if not parsed:
-        return None
-
-    actor_kind, actor_id = parsed
-    if actor_kind == "player":
-        player = (
-            Player.objects.select_related("room", "world__context__instance_of")
-            .filter(pk=actor_id)
-            .first()
-        )
-        if not player:
-            return None
-        return {
-            "key": player.key,
-            "name": player.name,
-            "kind": "player",
-            "room_key": player.room.key if player.room_id else "",
-            "world_key": _resolve_world_key_for_world(player.world),
-        }
-
-    mob = (
-        Mob.objects.select_related("room", "world__context__instance_of")
-        .filter(pk=actor_id)
-        .first()
-    )
-    if not mob:
-        return None
-    return {
-        "key": mob.key,
-        "name": mob.name,
-        "kind": "mob",
-        "room_key": mob.room.key if mob.room_id else "",
-        "world_key": _resolve_world_key_for_world(mob.world),
-    }
-
-
-def _resolve_actor_snapshot(actor_snapshot: dict | None) -> dict | None:
-    if not isinstance(actor_snapshot, dict):
-        return None
-
-    actor_key = str(actor_snapshot.get("key") or "").strip()
-    if not actor_key:
-        return None
-
-    actor_kind = str(actor_snapshot.get("kind") or "").strip().lower()
-    if actor_kind not in {"player", "mob"}:
-        parsed = _parse_actor_ref(actor_key)
-        if not parsed:
-            return None
-        actor_kind = parsed[0]
-
-    actor_name = actor_snapshot.get("name")
-    if actor_name is None:
-        actor_name = actor_key
-
-    return {
-        "key": actor_key,
-        "name": str(actor_name),
-        "kind": actor_kind,
-        "room_key": str(actor_snapshot.get("room_key") or "").strip(),
-        "world_key": str(actor_snapshot.get("world_key") or "").strip(),
-    }
-
-
-def _build_ai_forward_payload(
-    *,
-    event_type: str,
-    event_data: dict,
-    actor: dict,
-) -> dict:
-    return {
-        "event_id": f"evt-{uuid.uuid4()}",
-        "event_type": event_type,
-        "world_key": actor["world_key"],
-        "room_key": actor["room_key"],
-        "timestamp": timezone.now().isoformat(),
-        "actor": {
-            "key": actor["key"],
-            "name": actor["name"],
-            "kind": actor["kind"],
-        },
-        "payload": event_data,
-    }
-
-
-@shared_task
-def forward_event_to_ai_sidecar(
-    *,
-    event_type: str,
-    event_data: dict | None = None,
-    actor_key: str | None = None,
-    actor_snapshot: dict | None = None,
-) -> None:
-    """
-    Forward selected game events to the WR AI sidecar.
-
-    This task is intentionally fire-and-forget and should not raise errors
-    that could impact gameplay flows.
-    """
-    forward_url = str(getattr(settings, "WR_AI_EVENT_FORWARD_URL", "") or "").strip()
-    if not forward_url:
-        return
-
-    normalized_event_type = _normalize_event_type(event_type)
-    allowed_event_types = _parse_allowed_event_types(
-        getattr(settings, "WR_AI_EVENT_TYPES", "")
-    )
-    if normalized_event_type not in allowed_event_types:
-        return
-
-    actor = _resolve_ai_forward_actor(actor_key) or _resolve_actor_snapshot(actor_snapshot)
-    if not actor:
-        return
-
-    payload = _build_ai_forward_payload(
-        event_type=normalized_event_type,
-        event_data=event_data if isinstance(event_data, dict) else {},
-        actor=actor,
-    )
-    body = json.dumps(payload).encode("utf-8")
-
-    request = urllib_request.Request(
-        forward_url,
-        data=body,
-        method="POST",
-    )
-    request.add_header("Content-Type", "application/json")
-
-    forward_token = str(getattr(settings, "WR_AI_EVENT_FORWARD_TOKEN", "") or "").strip()
-    if forward_token:
-        request.add_header("Authorization", f"Bearer {forward_token}")
-
-    try:
-        with urllib_request.urlopen(request, timeout=2.0):
-            return
-    except (urllib_error.URLError, ValueError):
-        return
 
 
 def _publish_game_error(player_key: str | None, command_type: str, text: str, connection_id: str | None = None):
@@ -593,7 +420,6 @@ def execute_trigger_script_segments(
         payload: dict[str, object] = {
             "text": segment_text,
             "skip_triggers": True,
-            "__trigger_source": True,
         }
         if issuer_scope:
             payload["issuer_scope"] = issuer_scope
@@ -605,6 +431,7 @@ def execute_trigger_script_segments(
                 actor_id=actor_id,
                 payload=payload,
                 connection_id=connection_id,
+                script_source=True,
             )
         except (ActorNotFoundError, HandlerNotFoundError, ValueError):
             return

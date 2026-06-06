@@ -20,6 +20,7 @@ from spawns.events import publish_events
 from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.registry import register_handler
 from spawns.models import Player
+from spawns.triggers import evaluate_movement_policies
 
 
 @register_handler
@@ -54,6 +55,25 @@ class MoveHandler(CommandHandler):
 
                 resolution = ResolveMoveAction().execute(player, direction)
                 context = resolution.data["context"]
+
+                for policy_event in (
+                    adv_consts.TRIGGER_EVENT_BEFORE_MOVE_EXIT,
+                    adv_consts.TRIGGER_EVENT_BEFORE_MOVE_ENTER,
+                ):
+                    policy_result = evaluate_movement_policies(
+                        actor=player,
+                        event=policy_event,
+                        direction=context.direction,
+                        origin_room_id=context.origin_room_id,
+                        destination_room_id=context.dest_room_id,
+                        world_id=context.trigger_world_id,
+                    )
+                    if not policy_result.allowed:
+                        raise ActionError(
+                            policy_result.feedback or "You cannot go that way.",
+                            code=policy_result.code,
+                            data={"trigger_id": policy_result.trigger_id},
+                        )
 
                 ChangeRoomAction().execute(player, context.dest_room_id)
                 AdjustStaminaAction().execute(player, -context.movement_cost)

@@ -87,8 +87,10 @@ Triggers can both read and write state.
 
 For full trigger authoring guidance aimed at builders, also read
 [trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md).
+For condition operators and paths, also read
+[condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md).
 
-Use structured conditions with the same condition DSL used by quests:
+Use structured conditions with the shared WR2 condition DSL:
 
 ```yaml
 kind: trigger
@@ -118,13 +120,27 @@ Common trigger patterns:
 - flip a room flag-like runtime value with `/state set room ...`
 - broadcast dynamic text with `{{ state.* }}` substitutions
 
+For post-entry room events such as traps, use room state to keep the event from
+repeating:
+
+```yaml
+conditions:
+  not:
+    eq:
+      - state.room.trap_sprung
+      - true
+script: |
+  /cmd room -- /echo -- Spears snap out from the walls.
+  /cmd room -- /state set room trap_sprung true
+```
+
 ## Quests
 
 Quests can read state in conditions and write state in effects.
 
 ### Conditions
 
-Use state paths anywhere the quest condition DSL accepts a path:
+Use state paths anywhere the shared condition DSL accepts a path:
 
 ```yaml
 visible_if:
@@ -196,6 +212,40 @@ steps:
         text: Continue while it is {{ state.world.weather }}.
         goto: resolved
 ```
+
+## Ability State
+
+Abilities can also write state with `type: state` components. This is commonly
+used for combo points or charges:
+
+```yaml
+components:
+  - type: state
+    scope: character
+    key: combo_points
+    op: increment
+    amount: 1
+    max: 5
+    apply: on_hit
+```
+
+Ability damage and healing components can read state with `scaling.from`:
+
+```yaml
+components:
+  - type: damage
+    profile: basic_physical
+    scaling:
+      from: state.character.combo_points
+      multiplier_per_point: 0.5
+  - type: state
+    scope: character
+    key: combo_points
+    op: clear
+```
+
+See [ability-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/ability-builder-guide.md)
+for full examples and ordering notes.
 
 ## Zone Manifests
 

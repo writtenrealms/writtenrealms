@@ -3,7 +3,11 @@ from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from core.serializers import ReferenceField
-from core.stat_system import get_world_label_bundle
+from core.stat_system import (
+    get_world_class_selection,
+    get_world_label_bundle,
+    world_uses_classes,
+)
 from worlds.models import Room, World, Zone, StartingEq
 
 
@@ -24,6 +28,7 @@ class WorldSerializer(serializers.ModelSerializer):
 
     author = serializers.ReadOnlyField(source='author.username')
     labels = serializers.SerializerMethodField()
+    class_selection = serializers.SerializerMethodField()
     is_classless = serializers.SerializerMethodField()
     instance_of_id = serializers.SerializerMethodField()
 
@@ -34,6 +39,7 @@ class WorldSerializer(serializers.ModelSerializer):
             'name', 'description', 'author', 'created_ts',
             'factions',
             'labels',
+            'class_selection',
             'is_classless',
             'instance_of_id',
         )
@@ -152,9 +158,10 @@ class WorldSerializer(serializers.ModelSerializer):
         return labels
 
     def get_is_classless(self, world):
-        root_world = world.context or world
-        root_world = root_world.instance_of or root_world
-        return root_world.config.is_classless
+        return not world_uses_classes(world)
+
+    def get_class_selection(self, world):
+        return get_world_class_selection(world)
 
     def get_instance_of_id(self, world):
         context = world.context or world
