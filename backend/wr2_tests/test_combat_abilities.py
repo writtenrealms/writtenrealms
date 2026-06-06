@@ -234,6 +234,125 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(success["data"]["ability"]["hotkey"], "1")
         self.assertEqual(success["data"]["actor"]["ability_hotkeys"], {"1": "power-strike"})
 
+    def test_learn_without_selector_requires_present_trainer(self):
+        self._ability(
+            slug="power-strike",
+            name="Power Strike",
+            verbs=["strike"],
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+        MobDefinition.objects.create(
+            world=self.world,
+            slug="arms-trainer",
+            name="an arms trainer",
+            keywords="trainer arms",
+            base_properties={"health_max": 10},
+            trainer={
+                "abilities": ["power-strike"],
+                "availability": "present",
+            },
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "learn")
+
+        errors = self._messages_by_type(messages, "cmd.ability.learn.error")
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["text"], "There is no-one around to teach you right now.")
+        self.assertEqual(errors[0]["data"]["code"], "ability_trainer_unavailable")
+
+    def test_learn_without_selector_lists_ungated_abilities_without_trainer(self):
+        self._ability(
+            slug="field-mend",
+            name="Field Mend",
+            verbs=["mend", "fieldmend"],
+            target={"type": "self", "default": "self", "allow_out_of_combat": True},
+            components=[{"type": "healing", "profile": "basic_heal"}],
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "learn")
+
+        lists = self._messages_by_type(messages, "cmd.ability.learn.list")
+        self.assertEqual(len(lists), 1)
+        self.assertEqual(lists[0]["text"], "You can learn here: Field Mend [ learn mend ].")
+        self.assertEqual(
+            lists[0]["data"]["abilities"],
+            [
+                {
+                    "slug": "field-mend",
+                    "name": "Field Mend",
+                    "learn_command": "learn mend",
+                    "trainer": None,
+                }
+            ],
+        )
+
+    def test_learn_without_selector_lists_trainable_abilities_at_trainer(self):
+        self._ability(
+            slug="power-strike",
+            name="Power Strike",
+            verbs=["strike"],
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+        self._ability(
+            slug="locked-strike",
+            name="Locked Strike",
+            verbs=["lockedstrike"],
+            availability={"classes": [], "min_level": 99},
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+        self._ability(
+            slug="field-mend",
+            name="Field Mend",
+            verbs=["mend", "fieldmend"],
+            target={"type": "self", "default": "self", "allow_out_of_combat": True},
+            components=[{"type": "healing", "profile": "basic_heal"}],
+        )
+        trainer_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="arms-trainer",
+            name="an arms trainer",
+            keywords="trainer arms",
+            base_properties={"health_max": 10},
+            trainer={
+                "abilities": ["power-strike", "locked-strike"],
+                "availability": "present",
+            },
+        )
+        trainer = trainer_definition.spawn(self.room, self.spawn_world)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "learn")
+
+        lists = self._messages_by_type(messages, "cmd.ability.learn.list")
+        self.assertEqual(len(lists), 1)
+        self.assertEqual(
+            lists[0]["text"],
+            "You can learn here: Power Strike [ learn strike ], Field Mend [ learn mend ].",
+        )
+        self.assertEqual(
+            lists[0]["data"]["abilities"],
+            [
+                {
+                    "slug": "power-strike",
+                    "name": "Power Strike",
+                    "learn_command": "learn strike",
+                    "trainer": {"id": trainer.id, "name": "an arms trainer"},
+                },
+                {
+                    "slug": "field-mend",
+                    "name": "Field Mend",
+                    "learn_command": "learn mend",
+                    "trainer": None,
+                },
+            ],
+        )
+        self.assertEqual(
+            lists[0]["data"]["trainers"],
+            [{"id": trainer.id, "name": "an arms trainer"}],
+        )
+
     def test_learning_trainer_gated_ability_requires_present_trainer(self):
         self._ability(
             slug="power-strike",
