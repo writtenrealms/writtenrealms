@@ -876,6 +876,121 @@ class TestCombatAbilities(WorldTestCase):
         mob.refresh_from_db()
         self.assertEqual(mob.health, self.stats["attack_power"] * 4)
 
+    def test_resource_change_effect_ticks_energy_during_following_rounds(self):
+        self._ability(
+            slug="focus-renewal",
+            name="Focus Renewal",
+            verbs=["renewfocus"],
+            target={"type": "self", "default": "self", "allow_out_of_combat": False},
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "focus-renewal",
+                    "category": "buff",
+                    "target": "self",
+                    "duration": {"rounds": 2},
+                    "tick": {
+                        "every_rounds": 1,
+                        "primitives": [
+                            {
+                                "type": "resource_change",
+                                "resource": "energy",
+                                "amount": 3,
+                                "calc": "fixed",
+                                "target": "effect.target",
+                            }
+                        ],
+                    },
+                    "apply": "on_resolve",
+                }
+            ],
+        )
+        self.player.known_abilities = ["focus-renewal"]
+        self.player.energy = 0
+        self.player.save(update_fields=["known_abilities", "energy"])
+        self._mob(health=self.stats["attack_power"] * 20)
+
+        dispatch_text_command(self.player.id, "kill rat")
+        dispatch_text_command(self.player.id, "renewfocus")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.energy, 0)
+
+        dispatch_text_command(self.player.id, "kill rat")
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.energy, 3)
+
+        dispatch_text_command(self.player.id, "kill rat")
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.energy, 6)
+
+        dispatch_text_command(self.player.id, "kill rat")
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.energy, 6)
+
+    def test_self_buff_can_restore_energy_when_physical_attacks_hit(self):
+        self._ability(
+            slug="energized-strikes",
+            name="Energized Strikes",
+            verbs=["energize"],
+            target={"type": "self", "default": "self", "allow_out_of_combat": False},
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "energized-strikes",
+                    "category": "buff",
+                    "target": "self",
+                    "duration": {"rounds": 2},
+                    "primitives": [
+                        {
+                            "type": "proc",
+                            "phase": "after_damage",
+                            "conditions": {
+                                "all": [
+                                    {"eq": ["event.actor", "{effect.target}"]},
+                                    {"eq": ["event.attack", "attack"]},
+                                    {"eq": ["event.damage_type", "physical"]},
+                                    {"gte": ["event.damage_taken", 1]},
+                                ]
+                            },
+                            "actions": [
+                                {
+                                    "type": "resource_change",
+                                    "resource": "energy",
+                                    "amount": 3,
+                                    "calc": "fixed",
+                                    "target": "effect.target",
+                                }
+                            ],
+                        }
+                    ],
+                    "apply": "on_resolve",
+                }
+            ],
+        )
+        self.player.known_abilities = ["energized-strikes"]
+        self.player.energy = 0
+        self.player.save(update_fields=["known_abilities", "energy"])
+        self._mob(health=self.stats["attack_power"] * 20)
+
+        dispatch_text_command(self.player.id, "kill rat")
+        dispatch_text_command(self.player.id, "energize")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.energy, 0)
+
+        dispatch_text_command(self.player.id, "kill rat")
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.energy, 3)
+
+        dispatch_text_command(self.player.id, "kill rat")
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.energy, 6)
+
+        dispatch_text_command(self.player.id, "kill rat")
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.energy, 6)
+
     def test_self_heal_uses_same_ability_schema_outside_combat(self):
         self._ability(
             slug="mend",

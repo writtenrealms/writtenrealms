@@ -11,6 +11,7 @@ from django.utils import timezone
 from config import constants as adv_consts
 from core.combat_formulas import CombatAttackResult, resolve_attack
 from core.computations import compute_stats
+from core.condition_dsl import ConditionContext, evaluate_condition
 from core.leveling import ExperienceGrant, apply_experience
 from builders.models import AbilityDefinition
 from spawns.actions.base import ActionError, ActionResult
@@ -709,6 +710,19 @@ def _effect_applies_to(effect: dict, *, target_type: str, target_id: int) -> boo
     return target.get("type") == target_type and int(target.get("id") or 0) == target_id
 
 
+def _effect_ref(ref: dict | None) -> str:
+    ref = ref or {}
+    ref_type = str(ref.get("type") or "").strip()
+    ref_id = int(ref.get("id") or 0)
+    if not ref_type or not ref_id:
+        return ""
+    return f"{ref_type}.{ref_id}"
+
+
+def _actor_ref(actor: Player | Mob) -> str:
+    return f"{'player' if isinstance(actor, Player) else 'mob'}.{actor.id}"
+
+
 def _append_effect(
     encounter: CombatEncounter,
     *,
@@ -719,17 +733,22 @@ def _append_effect(
     target_id: int,
     duration_rounds: int,
     label: str,
+    category: str = "neutral",
+    primitives: list[dict] | None = None,
     tick: dict | None = None,
 ) -> None:
     effects = list(encounter.active_effects or [])
     effects.append(
         {
             "effect": effect,
+            "category": category,
             "source": {"type": source_type, "id": source_id},
             "target": {"type": target_type, "id": target_id},
             "remaining_rounds": max(1, int(duration_rounds or 1)),
             "rounds_elapsed": 0,
+            "started_round": int(encounter.round_number or 0),
             "label": label,
+            "primitives": primitives or [],
             "tick": tick or {},
         }
     )
@@ -807,6 +826,220 @@ def _apply_healing(
     if result.healing_done <= 0:
         return
     target.health = min(health_max, int(target.health or 0) + result.healing_done)
+
+
+def _resource_limit(target: Player | Mob, resource: str) -> int:
+    max_field = f"{resource}_max"
+    default = 1 if resource == "health" else 0
+    try:
+        return max(default, int(getattr(target, max_field, default) or default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _resource_change_amount(
+    primitive: dict,
+    *,
+    target: Player | Mob,
+    resource: str,
+) -> int:
+    try:
+        amount = float(primitive.get("amount") or 0)
+    except (TypeError, ValueError):
+        amount = 0.0
+    calc = str(primitive.get("calc") or "fixed").strip().lower()
+    if calc in {"percent_max", "percent_base"}:
+        amount = _resource_limit(target, resource) * (amount / 100)
+    return int(amount)
+
+
+def _resolve_effect_target(
+    target_selector: str | None,
+    *,
+    effect: dict,
+    player: Player,
+    target_mob: Mob,
+) -> Player | Mob | None:
+    selector = str(target_selector or "effect.target").strip().lower()
+    if selector in {"actor", "self", "effect.source"}:
+        return player
+    if selector in {"target", "ability.target", "effect.target"}:
+        target = effect.get("target") or {}
+        if target.get("type") == "player" and int(target.get("id") or 0) == player.id:
+            return player
+        if target.get("type") == "mob" and int(target.get("id") or 0) == target_mob.id:
+            return target_mob
+    return None
+
+
+def _execute_resource_change_primitive(
+    *,
+    primitive: dict,
+    effect: dict,
+    player: Player,
+    target_mob: Mob,
+    room: Room,
+    round_id: str,
+) -> list[GameEvent]:
+    resource = str(primitive.get("resource") or "").strip().lower()
+    if resource not in {"health", "energy", "stamina"}:
+        return []
+
+    target = _resolve_effect_target(
+        primitive.get("target"),
+        effect=effect,
+        player=player,
+        target_mob=target_mob,
+    )
+    if target is None:
+        return []
+
+    amount = _resource_change_amount(primitive, target=target, resource=resource)
+    if amount == 0:
+        return []
+
+    before = int(getattr(target, resource, 0) or 0)
+    limit = _resource_limit(target, resource)
+    after = max(0, min(limit, before + amount))
+    if after == before:
+        return []
+
+    setattr(target, resource, after)
+    target.save(update_fields=[resource])
+
+    target_payload = (
+        serialize_char_from_player(target).model_dump()
+        if isinstance(target, Player)
+        else serialize_char_from_mob(target).model_dump()
+    )
+    effect_key = str(effect.get("effect") or "").strip()
+    label = str(effect.get("label") or effect_key or "Effect").strip()
+    delta = after - before
+    data = {
+        "effect": effect_key,
+        "label": label,
+        "target": target_payload,
+        "resource": resource,
+        "amount": delta,
+        "current": after,
+        "maximum": limit,
+        "round_id": round_id,
+    }
+    return [
+        GameEvent(
+            type="notification.combat.effect",
+            recipients=[player.key],
+            data=data,
+            text=f"{label} restores {delta} {resource}."
+            if delta > 0
+            else f"{label} drains {abs(delta)} {resource}.",
+        )
+    ]
+
+
+def _execute_effect_primitives(
+    *,
+    primitives: list[dict],
+    effect: dict,
+    player: Player,
+    target_mob: Mob,
+    room: Room,
+    round_id: str,
+) -> list[GameEvent]:
+    events: list[GameEvent] = []
+    for primitive in primitives:
+        if primitive.get("type") != "resource_change":
+            continue
+        events.extend(
+            _execute_resource_change_primitive(
+                primitive=primitive,
+                effect=effect,
+                player=player,
+                target_mob=target_mob,
+                room=room,
+                round_id=round_id,
+            )
+        )
+    return events
+
+
+def _proc_condition_context(
+    *,
+    event_data: dict,
+    player: Player,
+    room: Room,
+) -> ConditionContext:
+    return ConditionContext(
+        actor=player,
+        player=player,
+        room=room,
+        zone=getattr(room, "zone", None),
+        world=getattr(player, "world", None),
+        event_data=event_data,
+    )
+
+
+def _execute_after_damage_procs(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    target_mob: Mob,
+    room: Room,
+    actor: Player | Mob,
+    target: Player | Mob,
+    result: CombatAttackResult,
+    round_id: str,
+    attack: str,
+    label: str,
+) -> list[GameEvent]:
+    if result.damage_taken <= 0:
+        return []
+
+    base_event_data = {
+        "actor": _actor_ref(actor),
+        "target": _actor_ref(target),
+        "damage_taken": result.damage_taken,
+        "damage_dealt": result.damage_dealt,
+        "damage_type": result.damage_type,
+        "outcome": result.outcome,
+        "attack": attack,
+        "label": label,
+        "round_id": round_id,
+    }
+
+    events: list[GameEvent] = []
+    for effect in list(encounter.active_effects or []):
+        for primitive in effect.get("primitives") or []:
+            if primitive.get("type") != "proc" or primitive.get("phase") != "after_damage":
+                continue
+            event_data = {
+                **base_event_data,
+                "effect": {
+                    "key": effect.get("effect"),
+                    "source": _effect_ref(effect.get("source")),
+                    "target": _effect_ref(effect.get("target")),
+                },
+            }
+            if not evaluate_condition(
+                primitive.get("conditions") or {},
+                context=_proc_condition_context(
+                    event_data=event_data,
+                    player=player,
+                    room=room,
+                ),
+            ):
+                continue
+            events.extend(
+                _execute_effect_primitives(
+                    primitives=primitive.get("actions") or [],
+                    effect=effect,
+                    player=player,
+                    target_mob=target_mob,
+                    room=room,
+                    round_id=round_id,
+                )
+            )
+    return events
 
 
 def _execute_output_component(
@@ -909,6 +1142,20 @@ def _execute_output_component(
             label=label,
         )
     )
+    events.extend(
+        _execute_after_damage_procs(
+            encounter=encounter,
+            player=player,
+            target_mob=target_mob,
+            room=room,
+            actor=player,
+            target=target_mob,
+            result=result,
+            round_id=round_id,
+            attack=ability.slug if ability else "effect",
+            label=label,
+        )
+    )
     return events, result.outcome != "dodged" and result.damage_taken > 0
 
 
@@ -927,10 +1174,11 @@ def _resolve_periodic_effects(
 
     events: list[GameEvent] = []
     kept: list[dict] = []
-    initial_player_health = int(player.health or 0)
     for effect in effects:
         effect_type = effect.get("effect")
-        if effect_type not in {"dot", "hot"}:
+        tick = effect.get("tick") or {}
+        has_tick = bool(tick)
+        if not has_tick:
             kept.append(effect)
             continue
 
@@ -942,29 +1190,86 @@ def _resolve_periodic_effects(
 
         elapsed = int(effect.get("rounds_elapsed") or 0) + 1
         remaining = int(effect.get("remaining_rounds") or 0)
-        every = max(1, int((effect.get("tick") or {}).get("every_rounds") or 1))
+        every = max(1, int(tick.get("every_rounds") or 1))
         if elapsed % every == 0:
-            tick_component = (effect.get("tick") or {}).get("component") or {}
-            component_events, _ = _execute_output_component(
-                encounter=encounter,
-                player=player,
-                target_mob=target_mob,
-                room=room,
-                component=tick_component,
-                ability=None,
-                round_id=round_id,
-                player_health_max=player_health_max,
-            )
-            events.extend(component_events)
+            tick_primitives = tick.get("primitives") or []
+            if tick_primitives:
+                events.extend(
+                    _execute_effect_primitives(
+                        primitives=tick_primitives,
+                        effect=effect,
+                        player=player,
+                        target_mob=target_mob,
+                        room=room,
+                        round_id=round_id,
+                    )
+                )
+            else:
+                tick_component = tick.get("component") or {}
+                component_events, _ = _execute_output_component(
+                    encounter=encounter,
+                    player=player,
+                    target_mob=target_mob,
+                    room=room,
+                    component=tick_component,
+                    ability=None,
+                    round_id=round_id,
+                    player_health_max=player_health_max,
+                )
+                events.extend(component_events)
 
         remaining -= 1
         if remaining > 0:
             kept.append({**effect, "rounds_elapsed": elapsed, "remaining_rounds": remaining})
 
     encounter.active_effects = kept
-    if int(player.health or 0) != initial_player_health:
-        player.save(update_fields=["health"])
     return events
+
+
+def _effect_target_for_component(
+    *,
+    component: dict,
+    ability: AbilityDefinition,
+    pending: dict,
+    player: Player,
+    target_mob: Mob,
+) -> tuple[str, int]:
+    selector = str(component.get("target") or "ability.target").strip().lower()
+    if selector in {"actor", "self", "effect.source"}:
+        return "player", player.id
+
+    pending_target = pending.get("target") or {}
+    pending_target_type = str(pending_target.get("type") or "").strip().lower()
+    if selector in {"target", "ability.target", "effect.target"}:
+        if pending_target_type == "player":
+            return "player", player.id
+        if pending_target_type == "mob":
+            return "mob", target_mob.id
+
+    ability_target_type = str((ability.target or {}).get("type") or "").strip().lower()
+    if ability_target_type in {"self", "ally"}:
+        return "player", player.id
+    return "mob", target_mob.id
+
+
+def _advance_non_ticking_effect_durations(encounter: CombatEncounter) -> None:
+    effects = list(encounter.active_effects or [])
+    if not effects:
+        return
+
+    current_round = int(encounter.round_number or 0)
+    kept: list[dict] = []
+    for effect in effects:
+        if effect.get("tick") or effect.get("effect") == "stun":
+            kept.append(effect)
+            continue
+        if int(effect.get("started_round") or 0) == current_round:
+            kept.append(effect)
+            continue
+        remaining = int(effect.get("remaining_rounds") or 0) - 1
+        if remaining > 0:
+            kept.append({**effect, "remaining_rounds": remaining})
+    encounter.active_effects = kept
 
 
 def _execute_pending_player_ability(
@@ -1097,8 +1402,13 @@ def _execute_pending_player_ability(
             continue
         effect_type = component.get("effect")
         duration = int(((component.get("duration") or {}).get("rounds")) or 1)
-        target_type = "player" if effect_type == "hot" else "mob"
-        target_id = player.id if target_type == "player" else target_mob.id
+        target_type, target_id = _effect_target_for_component(
+            component=component,
+            ability=ability,
+            pending=pending,
+            player=player,
+            target_mob=target_mob,
+        )
         _append_effect(
             encounter,
             effect=effect_type,
@@ -1108,6 +1418,8 @@ def _execute_pending_player_ability(
             target_id=target_id,
             duration_rounds=duration,
             label=_component_label(component, ability),
+            category=component.get("category") or "neutral",
+            primitives=component.get("primitives") or [],
             tick=component.get("tick") or {},
         )
         events.append(
@@ -1282,6 +1594,20 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
                     room_text=_room_attack_text(player.name, target_name, player_attack),
                 )
             )
+            events.extend(
+                _execute_after_damage_procs(
+                    encounter=encounter,
+                    player=player,
+                    target_mob=target_mob,
+                    room=room,
+                    actor=player,
+                    target=target_mob,
+                    result=player_attack,
+                    round_id=round_id,
+                    attack="attack",
+                    label="Attack",
+                )
+            )
 
             if target_mob.health <= 0:
                 return _handle_mob_defeated(
@@ -1293,6 +1619,7 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
                 )
 
     if not target_mob.fights_back:
+        _advance_non_ticking_effect_durations(encounter)
         cooldowns_changed = _finalize_active_round(
             encounter=encounter,
             player=player,
@@ -1325,6 +1652,7 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
                 round_id=round_id,
             )
         )
+        _advance_non_ticking_effect_durations(encounter)
         cooldowns_changed = _finalize_active_round(
             encounter=encounter,
             player=player,
@@ -1366,6 +1694,20 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
             round_id=round_id,
             actor_text=_actor_hit_text(mob_name, mob_attack),
             room_text=_room_attack_text(mob_name, player.name, mob_attack),
+        )
+    )
+    events.extend(
+        _execute_after_damage_procs(
+            encounter=encounter,
+            player=player,
+            target_mob=target_mob,
+            room=room,
+            actor=target_mob,
+            target=player,
+            result=mob_attack,
+            round_id=round_id,
+            attack="attack",
+            label="Attack",
         )
     )
 
@@ -1415,6 +1757,7 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
             encounter_active=False,
         )
 
+    _advance_non_ticking_effect_durations(encounter)
     cooldowns_changed = _finalize_active_round(
         encounter=encounter,
         player=player,

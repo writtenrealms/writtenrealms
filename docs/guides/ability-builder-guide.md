@@ -5,7 +5,9 @@
 This guide describes the WR2 ability authoring model. Ability manifests are
 wired into the runtime for player commands, encounter-round queueing, direct
 damage, healing, cast times, stun, damage-over-time, heal-over-time, and
-out-of-combat self utility.
+out-of-combat self utility. Encounter-scoped effects also support resource
+change ticks and `after_damage` procs for bounded buff behavior such as energy
+return on landed attacks.
 
 Ability `requirements` use the shared WR2 condition DSL. For condition
 operators and paths, read
@@ -20,6 +22,8 @@ An ability is an authored command that resolves one or more components:
 - stun
 - damage-over-time
 - heal-over-time
+- resource-changing ticks
+- resource-changing damage procs
 
 In combat, an ability is queued as the actor's primary action for the next
 encounter round. It replaces the auto-attack for that round.
@@ -454,6 +458,91 @@ spec:
 ```
 
 HOT ticks should use normal combat events so players can see what happened.
+
+## Resource Regeneration Effects
+
+Use a ticking effect with a `resource_change` primitive when an effect should
+restore health, energy, or stamina across later encounter rounds:
+
+```yaml
+kind: ability
+metadata:
+  slug: focus-renewal
+  name: Focus Renewal
+spec:
+  command:
+    verbs: [renewfocus]
+  action_type: primary
+  target:
+    type: self
+    default: self
+  components:
+    - type: effect
+      effect: focus-renewal
+      category: buff
+      target: self
+      duration:
+        rounds: 3
+      tick:
+        every_rounds: 1
+        primitives:
+          - type: resource_change
+            resource: energy
+            amount: 5
+            calc: fixed
+            target: effect.target
+```
+
+`resource` supports `health`, `energy`, and `stamina`. `calc` supports the same
+`fixed`, `percent_max`, and `percent_base` vocabulary used by ability costs.
+Resource changes clamp to the target's current maximum pool.
+
+## Damage Proc Buffs
+
+Use a `proc` primitive when an active effect should react to a known combat hook.
+The first supported proc phase is `after_damage`.
+
+Example: restore energy when the buffed actor lands a physical auto-attack.
+
+```yaml
+kind: ability
+metadata:
+  slug: energized-strikes
+  name: Energized Strikes
+spec:
+  command:
+    verbs: [energize]
+  action_type: primary
+  target:
+    type: self
+    default: self
+  components:
+    - type: effect
+      effect: energized-strikes
+      category: buff
+      target: self
+      duration:
+        rounds: 10
+      primitives:
+        - type: proc
+          phase: after_damage
+          conditions:
+            all:
+              - eq: [event.actor, "{effect.target}"]
+              - eq: [event.attack, attack]
+              - eq: [event.damage_type, physical]
+              - gte: [event.damage_taken, 1]
+          actions:
+            - type: resource_change
+              resource: energy
+              amount: 5
+              calc: fixed
+              target: effect.target
+```
+
+Proc conditions use the shared WR2 condition DSL. When comparing one event path
+to another path, wrap the right-hand reference in braces, as in
+`"{effect.target}"`.
 
 ## Class Access
 

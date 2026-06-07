@@ -34,6 +34,11 @@ COST_CALCS = ("fixed", "percent_max", "percent_base")
 COMPONENT_TYPES = ("damage", "healing", "effect", "state")
 EFFECT_TYPES = ("stun", "dot", "hot")
 EFFECT_APPLY_POLICIES = ("on_resolve", "on_hit")
+EFFECT_CATEGORIES = ("buff", "debuff", "neutral")
+EFFECT_TARGETS = ("actor", "self", "target", "ability.target", "effect.source", "effect.target")
+EFFECT_TICK_PHASES = ("round_start",)
+EFFECT_PRIMITIVE_TYPES = ("resource_change", "proc")
+EFFECT_PROC_PHASES = ("after_damage",)
 STATE_COMPONENT_SCOPES = ("world", "zone", "room", "character")
 STATE_COMPONENT_OPERATIONS = ("set", "increment", "clear")
 
@@ -480,10 +485,10 @@ def _normalize_effect_component(
     default_label: str,
 ) -> dict[str, Any]:
     raw_effect = value.get("effect")
-    effect_type = _coerce_choice(
+    effect_type = _coerce_slug(
         raw_effect,
-        choices=EFFECT_TYPES,
         field_name=f"{field_name}.effect",
+        allow_hyphen=True,
     )
     duration_rounds = _duration_rounds(
         value.get("duration", {"rounds": 1}),
@@ -498,32 +503,155 @@ def _normalize_effect_component(
     normalized: dict[str, Any] = {
         "type": "effect",
         "effect": effect_type,
+        "category": _coerce_choice(
+            value.get("category", "neutral"),
+            choices=EFFECT_CATEGORIES,
+            field_name=f"{field_name}.category",
+        ),
+        "target": _coerce_choice(
+            value.get("target", "ability.target"),
+            choices=EFFECT_TARGETS,
+            field_name=f"{field_name}.target",
+        ),
         "duration": {"rounds": duration_rounds},
         "apply": apply_policy,
         "text": _normalize_text(value.get("text"), default_label=default_label),
     }
-    if effect_type in {"dot", "hot"}:
+    primitives = _normalize_effect_primitives(
+        value.get("primitives"),
+        field_name=f"{field_name}.primitives",
+    )
+    if primitives:
+        normalized["primitives"] = primitives
+
+    if effect_type in {"dot", "hot"} or "tick" in value:
         tick = value.get("tick") or {}
         if not isinstance(tick, dict):
             raise AbilityValidationError(f"{field_name}.tick must be a mapping.")
-        tick_component = tick.get("component")
-        if not isinstance(tick_component, dict):
-            raise AbilityValidationError(f"{field_name}.tick.component must be a mapping.")
-        expected_type = "damage" if effect_type == "dot" else "healing"
-        normalized["tick"] = {
+        normalized_tick: dict[str, Any] = {
+            "phase": _coerce_choice(
+                tick.get("phase", "round_start"),
+                choices=EFFECT_TICK_PHASES,
+                field_name=f"{field_name}.tick.phase",
+            ),
             "every_rounds": _coerce_positive_int(
                 tick.get("every_rounds", 1),
                 field_name=f"{field_name}.tick.every_rounds",
                 minimum=1,
-            ),
-            "component": _normalize_output_component(
+            )
+        }
+        tick_primitives = _normalize_effect_primitives(
+            tick.get("primitives"),
+            field_name=f"{field_name}.tick.primitives",
+        )
+        if tick_primitives:
+            normalized_tick["primitives"] = tick_primitives
+        else:
+            tick_component = tick.get("component")
+            if not isinstance(tick_component, dict):
+                raise AbilityValidationError(f"{field_name}.tick.component must be a mapping.")
+            expected_type = "damage" if effect_type == "dot" else "healing"
+            normalized_tick["component"] = _normalize_output_component(
                 {**tick_component, "type": expected_type},
                 field_name=f"{field_name}.tick.component",
                 component_type=expected_type,
                 default_label=default_label,
-            ),
-        }
+            )
+        normalized["tick"] = normalized_tick
     return normalized
+
+
+def _normalize_effect_primitives(value: Any, *, field_name: str) -> list[dict[str, Any]]:
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise AbilityValidationError(f"{field_name} must be a list.")
+    return [
+        _normalize_effect_primitive(item, field_name=f"{field_name}[{index}]")
+        for index, item in enumerate(value)
+    ]
+
+
+def _normalize_effect_primitive(value: Any, *, field_name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise AbilityValidationError(f"{field_name} must be a mapping.")
+    primitive_type = _coerce_choice(
+        value.get("type"),
+        choices=EFFECT_PRIMITIVE_TYPES,
+        field_name=f"{field_name}.type",
+    )
+    if primitive_type == "resource_change":
+        return _normalize_resource_change_primitive(value, field_name=field_name)
+    return _normalize_proc_primitive(value, field_name=field_name)
+
+
+def _normalize_resource_change_primitive(value: dict[str, Any], *, field_name: str) -> dict[str, Any]:
+    unknown_fields = sorted(set(value.keys()) - {"type", "resource", "amount", "calc", "target"})
+    if unknown_fields:
+        raise AbilityValidationError(
+            f"{field_name} has unsupported field(s): {', '.join(unknown_fields)}."
+        )
+    return {
+        "type": "resource_change",
+        "resource": _coerce_choice(
+            value.get("resource"),
+            choices=COST_RESOURCES,
+            field_name=f"{field_name}.resource",
+        ),
+        "amount": _coerce_number(
+            value.get("amount", 0),
+            field_name=f"{field_name}.amount",
+        ),
+        "calc": _coerce_choice(
+            value.get("calc", "fixed"),
+            choices=COST_CALCS,
+            field_name=f"{field_name}.calc",
+        ),
+        "target": _coerce_choice(
+            value.get("target", "effect.target"),
+            choices=EFFECT_TARGETS,
+            field_name=f"{field_name}.target",
+        ),
+    }
+
+
+def _normalize_proc_primitive(value: dict[str, Any], *, field_name: str) -> dict[str, Any]:
+    unknown_fields = sorted(set(value.keys()) - {"type", "phase", "conditions", "actions"})
+    if unknown_fields:
+        raise AbilityValidationError(
+            f"{field_name} has unsupported field(s): {', '.join(unknown_fields)}."
+        )
+    conditions = deepcopy(value.get("conditions") or {})
+    try:
+        validate_condition_payload(conditions, field_name=f"{field_name}.conditions")
+    except ValueError as exc:
+        raise AbilityValidationError(str(exc))
+    actions = value.get("actions")
+    if not isinstance(actions, list) or not actions:
+        raise AbilityValidationError(f"{field_name}.actions must be a non-empty list.")
+    normalized_actions: list[dict[str, Any]] = []
+    for index, action in enumerate(actions):
+        if not isinstance(action, dict):
+            raise AbilityValidationError(f"{field_name}.actions[{index}] must be a mapping.")
+        action_type = str(action.get("type") or "").strip().lower()
+        if action_type != "resource_change":
+            raise AbilityValidationError(f"{field_name}.actions[{index}].type must be resource_change.")
+        normalized_actions.append(
+            _normalize_resource_change_primitive(
+                action,
+                field_name=f"{field_name}.actions[{index}]",
+            )
+        )
+    return {
+        "type": "proc",
+        "phase": _coerce_choice(
+            value.get("phase"),
+            choices=EFFECT_PROC_PHASES,
+            field_name=f"{field_name}.phase",
+        ),
+        "conditions": conditions,
+        "actions": normalized_actions,
+    }
 
 
 def _normalize_component(value: Any, *, field_name: str, default_label: str) -> dict[str, Any]:

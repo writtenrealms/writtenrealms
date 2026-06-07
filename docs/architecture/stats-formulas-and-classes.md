@@ -17,6 +17,7 @@ Reference docs:
 
 - `.codex/skills/wr-transition/wr2-architecture.md`
 - `docs/architecture/combat-encounter-model.md`
+- `docs/architecture/combat-buffs-and-effects.md`
 - `docs/architecture/yaml-manifest-system.md`
 
 ## Current Problem

@@ -239,6 +239,83 @@ spec:
             },
         )
 
+    def test_apply_ability_manifest_accepts_resource_proc_effects(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: energized-strikes
+  name: Energized Strikes
+spec:
+  command:
+    verbs: [energize]
+  target:
+    type: self
+    default: self
+    allow_out_of_combat: false
+  components:
+    - type: effect
+      effect: energized-strikes
+      category: buff
+      target: self
+      duration:
+        rounds: 10
+      primitives:
+        - type: proc
+          phase: after_damage
+          conditions:
+            all:
+              - eq: [event.actor, "{{effect.target}}"]
+              - eq: [event.attack, attack]
+              - eq: [event.damage_type, physical]
+              - gte: [event.damage_taken, 1]
+          actions:
+            - type: resource_change
+              resource: energy
+              amount: 5
+              calc: fixed
+              target: effect.target
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        ability = AbilityDefinition.objects.get(world=self.world, slug="energized-strikes")
+        self.assertEqual(
+            ability.components[0],
+            {
+                "type": "effect",
+                "effect": "energized-strikes",
+                "category": "buff",
+                "target": "self",
+                "duration": {"rounds": 10},
+                "apply": "on_resolve",
+                "text": {"label": "Energized Strikes"},
+                "primitives": [
+                    {
+                        "type": "proc",
+                        "phase": "after_damage",
+                        "conditions": {
+                            "all": [
+                                {"eq": ["event.actor", "{effect.target}"]},
+                                {"eq": ["event.attack", "attack"]},
+                                {"eq": ["event.damage_type", "physical"]},
+                                {"gte": ["event.damage_taken", 1]},
+                            ]
+                        },
+                        "actions": [
+                            {
+                                "type": "resource_change",
+                                "resource": "energy",
+                                "amount": 5.0,
+                                "calc": "fixed",
+                                "target": "effect.target",
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+
     def test_world_manifest_accepts_ability_progression(self):
         manifest = f"""
 kind: world

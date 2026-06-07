@@ -1,9 +1,10 @@
 import math
+from copy import deepcopy
 from unittest.mock import patch
 
 from config import constants as api_consts
 from core.computations import compute_stats
-from spawns.models import Mob
+from spawns.models import CombatEncounter, Mob
 from spawns.tasks import WR2_STANDING_REGEN_RATE, run_heartbeat_regen
 from tests.base import WorldTestCase
 from wr2_tests.utils import apply_basic_stat_system
@@ -69,6 +70,51 @@ class TestHeartbeatRegen(WorldTestCase):
         self.player.refresh_from_db()
         self.assertEqual((self.player.health, self.player.energy, self.player.stamina), before)
 
+    def test_player_regen_in_combat_uses_explicit_health_energy_and_stamina_base(self):
+        stat_system = deepcopy(self.world.config.stat_system)
+        stat_system["formulas"].setdefault("base_stats", {}).update(
+            {
+                "health_regen": 1,
+                "energy_regen": 2,
+            }
+        )
+        self.world.config.stat_system = stat_system
+        self.world.config.save(update_fields=["stat_system"])
+
+        stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
+        health_max = stats["health_max"]
+        energy_max = stats["energy_max"]
+        stamina_max = stats["stamina_max"]
+
+        self.player.in_game = True
+        self.player.health = max(health_max - 10, 0)
+        self.player.energy = max(energy_max - 10, 0)
+        self.player.stamina = max(stamina_max - 10, 0)
+        self.player.save(update_fields=["in_game", "health", "energy", "stamina"])
+        mob = Mob.objects.create(
+            name="Sparring Mob",
+            world=self.spawn_world,
+            room=self.spawn_room,
+            health=100,
+            health_max=100,
+        )
+        CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.spawn_room,
+            player=self.player,
+            mob=mob,
+        )
+
+        run_heartbeat_regen()
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.health, max(health_max - 10, 0) + 1)
+        self.assertEqual(self.player.energy, max(energy_max - 10, 0) + 2)
+        self.assertEqual(
+            self.player.stamina,
+            max(stamina_max - 10, 0) + WR2_STANDING_REGEN_RATE,
+        )
+
     def test_mob_regen_uses_mob_regen_attributes(self):
         self.player.in_game = True
         self.player.save(update_fields=["in_game"])
@@ -94,6 +140,39 @@ class TestHeartbeatRegen(WorldTestCase):
         mob.refresh_from_db()
         self.assertEqual(mob.health, 113)
         self.assertEqual(mob.energy, 26)
+        self.assertEqual(mob.stamina, 25)
+
+    def test_mob_regen_in_combat_uses_explicit_health_energy_and_stamina_base(self):
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+
+        mob = Mob.objects.create(
+            name="A Mob",
+            world=self.spawn_world,
+            room=self.spawn_room,
+            health=100,
+            health_max=120,
+            health_regen=1,
+            energy=20,
+            energy_max=40,
+            energy_regen=2,
+            stamina=20,
+            stamina_max=30,
+            stamina_regen=3,
+            regen_rate=10,
+        )
+        CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.spawn_room,
+            player=self.player,
+            mob=mob,
+        )
+
+        run_heartbeat_regen()
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.health, 101)
+        self.assertEqual(mob.energy, 22)
         self.assertEqual(mob.stamina, 25)
 
     def test_regen_skips_non_running_worlds(self):

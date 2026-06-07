@@ -10,7 +10,7 @@ from core.computations import compute_stats
 from django.core.cache import cache
 from django.db.models import F, Q
 from spawns.services import WorldGate
-from spawns.models import Mob, Player
+from spawns.models import CombatEncounter, Mob, Player
 from spawns.serializers import PlayerConfigSerializer
 from spawns.events import publish_events
 from spawns.handlers import (
@@ -94,7 +94,7 @@ def _apply_regen(
     return True
 
 
-def _regen_player(player: Player) -> dict[str, int | str] | None:
+def _regen_player(player: Player, *, in_combat: bool = False) -> dict[str, int | str] | None:
     stats = compute_stats(
         player.level,
         player.archetype,
@@ -117,9 +117,14 @@ def _regen_player(player: Player) -> dict[str, int | str] | None:
         stats.get("stamina_regen")
     )
 
-    health_add = math.ceil(health_max * WR2_STANDING_REGEN_RATE / 100) + health_regen
-    energy_add = math.ceil(energy_base * WR2_STANDING_REGEN_RATE / 100) + energy_regen
-    stamina_add = stamina_regen or WR2_STANDING_REGEN_RATE
+    if in_combat:
+        health_add = health_regen
+        energy_add = energy_regen
+        stamina_add = stamina_regen or WR2_STANDING_REGEN_RATE
+    else:
+        health_add = math.ceil(health_max * WR2_STANDING_REGEN_RATE / 100) + health_regen
+        energy_add = math.ceil(energy_base * WR2_STANDING_REGEN_RATE / 100) + energy_regen
+        stamina_add = stamina_regen or WR2_STANDING_REGEN_RATE
 
     changed = _apply_regen(
         player,
@@ -147,19 +152,23 @@ def _regen_player(player: Player) -> dict[str, int | str] | None:
     }
 
 
-def _regen_mob(mob: Mob) -> bool:
+def _regen_mob(mob: Mob, *, in_combat: bool = False) -> bool:
     health_max = _as_non_negative_int(getattr(mob, "health_max", mob.health), default=mob.health)
     energy_max = _as_non_negative_int(getattr(mob, "energy_max", mob.energy), default=mob.energy)
     stamina_max = _as_non_negative_int(getattr(mob, "stamina_max", mob.stamina), default=mob.stamina)
     regen_rate = _as_non_negative_int(getattr(mob, "regen_rate", WR2_STANDING_REGEN_RATE))
 
-    health_add = math.ceil(health_max * regen_rate / 100) + _as_non_negative_int(
-        getattr(mob, "health_regen", 0)
-    )
-    energy_add = math.ceil(energy_max * regen_rate / 100) + _as_non_negative_int(
-        getattr(mob, "energy_regen", 0)
-    )
-    stamina_add = WR2_STANDING_REGEN_RATE + _as_non_negative_int(getattr(mob, "stamina_regen", 0))
+    health_regen = _as_non_negative_int(getattr(mob, "health_regen", 0))
+    energy_regen = _as_non_negative_int(getattr(mob, "energy_regen", 0))
+    stamina_regen = _as_non_negative_int(getattr(mob, "stamina_regen", 0))
+    if in_combat:
+        health_add = health_regen
+        energy_add = energy_regen
+        stamina_add = WR2_STANDING_REGEN_RATE + stamina_regen
+    else:
+        health_add = math.ceil(health_max * regen_rate / 100) + health_regen
+        energy_add = math.ceil(energy_max * regen_rate / 100) + energy_regen
+        stamina_add = WR2_STANDING_REGEN_RATE + stamina_regen
 
     return _apply_regen(
         mob,
@@ -189,9 +198,27 @@ def run_heartbeat_regen() -> dict[str, int]:
         "stamina",
     )
     active_world_ids = list(active_players.values_list("world_id", flat=True).distinct())
+    active_combat_player_ids = set(
+        CombatEncounter.objects.filter(
+            status=CombatEncounter.STATUS_ACTIVE,
+            player__in_game=True,
+            player__world__lifecycle=api_consts.WORLD_LIFECYCLE_RUNNING,
+        ).values_list("player_id", flat=True)
+    )
+    active_combat_mob_ids = set(
+        CombatEncounter.objects.filter(
+            status=CombatEncounter.STATUS_ACTIVE,
+            player__in_game=True,
+            player__world__lifecycle=api_consts.WORLD_LIFECYCLE_RUNNING,
+            mob_id__isnull=False,
+        ).values_list("mob_id", flat=True)
+    )
 
     for player in active_players.iterator(chunk_size=200):
-        actor_update = _regen_player(player)
+        actor_update = _regen_player(
+            player,
+            in_combat=player.id in active_combat_player_ids,
+        )
         if actor_update:
             players_regenerated += 1
             publish_to_player(
@@ -234,7 +261,7 @@ def run_heartbeat_regen() -> dict[str, int]:
         mobs_qs = Mob.objects.none()
 
     for mob in mobs_qs.iterator(chunk_size=200):
-        if _regen_mob(mob):
+        if _regen_mob(mob, in_combat=mob.id in active_combat_mob_ids):
             mobs_regenerated += 1
 
     return {"players": players_regenerated, "mobs": mobs_regenerated}
