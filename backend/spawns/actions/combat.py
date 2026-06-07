@@ -1727,6 +1727,7 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
         affect_data = {
             "actor": serialize_actor(player, death_room).model_dump(),
             "room": _room_payload(player, death_room),
+            "origin_room": _room_payload(player, room),
         }
         events.append(
             GameEvent(

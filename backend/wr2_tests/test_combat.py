@@ -2,10 +2,14 @@ from unittest.mock import patch
 
 from core.combat_formulas import normalize_combat_system
 from core.computations import compute_stats
+from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
+from builders.models import Trigger
+from config import constants as adv_consts
 from spawns.models import CombatEncounter, Mob
 from spawns.tasks import resolve_combat_encounter
 from tests.base import WorldTestCase
+from worlds.models import Room
 from wr2_tests.utils import (
     apply_basic_stat_system,
     capture_game_messages,
@@ -185,6 +189,18 @@ class TestKillCommand(WorldTestCase):
         graveyard = self.room.create_at("east")
         self.world.config.death_room = graveyard
         self.world.config.save(update_fields=["death_room"])
+        room_ct = ContentType.objects.get_for_model(Room)
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=room_ct,
+            target_id=graveyard.id,
+            event=adv_consts.TRIGGER_EVENT_AFTER_DEATH_ROOM_ENTER,
+            script="/cmd room -- /echo -- Death room trigger fired.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
 
         mob = Mob.objects.create(
             world=self.spawn_world,
@@ -213,6 +229,14 @@ class TestKillCommand(WorldTestCase):
         death_affect = self._message_by_type(messages, "affect.death", self.player.key)
         self.assertIsNotNone(death_affect)
         self.assertEqual(death_affect["data"]["room"]["id"], graveyard.id)
+        self.assertEqual(death_affect["data"]["origin_room"]["id"], self.room.id)
+
+        death_room_echo = self._message_by_type(
+            messages,
+            "cmd./echo.success",
+        )
+        self.assertIsNotNone(death_room_echo, [msg["message"] for msg in messages])
+        self.assertIn("Death room trigger fired", death_room_echo["text"])
 
         watcher_death = self._message_by_type(messages, "notification.death", watcher.key)
         self.assertIsNotNone(watcher_death)

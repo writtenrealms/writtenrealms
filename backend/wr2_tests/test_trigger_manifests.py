@@ -583,6 +583,40 @@ spec:
         self.assertIn("/cmd room -- /echo", created_trigger.script)
         self.assertFalse(created_trigger.display_action_in_room)
 
+    def test_apply_trigger_manifest_can_create_death_room_event_trigger(self):
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  name: Death Room Arrival
+spec:
+  scope: room
+  kind: event
+  target:
+    type: room
+    key: room.{self.room.id}
+  event: after_death_room_enter
+  script: |
+    /cmd room -- /echo -- Death releases you into the quiet chamber.
+  order: 0
+  is_active: true
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["operation"], "created")
+
+        created_trigger = Trigger.objects.get(pk=resp.data["trigger"]["id"])
+        self.assertEqual(created_trigger.kind, adv_consts.TRIGGER_KIND_EVENT)
+        self.assertEqual(created_trigger.scope, adv_consts.TRIGGER_SCOPE_ROOM)
+        self.assertEqual(created_trigger.target_type, ContentType.objects.get_for_model(Room))
+        self.assertEqual(created_trigger.target_id, self.room.id)
+        self.assertEqual(created_trigger.event, adv_consts.TRIGGER_EVENT_AFTER_DEATH_ROOM_ENTER)
+        self.assertIn("Death releases", created_trigger.script)
+
     def test_apply_trigger_manifest_rejects_policy_outside_room_scope(self):
         manifest = f"""
 kind: trigger

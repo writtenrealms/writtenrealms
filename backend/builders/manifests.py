@@ -1732,7 +1732,7 @@ def parse_trigger_manifest(
             )
         if event in adv_consts.TRIGGER_ROOM_EVENT_EVENTS and scope != adv_consts.TRIGGER_SCOPE_ROOM:
             raise serializers.ValidationError(
-                "Room movement event triggers must use scope 'room'."
+                "Room event triggers must use scope 'room'."
             )
     elif event:
         event = _coerce_choice(

@@ -27,6 +27,7 @@ This keeps trigger wiring out of individual command handlers and makes the
 - `cmd.move.success` -> `MOB_REACTION_EVENT_ENTERING`
 - `cmd.move.success` -> `after_move_exit` room event triggers
 - `cmd.move.success` -> `after_move_enter` room event triggers
+- `affect.death` -> `after_death_room_enter` room event triggers
 
 Subscriptions only trigger reactions for **player-originated** events. This
 avoids recursion when mobs or room scripts emit the same event types.

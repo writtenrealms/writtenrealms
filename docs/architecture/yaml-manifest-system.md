@@ -440,8 +440,8 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   - `spec.event` is required.
   - mob reaction events such as `say` use `scope: world` and a `mobtemplate`
     target.
-  - room movement events such as `after_move_enter` and `after_move_exit` use
-    `scope: room` and a `room` target.
+  - room events such as `after_move_enter`, `after_move_exit`, and
+    `after_death_room_enter` use `scope: room` and a `room` target.
 - For `spec.kind: policy`:
   - `spec.event` is required.
   - `spec.event` must be `before_move_enter` or `before_move_exit`.
