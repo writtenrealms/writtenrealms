@@ -152,3 +152,35 @@ spec:
 
 `weight` controls which entry is chosen relative to the other entries.
 `probability` controls whether that entry is eligible at all.
+
+## Loading And Granting Item Definitions
+
+After applying an item definition manifest, builders can test it with `/load`:
+
+```text
+/load item bronze-sword
+```
+
+When a builder player runs that command directly, the spawned item is added to
+the builder's inventory. The selector can be an item template id, an item
+template slug, an item definition id, or an item definition slug.
+
+Trigger scripts usually should not use direct `/load` when the item is meant
+for the triggering player. Use `/grantitem` instead:
+
+```yaml
+script: /cmd room -- /grantitem {{ actor_key }} bronze-sword
+```
+
+`/grantitem <target> <item>` resolves the target in the issuer's current room
+and puts the item into that target's inventory. This is the preferred command
+for pledge rewards, starter gear, quest rewards, and other item grants.
+
+Use room `/load` only when the item should appear on the room floor:
+
+```yaml
+script: /cmd room -- /load item bronze-sword
+```
+
+For full trigger scripting behavior, see
+[trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md).

@@ -7,6 +7,7 @@ from spawns.actions.base import ActionError
 from spawns.actions.builder import (
     CmdAction,
     EchoAction,
+    GrantItemAction,
     JumpAction,
     LoadTemplateAction,
     PurgeAction,
@@ -176,6 +177,24 @@ def _parse_setclass_args(ctx: CommandContext) -> tuple[str | None, str | None]:
     return args[-1], " ".join(args[:-1]).strip()
 
 
+def _parse_grantitem_args(ctx: CommandContext) -> tuple[str | None, str | None]:
+    target = ctx.payload.get("target")
+    item = (
+        ctx.payload.get("item")
+        or ctx.payload.get("item_id")
+        or ctx.payload.get("template_id")
+    )
+    if target is not None and item is not None:
+        return str(target).strip(), str(item).strip()
+
+    args = [str(arg).strip() for arg in list(ctx.payload.get("args", [])) if str(arg).strip()]
+    if len(args) < 2:
+        return None, None
+    if len(args) >= 3 and args[-2].lower() == "item":
+        return " ".join(args[:-2]).strip(), args[-1]
+    return " ".join(args[:-1]).strip(), args[-1]
+
+
 @register_handler
 class LoadHandler(CommandHandler):
     command_type = "/load"
@@ -255,6 +274,68 @@ class LoadHandler(CommandHandler):
             ctx.publish(
                 {
                     "type": "cmd./load.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.actor_key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class GrantItemHandler(CommandHandler):
+    command_type = "/grantitem"
+    text_commands = ("/grantitem",)
+    builder_only = True
+    allow_script_source = True
+    supported_actor_types = ("player", "mob", "room")
+    help = {
+        "name": "Grant Item",
+        "format": "/grantitem <target> <item_template_id|item_slug>",
+        "description": (
+            "Load an item template or definition into a target player or mob inventory. "
+            "The target is resolved in the issuer's current room."
+        ),
+        "examples": [
+            "/grantitem player.123 starter-blade",
+            "/grantitem aria starter-blade",
+            "/grantitem quartermaster supply-token",
+            "/cmd room -- /grantitem player.123 starter-blade",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        if not can_execute_builder_command(ctx, self):
+            ctx.publish(builder_permission_error(self.command_type))
+            return
+
+        target, item = _parse_grantitem_args(ctx)
+        if not target or not item:
+            ctx.publish(
+                {
+                    "type": "cmd./grantitem.error",
+                    "text": "Usage: /grantitem <target> <item_template_id|item_slug>",
+                    "data": {"error": "Missing target or item.", "code": "invalid_args"},
+                }
+            )
+            return
+
+        try:
+            result = GrantItemAction().execute(
+                actor=ctx.actor,
+                target_selector=target,
+                item_id=item,
+                runtime_world=ctx.world,
+            )
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd./grantitem.error",
                     "text": err.message,
                     "data": {"error": err.message, "code": err.code, **err.data},
                 }

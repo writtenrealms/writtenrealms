@@ -357,6 +357,198 @@ class TestBuilderLoad(BuilderCommandTestCase):
         self.assertTrue(message.get("text"))
 
 
+class TestBuilderGrantItem(BuilderCommandTestCase):
+    def _message_by_type(self, messages, message_type):
+        for msg in messages:
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def _message_for_key_and_type(self, messages, player_key, message_type):
+        for msg in messages:
+            if msg["player_key"] == player_key and msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def _item_definition(self, slug="grant-definition-sword", name="a grant definition sword"):
+        return ItemDefinition.objects.create(
+            world=self.world,
+            slug=slug,
+            name=name,
+        )
+
+    def test_builder_grantitem_adds_player_inventory_and_notifies_target(self):
+        item_definition = self._item_definition()
+        target = self.create_player("Target", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/grantitem {target.key} grant-definition-sword")
+
+        loaded_item = target.inventory.get(
+            definition=item_definition,
+            world=self.spawn_world,
+        )
+        self.assertEqual(loaded_item.name, item_definition.name)
+        self.assertFalse(self.player.inventory.filter(definition=item_definition).exists())
+
+        message = self._message_by_type(messages, "cmd./grantitem.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target"]["key"], target.key)
+        self.assertEqual(message["data"]["loaded"]["name"], item_definition.name)
+
+        notification = self._message_for_key_and_type(messages, target.key, "notification./grantitem")
+        self.assertIsNotNone(notification)
+        self.assertEqual(notification["data"]["actor"]["key"], target.key)
+        self.assertIn(
+            loaded_item.key,
+            [item["key"] for item in notification["data"]["actor"]["inventory"]],
+        )
+
+    def test_builder_grantitem_adds_mob_inventory(self):
+        item_definition = self._item_definition(
+            slug="grant-mob-definition-sword",
+            name="a grant mob definition sword",
+        )
+        target_mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Quartermaster",
+            keywords="quartermaster",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/grantitem quartermaster grant-mob-definition-sword")
+
+        loaded_item = target_mob.inventory.get(
+            definition=item_definition,
+            world=self.spawn_world,
+        )
+        self.assertEqual(loaded_item.name, item_definition.name)
+        message = self._message_by_type(messages, "cmd./grantitem.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target"]["key"], target_mob.key)
+        self.assertEqual(message["data"]["target_type"], "mob")
+
+    def test_room_actor_grantitem_adds_player_inventory(self):
+        item_definition = self._item_definition(
+            slug="room-grant-definition-sword",
+            name="a room grant definition sword",
+        )
+        target = self.create_player("Target", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="room",
+                actor_id=self.room.id,
+                payload={
+                    "text": f"/grantitem {target.key} room-grant-definition-sword",
+                    "world_id": self.spawn_world.id,
+                },
+                script_source=True,
+            )
+
+        loaded_item = target.inventory.get(
+            definition=item_definition,
+            world=self.spawn_world,
+        )
+        self.assertEqual(loaded_item.name, item_definition.name)
+        message = self._message_by_type(messages, "cmd./grantitem.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["actor"]["char_type"], "room")
+        self.assertEqual(message["data"]["target"]["key"], target.key)
+
+        notification = self._message_for_key_and_type(messages, target.key, "notification./grantitem")
+        self.assertIsNotNone(notification)
+        self.assertIn(
+            loaded_item.key,
+            [item["key"] for item in notification["data"]["actor"]["inventory"]],
+        )
+
+    def test_cmd_room_grantitem_adds_player_inventory(self):
+        item_definition = self._item_definition(
+            slug="cmd-room-grant-definition-sword",
+            name="a command room grant definition sword",
+        )
+        target = self.create_player("Target", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                payload={"text": f"/cmd room -- /grantitem {target.key} cmd-room-grant-definition-sword"},
+                script_source=True,
+            )
+
+        loaded_item = target.inventory.get(
+            definition=item_definition,
+            world=self.spawn_world,
+        )
+        self.assertEqual(loaded_item.name, item_definition.name)
+        cmd_message = self._message_by_type(messages, "cmd./cmd.success")
+        self.assertIsNotNone(cmd_message)
+        self.assertEqual(cmd_message["data"]["errors"], [])
+        self.assertEqual(cmd_message["data"]["target"]["scope"], "room")
+
+    def test_mob_actor_grantitem_adds_player_inventory(self):
+        item_definition = self._item_definition(
+            slug="mob-grant-definition-sword",
+            name="a mob grant definition sword",
+        )
+        target = self.create_player("Target", room=self.room)
+        issuer_mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Quartermaster",
+            keywords="quartermaster",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="mob",
+                actor_id=issuer_mob.id,
+                payload={"text": f"/grantitem {target.key} mob-grant-definition-sword"},
+                script_source=True,
+            )
+
+        loaded_item = target.inventory.get(
+            definition=item_definition,
+            world=self.spawn_world,
+        )
+        self.assertEqual(loaded_item.name, item_definition.name)
+        message = self._message_by_type(messages, "cmd./grantitem.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["actor"]["char_type"], "mob")
+        self.assertEqual(message["data"]["target"]["key"], target.key)
+
+    def test_mob_grantitem_requires_script_source(self):
+        item_definition = self._item_definition(
+            slug="mob-restricted-grant-definition-sword",
+            name="a restricted mob grant definition sword",
+        )
+        target = self.create_player("Target", room=self.room)
+        issuer_mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Quartermaster",
+            keywords="quartermaster",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="mob",
+                actor_id=issuer_mob.id,
+                payload={"text": f"/grantitem {target.key} mob-restricted-grant-definition-sword"},
+            )
+
+        self.assertFalse(target.inventory.filter(definition=item_definition).exists())
+        message = self._message_by_type(messages, "cmd./grantitem.error")
+        self.assertIsNotNone(message)
+        self.assertIn("permission", message.get("text", "").lower())
+
+
 class TestBuilderPurge(BuilderCommandTestCase):
     def _message_by_type(self, messages, message_type):
         for msg in messages:

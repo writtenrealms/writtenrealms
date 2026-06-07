@@ -138,6 +138,27 @@ The loader rule UI can load mob definitions directly. The reference key shape is
 `mob_definition.<id>`, and mob definitions can also be resolved by slug in the
 builder load path.
 
+For direct builder testing, use `/load mob`:
+
+```text
+/load mob road-bandit
+```
+
+When a builder player runs that command directly, the mob is spawned in the
+builder's current room. The selector can be a mob template id, a mob template
+slug, a mob definition id, or a mob definition slug.
+
+Room and mob scripts can also use `/load mob` through `/cmd`:
+
+```yaml
+script: /cmd room -- /load mob road-bandit
+```
+
+This spawns the mob in the room issuing the command. If a mob issues
+`/load mob ...` from an internal script context, the new mob is spawned in the
+issuer mob's current room. Room and mob issuers cannot use `/load` from normal
+player-facing command input; it is script-source gated.
+
 World export includes mob definitions as `kind: mobdefinition` documents, so a
 definition authored in one world can be copied into another world through
 **World > Edit**.

@@ -268,6 +268,65 @@ Common commands you will often use in trigger scripts:
 - `/state clear ...`
 - `/echo -- ...`
 - `/cmd room -- /echo -- ...`
+- `/cmd room -- /load item <item_slug>`
+- `/cmd room -- /grantitem {{ actor_key }} <item_slug>`
+
+For the full slash command matrix and command-by-command reference, see
+[builder-command-reference.md](/Users/teebes/code/writtenrealms/docs/guides/builder-command-reference.md).
+
+### Loading And Granting Items
+
+Use `/load` when the issuer itself should receive the item, or when a room
+should place the item on the ground.
+
+```text
+/load item <item_template_id|item_slug>
+/load mob <mob_template_id|mob_slug>
+```
+
+Issuer behavior:
+
+- builder player issuer: `/load item ...` puts the item in the builder's
+  inventory, and `/load mob ...` places the mob in the builder's current room
+- mob issuer: `/load item ...` puts the item in that mob's inventory, and
+  `/load mob ...` places the mob in the issuer mob's current room
+- room issuer: `/load item ...` places the item on the room floor, and
+  `/load mob ...` places the mob in that room
+
+Room and mob issuers can use `/load` only from internal script contexts such as
+trigger scripts or `/cmd`. A normal player-facing mob command cannot grant
+itself builder powers.
+
+Use `/grantitem` when a script should put an item into a target character's
+inventory.
+
+```text
+/grantitem <target> <item_template_id|item_slug>
+```
+
+Targets are resolved in the issuer's current room. The target may be a player
+or a mob, and can be selected by key (`player.123`, `mob.456`) or by an
+unambiguous name/keyword in the room.
+
+For item selectors, `item_slug` can be a legacy item template slug or a WR2 item
+definition slug. Numeric ids are resolved against those same authored item
+sources.
+
+Common trigger examples:
+
+```yaml
+script: /cmd room -- /load item temple-key
+```
+
+This loads `temple-key` onto the triggering room's floor.
+
+```yaml
+script: /cmd room -- /grantitem {{ actor_key }} starter-trident
+```
+
+This grants `starter-trident` directly to the triggering player. Use this for
+pledge rewards, starter equipment, quest rewards, and other cases where the
+item should not be dropped on the ground first.
 
 ## Common Patterns
 
@@ -292,6 +351,7 @@ spec:
   script: |
     /cmd room -- /echo -- You feel Poseidon's tide answer in your blood.
     /cmd room -- /setclass {{ actor_key }} tidecaller
+    /cmd room -- /grantitem {{ actor_key }} tidecaller-starter-trident
   conditions:
     ne:
       - actor.archetype
@@ -305,7 +365,7 @@ spec:
 ```
 
 Use `{{ actor_key }}` when a script needs to pass the triggering character to a
-builder command such as `/setclass`.
+builder command such as `/setclass` or `/grantitem`.
 
 ### Warlord-Only Room Entry
 
@@ -511,6 +571,9 @@ For builder work, the important distinction is:
 
 ## Related Docs
 
+- [builder-command-reference.md](/Users/teebes/code/writtenrealms/docs/guides/builder-command-reference.md)
+- [item-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/item-definition-builder-guide.md)
+- [mob-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-definition-builder-guide.md)
 - [state-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/state-builder-guide.md)
 - [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
 - [trigger-matching-dsl.md](/Users/teebes/code/writtenrealms/docs/architecture/trigger-matching-dsl.md)

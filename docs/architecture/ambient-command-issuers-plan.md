@@ -29,6 +29,9 @@ This plan remains directional, but several pieces are now implemented:
 - `/load` supports player, mob, and room actors. Player and mob actors load
   items into their own inventory; room actors load items onto the room floor.
   Mob and room usage is script-source gated.
+- `/grantitem <target> <item>` supports builder player, mob, and room issuers.
+  It resolves a player or mob target in the issuer's current room and loads the
+  item into that target's inventory. Mob and room usage is script-source gated.
 - `/echo` and `/state` support room, zone, and world actors.
 - `/setclass` supports a room actor with an explicit player target, preserving
   trigger patterns such as `/cmd room -- /setclass {{ actor_key }} tidecaller`.
@@ -287,6 +290,8 @@ Status: partially implemented for scoped builder primitives.
 3. Define payload schemas for ambient commands.
 4. Support `/load` as a first item-spawn primitive: player and mob actors load
    items into inventory, while room actors load items onto the room floor.
+5. Support `/grantitem` as a targeted item-spawn primitive for room-triggered
+   rewards and starter-equipment scripts.
 
 Exit criteria:
 - A room issuer can produce visible room/zone/world outputs through standard publish paths.
@@ -359,13 +364,15 @@ The first compatibility slice is:
    under a mob actor it loads the item into that mob's inventory.
 5. Tests cover direct room actor `/load`, `/cmd room -- /load`, and
    pledge-style `/cmd room -- /setclass <player> <class>`.
+6. `/grantitem <target> <slug>` under a room or mob actor loads the item into
+   the target character inventory and sends player targets an inventory-updating
+   notification.
 
 This delivers immediate value for WR1-style content migration while validating
 ambient actor dispatch before the broader issuer/subject refactor.
 
 Recommended next vertical slice:
 
-1. Add `/grantitem` as a script-safe command available to rooms and mobs.
-2. Introduce explicit command diagnostics for nested script command failures.
-3. Start replacing `supported_actor_types` with issuer/subject capability
+1. Introduce explicit command diagnostics for nested script command failures.
+2. Start replacing `supported_actor_types` with issuer/subject capability
    declarations once the second ambient primitive is proven.

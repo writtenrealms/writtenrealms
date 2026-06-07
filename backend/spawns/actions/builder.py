@@ -50,6 +50,7 @@ from spawns.state_payloads import (
     serialize_actor,
     serialize_char_from_mob,
     serialize_char_from_player,
+    serialize_item,
     serialize_room,
 )
 from worlds.models import Room, World, Zone
@@ -424,6 +425,36 @@ def _resolve_room_in_world(room_world, room_selector_id: int):
     return room_world.rooms.filter(relative_id=room_selector_id).first()
 
 
+def _resolve_room_character_target(
+    *,
+    actor: BuilderCommandActor,
+    target_selector: str,
+    runtime_world: World | None = None,
+    allow_self: bool = True,
+) -> Player | Mob:
+    room = _actor_room(actor)
+    if not room:
+        raise ActionError("There is no current room for target resolution.", code="no_room")
+
+    normalized_target = str(target_selector or "").strip().lower()
+    if not normalized_target:
+        raise ActionError("Target is required.", code="invalid_target")
+    if allow_self and normalized_target in {"self", "me"}:
+        if isinstance(actor, (Player, Mob)):
+            return actor
+        raise ActionError("Room actors must specify a target.", code="invalid_target")
+
+    world = _actor_world(actor, runtime_world=runtime_world)
+    player_targets = _collect_room_player_targets(room, normalized_target, world=world)
+    mob_targets = _collect_room_mob_targets(room, normalized_target, world=world)
+    targets: list[Player | Mob] = [*player_targets, *mob_targets]
+    if not targets:
+        raise ActionError("Target not found in this room.", code="invalid_target")
+    if len(targets) > 1:
+        raise ActionError("Target is ambiguous.", code="ambiguous_target")
+    return targets[0]
+
+
 def _item_template_field_names() -> list[str]:
     names: list[str] = []
     for field in ItemMixin._meta.fields:
@@ -579,6 +610,109 @@ class LoadTemplateAction:
                 )
             ]
         )
+
+
+class GrantItemAction:
+    def _target_payload(self, target: Player | Mob) -> tuple[dict[str, object], str]:
+        if isinstance(target, Player):
+            updated_target = get_player_with_related(target.id)
+            return serialize_actor(updated_target, updated_target.room).model_dump(), updated_target.key
+
+        updated_target = Mob.objects.select_related("definition", "template", "room", "world").get(pk=target.id)
+        return serialize_char_from_mob(updated_target).model_dump(), updated_target.key
+
+    def execute(
+        self,
+        *,
+        actor: Player | Mob | Room,
+        target_selector: str,
+        item_id: int | str,
+        runtime_world: World | None = None,
+    ) -> ActionResult:
+        actor_type = _actor_kind(actor)
+        if actor_type not in ("player", "mob", "room"):
+            raise ActionError("Only players, mobs, and rooms can grant items.", code="unsupported_actor")
+
+        target = _resolve_room_character_target(
+            actor=actor,
+            target_selector=target_selector,
+            runtime_world=runtime_world,
+        )
+        spawn_world = _actor_world(actor, runtime_world=runtime_world)
+        if not spawn_world:
+            raise ActionError("No runtime world is available for granting items.", code="no_world")
+
+        payload = {
+            "world_id": spawn_world.id,
+            "template_type": "item",
+            "template_id": item_id,
+            "actor_type": _actor_kind(target),
+            "actor_id": target.id,
+            "room": _actor_room(actor).id,
+        }
+
+        serializer = LoadTemplateSerializer(data=payload)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except drf_serializers.ValidationError as exc:
+            message = _first_error_message(exc.detail) or "Unable to grant item."
+            raise ActionError(message, code="invalid_grant")
+
+        vd = serializer.validated_data
+        item = vd["template"].spawn(vd["actor"], vd["spawn_world"])
+        loaded_name = item.name or (item.template.name if item.template else "item")
+        item_payload = serialize_item(item, viewer=target if isinstance(target, (Player, Mob)) else None).model_dump()
+        target_payload, target_key = self._target_payload(target)
+
+        if isinstance(actor, Player):
+            updated_actor = get_player_with_related(actor.id)
+            actor_payload = serialize_actor(updated_actor, updated_actor.room).model_dump()
+            recipient_key = updated_actor.key
+        else:
+            actor_payload = _actor_summary(actor)
+            recipient_key = actor.key
+
+        loaded_data = {
+            "type": "item",
+            "key": item.key,
+            "name": loaded_name,
+            "item": item_payload,
+        }
+        data = {
+            "actor": actor_payload,
+            "target": target_payload,
+            "target_type": _actor_kind(target),
+            "loaded": loaded_data,
+        }
+        target_name = getattr(target, "name", None) or "target"
+        text = f"Granted {loaded_name} to {target_name}."
+
+        events = [
+            GameEvent(
+                type="cmd./grantitem.success",
+                recipients=[recipient_key],
+                data=data,
+                text=text,
+            )
+        ]
+
+        if isinstance(target, Player) and target_key != recipient_key:
+            events.append(
+                GameEvent(
+                    type="notification./grantitem",
+                    recipients=[target_key],
+                    data={
+                        "actor": target_payload,
+                        "issuer": actor_payload,
+                        "target": target_payload,
+                        "target_type": "player",
+                        "loaded": loaded_data,
+                    },
+                    text=f"You receive {loaded_name}.",
+                )
+            )
+
+        return ActionResult(events=events)
 
 
 class PurgeAction:
