@@ -64,6 +64,10 @@ const distanceToBottom = ref(0);
 
 const consoleMessage = (message) => {
   const type = message.type;
+  const isCompletedFleeSuccess =
+    type === "cmd.flee.success" &&
+    message.data &&
+    message.data.room;
 
   // Simple map from message type to console view
   const type_mapping = {
@@ -96,6 +100,7 @@ const consoleMessage = (message) => {
   if (type === "cmd.look.success" ||
       type === "cmd.move.success" ||
       type === "affect.flee.success" ||
+      isCompletedFleeSuccess ||
       type === "cmd.state.sync.success" ||
       (type === "system.connect.success" && message.data && message.data.room) ||
       type === "cmd./jump.success" ||

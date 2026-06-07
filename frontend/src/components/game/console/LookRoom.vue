@@ -20,7 +20,7 @@
       {{ message.data.penalty }}
     </div>
 
-    <div v-if="message.type === 'affect.flee.success'" class="mb-4">
+    <div v-if="isFleeSuccess" class="mb-4">
       <span v-if="message.data.is_auto">Your health is too low and you flee {{ message.data.direction }}!</span>
       <span v-else>You flee {{ message.data.direction }}!</span>
     </div>
@@ -173,6 +173,10 @@ const isStateSnapshot = computed(() => {
     props.message.data &&
     props.message.data.room
   );
+});
+
+const isFleeSuccess = computed(() => {
+  return props.message.type === "affect.flee.success" || props.message.type === "cmd.flee.success";
 });
 
 const descLines = computed(() => {

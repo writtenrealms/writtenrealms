@@ -158,6 +158,10 @@ const receiveMessage = async ({
   const isStateSnapshot =
     isStateSync ||
     (isConnectSuccess && message_data.data && message_data.data.room);
+  const isCompletedFleeSuccess =
+    message_data.type === "cmd.flee.success" &&
+    message_data.data &&
+    message_data.data.room;
 
   // Connection acknowledged (no state payload yet)
   if (isConnectSuccess) {
@@ -242,6 +246,7 @@ const receiveMessage = async ({
   if (
     message_data.type === "cmd.move.success" ||
     message_data.type === "affect.flee.success" ||
+    isCompletedFleeSuccess ||
     message_data.type === "notification.transport.exit" ||
     message_data.type === "affect.death" ||
     message_data.type === "affect.transfer"
@@ -605,7 +610,7 @@ const receiveMessage = async ({
       commit("player_set", message_data.data.target);
     }
 
-  } else if (message_data.type === "affect.flee.success") {
+  } else if (message_data.type === "affect.flee.success" || isCompletedFleeSuccess) {
     commit("player_target_set", null);
   }
 
