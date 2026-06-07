@@ -4,6 +4,7 @@ import json
 import re
 
 from builders.models import ItemTemplate, MobTemplate
+from config import constants as adv_consts
 from core.leveling import (
     LevelingConfigError,
     clamp_level,
@@ -57,6 +58,20 @@ from worlds.models import Room, World, Zone
 
 ECHO_SCOPES = ("room", "zone", "world")
 CMD_SCOPE_TARGETS = ("room", "zone", "world")
+JUMP_DIRECTIONS = {
+    "n": adv_consts.DIRECTION_NORTH,
+    "north": adv_consts.DIRECTION_NORTH,
+    "e": adv_consts.DIRECTION_EAST,
+    "east": adv_consts.DIRECTION_EAST,
+    "s": adv_consts.DIRECTION_SOUTH,
+    "south": adv_consts.DIRECTION_SOUTH,
+    "w": adv_consts.DIRECTION_WEST,
+    "west": adv_consts.DIRECTION_WEST,
+    "u": adv_consts.DIRECTION_UP,
+    "up": adv_consts.DIRECTION_UP,
+    "d": adv_consts.DIRECTION_DOWN,
+    "down": adv_consts.DIRECTION_DOWN,
+}
 
 
 def _first_error_message(detail: object) -> str:
@@ -423,6 +438,10 @@ def _resolve_room_in_world(room_world, room_selector_id: int):
     if room:
         return room
     return room_world.rooms.filter(relative_id=room_selector_id).first()
+
+
+def _normalize_jump_direction(room_selector: str) -> str | None:
+    return JUMP_DIRECTIONS.get(room_selector.strip().lower())
 
 
 def _resolve_room_character_target(
@@ -1383,9 +1402,9 @@ class JumpAction:
     ) -> ActionResult:
         normalized_selector = (room_selector or "").strip()
         if not normalized_selector:
-            raise ActionError("Usage: /jump <room_id>", code="invalid_args")
-
-        room_selector_id = _parse_room_selector(normalized_selector)
+            raise ActionError("Usage: /jump <room_id|direction>", code="invalid_args")
+        jump_direction = _normalize_jump_direction(normalized_selector)
+        room_selector_id = None if jump_direction else _parse_room_selector(normalized_selector)
 
         with transaction.atomic():
             player = Player.objects.select_for_update().get(pk=player_id)
@@ -1394,13 +1413,22 @@ class JumpAction:
 
             origin_room_id = player.room_id
             try:
-                origin_room = Room.objects.select_related("world").get(pk=origin_room_id)
+                origin_room = Room.objects.select_related(
+                    "world",
+                    *adv_consts.DIRECTIONS,
+                ).get(pk=origin_room_id)
             except Room.DoesNotExist:
                 raise ActionError("Current room is invalid.", code="invalid_room")
 
             room_world = origin_room.world
-            target_room = _resolve_room_in_world(room_world, room_selector_id)
+            target_room = (
+                getattr(origin_room, jump_direction, None)
+                if jump_direction
+                else _resolve_room_in_world(room_world, room_selector_id)
+            )
             if not target_room:
+                if jump_direction:
+                    raise ActionError("You cannot jump that way.", code="no_exit")
                 raise ActionError("Invalid room ID.", code="invalid_room")
 
             player.room_id = target_room.id

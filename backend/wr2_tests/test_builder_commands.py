@@ -1,4 +1,14 @@
-from builders.models import AbilityDefinition, ItemDefinition, ItemTemplate, MobTemplate
+import json
+
+from django.contrib.contenttypes.models import ContentType
+
+from builders.models import (
+    AbilityDefinition,
+    ItemDefinition,
+    ItemTemplate,
+    MobTemplate,
+    Trigger,
+)
 from config import constants as api_consts
 from core.scoped_state import (
     STATE_SCOPE_CHARACTER,
@@ -708,6 +718,62 @@ class TestBuilderJump(BuilderCommandTestCase):
         self.assertEqual(message["data"]["target"]["id"], target_room.id)
         self.assertEqual(message["data"]["target"]["key"], f"room.{target_room.relative_id}")
         self.assertIn("satisfying thump", message.get("text", "").lower())
+
+    def test_jump_moves_player_by_direction(self):
+        target_room = self.room.create_at(api_consts.DIRECTION_EAST)
+
+        for selector in ("east", "e"):
+            with self.subTest(selector=selector):
+                self.player.room = self.room
+                self.player.stamina = 10
+                self.player.save(update_fields=["room", "stamina"])
+
+                with capture_game_messages() as messages:
+                    dispatch_text_command(self.player.id, f"/jump {selector}")
+
+                self.player.refresh_from_db()
+                self.assertEqual(self.player.room_id, target_room.id)
+                self.assertEqual(self.player.stamina, 10)
+
+                message = self._message_by_type(messages, "cmd./jump.success")
+                self.assertIsNotNone(message)
+                self.assertEqual(message["data"]["target"]["id"], target_room.id)
+
+    def test_jump_direction_bypasses_move_policy(self):
+        target_room = self.room.create_at(api_consts.DIRECTION_EAST)
+        room_ct = ContentType.objects.get_for_model(target_room.__class__)
+        Trigger.objects.create(
+            world=self.world,
+            scope=api_consts.TRIGGER_SCOPE_ROOM,
+            kind=api_consts.TRIGGER_KIND_POLICY,
+            target_type=room_ct,
+            target_id=target_room.id,
+            event=api_consts.TRIGGER_EVENT_BEFORE_MOVE_ENTER,
+            conditions=json.dumps({"always": False}),
+            failure_message="Only warlords may enter.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+        self.player.stamina = 10
+        self.player.save(update_fields=["stamina"])
+
+        with capture_game_messages() as move_messages:
+            dispatch_text_command(self.player.id, "east")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.room.id)
+        move_error = self._message_by_type(move_messages, "cmd.move.error")
+        self.assertIsNotNone(move_error)
+        self.assertEqual(move_error["text"], "Only warlords may enter.")
+
+        with capture_game_messages() as jump_messages:
+            dispatch_text_command(self.player.id, "/jump e")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, target_room.id)
+        self.assertEqual(self.player.stamina, 10)
+        self.assertIsNotNone(self._message_by_type(jump_messages, "cmd./jump.success"))
+        self.assertIsNone(self._message_by_type(jump_messages, "cmd.move.error"))
 
     def test_jump_requires_builder(self):
         target_room = self.room.create_at("east")

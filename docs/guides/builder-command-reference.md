@@ -326,17 +326,20 @@ Use `&&` to chain nested commands on one line:
 Format:
 
 ```text
-/jump <room_id>
+/jump <room_id|direction>
 ```
 
 Moves the builder player to another room in the current world. The room can be
-selected by absolute room id or `room.<id>` style key.
+selected by absolute room id, `room.<id>` style key, or a connected direction
+from the current room. Directional jumps bypass normal movement policy triggers.
 
 Examples:
 
 ```text
 /jump 50201
 /jump room.50201
+/jump north
+/jump n
 ```
 
 This command is direct-builder-only.
