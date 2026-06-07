@@ -28,13 +28,14 @@ from core.stat_system import (
     compute_stats,
     get_world_stat_system,
 )
-from core.utils import format_actor_msg
+from core.utils import capfirst, format_actor_msg
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers as drf_serializers
 
 from spawns.actions.base import ActionError, ActionResult
+from spawns.actions.combat import apply_player_death
 from spawns.events import GameEvent
 from spawns.handlers.registry import (
     ActorNotFoundError,
@@ -1003,6 +1004,103 @@ class StateAction:
                     data=data,
                     text=text,
                 )
+            ]
+        )
+
+
+class WizKillAction:
+    def _resolve_target(
+        self,
+        *,
+        actor: BuilderCommandActor,
+        target_selector: str,
+        runtime_world: World | None,
+    ) -> Player:
+        target = _resolve_room_character_target(
+            actor=actor,
+            target_selector=target_selector,
+            runtime_world=runtime_world,
+            allow_self=False,
+        )
+        if not isinstance(target, Player):
+            raise ActionError(
+                "/kill currently supports player targets.",
+                code="invalid_target",
+            )
+        return target
+
+    def _target_text(
+        self,
+        *,
+        actor: BuilderCommandActor,
+        target: Player,
+        message: str | None,
+    ) -> str:
+        if message:
+            return message
+        if isinstance(actor, Room):
+            return "You perish to your environment."
+        if isinstance(actor, Mob):
+            return f"You die to {actor.name}."
+        if isinstance(actor, Player):
+            return f"{capfirst(actor.name)} snaps you out of existence."
+        return "You have been slain."
+
+    def _room_text(self, *, actor: BuilderCommandActor, target: Player) -> str:
+        target_name = capfirst(target.name)
+        if isinstance(actor, Room):
+            return f"{target_name} perishes to their environment."
+        if isinstance(actor, Mob):
+            return f"{target_name} dies to {actor.name}."
+        if isinstance(actor, Player):
+            return f"{capfirst(actor.name)} snaps {target.name} out of existence."
+        return f"{target_name} dies."
+
+    def execute(
+        self,
+        *,
+        actor: BuilderCommandActor,
+        target_selector: str,
+        message: str | None = None,
+        runtime_world: World | None = None,
+    ) -> ActionResult:
+        target = self._resolve_target(
+            actor=actor,
+            target_selector=target_selector,
+            runtime_world=runtime_world,
+        )
+        origin_room = target.room
+        target_text = self._target_text(actor=actor, target=target, message=message)
+        room_text = self._room_text(actor=actor, target=target)
+        updated_target, death_events = apply_player_death(
+            player=target,
+            origin_room=origin_room,
+            killer=actor,
+            target_text=target_text,
+            room_text=room_text,
+        )
+
+        actor_payload = (
+            serialize_actor(actor, actor.room).model_dump()
+            if isinstance(actor, Player)
+            else _actor_summary(actor)
+        )
+        target_payload = serialize_actor(updated_target, updated_target.room).model_dump()
+        success_text = f"You snap {target.name} out of existence."
+
+        return ActionResult(
+            events=[
+                GameEvent(
+                    type="cmd./kill.success",
+                    recipients=[actor.key],
+                    data={
+                        "actor": actor_payload,
+                        "target": target_payload,
+                        "message": message or "",
+                    },
+                    text=success_text,
+                ),
+                *death_events,
             ]
         )
 

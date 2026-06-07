@@ -20,6 +20,7 @@ from spawns.handlers import dispatch_command, get_registered_handlers
 from spawns.models import CombatEncounter, Item, Mob
 from tests.base import WorldTestCase
 from wr2_tests.utils import (
+    apply_basic_stat_system,
     capture_game_messages,
     dispatch_text_command,
     dispatch_text_command_as_mob,
@@ -128,6 +129,21 @@ class TestBuilderCommandPermissions(WorldTestCase):
             get_state_snapshot(STATE_SCOPE_CHARACTER, self.player),
         )
         message = self._message_by_type(messages, "cmd./state.error")
+        self.assertIsNotNone(message)
+        self.assertIn("permission", message.get("text", "").lower())
+
+    def test_script_source_does_not_allow_player_kill_commands(self):
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                payload={"text": f"/kill {self.player.key}"},
+                script_source=True,
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.room.id)
+        message = self._message_by_type(messages, "cmd./kill.error")
         self.assertIsNotNone(message)
         self.assertIn("permission", message.get("text", "").lower())
 
@@ -574,6 +590,135 @@ class TestBuilderGrantItem(BuilderCommandTestCase):
         message = self._message_by_type(messages, "cmd./grantitem.error")
         self.assertIsNotNone(message)
         self.assertIn("permission", message.get("text", "").lower())
+
+
+class TestBuilderWizKill(BuilderCommandTestCase):
+    def setUp(self):
+        super().setUp()
+        apply_basic_stat_system(self.world)
+        self.death_room = self.room.create_at("east")
+        self.world.config.death_room = self.death_room
+        self.world.config.save(update_fields=["death_room"])
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+
+    def _message_by_type(self, messages, message_type, player_key=None):
+        for msg in messages:
+            if player_key and msg["player_key"] != player_key:
+                continue
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def test_builder_kill_moves_player_to_death_room_with_message(self):
+        target = self.create_player("Target", room=self.room)
+        target.in_game = True
+        target.save(update_fields=["in_game"])
+        watcher = self.create_player("Watcher", room=self.room)
+        watcher.in_game = True
+        watcher.save(update_fields=["in_game"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/kill {target.key} -- The pit swallows you whole.")
+
+        target.refresh_from_db()
+        self.assertEqual(target.room_id, self.death_room.id)
+        self.assertGreater(target.health, 0)
+
+        success = self._message_by_type(messages, "cmd./kill.success", self.player.key)
+        self.assertIsNotNone(success)
+        self.assertEqual(success["data"]["target"]["key"], target.key)
+
+        affect = self._message_by_type(messages, "affect.death", target.key)
+        self.assertIsNotNone(affect)
+        self.assertEqual(affect["text"], "The pit swallows you whole.")
+        self.assertEqual(affect["data"]["room"]["id"], self.death_room.id)
+        self.assertEqual(affect["data"]["origin_room"]["id"], self.room.id)
+
+        watcher_death = self._message_by_type(messages, "notification.death", watcher.key)
+        self.assertIsNotNone(watcher_death)
+        self.assertEqual(watcher_death["text"], "Joe snaps Target out of existence.")
+        self.assertEqual(watcher_death["data"]["deceased"]["key"], target.key)
+
+    def test_cmd_room_kill_moves_triggering_player_to_death_room(self):
+        target = self.create_player("TriggerTarget", room=self.room)
+        target.in_game = True
+        target.save(update_fields=["in_game"])
+        Trigger.objects.create(
+            world=self.world,
+            scope=api_consts.TRIGGER_SCOPE_ROOM,
+            kind=api_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(self.death_room.__class__),
+            target_id=self.death_room.id,
+            event=api_consts.TRIGGER_EVENT_AFTER_DEATH_ROOM_ENTER,
+            script="/cmd room -- /echo -- Death room trigger fired.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=target.id,
+                payload={
+                    "text": f"/cmd room -- /kill {target.key} -- The floor vanishes beneath you."
+                },
+                script_source=True,
+            )
+
+        target.refresh_from_db()
+        self.assertEqual(target.room_id, self.death_room.id)
+        affect = self._message_by_type(messages, "affect.death", target.key)
+        self.assertIsNotNone(affect)
+        self.assertEqual(affect["text"], "The floor vanishes beneath you.")
+        cmd_message = self._message_by_type(messages, "cmd./cmd.success", target.key)
+        self.assertIsNotNone(cmd_message)
+        self.assertEqual(cmd_message["data"]["errors"], [])
+        death_room_echo = self._message_by_type(messages, "cmd./echo.success")
+        self.assertIsNotNone(death_room_echo, [msg["message"] for msg in messages])
+        self.assertIn("Death room trigger fired", death_room_echo["text"])
+
+    def test_mob_actor_kill_moves_player_to_death_room(self):
+        target = self.create_player("Victim", room=self.room)
+        target.in_game = True
+        target.save(update_fields=["in_game"])
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Stone Sentinel",
+            keywords="sentinel",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="mob",
+                actor_id=mob.id,
+                payload={"text": f"/kill {target.key} -- The sentinel crushes you."},
+                script_source=True,
+            )
+
+        target.refresh_from_db()
+        self.assertEqual(target.room_id, self.death_room.id)
+        affect = self._message_by_type(messages, "affect.death", target.key)
+        self.assertIsNotNone(affect)
+        self.assertEqual(affect["text"], "The sentinel crushes you.")
+
+    def test_kill_rejects_mob_targets(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Training Dummy",
+            keywords="dummy",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/kill {mob.key}")
+
+        self.assertTrue(Mob.objects.filter(pk=mob.id).exists())
+        message = self._message_by_type(messages, "cmd./kill.error", self.player.key)
+        self.assertIsNotNone(message)
+        self.assertIn("player targets", message.get("text", ""))
 
 
 class TestBuilderPurge(BuilderCommandTestCase):

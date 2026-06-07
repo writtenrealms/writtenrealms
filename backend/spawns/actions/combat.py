@@ -175,6 +175,115 @@ def _empty_corpse_payload() -> dict:
     return {"key": "", "name": "", "inventory": []}
 
 
+def _death_notification_recipients(
+    *,
+    deceased: Player,
+    origin_room: Room | None,
+    killer=None,
+) -> list[str]:
+    if not origin_room:
+        return []
+    qs = Player.objects.filter(room_id=origin_room.id, in_game=True).exclude(pk=deceased.id)
+    if isinstance(killer, Player):
+        qs = qs.exclude(pk=killer.id)
+    return [f"player.{player_id}" for player_id in qs.values_list("id", flat=True)]
+
+
+def _death_killer_payload(killer) -> dict | None:
+    if isinstance(killer, Player):
+        return serialize_char_from_player(killer).model_dump()
+    if isinstance(killer, Mob):
+        return serialize_char_from_mob(killer).model_dump()
+    if isinstance(killer, Room):
+        return {
+            "id": killer.id,
+            "key": killer.key,
+            "name": killer.name,
+            "char_type": "room",
+        }
+    return None
+
+
+def apply_player_death(
+    *,
+    player: Player,
+    origin_room: Room | None = None,
+    killer=None,
+    target_text: str | None = None,
+    room_text: str | None = None,
+    config=None,
+) -> tuple[Player, list[GameEvent]]:
+    with transaction.atomic():
+        updated_player = Player.objects.select_for_update().get(pk=player.pk)
+        origin_room = origin_room or updated_player.room
+        stats = _player_combat_stats(updated_player)
+        death_config = config or updated_player.world.effective_config
+        death_room = (
+            death_config.death_room
+            if death_config and death_config.death_room_id
+            else updated_player.get_starting_room()
+        )
+        if not death_room:
+            raise ActionError("There is no death room for this world.", code="no_death_room")
+
+        updated_player.health = stats.player_health_max
+        updated_player.energy = stats.player_energy_max
+        updated_player.stamina = stats.player_stamina_max
+        updated_player.room = death_room
+        # TODO: Apply WR2 death penalties here once the penalty system exists.
+        updated_player.save(update_fields=["health", "energy", "stamina", "room"])
+
+        active_encounters = CombatEncounter.objects.select_for_update().filter(
+            player=updated_player,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        for encounter in active_encounters:
+            _finish_encounter(encounter)
+
+    affect_data = {
+        "actor": serialize_actor(updated_player, death_room).model_dump(),
+        "room": _room_payload(updated_player, death_room),
+    }
+    if origin_room:
+        affect_data["origin_room"] = _room_payload(updated_player, origin_room)
+    killer_payload = _death_killer_payload(killer)
+    if killer_payload:
+        affect_data["killer"] = killer_payload
+
+    events = [
+        GameEvent(
+            type="affect.death",
+            recipients=[updated_player.key],
+            data=affect_data,
+            text=target_text or "You have been slain.",
+        )
+    ]
+
+    if room_text and not updated_player.is_invisible:
+        recipients = _death_notification_recipients(
+            deceased=updated_player,
+            origin_room=origin_room,
+            killer=killer,
+        )
+        if recipients:
+            notification_data = {
+                "deceased": serialize_char_from_player(updated_player).model_dump(),
+                "corpse": _empty_corpse_payload(),
+            }
+            if killer_payload:
+                notification_data["killer"] = killer_payload
+            events.append(
+                GameEvent(
+                    type="notification.death",
+                    recipients=recipients,
+                    data=notification_data,
+                    text=room_text,
+                )
+            )
+
+    return updated_player, events
+
+
 def _combat_state_payload(char_payload: dict, *, target_payload: dict | None) -> dict:
     payload = dict(char_payload)
     payload["state"] = "combat"
@@ -1714,48 +1823,18 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
     )
 
     if player.health <= 0:
-        death_room = config.death_room if config and config.death_room_id else player.get_starting_room()
-        player.health = stats.player_health_max
-        player.energy = stats.player_energy_max
-        player.stamina = stats.player_stamina_max
-        player.room = death_room
-        # TODO: Apply WR2 death penalties here once the penalty system exists.
-        player.save(update_fields=["health", "energy", "stamina", "room"])
-
-        _finish_encounter(encounter)
-
-        affect_data = {
-            "actor": serialize_actor(player, death_room).model_dump(),
-            "room": _room_payload(player, death_room),
-            "origin_room": _room_payload(player, room),
-        }
-        events.append(
-            GameEvent(
-                type="affect.death",
-                recipients=[player.key],
-                data=affect_data,
-                text="You have been slain.",
-            )
+        updated_player, death_events = apply_player_death(
+            player=player,
+            origin_room=room,
+            killer=target_mob,
+            target_text="You have been slain.",
+            room_text=f"{mob_name} kills {player.name}.",
+            config=config,
         )
-
-        if not player.is_invisible:
-            recipients = _combat_recipients(player, room)
-            if recipients:
-                events.append(
-                    GameEvent(
-                        type="notification.death",
-                        recipients=recipients,
-                        data={
-                            "deceased": serialize_char_from_player(player).model_dump(),
-                            "killer": serialize_char_from_mob(target_mob).model_dump(),
-                            "corpse": _empty_corpse_payload(),
-                        },
-                        text=f"{mob_name} kills {player.name}.",
-                    )
-                )
+        events.extend(death_events)
 
         return CombatStepResult(
-            actor_key=player.key,
+            actor_key=updated_player.key,
             events=events,
             encounter_active=False,
         )

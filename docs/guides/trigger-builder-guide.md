@@ -269,6 +269,7 @@ Common commands you will often use in trigger scripts:
 - `/cmd room -- /echo -- ...`
 - `/cmd room -- /load item <item_slug>`
 - `/cmd room -- /grantitem {{ actor_key }} <item_slug>`
+- `/cmd room -- /kill {{ actor_key }} -- <private death message>`
 
 For the full slash command matrix and command-by-command reference, see
 [builder-command-reference.md](/Users/teebes/code/writtenrealms/docs/guides/builder-command-reference.md).
@@ -349,6 +350,36 @@ script: /cmd room -- /grantitem {{ actor_key }} starter-trident
 This grants `starter-trident` directly to the triggering player. Use this for
 pledge rewards, starter equipment, quest rewards, and other cases where the
 item should not be dropped on the ground first.
+
+## Death Traps
+
+Use `/kill` as a room-issued command when entering or using a room should
+instantly kill the triggering player.
+
+```yaml
+kind: trigger
+metadata:
+  world: world.<world_id>
+  name: Pit Trap
+spec:
+  scope: room
+  kind: event
+  target:
+    type: room
+    key: room.<room_id>
+  event: after_move_enter
+  script: |
+    /cmd room -- /kill {{ actor_key }} -- The pit swallows you whole.
+    /cmd room -- /echo -- The floor seals again.
+  display_action_in_room: false
+  gate_delay: 0
+  order: 0
+  is_active: true
+```
+
+The message after `--` is sent to the killed player. Use an additional `/echo`
+line, or `&& /echo -- ...` inside the same `/cmd room` command, for room-visible
+trap flavor.
 
 ## Common Patterns
 

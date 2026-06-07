@@ -16,6 +16,7 @@ from spawns.actions.builder import (
     SetClassAction,
     SetLevelAction,
     StateAction,
+    WizKillAction,
 )
 from spawns.events import publish_events
 from spawns.handlers.base import (
@@ -237,6 +238,23 @@ def _parse_grantitem_args(ctx: CommandContext) -> tuple[str | None, str | None]:
     return " ".join(args[:-1]).strip(), args[-1]
 
 
+def _parse_kill_args(ctx: CommandContext) -> tuple[str | None, str | None]:
+    target = ctx.payload.get("target")
+    message = ctx.payload.get("message") or ctx.payload.get("msg")
+    if target is not None:
+        return str(target).strip(), str(message).strip() if message else None
+
+    args = [str(arg).strip() for arg in list(ctx.payload.get("args", [])) if str(arg).strip()]
+    if not args:
+        return None, None
+    target_text, message_text = _split_delimited_args(args)
+    if message_text is not None:
+        return target_text, message_text
+    if len(args) > 1:
+        return args[0], " ".join(args[1:]).strip()
+    return args[0], None
+
+
 @register_handler
 class LoadHandler(CommandHandler):
     command_type = "/load"
@@ -378,6 +396,76 @@ class GrantItemHandler(CommandHandler):
             ctx.publish(
                 {
                     "type": "cmd./grantitem.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.actor_key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class WizKillHandler(CommandHandler):
+    command_type = "/kill"
+    text_commands = ("/kill",)
+    builder_only = True
+    allow_script_source = True
+    supported_actor_types = ("player", "mob", "room")
+    help = {
+        "name": "Kill",
+        "format": "/kill <target> [-- message]",
+        "description": (
+            "Instantly kill a player target in the issuer's current room. "
+            "The target is moved through the normal death-room pipeline."
+        ),
+        "examples": [
+            "/kill player.123",
+            "/kill aria -- The pit swallows you whole.",
+            "/cmd room -- /kill {{ actor_key }} -- The pit swallows you whole.",
+        ],
+    }
+
+    def _can_execute_kill_command(self, ctx: CommandContext) -> bool:
+        if has_builder_access(ctx.player):
+            return True
+        return bool(
+            ctx.script_source
+            and self.allow_script_source
+            and ctx.actor_type in {"mob", "room"}
+        )
+
+    def handle(self, ctx: CommandContext) -> None:
+        if not self._can_execute_kill_command(ctx):
+            ctx.publish(builder_permission_error(self.command_type))
+            return
+
+        target, message = _parse_kill_args(ctx)
+        if not target:
+            ctx.publish(
+                {
+                    "type": "cmd./kill.error",
+                    "text": "Usage: /kill <target> [-- message]",
+                    "data": {"error": "Missing target.", "code": "invalid_args"},
+                }
+            )
+            return
+
+        try:
+            result = WizKillAction().execute(
+                actor=ctx.actor,
+                target_selector=target,
+                message=message,
+                runtime_world=ctx.world,
+            )
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd./kill.error",
                     "text": err.message,
                     "data": {"error": err.message, "code": err.code, **err.data},
                 }

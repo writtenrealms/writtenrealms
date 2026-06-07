@@ -47,9 +47,10 @@ Legend:
 | --- | --- | --- | --- | --- | --- | --- |
 | `/load` | Direct | Script | Script | Script | No | No |
 | `/grantitem` | Direct | Script | Script | Script | No | No |
+| `/kill` | Direct | No | Script | Script | No | No |
 | `/purge` | Direct | No | No | No | No | No |
 | `/echo`, `/zecho`, `/wecho` | Direct | Script | Script | Script | Script | Script |
-| `/state` | Direct | Script | Script | Script | Script | Script |
+| `/state` | Direct | No | Script | Script | Script | Script |
 | `/setlevel` | Direct | No | No | No | No | No |
 | `/setclass` | Direct | Script | No | Script | No | No |
 | `/cmd`, `/force`, `/rcmd`, `/zcmd`, `/wcmd` | Direct | Script | Script | Script | Script | Script |
@@ -123,6 +124,35 @@ Examples:
 
 Use `/grantitem` for pledge rewards, starter equipment, quest rewards, and any
 scripted reward that should not appear on the room floor.
+
+### `/kill`
+
+Format:
+
+```text
+/kill <target>
+/kill <target> -- <private death message>
+```
+
+Instantly kills a player target in the issuer's current room. The target is
+moved through the normal death-room pipeline, resources are restored from the
+world stat system, `affect.death` is emitted, and death-room event triggers can
+run.
+
+The optional `--` message is sent to the killed player as the death text. Use
+`&&` chaining with `/echo` for separate room flavor text.
+
+Examples:
+
+```text
+/kill player.123
+/kill aria -- The pit swallows you whole.
+/cmd room -- /kill {{ actor_key }} -- The pit swallows you whole.
+/cmd room -- /kill {{ actor_key }} -- The pit swallows you whole. && /echo -- The floor seals again.
+```
+
+`/kill` currently targets players. It does not kill mobs; use combat or builder
+cleanup commands for spawned mobs.
 
 ### `/purge`
 
@@ -406,6 +436,12 @@ Change the triggering player's class:
 
 ```yaml
 script: /cmd room -- /setclass {{ actor_key }} tidecaller
+```
+
+Kill the triggering player in a room trap:
+
+```yaml
+script: /cmd room -- /kill {{ actor_key }} -- The pit swallows you whole.
 ```
 
 ## Related Docs
