@@ -18,7 +18,7 @@ replacement-oriented. It does not require immediate implementation.
 Reference docs:
 
 - `.codex/skills/wr-transition/wr2-architecture.md`
-- `docs/ambient-command-issuers-plan.md`
+- `docs/architecture/ambient-command-issuers-plan.md`
 - `docs/quest-system-roadmap.md`
 - `docs/quest-system-endstate.md`
 - `docs/yaml-manifest-system.md`

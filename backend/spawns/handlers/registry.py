@@ -8,6 +8,7 @@ from typing import Type
 
 from spawns.handlers.base import CommandHandler, CommandContext
 from spawns.models import Mob, Player
+from worlds.models import Room, World, Zone
 
 
 class HandlerNotFoundError(Exception):
@@ -30,6 +31,28 @@ class PlayerNotFoundError(ActorNotFoundError):
     def __init__(self, player_id: int):
         self.player_id = player_id
         super().__init__("player", player_id)
+
+
+def _payload_int(payload: dict, *keys: str) -> int | None:
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _resolve_runtime_world(payload: dict, default_world: World | None) -> World | None:
+    world_id = _payload_int(payload, "runtime_world_id", "world_id")
+    if world_id is None:
+        return default_world
+    try:
+        return World.objects.get(pk=world_id)
+    except World.DoesNotExist:
+        raise ActorNotFoundError("world", world_id)
 
 
 # Global handler registry: command_type -> handler instance
@@ -151,7 +174,8 @@ def dispatch_command(
     Args:
         command_type: The command to execute (e.g., "state.sync", "look")
         player_id: Backwards-compatible player ID.
-        actor_type: "player" or "mob". Defaults to "player" when player_id is provided.
+        actor_type: "player", "mob", "room", "zone", or "world".
+            Defaults to "player" when player_id is provided.
         actor_id: Actor database ID.
         payload: Command-specific data from the client
         connection_id: Optional WebSocket connection identifier
@@ -175,18 +199,49 @@ def dispatch_command(
     actor = None
     player = None
     mob = None
+    room = None
+    zone = None
+    world = None
     if resolved_actor_type == "player":
         try:
             player = Player.objects.get(pk=resolved_actor_id)
         except Player.DoesNotExist:
             raise PlayerNotFoundError(resolved_actor_id)
         actor = player
+        world = player.world
+        room = player.room
+        zone = getattr(room, "zone", None)
     elif resolved_actor_type == "mob":
         try:
             mob = Mob.objects.get(pk=resolved_actor_id)
         except Mob.DoesNotExist:
             raise ActorNotFoundError("mob", resolved_actor_id)
         actor = mob
+        world = mob.world
+        room = mob.room
+        zone = getattr(room, "zone", None)
+    elif resolved_actor_type == "room":
+        try:
+            room = Room.objects.select_related("world", "zone").get(pk=resolved_actor_id)
+        except Room.DoesNotExist:
+            raise ActorNotFoundError("room", resolved_actor_id)
+        actor = room
+        world = _resolve_runtime_world(payload, room.world)
+        zone = room.zone
+    elif resolved_actor_type == "zone":
+        try:
+            zone = Zone.objects.select_related("world", "center").get(pk=resolved_actor_id)
+        except Zone.DoesNotExist:
+            raise ActorNotFoundError("zone", resolved_actor_id)
+        actor = zone
+        world = _resolve_runtime_world(payload, zone.world)
+        room = zone.center
+    elif resolved_actor_type == "world":
+        try:
+            world = World.objects.get(pk=resolved_actor_id)
+        except World.DoesNotExist:
+            raise ActorNotFoundError("world", resolved_actor_id)
+        actor = world
     else:
         raise ValueError(f"Unsupported actor_type: {resolved_actor_type}")
 
@@ -204,6 +259,9 @@ def dispatch_command(
         connection_id=connection_id,
         player=player,
         mob=mob,
+        room=room,
+        zone=zone,
+        world=world,
         published_messages=published_messages,
         script_source=script_source,
     )

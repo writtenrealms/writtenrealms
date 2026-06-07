@@ -9,10 +9,11 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from spawns.models import Mob, Player
+from worlds.models import Room, World, Zone
 from fastapi_app.game_ws import publish_to_player
 
 
-CommandActor = Player | Mob
+CommandActor = Player | Mob | Room | Zone | World
 
 
 @dataclass
@@ -28,6 +29,9 @@ class CommandContext:
     connection_id: str | None = None
     player: Player | None = None
     mob: Mob | None = None
+    room: Room | None = None
+    zone: Zone | None = None
+    world: World | None = None
     published_messages: list[dict] | None = None
     script_source: bool = False
 

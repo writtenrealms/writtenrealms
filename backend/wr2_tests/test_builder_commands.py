@@ -206,6 +206,123 @@ class TestBuilderLoad(BuilderCommandTestCase):
             item_definition.name,
         )
 
+    def test_room_actor_load_item_adds_room_inventory(self):
+        item_definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="room-definition-sword",
+            name="a room definition sword",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="room",
+                actor_id=self.room.id,
+                payload={
+                    "text": "/load item room-definition-sword",
+                    "world_id": self.spawn_world.id,
+                },
+                script_source=True,
+            )
+
+        loaded_item = self.room.inventory.get(
+            definition=item_definition,
+            world=self.spawn_world,
+        )
+        self.assertEqual(loaded_item.name, item_definition.name)
+        self.assertFalse(self.player.inventory.filter(definition=item_definition).exists())
+        message = self._message_by_type(messages, "cmd./load.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["actor"]["char_type"], "room")
+        self.assertEqual(message["data"]["loaded"]["name"], item_definition.name)
+
+    def test_cmd_room_load_item_adds_room_inventory(self):
+        item_definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="cmd-room-definition-sword",
+            name="a command room definition sword",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                payload={"text": "/cmd room -- /load item cmd-room-definition-sword"},
+                script_source=True,
+            )
+
+        loaded_item = self.room.inventory.get(
+            definition=item_definition,
+            world=self.spawn_world,
+        )
+        self.assertEqual(loaded_item.name, item_definition.name)
+        self.assertFalse(self.player.inventory.filter(definition=item_definition).exists())
+        cmd_message = self._message_by_type(messages, "cmd./cmd.success")
+        self.assertIsNotNone(cmd_message)
+        self.assertEqual(cmd_message["data"]["target"]["type"], "scope")
+        self.assertEqual(cmd_message["data"]["target"]["scope"], "room")
+        self.assertEqual(cmd_message["data"]["errors"], [])
+
+    def test_scripted_mob_load_item_adds_mob_inventory(self):
+        item_definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="mob-definition-sword",
+            name="a mob definition sword",
+        )
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Quartermaster",
+            keywords="quartermaster",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="mob",
+                actor_id=mob.id,
+                payload={"text": "/load item mob-definition-sword"},
+                script_source=True,
+            )
+
+        loaded_item = mob.inventory.get(
+            definition=item_definition,
+            world=self.spawn_world,
+        )
+        self.assertEqual(loaded_item.name, item_definition.name)
+        self.assertFalse(self.player.inventory.filter(definition=item_definition).exists())
+        self.assertFalse(self.room.inventory.filter(definition=item_definition).exists())
+        message = self._message_by_type(messages, "cmd./load.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["actor"]["char_type"], "mob")
+        self.assertEqual(message["data"]["loaded"]["name"], item_definition.name)
+
+    def test_mob_load_requires_script_source(self):
+        item_definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="mob-restricted-definition-sword",
+            name="a restricted mob definition sword",
+        )
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Quartermaster",
+            keywords="quartermaster",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="mob",
+                actor_id=mob.id,
+                payload={"text": "/load item mob-restricted-definition-sword"},
+            )
+
+        self.assertFalse(mob.inventory.filter(definition=item_definition).exists())
+        message = self._message_by_type(messages, "cmd./load.error")
+        self.assertIsNotNone(message)
+        self.assertIn("permission", message.get("text", "").lower())
+
     def test_load_mob_accepts_template_slug(self):
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, f"/load mob {self.mob_template.slug}")
@@ -762,6 +879,24 @@ class TestBuilderSetClass(BuilderCommandTestCase):
         message = self._message_by_type(messages, "cmd./setclass.success")
         self.assertIsNotNone(message)
         self.assertEqual(message["data"]["new_class"], "hoplite")
+
+    def test_cmd_room_setclass_updates_target_player(self):
+        target = self.create_player("Pledge Target", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=target.id,
+                payload={"text": f"/cmd room -- /setclass {target.key} Warlord"},
+                script_source=True,
+            )
+
+        target.refresh_from_db()
+        self.assertEqual(target.archetype, "warlord")
+        cmd_message = self._message_by_type(messages, "cmd./cmd.success")
+        self.assertIsNotNone(cmd_message)
+        self.assertEqual(cmd_message["data"]["target"]["scope"], "room")
+        self.assertEqual(cmd_message["data"]["errors"], [])
 
 
 class TestBuilderResync(BuilderCommandTestCase):

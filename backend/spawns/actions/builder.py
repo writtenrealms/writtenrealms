@@ -52,7 +52,7 @@ from spawns.state_payloads import (
     serialize_char_from_player,
     serialize_room,
 )
-from worlds.models import Room
+from worlds.models import Room, World, Zone
 
 ECHO_SCOPES = ("room", "zone", "world")
 CMD_SCOPE_TARGETS = ("room", "zone", "world")
@@ -213,20 +213,24 @@ def _first_dispatched_error(messages: list[dict]) -> str | None:
     return None
 
 
-def _collect_room_mob_targets(room: Room, selector: str) -> list[Mob]:
+def _collect_room_mob_targets(room: Room, selector: str, *, world: World | None = None) -> list[Mob]:
     normalized = selector.strip().lower()
     if not normalized:
         return []
+
+    room_mobs_qs = room.mobs.select_related("definition", "template")
+    if world is not None:
+        room_mobs_qs = room_mobs_qs.filter(world=world)
 
     if normalized.startswith("mob."):
         try:
             mob_id = int(normalized.split(".", 1)[1])
         except (TypeError, ValueError):
             return []
-        mob = room.mobs.select_related("definition", "template").filter(pk=mob_id).first()
+        mob = room_mobs_qs.filter(pk=mob_id).first()
         return [mob] if mob else []
 
-    room_mobs = list(room.mobs.select_related("definition", "template"))
+    room_mobs = list(room_mobs_qs)
     return [mob for mob in room_mobs if _entity_matches(mob, normalized)]
 
 
@@ -242,20 +246,24 @@ def _player_matches(player: Player, selector: str) -> bool:
     return name == selector or name.startswith(selector)
 
 
-def _collect_room_player_targets(room: Room, selector: str) -> list[Player]:
+def _collect_room_player_targets(room: Room, selector: str, *, world: World | None = None) -> list[Player]:
     normalized = selector.strip().lower()
     if not normalized:
         return []
+
+    room_players_qs = room.players.select_related("world", "world__config", "user")
+    if world is not None:
+        room_players_qs = room_players_qs.filter(world=world)
 
     if normalized.startswith("player."):
         try:
             player_id = int(normalized.split(".", 1)[1])
         except (TypeError, ValueError):
             return []
-        player = room.players.filter(pk=player_id).first()
+        player = room_players_qs.filter(pk=player_id).first()
         return [player] if player else []
 
-    room_players = list(room.players.select_related("world", "world__config", "user"))
+    room_players = list(room_players_qs)
     return [player for player in room_players if _player_matches(player, normalized)]
 
 
@@ -296,11 +304,24 @@ def _resolve_player_class_key(world, selector: str) -> str:
     raise ActionError("Class not found.", code="invalid_class")
 
 
-def _actor_kind(actor: Player | Mob) -> str:
-    return "player" if isinstance(actor, Player) else "mob"
+BuilderCommandActor = Player | Mob | Room | Zone | World
 
 
-def _actor_summary(actor: Player | Mob) -> dict[str, object]:
+def _actor_kind(actor: BuilderCommandActor) -> str:
+    if isinstance(actor, Player):
+        return "player"
+    if isinstance(actor, Mob):
+        return "mob"
+    if isinstance(actor, Room):
+        return "room"
+    if isinstance(actor, Zone):
+        return "zone"
+    if isinstance(actor, World):
+        return "world"
+    return str(getattr(actor, "model_type", "") or "actor")
+
+
+def _actor_summary(actor: BuilderCommandActor) -> dict[str, object]:
     return {
         "key": actor.key,
         "name": getattr(actor, "name", "Unknown"),
@@ -308,13 +329,44 @@ def _actor_summary(actor: Player | Mob) -> dict[str, object]:
     }
 
 
+def _actor_world(actor: BuilderCommandActor, *, runtime_world: World | None = None) -> World | None:
+    if runtime_world is not None:
+        return runtime_world
+    if isinstance(actor, World):
+        return actor
+    return getattr(actor, "world", None)
+
+
+def _actor_room(actor: BuilderCommandActor) -> Room | None:
+    if isinstance(actor, Room):
+        return actor
+    if isinstance(actor, Zone):
+        return actor.center
+    if isinstance(actor, World):
+        return None
+    return getattr(actor, "room", None)
+
+
+def _actor_zone(actor: BuilderCommandActor) -> Zone | None:
+    if isinstance(actor, Zone):
+        return actor
+    if isinstance(actor, World):
+        return None
+    if isinstance(actor, Room):
+        return actor.zone
+    room = getattr(actor, "room", None)
+    return getattr(room, "zone", None)
+
+
 def _render_command_segment(
     segment: str,
     *,
-    actor: Player | Mob,
+    actor: BuilderCommandActor,
     character: Player | None = None,
     quest_instance=None,
 ) -> str:
+    if not isinstance(actor, (Player, Mob)):
+        return str(segment or "").strip()
     rendered = format_actor_msg(
         segment,
         actor,
@@ -324,25 +376,29 @@ def _render_command_segment(
     return str(rendered or segment).strip()
 
 
-def _collect_scope_player_keys(actor: Player | Mob, scope: str) -> list[str]:
-    world_id = getattr(actor, "world_id", None)
-    if not world_id:
+def _collect_scope_player_keys(
+    actor: BuilderCommandActor,
+    scope: str,
+    *,
+    runtime_world: World | None = None,
+) -> list[str]:
+    world = _actor_world(actor, runtime_world=runtime_world)
+    if not world:
         raise ActionError("You are nowhere. Cannot echo.", code="no_world")
 
-    qs = Player.objects.filter(world_id=world_id, in_game=True)
+    qs = Player.objects.filter(world=world, in_game=True)
     normalized_scope = scope.strip().lower()
 
     if normalized_scope == "room":
-        room_id = getattr(actor, "room_id", None)
-        if not room_id:
+        room = _actor_room(actor)
+        if not room:
             raise ActionError("You are nowhere. Cannot echo to room.", code="no_room")
-        qs = qs.filter(room_id=room_id)
+        qs = qs.filter(room=room)
     elif normalized_scope == "zone":
-        room = getattr(actor, "room", None)
-        zone_id = getattr(room, "zone_id", None)
-        if not zone_id:
+        zone = _actor_zone(actor)
+        if not zone:
             raise ActionError("You are nowhere. Cannot echo to zone.", code="no_zone")
-        qs = qs.filter(room__zone_id=zone_id)
+        qs = qs.filter(room__zone=zone)
     elif normalized_scope == "world":
         pass
     else:
@@ -421,22 +477,44 @@ class LoadTemplateAction:
     def execute(
         self,
         *,
-        player_id: int,
+        actor: Player | Mob | Room,
+        runtime_world: World | None = None,
         template_type: str,
-        template_id: int,
+        template_id: int | str,
         cmd: str | None = None,
     ) -> ActionResult:
-        player = get_player_with_related(player_id)
-        if not player.room_id:
+        actor_type = _actor_kind(actor)
+        if actor_type not in ("player", "mob", "room"):
+            raise ActionError("Only players, mobs, and rooms can load templates.", code="unsupported_actor")
+
+        load_actor: Player | Mob | Room
+        room: Room | None
+        spawn_world: World | None
+        if isinstance(actor, Player):
+            load_actor = get_player_with_related(actor.id)
+            room = load_actor.room
+            spawn_world = load_actor.world
+        elif isinstance(actor, Mob):
+            load_actor = actor
+            room = actor.room
+            spawn_world = actor.world
+        else:
+            load_actor = actor
+            room = actor
+            spawn_world = _actor_world(actor, runtime_world=runtime_world)
+
+        if not room:
             raise ActionError("You are nowhere. Cannot load templates.", code="no_room")
+        if not spawn_world:
+            raise ActionError("No runtime world is available for loading templates.", code="no_world")
 
         payload = {
-            "world_id": player.world_id,
+            "world_id": spawn_world.id,
             "template_type": template_type,
             "template_id": template_id,
-            "actor_type": "player",
-            "actor_id": player.id,
-            "room": player.room_id,
+            "actor_type": actor_type,
+            "actor_id": load_actor.id,
+            "room": room.id,
         }
         if cmd:
             payload["cmd"] = cmd
@@ -470,11 +548,16 @@ class LoadTemplateAction:
         else:
             raise ActionError("Unknown template type.", code="invalid_type")
 
-        updated_player = get_player_with_related(player.id)
-        actor_payload = serialize_actor(updated_player, updated_player.room)
+        if isinstance(load_actor, Player):
+            updated_actor = get_player_with_related(load_actor.id)
+            actor_payload = serialize_actor(updated_actor, updated_actor.room).model_dump()
+            recipient_key = updated_actor.key
+        else:
+            actor_payload = _actor_summary(load_actor)
+            recipient_key = load_actor.key
 
         data = {
-            "actor": actor_payload.model_dump(),
+            "actor": actor_payload,
             "loaded": {
                 "type": loaded_type,
                 "key": loaded_key,
@@ -490,7 +573,7 @@ class LoadTemplateAction:
             events=[
                 GameEvent(
                     type="cmd./load.success",
-                    recipients=[updated_player.key],
+                    recipients=[recipient_key],
                     data=data,
                     text=text,
                 )
@@ -576,9 +659,10 @@ class EchoAction:
     def execute(
         self,
         *,
-        actor: Player | Mob,
+        actor: BuilderCommandActor,
         scope: str,
         message: str,
+        runtime_world: World | None = None,
     ) -> ActionResult:
         normalized_scope = str(scope or "").strip().lower()
         if normalized_scope not in ECHO_SCOPES:
@@ -591,7 +675,11 @@ class EchoAction:
                 code="invalid_args",
             )
 
-        recipients = _collect_scope_player_keys(actor, normalized_scope)
+        recipients = _collect_scope_player_keys(
+            actor,
+            normalized_scope,
+            runtime_world=runtime_world,
+        )
         data = {
             "actor": _actor_summary(actor),
             "scope": normalized_scope,
@@ -599,15 +687,15 @@ class EchoAction:
         }
 
         events: list[GameEvent] = []
-        if isinstance(actor, Player):
-            events.append(
-                GameEvent(
-                    type="cmd./echo.success",
-                    recipients=[actor.key],
-                    data=data,
-                    text=normalized_message,
-                )
+        events.append(
+            GameEvent(
+                type="cmd./echo.success",
+                recipients=[actor.key],
+                data=data,
+                text=normalized_message,
             )
+        )
+        if isinstance(actor, Player):
             recipients = [recipient for recipient in recipients if recipient != actor.key]
 
         if recipients:
@@ -627,16 +715,25 @@ class StateAction:
     def execute(
         self,
         *,
-        actor: Player | Mob,
+        actor: BuilderCommandActor,
         operation: str,
         scope: str,
         key: str | None = None,
         value: object | None = None,
         amount: int | float | None = None,
+        runtime_world: World | None = None,
     ) -> ActionResult:
         normalized_operation = str(operation or "").strip().lower()
         normalized_scope = normalize_state_scope(scope)
-        owner = resolve_scope_owner(normalized_scope, actor=actor)
+        character = actor if isinstance(actor, Player) else None
+        owner = resolve_scope_owner(
+            normalized_scope,
+            actor=actor,
+            world=_actor_world(actor, runtime_world=runtime_world),
+            zone=_actor_zone(actor),
+            room=_actor_room(actor),
+            character=character,
+        )
         if owner is None:
             raise ActionError(
                 f"There is no current {normalized_scope} state owner here.",
@@ -737,8 +834,8 @@ class SetLevelAction:
         if not normalized_target or normalized_target in {"self", "me"}:
             return actor
 
-        player_targets = _collect_room_player_targets(room, normalized_target)
-        mob_targets = _collect_room_mob_targets(room, normalized_target)
+        player_targets = _collect_room_player_targets(room, normalized_target, world=actor.world)
+        mob_targets = _collect_room_mob_targets(room, normalized_target, world=actor.world)
         targets: list[Player | Mob] = [*player_targets, *mob_targets]
         if not targets:
             raise ActionError("Target not found in this room.", code="invalid_target")
@@ -823,18 +920,25 @@ class SetClassAction:
     def _resolve_target(
         self,
         *,
-        actor: Player,
+        actor: Player | Room,
+        runtime_world: World | None,
         target_selector: str | None,
     ) -> Player:
-        room = actor.room
+        room = _actor_room(actor)
         if not room:
             raise ActionError("You are nowhere. Cannot set classes.", code="no_room")
 
         normalized_target = str(target_selector or "").strip().lower()
-        if not normalized_target or normalized_target in {"self", "me"}:
+        if isinstance(actor, Player) and (not normalized_target or normalized_target in {"self", "me"}):
             return actor
+        if not normalized_target or normalized_target in {"self", "me"}:
+            raise ActionError("Target player is required.", code="invalid_target")
 
-        targets = _collect_room_player_targets(room, normalized_target)
+        targets = _collect_room_player_targets(
+            room,
+            normalized_target,
+            world=_actor_world(actor, runtime_world=runtime_world),
+        )
         if not targets:
             raise ActionError("Player not found in this room.", code="invalid_target")
         if len(targets) > 1:
@@ -844,12 +948,14 @@ class SetClassAction:
     def execute(
         self,
         *,
-        actor: Player,
+        actor: Player | Room,
         class_selector: str,
         target_selector: str | None = None,
+        runtime_world: World | None = None,
     ) -> ActionResult:
         target = self._resolve_target(
             actor=actor,
+            runtime_world=runtime_world,
             target_selector=target_selector,
         )
         new_class = _resolve_player_class_key(target.world, class_selector)
@@ -885,24 +991,31 @@ class SetClassAction:
                 status=CombatEncounter.STATUS_ACTIVE,
             ).exclude(pending_player_ability={}).update(pending_player_ability={})
 
-        updated_actor = get_player_with_related(actor.id)
         updated_target = get_player_with_related(target.id)
-        actor_payload = serialize_actor(updated_actor, updated_actor.room)
-        room_payload = _get_single_room_payload(updated_actor)
         target_payload = serialize_actor(updated_target, updated_target.room)
         class_labels = get_world_stat_system(updated_target.world)["labels"]["classes"]
         class_label = class_labels.get(new_class, new_class)
         target_name = getattr(updated_target, "name", None) or "target"
         text = f"Set {target_name}'s class to {class_label}."
 
+        if isinstance(actor, Player):
+            updated_actor = get_player_with_related(actor.id)
+            actor_payload = serialize_actor(updated_actor, updated_actor.room).model_dump()
+            room_payload = _get_single_room_payload(updated_actor).model_dump()
+            recipient_key = updated_actor.key
+        else:
+            actor_payload = _actor_summary(actor)
+            room_payload = {"key": actor.key, "name": actor.name}
+            recipient_key = actor.key
+
         return ActionResult(
             events=[
                 GameEvent(
                     type="cmd./setclass.success",
-                    recipients=[updated_actor.key],
+                    recipients=[recipient_key],
                     data={
-                        "actor": actor_payload.model_dump(),
-                        "room": room_payload.model_dump(),
+                        "actor": actor_payload,
+                        "room": room_payload,
                         "target": target_payload.model_dump(),
                         "target_type": "player",
                         "previous_class": previous_class,
@@ -918,15 +1031,43 @@ class SetClassAction:
 
 class CmdAction:
     @staticmethod
-    def _dispatch_actor_ref(actor: Player | Mob) -> tuple[str, int]:
+    def _dispatch_actor_ref(actor: BuilderCommandActor) -> tuple[str, int]:
         return _actor_kind(actor), actor.id
+
+    def _resolve_scope_actor(
+        self,
+        *,
+        actor: BuilderCommandActor,
+        scope: str,
+        runtime_world: World | None = None,
+    ) -> BuilderCommandActor:
+        if scope == "room":
+            room = _actor_room(actor)
+            if not room:
+                raise ActionError("There is no current room for this command.", code="no_room")
+            return room
+        if scope == "zone":
+            zone = _actor_zone(actor)
+            if not zone:
+                raise ActionError("There is no current zone for this command.", code="no_zone")
+            return zone
+        if scope == "world":
+            world = _actor_world(actor, runtime_world=runtime_world)
+            if not world:
+                raise ActionError("There is no current world for this command.", code="no_world")
+            return world
+        raise ActionError(
+            "Usage: /cmd <room|zone|world|target> -- <command>",
+            code="invalid_args",
+        )
 
     def _dispatch_segment(
         self,
         *,
-        dispatch_actor: Player | Mob,
+        dispatch_actor: BuilderCommandActor,
         segment: str,
         issuer_scope: str | None = None,
+        runtime_world: World | None = None,
         skip_triggers: bool = False,
         script_source: bool = False,
     ) -> str | None:
@@ -948,6 +1089,8 @@ class CmdAction:
         payload: dict[str, object] = {"text": rendered_segment}
         if issuer_scope:
             payload["issuer_scope"] = issuer_scope
+        if runtime_world:
+            payload["world_id"] = runtime_world.id
         if skip_triggers:
             payload["skip_triggers"] = True
 
@@ -967,16 +1110,13 @@ class CmdAction:
     def execute(
         self,
         *,
-        actor: Player | Mob,
+        actor: BuilderCommandActor,
         target_selector: str,
         cmd: str,
+        runtime_world: World | None = None,
         skip_triggers: bool = False,
         script_source: bool = False,
     ) -> ActionResult:
-        room = getattr(actor, "room", None)
-        if not room:
-            raise ActionError("You are nowhere. Cannot execute commands.", code="no_room")
-
         normalized_target = str(target_selector or "").strip().lower()
         if not normalized_target:
             raise ActionError(
@@ -991,17 +1131,34 @@ class CmdAction:
                 code="invalid_args",
             )
 
-        dispatch_actor: Player | Mob = actor
+        dispatch_actor: BuilderCommandActor = actor
         issuer_scope: str | None = None
         target_data: dict[str, object]
 
         if normalized_target in CMD_SCOPE_TARGETS:
             issuer_scope = normalized_target
-            target_data = {"type": "scope", "scope": normalized_target}
+            dispatch_actor = self._resolve_scope_actor(
+                actor=actor,
+                scope=normalized_target,
+                runtime_world=runtime_world,
+            )
+            target_data = {
+                "type": "scope",
+                "scope": normalized_target,
+                "key": dispatch_actor.key,
+                "name": getattr(dispatch_actor, "name", normalized_target),
+            }
         else:
+            room = _actor_room(actor)
+            if not room:
+                raise ActionError("There is no current room for target commands.", code="no_room")
             if normalized_target.startswith("mob:"):
                 normalized_target = normalized_target.split(":", 1)[1].strip().lower()
-            targets = _collect_room_mob_targets(room, normalized_target)
+            targets = _collect_room_mob_targets(
+                room,
+                normalized_target,
+                world=_actor_world(actor, runtime_world=runtime_world),
+            )
             if not targets:
                 raise ActionError("Target not found.", code="invalid_target")
             target_mob = targets[0]
@@ -1018,6 +1175,7 @@ class CmdAction:
                 dispatch_actor=dispatch_actor,
                 segment=segment,
                 issuer_scope=issuer_scope,
+                runtime_world=_actor_world(actor, runtime_world=runtime_world),
                 skip_triggers=skip_triggers,
                 script_source=script_source,
             )

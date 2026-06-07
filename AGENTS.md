@@ -15,7 +15,7 @@
 - Legacy WR1 engine code is now maintained out of tree as migration reference material.
 - See `.codex/skills/wr-transition/wr1-architecture.md` and `.codex/skills/wr-transition/wr2-architecture.md` for architecture references.
 - For current Trigger/YAML editing behavior, see `docs/yaml-manifest-system.md`.
-- For ambient issuer command context direction, see `docs/ambient-command-issuers-plan.md`.
+- For ambient issuer command context direction, see `docs/architecture/ambient-command-issuers-plan.md`.
 - Any feature that needs conditional logic must use the existing WR2 condition framework (`backend/core/condition_dsl.py`) rather than inventing a new predicate/condition format.
 
 ## Build, Test, and Development Commands

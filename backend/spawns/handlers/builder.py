@@ -181,11 +181,14 @@ class LoadHandler(CommandHandler):
     command_type = "/load"
     text_commands = ("/load",)
     builder_only = True
+    allow_script_source = True
+    supported_actor_types = ("player", "mob", "room")
     help = {
         "name": "Load",
         "format": "/load <item|mob> <template_id|slug> [cmd]",
         "description": (
-            "Load an item or mob template into your current room. "
+            "Load an item or mob template. Players and mobs load items into inventory; "
+            "rooms load items onto the ground. "
             "An optional trailing command is attached to the loaded entity."
         ),
         "examples": [
@@ -242,7 +245,8 @@ class LoadHandler(CommandHandler):
 
         try:
             result = LoadTemplateAction().execute(
-                player_id=ctx.player.id,
+                actor=ctx.actor,
+                runtime_world=ctx.world,
                 template_type=template_type,
                 template_id=template_id,
                 cmd=cmd,
@@ -259,7 +263,7 @@ class LoadHandler(CommandHandler):
 
         publish_events(
             result.events,
-            actor_key=ctx.player.key,
+            actor_key=ctx.actor_key,
             connection_id=ctx.connection_id,
         )
 
@@ -320,7 +324,7 @@ class EchoHandler(CommandHandler):
     text_commands = ("/echo", "/zecho", "/wecho")
     builder_only = True
     allow_script_source = True
-    supported_actor_types = ("player", "mob")
+    supported_actor_types = ("player", "mob", "room", "zone", "world")
     help = {
         "name": "Echo",
         "format": "/echo [room|zone|world] <message>",
@@ -357,6 +361,7 @@ class EchoHandler(CommandHandler):
                 actor=ctx.actor,
                 scope=scope,
                 message=message,
+                runtime_world=ctx.world,
             )
         except ActionError as err:
             ctx.publish(
@@ -381,7 +386,7 @@ class StateHandler(CommandHandler):
     text_commands = ("/state",)
     builder_only = True
     allow_script_source = True
-    supported_actor_types = ("player", "mob")
+    supported_actor_types = ("player", "mob", "room", "zone", "world")
     help = {
         "name": "State",
         "format": "/state <show|get|set|clear|add> <world|zone|room|character> [key] [-- value]",
@@ -423,6 +428,7 @@ class StateHandler(CommandHandler):
                 key=key,
                 value=value,
                 amount=value,
+                runtime_world=ctx.world,
             )
         except ActionError as err:
             ctx.publish(
@@ -506,6 +512,7 @@ class SetClassHandler(CommandHandler):
     text_commands = ("/setclass",)
     builder_only = True
     allow_script_source = True
+    supported_actor_types = ("player", "room")
     help = {
         "name": "Set Class",
         "format": "/setclass <class> | /setclass <player> <class>",
@@ -540,9 +547,10 @@ class SetClassHandler(CommandHandler):
 
         try:
             result = SetClassAction().execute(
-                actor=ctx.player,
+                actor=ctx.actor,
                 class_selector=class_name,
                 target_selector=target,
+                runtime_world=ctx.world,
             )
         except ActionError as err:
             ctx.publish(
@@ -556,7 +564,7 @@ class SetClassHandler(CommandHandler):
 
         publish_events(
             result.events,
-            actor_key=ctx.player.key,
+            actor_key=ctx.actor_key,
             connection_id=ctx.connection_id,
         )
 
@@ -567,7 +575,7 @@ class CmdHandler(CommandHandler):
     text_commands = ("/cmd", "/force", "/rcmd", "/zcmd", "/wcmd")
     builder_only = True
     allow_script_source = True
-    supported_actor_types = ("player", "mob")
+    supported_actor_types = ("player", "mob", "room", "zone", "world")
     help = {
         "name": "Cmd",
         "format": "/cmd <room|zone|world|target> -- <command>",
@@ -604,6 +612,7 @@ class CmdHandler(CommandHandler):
                 actor=ctx.actor,
                 target_selector=target_selector,
                 cmd=cmd,
+                runtime_world=ctx.world,
                 skip_triggers=bool(ctx.payload.get("skip_triggers")),
                 script_source=ctx.script_source,
             )

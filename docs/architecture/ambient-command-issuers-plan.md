@@ -1,6 +1,6 @@
 # Ambient Command Issuers in WR2 (Room/Zone/World)
 
-This document proposes an architecture and implementation plan for supporting non-character command issuers in WR2.
+This document tracks the architecture and implementation plan for supporting non-character command issuers in WR2.
 
 The goal is to support commands initiated by:
 - Rooms
@@ -18,12 +18,40 @@ This plan remains directional, but several pieces are now implemented:
 - Builder command primitives are `/echo` and `/cmd`.
 - Trigger YAML manifest ingestion is in place for create/update/delete.
 - Room builder UI now exposes **Triggers** and a room-tailored new-trigger template.
+- The command dispatcher can resolve `room`, `zone`, and `world` actor types
+  through the existing actor compatibility path.
+- `CommandContext` carries optional `room`, `zone`, and `world` references in
+  addition to `player` and `mob`.
+- `TextCommandHandler` can route ambient actors, while dynamic ability commands
+  and fallback command triggers remain character-only.
+- `/cmd room`, `/cmd zone`, and `/cmd world` now dispatch nested commands as the
+  corresponding ambient actor instead of only tagging an `issuer_scope`.
+- `/load` supports player, mob, and room actors. Player and mob actors load
+  items into their own inventory; room actors load items onto the room floor.
+  Mob and room usage is script-source gated.
+- `/echo` and `/state` support room, zone, and world actors.
+- `/setclass` supports a room actor with an explicit player target, preserving
+  trigger patterns such as `/cmd room -- /setclass {{ actor_key }} tidecaller`.
+- Direct scheduled room dispatch should include `world_id` or
+  `runtime_world_id` in the payload when the command needs live-instance
+  context. `/cmd room` carries this from the originating character
+  automatically.
 
 Current trigger command kind is `command`.
 
+Still future work:
+
+- The explicit `issuer`/`subject` context shape described below is not yet
+  implemented.
+- Handler declarations still use `supported_actor_types`; they have not yet
+  moved to `allowed_issuer_types` and `required_subject_types`.
+- There is not yet a dedicated `ScriptCommandRunner`.
+- Ambient command recursion limits, rate limits, and structured diagnostics are
+  not complete.
+
 ## Why This Is Needed
 
-WR1 depended heavily on room-driven scripting. WR2 now supports players and mobs issuing commands, but ambient sources (room/zone/world) are still missing.
+WR1 depended heavily on room-driven scripting. WR2 now supports players and mobs issuing commands and has an initial compatibility slice for room/zone/world actors, but the full issuer/subject model is still missing.
 
 Players and mobs are similar because both are embodied actors with room presence and physical constraints. Rooms/zones/worlds are different:
 - They can initiate behavior
@@ -228,10 +256,14 @@ Ambient scripting can create loops quickly. Add guardrails early:
 
 ### Phase 1: Model and compatibility
 
+Status: partially implemented through the existing actor compatibility model.
+
 1. Add `issuer` and `subject` fields to command context and registry resolution.
 2. Keep current actor-based fields as compatibility aliases.
 3. Support resolving refs for `room`, `zone`, and `world` in dispatch.
 4. Keep current player/mob behavior unchanged.
+5. Carry runtime `world` context for ambient room commands so live-instance
+   operations can target the correct spawn world.
 
 Exit criteria:
 - Existing WR2 tests pass without behavior regressions.
@@ -248,9 +280,13 @@ Exit criteria:
 
 ### Phase 3: Ambient command primitives
 
+Status: partially implemented for scoped builder primitives.
+
 1. Add minimal ambient-safe commands (example: `echo`, `write.zone`, `write.game`).
 2. Add room/zone/world tests for ambient dispatch and publish behavior.
 3. Define payload schemas for ambient commands.
+4. Support `/load` as a first item-spawn primitive: player and mob actors load
+   items into inventory, while room actors load items onto the room floor.
 
 Exit criteria:
 - A room issuer can produce visible room/zone/world outputs through standard publish paths.
@@ -311,12 +347,25 @@ Required test layers:
 - Migration regressions for legacy room-check replacement cases
 - Loop safety tests (depth and dedupe guards)
 
-## Recommended First Vertical Slice
+## Implemented First Vertical Slice
 
-Implement one end-to-end room issuer path first:
-1. Room trigger invokes script runner
-2. Runner dispatches with `issuer=room`
-3. Script executes `force <mob> say ...` and `force <mob> emote ...`
-4. Players in room receive notifications
+The first compatibility slice is:
 
-This delivers immediate value for WR1-style content migration while validating architecture choices before broader rollout.
+1. A script-safe command dispatch can target a room actor directly.
+2. `/cmd room -- <command>` resolves the current room and dispatches the nested
+   command as `actor_type=room`.
+3. Runtime world context is carried into the nested command payload.
+4. `/load item <slug>` under a room actor loads the item onto the room floor;
+   under a mob actor it loads the item into that mob's inventory.
+5. Tests cover direct room actor `/load`, `/cmd room -- /load`, and
+   pledge-style `/cmd room -- /setclass <player> <class>`.
+
+This delivers immediate value for WR1-style content migration while validating
+ambient actor dispatch before the broader issuer/subject refactor.
+
+Recommended next vertical slice:
+
+1. Add `/grantitem` as a script-safe command available to rooms and mobs.
+2. Introduce explicit command diagnostics for nested script command failures.
+3. Start replacing `supported_actor_types` with issuer/subject capability
+   declarations once the second ambient primitive is proven.
