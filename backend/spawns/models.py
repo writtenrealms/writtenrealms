@@ -176,6 +176,10 @@ class Player(CharMixin, AdventBaseModel):
     last_action_ts = models.DateTimeField(**optional)
 
     in_game = models.BooleanField(default=False)
+    state = models.TextField(
+        choices=list_to_choice(adv_consts.CHARACTER_STATES),
+        default=adv_consts.CHARACTER_STATE_STANDING,
+    )
 
     mute_list = models.TextField(**optional)
     # Space delimited, lowercase list of channels the player is

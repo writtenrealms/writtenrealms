@@ -25,6 +25,7 @@ from core.scoped_state import (
     set_state_value,
 )
 from spawns.actions.base import ActionError, ActionResult
+from spawns.actions.player_state import stand_player
 from spawns.actions.targeting import resolve_room_mob_target
 from spawns.events import GameEvent
 from spawns.models import CombatEncounter, Mob, Player
@@ -1300,6 +1301,7 @@ class AbilityAction:
 
             interval = _combat_interval(config)
             if interval == 0:
+                stand_player(player)
                 return self._resolve_immediately(
                     player=player,
                     target_mob=target_mob,
@@ -1308,6 +1310,7 @@ class AbilityAction:
                     config=config,
                 )
 
+            stand_player(player)
             encounter = CombatEncounter.objects.create(
                 world=player.world,
                 room=room,

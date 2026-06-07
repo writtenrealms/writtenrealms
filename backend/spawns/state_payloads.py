@@ -52,6 +52,13 @@ from worlds.models import Door, Room, World
 
 # ---- Utilities ----
 
+def player_state(player: Player) -> str:
+    state = str(getattr(player, "state", "") or "").strip().lower()
+    if state in {"standing", "resting", "combat"}:
+        return state
+    return "standing"
+
+
 def safe_capitalize(value: Optional[str]) -> str:
     if not value:
         return ""
@@ -430,7 +437,7 @@ def serialize_char_from_player(
         archetype=player.archetype,
         core_faction=(player.factions or {}).get("core"),
         room_description=safe_capitalize(player.name) + " is here.",
-        state="standing",
+        state=player_state(player),
         stance="normal",
         health=player.health,
         health_max=getattr(player, "health_max", player.health),
@@ -754,6 +761,7 @@ def serialize_actor(player: Player, room: Optional[Room]) -> Actor:
             "gender": player.gender or "male",
             "description": player.description,
             "factions": getattr(player, "factions", {}) or {},
+            "state": player_state(player),
             "room": None,
         }
     stat_payload = build_player_stat_payload(player)

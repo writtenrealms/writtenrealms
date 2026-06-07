@@ -141,6 +141,15 @@ PLAYER_EVENTS = [
     PLAYER_EVENT_CREATE,
 ]
 
+CHARACTER_STATE_STANDING = 'standing'
+CHARACTER_STATE_RESTING = 'resting'
+CHARACTER_STATE_COMBAT = 'combat'
+CHARACTER_STATES = [
+    CHARACTER_STATE_STANDING,
+    CHARACTER_STATE_RESTING,
+    CHARACTER_STATE_COMBAT,
+]
+
 MAX_RULE_SPAWNS = 15
 
 # Sometimes the extraction tic runs right alongside the loading tic. Because

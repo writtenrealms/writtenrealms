@@ -5,7 +5,11 @@ from unittest.mock import patch
 from config import constants as api_consts
 from core.computations import compute_stats
 from spawns.models import CombatEncounter, Mob
-from spawns.tasks import WR2_STANDING_REGEN_RATE, run_heartbeat_regen
+from spawns.tasks import (
+    WR2_RESTING_REGEN_MULTIPLIER,
+    WR2_STANDING_REGEN_RATE,
+    run_heartbeat_regen,
+)
 from tests.base import WorldTestCase
 from wr2_tests.utils import apply_basic_stat_system
 
@@ -46,6 +50,41 @@ class TestHeartbeatRegen(WorldTestCase):
         expected_stamina = min(
             stamina_max,
             self.player.stamina + WR2_STANDING_REGEN_RATE,
+        )
+
+        run_heartbeat_regen()
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.health, expected_health)
+        self.assertEqual(self.player.energy, expected_energy)
+        self.assertEqual(self.player.stamina, expected_stamina)
+
+    def test_resting_player_regen_triples_standing_base_rate(self):
+        stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
+        health_max = stats["health_max"]
+        energy_max = stats["energy_max"]
+        stamina_max = stats["stamina_max"]
+        energy_base = stats["energy_base"]
+        resting_regen_rate = WR2_STANDING_REGEN_RATE * WR2_RESTING_REGEN_MULTIPLIER
+
+        self.player.in_game = True
+        self.player.state = api_consts.CHARACTER_STATE_RESTING
+        self.player.health = max(health_max - 20, 0)
+        self.player.energy = max(energy_max - 20, 0)
+        self.player.stamina = max(stamina_max - 20, 0)
+        self.player.save(update_fields=["in_game", "state", "health", "energy", "stamina"])
+
+        expected_health = min(
+            health_max,
+            self.player.health + math.ceil(health_max * resting_regen_rate / 100),
+        )
+        expected_energy = min(
+            energy_max,
+            self.player.energy + math.ceil(energy_base * resting_regen_rate / 100),
+        )
+        expected_stamina = min(
+            stamina_max,
+            self.player.stamina + resting_regen_rate,
         )
 
         run_heartbeat_regen()

@@ -26,6 +26,7 @@ from fastapi_app.game_ws import publish_to_player
 from fastapi_app.forge_ws import complete_job, exit_world as notify_exit_world
 
 WR2_STANDING_REGEN_RATE = adv_config.PLAYER_STARTING_STAMINA_REGEN
+WR2_RESTING_REGEN_MULTIPLIER = 3
 HEARTBEAT_REGEN_LOCK_KEY = "heartbeat_regen_lock"
 
 
@@ -122,9 +123,12 @@ def _regen_player(player: Player, *, in_combat: bool = False) -> dict[str, int |
         energy_add = energy_regen
         stamina_add = stamina_regen or WR2_STANDING_REGEN_RATE
     else:
-        health_add = math.ceil(health_max * WR2_STANDING_REGEN_RATE / 100) + health_regen
-        energy_add = math.ceil(energy_base * WR2_STANDING_REGEN_RATE / 100) + energy_regen
-        stamina_add = stamina_regen or WR2_STANDING_REGEN_RATE
+        base_regen_rate = WR2_STANDING_REGEN_RATE
+        if getattr(player, "state", None) == api_consts.CHARACTER_STATE_RESTING:
+            base_regen_rate *= WR2_RESTING_REGEN_MULTIPLIER
+        health_add = math.ceil(health_max * base_regen_rate / 100) + health_regen
+        energy_add = math.ceil(energy_base * base_regen_rate / 100) + energy_regen
+        stamina_add = max(stamina_regen, base_regen_rate)
 
     changed = _apply_regen(
         player,
@@ -140,6 +144,7 @@ def _regen_player(player: Player, *, in_combat: bool = False) -> dict[str, int |
 
     return {
         "key": player.key,
+        "state": getattr(player, "state", api_consts.CHARACTER_STATE_STANDING),
         "health": player.health,
         "health_max": health_max,
         "health_regen": health_regen,
@@ -199,6 +204,7 @@ def run_heartbeat_regen() -> dict[str, int]:
         "health",
         "energy",
         "stamina",
+        "state",
         "known_abilities",
         "ability_hotkeys",
         "ability_cooldowns",

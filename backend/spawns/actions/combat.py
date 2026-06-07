@@ -28,6 +28,7 @@ from spawns.actions.abilities import (
     start_ability_cooldown,
 )
 from spawns.actions.movement_costs import movement_cost
+from spawns.actions.player_state import stand_player
 from spawns.actions.targeting import resolve_room_mob_target
 from spawns.events import GameEvent
 from spawns.models import CombatEncounter, Item, Mob, Player
@@ -1473,6 +1474,7 @@ def _finalize_active_round(
 
 def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target_mob: Mob, config) -> CombatStepResult:
     room = Room.objects.select_related("world", "zone").get(pk=encounter.room_id)
+    stand_player(player)
     stats = _player_combat_stats(player)
     player.health_max = stats.player_health_max
     player.energy_max = stats.player_energy_max
@@ -2022,12 +2024,14 @@ class KillAction:
                 )
 
             if interval == 0:
+                stand_player(player)
                 return self._resolve_immediately(
                     player=player,
                     target_mob=target_mob,
                     config=config,
                 )
 
+            stand_player(player)
             encounter = CombatEncounter.objects.create(
                 world=player.world,
                 room=room,

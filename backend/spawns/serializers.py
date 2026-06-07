@@ -969,6 +969,7 @@ class AnimatePlayerSerializer(serializers.ModelSerializer):
             'archetype', 'room', 'user_id',
             'experience', 'is_temporary',
             'health', 'stamina', 'energy',
+            'state',
             'room_description',
             'trophy', 'config', 'effects', 'marks',
             'user_name', 'is_staff', 'is_confirmed', 'link_id',

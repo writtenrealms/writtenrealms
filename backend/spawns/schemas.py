@@ -138,7 +138,7 @@ class Char(BaseModel):
     core_faction: Optional[str] = None
     room_description: Optional[str] = None
 
-    state: str = "standing"  # "standing", "combat", "sitting", "sleeping"
+    state: str = "standing"  # "standing", "resting", "combat", "sitting", "sleeping"
     stance: str = "normal"  # "normal", "aggressive", "defensive", etc.
 
     health: int = 0
