@@ -70,6 +70,88 @@ class TestHeartbeatRegen(WorldTestCase):
         self.player.refresh_from_db()
         self.assertEqual((self.player.health, self.player.energy, self.player.stamina), before)
 
+    def test_heartbeat_decrements_ability_cooldowns_outside_combat(self):
+        stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
+
+        self.player.in_game = True
+        self.player.health = stats["health_max"]
+        self.player.energy = stats["energy_max"]
+        self.player.stamina = stats["stamina_max"]
+        self.player.known_abilities = ["power-strike", "quick-jab"]
+        self.player.ability_hotkeys = {"1": "power-strike", "2": "quick-jab"}
+        self.player.ability_cooldowns = {"power-strike": 2, "quick-jab": 1}
+        self.player.save(
+            update_fields=[
+                "in_game",
+                "health",
+                "energy",
+                "stamina",
+                "known_abilities",
+                "ability_hotkeys",
+                "ability_cooldowns",
+            ]
+        )
+
+        with patch("spawns.tasks.publish_events") as publish_mock:
+            result = run_heartbeat_regen()
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.ability_cooldowns, {"power-strike": 1})
+        self.assertEqual(result["players"], 0)
+        self.assertEqual(result["ability_cooldowns"], 1)
+
+        publish_mock.assert_called_once()
+        events = publish_mock.call_args.args[0]
+        self.assertEqual(publish_mock.call_args.kwargs["actor_key"], self.player.key)
+        self.assertEqual(len(events), 1)
+        message = events[0].to_message()
+        self.assertEqual(events[0].recipients, [self.player.key])
+        self.assertEqual(message["type"], "player.abilities.update")
+        self.assertEqual(
+            message["data"]["actor"]["ability_cooldowns"],
+            {"power-strike": 1},
+        )
+
+    def test_heartbeat_leaves_active_combat_ability_cooldowns_to_combat_rounds(self):
+        stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
+
+        self.player.in_game = True
+        self.player.health = stats["health_max"]
+        self.player.energy = stats["energy_max"]
+        self.player.stamina = stats["stamina_max"]
+        self.player.ability_cooldowns = {"power-strike": 2}
+        self.player.save(
+            update_fields=[
+                "in_game",
+                "health",
+                "energy",
+                "stamina",
+                "ability_cooldowns",
+            ]
+        )
+        mob = Mob.objects.create(
+            name="Sparring Mob",
+            world=self.spawn_world,
+            room=self.spawn_room,
+            health=100,
+            health_max=100,
+        )
+        CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.spawn_room,
+            player=self.player,
+            mob=mob,
+        )
+
+        with patch("spawns.tasks.publish_events") as publish_mock:
+            result = run_heartbeat_regen()
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.ability_cooldowns, {"power-strike": 2})
+        self.assertEqual(result["players"], 0)
+        self.assertEqual(result["ability_cooldowns"], 0)
+        publish_mock.assert_not_called()
+
     def test_player_regen_in_combat_uses_explicit_health_energy_and_stamina_base(self):
         stat_system = deepcopy(self.world.config.stat_system)
         stat_system["formulas"].setdefault("base_stats", {}).update(

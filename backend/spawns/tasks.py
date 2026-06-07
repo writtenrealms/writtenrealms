@@ -182,7 +182,10 @@ def _regen_mob(mob: Mob, *, in_combat: bool = False) -> bool:
 
 
 def run_heartbeat_regen() -> dict[str, int]:
+    from spawns.actions.abilities import ability_state_event, decrement_ability_cooldowns
+
     players_regenerated = 0
+    player_cooldowns_updated = 0
     mobs_regenerated = 0
 
     active_players = Player.objects.filter(
@@ -196,6 +199,9 @@ def run_heartbeat_regen() -> dict[str, int]:
         "health",
         "energy",
         "stamina",
+        "known_abilities",
+        "ability_hotkeys",
+        "ability_cooldowns",
     )
     active_world_ids = list(active_players.values_list("world_id", flat=True).distinct())
     active_combat_player_ids = set(
@@ -229,6 +235,13 @@ def run_heartbeat_regen() -> dict[str, int]:
                         "actor": actor_update,
                     },
                 },
+            )
+        if player.id not in active_combat_player_ids and decrement_ability_cooldowns(player):
+            player.save(update_fields=["ability_cooldowns"])
+            player_cooldowns_updated += 1
+            publish_events(
+                [ability_state_event(player)],
+                actor_key=player.key,
             )
 
     if active_world_ids:
@@ -264,7 +277,11 @@ def run_heartbeat_regen() -> dict[str, int]:
         if _regen_mob(mob, in_combat=mob.id in active_combat_mob_ids):
             mobs_regenerated += 1
 
-    return {"players": players_regenerated, "mobs": mobs_regenerated}
+    return {
+        "players": players_regenerated,
+        "mobs": mobs_regenerated,
+        "ability_cooldowns": player_cooldowns_updated,
+    }
 
 
 @shared_task(ignore_result=True)

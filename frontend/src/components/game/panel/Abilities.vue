@@ -2,11 +2,15 @@
   <div class="abilities-region flex flex-col">
     <div class="abilities-view flex flex-col">
       <div class="abilities action-boxes" v-if="actionRows.length">
-        <div class="ability-boxes">
+        <div class="ability-boxes" :style="abilityBoxStyle">
           <div class="box-row" v-for="(row, rowIndex) in actionRows" :key="rowIndex">
             <div
               class="box-item no-touch"
-              :class="{ disabled: item.isDisabled, cooldown: item.cooldownRemaining > 0 }"
+              :class="{
+                disabled: item.isDisabled,
+                cooldown: item.cooldownRemaining > 0,
+                'cooldown-disabled': item.cooldownRemaining > 0,
+              }"
               v-for="item in row"
               :key="item.key"
               @click="onClick(item)"
@@ -49,15 +53,24 @@ interface ActionBarItem {
 }
 
 const HOTKEY_LIMIT = 8;
-const ROW_SIZE = 4;
+const MAX_ROW_SIZE = 5;
+const BALANCED_ROW_LIMIT = MAX_ROW_SIZE * 2;
 
 const player = computed(() => store.state.game.player || {});
 const world = computed(() => store.state.game.world || {});
 
+const rowSizeForCount = (count: number) => {
+  if (count <= 0) return MAX_ROW_SIZE;
+  if (count <= MAX_ROW_SIZE) return count;
+  if (count <= BALANCED_ROW_LIMIT) return Math.ceil(count / 2);
+  return MAX_ROW_SIZE;
+};
+
 const chunkRows = (items: ActionBarItem[]) => {
+  const rowSize = rowSizeForCount(items.length);
   const rows: ActionBarItem[][] = [];
-  for (let index = 0; index < items.length; index += ROW_SIZE) {
-    rows.push(items.slice(index, index + ROW_SIZE));
+  for (let index = 0; index < items.length; index += rowSize) {
+    rows.push(items.slice(index, index + rowSize));
   }
   return rows;
 };
@@ -139,6 +152,10 @@ const abilityItems = computed(() => {
 });
 
 const actionRows = computed(() => chunkRows(abilityItems.value));
+
+const abilityBoxStyle = computed(() => ({
+  "--ability-columns": String(rowSizeForCount(abilityItems.value.length)),
+}));
 </script>
 
 <style lang="scss" scoped>
@@ -179,7 +196,7 @@ const actionRows = computed(() => chunkRows(abilityItems.value));
     .box-item {
       position: relative;
 
-      flex: 0 0 25%;
+      flex: 0 0 calc(100% / var(--ability-columns, 4));
       display: flex;
       justify-content: center;
       align-items: center;
@@ -194,7 +211,7 @@ const actionRows = computed(() => chunkRows(abilityItems.value));
       }
 
       height: 40px;
-      max-width: 25%;
+      max-width: calc(100% / var(--ability-columns, 4));
       min-width: 0;
 
       font-size: 11px;
@@ -226,10 +243,13 @@ const actionRows = computed(() => chunkRows(abilityItems.value));
       }
 
       &.cooldown {
-        background: #3c3c3c;
-        color: rgba(255, 255, 255, 0.3);
+        background: #828283;
 
         .hotkey {
+          color: white;
+        }
+
+        > .box-name {
           color: white;
         }
       }
@@ -278,14 +298,19 @@ const actionRows = computed(() => chunkRows(abilityItems.value));
         color: $color-text-hex-50;
       }
 
+      &.cooldown-disabled > .box-name {
+        color: white;
+      }
+
       .box-overlay {
         position: absolute;
         bottom: 0;
         left: 0;
         z-index: 1;
-        background: #3c3c3c;
+        background: rgba(60, 60, 60, 0.9);
         width: 100%;
         height: 0;
+        transition: height 160ms ease;
       }
     }
 
