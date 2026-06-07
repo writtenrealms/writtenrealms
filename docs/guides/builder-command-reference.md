@@ -192,19 +192,22 @@ Formats:
 
 ```text
 /state show <world|zone|room|character>
-/state get <world|zone|room|character> <key>
-/state set <world|zone|room|character> <key> <value>
-/state set <world|zone|room|character> <key> -- <value with spaces>
-/state add <world|zone|room|character> <key> [amount]
-/state clear <world|zone|room|character> <key>
+/state get <world|zone|room|character> [--target <target>] <key>
+/state set <world|zone|room|character> [--target <target>] <key> <value>
+/state set <world|zone|room|character> [--target <target>] <key> -- <value with spaces>
+/state add <world|zone|room|character> [--target <target>] <key> [amount]
+/state clear <world|zone|room|character> [--target <target>] <key>
 ```
 
 Reads or mutates scoped runtime state.
 
 Room, zone, and world issuers should use scopes they actually own. A room issuer
 can mutate room, zone, or world state. A zone issuer can mutate zone or world
-state. A world issuer can mutate world state. `character` state is for player
-character issuers.
+state. A world issuer can mutate world state.
+
+For `character` state, use `--target <player>` when the issuer is not the
+player whose state should change. Targeted character state currently resolves
+players in the issuer's current room.
 
 Examples:
 
@@ -214,7 +217,9 @@ Examples:
 /state set room lever_pulled true
 /state set world weather -- stormy
 /state add character favor 1
+/state set character --target joe pull_lever true
 /state clear room lever_pulled
+/cmd room -- /state set character --target {{ actor_key }} pull_lever true
 ```
 
 For state authoring guidance, see
@@ -313,7 +318,7 @@ Examples:
 Use `&&` to chain nested commands on one line:
 
 ```text
-/cmd room -- /echo -- The lever clicks. && /state set room lever_pulled true
+/cmd room -- /state set room lever_pulled true && /echo -- The lever clicks.
 ```
 
 ### `/jump`
@@ -386,6 +391,12 @@ Set a room state flag and echo feedback:
 script: |
   /cmd room -- /state set room lever_pulled true
   /cmd room -- /echo -- The lever clicks.
+```
+
+Set character state on the triggering player:
+
+```yaml
+script: /cmd room -- /state set character --target {{ actor_key }} pull_lever true
 ```
 
 Change the triggering player's class:

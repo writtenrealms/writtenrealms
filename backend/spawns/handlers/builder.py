@@ -27,6 +27,7 @@ from spawns.handlers.base import (
 from spawns.handlers.permissions import (
     builder_permission_error,
     can_execute_builder_command,
+    has_builder_access,
 )
 from spawns.handlers.registry import register_handler
 
@@ -113,40 +114,81 @@ def _parse_cmd_target_and_command(ctx: CommandContext) -> tuple[str | None, str 
 
 def _parse_state_args(
     ctx: CommandContext,
-) -> tuple[str | None, str | None, str | None, str | None]:
+) -> tuple[str | None, str | None, str | None, str | None, str | None]:
     args = [str(arg).strip() for arg in list(ctx.payload.get("args", [])) if str(arg).strip()]
     if not args:
-        return None, None, None, None
+        return None, None, None, None, None
+
+    def _extract_target(tokens: list[str]) -> tuple[str | None, list[str]] | None:
+        remaining: list[str] = []
+        target: str | None = None
+        idx = 0
+        while idx < len(tokens):
+            token = tokens[idx]
+            if token == "--target":
+                if idx + 1 >= len(tokens):
+                    return None
+                target = tokens[idx + 1]
+                idx += 2
+                continue
+            if token.startswith("--target="):
+                target = token.split("=", 1)[1].strip()
+                if not target:
+                    return None
+                idx += 1
+                continue
+            remaining.append(token)
+            idx += 1
+        return target, remaining
 
     operation = args[0].lower()
     if operation == "show":
-        if len(args) < 2:
-            return None, None, None, None
-        return operation, args[1], None, None
+        parsed = _extract_target(args[1:])
+        if parsed is None:
+            return None, None, None, None, None
+        target, tokens = parsed
+        if len(tokens) < 1:
+            return None, None, None, None, None
+        return operation, tokens[0], target, None, None
 
     if operation in {"get", "clear"}:
-        if len(args) < 3:
-            return None, None, None, None
-        return operation, args[1], args[2], None
+        parsed = _extract_target(args[1:])
+        if parsed is None:
+            return None, None, None, None, None
+        target, tokens = parsed
+        if len(tokens) < 2:
+            return None, None, None, None, None
+        return operation, tokens[0], target, tokens[1], None
 
     if operation == "add":
-        if len(args) < 3:
-            return None, None, None, None
-        amount = " ".join(args[3:]).strip() if len(args) > 3 else "1"
-        return operation, args[1], args[2], amount
+        parsed = _extract_target(args[1:])
+        if parsed is None:
+            return None, None, None, None, None
+        target, tokens = parsed
+        if len(tokens) < 2:
+            return None, None, None, None, None
+        amount = " ".join(tokens[2:]).strip() if len(tokens) > 2 else "1"
+        return operation, tokens[0], target, tokens[1], amount
 
     if operation == "set":
         lhs, rhs = _split_delimited_args(args[1:])
         if rhs is not None:
-            lhs_tokens = [token for token in (lhs or "").split() if token]
-            if len(lhs_tokens) < 2:
-                return None, None, None, None
-            return operation, lhs_tokens[0], lhs_tokens[1], rhs
-        if len(args) < 4:
-            return None, None, None, None
-        return operation, args[1], args[2], " ".join(args[3:]).strip()
+            parsed = _extract_target([token for token in (lhs or "").split() if token])
+            if parsed is None:
+                return None, None, None, None, None
+            target, tokens = parsed
+            if len(tokens) < 2:
+                return None, None, None, None, None
+            return operation, tokens[0], target, tokens[1], rhs
+        parsed = _extract_target(args[1:])
+        if parsed is None:
+            return None, None, None, None, None
+        target, tokens = parsed
+        if len(tokens) < 3:
+            return None, None, None, None, None
+        return operation, tokens[0], target, tokens[1], " ".join(tokens[2:]).strip()
 
-    return None, None, None, None
+    return None, None, None, None, None
 
 
 def _parse_setlevel_args(ctx: CommandContext) -> tuple[str | None, str | None]:
@@ -470,7 +512,7 @@ class StateHandler(CommandHandler):
     supported_actor_types = ("player", "mob", "room", "zone", "world")
     help = {
         "name": "State",
-        "format": "/state <show|get|set|clear|add> <world|zone|room|character> [key] [-- value]",
+        "format": "/state <show|get|set|clear|add> <world|zone|room|character> [--target <target>] [key] [-- value]",
         "description": (
             "Inspect or mutate scoped state in the current world, zone, room, or character context. "
             "Use -- when the value contains spaces."
@@ -481,21 +523,31 @@ class StateHandler(CommandHandler):
             "/state set world weather -- rainy",
             "/state set room lever_pulled true",
             "/state add character rumor_count 1",
+            "/state set character --target aria pull_lever true",
             "/state clear room lever_pulled",
         ],
     }
 
+    def _can_execute_state_command(self, ctx: CommandContext) -> bool:
+        if has_builder_access(ctx.player):
+            return True
+        return bool(
+            ctx.script_source
+            and self.allow_script_source
+            and ctx.actor_type != "player"
+        )
+
     def handle(self, ctx: CommandContext) -> None:
-        if not can_execute_builder_command(ctx, self):
+        if not self._can_execute_state_command(ctx):
             ctx.publish(builder_permission_error(self.command_type))
             return
 
-        operation, scope, key, value = _parse_state_args(ctx)
+        operation, scope, target, key, value = _parse_state_args(ctx)
         if not operation or not scope:
             ctx.publish(
                 {
                     "type": "cmd./state.error",
-                    "text": "Usage: /state <show|get|set|clear|add> <world|zone|room|character> [key] [-- value]",
+                    "text": "Usage: /state <show|get|set|clear|add> <world|zone|room|character> [--target <target>] [key] [-- value]",
                     "data": {"error": "Missing or invalid state arguments.", "code": "invalid_args"},
                 }
             )
@@ -506,6 +558,7 @@ class StateHandler(CommandHandler):
                 actor=ctx.actor,
                 operation=operation,
                 scope=scope,
+                target_selector=target,
                 key=key,
                 value=value,
                 amount=value,

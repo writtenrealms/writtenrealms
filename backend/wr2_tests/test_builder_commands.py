@@ -104,6 +104,23 @@ class TestBuilderCommandPermissions(WorldTestCase):
         self.assertIsNotNone(message)
         self.assertIn("permission", message.get("text", "").lower())
 
+    def test_script_source_does_not_allow_player_state_commands(self):
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                payload={"text": "/state set character pull_lever true"},
+                script_source=True,
+            )
+
+        self.assertNotIn(
+            "pull_lever",
+            get_state_snapshot(STATE_SCOPE_CHARACTER, self.player),
+        )
+        message = self._message_by_type(messages, "cmd./state.error")
+        self.assertIsNotNone(message)
+        self.assertIn("permission", message.get("text", "").lower())
+
 
 class BuilderCommandTestCase(WorldTestCase):
     def setUp(self):
@@ -1464,6 +1481,87 @@ class TestBuilderState(BuilderCommandTestCase):
             "lever_pulled",
             get_state_snapshot(STATE_SCOPE_ROOM, self.room),
         )
+
+    def test_state_target_sets_room_player_character_state(self):
+        target = self.create_player("Target", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/state set character --target {target.key} pull_lever true")
+            dispatch_text_command(self.player.id, f"/state get character --target {target.key} pull_lever")
+            dispatch_text_command(self.player.id, f"/state clear character --target {target.key} pull_lever")
+
+        success_messages = self._messages_by_type(messages, "cmd./state.success")
+        self.assertEqual(len(success_messages), 3)
+        self.assertEqual(
+            get_state_snapshot(STATE_SCOPE_CHARACTER, target).get("pull_lever"),
+            None,
+        )
+        self.assertNotIn(
+            "pull_lever",
+            get_state_snapshot(STATE_SCOPE_CHARACTER, self.player),
+        )
+        self.assertIn("character.pull_lever = true", success_messages[1]["message"].get("text", ""))
+
+    def test_state_target_set_supports_value_delimiter(self):
+        target = self.create_player("Target", room=self.room)
+
+        with capture_game_messages():
+            dispatch_text_command(
+                self.player.id,
+                f"/state set character --target {target.key} lever_note -- pulled at the west altar",
+            )
+
+        self.assertEqual(
+            get_state_snapshot(STATE_SCOPE_CHARACTER, target).get("lever_note"),
+            "pulled at the west altar",
+        )
+
+    def test_cmd_room_state_target_sets_triggering_player_character_state(self):
+        target = self.create_player("TriggerTarget", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=target.id,
+                payload={
+                    "text": f"/cmd room -- /state set character --target {target.key} pull_lever true"
+                },
+                script_source=True,
+            )
+
+        self.assertEqual(
+            get_state_snapshot(STATE_SCOPE_CHARACTER, target).get("pull_lever"),
+            True,
+        )
+        cmd_messages = self._messages_by_type(messages, "cmd./cmd.success")
+        self.assertEqual(len(cmd_messages), 1)
+        self.assertEqual(cmd_messages[0]["message"]["data"]["errors"], [])
+
+    def test_state_target_rejects_non_character_scope(self):
+        target = self.create_player("Target", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/state set room --target {target.key} pull_lever true")
+
+        error_messages = self._messages_by_type(messages, "cmd./state.error")
+        self.assertEqual(len(error_messages), 1)
+        self.assertIn("--target", error_messages[0]["message"].get("text", ""))
+        self.assertNotIn("pull_lever", get_state_snapshot(STATE_SCOPE_ROOM, self.room))
+
+    def test_state_target_rejects_mob_character_state(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Quartermaster",
+            keywords="quartermaster",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/state set character --target {mob.key} pull_lever true")
+
+        error_messages = self._messages_by_type(messages, "cmd./state.error")
+        self.assertEqual(len(error_messages), 1)
+        self.assertIn("players", error_messages[0]["message"].get("text", ""))
 
     def test_echo_renders_state_template(self):
         dispatch_text_command(self.player.id, "/state set world weather -- windy")

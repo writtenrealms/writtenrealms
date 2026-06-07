@@ -242,7 +242,7 @@ Example:
 
 ```yaml
 script: |
-  /state set room lever_pulled true && /cmd room -- /echo -- The lever clicks.
+  /cmd room -- /state set room lever_pulled true && /echo -- The lever clicks.
   /cmd room -- /echo -- A hidden door slides open.
 ```
 
@@ -263,9 +263,8 @@ Practical guidance:
 
 Common commands you will often use in trigger scripts:
 
-- `/state set ...`
-- `/state add ...`
-- `/state clear ...`
+- `/cmd room -- /state set room ...`
+- `/cmd room -- /state set character --target {{ actor_key }} ...`
 - `/echo -- ...`
 - `/cmd room -- /echo -- ...`
 - `/cmd room -- /load item <item_slug>`
@@ -273,6 +272,29 @@ Common commands you will often use in trigger scripts:
 
 For the full slash command matrix and command-by-command reference, see
 [builder-command-reference.md](/Users/teebes/code/writtenrealms/docs/guides/builder-command-reference.md).
+
+### Writing State
+
+Use `/state` when a trigger needs to record runtime facts.
+
+For room state, run `/state` as the room:
+
+```yaml
+script: /cmd room -- /state set room lever_pulled true
+```
+
+This sets `state.room.lever_pulled` on the trigger room.
+
+For player character state, keep the room as the issuer and pass the triggering
+player explicitly with `--target {{ actor_key }}`:
+
+```yaml
+script: /cmd room -- /state set character --target {{ actor_key }} pull_lever true
+```
+
+This sets `state.character.pull_lever` on the player who triggered the room
+command. Prefer this explicit form over relying on an unwrapped `/state`
+command in a trigger script.
 
 ### Loading And Granting Items
 
@@ -470,7 +492,7 @@ spec:
         - state.room.lever_pulled
         - true
   script: |
-    /state set room lever_pulled true && /cmd room -- /echo -- The lever clicks.
+    /cmd room -- /state set room lever_pulled true && /echo -- The lever clicks.
     /cmd room -- /echo -- Stone grinds somewhere behind the wall.
   show_details_on_failure: true
   failure_message: Nothing else happens.

@@ -846,12 +846,36 @@ class EchoAction:
 
 
 class StateAction:
+    def _resolve_character_owner(
+        self,
+        *,
+        actor: BuilderCommandActor,
+        target_selector: str | None,
+        runtime_world: World | None,
+    ) -> Player | None:
+        if not target_selector:
+            return actor if isinstance(actor, Player) else None
+
+        target = _resolve_room_character_target(
+            actor=actor,
+            target_selector=target_selector,
+            runtime_world=runtime_world,
+            allow_self=True,
+        )
+        if not isinstance(target, Player):
+            raise ActionError(
+                "Character state targets must be players.",
+                code="invalid_target",
+            )
+        return target
+
     def execute(
         self,
         *,
         actor: BuilderCommandActor,
         operation: str,
         scope: str,
+        target_selector: str | None = None,
         key: str | None = None,
         value: object | None = None,
         amount: int | float | None = None,
@@ -859,7 +883,16 @@ class StateAction:
     ) -> ActionResult:
         normalized_operation = str(operation or "").strip().lower()
         normalized_scope = normalize_state_scope(scope)
-        character = actor if isinstance(actor, Player) else None
+        if target_selector and normalized_scope != "character":
+            raise ActionError(
+                "--target is only supported for character state.",
+                code="invalid_target",
+            )
+        character = self._resolve_character_owner(
+            actor=actor,
+            target_selector=target_selector,
+            runtime_world=runtime_world,
+        )
         owner = resolve_scope_owner(
             normalized_scope,
             actor=actor,
@@ -879,6 +912,8 @@ class StateAction:
             "scope": normalized_scope,
             "operation": normalized_operation,
         }
+        if target_selector:
+            data["target"] = _actor_summary(character)
         text = None
 
         if normalized_operation == "show":
