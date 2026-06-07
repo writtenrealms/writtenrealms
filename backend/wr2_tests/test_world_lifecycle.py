@@ -2,12 +2,13 @@ from unittest.mock import patch
 
 from django.utils import timezone
 
+from builders.models import Loader, MobTemplate, Rule
 from config import constants as api_consts
 from spawns.models import Item, Mob
 from spawns.services import WorldGate
 from tests.base import WorldTestCase
 from worlds.services import WorldSmith
-from worlds.tasks import monitor_worlds
+from worlds.tasks import monitor_worlds, run_world_loaders
 from rest_framework import serializers
 
 
@@ -19,6 +20,62 @@ class TestStartWorld(WorldTestCase):
         service = WorldSmith(spawn_world)
         service.start()
         self.assertEqual(spawn_world.lifecycle, api_consts.WORLD_LIFECYCLE_RUNNING)
+
+    def test_start_world_runs_initial_loaders(self):
+        mob_template = MobTemplate.objects.create(
+            world=self.world,
+            name="a sentinel",
+        )
+        loader = Loader.objects.create(
+            world=self.world,
+            zone=self.zone,
+            inherit_zone_wait=False,
+        )
+        rule = Rule.objects.create(
+            loader=loader,
+            template=mob_template,
+            target=self.room,
+            num_copies=2,
+        )
+        spawn_world = self.world.create_spawn_world()
+
+        WorldSmith(spawn_world).start()
+
+        self.assertEqual(
+            Mob.objects.filter(world=spawn_world, rule=rule).count(),
+            2,
+        )
+        spawn_world.refresh_from_db()
+        loader.refresh_from_db()
+        self.assertIsNotNone(spawn_world.last_loader_run_ts)
+        self.assertIsNotNone(loader.last_processing_ts)
+
+    def test_loader_task_after_start_does_not_duplicate_initial_load(self):
+        mob_template = MobTemplate.objects.create(
+            world=self.world,
+            name="a sentinel",
+        )
+        loader = Loader.objects.create(
+            world=self.world,
+            zone=self.zone,
+            inherit_zone_wait=False,
+            respawn_wait=0,
+        )
+        rule = Rule.objects.create(
+            loader=loader,
+            template=mob_template,
+            target=self.room,
+            num_copies=2,
+        )
+        spawn_world = self.world.create_spawn_world()
+
+        WorldSmith(spawn_world).start()
+        run_world_loaders()
+
+        self.assertEqual(
+            Mob.objects.filter(world=spawn_world, rule=rule).count(),
+            2,
+        )
 
     def test_stop_world(self):
         spawn_world = self.world.create_spawn_world()

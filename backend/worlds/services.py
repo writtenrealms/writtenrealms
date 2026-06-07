@@ -51,7 +51,8 @@ class WorldSmith:
     def start(self, staff_request=False):
         self.start_preflight(staff_request=staff_request)
         self.world.set_lifecycle(api_consts.WORLD_LIFECYCLE_STARTING)
-        # Placeholder for startup work
+        from spawns.loading import run_loaders
+        run_loaders(world=self.world, initial=True)
         self.world.set_lifecycle(api_consts.WORLD_LIFECYCLE_RUNNING)
         # Update the admin page
         self.world.update_builder_admin()
