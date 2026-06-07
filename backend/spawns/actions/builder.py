@@ -284,6 +284,62 @@ def _collect_room_player_targets(room: Room, selector: str, *, world: World | No
     return [player for player in room_players if _player_matches(player, normalized)]
 
 
+def _collect_world_player_targets(world: World, selector: str) -> list[Player]:
+    normalized = selector.strip().lower()
+    if not normalized:
+        return []
+
+    world_players_qs = Player.objects.filter(
+        world=world,
+        in_game=True,
+    ).select_related("world", "world__config", "user", "room")
+
+    if normalized.startswith("player."):
+        try:
+            player_id = int(normalized.split(".", 1)[1])
+        except (TypeError, ValueError):
+            return []
+        player = world_players_qs.filter(pk=player_id).first()
+        return [player] if player else []
+
+    exact_matches = list(world_players_qs.filter(name__iexact=normalized))
+    if exact_matches:
+        return exact_matches
+
+    prefix_matches = list(world_players_qs.filter(name__istartswith=normalized))
+    if prefix_matches:
+        return prefix_matches
+
+    world_players = list(world_players_qs)
+    return [player for player in world_players if _player_matches(player, normalized)]
+
+
+def _resolve_world_player_target(
+    *,
+    actor: BuilderCommandActor,
+    target_selector: str,
+    runtime_world: World | None = None,
+) -> Player:
+    world = _actor_world(actor, runtime_world=runtime_world)
+    if not world:
+        raise ActionError("No runtime world is available for player resolution.", code="no_world")
+
+    normalized_target = str(target_selector or "").strip().lower()
+    if not normalized_target:
+        raise ActionError("Target player is required.", code="invalid_target")
+    if normalized_target in {"self", "me"}:
+        if isinstance(actor, Player):
+            return actor
+        raise ActionError("Only player actors can target self.", code="invalid_target")
+
+    targets = _collect_world_player_targets(world, normalized_target)
+    if not targets:
+        raise ActionError("Send recipient not found.", code="invalid_target")
+    if len(targets) > 1:
+        raise ActionError("Send recipient is ambiguous.", code="ambiguous_target")
+    return targets[0]
+
+
 def _resolve_player_class_key(world, selector: str) -> str:
     normalized = str(selector or "").strip().lower()
     if not normalized:
@@ -863,6 +919,63 @@ class EchoAction:
             )
 
         return ActionResult(events=events)
+
+
+class SendAction:
+    def execute(
+        self,
+        *,
+        actor: BuilderCommandActor,
+        target_selector: str,
+        message: str,
+        runtime_world: World | None = None,
+    ) -> ActionResult:
+        target = _resolve_world_player_target(
+            actor=actor,
+            target_selector=target_selector,
+            runtime_world=runtime_world,
+        )
+        normalized_message = _render_command_segment(
+            str(message or ""),
+            actor=actor,
+            character=target,
+        )
+        if not normalized_message:
+            raise ActionError("Usage: /send <player> <message>", code="invalid_args")
+
+        if isinstance(actor, Player):
+            updated_actor = get_player_with_related(actor.id)
+            actor_payload = serialize_actor(updated_actor, updated_actor.room).model_dump()
+            recipient_key = updated_actor.key
+        else:
+            actor_payload = _actor_summary(actor)
+            recipient_key = actor.key
+
+        updated_target = get_player_with_related(target.id)
+        target_payload = serialize_actor(updated_target, updated_target.room).model_dump()
+        data = {
+            "actor": actor_payload,
+            "target": target_payload,
+            "target_type": "player",
+            "message": normalized_message,
+        }
+
+        return ActionResult(
+            events=[
+                GameEvent(
+                    type="cmd./send.success",
+                    recipients=[recipient_key],
+                    data=data,
+                    text=normalized_message,
+                ),
+                GameEvent(
+                    type="notification./send",
+                    recipients=[updated_target.key],
+                    data=data,
+                    text=normalized_message,
+                ),
+            ]
+        )
 
 
 class StateAction:

@@ -267,6 +267,7 @@ Common commands you will often use in trigger scripts:
 - `/cmd room -- /state set character --target {{ actor_key }} ...`
 - `/echo -- ...`
 - `/cmd room -- /echo -- ...`
+- `/cmd room -- /send {{ actor_key }} -- <private message>`
 - `/cmd room -- /load item <item_slug>`
 - `/cmd room -- /grantitem {{ actor_key }} <item_slug>`
 - `/cmd room -- /kill {{ actor_key }} -- <private death message>`
@@ -378,8 +379,19 @@ spec:
 ```
 
 The message after `--` is sent to the killed player. Use an additional `/echo`
-line, or `&& /echo -- ...` inside the same `/cmd room` command, for room-visible
-trap flavor.
+line, or chain a second command with `&&`, for room-visible trap flavor:
+
+```yaml
+script: |
+  /cmd room -- /kill {{ actor_key }} -- The pit swallows you whole. && /cmd room -- /echo -- The floor seals again.
+```
+
+Use `/send` when a trigger should privately message a player without killing
+them:
+
+```yaml
+script: /cmd room -- /send {{ actor_key }} -- The inscription burns behind your eyes.
+```
 
 ## Common Patterns
 

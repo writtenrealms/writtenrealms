@@ -592,6 +592,118 @@ class TestBuilderGrantItem(BuilderCommandTestCase):
         self.assertIn("permission", message.get("text", "").lower())
 
 
+class TestBuilderSend(BuilderCommandTestCase):
+    def _message_for_key_and_type(self, messages, player_key, message_type):
+        for msg in messages:
+            if msg["player_key"] == player_key and msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def _set_online(self, *players):
+        for player in players:
+            player.in_game = True
+            player.save(update_fields=["in_game"])
+
+    def test_builder_send_private_message_to_online_player(self):
+        far_room = self.room.create_at("north")
+        target = self.create_player("Aria", room=far_room)
+        watcher = self.create_player("Watcher", room=far_room)
+        self._set_online(target, watcher)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/send ari You feel watched.")
+
+        success = self._message_for_key_and_type(messages, self.player.key, "cmd./send.success")
+        self.assertIsNotNone(success)
+        self.assertEqual(success["data"]["target"]["key"], target.key)
+        self.assertEqual(success["text"], "You feel watched.")
+
+        notification = self._message_for_key_and_type(messages, target.key, "notification./send")
+        self.assertIsNotNone(notification)
+        self.assertEqual(notification["text"], "You feel watched.")
+        self.assertEqual(notification["data"]["actor"]["key"], self.player.key)
+
+        watcher_notification = self._message_for_key_and_type(messages, watcher.key, "notification./send")
+        self.assertIsNone(watcher_notification)
+
+    def test_cmd_room_send_private_message_to_triggering_player(self):
+        target = self.create_player("TriggerTarget", room=self.room)
+        self._set_online(target)
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=target.id,
+                payload={
+                    "text": f"/cmd room -- /send {target.key} -- The altar answers you alone."
+                },
+                script_source=True,
+            )
+
+        notification = self._message_for_key_and_type(messages, target.key, "notification./send")
+        self.assertIsNotNone(notification)
+        self.assertEqual(notification["text"], "The altar answers you alone.")
+        self.assertEqual(notification["data"]["actor"]["char_type"], "room")
+
+        cmd_message = self._message_for_key_and_type(messages, target.key, "cmd./cmd.success")
+        self.assertIsNotNone(cmd_message)
+        self.assertEqual(cmd_message["data"]["errors"], [])
+
+    def test_mob_actor_send_private_message(self):
+        target = self.create_player("Target", room=self.room)
+        self._set_online(target)
+        issuer_mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Oracle",
+            keywords="oracle",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="mob",
+                actor_id=issuer_mob.id,
+                payload={"text": f"/send {target.key} -- The oracle sees you."},
+                script_source=True,
+            )
+
+        notification = self._message_for_key_and_type(messages, target.key, "notification./send")
+        self.assertIsNotNone(notification)
+        self.assertEqual(notification["text"], "The oracle sees you.")
+        self.assertEqual(notification["data"]["actor"]["char_type"], "mob")
+
+    def test_player_script_source_cannot_send_without_ambient_actor(self):
+        other_user = self.create_user("other-send@example.com")
+        trigger_actor = self.create_player("Triggerer", user=other_user)
+        target = self.create_player("Target", room=self.room)
+        self._set_online(trigger_actor, target)
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=trigger_actor.id,
+                payload={"text": f"/send {target.key} This should not send."},
+                script_source=True,
+            )
+
+        notification = self._message_for_key_and_type(messages, target.key, "notification./send")
+        self.assertIsNone(notification)
+        error = self._message_for_key_and_type(messages, trigger_actor.key, "cmd./send.error")
+        self.assertIsNotNone(error)
+        self.assertIn("permission", error.get("text", "").lower())
+
+    def test_send_requires_online_player(self):
+        target = self.create_player("OfflineTarget", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/send {target.key} Are you there?")
+
+        error = self._message_for_key_and_type(messages, self.player.key, "cmd./send.error")
+        self.assertIsNotNone(error)
+        self.assertIn("recipient not found", error.get("text", "").lower())
+
+
 class TestBuilderWizKill(BuilderCommandTestCase):
     def setUp(self):
         super().setUp()

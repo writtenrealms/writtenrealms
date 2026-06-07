@@ -50,6 +50,7 @@ Legend:
 | `/kill` | Direct | No | Script | Script | No | No |
 | `/purge` | Direct | No | No | No | No | No |
 | `/echo`, `/zecho`, `/wecho` | Direct | Script | Script | Script | Script | Script |
+| `/send` | Direct | No | Script | Script | Script | Script |
 | `/state` | Direct | No | Script | Script | Script | Script |
 | `/setlevel` | Direct | No | No | No | No | No |
 | `/setclass` | Direct | Script | No | Script | No | No |
@@ -148,7 +149,7 @@ Examples:
 /kill player.123
 /kill aria -- The pit swallows you whole.
 /cmd room -- /kill {{ actor_key }} -- The pit swallows you whole.
-/cmd room -- /kill {{ actor_key }} -- The pit swallows you whole. && /echo -- The floor seals again.
+/cmd room -- /kill {{ actor_key }} -- The pit swallows you whole. && /cmd room -- /echo -- The floor seals again.
 ```
 
 `/kill` currently targets players. It does not kill mobs; use combat or builder
@@ -214,6 +215,36 @@ Examples:
 /echo zone The bells ring in the distance.
 /wecho The world trembles.
 /cmd room -- /echo -- The altar hums.
+```
+
+### `/send`
+
+Formats:
+
+```text
+/send <player> <message>
+/send <player> -- <message>
+```
+
+Sends private text to one connected player in the issuer's runtime world.
+Targets can be `player.<id>`, exact player names, or unambiguous name prefixes.
+
+Use `/send` when only one player should receive the text. Use `/echo` when the
+message should be visible to a room, zone, or world.
+
+Examples:
+
+```text
+/send aria The altar hums beneath your hand.
+/send player.123 -- You hear distant surf.
+/cmd room -- /send {{ actor_key }} -- You feel watched.
+```
+
+Player-trigger scripts cannot run `/send` directly. Use an explicit ambient
+actor when a trigger should send private text:
+
+```text
+/cmd room -- /send {{ actor_key }} -- The inscription burns behind your eyes.
 ```
 
 ### `/state`

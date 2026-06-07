@@ -13,6 +13,7 @@ from spawns.actions.builder import (
     PurgeAction,
     ResyncItemTemplatesAction,
     ResyncMobTemplatesAction,
+    SendAction,
     SetClassAction,
     SetLevelAction,
     StateAction,
@@ -255,6 +256,23 @@ def _parse_kill_args(ctx: CommandContext) -> tuple[str | None, str | None]:
     return args[0], None
 
 
+def _parse_send_args(ctx: CommandContext) -> tuple[str | None, str | None]:
+    target = ctx.payload.get("target") or ctx.payload.get("to")
+    message = ctx.payload.get("message") or ctx.payload.get("text")
+    if target is not None:
+        return str(target).strip(), str(message).strip() if message else None
+
+    args = [str(arg).strip() for arg in list(ctx.payload.get("args", [])) if str(arg).strip()]
+    if not args:
+        return None, None
+    target_text, message_text = _split_delimited_args(args)
+    if message_text is not None:
+        return target_text, message_text
+    if len(args) > 1:
+        return args[0], " ".join(args[1:]).strip()
+    return args[0], None
+
+
 @register_handler
 class LoadHandler(CommandHandler):
     command_type = "/load"
@@ -396,6 +414,73 @@ class GrantItemHandler(CommandHandler):
             ctx.publish(
                 {
                     "type": "cmd./grantitem.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.actor_key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class SendHandler(CommandHandler):
+    command_type = "/send"
+    text_commands = ("/send",)
+    builder_only = True
+    allow_script_source = True
+    supported_actor_types = ("player", "mob", "room", "zone", "world")
+    help = {
+        "name": "Send",
+        "format": "/send <player> <message>",
+        "description": "Send private text to one connected player in the issuer's runtime world.",
+        "examples": [
+            "/send aria The altar hums beneath your hand.",
+            "/send player.123 -- You hear distant surf.",
+            "/cmd room -- /send {{ actor_key }} -- You feel watched.",
+        ],
+    }
+
+    def _can_execute_send_command(self, ctx: CommandContext) -> bool:
+        if has_builder_access(ctx.player):
+            return True
+        return bool(
+            ctx.script_source
+            and self.allow_script_source
+            and ctx.actor_type in {"mob", "room", "zone", "world"}
+        )
+
+    def handle(self, ctx: CommandContext) -> None:
+        if not self._can_execute_send_command(ctx):
+            ctx.publish(builder_permission_error(self.command_type))
+            return
+
+        target, message = _parse_send_args(ctx)
+        if not target or not message:
+            ctx.publish(
+                {
+                    "type": "cmd./send.error",
+                    "text": "Usage: /send <player> <message>",
+                    "data": {"error": "Missing target or message.", "code": "invalid_args"},
+                }
+            )
+            return
+
+        try:
+            result = SendAction().execute(
+                actor=ctx.actor,
+                target_selector=target,
+                message=message,
+                runtime_world=ctx.world,
+            )
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd./send.error",
                     "text": err.message,
                     "data": {"error": err.message, "code": err.code, **err.data},
                 }
