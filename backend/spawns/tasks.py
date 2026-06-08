@@ -12,13 +12,14 @@ from django.db.models import F, Q
 from spawns.services import WorldGate
 from spawns.models import CombatEncounter, Mob, Player
 from spawns.serializers import PlayerConfigSerializer
-from spawns.events import publish_events
+from spawns.events import GameEvent, publish_events
 from spawns.handlers import (
     ActorNotFoundError,
     dispatch_command,
     HandlerNotFoundError,
     PlayerNotFoundError,
 )
+from spawns.state_payloads import safe_capitalize, serialize_char_from_player
 from worlds.models import World
 from worlds.serializers import WorldSerializer
 
@@ -28,6 +29,44 @@ from fastapi_app.forge_ws import complete_job, exit_world as notify_exit_world
 WR2_STANDING_REGEN_RATE = adv_config.PLAYER_STARTING_STAMINA_REGEN
 WR2_RESTING_REGEN_MULTIPLIER = 3
 HEARTBEAT_REGEN_LOCK_KEY = "heartbeat_regen_lock"
+
+
+def _notify_world_lifecycle(player: Player, world: World, action: str) -> None:
+    if player.is_invisible:
+        return
+
+    recipient_ids = list(
+        Player.objects.filter(
+            world=world,
+            in_game=True,
+        )
+        .exclude(pk=player.id)
+        .values_list("id", flat=True)
+    )
+    if not recipient_ids:
+        return
+
+    if action == "enter":
+        event_type = "notification.world.enter"
+        text = f"{safe_capitalize(player.name)} has entered the world."
+    elif action == "leave":
+        event_type = "notification.world.leave"
+        text = f"{safe_capitalize(player.name)} has left the world."
+    else:
+        return
+
+    actor_payload = serialize_char_from_player(player).model_dump()
+    publish_events(
+        [
+            GameEvent(
+                type=event_type,
+                recipients=[f"player.{recipient_id}" for recipient_id in recipient_ids],
+                data={"actor": actor_payload},
+                text=text,
+            )
+        ],
+        actor_key=player.key,
+    )
 
 
 def _heartbeat_interval_seconds() -> float:
@@ -317,6 +356,7 @@ def enter_world(player_id, world_id, client_id=None, ip=None):
     try:
         # Enter the world
         WorldGate(player=player, world=spawn_world).enter(ip=ip)
+        _notify_world_lifecycle(player, spawn_world, "enter")
 
         # - Instance Follow system -
         # This whether this instance assignment that had followers with
@@ -400,12 +440,26 @@ def exit_world(player_id, world_id,
                     ref=ref,
                     leave_instance=leave_instance,
                     member_ids=member_ids)
+    _notify_world_lifecycle(player, world, "leave")
 
     # Notify frontend
     notify_exit_world(
         player_id=player_id,
         world_id=world_id,
         exit_to=world.context.id)
+
+
+@shared_task
+def exit_current_world(player_id):
+    player = Player.objects.select_related("world", "world__context").get(pk=player_id)
+    if not player.in_game:
+        return {"skipped": "not_in_game"}
+
+    exit_world(
+        player_id=player.id,
+        world_id=player.world_id,
+    )
+    return {"exited": True, "world_id": player.world_id}
 
 
 def _parse_actor_ref(actor_key: str | None) -> tuple[str, int] | None:

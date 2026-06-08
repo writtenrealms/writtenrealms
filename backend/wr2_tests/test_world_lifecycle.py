@@ -5,8 +5,10 @@ from django.utils import timezone
 from builders.models import Loader, MobTemplate, Rule
 from config import constants as api_consts
 from spawns.models import Item, Mob
+from spawns.tasks import enter_world, exit_current_world
 from spawns.services import WorldGate
 from tests.base import WorldTestCase
+from wr2_tests.utils import capture_game_messages
 from worlds.services import WorldSmith
 from worlds.tasks import monitor_worlds, run_world_loaders
 from rest_framework import serializers
@@ -142,6 +144,37 @@ class TestEnterWorld(WorldTestCase):
         WorldGate(world=self.spawn_world, player=self.player).enter()
         self.assertTrue(self.player.in_game)
 
+    def test_enter_world_notifies_other_online_players(self):
+        self.world.is_multiplayer = True
+        self.world.save(update_fields=["is_multiplayer"])
+        self.spawn_world.is_multiplayer = True
+        self.spawn_world.save(update_fields=["is_multiplayer"])
+        watcher = self.create_player(
+            "Jane",
+            user=self.create_user("jane@example.com"),
+        )
+        watcher.in_game = True
+        watcher.save(update_fields=["in_game"])
+
+        with capture_game_messages() as messages:
+            enter_world(self.player.id, self.spawn_world.id)
+
+        notification = next(
+            (
+                msg
+                for msg in messages
+                if msg["message"].get("type") == "notification.world.enter"
+            ),
+            None,
+        )
+        self.assertIsNotNone(notification)
+        self.assertEqual(notification["player_key"], watcher.key)
+        self.assertEqual(notification["message"]["text"], "John has entered the world.")
+        self.assertEqual(notification["message"]["data"]["actor"]["key"], self.player.key)
+        self.assertFalse(
+            any(msg["player_key"] == self.player.key for msg in messages)
+        )
+
 
 class TestMonitorWorldsIdlePlayers(WorldTestCase):
 
@@ -232,4 +265,45 @@ class TestMonitorWorldsIdlePlayers(WorldTestCase):
             player_id=self.player.id,
             world_id=self.spawn_world.id,
             exit_to=self.spawn_world.context.id,
+        )
+
+    @patch("spawns.tasks.notify_exit_world")
+    def test_exit_current_world_uses_wr2_exit_path(self, mock_notify_exit_world):
+        result = exit_current_world(self.player.id)
+
+        self.player.refresh_from_db()
+        self.assertFalse(self.player.in_game)
+        self.assertEqual(result, {"exited": True, "world_id": self.spawn_world.id})
+        mock_notify_exit_world.assert_called_once_with(
+            player_id=self.player.id,
+            world_id=self.spawn_world.id,
+            exit_to=self.spawn_world.context.id,
+        )
+
+    @patch("spawns.tasks.notify_exit_world")
+    def test_exit_current_world_notifies_other_online_players(self, mock_notify_exit_world):
+        watcher = self.create_player(
+            "Jane",
+            user=self.create_user("jane@example.com"),
+        )
+        watcher.in_game = True
+        watcher.save(update_fields=["in_game"])
+
+        with capture_game_messages() as messages:
+            exit_current_world(self.player.id)
+
+        notification = next(
+            (
+                msg
+                for msg in messages
+                if msg["message"].get("type") == "notification.world.leave"
+            ),
+            None,
+        )
+        self.assertIsNotNone(notification)
+        self.assertEqual(notification["player_key"], watcher.key)
+        self.assertEqual(notification["message"]["text"], "Joe has left the world.")
+        self.assertEqual(notification["message"]["data"]["actor"]["key"], self.player.key)
+        self.assertFalse(
+            any(msg["player_key"] == self.player.key for msg in messages)
         )

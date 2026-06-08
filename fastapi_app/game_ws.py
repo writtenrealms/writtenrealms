@@ -89,11 +89,24 @@ class GameConnectionManager:
     async def disconnect(self, websocket: WebSocket):
         """Clean up a disconnected player."""
         player_key = self.connection_players.pop(websocket, None)
+        connection_id = self.connection_ids.pop(websocket, None)
         if player_key:
-            self.active_connections.pop(player_key, None)
-            self.player_connections.pop(player_key, None)
-        self.connection_ids.pop(websocket, None)
+            if self.active_connections.get(player_key) is websocket:
+                self.active_connections.pop(player_key, None)
+            if self.player_connections.get(player_key) == connection_id:
+                self.player_connections.pop(player_key, None)
         logger.info(f"Player {player_key} disconnected")
+
+    def is_current_connection(self, websocket: WebSocket) -> bool:
+        """Return whether a websocket is still the active connection for its player."""
+        player_key = self.connection_players.get(websocket)
+        connection_id = self.connection_ids.get(websocket)
+        if not player_key or not connection_id:
+            return False
+        return (
+            self.active_connections.get(player_key) is websocket
+            and self.player_connections.get(player_key) == connection_id
+        )
 
     async def send_to_player(self, player_key: str, message: dict):
         """Send a message to a specific player."""
@@ -257,6 +270,15 @@ async def handle_game_websocket(websocket: WebSocket):
             kwargs["connection_id"] = connection_id
         celery_app.send_task('spawns.tasks.handle_game_command', kwargs=kwargs)
 
+    def queue_exit_current_world():
+        if not player_id:
+            return
+        celery_app = get_celery_app()
+        celery_app.send_task(
+            'spawns.tasks.exit_current_world',
+            kwargs={"player_id": player_id},
+        )
+
     try:
         while True:
             # Receive message from client
@@ -355,4 +377,9 @@ async def handle_game_websocket(websocket: WebSocket):
     except Exception as e:
         logger.error(f"Game WebSocket error: {e}")
     finally:
+        try:
+            if authenticated and player_id and game_manager.is_current_connection(websocket):
+                queue_exit_current_world()
+        except Exception as e:
+            logger.error(f"Error queueing world exit for {player_key}: {e}")
         await game_manager.disconnect(websocket)
