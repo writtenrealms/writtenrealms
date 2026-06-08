@@ -53,25 +53,36 @@ interface ActionBarItem {
 }
 
 const HOTKEY_LIMIT = 8;
+const SINGLE_ROW_LIMIT = 3;
 const MAX_ROW_SIZE = 5;
-const BALANCED_ROW_LIMIT = MAX_ROW_SIZE * 2;
 
 const player = computed(() => store.state.game.player || {});
 const world = computed(() => store.state.game.world || {});
 
-const rowSizeForCount = (count: number) => {
-  if (count <= 0) return MAX_ROW_SIZE;
-  if (count <= MAX_ROW_SIZE) return count;
-  if (count <= BALANCED_ROW_LIMIT) return Math.ceil(count / 2);
-  return MAX_ROW_SIZE;
+const rowSizesForCount = (count: number) => {
+  if (count <= 0) return [];
+
+  const rowCount = count <= SINGLE_ROW_LIMIT
+    ? 1
+    : Math.max(2, Math.ceil(count / MAX_ROW_SIZE));
+  const baseRowSize = Math.floor(count / rowCount);
+  const extraItems = count % rowCount;
+
+  return Array.from(
+    { length: rowCount },
+    (_, index) => baseRowSize + (index < extraItems ? 1 : 0)
+  );
 };
 
 const chunkRows = (items: ActionBarItem[]) => {
-  const rowSize = rowSizeForCount(items.length);
   const rows: ActionBarItem[][] = [];
-  for (let index = 0; index < items.length; index += rowSize) {
-    rows.push(items.slice(index, index + rowSize));
+  let offset = 0;
+
+  for (const rowSize of rowSizesForCount(items.length)) {
+    rows.push(items.slice(offset, offset + rowSize));
+    offset += rowSize;
   }
+
   return rows;
 };
 
@@ -154,7 +165,9 @@ const abilityItems = computed(() => {
 const actionRows = computed(() => chunkRows(abilityItems.value));
 
 const abilityBoxStyle = computed(() => ({
-  "--ability-columns": String(rowSizeForCount(abilityItems.value.length)),
+  "--ability-columns": String(
+    Math.max(1, ...actionRows.value.map(row => row.length))
+  ),
 }));
 </script>
 
