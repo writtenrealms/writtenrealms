@@ -278,6 +278,24 @@ spec:
         ]
         self.assertIn("insight", primary_keys)
 
+    def test_apply_world_config_manifest_accepts_destroy_all_death_mode(self):
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{self.world.id}
+spec:
+  death_mode: destroy_all
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.world.config.refresh_from_db()
+        self.assertEqual(self.world.config.death_mode, "destroy_all")
+
     def test_apply_world_config_manifest_accepts_async_combat_pacing_sentinel(self):
         manifest = f"""
 kind: world

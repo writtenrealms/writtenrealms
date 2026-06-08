@@ -6,7 +6,8 @@ from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
 from builders.models import Trigger
 from config import constants as adv_consts
-from spawns.models import CombatEncounter, Mob
+from spawns.actions.combat import apply_player_death
+from spawns.models import CombatEncounter, Item, Mob, Player
 from spawns.tasks import resolve_combat_encounter
 from tests.base import WorldTestCase
 from worlds.models import Room
@@ -67,6 +68,262 @@ class TestKillCommand(WorldTestCase):
             if msg["message"].get("type") == message_type
             and (player_key is None or msg["player_key"] == player_key)
         ]
+
+    def _death_event_by_type(self, events, event_type):
+        for event in events:
+            if event.type == event_type:
+                return event
+        return None
+
+    def _set_death_mode(self, death_mode, *, gold_penalty=None):
+        self.world.config.death_mode = death_mode
+        update_fields = ["death_mode"]
+        if gold_penalty is not None:
+            self.world.config.death_gold_penalty = gold_penalty
+            update_fields.append("death_gold_penalty")
+        self.world.config.save(update_fields=update_fields)
+
+    def _equipped_item(self, *, name="Bronze Sword", slot=adv_consts.EQUIPMENT_SLOT_WEAPON, cost=100):
+        item = Item.objects.create(
+            world=self.spawn_world,
+            container=self.player.equipment,
+            name=name,
+            cost=cost,
+        )
+        setattr(self.player.equipment, slot, item)
+        self.player.equipment.save(update_fields=[slot])
+        return item
+
+    def _inventory_item(self, *, name="Travel Ration"):
+        return Item.objects.create(
+            world=self.spawn_world,
+            container=self.player,
+            name=name,
+        )
+
+    def test_player_death_destroy_eq_destroys_equipment(self):
+        self._set_death_mode(adv_consts.DEATH_MODE_DESTROY_EQ)
+        sword = self._equipped_item()
+        ration = self._inventory_item()
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Ogre",
+            keywords="ogre",
+        )
+
+        updated_player, events = apply_player_death(
+            player=self.player,
+            origin_room=self.room,
+            killer=mob,
+        )
+
+        updated_player.refresh_from_db()
+        updated_player.equipment.refresh_from_db()
+        self.assertIsNone(updated_player.equipment.weapon)
+        self.assertFalse(Item.objects.filter(pk=sword.pk).exists())
+        self.assertEqual(Item.objects.get(pk=ration.pk).container, updated_player)
+
+        death_affect = self._death_event_by_type(events, "affect.death")
+        self.assertIsNotNone(death_affect)
+        self.assertEqual(death_affect.data["penalty"], "Your equipment is destroyed.")
+        self.assertEqual(death_affect.data["actor"]["equipment"]["weapon"], None)
+
+    def test_player_death_destroy_all_destroys_equipment_and_inventory(self):
+        self._set_death_mode(adv_consts.DEATH_MODE_DESTROY_ALL)
+        sword = self._equipped_item()
+        shield = self._equipped_item(
+            name="Iron Shield",
+            slot=adv_consts.EQUIPMENT_SLOT_OFFHAND,
+        )
+        ration = self._inventory_item()
+        token = self._inventory_item(name="Copper Token")
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Ogre",
+            keywords="ogre",
+        )
+
+        updated_player, events = apply_player_death(
+            player=self.player,
+            origin_room=self.room,
+            killer=mob,
+        )
+
+        updated_player.refresh_from_db()
+        updated_player.equipment.refresh_from_db()
+        self.assertIsNone(updated_player.equipment.weapon)
+        self.assertIsNone(updated_player.equipment.offhand)
+        self.assertFalse(
+            Item.objects.filter(pk__in=[sword.pk, shield.pk, ration.pk, token.pk]).exists()
+        )
+
+        death_affect = self._death_event_by_type(events, "affect.death")
+        self.assertIsNotNone(death_affect)
+        self.assertEqual(
+            death_affect.data["penalty"],
+            "Your equipment and inventory are destroyed.",
+        )
+        self.assertEqual(death_affect.data["actor"]["equipment"]["weapon"], None)
+        self.assertEqual(death_affect.data["actor"]["equipment"]["offhand"], None)
+        self.assertEqual(death_affect.data["actor"]["inventory"], [])
+
+    def test_player_death_lose_all_drops_equipment_and_inventory_in_origin_room_corpse(self):
+        self._set_death_mode(adv_consts.DEATH_MODE_LOSE_ALL)
+        sword = self._equipped_item()
+        ration = self._inventory_item()
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Ogre",
+            keywords="ogre",
+        )
+        watcher = self.create_player("Watcher", room=self.room)
+        watcher.in_game = True
+        watcher.save(update_fields=["in_game"])
+
+        updated_player, events = apply_player_death(
+            player=self.player,
+            origin_room=self.room,
+            killer=mob,
+            room_text="Ogre kills Joe.",
+        )
+
+        updated_player.refresh_from_db()
+        updated_player.equipment.refresh_from_db()
+        sword.refresh_from_db()
+        ration.refresh_from_db()
+        self.assertIsNone(updated_player.equipment.weapon)
+        corpse = self.room.inventory.get(type=adv_consts.ITEM_TYPE_CORPSE)
+        self.assertEqual(corpse.name, "the corpse of Joe")
+        self.assertEqual(sword.container, corpse)
+        self.assertEqual(ration.container, corpse)
+
+        death_affect = self._death_event_by_type(events, "affect.death")
+        self.assertIsNotNone(death_affect)
+        self.assertEqual(death_affect.data["penalty"], "Your equipment is left behind.")
+        self.assertEqual(death_affect.data["actor"]["inventory"], [])
+
+        death_notification = self._death_event_by_type(events, "notification.death")
+        self.assertIsNotNone(death_notification)
+        self.assertEqual(death_notification.data["corpse"]["key"], corpse.key)
+        self.assertEqual(
+            {item["key"] for item in death_notification.data["corpse"]["inventory"]},
+            {sword.key, ration.key},
+        )
+
+    def test_player_death_lose_inv_drops_inventory_and_keeps_equipment(self):
+        self._set_death_mode(adv_consts.DEATH_MODE_LOSE_INV)
+        sword = self._equipped_item()
+        ration = self._inventory_item()
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Ogre",
+            keywords="ogre",
+        )
+
+        updated_player, events = apply_player_death(
+            player=self.player,
+            origin_room=self.room,
+            killer=mob,
+        )
+
+        updated_player.refresh_from_db()
+        updated_player.equipment.refresh_from_db()
+        sword.refresh_from_db()
+        ration.refresh_from_db()
+        corpse = self.room.inventory.get(type=adv_consts.ITEM_TYPE_CORPSE)
+        self.assertEqual(updated_player.equipment.weapon_id, sword.id)
+        self.assertEqual(sword.container, updated_player.equipment)
+        self.assertEqual(ration.container, corpse)
+
+        death_affect = self._death_event_by_type(events, "affect.death")
+        self.assertIsNotNone(death_affect)
+        self.assertEqual(death_affect.data["penalty"], "Your inventory is left behind.")
+
+    def test_player_death_lose_gold_charges_repairs_for_non_pvp_death(self):
+        self._set_death_mode(adv_consts.DEATH_MODE_LOSE_GOLD, gold_penalty=0.25)
+        self._equipped_item(cost=100)
+        self._equipped_item(name="Iron Shield", slot=adv_consts.EQUIPMENT_SLOT_OFFHAND, cost=60)
+        self.player.gold = 30
+        self.player.save(update_fields=["gold"])
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Ogre",
+            keywords="ogre",
+        )
+
+        updated_player, events = apply_player_death(
+            player=self.player,
+            origin_room=self.room,
+            killer=mob,
+        )
+
+        updated_player.refresh_from_db()
+        self.assertEqual(updated_player.gold, 0)
+
+        death_affect = self._death_event_by_type(events, "affect.death")
+        self.assertIsNotNone(death_affect)
+        self.assertEqual(death_affect.data["penalty"], "You pay 30 gold for repairs.")
+        self.assertEqual(death_affect.data["actor"]["gold"], 0)
+
+    def test_player_death_lose_gold_does_not_charge_repairs_for_pvp_death(self):
+        self._set_death_mode(adv_consts.DEATH_MODE_LOSE_GOLD, gold_penalty=0.25)
+        self._equipped_item(cost=100)
+        self.player.gold = 30
+        self.player.save(update_fields=["gold"])
+        killer = Player.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Killer",
+            user=self.create_user("killer@example.com"),
+        )
+
+        updated_player, events = apply_player_death(
+            player=self.player,
+            origin_room=self.room,
+            killer=killer,
+        )
+
+        updated_player.refresh_from_db()
+        self.assertEqual(updated_player.gold, 30)
+
+        death_affect = self._death_event_by_type(events, "affect.death")
+        self.assertIsNotNone(death_affect)
+        self.assertEqual(death_affect.data["penalty"], "")
+
+    def test_player_death_lose_eq_drops_equipment_and_keeps_inventory(self):
+        self._set_death_mode(adv_consts.DEATH_MODE_LOSE_EQ)
+        sword = self._equipped_item()
+        ration = self._inventory_item()
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Ogre",
+            keywords="ogre",
+        )
+
+        updated_player, events = apply_player_death(
+            player=self.player,
+            origin_room=self.room,
+            killer=mob,
+        )
+
+        updated_player.refresh_from_db()
+        updated_player.equipment.refresh_from_db()
+        sword.refresh_from_db()
+        ration.refresh_from_db()
+        corpse = self.room.inventory.get(type=adv_consts.ITEM_TYPE_CORPSE)
+        self.assertIsNone(updated_player.equipment.weapon)
+        self.assertEqual(sword.container, corpse)
+        self.assertEqual(ration.container, updated_player)
+
+        death_affect = self._death_event_by_type(events, "affect.death")
+        self.assertIsNotNone(death_affect)
+        self.assertEqual(death_affect.data["penalty"], "Your equipment is left behind.")
 
     def test_kill_auto_resolves_until_mob_dies_and_awards_rewards(self):
         mob = Mob.objects.create(

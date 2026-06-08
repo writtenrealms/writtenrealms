@@ -155,6 +155,34 @@ Examples:
 `/kill` currently targets players. It does not kill mobs; use combat or builder
 cleanup commands for spawned mobs.
 
+## World Death Modes
+
+Player death penalties are controlled by `death_mode` on the world config. The
+same mode is used for combat deaths and builder/script deaths that go through
+the normal death-room pipeline.
+
+Available modes:
+
+| Mode | Effect |
+| --- | --- |
+| `lose_none` | Restores the player in the death room without changing equipment, inventory, or gold. |
+| `lose_all` | Moves equipped items and carried inventory into a corpse in the room where the player died. |
+| `lose_eq` | Moves equipped items into a corpse in the room where the player died; carried inventory stays with the player. |
+| `lose_inv` | Moves carried inventory into a corpse in the room where the player died; equipment stays equipped. |
+| `destroy_eq` | Deletes equipped items; carried inventory stays with the player. |
+| `destroy_all` | Deletes equipped items and carried inventory. |
+| `lose_gold` | On non-PvP deaths, charges repair gold based on equipped item cost and `death_gold_penalty`, capped by the player's current gold. PvP deaths do not charge this repair cost. |
+
+Example world manifest fragment:
+
+```yaml
+kind: world
+spec:
+  death_room: room@0,0,0
+  death_mode: lose_eq
+  death_gold_penalty: 0.2
+```
+
 ### `/purge`
 
 Format:

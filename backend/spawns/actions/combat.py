@@ -5,6 +5,7 @@ from datetime import timedelta
 import logging
 import random
 
+from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.utils import timezone
 
@@ -204,6 +205,119 @@ def _death_killer_payload(killer) -> dict | None:
     return None
 
 
+def _equipped_items(player: Player) -> list[tuple[str, Item]]:
+    equipment = player.equipment
+    if not equipment:
+        return []
+    items: list[tuple[str, Item]] = []
+    seen_ids: set[int] = set()
+    for slot in adv_consts.EQUIPMENT_SLOTS:
+        item = getattr(equipment, slot, None)
+        if item and item.id not in seen_ids:
+            items.append((slot, item))
+            seen_ids.add(item.id)
+    return items
+
+
+def _clear_equipment_slots(player: Player, slots: list[str]) -> None:
+    if not slots:
+        return
+    equipment = player.equipment
+    for slot in slots:
+        setattr(equipment, slot, None)
+    equipment.save(update_fields=slots)
+
+
+def _transfer_items_to_container(items: list[Item], container) -> None:
+    if not items or container is None:
+        return
+    container_ct = ContentType.objects.get_for_model(container.__class__)
+    Item.objects.filter(pk__in=[item.id for item in items]).update(
+        container_type=container_ct,
+        container_id=container.id,
+    )
+
+
+def _create_player_corpse(player: Player, room: Room | None) -> Item | None:
+    if room is None:
+        return None
+    return Item.objects.create(
+        name=f"the corpse of {player.name}",
+        keywords=f"corpse {player.name}",
+        ground_description=f"The corpse of {player.name} is lying here.",
+        type=adv_consts.ITEM_TYPE_CORPSE,
+        world=player.world,
+        level=player.level,
+        is_pickable=False,
+        container=room,
+    )
+
+
+def _equipped_item_value(player: Player) -> int:
+    return sum(max(0, int(item.cost or 0)) for _, item in _equipped_items(player))
+
+
+def _apply_player_death_penalty(
+    *,
+    player: Player,
+    death_mode: str,
+    death_gold_penalty: float,
+    origin_room: Room | None,
+    is_pvp_death: bool,
+) -> tuple[str, int | None]:
+    if death_mode == adv_consts.DEATH_MODE_LOSE_ALL:
+        equipped = _equipped_items(player)
+        carried_items = list(player.inventory.filter(is_pending_deletion=False))
+        corpse = _create_player_corpse(player, origin_room)
+        _clear_equipment_slots(player, [slot for slot, _ in equipped])
+        if corpse:
+            _transfer_items_to_container([item for _, item in equipped] + carried_items, corpse)
+        return "Your equipment is left behind.", corpse.id if corpse else None
+
+    if death_mode == adv_consts.DEATH_MODE_LOSE_GOLD and not is_pvp_death:
+        penalty = round(_equipped_item_value(player) * death_gold_penalty)
+        penalty = min(max(0, penalty), player.gold)
+        if penalty > 0:
+            player.gold -= penalty
+            player.save(update_fields=["gold"])
+            return f"You pay {penalty} gold for repairs.", None
+        return "", None
+
+    if death_mode == adv_consts.DEATH_MODE_DESTROY_EQ:
+        equipped = _equipped_items(player)
+        if equipped:
+            item_ids = [item.id for _, item in equipped]
+            _clear_equipment_slots(player, [slot for slot, _ in equipped])
+            Item.objects.filter(pk__in=item_ids).delete()
+        return "Your equipment is destroyed.", None
+
+    if death_mode == adv_consts.DEATH_MODE_DESTROY_ALL:
+        equipped = _equipped_items(player)
+        carried_items = list(player.inventory.all())
+        item_ids = [item.id for _, item in equipped] + [item.id for item in carried_items]
+        _clear_equipment_slots(player, [slot for slot, _ in equipped])
+        if item_ids:
+            Item.objects.filter(pk__in=item_ids).delete()
+        return "Your equipment and inventory are destroyed.", None
+
+    if death_mode == adv_consts.DEATH_MODE_LOSE_INV:
+        carried_items = list(player.inventory.filter(is_pending_deletion=False))
+        corpse = _create_player_corpse(player, origin_room)
+        if corpse:
+            _transfer_items_to_container(carried_items, corpse)
+        return "Your inventory is left behind.", corpse.id if corpse else None
+
+    if death_mode == adv_consts.DEATH_MODE_LOSE_EQ:
+        equipped = _equipped_items(player)
+        corpse = _create_player_corpse(player, origin_room)
+        _clear_equipment_slots(player, [slot for slot, _ in equipped])
+        if corpse:
+            _transfer_items_to_container([item for _, item in equipped], corpse)
+        return "Your equipment is left behind.", corpse.id if corpse else None
+
+    return "", None
+
+
 def apply_player_death(
     *,
     player: Player,
@@ -230,8 +344,14 @@ def apply_player_death(
         updated_player.energy = stats.player_energy_max
         updated_player.stamina = stats.player_stamina_max
         updated_player.room = death_room
-        # TODO: Apply WR2 death penalties here once the penalty system exists.
         updated_player.save(update_fields=["health", "energy", "stamina", "room"])
+        penalty_text, corpse_id = _apply_player_death_penalty(
+            player=updated_player,
+            death_mode=death_config.death_mode if death_config else adv_consts.DEATH_MODE_LOSE_NONE,
+            death_gold_penalty=death_config.death_gold_penalty if death_config else 0,
+            origin_room=origin_room or death_room,
+            is_pvp_death=isinstance(killer, Player),
+        )
 
         active_encounters = CombatEncounter.objects.select_for_update().filter(
             player=updated_player,
@@ -243,6 +363,7 @@ def apply_player_death(
     affect_data = {
         "actor": serialize_actor(updated_player, death_room).model_dump(),
         "room": _room_payload(updated_player, death_room),
+        "penalty": penalty_text,
     }
     if origin_room:
         affect_data["origin_room"] = _room_payload(updated_player, origin_room)
@@ -268,7 +389,11 @@ def apply_player_death(
         if recipients:
             notification_data = {
                 "deceased": serialize_char_from_player(updated_player).model_dump(),
-                "corpse": _empty_corpse_payload(),
+                "corpse": (
+                    _serialize_corpse(corpse_id, viewer=None)
+                    if corpse_id
+                    else _empty_corpse_payload()
+                ),
             }
             if killer_payload:
                 notification_data["killer"] = killer_payload
