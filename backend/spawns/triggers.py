@@ -779,7 +779,7 @@ def _dispatch_trigger_script_segment(
     issuer_scope: str | None = None,
     connection_id: str | None = None,
 ) -> str | None:
-    rendered_segment = str(format_actor_msg(segment, actor) or segment).strip()
+    rendered_segment = _render_trigger_script_segment(actor=actor, segment=segment)
     command_token = _first_token(rendered_segment)
     if not command_token:
         return None
@@ -815,6 +815,10 @@ def _dispatch_trigger_script_segment(
         return str(err)
 
     return _first_dispatched_error(dispatched_messages)
+
+
+def _render_trigger_script_segment(*, actor: Player | Mob, segment: str) -> str:
+    return str(format_actor_msg(segment, actor) or segment).strip()
 
 
 def _dispatch_trigger_script_segments(
@@ -869,12 +873,20 @@ def _schedule_trigger_script_line_segments(
     from spawns import tasks as spawn_tasks
 
     actor_type = _actor_kind(actor)
+    rendered_line_segments = [
+        rendered_segment
+        for segment in line_segments
+        if (rendered_segment := _render_trigger_script_segment(actor=actor, segment=segment))
+    ]
+    if not rendered_line_segments:
+        return []
+
     try:
         spawn_tasks.execute_trigger_script_segments.apply_async(
             kwargs={
                 "actor_type": actor_type,
                 "actor_id": actor.id,
-                "segments": line_segments,
+                "segments": rendered_line_segments,
                 "issuer_scope": issuer_scope,
                 "connection_id": connection_id,
             },

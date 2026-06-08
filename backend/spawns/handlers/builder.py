@@ -221,22 +221,47 @@ def _parse_setclass_args(ctx: CommandContext) -> tuple[str | None, str | None]:
     return args[-1], " ".join(args[:-1]).strip()
 
 
-def _parse_grantitem_args(ctx: CommandContext) -> tuple[str | None, str | None]:
+def _payload_item_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [item for item in str(value).split() if item.strip()]
+
+
+def _parse_grantitem_args(ctx: CommandContext) -> tuple[str | None, list[str]]:
     target = ctx.payload.get("target")
+    items = (
+        ctx.payload.get("items")
+        or ctx.payload.get("item_ids")
+        or ctx.payload.get("template_ids")
+    )
     item = (
         ctx.payload.get("item")
         or ctx.payload.get("item_id")
         or ctx.payload.get("template_id")
     )
-    if target is not None and item is not None:
-        return str(target).strip(), str(item).strip()
+    if target is not None:
+        item_ids = _payload_item_list(items)
+        if not item_ids and item is not None:
+            item_ids = [str(item).strip()]
+        return str(target).strip(), [item_id for item_id in item_ids if item_id]
 
     args = [str(arg).strip() for arg in list(ctx.payload.get("args", [])) if str(arg).strip()]
     if len(args) < 2:
-        return None, None
+        return None, []
+
+    delimited_target, delimited_items = _split_delimited_args(args)
+    if delimited_items is not None:
+        return delimited_target, [
+            item_id
+            for item_id in delimited_items.split()
+            if item_id.strip()
+        ]
+
     if len(args) >= 3 and args[-2].lower() == "item":
-        return " ".join(args[:-2]).strip(), args[-1]
-    return " ".join(args[:-1]).strip(), args[-1]
+        return " ".join(args[:-2]).strip(), [args[-1]]
+    return " ".join(args[:-1]).strip(), [args[-1]]
 
 
 def _parse_kill_args(ctx: CommandContext) -> tuple[str | None, str | None]:
@@ -374,7 +399,7 @@ class GrantItemHandler(CommandHandler):
     supported_actor_types = ("player", "mob", "room")
     help = {
         "name": "Grant Item",
-        "format": "/grantitem <target> <item_template_id|item_slug>",
+        "format": "/grantitem <target> <item_template_id|item_slug> | /grantitem <target> -- <item_selector>...",
         "description": (
             "Load an item template or definition into a target player or mob inventory. "
             "The target is resolved in the issuer's current room."
@@ -383,6 +408,7 @@ class GrantItemHandler(CommandHandler):
             "/grantitem player.123 starter-blade",
             "/grantitem aria starter-blade",
             "/grantitem quartermaster supply-token",
+            "/grantitem player.123 -- starter-blade starter-shield",
             "/cmd room -- /grantitem player.123 starter-blade",
         ],
     }
@@ -392,22 +418,22 @@ class GrantItemHandler(CommandHandler):
             ctx.publish(builder_permission_error(self.command_type))
             return
 
-        target, item = _parse_grantitem_args(ctx)
-        if not target or not item:
+        target, items = _parse_grantitem_args(ctx)
+        if not target or not items:
             ctx.publish(
                 {
                     "type": "cmd./grantitem.error",
-                    "text": "Usage: /grantitem <target> <item_template_id|item_slug>",
+                    "text": "Usage: /grantitem <target> <item_template_id|item_slug> or /grantitem <target> -- <item_selector>...",
                     "data": {"error": "Missing target or item.", "code": "invalid_args"},
                 }
             )
             return
 
         try:
-            result = GrantItemAction().execute(
+            result = GrantItemAction().execute_many(
                 actor=ctx.actor,
                 target_selector=target,
-                item_id=item,
+                item_ids=items,
                 runtime_world=ctx.world,
             )
         except ActionError as err:

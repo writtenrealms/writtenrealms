@@ -103,6 +103,7 @@ Format:
 
 ```text
 /grantitem <target> <item_template_id|item_definition_id|item_slug>
+/grantitem <target> -- <item_selector> <item_selector> ...
 ```
 
 Loads an authored item into a target player or mob inventory.
@@ -120,11 +121,19 @@ Examples:
 /grantitem player.123 starter-blade
 /grantitem aria starter-blade
 /grantitem quartermaster supply-token
+/grantitem player.123 -- starter-blade starter-shield starter-cloak
 /cmd room -- /grantitem {{ actor_key }} tidecaller-starter-trident
 ```
 
 Use `/grantitem` for pledge rewards, starter equipment, quest rewards, and any
 scripted reward that should not appear on the room floor.
+
+Use the `--` form when granting multiple items. The target is everything before
+`--`; item selectors are whitespace-separated after `--`. Each item selector can
+be an item template id, item definition id, template slug, or definition slug.
+Multi-item grants are
+validated before any item is spawned, so a bad selector prevents the whole grant
+instead of creating a partial reward set.
 
 ### `/kill`
 

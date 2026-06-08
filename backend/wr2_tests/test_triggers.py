@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from django.contrib.contenttypes.models import ContentType
 
-from builders.models import MobTemplate, Trigger
+from builders.models import ItemDefinition, MobTemplate, Trigger
 from config import constants as adv_consts
 from core.scoped_state import STATE_SCOPE_WORLD, replace_state_snapshot
 from spawns.events import GameEvent, publish_events
@@ -129,6 +129,39 @@ class TestCommandFallbackTriggers(WorldTestCase):
                 ["/cmd room -- /echo -- Third line."],
             ],
         )
+
+    def test_multiline_script_renders_templates_before_scheduling_followups(self):
+        item_definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="delayed-grant-trident",
+            name="a delayed grant trident",
+        )
+        self._create_room_trigger(
+            script=(
+                "/cmd room -- /echo -- First line.\n"
+                "/cmd room -- /grantitem {{ actor_key }} delayed-grant-trident"
+            ),
+        )
+
+        with patch("spawns.tasks.execute_trigger_script_segments.apply_async") as mock_apply_async:
+            dispatch_text_command(self.player.id, "touch altar")
+
+        self.assertEqual(mock_apply_async.call_count, 1)
+        scheduled_kwargs = mock_apply_async.call_args.kwargs["kwargs"]
+        self.assertEqual(
+            scheduled_kwargs["segments"],
+            [f"/cmd room -- /grantitem {self.player.key} delayed-grant-trident"],
+        )
+
+        from spawns.tasks import execute_trigger_script_segments
+
+        execute_trigger_script_segments(**scheduled_kwargs)
+
+        loaded_item = self.player.inventory.get(
+            definition=item_definition,
+            world=self.spawn_world,
+        )
+        self.assertEqual(loaded_item.name, item_definition.name)
 
     def test_multiline_script_delay_is_configurable(self):
         self._create_room_trigger(

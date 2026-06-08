@@ -533,6 +533,127 @@ class TestBuilderGrantItem(BuilderCommandTestCase):
         self.assertEqual(cmd_message["data"]["errors"], [])
         self.assertEqual(cmd_message["data"]["target"]["scope"], "room")
 
+    def test_builder_grantitem_adds_multiple_player_items(self):
+        sword = self._item_definition(
+            slug="batch-grant-sword",
+            name="a batch grant sword",
+        )
+        helm = self._item_definition(
+            slug="batch-grant-helm",
+            name="a batch grant helm",
+        )
+        target = self.create_player("Target", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/grantitem {target.key} -- batch-grant-sword batch-grant-helm",
+            )
+
+        loaded_sword = target.inventory.get(definition=sword, world=self.spawn_world)
+        loaded_helm = target.inventory.get(definition=helm, world=self.spawn_world)
+        self.assertEqual(loaded_sword.name, sword.name)
+        self.assertEqual(loaded_helm.name, helm.name)
+
+        message = self._message_by_type(messages, "cmd./grantitem.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target"]["key"], target.key)
+        self.assertEqual(message["data"]["loaded"]["type"], "items")
+        self.assertEqual(message["data"]["loaded_count"], 2)
+        self.assertEqual(
+            [item["name"] for item in message["data"]["loaded_items"]],
+            [sword.name, helm.name],
+        )
+        self.assertEqual(message["text"], "Granted 2 items to Target.")
+
+        notification = self._message_for_key_and_type(messages, target.key, "notification./grantitem")
+        self.assertIsNotNone(notification)
+        self.assertEqual(notification["text"], "You receive 2 items.")
+        self.assertEqual(notification["data"]["loaded_count"], 2)
+        self.assertIn(
+            loaded_sword.key,
+            [item["key"] for item in notification["data"]["actor"]["inventory"]],
+        )
+        self.assertIn(
+            loaded_helm.key,
+            [item["key"] for item in notification["data"]["actor"]["inventory"]],
+        )
+
+    def test_builder_grantitem_batch_supports_multi_word_target(self):
+        sword = self._item_definition(
+            slug="batch-name-sword",
+            name="a batch name sword",
+        )
+        helm = self._item_definition(
+            slug="batch-name-helm",
+            name="a batch name helm",
+        )
+        target = self.create_player("Target Friend", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                "/grantitem Target Friend -- batch-name-sword batch-name-helm",
+            )
+
+        self.assertTrue(target.inventory.filter(definition=sword, world=self.spawn_world).exists())
+        self.assertTrue(target.inventory.filter(definition=helm, world=self.spawn_world).exists())
+        message = self._message_by_type(messages, "cmd./grantitem.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target"]["key"], target.key)
+
+    def test_builder_grantitem_batch_rolls_back_when_any_item_is_invalid(self):
+        sword = self._item_definition(
+            slug="batch-rollback-sword",
+            name="a batch rollback sword",
+        )
+        helm = self._item_definition(
+            slug="batch-rollback-helm",
+            name="a batch rollback helm",
+        )
+        target = self.create_player("Target", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/grantitem {target.key} -- batch-rollback-sword missing-batch-item batch-rollback-helm",
+            )
+
+        self.assertFalse(target.inventory.filter(definition=sword, world=self.spawn_world).exists())
+        self.assertFalse(target.inventory.filter(definition=helm, world=self.spawn_world).exists())
+        message = self._message_by_type(messages, "cmd./grantitem.error")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["text"], "Template does not belong to this world")
+        self.assertEqual(message["data"]["item"], "missing-batch-item")
+
+    def test_cmd_room_grantitem_adds_multiple_player_items(self):
+        sword = self._item_definition(
+            slug="cmd-room-batch-grant-sword",
+            name="a command room batch grant sword",
+        )
+        helm = self._item_definition(
+            slug="cmd-room-batch-grant-helm",
+            name="a command room batch grant helm",
+        )
+        target = self.create_player("Target", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                payload={
+                    "text": f"/cmd room -- /grantitem {target.key} -- cmd-room-batch-grant-sword cmd-room-batch-grant-helm"
+                },
+                script_source=True,
+            )
+
+        self.assertTrue(target.inventory.filter(definition=sword, world=self.spawn_world).exists())
+        self.assertTrue(target.inventory.filter(definition=helm, world=self.spawn_world).exists())
+        cmd_message = self._message_by_type(messages, "cmd./cmd.success")
+        self.assertIsNotNone(cmd_message)
+        self.assertEqual(cmd_message["data"]["errors"], [])
+        self.assertEqual(cmd_message["data"]["target"]["scope"], "room")
+
     def test_mob_actor_grantitem_adds_player_inventory(self):
         item_definition = self._item_definition(
             slug="mob-grant-definition-sword",

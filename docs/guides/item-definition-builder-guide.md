@@ -176,6 +176,15 @@ script: /cmd room -- /grantitem {{ actor_key }} bronze-sword
 and puts the item into that target's inventory. This is the preferred command
 for pledge rewards, starter gear, quest rewards, and other item grants.
 
+For multi-item rewards, use the delimited form:
+
+```yaml
+script: /cmd room -- /grantitem {{ actor_key }} -- bronze-sword bronze-helm bronze-boots
+```
+
+The target is before `--`; item selectors are listed after it. The grant is
+all-or-nothing: every item selector must resolve before any item is spawned.
+
 Use room `/load` only when the item should appear on the room floor:
 
 ```yaml

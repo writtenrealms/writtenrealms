@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 
-from builders.models import ItemTemplate, MobTemplate
+from builders.models import ItemDefinition, ItemTemplate, MobTemplate
 from config import constants as adv_consts
 from core.leveling import (
     LevelingConfigError,
@@ -697,71 +697,173 @@ class GrantItemAction:
         updated_target = Mob.objects.select_related("definition", "template", "room", "world").get(pk=target.id)
         return serialize_char_from_mob(updated_target).model_dump(), updated_target.key
 
+    def _context_world(self, spawn_world: World) -> World:
+        context = spawn_world.context
+        return context.instance_of or context
+
+    def _resolve_item_templates(
+        self,
+        *,
+        context: World,
+        item_refs: list[str],
+    ) -> list[ItemTemplate | ItemDefinition]:
+        normalized_refs = [str(item_ref).strip() for item_ref in item_refs if str(item_ref).strip()]
+        numeric_ids = {
+            int(item_ref)
+            for item_ref in normalized_refs
+            if item_ref.isdigit()
+        }
+        ref_values = set(normalized_refs)
+
+        item_templates_by_id = {
+            item_template.id: item_template
+            for item_template in ItemTemplate.objects.filter(world=context, pk__in=numeric_ids)
+        }
+        item_templates_by_slug = {
+            item_template.slug: item_template
+            for item_template in ItemTemplate.objects.filter(world=context, slug__in=ref_values)
+        }
+        item_definitions_by_id = {
+            item_definition.id: item_definition
+            for item_definition in ItemDefinition.objects.filter(world=context, pk__in=numeric_ids)
+        }
+        item_definitions_by_slug = {
+            item_definition.slug: item_definition
+            for item_definition in ItemDefinition.objects.filter(world=context, slug__in=ref_values)
+        }
+
+        templates: list[ItemTemplate | ItemDefinition] = []
+        for item_ref in normalized_refs:
+            template = None
+            if item_ref.isdigit():
+                template = item_templates_by_id.get(int(item_ref))
+            if template is None:
+                template = item_templates_by_slug.get(item_ref)
+            if template is None and item_ref.isdigit():
+                template = item_definitions_by_id.get(int(item_ref))
+            if template is None:
+                template = item_definitions_by_slug.get(item_ref)
+            if template is None:
+                raise ActionError(
+                    "Template does not belong to this world",
+                    code="invalid_grant",
+                    data={"item": item_ref},
+                )
+            templates.append(template)
+
+        return templates
+
+    def _loaded_item_name(self, item: Item) -> str:
+        name = getattr(item, "name", "") or ""
+        if name:
+            return name
+        definition = getattr(item, "definition", None)
+        if definition and definition.name:
+            return definition.name
+        template = getattr(item, "template", None)
+        if template and template.name:
+            return template.name
+        return "item"
+
+    def _loaded_item_payload(self, item: Item, target: Player | Mob) -> dict[str, object]:
+        loaded_name = self._loaded_item_name(item)
+        return {
+            "type": "item",
+            "key": item.key,
+            "name": loaded_name,
+            "item": serialize_item(item, viewer=target).model_dump(),
+        }
+
     def execute(
         self,
         *,
         actor: Player | Mob | Room,
         target_selector: str,
         item_id: int | str,
+        item_ids: list[int | str] | None = None,
+        runtime_world: World | None = None,
+    ) -> ActionResult:
+        return self.execute_many(
+            actor=actor,
+            target_selector=target_selector,
+            item_ids=item_ids or [item_id],
+            runtime_world=runtime_world,
+        )
+
+    def execute_many(
+        self,
+        *,
+        actor: Player | Mob | Room,
+        target_selector: str,
+        item_ids: list[int | str],
         runtime_world: World | None = None,
     ) -> ActionResult:
         actor_type = _actor_kind(actor)
         if actor_type not in ("player", "mob", "room"):
             raise ActionError("Only players, mobs, and rooms can grant items.", code="unsupported_actor")
 
-        target = _resolve_room_character_target(
-            actor=actor,
-            target_selector=target_selector,
-            runtime_world=runtime_world,
-        )
-        spawn_world = _actor_world(actor, runtime_world=runtime_world)
-        if not spawn_world:
-            raise ActionError("No runtime world is available for granting items.", code="no_world")
+        normalized_item_ids = [
+            str(item_id).strip()
+            for item_id in item_ids
+            if str(item_id).strip()
+        ]
+        if not normalized_item_ids:
+            raise ActionError("Usage: /grantitem <target> <item_template_id|item_slug>", code="invalid_args")
 
-        payload = {
-            "world_id": spawn_world.id,
-            "template_type": "item",
-            "template_id": item_id,
-            "actor_type": _actor_kind(target),
-            "actor_id": target.id,
-            "room": _actor_room(actor).id,
-        }
+        with transaction.atomic():
+            target = _resolve_room_character_target(
+                actor=actor,
+                target_selector=target_selector,
+                runtime_world=runtime_world,
+            )
+            spawn_world = _actor_world(actor, runtime_world=runtime_world)
+            if not spawn_world:
+                raise ActionError("No runtime world is available for granting items.", code="no_world")
 
-        serializer = LoadTemplateSerializer(data=payload)
-        try:
-            serializer.is_valid(raise_exception=True)
-        except drf_serializers.ValidationError as exc:
-            message = _first_error_message(exc.detail) or "Unable to grant item."
-            raise ActionError(message, code="invalid_grant")
+            templates = self._resolve_item_templates(
+                context=self._context_world(spawn_world),
+                item_refs=normalized_item_ids,
+            )
+            spawned_items = [
+                template.spawn(target, spawn_world)
+                for template in templates
+            ]
+            loaded_items = [
+                self._loaded_item_payload(item, target)
+                for item in spawned_items
+            ]
+            target_payload, target_key = self._target_payload(target)
 
-        vd = serializer.validated_data
-        item = vd["template"].spawn(vd["actor"], vd["spawn_world"])
-        loaded_name = item.name or (item.template.name if item.template else "item")
-        item_payload = serialize_item(item, viewer=target if isinstance(target, (Player, Mob)) else None).model_dump()
-        target_payload, target_key = self._target_payload(target)
+            if isinstance(actor, Player):
+                updated_actor = get_player_with_related(actor.id)
+                actor_payload = serialize_actor(updated_actor, updated_actor.room).model_dump()
+                recipient_key = updated_actor.key
+            else:
+                actor_payload = _actor_summary(actor)
+                recipient_key = actor.key
 
-        if isinstance(actor, Player):
-            updated_actor = get_player_with_related(actor.id)
-            actor_payload = serialize_actor(updated_actor, updated_actor.room).model_dump()
-            recipient_key = updated_actor.key
+        if len(loaded_items) == 1:
+            loaded_data = loaded_items[0]
+            text = f"Granted {loaded_data['name']} to {getattr(target, 'name', None) or 'target'}."
+            notification_text = f"You receive {loaded_data['name']}."
         else:
-            actor_payload = _actor_summary(actor)
-            recipient_key = actor.key
+            loaded_data = {
+                "type": "items",
+                "count": len(loaded_items),
+                "name": f"{len(loaded_items)} items",
+                "items": loaded_items,
+            }
+            text = f"Granted {len(loaded_items)} items to {getattr(target, 'name', None) or 'target'}."
+            notification_text = f"You receive {len(loaded_items)} items."
 
-        loaded_data = {
-            "type": "item",
-            "key": item.key,
-            "name": loaded_name,
-            "item": item_payload,
-        }
         data = {
             "actor": actor_payload,
             "target": target_payload,
             "target_type": _actor_kind(target),
             "loaded": loaded_data,
+            "loaded_items": loaded_items,
+            "loaded_count": len(loaded_items),
         }
-        target_name = getattr(target, "name", None) or "target"
-        text = f"Granted {loaded_name} to {target_name}."
 
         events = [
             GameEvent(
@@ -783,8 +885,10 @@ class GrantItemAction:
                         "target": target_payload,
                         "target_type": "player",
                         "loaded": loaded_data,
+                        "loaded_items": loaded_items,
+                        "loaded_count": len(loaded_items),
                     },
-                    text=f"You receive {loaded_name}.",
+                    text=notification_text,
                 )
             )
 

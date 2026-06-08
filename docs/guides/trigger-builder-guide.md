@@ -326,6 +326,7 @@ inventory.
 
 ```text
 /grantitem <target> <item_template_id|item_slug>
+/grantitem <target> -- <item_selector> <item_selector> ...
 ```
 
 Targets are resolved in the issuer's current room. The target may be a player
@@ -351,6 +352,15 @@ script: /cmd room -- /grantitem {{ actor_key }} starter-trident
 This grants `starter-trident` directly to the triggering player. Use this for
 pledge rewards, starter equipment, quest rewards, and other cases where the
 item should not be dropped on the ground first.
+
+Use the `--` form for multi-item rewards such as starter gear:
+
+```yaml
+script: /cmd room -- /grantitem {{ actor_key }} -- starter-trident starter-helm starter-boots
+```
+
+The multi-item form validates every item selector before spawning anything. If
+one slug or id is invalid, no items are granted.
 
 ## Death Traps
 
@@ -416,7 +426,7 @@ spec:
   script: |
     /cmd room -- /echo -- You feel Poseidon's tide answer in your blood.
     /cmd room -- /setclass {{ actor_key }} tidecaller
-    /cmd room -- /grantitem {{ actor_key }} tidecaller-starter-trident
+    /cmd room -- /grantitem {{ actor_key }} -- tidecaller-starter-trident tidecaller-starter-helm
   conditions:
     ne:
       - actor.archetype
