@@ -13,7 +13,7 @@
     </div>
 
     <div v-if="message.type === 'affect.death'" class="mt-4 color-text-red font-text-regular">
-      You have been slain! Rest your weary bones...
+      {{ message.text || "You have been slain! Rest your weary bones..." }}
     </div>
 
     <div v-if="message.data.penalty" class='font-text-regular color-text-red'>
