@@ -31,6 +31,7 @@ from worlds.models import Room, World, Zone
 TRIGGER_GATED_TEXT = "More time is needed."
 DEFAULT_CONDITION_FAILURE_TEXT = "Action could not be completed."
 DEFAULT_POLICY_FAILURE_TEXT = "You cannot go that way."
+TRIGGER_HOOK_CACHE_TIMEOUT_SECONDS = 60
 TRIGGER_SCOPE_PRIORITY = {
     adv_consts.TRIGGER_SCOPE_ROOM: 0,
     adv_consts.TRIGGER_SCOPE_ZONE: 1,
@@ -400,7 +401,7 @@ def _cached_room_hooks(
             is_active=True,
         ).order_by("order", "created_ts", "id")
     ]
-    cache.set(cache_key, hooks, timeout=None)
+    cache.set(cache_key, hooks, timeout=TRIGGER_HOOK_CACHE_TIMEOUT_SECONDS)
     return hooks
 
 

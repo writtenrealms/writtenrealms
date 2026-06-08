@@ -1,11 +1,20 @@
+from unittest.mock import patch
+
 import yaml
 
 from django.contrib.contenttypes.models import ContentType
+from django.core.cache import cache
 
 from rest_framework.reverse import reverse
 
 from builders.models import BuilderAssignment, MobTemplate, Trigger, WorldBuilder
 from config import constants as adv_consts
+from core.trigger_policy_cache import (
+    TRIGGER_POLICY_CACHE_VERSION_FLOOR,
+    bump_trigger_policy_cache_version,
+    get_trigger_policy_cache_version,
+    trigger_policy_cache_version_key,
+)
 from tests.base import WorldTestCase
 from worlds.models import Room
 
@@ -17,6 +26,21 @@ class AuthenticatedBuilderWorldTestCase(WorldTestCase):
 
 
 class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
+    @staticmethod
+    def _trigger_hook_cache_helpers():
+        import spawns.handlers  # noqa: F401
+        from spawns.triggers import (
+            TRIGGER_HOOK_CACHE_TIMEOUT_SECONDS,
+            _cached_room_hooks,
+            _room_hook_cache_key,
+        )
+
+        return (
+            TRIGGER_HOOK_CACHE_TIMEOUT_SECONDS,
+            _cached_room_hooks,
+            _room_hook_cache_key,
+        )
+
     def setUp(self):
         super().setUp()
         room_ct = ContentType.objects.get_for_model(Room)
@@ -616,6 +640,129 @@ spec:
         self.assertEqual(created_trigger.target_id, self.room.id)
         self.assertEqual(created_trigger.event, adv_consts.TRIGGER_EVENT_AFTER_DEATH_ROOM_ENTER)
         self.assertIn("Death releases", created_trigger.script)
+
+    def test_apply_trigger_manifest_invalidates_cached_room_event_hooks(self):
+        _, cached_room_hooks, room_hook_cache_key = self._trigger_hook_cache_helpers()
+        old_script = "/cmd room -- /echo -- Old pit script."
+        new_script = "/cmd room -- /echo -- New pit script."
+        room_ct = ContentType.objects.get_for_model(Room)
+        event_trigger = Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=room_ct,
+            target_id=self.room.id,
+            event=adv_consts.TRIGGER_EVENT_AFTER_MOVE_ENTER,
+            script=old_script,
+            display_action_in_room=False,
+        )
+        old_cache_key = room_hook_cache_key(
+            world_id=self.world.id,
+            room_id=self.room.id,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            event=adv_consts.TRIGGER_EVENT_AFTER_MOVE_ENTER,
+        )
+        cache.delete(old_cache_key)
+
+        cached_hooks = cached_room_hooks(
+            world_id=self.world.id,
+            room_id=self.room.id,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            event=adv_consts.TRIGGER_EVENT_AFTER_MOVE_ENTER,
+        )
+        self.assertEqual(cached_hooks[0]["script"], old_script)
+        old_version = get_trigger_policy_cache_version(self.world.id)
+
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {event_trigger.key}
+spec:
+  scope: room
+  kind: event
+  target:
+    type: room
+    key: {self.room.key}
+  event: after_move_enter
+  script: {new_script}
+  display_action_in_room: false
+  is_active: true
+"""
+        with self.captureOnCommitCallbacks(execute=True):
+            resp = self.client.post(
+                self.apply_ep,
+                {"manifest": manifest},
+                format="json",
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["operation"], "updated")
+        self.assertGreater(
+            get_trigger_policy_cache_version(self.world.id),
+            old_version,
+        )
+
+        refreshed_hooks = cached_room_hooks(
+            world_id=self.world.id,
+            room_id=self.room.id,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            event=adv_consts.TRIGGER_EVENT_AFTER_MOVE_ENTER,
+        )
+        self.assertEqual(refreshed_hooks[0]["script"], new_script)
+
+    def test_trigger_policy_cache_does_not_reuse_legacy_version_namespace(self):
+        cache_key = trigger_policy_cache_version_key(self.world.id)
+        cache.set(cache_key, 1, timeout=None)
+
+        version = get_trigger_policy_cache_version(self.world.id)
+
+        self.assertGreaterEqual(version, TRIGGER_POLICY_CACHE_VERSION_FLOOR)
+
+    def test_trigger_policy_cache_bump_promotes_legacy_version_namespace(self):
+        cache_key = trigger_policy_cache_version_key(self.world.id)
+        cache.set(cache_key, 1, timeout=None)
+
+        bump_trigger_policy_cache_version(self.world.id)
+
+        self.assertGreaterEqual(
+            get_trigger_policy_cache_version(self.world.id),
+            TRIGGER_POLICY_CACHE_VERSION_FLOOR,
+        )
+
+    def test_cached_room_hooks_use_finite_timeout(self):
+        (
+            hook_cache_timeout,
+            cached_room_hooks,
+            room_hook_cache_key,
+        ) = self._trigger_hook_cache_helpers()
+        room_ct = ContentType.objects.get_for_model(Room)
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=room_ct,
+            target_id=self.room.id,
+            event=adv_consts.TRIGGER_EVENT_AFTER_DEATH_ROOM_ENTER,
+            script="/cmd room -- /echo -- Death room hook.",
+            display_action_in_room=False,
+        )
+        cache_key = room_hook_cache_key(
+            world_id=self.world.id,
+            room_id=self.room.id,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            event=adv_consts.TRIGGER_EVENT_AFTER_DEATH_ROOM_ENTER,
+        )
+        cache.delete(cache_key)
+
+        with patch("spawns.triggers.cache.set") as cache_set:
+            cached_room_hooks(
+                world_id=self.world.id,
+                room_id=self.room.id,
+                kind=adv_consts.TRIGGER_KIND_EVENT,
+                event=adv_consts.TRIGGER_EVENT_AFTER_DEATH_ROOM_ENTER,
+            )
+
+        self.assertEqual(cache_set.call_args.kwargs["timeout"], hook_cache_timeout)
 
     def test_apply_trigger_manifest_rejects_policy_outside_room_scope(self):
         manifest = f"""

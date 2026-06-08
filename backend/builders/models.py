@@ -1007,9 +1007,9 @@ class Trigger(AdventBaseModel):
 
 
 def post_trigger_policy_cache_bump(sender, **kwargs):
-    from core.trigger_policy_cache import bump_trigger_policy_cache_version
+    from core.trigger_policy_cache import bump_trigger_policy_cache_version_on_commit
 
-    bump_trigger_policy_cache_version(kwargs['instance'].world_id)
+    bump_trigger_policy_cache_version_on_commit(kwargs['instance'].world_id)
 
 
 models.signals.post_save.connect(
