@@ -1813,6 +1813,37 @@ class JumpAction:
         return ActionResult(events=events)
 
 
+class InvisibleAction:
+    def execute(self, *, player_id: int) -> ActionResult:
+        with transaction.atomic():
+            player = Player.objects.select_for_update().get(pk=player_id)
+            player.is_invisible = not player.is_invisible
+            player.save(update_fields=["is_invisible"])
+
+        updated_player = get_player_with_related(player_id)
+        text = (
+            "You are now invisible."
+            if updated_player.is_invisible
+            else "You are now visible."
+        )
+        return ActionResult(
+            events=[
+                GameEvent(
+                    type="cmd./invisible.success",
+                    recipients=[updated_player.key],
+                    data={
+                        "actor": serialize_actor(
+                            updated_player,
+                            updated_player.room,
+                        ).model_dump(),
+                        "is_invisible": updated_player.is_invisible,
+                    },
+                    text=text,
+                )
+            ]
+        )
+
+
 class ResyncItemTemplatesAction:
     def execute(
         self,

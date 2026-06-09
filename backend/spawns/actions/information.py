@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
+from config import constants as adv_consts
 from core.utils import roll_die
+from django.utils import timezone
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.targeting import find_accessible_item_target, find_room_char_target
 from spawns.events import GameEvent
@@ -10,6 +14,7 @@ from spawns.state_payloads import (
     collect_map_room_ids,
     door_state_lookup,
     get_player_with_related,
+    is_player_visible_on_who_list,
     serialize_actor,
     serialize_char_from_mob,
     serialize_char_from_player,
@@ -262,6 +267,69 @@ class StatsAction:
                 )
             ]
         )
+
+
+class WhoAction:
+    def execute(self, player_id: int) -> ActionResult:
+        actor = get_player_with_related(player_id)
+        players = self._players_for_actor(actor)
+        data = {
+            "players": [self._serialize_player(actor, player) for player in players],
+            "grapevine": {},
+        }
+        text = render_event_text("cmd.who.success", data, viewer=actor)
+
+        return ActionResult(
+            events=[
+                GameEvent(
+                    type="cmd.who.success",
+                    recipients=[actor.key],
+                    data=data,
+                    text=text,
+                )
+            ]
+        )
+
+    def _players_for_actor(self, actor: Player) -> list[Player]:
+        qs = (
+            Player.objects.filter(world=actor.world, in_game=True)
+            .select_related("user", "room")
+            .prefetch_related("faction_assignments__faction", "clan_memberships__clan")
+            .order_by("id")
+        )
+        return [
+            player
+            for player in qs
+            if is_player_visible_on_who_list(actor, player)
+        ]
+
+    def _serialize_player(self, actor: Player, player: Player) -> dict:
+        idle_cutoff = timezone.now() - timedelta(seconds=adv_consts.IDLE_THRESHOLD)
+        player_data = {
+            "id": player.id,
+            "key": player.key,
+            "name": player.name,
+            "title": player.title,
+            "level": player.level,
+            "gender": player.gender or "male",
+            "core_faction": (player.factions or {}).get("core"),
+            "display_faction": player.display_faction or None,
+            "is_builder": player.is_builder,
+            "is_immortal": player.is_builder,
+            "is_invisible": player.is_invisible,
+            "is_idle": (
+                not player.last_action_ts
+                or player.last_action_ts <= idle_cutoff
+            ),
+            "is_linkless": False,
+            "name_recognition": bool(getattr(player.user, "name_recognition", False)),
+            "clan": player.clan,
+        }
+        if bool(getattr(actor.user, "is_staff", False)):
+            player_data["link_id"] = player.user.link_id
+        if actor.is_builder:
+            player_data["room_id"] = player.room_id
+        return player_data
 
 
 class RollAction:

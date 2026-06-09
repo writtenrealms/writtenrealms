@@ -155,6 +155,55 @@ class BuilderCommandTestCase(WorldTestCase):
         self.player.save(update_fields=["is_builder"])
 
 
+class TestBuilderInvisible(BuilderCommandTestCase):
+    def _message_by_type(self, messages, message_type):
+        for msg in messages:
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def test_invisible_toggles_builder_visibility(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/invisible")
+
+        self.player.refresh_from_db()
+        self.assertTrue(self.player.is_invisible)
+        message = self._message_by_type(messages, "cmd./invisible.success")
+        self.assertIsNotNone(message)
+        self.assertTrue(message["data"]["is_invisible"])
+        self.assertEqual(message["text"], "You are now invisible.")
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/inv")
+
+        self.player.refresh_from_db()
+        self.assertFalse(self.player.is_invisible)
+        message = self._message_by_type(messages, "cmd./invisible.success")
+        self.assertIsNotNone(message)
+        self.assertFalse(message["data"]["is_invisible"])
+        self.assertEqual(message["text"], "You are now visible.")
+
+    def test_invisible_builder_is_omitted_from_who_list(self):
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+        watcher_user = self.create_user("who-watcher@example.com")
+        watcher = self.create_player("Watcher", user=watcher_user)
+        watcher.in_game = True
+        watcher.save(update_fields=["in_game"])
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "/invisible")
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(watcher.id, "who")
+
+        message = self._message_by_type(messages, "cmd.who.success")
+        self.assertIsNotNone(message)
+        player_keys = {entry["key"] for entry in message["data"]["players"]}
+        self.assertIn(watcher.key, player_keys)
+        self.assertNotIn(self.player.key, player_keys)
+
+
 class TestBuilderLoad(BuilderCommandTestCase):
     def setUp(self):
         super().setUp()

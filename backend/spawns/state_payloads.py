@@ -866,6 +866,23 @@ def serialize_world(world: World) -> Dict:
     return data
 
 
+def is_player_visible_on_who_list(actor: Player | None, player: Player) -> bool:
+    actor_is_builder = bool(getattr(actor, "is_builder", False))
+    if player.is_invisible and player.is_builder:
+        return False
+
+    if player.is_invisible and not actor_is_builder:
+        return False
+
+    if not actor_is_builder and not player.is_builder:
+        actor_core = (getattr(actor, "factions", None) or {}).get("core")
+        player_core = (player.factions or {}).get("core")
+        if actor_core != player_core:
+            return False
+
+    return True
+
+
 def build_who_list(world: World, actor: Player) -> List[WhoListEntry]:
     idle_cutoff = timezone.now() - timedelta(seconds=adv_consts.IDLE_THRESHOLD)
     qs = (
@@ -874,21 +891,9 @@ def build_who_list(world: World, actor: Player) -> List[WhoListEntry]:
         .prefetch_related("faction_assignments__faction", "clan_memberships__clan")
     )
     who_list: List[WhoListEntry] = []
-    actor_is_builder = getattr(actor, "is_builder", False)
-    actor_core = (actor.factions or {}).get("core")
 
     for player in qs:
-        if player.is_invisible and not actor_is_builder:
-            continue
-
-        player_core = (player.factions or {}).get("core")
-        if (
-            not actor_is_builder
-            and not player.is_builder
-            and actor_core
-            and player_core
-            and actor_core != player_core
-        ):
+        if not is_player_visible_on_who_list(actor, player):
             continue
 
         who_list.append(

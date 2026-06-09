@@ -6,7 +6,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
 from builders.models import Trigger
 from config import constants as adv_consts
-from spawns.actions.combat import apply_player_death
+from spawns.actions.combat import apply_player_death, mob_should_aggro_player
 from spawns.models import CombatEncounter, Item, Mob, Player
 from spawns.tasks import resolve_combat_encounter
 from tests.base import WorldTestCase
@@ -499,6 +499,23 @@ class TestKillCommand(WorldTestCase):
         self.assertIsNotNone(watcher_death)
         self.assertEqual(watcher_death["data"]["deceased"]["key"], self.player.key)
         self.assertEqual(watcher_death["text"], "Ogre kills Joe.")
+
+    def test_invisible_player_is_not_eligible_for_mob_aggro(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Sentinel",
+            keywords="sentinel",
+            aggression=adv_consts.MOB_AGGRESSION_ALL,
+        )
+
+        self.assertTrue(mob_should_aggro_player(mob, self.player))
+
+        self.player.is_builder = True
+        self.player.is_invisible = True
+        self.player.save(update_fields=["is_builder", "is_invisible"])
+
+        self.assertFalse(mob_should_aggro_player(mob, self.player))
 
     def test_kill_with_positive_interval_starts_encounter_without_immediate_resolution(self):
         self.world.config.combat_resolution_interval = 1.5

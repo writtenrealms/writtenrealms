@@ -11,6 +11,7 @@ from spawns.actions.information import (
     LookAction,
     RollAction,
     StatsAction,
+    WhoAction,
 )
 from spawns.events import publish_events
 from spawns.handlers.base import CommandContext, CommandHandler
@@ -172,6 +173,35 @@ class StatsHandler(CommandHandler):
             result = StatsAction().execute(ctx.player.id)
         except ActionError as err:
             ctx.publish_error("stats", err.message)
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.player.key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class WhoHandler(CommandHandler):
+    command_type = "who"
+    text_commands = ("who",)
+    help = {
+        "name": "Who",
+        "format": "who",
+        "description": (
+            "List all currently logged in players. Players with a ~ in "
+            "front of their names are Builders, who can give special "
+            "assistance if needed."
+        ),
+        "examples": ["who"],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        try:
+            result = WhoAction().execute(ctx.player.id)
+        except ActionError as err:
+            ctx.publish_error("who", err.message)
             return
 
         publish_events(

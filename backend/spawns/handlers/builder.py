@@ -8,6 +8,7 @@ from spawns.actions.builder import (
     CmdAction,
     EchoAction,
     GrantItemAction,
+    InvisibleAction,
     JumpAction,
     LoadTemplateAction,
     PurgeAction,
@@ -1016,6 +1017,45 @@ class JumpHandler(CommandHandler):
             ctx.publish(
                 {
                     "type": "cmd./jump.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.player.key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class InvisibleHandler(CommandHandler):
+    command_type = "/invisible"
+    text_commands = ("/invisible", "/inv")
+    builder_only = True
+    help = {
+        "name": "Wiz Invisible",
+        "format": "/invisible | /inv",
+        "description": "Toggle whether your builder character is visible to regular characters.",
+        "examples": [
+            "/invisible",
+            "/inv",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        if not can_execute_builder_command(ctx, self):
+            ctx.publish(builder_permission_error(self.command_type))
+            return
+
+        try:
+            result = InvisibleAction().execute(player_id=ctx.player.id)
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd./invisible.error",
                     "text": err.message,
                     "data": {"error": err.message, "code": err.code, **err.data},
                 }

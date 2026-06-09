@@ -190,6 +190,20 @@ def _render_stats_text(data: dict) -> str | None:
     return "You review your stats."
 
 
+def _render_who_text(data: dict) -> str:
+    lines = ["Players online:"]
+    for player in data.get("players") or []:
+        prefix = "~ " if player.get("is_immortal") else ""
+        name = player.get("name") or "Unknown"
+        title = player.get("title") or ""
+        level = player.get("level") or 1
+        line = f"{prefix}{name} {title} ({level})"
+        if player.get("is_invisible"):
+            line += " [invisible]"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _render_drop_text(event_type: str, data: dict) -> str | None:
     items = data.get("items") or []
     if not items:
@@ -511,6 +525,9 @@ def render_event_text(
 
     if event_type == "cmd.stats.success":
         return _render_stats_text(data)
+
+    if event_type == "cmd.who.success":
+        return _render_who_text(data)
 
     if event_type in ("cmd.roll.success", "notification.cmd.roll.success"):
         return _render_roll_text(event_type, data)

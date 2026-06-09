@@ -1,4 +1,4 @@
-from builders.models import ItemTemplate
+from builders.models import Faction, ItemTemplate
 from config import constants as adv_consts
 from core.computations import compute_stats
 from spawns.handlers import dispatch_command
@@ -147,6 +147,102 @@ class TestLookCommandText(WorldTestCase):
         message = self._message_by_type(messages, "cmd.look.error")
         self.assertIsNotNone(message)
         self.assertIn("don't see that here", message["text"].lower())
+
+
+class TestWhoCommand(WorldTestCase):
+    def _message_by_type(self, messages, message_type):
+        for msg in messages:
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def _set_online(self, player, *, last_action_ts=None):
+        player.in_game = True
+        player.last_action_ts = last_action_ts or timezone.now()
+        player.save(update_fields=["in_game", "last_action_ts"])
+
+    def _assign_core_faction(self, player, code):
+        faction = Faction.objects.create(
+            world=self.world,
+            code=code,
+            name=code.title(),
+            is_core=True,
+        )
+        player.faction_assignments.create(faction=faction)
+        return faction
+
+    def test_who_text_command_returns_wr1_payload_and_text(self):
+        self.player.title = "the Tester"
+        self.player.level = 3
+        self.player.save(update_fields=["title", "level"])
+        self._set_online(self.player)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "who")
+
+        message = self._message_by_type(messages, "cmd.who.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["grapevine"], {})
+        self.assertEqual(len(message["data"]["players"]), 1)
+        self.assertEqual(message["data"]["players"][0]["key"], self.player.key)
+        self.assertEqual(message["data"]["players"][0]["title"], "the Tester")
+        self.assertIn("Players online:", message["text"])
+        self.assertIn("Joe the Tester (3)", message["text"])
+
+    def test_who_filters_invisible_offline_and_cross_faction_players(self):
+        self._assign_core_faction(self.player, "human")
+        self._set_online(self.player)
+
+        human = self.create_player("Human")
+        self._assign_core_faction(human, "human")
+        self._set_online(human)
+
+        orc = self.create_player("Orc")
+        self._assign_core_faction(orc, "orc")
+        self._set_online(orc)
+
+        invisible = self.create_player("Invisible")
+        self._assign_core_faction(invisible, "human")
+        invisible.is_invisible = True
+        invisible.save(update_fields=["is_invisible"])
+        self._set_online(invisible)
+
+        offline = self.create_player("Offline")
+        self._assign_core_faction(offline, "human")
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "who")
+
+        message = self._message_by_type(messages, "cmd.who.success")
+        self.assertIsNotNone(message)
+        player_names = [player["name"] for player in message["data"]["players"]]
+        self.assertEqual(player_names, ["Joe", "Human"])
+
+    def test_builder_who_sees_invisible_players_and_room_ids(self):
+        self.player.is_builder = True
+        self.player.save(update_fields=["is_builder"])
+        self._set_online(self.player)
+
+        invisible = self.create_player("Invisible")
+        invisible.is_invisible = True
+        invisible.save(update_fields=["is_invisible"])
+        self._set_online(invisible)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "who")
+
+        message = self._message_by_type(messages, "cmd.who.success")
+        self.assertIsNotNone(message)
+        players_by_name = {
+            player["name"]: player
+            for player in message["data"]["players"]
+        }
+        self.assertIn("Invisible", players_by_name)
+        self.assertTrue(players_by_name["Invisible"]["is_invisible"])
+        self.assertEqual(players_by_name["Invisible"]["room_id"], invisible.room_id)
+        self.assertTrue(players_by_name["Joe"]["is_immortal"])
+        self.assertIn("~ Joe", message["text"])
+        self.assertIn("Invisible  (1) [invisible]", message["text"])
 
 
 class TestStateSyncText(WorldTestCase):

@@ -57,6 +57,33 @@ class CombatStats:
     player_stamina_max: int
 
 
+def mob_should_aggro_player(mob: Mob, player: Player) -> bool:
+    if player.is_invisible:
+        return False
+
+    aggression = getattr(mob, "aggression", None)
+    if not aggression or aggression == adv_consts.MOB_AGGRESSION_PASSIVE:
+        return False
+    if aggression == adv_consts.MOB_AGGRESSION_ALL:
+        return True
+    if aggression == adv_consts.MOB_AGGRESSION_PLAYERS:
+        return True
+
+    mob_factions = dict(getattr(mob, "factions", None) or {})
+    player_factions = dict(getattr(player, "factions", None) or {})
+    mob_core = mob_factions.pop("core", None)
+    player_core = player_factions.pop("core", None)
+
+    if mob_core and player_core and mob_core != player_core:
+        return True
+
+    for faction, standing in mob_factions.items():
+        if int(standing or 0) > 0 and int(player_factions.get(faction, 0) or 0) < 0:
+            return True
+
+    return False
+
+
 @dataclass(frozen=True)
 class CombatStepResult:
     actor_key: str | None
