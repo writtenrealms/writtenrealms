@@ -3,6 +3,7 @@ Information / observation commands (look, inspect, etc).
 
 Implements information-oriented commands such as look, inventory, and help.
 """
+from spawns.command_history import get_player_command_history
 from spawns.actions.base import ActionError
 from quests.services.discovery import available_room_prompt_opportunities_for_room
 from spawns.actions.information import (
@@ -348,6 +349,47 @@ class HelpHandler(CommandHandler):
             {
                 "type": "cmd.help.success",
                 "text": self._render_list_text(commands),
+                "data": {"commands": commands},
+            }
+        )
+
+
+@register_handler
+class HistoryHandler(CommandHandler):
+    command_type = "history"
+    text_commands = ("history",)
+    help = {
+        "name": "History",
+        "format": "history | !<number>",
+        "description": "Show recent commands. Repeat one with !<number>.",
+        "examples": [
+            "history",
+            "!1",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        history = get_player_command_history(ctx.player)
+        commands = [
+            {
+                "index": index,
+                "command": command,
+            }
+            for index, command in enumerate(history, start=1)
+        ]
+
+        if commands:
+            text = "\n".join(
+                f"{entry['index']}. {entry['command']}"
+                for entry in commands
+            )
+        else:
+            text = "No command history yet."
+
+        ctx.publish(
+            {
+                "type": "cmd.history.success",
+                "text": text,
                 "data": {"commands": commands},
             }
         )

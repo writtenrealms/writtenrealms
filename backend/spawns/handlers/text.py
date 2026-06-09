@@ -3,6 +3,12 @@ Text command handler.
 
 Handles raw text input from players - the primary command interface.
 """
+import re
+
+from spawns.command_history import (
+    record_player_command_history,
+    resolve_player_command_history,
+)
 from spawns.handlers.base import CommandHandler, CommandContext
 from spawns.handlers.permissions import (
     builder_permission_error,
@@ -24,6 +30,9 @@ def _parse_text_command(text: str) -> tuple[str | None, list[str], str]:
     return parts[0].lower(), parts[1:], stripped
 
 
+_HISTORY_REPLAY_PATTERN = re.compile(r"!(\d+)")
+
+
 @register_handler
 class TextCommandHandler(CommandHandler):
     """
@@ -38,10 +47,105 @@ class TextCommandHandler(CommandHandler):
     command_type = "text"
     supported_actor_types = ("player", "mob", "room", "zone", "world")
 
+    def _publish_history_error(
+        self,
+        ctx: CommandContext,
+        error: str,
+        code: str,
+        **data,
+    ) -> None:
+        ctx.publish(
+            {
+                "type": "cmd.history.error",
+                "text": error,
+                "data": {"error": error, "code": code, **data},
+            }
+        )
+
+    def _record_history(self, ctx: CommandContext, raw_text: str) -> None:
+        if ctx.actor_type != "player" or ctx.player is None:
+            return
+        if ctx.script_source or ctx.payload.get("suppress_history"):
+            return
+        record_player_command_history(ctx.player.id, raw_text)
+
+    def _handle_history_replay(self, ctx: CommandContext, raw_text: str) -> bool:
+        if ctx.actor_type != "player" or ctx.player is None:
+            return False
+        if ctx.script_source:
+            return False
+        if not raw_text.startswith("!"):
+            return False
+
+        match = _HISTORY_REPLAY_PATTERN.fullmatch(raw_text)
+        if not match:
+            self._publish_history_error(
+                ctx,
+                "History references use !<number>, for example !1.",
+                "invalid_history_reference",
+                original_command=raw_text,
+            )
+            return True
+
+        index = int(match.group(1))
+        resolved_text = resolve_player_command_history(ctx.player, index)
+        if not resolved_text:
+            self._publish_history_error(
+                ctx,
+                f"No command found at history index {index}.",
+                "no_history_entry",
+                index=index,
+            )
+            return True
+        if resolved_text.startswith("!"):
+            error = (
+                f"History entry {index} is another history reference "
+                "and cannot be replayed."
+            )
+            self._publish_history_error(
+                ctx,
+                error,
+                "recursive_history_reference",
+                index=index,
+                command=resolved_text,
+            )
+            return True
+
+        ctx.publish(
+            {
+                "type": "cmd.history.replay",
+                "text": f"{raw_text} -> {resolved_text}",
+                "echo": True,
+                "data": {
+                    "index": index,
+                    "command": resolved_text,
+                    "reference": raw_text,
+                },
+            }
+        )
+
+        from spawns.handlers.registry import dispatch_command
+
+        dispatch_command(
+            command_type="text",
+            actor_type="player",
+            actor_id=ctx.player.id,
+            payload={
+                "text": resolved_text,
+                "suppress_history": True,
+            },
+            connection_id=ctx.connection_id,
+            published_messages=ctx.published_messages,
+        )
+        return True
+
     def handle(self, ctx: CommandContext) -> None:
         cmd_text = ctx.payload.get("text", "")
         command, args, raw_text = _parse_text_command(cmd_text)
         if not command:
+            return
+
+        if self._handle_history_replay(ctx, raw_text):
             return
 
         if command == "eq" and not args:
@@ -53,6 +157,7 @@ class TextCommandHandler(CommandHandler):
 
         resolved = resolve_text_handler(command, include_builder=True)
         if not resolved:
+            self._record_history(ctx, raw_text)
             if command.startswith("/"):
                 ctx.publish(
                     {
@@ -104,6 +209,8 @@ class TextCommandHandler(CommandHandler):
 
         resolved_command, handler = resolved
         ctx.payload["command"] = resolved_command
+        if handler.command_type != "history":
+            self._record_history(ctx, raw_text)
 
         if getattr(handler, "builder_only", False) and not can_execute_builder_command(ctx, handler):
             ctx.publish(builder_permission_error(resolved_command))

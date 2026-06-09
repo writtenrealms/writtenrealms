@@ -761,6 +761,7 @@ const actions = {
 
     const lcmd = cmd.toLowerCase();
     const lfirst_token = lcmd.split(" ")[0];
+    const isHistoryReplay = /^!\d+$/.test(cmd.trim());
 
     // Special focus processing
     if (
@@ -784,7 +785,7 @@ const actions = {
     const message = { type: "cmd.text", text: cmd, echo: true };
 
     // Echo user input back to console
-    if (!silent) {
+    if (!silent && !isHistoryReplay) {
       commit("message_add", message);
     }
 

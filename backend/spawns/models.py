@@ -191,6 +191,7 @@ class Player(CharMixin, AdventBaseModel):
     known_abilities = models.JSONField(default=list)
     ability_hotkeys = models.JSONField(default=dict)
     ability_cooldowns = models.JSONField(default=dict)
+    command_history = models.JSONField(default=list)
 
     def __str__(self):
         return "{name} ({level})".format(
