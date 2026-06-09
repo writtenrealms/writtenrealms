@@ -88,7 +88,7 @@ MOB_DIRECT_STAT_FIELDS = (
     "attack_power",
     "ability_power",
 )
-PLAYER_SET_FIELDS = {
+PLAYER_SET_FIELD_CHOICES = (
     "level",
     "experience",
     "health",
@@ -98,8 +98,9 @@ PLAYER_SET_FIELDS = {
     "gold",
     "glory",
     "medals",
-}
-MOB_SET_FIELDS = {
+)
+PLAYER_SET_FIELDS = set(PLAYER_SET_FIELD_CHOICES)
+MOB_SET_FIELD_CHOICES = (
     "level",
     "experience",
     "health",
@@ -110,6 +111,16 @@ MOB_SET_FIELDS = {
     "gold",
     "exp_worth",
     *MOB_DIRECT_STAT_FIELDS,
+)
+MOB_SET_FIELDS = set(MOB_SET_FIELD_CHOICES)
+RESOURCE_CURRENT_TO_MAX = {
+    "health": "health_max",
+    "energy": "energy_max",
+    "stamina": "stamina_max",
+}
+RESOURCE_MAX_TO_CURRENT = {
+    max_field: current_field
+    for current_field, max_field in RESOURCE_CURRENT_TO_MAX.items()
 }
 PLAYER_COMPUTED_STAT_FIELDS = {
     "health_max",
@@ -855,6 +866,20 @@ def _coerce_model_field_value(target: Player | Mob, field_name: str, raw_value: 
     return str(value)
 
 
+def _resource_max_for_target(target: Player | Mob, max_field: str) -> int:
+    if isinstance(target, Player):
+        stats = compute_stats(
+            target.level,
+            target.archetype,
+            char=target,
+            world=target.world,
+        )
+        max_value = int(stats.get(max_field) or 0)
+        return max(1, max_value) if max_field == "health_max" else max(0, max_value)
+
+    return int(getattr(target, max_field, 0) or 0)
+
+
 def _set_character_stat_value(
     *,
     target: Player | Mob,
@@ -894,8 +919,35 @@ def _set_character_stat_value(
 
     previous_value = getattr(target, normalized_field)
     new_value = _coerce_model_field_value(target, normalized_field, raw_value)
+
+    max_field = RESOURCE_CURRENT_TO_MAX.get(normalized_field)
+    if max_field:
+        max_value = _resource_max_for_target(target, max_field)
+        if int(new_value) > max_value:
+            raise ActionError(
+                (
+                    f"{normalized_field} cannot exceed {max_field} ({max_value}). "
+                    f"Set {max_field} first."
+                ),
+                code="invalid_value",
+                data={
+                    "field": normalized_field,
+                    "max_field": max_field,
+                    "max_value": max_value,
+                },
+            )
+
     setattr(target, normalized_field, new_value)
-    target.save(update_fields=[normalized_field])
+
+    update_fields = [normalized_field]
+    current_field = RESOURCE_MAX_TO_CURRENT.get(normalized_field)
+    if current_field:
+        current_value = int(getattr(target, current_field, 0) or 0)
+        if current_value > int(new_value):
+            setattr(target, current_field, int(new_value))
+            update_fields.append(current_field)
+
+    target.save(update_fields=update_fields)
     return previous_value, new_value, normalized_field
 
 

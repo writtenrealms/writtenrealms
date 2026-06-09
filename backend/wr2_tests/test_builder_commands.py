@@ -1697,6 +1697,69 @@ class TestBuilderStatsAndSet(BuilderCommandTestCase):
         self.assertEqual(message["data"]["new_value"], 11)
         self.assertEqual(message["data"]["room"]["id"], self.room.id)
 
+    def test_builder_set_rejects_mob_current_resource_above_max(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Training Guard",
+            keywords="training guard",
+            health=100,
+            health_max=200,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/set guard health 500")
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.health, 100)
+        self.assertEqual(mob.health_max, 200)
+        message = self._message_by_type(messages, "cmd./set.error")
+        self.assertIsNotNone(message)
+        self.assertIn("health cannot exceed health_max (200)", message.get("text", ""))
+        self.assertEqual(message["data"]["field"], "health")
+        self.assertEqual(message["data"]["max_field"], "health_max")
+        self.assertEqual(message["data"]["max_value"], 200)
+
+    def test_builder_set_clamps_mob_current_resource_when_lowering_max(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Training Guard",
+            keywords="training guard",
+            health=150,
+            health_max=200,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/set guard health_max 100")
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.health, 100)
+        self.assertEqual(mob.health_max, 100)
+        message = self._message_by_type(messages, "cmd./set.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["field"], "health_max")
+        self.assertEqual(message["data"]["previous_value"], 200)
+        self.assertEqual(message["data"]["new_value"], 100)
+        self.assertEqual(message["data"]["target"]["health"], 100)
+        self.assertEqual(message["data"]["target"]["health_max"], 100)
+
+    def test_builder_set_rejects_player_current_resource_above_computed_max(self):
+        target = self.create_player("Target", room=self.room)
+        target.health = 1
+        target.save(update_fields=["health"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/set {target.key} health 999999")
+
+        target.refresh_from_db()
+        self.assertEqual(target.health, 1)
+        message = self._message_by_type(messages, "cmd./set.error")
+        self.assertIsNotNone(message)
+        self.assertIn("health cannot exceed health_max", message.get("text", ""))
+        self.assertEqual(message["data"]["field"], "health")
+        self.assertEqual(message["data"]["max_field"], "health_max")
+
     def test_builder_set_updates_room_mob_aggression_case_insensitively(self):
         mob = Mob.objects.create(
             world=self.spawn_world,

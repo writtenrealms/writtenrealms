@@ -16,6 +16,8 @@ from spawns.actions.builder import (
     ResyncItemTemplatesAction,
     ResyncMobTemplatesAction,
     SendAction,
+    MOB_SET_FIELD_CHOICES,
+    PLAYER_SET_FIELD_CHOICES,
     SetClassAction,
     SetLevelAction,
     SetStatAction,
@@ -45,6 +47,15 @@ SCOPED_CMD_ALIASES = {
     "/wcmd": "world",
     "/zcmd": "zone",
 }
+
+SET_STAT_HELP_DETAILS = [
+    f"Player fields: {', '.join(PLAYER_SET_FIELD_CHOICES)}.",
+    f"Mob fields: {', '.join(MOB_SET_FIELD_CHOICES)}.",
+    "Attribute keys can be set with attribute.<key>, attributes.<key>, or attr.<key>.",
+    "Use attributes -- <json object> to replace the full attributes map.",
+    "Current resources cannot exceed their max; set the max first when raising both.",
+    "Lowering a mob resource max clamps the current resource down to that max.",
+]
 
 
 def _split_delimited_args(args: list[str]) -> tuple[str, str] | tuple[None, None]:
@@ -881,6 +892,7 @@ class SetStatHandler(CommandHandler):
             "Set a persisted stat field on a player or mob. Player combat ratings are computed; "
             "set player attributes or equipment instead of direct computed ratings."
         ),
+        "details": SET_STAT_HELP_DETAILS,
         "examples": [
             "/set guard health 25",
             "/set guard attack_power 8",
