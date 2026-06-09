@@ -33,7 +33,10 @@ spec:
 Common direct mob fields include `level`, `exp_worth`, `gold`, `health_max`,
 `health_regen`, `energy_max`, `energy_regen`, `stamina_max`, `stamina_regen`,
 `regen_rate`, `attack_power`, `ability_power`, `armor`, `crit`, `dodge`,
-`resilience`, `fights_back`, and `is_invisible`.
+`resilience`, `aggression`, `fights_back`, and `is_invisible`.
+
+Use `aggression: passive`, `normal`, `players`, `all`, or `friendly`. The
+alias `aggressive` is accepted for `all`.
 
 ## Fixed Attribute Mobs
 

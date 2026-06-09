@@ -1697,6 +1697,51 @@ class TestBuilderStatsAndSet(BuilderCommandTestCase):
         self.assertEqual(message["data"]["new_value"], 11)
         self.assertEqual(message["data"]["room"]["id"], self.room.id)
 
+    def test_builder_set_updates_room_mob_aggression_case_insensitively(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Training Guard",
+            keywords="training guard",
+            aggression=api_consts.MOB_AGGRESSION_PASSIVE,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/set guard aggression Aggressive")
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.aggression, api_consts.MOB_AGGRESSION_ALL)
+        message = self._message_by_type(messages, "cmd./set.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["field"], "aggression")
+        self.assertEqual(
+            message["data"]["previous_value"],
+            api_consts.MOB_AGGRESSION_PASSIVE,
+        )
+        self.assertEqual(message["data"]["new_value"], api_consts.MOB_AGGRESSION_ALL)
+        self.assertEqual(
+            message["data"]["target"]["aggression"],
+            api_consts.MOB_AGGRESSION_ALL,
+        )
+
+    def test_builder_set_rejects_unknown_mob_aggression(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Training Guard",
+            keywords="training guard",
+            aggression=api_consts.MOB_AGGRESSION_PASSIVE,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/set guard aggression Berserk")
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.aggression, api_consts.MOB_AGGRESSION_PASSIVE)
+        message = self._message_by_type(messages, "cmd./set.error")
+        self.assertIsNotNone(message)
+        self.assertIn("aggression must be one of", message.get("text", ""))
+
     def test_builder_set_updates_global_player_attribute_key(self):
         far_room = self.room.create_at("east")
         target = self.create_player("RemotePlayer", room=far_room)

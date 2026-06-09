@@ -11,6 +11,7 @@ from builders.item_definitions import (
 )
 from core.stat_system import DIRECT_STAT_KEYS, compute_attribute_formula_stats
 from core.model_mixins import CharMixin, MobMixin
+from config import constants as adv_consts
 
 
 def _field_names(model_cls) -> set[str]:
@@ -107,6 +108,8 @@ def _mob_fields_from_definition(definition, attributes: dict[str, float]) -> dic
             "group_id",
         }:
             continue
+        if key == "aggression":
+            value = adv_consts.canonical_mob_aggression(value)
         fields[key] = value
 
     fields["attributes"] = attributes

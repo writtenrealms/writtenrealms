@@ -106,6 +106,7 @@ MOB_SET_FIELDS = {
     "energy",
     "stamina",
     "attributes",
+    "aggression",
     "gold",
     "exp_worth",
     *MOB_DIRECT_STAT_FIELDS,
@@ -659,7 +660,9 @@ def _serialize_mob_stats_target(mob: Mob) -> dict[str, object]:
             "experience": int(getattr(mob, "experience", 0) or 0),
             "exp_worth": int(getattr(mob, "exp_worth", 0) or 0),
             "gold": int(getattr(mob, "gold", 0) or 0),
-            "aggression": str(getattr(mob, "aggression", "") or ""),
+            "aggression": adv_consts.canonical_mob_aggression(
+                getattr(mob, "aggression", "")
+            ),
             "stamina": int(getattr(mob, "stamina", 0) or 0),
             "stamina_max": int(getattr(mob, "stamina_max", 0) or 0),
             "stamina_regen": int(getattr(mob, "stamina_regen", 0) or 0),
@@ -813,6 +816,16 @@ def _coerce_model_field_value(target: Player | Mob, field_name: str, raw_value: 
         model_field = target._meta.get_field(field_name)
     except Exception as exc:
         raise ActionError(f"Unknown field '{field_name}'.", code="invalid_field") from exc
+
+    if isinstance(target, Mob) and field_name == "aggression":
+        aggression = adv_consts.canonical_mob_aggression(value)
+        if aggression not in adv_consts.MOB_AGGRESSION_OPTIONS:
+            raise ActionError(
+                "aggression must be one of: "
+                f"{', '.join(adv_consts.MOB_AGGRESSION_OPTIONS)}.",
+                code="invalid_value",
+            )
+        return aggression
 
     internal_type = model_field.get_internal_type()
     if internal_type in {"IntegerField", "PositiveIntegerField", "PositiveSmallIntegerField"}:

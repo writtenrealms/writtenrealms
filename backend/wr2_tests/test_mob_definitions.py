@@ -29,6 +29,7 @@ class TestMobDefinitions(WorldTestCase):
             room_description="A bandit watches the road.",
             base_properties={
                 "level": 4,
+                "aggression": "aggressive",
                 "health_max": 45,
                 "attack_power": 6,
             },
@@ -53,6 +54,7 @@ class TestMobDefinitions(WorldTestCase):
         self.assertEqual(mob.name, "a bandit")
         self.assertEqual(mob.type, adv_consts.MOB_TYPE_HUMANOID)
         self.assertEqual(mob.level, 4)
+        self.assertEqual(mob.aggression, adv_consts.MOB_AGGRESSION_ALL)
         self.assertEqual(mob.health_max, 45)
         self.assertEqual(mob.health, 45)
         self.assertEqual(mob.attack_power, 18)
@@ -193,6 +195,53 @@ spec:
         self.assertEqual(definition.base_properties["health_max"], 42)
         self.assertEqual(definition.attributes, {"brawn": 2})
         self.assertEqual(definition.randomization["attributes"][0]["mode"], "favor_high")
+
+    def test_apply_mob_definition_manifest_normalizes_aggressive_alias(self):
+        manifest = f"""
+kind: mobdefinition
+metadata:
+  world: world.{self.world.id}
+  slug: guard
+  name: a guard
+spec:
+  type: humanoid
+  aggression: aggressive
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        definition = MobDefinition.objects.get(world=self.world, slug="guard")
+        self.assertEqual(
+            definition.base_properties["aggression"],
+            adv_consts.MOB_AGGRESSION_ALL,
+        )
+        detail_resp = self.client.get(
+            reverse(
+                "builder-mob-definition-detail",
+                args=[self.world.pk, definition.pk],
+            )
+        )
+        self.assertEqual(detail_resp.status_code, 200, detail_resp.data)
+        self.assertEqual(
+            detail_resp.data["manifest"]["spec"]["aggression"],
+            adv_consts.MOB_AGGRESSION_ALL,
+        )
+
+    def test_apply_mob_definition_manifest_rejects_unknown_aggression(self):
+        manifest = f"""
+kind: mobdefinition
+metadata:
+  world: world.{self.world.id}
+  slug: guard
+  name: a guard
+spec:
+  type: humanoid
+  aggression: berserk
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400, resp.data)
+        self.assertIn("aggression", str(resp.data).lower())
 
     def test_apply_mob_definition_manifest_can_create_ability_trainer(self):
         AbilityDefinition.objects.create(

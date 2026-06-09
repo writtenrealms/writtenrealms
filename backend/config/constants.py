@@ -575,6 +575,15 @@ MOB_AGGRESSION_OPTIONS = [
     #MOB_AGGRESSION_ALIGNMENT_NEUTRAL,
 ]
 
+MOB_AGGRESSION_ALIASES = {
+    'aggressive': MOB_AGGRESSION_ALL,
+}
+
+
+def canonical_mob_aggression(value):
+    normalized = str(value or '').strip().lower()
+    return MOB_AGGRESSION_ALIASES.get(normalized, normalized)
+
 ITEM_CURRENCY_GOLD = 'gold'
 
 ITEM_CURRENCY_MEDAL = 'medal'

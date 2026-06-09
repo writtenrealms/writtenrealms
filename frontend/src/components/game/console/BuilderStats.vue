@@ -96,8 +96,6 @@ const summaryText = computed(() => {
   return [[name, key].filter(Boolean).join(" "), details].filter(Boolean).join(" - ");
 });
 
-const formatChoice = (value: any) => titleCase(String(value || "").replace(/:/g, ": "));
-
 const detailEntries = computed(() => {
   const entries: any[] = [
     { key: "type", label: "Type", value: targetType.value || "character" },
@@ -106,7 +104,7 @@ const detailEntries = computed(() => {
     entries.push({
       key: "aggression",
       label: "Aggression",
-      value: formatChoice(target.value.aggression),
+      value: String(target.value.aggression || "").trim().toLowerCase(),
     });
   }
   if (targetType.value === "mob") {

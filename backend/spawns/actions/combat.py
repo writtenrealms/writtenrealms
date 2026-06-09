@@ -153,8 +153,11 @@ def mob_should_aggro_player(mob: Mob, player: Player) -> bool:
     if player.is_invisible:
         return False
 
-    aggression = getattr(mob, "aggression", None)
-    if aggression is None:
+    raw_aggression = getattr(mob, "aggression", None)
+    if raw_aggression is None:
+        return False
+    aggression = adv_consts.canonical_mob_aggression(raw_aggression)
+    if not aggression:
         return False
     if aggression == adv_consts.MOB_AGGRESSION_ALL:
         return True

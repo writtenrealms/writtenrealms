@@ -557,6 +557,9 @@ class TestKillCommand(WorldTestCase):
         mob.aggression = adv_consts.MOB_AGGRESSION_PLAYERS
         self.assertTrue(mob_should_aggro_player(mob, player))
 
+        mob.aggression = "aggressive"
+        self.assertTrue(mob_should_aggro_player(mob, player))
+
     def test_mob_aggro_starts_combat_when_player_enters_room(self):
         self.world.config.combat_resolution_interval = 1.5
         self.world.config.save(update_fields=["combat_resolution_interval"])

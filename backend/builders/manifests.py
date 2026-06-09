@@ -582,6 +582,20 @@ def _coerce_choice(value: Any, choices: list[str], field_name: str) -> str:
     return normalized
 
 
+def _coerce_mob_aggression(value: Any, field_name: str) -> str:
+    normalized = adv_consts.canonical_mob_aggression(value)
+    if normalized not in adv_consts.MOB_AGGRESSION_OPTIONS:
+        aliases = ", ".join(sorted(adv_consts.MOB_AGGRESSION_ALIASES.keys()))
+        message = (
+            f"{field_name} must be one of: "
+            f"{', '.join(adv_consts.MOB_AGGRESSION_OPTIONS)}"
+        )
+        if aliases:
+            message = f"{message}; accepted aliases: {aliases}"
+        raise serializers.ValidationError(f"{message}.")
+    return normalized
+
+
 def _canonical_trigger_kind(kind: str | None) -> str:
     return str(kind or "").strip().lower()
 
@@ -991,7 +1005,7 @@ def serialize_item_definition_payload(item_definition: ItemDefinition) -> dict[s
 
 
 def _mob_definition_aggression(mob_definition: MobDefinition) -> str:
-    return (
+    return adv_consts.canonical_mob_aggression(
         (mob_definition.base_properties or {}).get("aggression")
         or adv_consts.MOB_AGGRESSION_PASSIVE
     )
@@ -2666,7 +2680,10 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
     for field_name in _MOB_DEFINITION_BASE_PROPERTY_FIELDS:
         if field_name not in spec_patch:
             continue
-        base_properties[field_name] = spec_patch.get(field_name)
+        value = spec_patch.get(field_name)
+        if field_name == "aggression":
+            value = _coerce_mob_aggression(value, "spec.aggression")
+        base_properties[field_name] = value
 
     combat = spec_patch.get("combat", {})
     if combat in (None, ""):
@@ -2684,6 +2701,8 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         if field_name == "health":
             base_properties["health_max"] = value
         elif field_name in _MOB_DEFINITION_BASE_PROPERTY_FIELDS:
+            if field_name == "aggression":
+                value = _coerce_mob_aggression(value, "spec.combat.aggression")
             base_properties[field_name] = value
 
     merchant = spec_patch.get("merchant", {})
