@@ -12,6 +12,7 @@
         <button class="btn-small primary-action" :disabled="!canSave" @click="emit('save')">
           {{ isSubmitting ? savingLabel : saveLabel }}
         </button>
+        <slot name="actions" />
       </div>
     </div>
 
@@ -79,11 +80,35 @@ const textareaStyle = computed(() => ({
   minHeight: `${props.minHeight}px`,
 }));
 
+const trailingBuilderNavHeight = () => {
+  const contentsOuter = document.querySelector("#builder .builder-contents-outer");
+  const sideNav = document.querySelector("#builder .builder-contents-outer > .side-nav");
+  if (!(contentsOuter instanceof HTMLElement) || !(sideNav instanceof HTMLElement)) {
+    return 0;
+  }
+  const contentsStyle = getComputedStyle(contentsOuter);
+  const sideNavStyle = getComputedStyle(sideNav);
+  if (
+    contentsStyle.flexDirection !== "column"
+    || sideNavStyle.display === "none"
+    || sideNavStyle.visibility === "hidden"
+  ) {
+    return 0;
+  }
+  return sideNav.getBoundingClientRect().height;
+};
+
 const measureTextarea = async () => {
   await nextTick();
   const el = textarea.value;
   if (!el) return;
-  const availableHeight = window.innerHeight - el.getBoundingClientRect().top - props.bottomGap;
+  const viewportHeight = window.visualViewport?.height || window.innerHeight;
+  const availableHeight = (
+    viewportHeight
+    - el.getBoundingClientRect().top
+    - props.bottomGap
+    - trailingBuilderNavHeight()
+  );
   textareaHeight.value = `${Math.max(props.minHeight, Math.floor(availableHeight))}px`;
 };
 
@@ -102,11 +127,13 @@ const copyYaml = async () => {
 
 onMounted(() => {
   window.addEventListener("resize", measureTextarea);
+  window.visualViewport?.addEventListener("resize", measureTextarea);
   measureTextarea();
 });
 
 onUnmounted(() => {
   window.removeEventListener("resize", measureTextarea);
+  window.visualViewport?.removeEventListener("resize", measureTextarea);
 });
 
 watch(
@@ -130,18 +157,21 @@ watch(
 .manifest-yaml-editor-header {
   align-items: flex-start;
   display: flex;
-  gap: 1rem;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 0.75rem;
 }
 
 .manifest-yaml-editor-heading {
   min-width: 0;
+  width: 100%;
 }
 
 .manifest-yaml-editor-actions {
+  align-items: center;
   display: flex;
-  flex-shrink: 0;
+  flex-wrap: wrap;
   gap: 0.5rem;
+  width: 100%;
 
   button:disabled {
     border-color: $color-text-hex-50;

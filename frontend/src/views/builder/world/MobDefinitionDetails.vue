@@ -15,6 +15,11 @@
             ID: {{ mobDefinition.id }} <span class='mx-2'>|</span> Slug: {{ mobDefinition.slug }}
           </div>
         </template>
+        <template #actions>
+          <button class="btn-thin" :disabled="!mobDefinition.delete_yaml" @click="copyDeleteYaml">
+            COPY DELETE YAML
+          </button>
+        </template>
       </ManifestYamlEditor>
     </template>
   </div>
@@ -74,6 +79,15 @@ const fetchMobDefinition = async () => {
     store.commit("ui/notification_set_error", extractError(error));
   } finally {
     isLoading.value = false;
+  }
+};
+
+const copyDeleteYaml = async () => {
+  try {
+    await navigator.clipboard.writeText(mobDefinition.value?.delete_yaml || "");
+    store.commit("ui/notification_set", "Mob delete YAML copied.");
+  } catch {
+    store.commit("ui/notification_set_error", "Unable to copy delete YAML to clipboard.");
   }
 };
 

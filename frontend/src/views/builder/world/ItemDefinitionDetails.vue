@@ -12,8 +12,13 @@
         <template #header>
           <h2>{{ itemDefinition.name }}</h2>
           <div class="color-text-60">
-            ID: {{ itemDefinition.id }} | Slug: {{ itemDefinition.slug }} | Type: {{ itemDefinition.type }}
+            ID: {{ itemDefinition.id }} | Slug: {{ itemDefinition.slug }}
           </div>
+        </template>
+        <template #actions>
+          <button class="btn-thin" :disabled="!itemDefinition.delete_yaml" @click="copyDeleteYaml">
+            COPY DELETE YAML
+          </button>
         </template>
       </ManifestYamlEditor>
     </template>
@@ -74,6 +79,15 @@ const fetchItemDefinition = async () => {
     store.commit("ui/notification_set_error", extractError(error));
   } finally {
     isLoading.value = false;
+  }
+};
+
+const copyDeleteYaml = async () => {
+  try {
+    await navigator.clipboard.writeText(itemDefinition.value?.delete_yaml || "");
+    store.commit("ui/notification_set", "Item delete YAML copied.");
+  } catch {
+    store.commit("ui/notification_set_error", "Unable to copy delete YAML to clipboard.");
   }
 };
 
