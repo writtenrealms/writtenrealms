@@ -32,6 +32,7 @@
 import { computed, onMounted, onUnmounted, onUpdated, ref } from 'vue';
 import { useStore } from 'vuex';
 import _ from "lodash";
+import BuilderStats from "@/components/game/console/BuilderStats.vue";
 import Chat from '@/components/game/console/Chat.vue';
 import CombatMessage from '@/components/game/console/CombatMessage.vue';
 import Compare from '@/components/game/console/Compare.vue';
@@ -81,6 +82,7 @@ const consoleMessage = (message) => {
     "cmd.inventory.success": Inventory,
     "cmd.list.success": List,
     "cmd.offer.success": OfferInventory,
+    "cmd./stats.success": BuilderStats,
     "cmd.stats.success": Stats,
     "cmd.who.success": Who,
     "cmd.whois.success": Whois,

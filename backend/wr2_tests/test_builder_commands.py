@@ -1617,6 +1617,7 @@ class TestBuilderStatsAndSet(BuilderCommandTestCase):
             health=12,
             health_max=40,
             attack_power=7,
+            aggression=api_consts.MOB_AGGRESSION_PLAYERS,
             attributes={"strength": 3},
         )
 
@@ -1627,9 +1628,15 @@ class TestBuilderStatsAndSet(BuilderCommandTestCase):
         self.assertIsNotNone(message)
         self.assertEqual(message["data"]["target_type"], "mob")
         self.assertEqual(message["data"]["target"]["key"], mob.key)
+        self.assertEqual(message["data"]["target"]["aggression"], api_consts.MOB_AGGRESSION_PLAYERS)
         self.assertEqual(message["data"]["target"]["stats"]["attack_power"], 7)
         self.assertEqual(message["data"]["target"]["attributes"]["strength"], 3)
         self.assertIn("Iron Guard", message.get("text", ""))
+        self.assertIn("Aggression: players", message.get("text", ""))
+        self.assertIn("Health: 12 / 40", message.get("text", ""))
+        self.assertIn("Health Regen: 0", message.get("text", ""))
+        self.assertNotIn("(regen", message.get("text", ""))
+        self.assertNotIn("Stats:", message.get("text", ""))
 
     def test_builder_stats_reads_global_mob_key_outside_room(self):
         far_room = self.room.create_at("east")

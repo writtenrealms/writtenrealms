@@ -659,6 +659,7 @@ def _serialize_mob_stats_target(mob: Mob) -> dict[str, object]:
             "experience": int(getattr(mob, "experience", 0) or 0),
             "exp_worth": int(getattr(mob, "exp_worth", 0) or 0),
             "gold": int(getattr(mob, "gold", 0) or 0),
+            "aggression": str(getattr(mob, "aggression", "") or ""),
             "stamina": int(getattr(mob, "stamina", 0) or 0),
             "stamina_max": int(getattr(mob, "stamina_max", 0) or 0),
             "stamina_regen": int(getattr(mob, "stamina_regen", 0) or 0),
@@ -737,6 +738,8 @@ def _render_builder_stats_text(
     ]
     if target_payload.get("archetype"):
         lines.append(f"Class: {target_payload.get('archetype')}")
+    if target_type == "mob" and target_payload.get("aggression"):
+        lines.append(f"Aggression: {target_payload.get('aggression')}")
 
     resource_pairs = [
         ("health", "health_max", "health_regen"),
@@ -750,10 +753,10 @@ def _render_builder_stats_text(
         current_value = target_payload.get(current_key, 0)
         max_value = target_payload.get(max_key, 0)
         regen_value = target_payload.get(regen_key)
-        line = f"{label}: {current_value} / {max_value}"
+        lines.append(f"{label}: {current_value} / {max_value}")
         if regen_value not in (None, ""):
-            line = f"{line} (regen {regen_value})"
-        lines.append(line)
+            regen_label = _label_from_world(world_payload, "stats", regen_key, f"{label} Regen")
+            lines.append(f"{regen_label}: {regen_value}")
 
     if target_type == "player":
         lines.append(f"Experience: {target_payload.get('experience', 0)}")
@@ -777,14 +780,14 @@ def _render_builder_stats_text(
 
     stats = target_payload.get("stats") or {}
     if isinstance(stats, dict):
-        lines.extend(
-            _format_stat_lines(
-                title="Stats",
-                values=stats,
-                world_payload=world_payload,
-                label_category="stats",
-            )
-        )
+        resource_regen_keys = {"health_regen", "energy_regen", "stamina_regen"}
+        stat_lines = []
+        for key in _ordered_keys(world_payload, "stats", stats):
+            if key in resource_regen_keys:
+                continue
+            label = _label_from_world(world_payload, "stats", key)
+            stat_lines.append(f"{label}: {stats[key]}")
+        lines.extend(stat_lines)
 
     return "\n".join(lines)
 
