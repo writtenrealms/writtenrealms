@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 import logging
+import math
 import random
 
 from django.contrib.contenttypes.models import ContentType
@@ -10,44 +11,135 @@ from django.db import transaction
 from django.utils import timezone
 
 from config import constants as adv_consts
-from core.combat_formulas import CombatAttackResult, resolve_attack
+from core.combat_formulas import CombatAttackResult, combatant_snapshot, resolve_attack
 from core.computations import compute_stats
 from core.condition_dsl import ConditionContext, evaluate_condition
 from core.leveling import ExperienceGrant, apply_experience
 from builders.models import AbilityDefinition
 from spawns.actions.base import ActionError, ActionResult
-from spawns.actions.abilities import (
-    ability_component_overrides,
-    ability_cast_rounds,
-    ability_is_available_to_player,
-    ability_state_event,
-    cooldown_remaining,
-    decrement_ability_cooldowns,
-    execute_state_component,
-    pay_ability_cost,
-    player_knows_ability,
-    start_ability_cooldown,
-)
 from spawns.actions.movement_costs import movement_cost
-from spawns.actions.player_state import stand_player
 from spawns.actions.targeting import resolve_room_mob_target
 from spawns.events import GameEvent
 from spawns.models import CombatEncounter, Item, Mob, Player
-from spawns.state_payloads import (
-    door_state_lookup,
-    room_payload_key_for,
-    serialize_actor,
-    serialize_char_from_mob,
-    serialize_char_from_player,
-    serialize_item,
-    serialize_room,
-    safe_capitalize,
-)
 from worlds.models import Room
 
 
 logger = logging.getLogger(__name__)
 MAX_AUTO_RESOLVE_ROUNDS = 100
+
+
+def ability_component_overrides(*args, **kwargs):
+    from spawns.actions.abilities import ability_component_overrides as fn
+
+    return fn(*args, **kwargs)
+
+
+def ability_cast_rounds(*args, **kwargs):
+    from spawns.actions.abilities import ability_cast_rounds as fn
+
+    return fn(*args, **kwargs)
+
+
+def ability_is_available_to_player(*args, **kwargs):
+    from spawns.actions.abilities import ability_is_available_to_player as fn
+
+    return fn(*args, **kwargs)
+
+
+def ability_state_event(*args, **kwargs):
+    from spawns.actions.abilities import ability_state_event as fn
+
+    return fn(*args, **kwargs)
+
+
+def cooldown_remaining(*args, **kwargs):
+    from spawns.actions.abilities import cooldown_remaining as fn
+
+    return fn(*args, **kwargs)
+
+
+def decrement_ability_cooldowns(*args, **kwargs):
+    from spawns.actions.abilities import decrement_ability_cooldowns as fn
+
+    return fn(*args, **kwargs)
+
+
+def execute_state_component(*args, **kwargs):
+    from spawns.actions.abilities import execute_state_component as fn
+
+    return fn(*args, **kwargs)
+
+
+def pay_ability_cost(*args, **kwargs):
+    from spawns.actions.abilities import pay_ability_cost as fn
+
+    return fn(*args, **kwargs)
+
+
+def player_knows_ability(*args, **kwargs):
+    from spawns.actions.abilities import player_knows_ability as fn
+
+    return fn(*args, **kwargs)
+
+
+def start_ability_cooldown(*args, **kwargs):
+    from spawns.actions.abilities import start_ability_cooldown as fn
+
+    return fn(*args, **kwargs)
+
+
+def stand_player(*args, **kwargs):
+    from spawns.actions.player_state import stand_player as fn
+
+    return fn(*args, **kwargs)
+
+
+def door_state_lookup(*args, **kwargs):
+    from spawns.state_payloads import door_state_lookup as fn
+
+    return fn(*args, **kwargs)
+
+
+def room_payload_key_for(*args, **kwargs):
+    from spawns.state_payloads import room_payload_key_for as fn
+
+    return fn(*args, **kwargs)
+
+
+def serialize_actor(*args, **kwargs):
+    from spawns.state_payloads import serialize_actor as fn
+
+    return fn(*args, **kwargs)
+
+
+def serialize_char_from_mob(*args, **kwargs):
+    from spawns.state_payloads import serialize_char_from_mob as fn
+
+    return fn(*args, **kwargs)
+
+
+def serialize_char_from_player(*args, **kwargs):
+    from spawns.state_payloads import serialize_char_from_player as fn
+
+    return fn(*args, **kwargs)
+
+
+def serialize_item(*args, **kwargs):
+    from spawns.state_payloads import serialize_item as fn
+
+    return fn(*args, **kwargs)
+
+
+def serialize_room(*args, **kwargs):
+    from spawns.state_payloads import serialize_room as fn
+
+    return fn(*args, **kwargs)
+
+
+def safe_capitalize(*args, **kwargs):
+    from spawns.state_payloads import safe_capitalize as fn
+
+    return fn(*args, **kwargs)
 
 
 @dataclass(frozen=True)
@@ -62,26 +154,59 @@ def mob_should_aggro_player(mob: Mob, player: Player) -> bool:
         return False
 
     aggression = getattr(mob, "aggression", None)
-    if not aggression or aggression == adv_consts.MOB_AGGRESSION_PASSIVE:
+    if aggression is None:
         return False
     if aggression == adv_consts.MOB_AGGRESSION_ALL:
         return True
     if aggression == adv_consts.MOB_AGGRESSION_PLAYERS:
         return True
+    if aggression == adv_consts.MOB_AGGRESSION_PASSIVE:
+        return False
 
-    mob_factions = dict(getattr(mob, "factions", None) or {})
+    mob_factions = _mob_factions_for_aggro(mob)
     player_factions = dict(getattr(player, "factions", None) or {})
     mob_core = mob_factions.pop("core", None)
     player_core = player_factions.pop("core", None)
 
-    if mob_core and player_core and mob_core != player_core:
+    if mob_core is not None and player_core is not None and mob_core != player_core:
         return True
 
     for faction, standing in mob_factions.items():
-        if int(standing or 0) > 0 and int(player_factions.get(faction, 0) or 0) < 0:
+        if _safe_int(standing) > 0 and _safe_int(player_factions.get(faction, 0)) < 0:
             return True
 
     return False
+
+
+def _safe_int(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _mob_factions_for_aggro(mob: Mob) -> dict:
+    if getattr(mob, "template_id", None) and getattr(mob, "template", None):
+        return _explicit_assignment_factions(mob.template)
+    return _explicit_assignment_factions(mob)
+
+
+def _explicit_assignment_factions(actor) -> dict:
+    prefetched = getattr(actor, "_prefetched_objects_cache", {})
+    assignments = prefetched.get("faction_assignments")
+    if assignments is None:
+        assignments = actor.faction_assignments.select_related("faction").all()
+
+    factions = {}
+    for assignment in assignments:
+        faction = assignment.faction
+        if not faction:
+            continue
+        if faction.is_core:
+            factions["core"] = faction.code
+        else:
+            factions[faction.code] = assignment.value
+    return factions
 
 
 @dataclass(frozen=True)
@@ -474,6 +599,30 @@ def _engage_events(*, player: Player, room: Room, mob: Mob) -> list[GameEvent]:
                 "room": _room_payload(player, room),
             },
             text=f"You engage {target_name}.",
+        )
+    ]
+
+
+def _aggro_engage_events(*, player: Player, room: Room, mob: Mob) -> list[GameEvent]:
+    player_payload = _combat_state_payload(
+        serialize_char_from_player(player).model_dump(),
+        target_payload=serialize_char_from_mob(mob).model_dump(),
+    )
+    target_payload = _combat_state_payload(
+        serialize_char_from_mob(mob).model_dump(),
+        target_payload=serialize_char_from_player(player).model_dump(),
+    )
+    mob_name = target_payload.get("name") or "Something"
+    return [
+        GameEvent(
+            type="cmd.kill.success",
+            recipients=[player.key],
+            data={
+                "actor": player_payload,
+                "target": target_payload,
+                "room": _room_payload(player, room),
+            },
+            text=f"{safe_capitalize(mob_name)} attacks you!",
         )
     ]
 
@@ -985,6 +1134,22 @@ def _actor_ref(actor: Player | Mob) -> str:
     return f"{'player' if isinstance(actor, Player) else 'mob'}.{actor.id}"
 
 
+def _actor_for_effect_ref(
+    ref: dict | None,
+    *,
+    player: Player,
+    target_mob: Mob,
+) -> Player | Mob | None:
+    ref = ref or {}
+    ref_type = str(ref.get("type") or "").strip().lower()
+    ref_id = int(ref.get("id") or 0)
+    if ref_type == "player" and ref_id == player.id:
+        return player
+    if ref_type == "mob" and ref_id == target_mob.id:
+        return target_mob
+    return None
+
+
 def _append_effect(
     encounter: CombatEncounter,
     *,
@@ -1015,6 +1180,54 @@ def _append_effect(
         }
     )
     encounter.active_effects = effects
+
+
+def _damage_absorb_amount(
+    primitive: dict,
+    *,
+    target: Player | Mob,
+    source: Player | Mob | None = None,
+) -> int:
+    try:
+        amount = float(primitive.get("amount") or 0)
+    except (TypeError, ValueError):
+        amount = 0.0
+    if str(primitive.get("calc") or "fixed").strip().lower() == "percent_max":
+        amount = _resource_limit(target, "health") * (amount / 100)
+    if source is not None:
+        snapshot = combatant_snapshot(source, world=getattr(source, "world", None))
+        for scaling in primitive.get("scaling") or []:
+            stat_key = str(scaling.get("source") or "").strip()
+            try:
+                multiplier = float(scaling.get("multiplier") or 0)
+            except (TypeError, ValueError):
+                multiplier = 0.0
+            amount += float(snapshot.stats.get(stat_key, 0.0) or 0.0) * multiplier
+    return max(0, int(math.ceil(amount)))
+
+
+def _initialize_effect_primitives(
+    primitives: list[dict],
+    *,
+    target: Player | Mob,
+    source: Player | Mob | None,
+) -> list[dict]:
+    initialized: list[dict] = []
+    for primitive in primitives:
+        if primitive.get("type") != "damage_absorb":
+            initialized.append(primitive)
+            continue
+        initialized.append(
+            {
+                **primitive,
+                "remaining": _damage_absorb_amount(
+                    primitive,
+                    target=target,
+                    source=source,
+                ),
+            }
+        )
+    return initialized
 
 
 def _consume_stun(
@@ -1261,6 +1474,7 @@ def _execute_after_damage_procs(
         "actor": _actor_ref(actor),
         "target": _actor_ref(target),
         "damage_taken": result.damage_taken,
+        "damage_absorbed": result.damage_absorbed,
         "damage_dealt": result.damage_dealt,
         "damage_type": result.damage_type,
         "outcome": result.outcome,
@@ -1302,6 +1516,144 @@ def _execute_after_damage_procs(
                 )
             )
     return events
+
+
+def _damage_type_matches_absorb(primitive: dict, *, damage_type: str) -> bool:
+    damage_types = primitive.get("damage_types") or []
+    if not damage_types:
+        return True
+    return str(damage_type or "").strip().lower() in {
+        str(item or "").strip().lower()
+        for item in damage_types
+    }
+
+
+def _absorb_target_payload(target: Player | Mob) -> dict:
+    return (
+        serialize_char_from_player(target).model_dump()
+        if isinstance(target, Player)
+        else serialize_char_from_mob(target).model_dump()
+    )
+
+
+def _apply_damage_absorption(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    target_mob: Mob,
+    target: Player | Mob,
+    result: CombatAttackResult,
+    round_id: str,
+) -> tuple[CombatAttackResult, list[GameEvent]]:
+    if result.damage_taken <= 0:
+        return result, []
+
+    target_type = "player" if isinstance(target, Player) else "mob"
+    target_id = int(target.id)
+    remaining_damage = int(result.damage_taken)
+    absorbed_total = 0
+    events: list[GameEvent] = []
+    kept_effects: list[dict] = []
+    changed = False
+
+    for effect in list(encounter.active_effects or []):
+        if not _effect_applies_to(effect, target_type=target_type, target_id=target_id):
+            kept_effects.append(effect)
+            continue
+
+        primitives = list(effect.get("primitives") or [])
+        if not primitives:
+            kept_effects.append(effect)
+            continue
+
+        next_primitives: list[dict] = []
+        had_absorb = False
+        absorbed_for_effect = 0
+        for primitive in primitives:
+            if primitive.get("type") != "damage_absorb":
+                next_primitives.append(primitive)
+                continue
+
+            had_absorb = True
+            if remaining_damage <= 0 or not _damage_type_matches_absorb(
+                primitive,
+                damage_type=result.damage_type,
+            ):
+                next_primitives.append(primitive)
+                continue
+
+            remaining_absorb = int(
+                primitive.get(
+                    "remaining",
+                    _damage_absorb_amount(
+                        primitive,
+                        target=target,
+                        source=_actor_for_effect_ref(
+                            effect.get("source"),
+                            player=player,
+                            target_mob=target_mob,
+                        ),
+                    ),
+                )
+                or 0
+            )
+            absorbed = min(remaining_damage, max(0, remaining_absorb))
+            if absorbed <= 0:
+                continue
+
+            changed = True
+            absorbed_for_effect += absorbed
+            absorbed_total += absorbed
+            remaining_damage -= absorbed
+            remaining_absorb -= absorbed
+            if remaining_absorb > 0:
+                next_primitives.append({**primitive, "remaining": remaining_absorb})
+
+        has_remaining_absorb = any(
+            primitive.get("type") == "damage_absorb"
+            for primitive in next_primitives
+        )
+        if not had_absorb or has_remaining_absorb:
+            kept_effects.append({**effect, "primitives": next_primitives})
+        else:
+            changed = True
+
+        if absorbed_for_effect > 0:
+            effect_key = str(effect.get("effect") or "").strip()
+            label = str(effect.get("label") or effect_key or "Barrier").strip()
+            events.append(
+                GameEvent(
+                    type="notification.combat.effect",
+                    recipients=[player.key],
+                    data={
+                        "effect": effect_key,
+                        "label": label,
+                        "target": _absorb_target_payload(target),
+                        "amount": absorbed_for_effect,
+                        "remaining": sum(
+                            max(0, int(primitive.get("remaining") or 0))
+                            for primitive in next_primitives
+                            if primitive.get("type") == "damage_absorb"
+                        ),
+                        "damage_type": result.damage_type,
+                        "round_id": round_id,
+                    },
+                    text=f"{label} absorbs {absorbed_for_effect} damage.",
+                )
+            )
+
+    if changed:
+        encounter.active_effects = kept_effects
+    if absorbed_total <= 0:
+        return result, events
+    return (
+        replace(
+            result,
+            damage_taken=max(0, remaining_damage),
+            damage_absorbed=int(result.damage_absorbed or 0) + absorbed_total,
+        ),
+        events,
+    )
 
 
 def _execute_output_component(
@@ -1371,6 +1723,15 @@ def _execute_output_component(
             room=room,
         ) if ability else component.get("overrides") or {},
     )
+    result, absorb_events = _apply_damage_absorption(
+        encounter=encounter,
+        player=player,
+        target_mob=target_mob,
+        target=target_mob,
+        result=result,
+        round_id=round_id,
+    )
+    events.extend(absorb_events)
     if result.damage_taken > 0:
         target_mob.health = max(0, int(target_mob.health or 0) - result.damage_taken)
         target_mob.save(update_fields=["health"])
@@ -1671,6 +2032,7 @@ def _execute_pending_player_ability(
             player=player,
             target_mob=target_mob,
         )
+        effect_target = player if target_type == "player" else target_mob
         _append_effect(
             encounter,
             effect=effect_type,
@@ -1681,7 +2043,11 @@ def _execute_pending_player_ability(
             duration_rounds=duration,
             label=_component_label(component, ability),
             category=component.get("category") or "neutral",
-            primitives=component.get("primitives") or [],
+            primitives=_initialize_effect_primitives(
+                component.get("primitives") or [],
+                target=effect_target,
+                source=player,
+            ),
             tick=component.get("tick") or {},
         )
         events.append(
@@ -1829,6 +2195,15 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
                 target=target_mob,
                 world=player.world,
             )
+            player_attack, absorb_events = _apply_damage_absorption(
+                encounter=encounter,
+                player=player,
+                target_mob=target_mob,
+                target=target_mob,
+                result=player_attack,
+                round_id=round_id,
+            )
+            events.extend(absorb_events)
             if player_attack.damage_taken > 0:
                 target_mob.health = max(
                     0,
@@ -1934,6 +2309,15 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
         target=player,
         world=player.world,
     )
+    mob_attack, absorb_events = _apply_damage_absorption(
+        encounter=encounter,
+        player=player,
+        target_mob=target_mob,
+        target=player,
+        result=mob_attack,
+        round_id=round_id,
+    )
+    events.extend(absorb_events)
     if mob_attack.damage_taken > 0:
         player.health = max(0, int(player.health or 0) - mob_attack.damage_taken)
         player.save(update_fields=["health"])
@@ -2066,6 +2450,117 @@ def resolve_combat_encounter_step(
         _schedule_encounter_resolution(encounter_id, next_delay)
 
     return result
+
+
+class ScanRoomAggroAction:
+    @staticmethod
+    def _can_aggro(mob: Mob) -> bool:
+        return (
+            not getattr(mob, "is_pending_deletion", False)
+            and getattr(mob, "attackable", True)
+            and int(getattr(mob, "health", 0) or 0) > 0
+        )
+
+    def _start_aggro_encounter(
+        self,
+        *,
+        player: Player,
+        room: Room,
+        mob: Mob,
+        config,
+    ) -> ActionResult:
+        interval = _combat_interval(config)
+        events = _aggro_engage_events(player=player, room=room, mob=mob)
+
+        if interval == 0:
+            stand_player(player)
+            result = KillAction()._resolve_immediately(
+                player=player,
+                target_mob=mob,
+                config=config,
+            )
+            return ActionResult(events=[*events, *result.events])
+
+        stand_player(player)
+        encounter = CombatEncounter.objects.create(
+            world=player.world,
+            room=room,
+            player=player,
+            mob=mob,
+            resolution_interval=interval,
+            next_resolution_ts=(
+                timezone.now() + timedelta(seconds=interval)
+                if interval > 0
+                else None
+            ),
+        )
+
+        if interval == -1:
+            step = resolve_combat_encounter_step(
+                encounter.id,
+                auto_advance=False,
+            )
+            return ActionResult(events=[*events, *step.events])
+
+        _schedule_encounter_resolution(encounter.id, interval)
+        return ActionResult(events=events)
+
+    def execute(self, player_id: int) -> ActionResult:
+        with transaction.atomic():
+            player = (
+                Player.objects.select_for_update()
+                .select_related("world")
+                .prefetch_related("faction_assignments__faction")
+                .get(pk=player_id)
+            )
+            if (
+                player.is_invisible
+                or not player.room_id
+                or int(player.health or 0) <= 0
+            ):
+                return ActionResult()
+
+            config = player.world.effective_config
+            if config and not config.allow_combat:
+                return ActionResult()
+
+            room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
+            if CombatEncounter.objects.select_for_update().filter(
+                player=player,
+                status=CombatEncounter.STATUS_ACTIVE,
+            ).exists():
+                return ActionResult()
+
+            active_mob_ids = set(
+                CombatEncounter.objects.select_for_update()
+                .filter(
+                    room=room,
+                    status=CombatEncounter.STATUS_ACTIVE,
+                    mob_id__isnull=False,
+                )
+                .values_list("mob_id", flat=True)
+            )
+            mobs = (
+                Mob.objects.select_for_update()
+                .prefetch_related(
+                    "faction_assignments__faction",
+                    "template__faction_assignments__faction",
+                )
+                .filter(room=room, is_pending_deletion=False)
+                .order_by("id")
+            )
+            for mob in mobs:
+                if mob.id in active_mob_ids or not self._can_aggro(mob):
+                    continue
+                if mob_should_aggro_player(mob, player):
+                    return self._start_aggro_encounter(
+                        player=player,
+                        room=room,
+                        mob=mob,
+                        config=config,
+                    )
+
+        return ActionResult()
 
 
 class FleeAction:

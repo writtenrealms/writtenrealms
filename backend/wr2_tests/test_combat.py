@@ -4,7 +4,7 @@ from core.combat_formulas import normalize_combat_system
 from core.computations import compute_stats
 from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
-from builders.models import Trigger
+from builders.models import Faction, Trigger
 from config import constants as adv_consts
 from spawns.actions.combat import apply_player_death, mob_should_aggro_player
 from spawns.models import CombatEncounter, Item, Mob, Player
@@ -516,6 +516,140 @@ class TestKillCommand(WorldTestCase):
         self.player.save(update_fields=["is_builder", "is_invisible"])
 
         self.assertFalse(mob_should_aggro_player(mob, self.player))
+
+    def test_mob_aggression_modes_match_wr1_faction_rules(self):
+        human = Faction.objects.create(
+            world=self.world,
+            code="aggro_human",
+            name="Aggro Human",
+            is_core=True,
+        )
+        orc = Faction.objects.create(
+            world=self.world,
+            code="aggro_orc",
+            name="Aggro Orc",
+            is_core=True,
+        )
+        player = self.player
+        player.faction_assignments.create(faction=human)
+
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Sentinel",
+            keywords="sentinel",
+            aggression=adv_consts.MOB_AGGRESSION_NORMAL,
+        )
+        self.assertFalse(mob_should_aggro_player(mob, player))
+
+        mob.faction_assignments.create(faction=orc)
+        self.assertTrue(mob_should_aggro_player(mob, player))
+
+        mob.aggression = adv_consts.MOB_AGGRESSION_FRIENDLY
+        self.assertTrue(mob_should_aggro_player(mob, player))
+
+        mob.aggression = adv_consts.MOB_AGGRESSION_PASSIVE
+        self.assertFalse(mob_should_aggro_player(mob, player))
+
+        mob.aggression = adv_consts.MOB_AGGRESSION_ALL
+        self.assertTrue(mob_should_aggro_player(mob, player))
+
+        mob.aggression = adv_consts.MOB_AGGRESSION_PLAYERS
+        self.assertTrue(mob_should_aggro_player(mob, player))
+
+    def test_mob_aggro_starts_combat_when_player_enters_room(self):
+        self.world.config.combat_resolution_interval = 1.5
+        self.world.config.save(update_fields=["combat_resolution_interval"])
+
+        destination = Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Gatehouse",
+            x=self.room.x + 1,
+            y=self.room.y,
+            z=self.room.z,
+        )
+        self.room.east = destination
+        self.room.save(update_fields=["east"])
+        destination.west = self.room
+        destination.save(update_fields=["west"])
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=destination,
+            name="Sentinel",
+            keywords="sentinel",
+            health=20,
+            health_max=20,
+            attack_power=4,
+            aggression=adv_consts.MOB_AGGRESSION_ALL,
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async") as schedule_mock:
+            with self.captureOnCommitCallbacks(execute=True):
+                with capture_game_messages() as messages:
+                    dispatch_text_command(self.player.id, "east")
+
+        encounter = CombatEncounter.objects.get(
+            player=self.player,
+            mob=mob,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        self.assertEqual(encounter.round_number, 0)
+        engage_message = self._message_by_type(
+            messages,
+            "cmd.kill.success",
+            self.player.key,
+        )
+        self.assertIsNotNone(engage_message)
+        self.assertEqual(engage_message["text"], "Sentinel attacks you!")
+        self.assertEqual(engage_message["data"]["actor"]["state"], "combat")
+        self.assertEqual(engage_message["data"]["actor"]["target"]["key"], mob.key)
+        schedule_mock.assert_called_once()
+        self.assertEqual(
+            schedule_mock.call_args.kwargs["kwargs"]["encounter_id"],
+            encounter.id,
+        )
+        self.assertEqual(schedule_mock.call_args.kwargs["countdown"], 1.5)
+
+    def test_passive_mob_does_not_aggro_when_player_enters_room(self):
+        self.world.config.combat_resolution_interval = 1.5
+        self.world.config.save(update_fields=["combat_resolution_interval"])
+
+        destination = Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Quiet Hall",
+            x=self.room.x + 1,
+            y=self.room.y,
+            z=self.room.z,
+        )
+        self.room.east = destination
+        self.room.save(update_fields=["east"])
+        Mob.objects.create(
+            world=self.spawn_world,
+            room=destination,
+            name="Guard",
+            keywords="guard",
+            aggression=adv_consts.MOB_AGGRESSION_PASSIVE,
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async") as schedule_mock:
+            with capture_game_messages() as messages:
+                dispatch_text_command(self.player.id, "east")
+
+        self.assertIsNotNone(
+            self._message_by_type(messages, "cmd.move.success", self.player.key)
+        )
+        self.assertIsNone(
+            self._message_by_type(messages, "cmd.kill.success", self.player.key)
+        )
+        self.assertFalse(
+            CombatEncounter.objects.filter(
+                player=self.player,
+                status=CombatEncounter.STATUS_ACTIVE,
+            ).exists()
+        )
+        schedule_mock.assert_not_called()
 
     def test_kill_with_positive_interval_starts_encounter_without_immediate_resolution(self):
         self.world.config.combat_resolution_interval = 1.5

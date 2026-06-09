@@ -166,6 +166,7 @@ spec:
   room_description: A bandit watches the road.
   keywords: bandit thief
   type: humanoid
+  aggression: all
   level: 5
   health_max: 42
   attack_power: 7
@@ -187,6 +188,7 @@ spec:
         definition = MobDefinition.objects.get(world=self.world, slug="bandit")
         self.assertEqual(definition.name, "a bandit")
         self.assertEqual(definition.mob_type, adv_consts.MOB_TYPE_HUMANOID)
+        self.assertEqual(definition.base_properties["aggression"], adv_consts.MOB_AGGRESSION_ALL)
         self.assertEqual(definition.base_properties["level"], 5)
         self.assertEqual(definition.base_properties["health_max"], 42)
         self.assertEqual(definition.attributes, {"brawn": 2})
@@ -336,8 +338,10 @@ class TestMobDefinitionBuilderEndpoints(WorldTestCase):
 
         self.assertEqual(resp.status_code, 200, resp.data)
         self.assertEqual(resp.data["slug"], "bandit")
+        self.assertEqual(resp.data["aggression"], adv_consts.MOB_AGGRESSION_PASSIVE)
         self.assertEqual(resp.data["attributes"], {"brawn": 2})
         self.assertIn("kind: mobdefinition", resp.data["yaml"])
+        self.assertIn("aggression: passive", resp.data["yaml"])
         self.assertEqual(resp.data["manifest"]["kind"], "mobdefinition")
 
     def test_suggest_mob_definition_returns_applyable_yaml(self):

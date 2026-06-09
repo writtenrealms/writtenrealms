@@ -98,3 +98,13 @@ class MoveHandler(CommandHandler):
             actor_key=ctx.player.key,
             connection_id=ctx.connection_id,
         )
+
+        from spawns.actions.combat import ScanRoomAggroAction
+
+        aggro_result = ScanRoomAggroAction().execute(ctx.player.id)
+        if aggro_result.events:
+            publish_events(
+                aggro_result.events,
+                actor_key=ctx.player.key,
+                connection_id=ctx.connection_id,
+            )

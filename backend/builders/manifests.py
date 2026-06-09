@@ -990,6 +990,13 @@ def serialize_item_definition_payload(item_definition: ItemDefinition) -> dict[s
     }
 
 
+def _mob_definition_aggression(mob_definition: MobDefinition) -> str:
+    return (
+        (mob_definition.base_properties or {}).get("aggression")
+        or adv_consts.MOB_AGGRESSION_PASSIVE
+    )
+
+
 def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[str, Any]:
     spec = {
         "description": mob_definition.description or "",
@@ -1004,6 +1011,7 @@ def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[st
             spec[field_name] = ""
         else:
             spec[field_name] = value
+    spec["aggression"] = _mob_definition_aggression(mob_definition)
     spec["combat"] = {
         "attackable": bool(mob_definition.attackable),
     }
@@ -1061,6 +1069,7 @@ def serialize_mob_definition_payload(mob_definition: MobDefinition) -> dict[str,
         "notes": mob_definition.notes or "",
         "type": mob_definition.mob_type,
         "assists": bool(mob_definition.assists),
+        "aggression": _mob_definition_aggression(mob_definition),
         "base_properties": mob_definition.base_properties or {},
         "attributes": mob_definition.attributes or {},
         "randomization": mob_definition.randomization or {},
