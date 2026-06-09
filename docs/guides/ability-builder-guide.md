@@ -6,8 +6,8 @@ This guide describes the WR2 ability authoring model. Ability manifests are
 wired into the runtime for player commands, encounter-round queueing, direct
 damage, healing, cast times, stun, damage-over-time, heal-over-time, and
 out-of-combat self utility. Encounter-scoped effects also support resource
-change ticks and `after_damage` procs for bounded buff behavior such as energy
-return on landed attacks.
+change ticks, damage absorption barriers, and `after_damage` procs for bounded
+buff behavior such as energy return on landed attacks.
 
 Ability `requirements` use the shared WR2 condition DSL. For condition
 operators and paths, read
@@ -23,6 +23,7 @@ An ability is an authored command that resolves one or more components:
 - damage-over-time
 - heal-over-time
 - resource-changing ticks
+- damage absorption barriers
 - resource-changing damage procs
 
 In combat, an ability is queued as the actor's primary action for the next
@@ -496,6 +497,80 @@ spec:
 `resource` supports `health`, `energy`, and `stamina`. `calc` supports the same
 `fixed`, `percent_max`, and `percent_base` vocabulary used by ability costs.
 Resource changes clamp to the target's current maximum pool.
+
+## Damage Absorption Barriers
+
+Use a `damage_absorb` primitive when an effect should prevent incoming damage
+until either its duration expires or its absorb pool is depleted.
+
+```yaml
+kind: ability
+metadata:
+  slug: ward
+  name: Ward
+spec:
+  command:
+    verbs: [ward]
+  action_type: primary
+  target:
+    type: self
+    default: self
+  cooldown:
+    rounds: 3
+  components:
+    - type: effect
+      effect: ward
+      category: buff
+      target: self
+      duration:
+        rounds: 3
+      primitives:
+        - type: damage_absorb
+          amount: 25
+          calc: fixed
+          damage_types: [physical, ability]
+```
+
+`calc` supports:
+
+- `fixed`: absorb exactly `amount` damage.
+- `percent_max`: absorb `amount` percent of the target's current max health.
+
+`damage_types` is optional. Omit it to absorb all incoming damage types, or use
+`[physical]`, `[ability]`, or `[physical, ability]` to narrow the shield.
+Absorbed damage is reported on combat attack events as `damage_absorbed`, and
+the remaining health damage is reported as `damage_taken`.
+
+Barrier pools can also scale from the effect source's combat stats. This shield
+absorbs `0.5 * ability_power`:
+
+```yaml
+primitives:
+  - type: damage_absorb
+    amount: 0
+    calc: fixed
+    scaling:
+      - source: ability_power
+        multiplier: 0.5
+```
+
+Scaling terms are additive. This shield absorbs
+`0.1 * ability_power + 0.3 * health_max` from the source's current stats:
+
+```yaml
+primitives:
+  - type: damage_absorb
+    amount: 0
+    calc: fixed
+    scaling:
+      - source: ability_power
+        multiplier: 0.1
+      - source: health_max
+        multiplier: 0.3
+```
+
+You can combine a flat base with scaling. For example, `amount: 25` plus
+`ability_power * 0.5` creates a pool of `25 + 0.5 * ability_power`.
 
 ## Damage Proc Buffs
 

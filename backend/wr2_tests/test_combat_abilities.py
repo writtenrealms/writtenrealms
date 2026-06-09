@@ -1,4 +1,5 @@
 from copy import deepcopy
+import math
 from unittest.mock import patch
 
 from builders.models import AbilityDefinition, ItemTemplate, MobDefinition
@@ -990,6 +991,218 @@ class TestCombatAbilities(WorldTestCase):
         dispatch_text_command(self.player.id, "kill rat")
         self.player.refresh_from_db()
         self.assertEqual(self.player.energy, 6)
+
+    def test_self_barrier_absorbs_incoming_physical_damage_until_depleted(self):
+        self._ability(
+            slug="ward",
+            name="Ward",
+            verbs=["ward"],
+            target={"type": "self", "default": "self", "allow_out_of_combat": False},
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "ward",
+                    "category": "buff",
+                    "target": "self",
+                    "duration": {"rounds": 3},
+                    "primitives": [
+                        {
+                            "type": "damage_absorb",
+                            "amount": 10,
+                            "calc": "fixed",
+                            "damage_types": ["physical"],
+                        }
+                    ],
+                    "apply": "on_resolve",
+                }
+            ],
+        )
+        self.player.known_abilities = ["ward"]
+        self.player.health = 50
+        self.player.save(update_fields=["known_abilities", "health"])
+        mob = self._mob(health=self.stats["attack_power"] * 20, attack_power=7, fights_back=True)
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with capture_game_messages() as messages:
+                dispatch_text_command(self.player.id, "ward")
+                resolve_combat_encounter(encounter.id)
+
+        self.player.refresh_from_db()
+        encounter.refresh_from_db()
+        self.assertEqual(self.player.health, 50)
+        self.assertEqual(encounter.active_effects[0]["primitives"][0]["remaining"], 3)
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertEqual(attacks[-1]["data"]["damage_taken"], 0)
+        self.assertEqual(attacks[-1]["data"]["damage_absorbed"], 7)
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with capture_game_messages() as messages:
+                resolve_combat_encounter(encounter.id)
+
+        self.player.refresh_from_db()
+        encounter.refresh_from_db()
+        self.assertEqual(self.player.health, 46)
+        self.assertEqual(encounter.active_effects, [])
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertEqual(attacks[-1]["data"]["damage_taken"], 4)
+        self.assertEqual(attacks[-1]["data"]["damage_absorbed"], 3)
+
+    def test_barrier_damage_type_filter_allows_unmatched_damage_through(self):
+        self._ability(
+            slug="ability-ward",
+            name="Ability Ward",
+            verbs=["abilityward"],
+            target={"type": "self", "default": "self", "allow_out_of_combat": False},
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "ability-ward",
+                    "category": "buff",
+                    "target": "self",
+                    "duration": {"rounds": 3},
+                    "primitives": [
+                        {
+                            "type": "damage_absorb",
+                            "amount": 10,
+                            "calc": "fixed",
+                            "damage_types": ["ability"],
+                        }
+                    ],
+                    "apply": "on_resolve",
+                }
+            ],
+        )
+        self.player.known_abilities = ["ability-ward"]
+        self.player.health = 50
+        self.player.save(update_fields=["known_abilities", "health"])
+        mob = self._mob(health=self.stats["attack_power"] * 20, attack_power=7, fights_back=True)
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with capture_game_messages() as messages:
+                dispatch_text_command(self.player.id, "abilityward")
+                resolve_combat_encounter(encounter.id)
+
+        self.player.refresh_from_db()
+        encounter.refresh_from_db()
+        self.assertEqual(self.player.health, 43)
+        self.assertEqual(encounter.active_effects[0]["primitives"][0]["remaining"], 10)
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertEqual(attacks[-1]["data"]["damage_taken"], 7)
+        self.assertEqual(attacks[-1]["data"]["damage_absorbed"], 0)
+
+    def test_barrier_can_scale_from_source_ability_power(self):
+        self._ability(
+            slug="power-ward",
+            name="Power Ward",
+            verbs=["powerward"],
+            target={"type": "self", "default": "self", "allow_out_of_combat": False},
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "power-ward",
+                    "category": "buff",
+                    "target": "self",
+                    "duration": {"rounds": 3},
+                    "primitives": [
+                        {
+                            "type": "damage_absorb",
+                            "amount": 0,
+                            "calc": "fixed",
+                            "scaling": [
+                                {"source": "ability_power", "multiplier": 0.5},
+                            ],
+                        }
+                    ],
+                    "apply": "on_resolve",
+                }
+            ],
+        )
+        self.player.known_abilities = ["power-ward"]
+        self.player.save(update_fields=["known_abilities"])
+        mob = self._mob(health=self.stats["attack_power"] * 20, fights_back=False)
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            dispatch_text_command(self.player.id, "powerward")
+            resolve_combat_encounter(encounter.id)
+
+        encounter.refresh_from_db()
+        expected_absorb = math.ceil(self.stats["ability_power"] * 0.5)
+        self.assertGreater(expected_absorb, 0)
+        self.assertEqual(
+            encounter.active_effects[0]["primitives"][0]["remaining"],
+            expected_absorb,
+        )
+
+    def test_barrier_can_scale_from_multiple_source_stats(self):
+        self._ability(
+            slug="vital-ward",
+            name="Vital Ward",
+            verbs=["vitalward"],
+            target={"type": "self", "default": "self", "allow_out_of_combat": False},
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "vital-ward",
+                    "category": "buff",
+                    "target": "self",
+                    "duration": {"rounds": 3},
+                    "primitives": [
+                        {
+                            "type": "damage_absorb",
+                            "amount": 0,
+                            "calc": "fixed",
+                            "scaling": [
+                                {"source": "ability_power", "multiplier": 0.1},
+                                {"source": "health_max", "multiplier": 0.3},
+                            ],
+                        }
+                    ],
+                    "apply": "on_resolve",
+                }
+            ],
+        )
+        self.player.known_abilities = ["vital-ward"]
+        self.player.save(update_fields=["known_abilities"])
+        mob = self._mob(health=self.stats["attack_power"] * 20, fights_back=False)
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            dispatch_text_command(self.player.id, "vitalward")
+            resolve_combat_encounter(encounter.id)
+
+        encounter.refresh_from_db()
+        expected_absorb = math.ceil(
+            self.stats["ability_power"] * 0.1
+            + self.stats["health_max"] * 0.3
+        )
+        self.assertGreater(expected_absorb, 0)
+        self.assertEqual(
+            encounter.active_effects[0]["primitives"][0]["remaining"],
+            expected_absorb,
+        )
 
     def test_self_heal_uses_same_ability_schema_outside_combat(self):
         self._ability(

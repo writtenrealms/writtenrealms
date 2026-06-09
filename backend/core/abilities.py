@@ -37,8 +37,24 @@ EFFECT_APPLY_POLICIES = ("on_resolve", "on_hit")
 EFFECT_CATEGORIES = ("buff", "debuff", "neutral")
 EFFECT_TARGETS = ("actor", "self", "target", "ability.target", "effect.source", "effect.target")
 EFFECT_TICK_PHASES = ("round_start",)
-EFFECT_PRIMITIVE_TYPES = ("resource_change", "proc")
+EFFECT_PRIMITIVE_TYPES = ("resource_change", "proc", "damage_absorb")
 EFFECT_PROC_PHASES = ("after_damage",)
+DAMAGE_ABSORB_CALCS = ("fixed", "percent_max")
+DAMAGE_ABSORB_SCALING_SOURCES = (
+    "health_max",
+    "energy_max",
+    "stamina_max",
+    "attack_power",
+    "ability_power",
+    "armor",
+    "crit",
+    "dodge",
+    "resilience",
+    "health_regen",
+    "energy_regen",
+    "stamina_regen",
+    "weapon_damage",
+)
 STATE_COMPONENT_SCOPES = ("world", "zone", "room", "character")
 STATE_COMPONENT_OPERATIONS = ("set", "increment", "clear")
 
@@ -582,6 +598,8 @@ def _normalize_effect_primitive(value: Any, *, field_name: str) -> dict[str, Any
     )
     if primitive_type == "resource_change":
         return _normalize_resource_change_primitive(value, field_name=field_name)
+    if primitive_type == "damage_absorb":
+        return _normalize_damage_absorb_primitive(value, field_name=field_name)
     return _normalize_proc_primitive(value, field_name=field_name)
 
 
@@ -613,6 +631,99 @@ def _normalize_resource_change_primitive(value: dict[str, Any], *, field_name: s
             field_name=f"{field_name}.target",
         ),
     }
+
+
+def _normalize_damage_absorb_types(value: Any, *, field_name: str) -> list[str]:
+    if value in (None, "", "all"):
+        return []
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        raise AbilityValidationError(f"{field_name} must be a list.")
+
+    normalized: list[str] = []
+    for index, raw_type in enumerate(value):
+        damage_type = _coerce_slug(
+            raw_type,
+            field_name=f"{field_name}[{index}]",
+            allow_hyphen=True,
+        )
+        if damage_type == "all":
+            return []
+        if damage_type not in normalized:
+            normalized.append(damage_type)
+    return normalized
+
+
+def _normalize_damage_absorb_scaling(value: Any, *, field_name: str) -> list[dict[str, Any]]:
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise AbilityValidationError(f"{field_name} must be a list.")
+
+    normalized: list[dict[str, Any]] = []
+    for index, entry in enumerate(value):
+        item_field = f"{field_name}[{index}]"
+        if not isinstance(entry, dict):
+            raise AbilityValidationError(f"{item_field} must be a mapping.")
+        unknown_fields = sorted(set(entry.keys()) - {"source", "multiplier"})
+        if unknown_fields:
+            raise AbilityValidationError(
+                f"{item_field} has unsupported field(s): {', '.join(unknown_fields)}."
+            )
+        normalized.append(
+            {
+                "source": _coerce_choice(
+                    entry.get("source"),
+                    choices=DAMAGE_ABSORB_SCALING_SOURCES,
+                    field_name=f"{item_field}.source",
+                ),
+                "multiplier": _coerce_number(
+                    entry.get("multiplier", 0),
+                    field_name=f"{item_field}.multiplier",
+                ),
+            }
+        )
+    return normalized
+
+
+def _normalize_damage_absorb_primitive(value: dict[str, Any], *, field_name: str) -> dict[str, Any]:
+    unknown_fields = sorted(
+        set(value.keys()) - {"type", "amount", "calc", "damage_type", "damage_types", "scaling"}
+    )
+    if unknown_fields:
+        raise AbilityValidationError(
+            f"{field_name} has unsupported field(s): {', '.join(unknown_fields)}."
+        )
+    if "damage_type" in value and "damage_types" in value:
+        raise AbilityValidationError(
+            f"{field_name} cannot define both damage_type and damage_types."
+        )
+    damage_types = value.get("damage_types", value.get("damage_type"))
+    normalized = {
+        "type": "damage_absorb",
+        "amount": _coerce_number(
+            value.get("amount", 0),
+            field_name=f"{field_name}.amount",
+            minimum=0,
+        ),
+        "calc": _coerce_choice(
+            value.get("calc", "fixed"),
+            choices=DAMAGE_ABSORB_CALCS,
+            field_name=f"{field_name}.calc",
+        ),
+        "damage_types": _normalize_damage_absorb_types(
+            damage_types,
+            field_name=f"{field_name}.damage_types",
+        ),
+    }
+    scaling = _normalize_damage_absorb_scaling(
+        value.get("scaling"),
+        field_name=f"{field_name}.scaling",
+    )
+    if scaling:
+        normalized["scaling"] = scaling
+    return normalized
 
 
 def _normalize_proc_primitive(value: dict[str, Any], *, field_name: str) -> dict[str, Any]:

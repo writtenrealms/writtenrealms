@@ -14,7 +14,8 @@ This document describes the target architecture for effects that:
 - trigger follow-up behavior, such as restoring energy when an attack lands
 
 This is an architecture target. The current runtime only covers the first
-playable effect primitives: stun, damage-over-time, and heal-over-time.
+playable encounter-scoped effect primitives: stun, damage-over-time,
+heal-over-time, resource changes, damage absorption, and `after_damage` procs.
 
 Related documents:
 
@@ -210,6 +211,75 @@ Useful calculations:
 
 This mirrors the current ability cost vocabulary and keeps resource math
 consistent.
+
+## Damage Absorption Barriers
+
+Damage absorption buffs should use `damage_absorb`.
+
+The primitive represents a finite pool of prevented incoming damage. The active
+effect expires when either:
+
+- `remaining_rounds` reaches zero
+- every `damage_absorb` primitive on the effect has spent its remaining pool
+
+Builder shape:
+
+```yaml
+components:
+  - type: effect
+    effect: ward
+    category: buff
+    target: self
+    duration:
+      rounds: 3
+    primitives:
+      - type: damage_absorb
+        amount: 25
+        calc: fixed
+        damage_types: [physical, ability]
+```
+
+Supported calculations:
+
+- `fixed`: the absorb pool is exactly `amount`
+- `percent_max`: the absorb pool is `amount` percent of the target's current
+  max health when the effect is applied
+
+The pool can also include additive scaling terms. Scaling terms are evaluated
+from the effect source's combat stats when the effect is applied:
+
+```yaml
+primitives:
+  - type: damage_absorb
+    amount: 0
+    calc: fixed
+    scaling:
+      - source: ability_power
+        multiplier: 0.5
+```
+
+Multiple scaling terms are summed:
+
+```yaml
+primitives:
+  - type: damage_absorb
+    amount: 0
+    calc: fixed
+    scaling:
+      - source: ability_power
+        multiplier: 0.1
+      - source: health_max
+        multiplier: 0.3
+```
+
+`damage_types` is optional. If omitted, the barrier absorbs all incoming damage
+types. If present, it filters against the combat result's `damage_type`, such as
+`physical` or `ability`.
+
+Absorption happens after the normal combat formula resolves damage and before
+health is reduced. Combat attack events should preserve the formula result's
+pre-absorption fields, set `damage_absorbed` to the prevented amount, and report
+only the unabsorbed remainder as `damage_taken`.
 
 ## Stat And Attribute Buffs
 
@@ -653,6 +723,7 @@ Implementation requirements:
 ### Phase 2: Resource And Stat Buffs
 
 - add `resource_change` for health, energy, and stamina
+- add `damage_absorb` for finite shield and barrier effects
 - add `stat_modifier` for canonical stats
 - define snapshot recompute or overlay behavior
 - add stacking policies
@@ -662,7 +733,7 @@ Implementation requirements:
 
 - add `status_flag`
 - implement invisibility as a real visibility primitive
-- add silence, root, shield, or other high-value flags as needed
+- add silence, root, or other high-value flags as needed
 - ensure state sync and combat events expose active effect state
 
 ### Phase 4: Hooks And Procs

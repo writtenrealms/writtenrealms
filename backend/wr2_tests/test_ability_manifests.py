@@ -316,6 +316,67 @@ spec:
             },
         )
 
+    def test_apply_ability_manifest_accepts_damage_absorb_effects(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: ward
+  name: Ward
+spec:
+  command:
+    verbs: [ward]
+  target:
+    type: self
+    default: self
+    allow_out_of_combat: false
+  components:
+    - type: effect
+      effect: ward
+      category: buff
+      target: self
+      duration:
+        rounds: 3
+      primitives:
+        - type: damage_absorb
+          amount: 25
+          calc: fixed
+          damage_types: [physical, ability]
+          scaling:
+            - source: ability_power
+              multiplier: 0.1
+            - source: health_max
+              multiplier: 0.3
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        ability = AbilityDefinition.objects.get(world=self.world, slug="ward")
+        self.assertEqual(
+            ability.components[0],
+            {
+                "type": "effect",
+                "effect": "ward",
+                "category": "buff",
+                "target": "self",
+                "duration": {"rounds": 3},
+                "apply": "on_resolve",
+                "text": {"label": "Ward"},
+                "primitives": [
+                    {
+                        "type": "damage_absorb",
+                        "amount": 25.0,
+                        "calc": "fixed",
+                        "damage_types": ["physical", "ability"],
+                        "scaling": [
+                            {"source": "ability_power", "multiplier": 0.1},
+                            {"source": "health_max", "multiplier": 0.3},
+                        ],
+                    }
+                ],
+            },
+        )
+
     def test_world_manifest_accepts_ability_progression(self):
         manifest = f"""
 kind: world
