@@ -52,6 +52,8 @@ Legend:
 | `/echo`, `/zecho`, `/wecho` | Direct | Script | Script | Script | Script | Script |
 | `/send` | Direct | No | Script | Script | Script | Script |
 | `/state` | Direct | No | Script | Script | Script | Script |
+| `/stats` | Direct | No | No | No | No | No |
+| `/set` | Direct | No | No | No | No | No |
 | `/setlevel` | Direct | No | No | No | No | No |
 | `/setclass` | Direct | Script | No | Script | No | No |
 | `/cmd`, `/force`, `/rcmd`, `/zcmd`, `/wcmd` | Direct | Script | Script | Script | Script | Script |
@@ -322,6 +324,78 @@ Examples:
 
 For state authoring guidance, see
 [state-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/state-builder-guide.md).
+
+### `/stats`
+
+Format:
+
+```text
+/stats
+/stats <target>
+/stats <player.key|mob.key>
+```
+
+Shows a builder stat readout for the builder, a player or mob in the builder's
+current room, or a keyed character anywhere in the current runtime world.
+
+Room targets use the same builder room-character selector behavior as commands
+such as `/grantitem`, `/setlevel`, and `/setclass`. Keyed targets can be
+outside the builder's current room.
+
+Examples:
+
+```text
+/stats
+/stats guard
+/stats aria
+/stats mob.123
+/stats player.456
+```
+
+### `/set`
+
+Format:
+
+```text
+/set <target> <field> <value>
+/set <target> <field> -- <value>
+```
+
+Sets a persisted stat field on a player or mob. Targets can be players or mobs
+in the builder's current room, or keyed characters anywhere in the current
+runtime world.
+
+For player targets, direct combat ratings such as `attack_power`, `armor`,
+`crit`, `dodge`, and resource maximums are computed by the world stat system.
+Set player `attributes.<key>`, equipment, level, or current resources instead.
+
+Supported player fields:
+
+```text
+level, experience, health, energy, stamina, attributes, gold, glory, medals
+```
+
+Supported mob fields:
+
+```text
+level, experience, health, energy, stamina, attributes, gold, exp_worth,
+health_max, health_regen, energy_max, energy_regen, stamina_max,
+stamina_regen, armor, dodge, crit, resilience, attack_power, ability_power
+```
+
+Use `attribute.<key>`, `attributes.<key>`, or `attr.<key>` to change one
+attribute value. Use `attributes -- {...}` to replace the whole attribute
+object.
+
+Examples:
+
+```text
+/set guard health 25
+/set guard attack_power 8
+/set aria health 10
+/set player.456 attribute.strength 5
+/set mob.123 attributes -- {"strength": 4}
+```
 
 ### `/setlevel`
 

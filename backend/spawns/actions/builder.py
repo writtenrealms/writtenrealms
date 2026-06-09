@@ -54,6 +54,7 @@ from spawns.state_payloads import (
     serialize_char_from_player,
     serialize_item,
     serialize_room,
+    serialize_world,
 )
 from worlds.models import Room, World, Zone
 
@@ -72,6 +73,57 @@ JUMP_DIRECTIONS = {
     "up": adv_consts.DIRECTION_UP,
     "d": adv_consts.DIRECTION_DOWN,
     "down": adv_consts.DIRECTION_DOWN,
+}
+MOB_DIRECT_STAT_FIELDS = (
+    "health_max",
+    "health_regen",
+    "energy_max",
+    "energy_regen",
+    "stamina_max",
+    "stamina_regen",
+    "armor",
+    "dodge",
+    "crit",
+    "resilience",
+    "attack_power",
+    "ability_power",
+)
+PLAYER_SET_FIELDS = {
+    "level",
+    "experience",
+    "health",
+    "energy",
+    "stamina",
+    "attributes",
+    "gold",
+    "glory",
+    "medals",
+}
+MOB_SET_FIELDS = {
+    "level",
+    "experience",
+    "health",
+    "energy",
+    "stamina",
+    "attributes",
+    "gold",
+    "exp_worth",
+    *MOB_DIRECT_STAT_FIELDS,
+}
+PLAYER_COMPUTED_STAT_FIELDS = {
+    "health_max",
+    "health_regen",
+    "energy_max",
+    "energy_regen",
+    "stamina_max",
+    "stamina_regen",
+    "armor",
+    "dodge",
+    "crit",
+    "resilience",
+    "attack_power",
+    "ability_power",
+    "energy_base",
 }
 
 
@@ -529,6 +581,306 @@ def _resolve_room_character_target(
     if len(targets) > 1:
         raise ActionError("Target is ambiguous.", code="ambiguous_target")
     return targets[0]
+
+
+def _parse_character_key(selector: str) -> tuple[str, int] | None:
+    normalized = str(selector or "").strip().lower()
+    if not (normalized.startswith("player.") or normalized.startswith("mob.")):
+        return None
+    actor_type, raw_id = normalized.split(".", 1)
+    try:
+        return actor_type, int(raw_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_world_character_key(
+    *,
+    world: World,
+    selector: str,
+) -> Player | Mob | None:
+    parsed = _parse_character_key(selector)
+    if parsed is None:
+        return None
+    actor_type, actor_id = parsed
+    if actor_type == "player":
+        return (
+            Player.objects.select_related("world", "world__config", "user", "room", "equipment")
+            .filter(pk=actor_id, world=world)
+            .first()
+        )
+    return (
+        Mob.objects.select_related("world", "room", "definition", "template", "equipment")
+        .filter(pk=actor_id, world=world)
+        .first()
+    )
+
+
+def _resolve_builder_character_target(
+    *,
+    actor: BuilderCommandActor,
+    target_selector: str | None,
+    runtime_world: World | None = None,
+    allow_self: bool = True,
+) -> Player | Mob:
+    normalized_target = str(target_selector or "").strip().lower()
+    if not normalized_target:
+        if allow_self and isinstance(actor, (Player, Mob)):
+            return actor
+        raise ActionError("Target is required.", code="invalid_target")
+
+    if normalized_target in {"self", "me"}:
+        if allow_self and isinstance(actor, (Player, Mob)):
+            return actor
+        raise ActionError("Room actors must specify a target.", code="invalid_target")
+
+    if _parse_character_key(normalized_target) is not None:
+        world = _actor_world(actor, runtime_world=runtime_world)
+        if not world:
+            raise ActionError("No runtime world is available for target resolution.", code="no_world")
+        target = _resolve_world_character_key(world=world, selector=normalized_target)
+        if target is None:
+            raise ActionError("Target not found in this world.", code="invalid_target")
+        return target
+
+    return _resolve_room_character_target(
+        actor=actor,
+        target_selector=normalized_target,
+        runtime_world=runtime_world,
+        allow_self=allow_self,
+    )
+
+
+def _serialize_mob_stats_target(mob: Mob) -> dict[str, object]:
+    payload = serialize_char_from_mob(mob, include_equipment=True).model_dump()
+    stats = {field: getattr(mob, field, 0) for field in MOB_DIRECT_STAT_FIELDS}
+    payload.update(
+        {
+            "experience": int(getattr(mob, "experience", 0) or 0),
+            "exp_worth": int(getattr(mob, "exp_worth", 0) or 0),
+            "gold": int(getattr(mob, "gold", 0) or 0),
+            "stamina": int(getattr(mob, "stamina", 0) or 0),
+            "stamina_max": int(getattr(mob, "stamina_max", 0) or 0),
+            "stamina_regen": int(getattr(mob, "stamina_regen", 0) or 0),
+            "energy_regen": int(getattr(mob, "energy_regen", 0) or 0),
+            "health_regen": int(getattr(mob, "health_regen", 0) or 0),
+            "attributes": dict(getattr(mob, "attributes", {}) or {}),
+            "stats": stats,
+        }
+    )
+    return payload
+
+
+def _serialize_builder_stats_target(target: Player | Mob) -> tuple[dict[str, object], str]:
+    if isinstance(target, Player):
+        updated_target = get_player_with_related(target.id)
+        return serialize_actor(updated_target, updated_target.room).model_dump(), "player"
+
+    updated_target = (
+        Mob.objects.select_related("world", "room", "definition", "template", "equipment")
+        .get(pk=target.id)
+    )
+    return _serialize_mob_stats_target(updated_target), "mob"
+
+
+def _label_from_world(world_payload: dict[str, object], category: str, key: str, fallback: str | None = None) -> str:
+    labels = world_payload.get("labels") or {}
+    if not isinstance(labels, dict):
+        labels = {}
+    category_labels = labels.get(category) or {}
+    if not isinstance(category_labels, dict):
+        category_labels = {}
+    label = category_labels.get(key)
+    if label:
+        return str(label)
+    return fallback or key.replace("_", " ").title()
+
+
+def _ordered_keys(world_payload: dict[str, object], category: str, values: dict[str, object]) -> list[str]:
+    labels = world_payload.get("labels") or {}
+    if not isinstance(labels, dict):
+        labels = {}
+    order = ((labels.get("order") or {}) if isinstance(labels.get("order"), dict) else {}).get(category) or []
+    ordered = [str(key) for key in order if str(key) in values]
+    ordered.extend(sorted(str(key) for key in values.keys() if str(key) not in ordered))
+    return ordered
+
+
+def _format_stat_lines(
+    *,
+    title: str,
+    values: dict[str, object],
+    world_payload: dict[str, object],
+    label_category: str,
+) -> list[str]:
+    if not values:
+        return []
+    lines = [f"{title}:"]
+    for key in _ordered_keys(world_payload, label_category, values):
+        label = _label_from_world(world_payload, label_category, key)
+        lines.append(f"  {label}: {values[key]}")
+    return lines
+
+
+def _render_builder_stats_text(
+    *,
+    target_payload: dict[str, object],
+    target_type: str,
+    world_payload: dict[str, object],
+) -> str:
+    name = str(target_payload.get("name") or "Target")
+    key = str(target_payload.get("key") or "")
+    lines = [
+        f"{name} ({key})",
+        f"Type: {target_type}",
+        f"Level: {target_payload.get('level', 1)}",
+    ]
+    if target_payload.get("archetype"):
+        lines.append(f"Class: {target_payload.get('archetype')}")
+
+    resource_pairs = [
+        ("health", "health_max", "health_regen"),
+        ("energy", "energy_max", "energy_regen"),
+        ("stamina", "stamina_max", "stamina_regen"),
+    ]
+    for current_key, max_key, regen_key in resource_pairs:
+        if current_key not in target_payload and max_key not in target_payload:
+            continue
+        label = _label_from_world(world_payload, "resources", current_key, current_key.title())
+        current_value = target_payload.get(current_key, 0)
+        max_value = target_payload.get(max_key, 0)
+        regen_value = target_payload.get(regen_key)
+        line = f"{label}: {current_value} / {max_value}"
+        if regen_value not in (None, ""):
+            line = f"{line} (regen {regen_value})"
+        lines.append(line)
+
+    if target_type == "player":
+        lines.append(f"Experience: {target_payload.get('experience', 0)}")
+        lines.append(f"Gold: {target_payload.get('gold', 0)}")
+        lines.append(f"Glory: {target_payload.get('glory', 0)}")
+        lines.append(f"Medals: {target_payload.get('medals', 0)}")
+    else:
+        lines.append(f"Experience worth: {target_payload.get('exp_worth', 0)}")
+        lines.append(f"Gold: {target_payload.get('gold', 0)}")
+
+    attributes = target_payload.get("attributes") or {}
+    if isinstance(attributes, dict):
+        lines.extend(
+            _format_stat_lines(
+                title="Attributes",
+                values=attributes,
+                world_payload=world_payload,
+                label_category="attributes",
+            )
+        )
+
+    stats = target_payload.get("stats") or {}
+    if isinstance(stats, dict):
+        lines.extend(
+            _format_stat_lines(
+                title="Stats",
+                values=stats,
+                world_payload=world_payload,
+                label_category="stats",
+            )
+        )
+
+    return "\n".join(lines)
+
+
+def _normalize_set_field(field_name: str) -> tuple[str, str | None]:
+    normalized = str(field_name or "").strip()
+    if not normalized:
+        raise ActionError("Field is required.", code="invalid_args")
+    normalized = normalized.replace("-", "_")
+    lowered = normalized.lower()
+    for prefix in ("attribute.", "attributes.", "attr."):
+        if lowered.startswith(prefix):
+            attr_key = lowered.split(".", 1)[1].strip()
+            if not attr_key:
+                raise ActionError("Attribute key is required.", code="invalid_args")
+            return "attributes", attr_key
+    return lowered, None
+
+
+def _coerce_model_field_value(target: Player | Mob, field_name: str, raw_value: object) -> object:
+    value = coerce_state_command_value(raw_value)
+    try:
+        model_field = target._meta.get_field(field_name)
+    except Exception as exc:
+        raise ActionError(f"Unknown field '{field_name}'.", code="invalid_field") from exc
+
+    internal_type = model_field.get_internal_type()
+    if internal_type in {"IntegerField", "PositiveIntegerField", "PositiveSmallIntegerField"}:
+        try:
+            coerced = int(value)
+        except (TypeError, ValueError):
+            raise ActionError(f"{field_name} must be an integer.", code="invalid_value")
+        if internal_type.startswith("Positive") and coerced < 0:
+            raise ActionError(f"{field_name} cannot be negative.", code="invalid_value")
+        return coerced
+    if internal_type == "FloatField":
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            raise ActionError(f"{field_name} must be a number.", code="invalid_value")
+    if internal_type == "BooleanField":
+        if isinstance(value, bool):
+            return value
+        lowered = str(value).strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+        raise ActionError(f"{field_name} must be true or false.", code="invalid_value")
+    if internal_type == "JSONField":
+        return value
+    return str(value)
+
+
+def _set_character_stat_value(
+    *,
+    target: Player | Mob,
+    field_name: str,
+    raw_value: object,
+) -> tuple[object, object, str]:
+    normalized_field, attribute_key = _normalize_set_field(field_name)
+    allowed_fields = PLAYER_SET_FIELDS if isinstance(target, Player) else MOB_SET_FIELDS
+    if normalized_field not in allowed_fields:
+        if isinstance(target, Player) and normalized_field in PLAYER_COMPUTED_STAT_FIELDS:
+            raise ActionError(
+                f"{normalized_field} is computed for players. Set attributes or equipment instead.",
+                code="computed_player_stat",
+            )
+        raise ActionError(f"{normalized_field} cannot be set on this target.", code="invalid_field")
+
+    if normalized_field == "attributes":
+        previous_attributes = dict(getattr(target, "attributes", {}) or {})
+        if attribute_key:
+            previous_value = previous_attributes.get(attribute_key)
+            new_value = coerce_state_command_value(raw_value)
+            attributes = dict(previous_attributes)
+            if new_value is None:
+                attributes.pop(attribute_key, None)
+            else:
+                attributes[attribute_key] = new_value
+            target.attributes = attributes
+            target.save(update_fields=["attributes"])
+            return previous_value, new_value, f"attributes.{attribute_key}"
+
+        new_attributes = coerce_state_command_value(raw_value)
+        if not isinstance(new_attributes, dict):
+            raise ActionError("attributes must be a JSON object.", code="invalid_value")
+        target.attributes = new_attributes
+        target.save(update_fields=["attributes"])
+        return previous_attributes, new_attributes, "attributes"
+
+    previous_value = getattr(target, normalized_field)
+    new_value = _coerce_model_field_value(target, normalized_field, raw_value)
+    setattr(target, normalized_field, new_value)
+    target.save(update_fields=[normalized_field])
+    return previous_value, new_value, normalized_field
 
 
 def _item_template_field_names() -> list[str]:
@@ -1318,6 +1670,106 @@ class WizKillAction:
                     text=success_text,
                 ),
                 *death_events,
+            ]
+        )
+
+
+class BuilderStatsAction:
+    def execute(
+        self,
+        *,
+        actor: Player,
+        target_selector: str | None = None,
+        runtime_world: World | None = None,
+    ) -> ActionResult:
+        target = _resolve_builder_character_target(
+            actor=actor,
+            target_selector=target_selector,
+            runtime_world=runtime_world,
+            allow_self=True,
+        )
+        target_payload, target_type = _serialize_builder_stats_target(target)
+        world = _actor_world(actor, runtime_world=runtime_world)
+        if not world:
+            raise ActionError("No runtime world is available for stats.", code="no_world")
+        world_payload = serialize_world(world)
+
+        updated_actor = get_player_with_related(actor.id)
+        actor_payload = serialize_actor(updated_actor, updated_actor.room).model_dump()
+        text = _render_builder_stats_text(
+            target_payload=target_payload,
+            target_type=target_type,
+            world_payload=world_payload,
+        )
+
+        return ActionResult(
+            events=[
+                GameEvent(
+                    type="cmd./stats.success",
+                    recipients=[updated_actor.key],
+                    data={
+                        "actor": actor_payload,
+                        "target": target_payload,
+                        "target_type": target_type,
+                        "world": world_payload,
+                    },
+                    text=text,
+                )
+            ]
+        )
+
+
+class SetStatAction:
+    def execute(
+        self,
+        *,
+        actor: Player,
+        target_selector: str,
+        field_name: str,
+        value: object,
+        runtime_world: World | None = None,
+    ) -> ActionResult:
+        with transaction.atomic():
+            target = _resolve_builder_character_target(
+                actor=actor,
+                target_selector=target_selector,
+                runtime_world=runtime_world,
+                allow_self=True,
+            )
+            previous_value, new_value, normalized_field = _set_character_stat_value(
+                target=target,
+                field_name=field_name,
+                raw_value=value,
+            )
+
+        target_payload, target_type = _serialize_builder_stats_target(target)
+        updated_actor = get_player_with_related(actor.id)
+        actor_payload = serialize_actor(updated_actor, updated_actor.room)
+        room_payload = _get_single_room_payload(updated_actor)
+        target_name = str(target_payload.get("name") or "target")
+        rendered_value = (
+            json.dumps(new_value, sort_keys=True)
+            if isinstance(new_value, (dict, list, bool, type(None)))
+            else str(new_value)
+        )
+        text = f"Set {target_name}'s {normalized_field} to {rendered_value}."
+
+        return ActionResult(
+            events=[
+                GameEvent(
+                    type="cmd./set.success",
+                    recipients=[updated_actor.key],
+                    data={
+                        "actor": actor_payload.model_dump(),
+                        "room": room_payload.model_dump(),
+                        "target": target_payload,
+                        "target_type": target_type,
+                        "field": normalized_field,
+                        "previous_value": previous_value,
+                        "new_value": new_value,
+                    },
+                    text=text,
+                )
             ]
         )
 

@@ -1601,6 +1601,141 @@ class TestBuilderSetClass(BuilderCommandTestCase):
         self.assertEqual(cmd_message["data"]["errors"], [])
 
 
+class TestBuilderStatsAndSet(BuilderCommandTestCase):
+    def _message_by_type(self, messages, message_type):
+        for msg in messages:
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def test_builder_stats_reads_room_mob_by_selector(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Iron Guard",
+            keywords="iron guard",
+            health=12,
+            health_max=40,
+            attack_power=7,
+            attributes={"strength": 3},
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/stats guard")
+
+        message = self._message_by_type(messages, "cmd./stats.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target_type"], "mob")
+        self.assertEqual(message["data"]["target"]["key"], mob.key)
+        self.assertEqual(message["data"]["target"]["stats"]["attack_power"], 7)
+        self.assertEqual(message["data"]["target"]["attributes"]["strength"], 3)
+        self.assertIn("Iron Guard", message.get("text", ""))
+
+    def test_builder_stats_reads_global_mob_key_outside_room(self):
+        far_room = self.room.create_at("east")
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=far_room,
+            name="Remote Guard",
+            keywords="remote guard",
+            health=20,
+            health_max=55,
+            ability_power=9,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/stats {mob.key}")
+
+        message = self._message_by_type(messages, "cmd./stats.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target"]["key"], mob.key)
+        self.assertEqual(message["data"]["target"]["stats"]["ability_power"], 9)
+
+    def test_builder_stats_reads_global_player_key_outside_room(self):
+        far_room = self.room.create_at("east")
+        target = self.create_player("RemotePlayer", room=far_room)
+        target.health = 18
+        target.stamina = 22
+        target.save(update_fields=["health", "stamina"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/stats {target.key}")
+
+        message = self._message_by_type(messages, "cmd./stats.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target_type"], "player")
+        self.assertEqual(message["data"]["target"]["key"], target.key)
+        self.assertEqual(message["data"]["target"]["health"], 18)
+        self.assertIn("RemotePlayer", message.get("text", ""))
+
+    def test_builder_set_updates_room_mob_stat(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Training Guard",
+            keywords="training guard",
+            attack_power=2,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/set guard attack_power 11")
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.attack_power, 11)
+        message = self._message_by_type(messages, "cmd./set.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target"]["key"], mob.key)
+        self.assertEqual(message["data"]["field"], "attack_power")
+        self.assertEqual(message["data"]["previous_value"], 2)
+        self.assertEqual(message["data"]["new_value"], 11)
+        self.assertEqual(message["data"]["room"]["id"], self.room.id)
+
+    def test_builder_set_updates_global_player_attribute_key(self):
+        far_room = self.room.create_at("east")
+        target = self.create_player("RemotePlayer", room=far_room)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/set {target.key} attribute.brawn 5")
+
+        target.refresh_from_db()
+        self.assertEqual(target.attributes, {"brawn": 5})
+        message = self._message_by_type(messages, "cmd./set.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target_type"], "player")
+        self.assertEqual(message["data"]["field"], "attributes.brawn")
+        self.assertEqual(message["data"]["new_value"], 5)
+
+    def test_builder_set_replaces_mob_attributes_with_delimited_json(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Training Guard",
+            keywords="training guard",
+            attributes={"old": 1},
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, '/set guard attributes -- {"strength": 4, "wit": 2}')
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.attributes, {"strength": 4, "wit": 2})
+        message = self._message_by_type(messages, "cmd./set.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["field"], "attributes")
+        self.assertEqual(message["data"]["new_value"], {"strength": 4, "wit": 2})
+
+    def test_builder_set_rejects_computed_player_stat(self):
+        target = self.create_player("Target", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/set {target.key} attack_power 12")
+
+        target.refresh_from_db()
+        message = self._message_by_type(messages, "cmd./set.error")
+        self.assertIsNotNone(message)
+        self.assertIn("computed", message.get("text", "").lower())
+
+
 class TestBuilderResync(BuilderCommandTestCase):
     def _message_by_type(self, messages, message_type):
         for msg in messages:

@@ -5,6 +5,7 @@ Builder commands start with "/" and require a builder character.
 """
 from spawns.actions.base import ActionError
 from spawns.actions.builder import (
+    BuilderStatsAction,
     CmdAction,
     EchoAction,
     GrantItemAction,
@@ -17,6 +18,7 @@ from spawns.actions.builder import (
     SendAction,
     SetClassAction,
     SetLevelAction,
+    SetStatAction,
     StateAction,
     WizKillAction,
 )
@@ -220,6 +222,41 @@ def _parse_setclass_args(ctx: CommandContext) -> tuple[str | None, str | None]:
     if len(args) == 1:
         return args[0], None
     return args[-1], " ".join(args[:-1]).strip()
+
+
+def _parse_stats_args(ctx: CommandContext) -> str | None:
+    target = ctx.payload.get("target")
+    if target is not None:
+        return str(target).strip() or None
+    args = [str(arg).strip() for arg in list(ctx.payload.get("args", [])) if str(arg).strip()]
+    if not args:
+        return None
+    return " ".join(args).strip()
+
+
+def _parse_setstat_args(ctx: CommandContext) -> tuple[str | None, str | None, object | None]:
+    target = ctx.payload.get("target")
+    field_name = ctx.payload.get("field") or ctx.payload.get("stat")
+    value = ctx.payload.get("value")
+    if target is not None and field_name is not None:
+        return (
+            str(target).strip(),
+            str(field_name).strip(),
+            value,
+        )
+
+    args = [str(arg).strip() for arg in list(ctx.payload.get("args", [])) if str(arg).strip()]
+    if len(args) < 3:
+        return None, None, None
+
+    lhs, rhs = _split_delimited_args(args)
+    if rhs is not None:
+        lhs_args = [token for token in str(lhs or "").split() if token.strip()]
+        if len(lhs_args) < 2:
+            return None, None, None
+        return " ".join(lhs_args[:-1]).strip(), lhs_args[-1], rhs
+
+    return " ".join(args[:-2]).strip(), args[-2], args[-1]
 
 
 def _payload_item_list(value: object) -> list[str]:
@@ -777,6 +814,119 @@ class StateHandler(CommandHandler):
         publish_events(
             result.events,
             actor_key=ctx.actor_key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class BuilderStatsHandler(CommandHandler):
+    command_type = "/stats"
+    text_commands = ("/stats",)
+    builder_only = True
+    help = {
+        "name": "Builder Stats",
+        "format": "/stats [target|player.<id>|mob.<id>]",
+        "description": (
+            "Show a full builder stat readout for yourself, a character in your current room, "
+            "or a player/mob key anywhere in your current world."
+        ),
+        "examples": [
+            "/stats",
+            "/stats guard",
+            "/stats aria",
+            "/stats mob.123",
+            "/stats player.456",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        if not can_execute_builder_command(ctx, self):
+            ctx.publish(builder_permission_error(self.command_type))
+            return
+
+        target = _parse_stats_args(ctx)
+
+        try:
+            result = BuilderStatsAction().execute(
+                actor=ctx.player,
+                target_selector=target,
+                runtime_world=ctx.world,
+            )
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd./stats.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.player.key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class SetStatHandler(CommandHandler):
+    command_type = "/set"
+    text_commands = ("/set",)
+    builder_only = True
+    help = {
+        "name": "Set Stat",
+        "format": "/set <target|player.<id>|mob.<id>> <field|attributes.key> <value>",
+        "description": (
+            "Set a persisted stat field on a player or mob. Player combat ratings are computed; "
+            "set player attributes or equipment instead of direct computed ratings."
+        ),
+        "examples": [
+            "/set guard health 25",
+            "/set guard attack_power 8",
+            "/set aria health 10",
+            "/set player.456 attribute.strength 5",
+            "/set mob.123 attributes -- {\"strength\": 4}",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        if not can_execute_builder_command(ctx, self):
+            ctx.publish(builder_permission_error(self.command_type))
+            return
+
+        target, field_name, value = _parse_setstat_args(ctx)
+        if not target or not field_name or value is None:
+            ctx.publish(
+                {
+                    "type": "cmd./set.error",
+                    "text": "Usage: /set <target|player.<id>|mob.<id>> <field|attributes.key> <value>",
+                    "data": {"error": "Missing target, field, or value.", "code": "invalid_args"},
+                }
+            )
+            return
+
+        try:
+            result = SetStatAction().execute(
+                actor=ctx.player,
+                target_selector=target,
+                field_name=field_name,
+                value=value,
+                runtime_world=ctx.world,
+            )
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd./set.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.player.key,
             connection_id=ctx.connection_id,
         )
 
