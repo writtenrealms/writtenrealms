@@ -831,6 +831,8 @@ ATTR_AP = 'attack_power'
 
 ATTR_ABILITY_POWER = 'ability_power'
 
+ATTR_ARMOR = 'armor'
+
 ATTR_WEAPON_DAMAGE = 'weapon_damage'
 
 ATTR_CRIT = 'crit'
@@ -854,6 +856,7 @@ ATTRIBUTES = [
     ATTR_STR,
     ATTR_AP,
     ATTR_ABILITY_POWER,
+    ATTR_ARMOR,
     ATTR_CRIT,
     ATTR_DODGE,
     ATTR_RESILIENCE,
@@ -890,6 +893,7 @@ ATTR_BUDGET = {
     ATTR_MAX_ENERGY: 4,
     ATTR_AP: 4,
     ATTR_ABILITY_POWER: 4,
+    ATTR_ARMOR: 4,
     ATTR_WEAPON_DAMAGE: 4,
     ATTR_CRIT: 4,
     ATTR_RESILIENCE: 4,

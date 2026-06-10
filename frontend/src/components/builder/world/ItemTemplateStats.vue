@@ -44,6 +44,10 @@
         <div class="value">{{ template.ability_power }}</div>
       </div>
       <div class="stat">
+        <div class="label">Armor</div>
+        <div class="value">{{ template.armor }}</div>
+      </div>
+      <div class="stat">
         <div class="label">Crit Rating</div>
         <div class="value">{{ template.crit }}</div>
       </div>

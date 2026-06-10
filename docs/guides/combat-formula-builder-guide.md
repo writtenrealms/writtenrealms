@@ -666,6 +666,15 @@ for the YAML shape and `/setlevel` testing command.
 Use armor when you want protection from weapons, claws, fists, bullets, blades,
 or other physical attacks.
 
+Armor can come from formulas, direct stats, effects, and item definitions. On an
+item definition, `armor` is the final defensive rating the item grants.
+`armor_class` does not change mitigation; it only gates whether a character is
+allowed to equip armor and shields of that class. If heavy armor should be more
+protective than light armor, author a higher `armor` value on the heavy item.
+See
+[item-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/item-definition-builder-guide.md)
+for the world equipment config and item YAML shape.
+
 Use resilience when you want protection from magic, psionics, tech abilities,
 mental strain, elemental force, or other non-weapon ability attacks.
 

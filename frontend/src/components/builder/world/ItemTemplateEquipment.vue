@@ -27,7 +27,7 @@
       </template>
       <div v-else-if="equipment_type != 'accessory'">
         <div class="field-desc">Armor class</div>
-        <div>{{ item_template.armor_class }}</div>
+        <div>{{ armorClassLabel || "Unrestricted" }}</div>
       </div>
     </div>
 
@@ -49,7 +49,31 @@ const store = useStore();
 const formErrors = ref({});
 
 const item_template = computed(() => store.state.builder.worlds.item_template);
+const world = computed(() => store.state.builder.worlds.world || store.state.builder.world || store.state.game.world || {});
 const equipment_type = ref(item_template.value.equipment_type);
+const armorClassOptions = computed(() => {
+  const armorClasses = world.value?.equipment_system?.armor_classes || world.value?.equipment?.armor_classes || [];
+  if (armorClasses.length) {
+    return [
+      { value: null, label: "Unrestricted" },
+      ...armorClasses.map((armorClass: any) => ({
+        value: armorClass.key,
+        label: armorClass.label || armorClass.key,
+      })),
+    ];
+  }
+  return [
+    { value: null, label: "Unrestricted" },
+    { value: "light", label: "Light" },
+    { value: "heavy", label: "Heavy" },
+  ];
+});
+const armorClassLabel = computed(() => {
+  const option = armorClassOptions.value.find(
+    (candidate: any) => candidate.value === item_template.value.armor_class
+  );
+  return option ? option.label : item_template.value.armor_class;
+});
 
 watch(equipment_type, async (newValue) => {
   const resp = await axios.patch(
@@ -110,10 +134,7 @@ const editArmor = () => {
     attr: "armor_class",
     label: "Armor Class",
     widget: "select",
-    options: [
-      { value: "light", label: "Light" },
-      { value: "heavy", label: "Heavy" },
-    ],
+    options: armorClassOptions.value,
   };
   const modal = {
     title: `Edit Armor`,

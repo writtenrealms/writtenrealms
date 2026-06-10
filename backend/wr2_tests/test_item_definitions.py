@@ -352,6 +352,66 @@ spec:
         self.assertEqual(definition.attributes, {"brawn": 2})
         self.assertEqual(definition.randomization["attributes"][0]["mode"], "favor_high")
 
+    def test_apply_item_definition_manifest_accepts_armor_rating_and_class(self):
+        self.world.config.equipment_system = {
+            "armor_classes": [
+                {"key": "light", "label": "Light Armor"},
+                {"key": "heavy", "label": "Heavy Armor"},
+            ],
+            "default_armor_class": "light",
+        }
+        self.world.config.save(update_fields=["equipment_system"])
+
+        manifest = f"""
+kind: itemdefinition
+metadata:
+  world: world.{self.world.id}
+  slug: bronze-helmet
+  name: a bronze helmet
+spec:
+  type: equippable
+  equipment_type: head
+  armor_class: heavy
+  armor: 7
+  resilience: 2
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+        self.assertEqual(resp.status_code, 201, resp.data)
+
+        definition = ItemDefinition.objects.get(world=self.world, slug="bronze-helmet")
+        self.assertEqual(definition.base_properties["armor_class"], "heavy")
+        self.assertEqual(definition.base_properties["armor"], 7)
+        self.assertEqual(definition.base_properties["resilience"], 2)
+
+        item = definition.spawn(self.player, self.spawn_world)
+        self.assertEqual(item.armor_class, "heavy")
+        self.assertEqual(item.armor, 7)
+
+    def test_apply_item_definition_manifest_rejects_unknown_authored_armor_class(self):
+        self.world.config.equipment_system = {
+            "armor_classes": [
+                {"key": "light", "label": "Light Armor"},
+            ],
+            "default_armor_class": "light",
+        }
+        self.world.config.save(update_fields=["equipment_system"])
+
+        manifest = f"""
+kind: itemdefinition
+metadata:
+  world: world.{self.world.id}
+  slug: bronze-helmet
+  name: a bronze helmet
+spec:
+  type: equippable
+  equipment_type: head
+  armor_class: heavy
+  armor: 7
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("declared armor class", str(resp.data))
+
     def test_apply_item_bundle_manifest_can_create_weighted_bundle(self):
         sword = ItemDefinition.objects.create(
             world=self.world,

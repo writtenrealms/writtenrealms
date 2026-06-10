@@ -15,6 +15,7 @@ from django.utils import timezone
 from builders.models import AbilityDefinition
 from config import constants as adv_consts
 from core.combat_formulas import get_world_combat_system, rating_display_percent
+from core.equipment_system import get_world_equipment_payload
 from core.scoped_state import STATE_SCOPE_WORLD, get_state_snapshot
 from core.leveling import (
     get_world_leveling_config,
@@ -837,6 +838,7 @@ def serialize_world(world: World) -> Dict:
             "tier": world.tier,
             "socials": {"cmds": {}, "order": []},
             "currencies": {},
+            "equipment": get_world_equipment_payload(world),
             "leader": world.leader.key if world.leader else None,
         }
 
@@ -845,6 +847,7 @@ def serialize_world(world: World) -> Dict:
 
     data["labels"] = get_world_label_bundle(world)
     data["class_selection"] = get_world_class_selection(world)
+    data["equipment"] = get_world_equipment_payload(world)
     data["abilities"] = _serialize_ability_definitions(world)
     data["combat"] = _serialize_combat_system(world)
     data["is_classless"] = bool(data.get("classless"))

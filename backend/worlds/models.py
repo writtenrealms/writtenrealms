@@ -23,6 +23,7 @@ from core.db import (
     optional,
     list_to_choice,
     batch_deletion)
+from core.equipment_system import default_equipment_system
 from core.leveling import default_leveling_curve
 from core.stat_system import default_stat_system
 from core.abilities import default_ability_progression
@@ -1005,6 +1006,7 @@ class WorldConfig(BaseModel):
     non_ascii_names = models.BooleanField(default=False)
     is_classless = models.BooleanField(default=True)
     globals_enabled = models.BooleanField(default=True)
+    equipment_system = models.JSONField(default=default_equipment_system)
     stat_system = models.JSONField(default=default_stat_system)
 
     # If false, all chars will be default_gender gender

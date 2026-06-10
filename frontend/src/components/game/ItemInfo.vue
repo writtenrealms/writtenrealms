@@ -11,7 +11,7 @@
     <div
       class="cannot-eq-heavy-armor"
       v-if="cannot_wear_heavy_armor"
-    >Cannot equip heavy armor.</div>
+    >Cannot equip {{ armorClassLabel(item.armor_class).toLowerCase() || "this armor" }}.</div>
 
     <div
       class="level-too-high"
@@ -315,11 +315,13 @@ const summary = computed(() => {
       return `Level ${level} ${qualityPrefix}two-handed ${props.item.weapon_type || "weapon"}`.trim();
     }
     if (eqType === "shield") {
-      const heavy = props.item.armor_class === "heavy" ? "heavy " : "";
-      return `Level ${level} ${qualityPrefix}${heavy}shield`.trim();
+      const armorClass = armorClassLabel(props.item.armor_class);
+      const prefix = armorClass ? `${armorClass.toLowerCase()} ` : "";
+      return `Level ${level} ${qualityPrefix}${prefix}shield`.trim();
     }
-    const heavy = props.item.armor_class === "heavy" ? "heavy " : "";
-    return `Level ${level} ${qualityPrefix}${heavy}armor, worn on ${eqType}`.trim();
+    const armorClass = armorClassLabel(props.item.armor_class);
+    const prefix = armorClass ? `${armorClass.toLowerCase()} ` : "";
+    return `Level ${level} ${qualityPrefix}${prefix}armor, worn on ${eqType}`.trim();
   }
 
   if (itemType === "inert") return "Item";
@@ -369,6 +371,36 @@ const player = {
   ...(store.state.game.player || {}),
   marks: (store.state.game.player && store.state.game.player.marks) || {},
 };
+const armorClassEntries = computed(() => world.value?.equipment?.armor_classes || []);
+const authoredArmorClasses = computed(() => armorClassEntries.value.length > 0);
+const armorClassLabel = (armorClass: string) => {
+  if (!armorClass) return "";
+  const entry = armorClassEntries.value.find((candidate: any) => candidate.key === armorClass);
+  return (entry && entry.label) || armorClass.replace(/_/g, " ");
+};
+const usesArmorProficiency = computed(() => {
+  return [
+    "head",
+    "body",
+    "arms",
+    "hands",
+    "waist",
+    "legs",
+    "feet",
+    "shield",
+  ].includes(props.item.equipment_type);
+});
+const playerArmorProficiencies = computed(() => {
+  const proficiencies = world.value?.equipment?.armor_proficiencies || {};
+  const classProficiencies = proficiencies.classes || {};
+  if (Object.prototype.hasOwnProperty.call(classProficiencies, player.archetype)) {
+    return classProficiencies[player.archetype];
+  }
+  if (Object.prototype.hasOwnProperty.call(proficiencies, "default")) {
+    return proficiencies.default;
+  }
+  return null;
+});
 const is_eq_item_too_high_level = computed(() => {
   // If the user is allowed to wear the item, return false.
   // If the user cannot wear the item, return the max level
@@ -407,6 +439,15 @@ const onClickContainedItem = (contained_item) => {
 };
 
 const cannot_wear_heavy_armor = computed(() => {
+  if (
+    authoredArmorClasses.value &&
+    usesArmorProficiency.value &&
+    props.item.armor_class
+  ) {
+    const proficiencies = playerArmorProficiencies.value;
+    return Array.isArray(proficiencies) && !proficiencies.includes(props.item.armor_class);
+  }
+
   if (player.marks.heavy_armor_proficiency === 'true' ||
       player.marks.proficiency_heavy_armor === 'true')
     return false;

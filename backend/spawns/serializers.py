@@ -49,6 +49,7 @@ from core.serializers import (
     InstanceOrTemplateValueField,
     ContainerTypeField,
     ReferenceField)
+from core.equipment_system import get_world_equipment_payload
 from core.stat_system import (
     StatSystemValidationError,
     get_world_class_selection,
@@ -317,6 +318,7 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
     facts = serializers.SerializerMethodField()
     socials = serializers.SerializerMethodField()
     currencies = serializers.SerializerMethodField()
+    equipment = serializers.SerializerMethodField()
 
     class Meta:
         model = World
@@ -351,6 +353,7 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
             'tier',
             'socials',
             'currencies',
+            'equipment',
             'leader',
         ]
 
@@ -439,6 +442,11 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
                 'is_default': currency.is_default,
             }
         return currencies
+
+    def get_equipment(self, spawn_world):
+        root_world = spawn_world.context
+        root_world = root_world.instance_of or root_world
+        return get_world_equipment_payload(root_world)
 
     def get_leader(self, spawn_world):
         leader = spawn_world.leader
@@ -1731,4 +1739,3 @@ class ExitInstanceSerializer(serializers.Serializer):
 
     def validate_player(self, player):
         return Player.objects.get(pk=player)
-

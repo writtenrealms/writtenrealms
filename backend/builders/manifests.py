@@ -43,6 +43,14 @@ from core.combat_formulas import (
     get_world_combat_system,
     normalize_combat_system,
 )
+from core.equipment_system import (
+    EquipmentSystemValidationError,
+    get_armor_class_keys,
+    get_world_equipment_system,
+    has_authored_armor_classes,
+    normalize_equipment_system,
+    validate_armor_class_reference,
+)
 from core.leveling import (
     LevelingConfigError,
     normalize_leveling_curve,
@@ -164,6 +172,7 @@ _WORLD_CONFIG_CONFIG_ROOM_FIELDS = (
 )
 _WORLD_CONFIG_STATS_FIELD = "stats"
 _WORLD_CONFIG_COMBAT_FIELD = "combat"
+_WORLD_CONFIG_EQUIPMENT_FIELD = "equipment"
 _WORLD_CONFIG_LEVELING_FIELD = "leveling_curve"
 _WORLD_CONFIG_ABILITY_PROGRESS_FIELD = "ability_progression"
 _WORLD_FIELDS_PROPAGATED_TO_SPAWNS = {
@@ -197,6 +206,19 @@ def _export_combat_system(world: World) -> dict[str, Any] | None:
         return get_world_combat_system(world)
     except CombatFormulaValidationError:
         return None
+
+
+def _export_equipment_system(world: World) -> dict[str, Any] | None:
+    config = world.config
+    if not config or not _has_authored_world_config_map(config.equipment_system):
+        return None
+    try:
+        equipment_system = get_world_equipment_system(world)
+    except EquipmentSystemValidationError:
+        return None
+    if not has_authored_armor_classes(equipment_system):
+        return None
+    return equipment_system
 
 _SCOPE_TO_TARGET_MODEL = {
     adv_consts.TRIGGER_SCOPE_ROOM: Room,
@@ -753,6 +775,9 @@ def world_config_to_manifest(
     combat_system = _export_combat_system(world)
     if combat_system:
         spec[_WORLD_CONFIG_COMBAT_FIELD] = combat_system
+    equipment_system = _export_equipment_system(world)
+    if equipment_system:
+        spec[_WORLD_CONFIG_EQUIPMENT_FIELD] = equipment_system
 
     manifest = {
         "kind": manifest_kind,
@@ -838,6 +863,7 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
             "globals_enabled": bool(config.globals_enabled),
             "stat_system": _export_stat_system(world) or {},
             "combat_system": _export_combat_system(world) or {},
+            "equipment_system": _export_equipment_system(world) or {},
             "ability_progression": normalize_ability_progression(
                 config.ability_progression
             ),
@@ -2491,6 +2517,20 @@ def _coerce_item_definition_fields(*, world: World, spec_patch: dict[str, Any], 
             continue
         base_properties[field_name] = value
 
+    if "armor_class" in base_properties:
+        try:
+            armor_class = validate_armor_class_reference(
+                world=world,
+                armor_class=base_properties.get("armor_class"),
+                field_name="spec.armor_class",
+            )
+        except EquipmentSystemValidationError as exc:
+            raise serializers.ValidationError(str(exc))
+        if armor_class:
+            base_properties["armor_class"] = armor_class
+        else:
+            base_properties.pop("armor_class", None)
+
     attributes = (
         normalize_attribute_map(
             spec_patch.get("attributes"),
@@ -3980,6 +4020,7 @@ def parse_world_config_manifest(
     allowed_fields.update(_WORLD_CONFIG_CONFIG_ROOM_FIELDS)
     allowed_fields.add(_WORLD_CONFIG_STATS_FIELD)
     allowed_fields.add(_WORLD_CONFIG_COMBAT_FIELD)
+    allowed_fields.add(_WORLD_CONFIG_EQUIPMENT_FIELD)
     allowed_fields.add(_WORLD_CONFIG_LEVELING_FIELD)
     allowed_fields.add(_WORLD_CONFIG_ABILITY_PROGRESS_FIELD)
 
@@ -4065,10 +4106,26 @@ def parse_world_config_manifest(
             )
         config_updates[field_name] = room
 
+    equipment_system = get_world_equipment_system(world)
+    if _WORLD_CONFIG_EQUIPMENT_FIELD in spec:
+        try:
+            equipment_system = normalize_equipment_system(
+                spec.get(_WORLD_CONFIG_EQUIPMENT_FIELD)
+            )
+            config_updates["equipment_system"] = equipment_system
+        except EquipmentSystemValidationError as exc:
+            raise serializers.ValidationError(str(exc))
+
     if _WORLD_CONFIG_STATS_FIELD in spec:
         try:
+            armor_class_keys = (
+                get_armor_class_keys(equipment_system)
+                if has_authored_armor_classes(equipment_system)
+                else None
+            )
             stat_system = normalize_stat_system(
-                spec.get(_WORLD_CONFIG_STATS_FIELD)
+                spec.get(_WORLD_CONFIG_STATS_FIELD),
+                armor_class_keys=armor_class_keys,
             )
             config_updates["stat_system"] = stat_system
             config_updates["is_classless"] = not bool(stat_system.get("class_profiles"))

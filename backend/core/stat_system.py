@@ -23,6 +23,11 @@ from typing import Any
 
 from config import constants
 from config import game_settings as config
+from core.equipment_system import (
+    get_armor_class_keys,
+    get_world_equipment_system,
+    has_authored_armor_classes,
+)
 
 
 class StatSystemValidationError(ValueError):
@@ -300,6 +305,36 @@ def _coerce_weights(
     return normalized
 
 
+def _coerce_armor_proficiencies(
+    value: Any,
+    *,
+    field_name: str,
+    armor_class_keys: set[str] | None,
+) -> list[str]:
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise StatSystemValidationError(f"{field_name} must be a list.")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for index, raw_key in enumerate(value):
+        key = str(raw_key or "").strip()
+        if not key:
+            raise StatSystemValidationError(
+                f"{field_name}[{index}] must be a non-empty armor class key."
+            )
+        if armor_class_keys is not None and key not in armor_class_keys:
+            raise StatSystemValidationError(
+                f"{field_name}[{index}] must reference a declared armor class."
+            )
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+    return normalized
+
+
 def _merge_dict(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     merged = deepcopy(base)
     for key, value in patch.items():
@@ -315,6 +350,7 @@ def _coerce_profile(
     *,
     field_name: str,
     attribute_keys: list[str],
+    armor_class_keys: set[str] | None,
     default_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if raw_profile in (None, ""):
@@ -328,6 +364,7 @@ def _coerce_profile(
         "main_attribute",
         "attribute_weights",
         "stat_rules",
+        "armor_proficiencies",
     }
     unknown_profile_keys = sorted(set(raw_profile.keys()) - allowed_profile_keys)
     if unknown_profile_keys:
@@ -357,12 +394,21 @@ def _coerce_profile(
         allowed_sources=set(attribute_keys),
     )
 
-    return {
+    normalized = {
         "label": label,
         "main_attribute": main_attribute,
         "attribute_weights": weights,
         "stat_rules": rules,
     }
+    if "armor_proficiencies" in raw_profile:
+        normalized["armor_proficiencies"] = _coerce_armor_proficiencies(
+            raw_profile.get("armor_proficiencies"),
+            field_name=f"{field_name}.armor_proficiencies",
+            armor_class_keys=armor_class_keys,
+        )
+    elif "armor_proficiencies" in base_profile:
+        normalized["armor_proficiencies"] = list(base_profile["armor_proficiencies"])
+    return normalized
 
 
 def _coerce_base_resource_config(
@@ -469,7 +515,11 @@ def _coerce_class_selection(
     return normalized
 
 
-def normalize_stat_system(value: Any) -> dict[str, Any]:
+def normalize_stat_system(
+    value: Any,
+    *,
+    armor_class_keys: Iterable[str] | None = None,
+) -> dict[str, Any]:
     if value in (None, ""):
         value = {}
     if not isinstance(value, dict):
@@ -490,6 +540,11 @@ def normalize_stat_system(value: Any) -> dict[str, Any]:
         )
 
     normalized = deepcopy(DEFAULT_STAT_SYSTEM)
+    normalized_armor_class_keys = (
+        {str(key or "").strip() for key in armor_class_keys if str(key or "").strip()}
+        if armor_class_keys is not None
+        else None
+    )
 
     attributes = _coerce_attributes(value.get("attributes"))
     attribute_keys = [entry["key"] for entry in attributes]
@@ -566,6 +621,7 @@ def normalize_stat_system(value: Any) -> dict[str, Any]:
         value.get("default_profile"),
         field_name="stats.default_profile",
         attribute_keys=attribute_keys,
+        armor_class_keys=normalized_armor_class_keys,
         default_profile=normalized["default_profile"],
     )
 
@@ -583,8 +639,16 @@ def normalize_stat_system(value: Any) -> dict[str, Any]:
             profile_value,
             field_name=f"stats.class_profiles.{normalized_key}",
             attribute_keys=attribute_keys,
+            armor_class_keys=normalized_armor_class_keys,
             default_profile=class_profiles.get(normalized_key),
         )
+        if (
+            "armor_proficiencies" not in class_profiles[normalized_key]
+            and "armor_proficiencies" in normalized["default_profile"]
+        ):
+            class_profiles[normalized_key]["armor_proficiencies"] = list(
+                normalized["default_profile"]["armor_proficiencies"]
+            )
         if class_profiles[normalized_key]["label"]:
             normalized["labels"]["classes"][normalized_key] = class_profiles[normalized_key]["label"]
     normalized["class_profiles"] = class_profiles
@@ -693,7 +757,16 @@ def get_world_stat_system(world) -> dict[str, Any]:
     config_obj = effective_config or getattr(world, "config", None)
     if config_obj is None:
         return deepcopy(DEFAULT_STAT_SYSTEM)
-    return normalize_stat_system(getattr(config_obj, "stat_system", None))
+    equipment_system = get_world_equipment_system(world)
+    armor_class_keys = (
+        get_armor_class_keys(equipment_system)
+        if has_authored_armor_classes(equipment_system)
+        else None
+    )
+    return normalize_stat_system(
+        getattr(config_obj, "stat_system", None),
+        armor_class_keys=armor_class_keys,
+    )
 
 
 def world_uses_classes(world) -> bool:

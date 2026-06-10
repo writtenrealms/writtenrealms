@@ -324,9 +324,7 @@ class ItemMixin(models.Model):
         **optional)
 
     # Armor
-    armor_class = models.TextField(
-        choices=list_to_choice(adv_consts.ARMOR_CLASSES),
-        default=adv_consts.ARMOR_CLASS_LIGHT)
+    armor_class = models.TextField(**optional)
 
     # Weapons
     weapon_grip = models.TextField(
@@ -356,6 +354,7 @@ class ItemMixin(models.Model):
     # Computed Stats
     attack_power = models.IntegerField(default=0)
     ability_power = models.IntegerField(default=0)
+    armor = models.IntegerField(default=0)
     resilience = models.IntegerField(default=0)
     dodge = models.IntegerField(default=0)
     crit = models.IntegerField(default=0)

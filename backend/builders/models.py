@@ -175,6 +175,7 @@ class ItemTemplate(ItemMixin, AdventBaseModel):
         for attr in [
             adv_consts.ATTR_AP,
             adv_consts.ATTR_ABILITY_POWER,
+            adv_consts.ATTR_ARMOR,
             adv_consts.ATTR_CRIT,
             adv_consts.ATTR_DODGE,
             adv_consts.ATTR_RESILIENCE,

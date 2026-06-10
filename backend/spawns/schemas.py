@@ -506,6 +506,7 @@ class World(BaseModel):
     # Game data
     labels: Dict[str, Any] = Field(default_factory=dict)
     class_selection: Dict[str, Any] = Field(default_factory=dict)
+    equipment: Dict[str, Any] = Field(default_factory=dict)
     combat: Dict[str, Any] = Field(default_factory=dict)
     factions: Dict[str, Faction] = Field(default_factory=dict)
     abilities: Dict[str, Any] = Field(default_factory=dict)

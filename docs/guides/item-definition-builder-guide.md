@@ -64,6 +64,128 @@ attribute, that key contributes nothing to combat. This is intentional:
 item YAML should not make the world fail to boot because an attribute was
 renamed or removed.
 
+## Armor Classes And Armor Values
+
+Armor classes and armor values are separate systems.
+
+- `armor_class` is an equip permission gate for armor and shield slots.
+- `armor` is the final defensive rating the item grants in combat.
+
+Worlds opt into authored armor classes in the world manifest:
+
+```yaml
+kind: world
+spec:
+  equipment:
+    armor_classes:
+      - key: light
+        label: Light Armor
+        description: Cloth, leather, linen, wicker, and flexible field gear.
+        armor_multiplier: 1.0
+      - key: heavy
+        label: Heavy Armor
+        description: Bronze helmets, reinforced cuirasses, greaves, and heavy shields.
+        armor_multiplier: 1.35
+    default_armor_class: light
+    armor_suggestions:
+      full_set_scale: 0.35
+      slot_weights:
+        head: 0.15
+        body: 0.30
+        arms: 0.10
+        hands: 0.10
+        waist: 0.10
+        legs: 0.15
+        feet: 0.10
+        shield: 0.35
+```
+
+Once a world defines `spec.equipment.armor_classes`, every non-empty item
+`armor_class` must match one of those keys. If the world has no authored armor
+classes, WR2 keeps the legacy `heavy` armor gate for compatibility.
+
+Class proficiencies live on the world stat profiles:
+
+```yaml
+kind: world
+spec:
+  stats:
+    default_profile:
+      armor_proficiencies: [light]
+      attribute_weights:
+        constitution: 3
+        strength: 2
+    class_profiles:
+      hoplite:
+        label: Hoplite
+        armor_proficiencies: [light, heavy]
+        attribute_weights:
+          constitution: 4
+          strength: 3
+      mystic:
+        label: Mystic
+        armor_proficiencies: [light]
+        attribute_weights:
+          constitution: 2
+          intelligence: 2
+```
+
+If a class omits `armor_proficiencies`, it inherits the `default_profile`
+proficiencies. If neither the class nor the default profile declares
+proficiencies, the class is unrestricted for compatibility. An explicit empty
+list means that class is proficient with no authored armor classes.
+
+Use `armor_class` and `armor` on armor and shield item definitions:
+
+```yaml
+kind: itemdefinition
+metadata:
+  slug: salt-stained-linothorax
+  name: a salt-stained linothorax
+spec:
+  type: equippable
+  level: 20
+  equipment_type: body
+  armor_class: light
+  armor: 4
+  resilience: 2
+  attributes:
+    constitution: 2
+```
+
+The equip command checks armor-class proficiency only for `head`, `body`,
+`arms`, `hands`, `waist`, `legs`, `feet`, and `shield`. Weapons and accessories
+ignore `armor_class` for equip permission, so omit it there unless you need it
+for display or migration notes.
+
+The `armor` value is always direct and final. A heavy item with `armor: 5`
+grants 5 armor, not `5 * 1.35`. The `armor_multiplier` setting is only a
+builder suggestion input for generated defaults; it does not multiply item
+stats at runtime. Builders can always edit `armor` in YAML before applying the
+definition.
+
+When hand-authoring starter gear, this is the default suggestion formula:
+
+```text
+level_scale = combat.level_scale(level)
+full_set_armor = ceil(level_scale * armor_suggestions.full_set_scale)
+armor = ceil(full_set_armor * slot_weight * armor_multiplier)
+```
+
+With the default combat level scale and the default suggestion settings, level
+20 starter gear usually lands around these values:
+
+| Slot | Light | Heavy |
+| --- | ---: | ---: |
+| Head | 2 | 3 |
+| Body | 4 | 5 |
+| Arms | 2 | 2 |
+| Hands | 2 | 2 |
+| Waist | 2 | 2 |
+| Legs | 2 | 3 |
+| Feet | 2 | 2 |
+| Shield | 5 | 6 |
+
 ## Random Stat Items
 
 Add `randomization.attributes` when each spawned copy should roll different

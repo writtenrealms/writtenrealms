@@ -1,6 +1,6 @@
 # Armor Classes And Item Armor
 
-Status: proposal.
+Status: initial platform slice implemented.
 
 This document describes the WR2 direction for world-authored armor classes,
 class armor proficiencies, and item armor value suggestions. It is intended to
@@ -103,11 +103,12 @@ spec:
 
 `armor_classes` is optional. If it is absent or empty, the world has no authored
 armor class restrictions. Items may still carry an `armor_class` string for
-display or legacy content, but new proficiency enforcement should not apply
-unless the world has authored armor classes.
+display or legacy content. Current compatibility behavior preserves the legacy
+`heavy` armor gate for worlds that have not opted into authored armor classes.
 
 `armor_multiplier` is suggestion-only. It affects the item suggestion service's
-default armor rating. It should not be read by combat at runtime.
+default armor rating. It is not read by combat at runtime and does not multiply
+a builder-authored item `armor` value.
 
 `default_armor_class` is suggestion-only. It gives the item creation flow a
 default selected armor class for armor slots. An item that omits `armor_class`
@@ -187,7 +188,9 @@ spec:
 
 Rules:
 
-- `armor` is an integer rating and defaults to `0`.
+- `armor` is an integer rating and defaults to `0`. It is the final runtime
+  rating; if a builder changes generated YAML from `armor: 14` to `armor: 8`,
+  the item grants 8 armor even if its armor class is heavy.
 - `armor_class` is optional.
 - If `armor_class` is present and the world defines armor classes, it must match
   a declared armor class key.
@@ -210,7 +213,8 @@ can_equip(player, item) -> allowed | denied(reason, code)
 The armor-class portion should:
 
 1. Resolve the world equipment system from the player's world.
-2. Return allowed if the world has no authored armor classes.
+2. If the world has no authored armor classes, use the legacy WR1-compatible
+   heavy-armor gate.
 3. Return allowed if the item has no `armor_class`.
 4. Return allowed if the item is not armor or shield equipment.
 5. Resolve the player's class profile from `player.archetype`.
@@ -332,7 +336,8 @@ Existing spawned items and templates should migrate with `armor: 0`. Existing
 Implementation should avoid a sudden behavior change for legacy worlds:
 
 1. Add the data fields and manifest schema first.
-2. Keep current behavior for worlds without authored `equipment.armor_classes`.
+2. Keep current legacy behavior for worlds without authored
+   `equipment.armor_classes`.
 3. Once a world defines `equipment.armor_classes`, use the authored policy
    instead of the hard-coded heavy-armor check.
 4. Convert worlds that need legacy behavior by explicitly declaring:

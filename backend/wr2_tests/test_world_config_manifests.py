@@ -314,6 +314,105 @@ spec:
         self.world.config.refresh_from_db()
         self.assertEqual(self.world.config.combat_resolution_interval, -1)
 
+    def test_apply_world_config_manifest_accepts_equipment_armor_proficiencies(self):
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{self.world.id}
+spec:
+  equipment:
+    armor_classes:
+      - key: light
+        label: Light Armor
+        armor_multiplier: 1.0
+      - key: heavy
+        label: Heavy Armor
+        armor_multiplier: 1.35
+    default_armor_class: light
+  stats:
+    attributes:
+      - key: constitution
+        label: Constitution
+      - key: strength
+        label: Strength
+    default_profile:
+      armor_proficiencies: [light]
+      attribute_weights:
+        constitution: 1
+        strength: 1
+    class_profiles:
+      hoplite:
+        label: Hoplite
+        main_attribute: constitution
+        armor_proficiencies: [light, heavy]
+        attribute_weights:
+          constitution: 4
+          strength: 2
+      mystic:
+        label: Mystic
+        main_attribute: strength
+        attribute_weights:
+          constitution: 1
+          strength: 4
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200, resp.data)
+
+        self.world.config.refresh_from_db()
+        self.assertEqual(
+            self.world.config.equipment_system["armor_classes"][1]["key"],
+            "heavy",
+        )
+        self.assertEqual(
+            self.world.config.stat_system["class_profiles"]["hoplite"]["armor_proficiencies"],
+            ["light", "heavy"],
+        )
+        self.assertEqual(
+            self.world.config.stat_system["class_profiles"]["mystic"]["armor_proficiencies"],
+            ["light"],
+        )
+
+        config_resp = self.client.get(self.config_ep)
+        self.assertEqual(config_resp.status_code, 200)
+        exported = yaml.safe_load(config_resp.data["yaml"])
+        self.assertEqual(exported["spec"]["equipment"]["default_armor_class"], "light")
+        self.assertEqual(
+            exported["spec"]["stats"]["class_profiles"]["hoplite"]["armor_proficiencies"],
+            ["light", "heavy"],
+        )
+
+    def test_apply_world_config_manifest_rejects_unknown_armor_proficiency(self):
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{self.world.id}
+spec:
+  equipment:
+    armor_classes:
+      - key: light
+        label: Light Armor
+  stats:
+    attributes:
+      - key: constitution
+        label: Constitution
+    class_profiles:
+      hoplite:
+        armor_proficiencies: [heavy]
+        attribute_weights:
+          constitution: 1
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("declared armor class", str(resp.data))
+
     def test_apply_world_config_manifest_rejects_invalid_leveling_curve(self):
         manifest = f"""
 kind: world

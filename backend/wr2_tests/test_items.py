@@ -329,12 +329,13 @@ class TestEquipmentCommands(WorldTestCase):
                 return msg["message"]
         return None
 
-    def _make_equipment_item(self, name, equipment_type):
+    def _make_equipment_item(self, name, equipment_type, **kwargs):
         template = ItemTemplate.objects.create(
             world=self.world,
             name=name,
             type=adv_consts.ITEM_TYPE_EQUIPPABLE,
             equipment_type=equipment_type,
+            armor_class=kwargs.get("armor_class"),
         )
         return Item.objects.create(
             world=self.spawn_world,
@@ -343,7 +344,64 @@ class TestEquipmentCommands(WorldTestCase):
             name=template.name,
             type=adv_consts.ITEM_TYPE_EQUIPPABLE,
             equipment_type=equipment_type,
+            armor_class=kwargs.get("armor_class"),
         )
+
+    def _configure_authored_armor_classes(self):
+        self.world.config.equipment_system = {
+            "armor_classes": [
+                {"key": "light", "label": "Light Armor"},
+                {"key": "heavy", "label": "Heavy Armor"},
+            ],
+            "default_armor_class": "light",
+        }
+        self.world.config.stat_system = {
+            "attributes": [
+                {"key": "constitution", "label": "Constitution"},
+                {"key": "strength", "label": "Strength"},
+            ],
+            "default_profile": {
+                "armor_proficiencies": ["light"],
+                "attribute_weights": {
+                    "constitution": 1,
+                    "strength": 1,
+                },
+            },
+            "class_profiles": {
+                "hoplite": {
+                    "label": "Hoplite",
+                    "main_attribute": "constitution",
+                    "armor_proficiencies": ["light", "heavy"],
+                    "attribute_weights": {
+                        "constitution": 4,
+                        "strength": 2,
+                    },
+                },
+                "warlord": {
+                    "label": "Warlord",
+                    "main_attribute": "strength",
+                    "armor_proficiencies": ["light", "heavy"],
+                    "attribute_weights": {
+                        "constitution": 2,
+                        "strength": 4,
+                    },
+                },
+                "mystic": {
+                    "label": "Mystic",
+                    "main_attribute": "strength",
+                    "armor_proficiencies": ["light"],
+                    "attribute_weights": {
+                        "constitution": 1,
+                        "strength": 4,
+                    },
+                },
+            },
+        }
+        self.world.config.save(update_fields=["equipment_system", "stat_system"])
+
+    def _set_player_class(self, class_key):
+        self.player.archetype = class_key
+        self.player.save(update_fields=["archetype"])
 
     def test_equip_moves_inventory_item_to_equipment(self):
         helmet = self._make_equipment_item(
@@ -363,6 +421,91 @@ class TestEquipmentCommands(WorldTestCase):
         self.assertIsNotNone(message)
         self.assertEqual(message["data"]["actor"]["equipment"]["head"]["key"], helmet.key)
         self.assertIn("You wear Iron Helmet on your head.", message.get("text", ""))
+
+    def test_authored_heavy_armor_can_be_equipped_by_hoplite_and_warlord(self):
+        self._configure_authored_armor_classes()
+        self._set_player_class("hoplite")
+        helmet = self._make_equipment_item(
+            "Bronze Helmet",
+            adv_consts.EQUIPMENT_TYPE_HEAD,
+            armor_class="heavy",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "equip helmet")
+
+        helmet.refresh_from_db()
+        self.player.equipment.refresh_from_db()
+        self.assertEqual(self.player.equipment.head_id, helmet.id)
+        self.assertIsNotNone(self._message_by_type(messages, "cmd.equip.success"))
+
+        self.player.equipment.head = None
+        self.player.equipment.save(update_fields=["head"])
+        helmet.container = self.player
+        helmet.save(update_fields=["container_type", "container_id"])
+        self._set_player_class("warlord")
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "equip helmet")
+
+        helmet.refresh_from_db()
+        self.player.equipment.refresh_from_db()
+        self.assertEqual(self.player.equipment.head_id, helmet.id)
+        self.assertIsNotNone(self._message_by_type(messages, "cmd.equip.success"))
+
+    def test_authored_heavy_armor_is_denied_to_unproficient_class(self):
+        self._configure_authored_armor_classes()
+        self._set_player_class("mystic")
+        helmet = self._make_equipment_item(
+            "Bronze Helmet",
+            adv_consts.EQUIPMENT_TYPE_HEAD,
+            armor_class="heavy",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "equip helmet")
+
+        helmet.refresh_from_db()
+        self.player.equipment.refresh_from_db()
+        self.assertIsNone(self.player.equipment.head_id)
+        self.assertEqual(helmet.container_id, self.player.id)
+        message = self._message_by_type(messages, "cmd.equip.success")
+        self.assertIsNotNone(message)
+        self.assertIn("You can't wear Bronze Helmet.", message.get("text", ""))
+
+    def test_authored_light_armor_can_be_equipped_by_default_proficiency(self):
+        self._configure_authored_armor_classes()
+        self._set_player_class("mystic")
+        helmet = self._make_equipment_item(
+            "Linen Cap",
+            adv_consts.EQUIPMENT_TYPE_HEAD,
+            armor_class="light",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "equip cap")
+
+        helmet.refresh_from_db()
+        self.player.equipment.refresh_from_db()
+        self.assertEqual(self.player.equipment.head_id, helmet.id)
+        self.assertIsNotNone(self._message_by_type(messages, "cmd.equip.success"))
+
+    def test_armor_class_does_not_gate_weapons(self):
+        self._configure_authored_armor_classes()
+        self._set_player_class("mystic")
+        sword = self._make_equipment_item(
+            "Bronze Sword",
+            adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
+            armor_class="heavy",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "equip sword")
+
+        sword.refresh_from_db()
+        self.player.equipment.refresh_from_db()
+        self.assertEqual(self.player.equipment.weapon_id, sword.id)
+        self.assertIsNotNone(self._message_by_type(messages, "cmd.equip.success"))
 
     def test_eq_without_arguments_lists_current_equipment(self):
         sword = self._make_equipment_item(

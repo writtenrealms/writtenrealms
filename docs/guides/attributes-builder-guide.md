@@ -244,6 +244,7 @@ spec:
       warrior:
         label: Warrior
         main_attribute: strength
+        armor_proficiencies: [light, heavy]
         attribute_weights:
           strength: 4
           constitution: 3
@@ -253,6 +254,14 @@ spec:
 
 Classes are optional. If `class_profiles` is empty or omitted, the world has no
 classes.
+
+`armor_proficiencies` is optional class-profile data. When the world defines
+`spec.equipment.armor_classes`, the equip command uses each character's class
+profile to decide whether armor and shield items with `armor_class` can be
+equipped. If a class omits `armor_proficiencies`, it inherits from
+`default_profile`. If neither the class nor `default_profile` declares
+proficiencies, the class is unrestricted for compatibility. An explicit empty
+list means the class is proficient with no authored armor classes.
 
 When WR2 calculates a character's final stats, it uses this shape:
 

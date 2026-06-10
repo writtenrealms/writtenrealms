@@ -6,6 +6,7 @@ from typing import Callable
 from django.db import transaction
 
 from config import constants as adv_consts
+from core.equipment_system import can_actor_equip_item_by_armor_class
 from core.utils.items import type_to_slot
 from quests.services.room_items import (
     QuestRoomItemProjection,
@@ -335,11 +336,7 @@ def _is_equippable_for_player(player: Player, item: Item, *, wield_only: bool = 
     ):
         return False
 
-    if (
-        eq_type in (*adv_consts.EQUIPMENT_ARMOR, adv_consts.EQUIPMENT_TYPE_SHIELD)
-        and item.armor_class == adv_consts.ARMOR_CLASS_HEAVY
-        and player.archetype != adv_consts.ARCHETYPE_WARRIOR
-    ):
+    if not can_actor_equip_item_by_armor_class(player, item).allowed:
         return False
 
     slot = _resolve_equipment_slot(player, item)

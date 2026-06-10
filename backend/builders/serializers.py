@@ -25,6 +25,13 @@ from core.combat_formulas import (
     CombatFormulaValidationError,
     normalize_combat_system,
 )
+from core.equipment_system import (
+    EquipmentSystemValidationError,
+    get_armor_class_keys,
+    has_authored_armor_classes,
+    normalize_equipment_system,
+    validate_armor_class_reference,
+)
 from core.leveling import (
     LevelingConfigError,
     normalize_leveling_curve,
@@ -403,6 +410,7 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'decay_glory',
             'name_exclusions',
             'globals_enabled',
+            'equipment_system',
             'stat_system',
         ]
 
@@ -425,6 +433,12 @@ class WorldConfigSerializer(serializers.ModelSerializer):
         except StatSystemValidationError as exc:
             raise serializers.ValidationError(str(exc))
 
+    def validate_equipment_system(self, value):
+        try:
+            return normalize_equipment_system(value)
+        except EquipmentSystemValidationError as exc:
+            raise serializers.ValidationError(str(exc))
+
     def validate_combat_system(self, value):
         try:
             return normalize_combat_system(value)
@@ -434,6 +448,27 @@ class WorldConfigSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         attrs = super().validate(attrs)
         config = self.instance
+        equipment_system = attrs.get(
+            "equipment_system",
+            getattr(config, "equipment_system", None),
+        )
+        try:
+            equipment_system = normalize_equipment_system(equipment_system)
+            if "equipment_system" in attrs:
+                attrs["equipment_system"] = equipment_system
+            if "stat_system" in attrs:
+                armor_class_keys = (
+                    get_armor_class_keys(equipment_system)
+                    if has_authored_armor_classes(equipment_system)
+                    else None
+                )
+                attrs["stat_system"] = normalize_stat_system(
+                    attrs["stat_system"],
+                    armor_class_keys=armor_class_keys,
+                )
+        except (EquipmentSystemValidationError, StatSystemValidationError) as exc:
+            raise serializers.ValidationError(str(exc))
+
         try:
             validate_leveling_config(
                 starting_level=attrs.get(
@@ -1602,7 +1637,7 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
             'health_max', 'health_regen', 'energy_max', 'energy_regen',
             'stamina_max', 'stamina_regen',
             'attributes',
-            'attack_power', 'ability_power', 'resilience', 'dodge', 'crit',
+            'attack_power', 'ability_power', 'armor', 'resilience', 'dodge', 'crit',
             'budget', 'cost_budget', 'food_value', 'food_type',
             'has_assignment',
             'on_use_cmd', 'on_use_description', 'on_use_equipped',
@@ -1663,6 +1698,7 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
             'attributes',
             'attack_power',
             'ability_power',
+            'armor',
             'crit',
             'dodge',
             'resilience',
@@ -1692,6 +1728,17 @@ class ItemTemplateSerializer(serializers.ModelSerializer):
 
     def validate_attributes(self, value):
         return _coerce_attribute_map(value)
+
+    def validate_armor_class(self, value):
+        world = self.context.get("world") or getattr(self.instance, "world", None)
+        try:
+            return validate_armor_class_reference(
+                world=world,
+                armor_class=value,
+                field_name="armor_class",
+            ) or None
+        except EquipmentSystemValidationError as exc:
+            raise serializers.ValidationError(str(exc))
 
     def get_budget(self, item_template):
         "Return budget utilization"
