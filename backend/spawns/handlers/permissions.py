@@ -33,6 +33,11 @@ def has_builder_access(player: Player | None) -> bool:
 def can_execute_builder_command(ctx, handler) -> bool:
     if has_builder_access(getattr(ctx, "player", None)):
         return True
+    if (
+        getattr(ctx, "actor_type", None) == "mob"
+        and getattr(handler, "allow_mob_actor", False)
+    ):
+        return True
     return bool(
         getattr(ctx, "script_source", False)
         and getattr(handler, "allow_script_source", False)

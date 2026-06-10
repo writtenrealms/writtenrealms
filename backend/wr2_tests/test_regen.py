@@ -11,7 +11,12 @@ from spawns.tasks import (
     run_heartbeat_regen,
 )
 from tests.base import WorldTestCase
-from wr2_tests.utils import apply_basic_stat_system
+from wr2_tests.utils import (
+    apply_basic_stat_system,
+    capture_game_messages,
+    dispatch_text_command,
+    dispatch_text_command_as_mob,
+)
 
 
 class TestHeartbeatRegen(WorldTestCase):
@@ -390,3 +395,126 @@ class TestHeartbeatRegen(WorldTestCase):
         self.assertEqual(actor["energy_max"], initial_energy)
         self.assertEqual(actor["stamina"], expected_stamina)
         self.assertEqual(actor["stamina_max"], expected_stamina_max)
+
+
+class TestRegenCommand(WorldTestCase):
+    def setUp(self):
+        super().setUp()
+        apply_basic_stat_system(self.world)
+        self.player.is_builder = True
+        self.player.save(update_fields=["is_builder"])
+
+    def _message_by_type(self, messages, message_type, player_key=None):
+        for msg in messages:
+            if player_key and msg["player_key"] != player_key:
+                continue
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def test_builder_regen_without_args_restores_self_resources(self):
+        stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
+        self.player.health = max(stats["health_max"] - 10, 0)
+        self.player.energy = max(stats["energy_max"] - 10, 0)
+        self.player.stamina = max(stats["stamina_max"] - 10, 0)
+        self.player.save(update_fields=["health", "energy", "stamina"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/regen")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.health, stats["health_max"])
+        self.assertEqual(self.player.energy, stats["energy_max"])
+        self.assertEqual(self.player.stamina, stats["stamina_max"])
+        message = self._message_by_type(messages, "cmd./regen.success", self.player.key)
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target"]["key"], self.player.key)
+        self.assertEqual(message["data"]["resources"], ["health", "energy", "stamina"])
+
+    def test_builder_regen_target_resource_only_restores_that_resource(self):
+        target = self.create_player("Target", room=self.room)
+        stats = compute_stats(target.level, target.archetype, char=target)
+        target.health = max(stats["health_max"] - 10, 0)
+        target.energy = max(stats["energy_max"] - 10, 0)
+        target.stamina = max(stats["stamina_max"] - 10, 0)
+        target.save(update_fields=["health", "energy", "stamina"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/regen {target.key} energy")
+
+        target.refresh_from_db()
+        self.assertEqual(target.health, max(stats["health_max"] - 10, 0))
+        self.assertEqual(target.energy, stats["energy_max"])
+        self.assertEqual(target.stamina, max(stats["stamina_max"] - 10, 0))
+        message = self._message_by_type(messages, "cmd./regen.success", self.player.key)
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["resource"], "energy")
+        self.assertEqual(message["data"]["target"]["key"], target.key)
+        notification = self._message_by_type(messages, "notification.regen", target.key)
+        self.assertIsNotNone(notification)
+        self.assertEqual(notification["data"]["actor"]["key"], target.key)
+        self.assertEqual(notification["data"]["actor"]["energy"], stats["energy_max"])
+
+    def test_mob_regen_without_args_restores_self_resources(self):
+        mob = Mob.objects.create(
+            name="A Mob",
+            keywords="mob",
+            world=self.spawn_world,
+            room=self.room,
+            health=1,
+            health_max=30,
+            energy=2,
+            energy_max=20,
+            stamina=3,
+            stamina_max=10,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command_as_mob(mob.id, "/regen")
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.health, 30)
+        self.assertEqual(mob.energy, 20)
+        self.assertEqual(mob.stamina, 10)
+        message = self._message_by_type(messages, "cmd./regen.success", mob.key)
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target"]["key"], mob.key)
+
+    def test_mob_regen_can_restore_target_player_resource(self):
+        mob = Mob.objects.create(
+            name="A Healer",
+            keywords="healer",
+            world=self.spawn_world,
+            room=self.room,
+        )
+        stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
+        self.player.health = max(stats["health_max"] - 10, 0)
+        self.player.energy = max(stats["energy_max"] - 10, 0)
+        self.player.stamina = max(stats["stamina_max"] - 10, 0)
+        self.player.save(update_fields=["health", "energy", "stamina"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command_as_mob(mob.id, f"/regen {self.player.key} health")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.health, stats["health_max"])
+        self.assertEqual(self.player.energy, max(stats["energy_max"] - 10, 0))
+        self.assertEqual(self.player.stamina, max(stats["stamina_max"] - 10, 0))
+        self.assertIsNotNone(self._message_by_type(messages, "cmd./regen.success", mob.key))
+        notification = self._message_by_type(messages, "notification.regen", self.player.key)
+        self.assertIsNotNone(notification)
+        self.assertEqual(notification["data"]["actor"]["health"], stats["health_max"])
+
+    def test_builder_regen_rejects_unknown_resource(self):
+        stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
+        self.player.health = max(stats["health_max"] - 10, 0)
+        self.player.save(update_fields=["health"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/regen self focus")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.health, max(stats["health_max"] - 10, 0))
+        message = self._message_by_type(messages, "cmd./regen.error", self.player.key)
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["code"], "invalid_resource")

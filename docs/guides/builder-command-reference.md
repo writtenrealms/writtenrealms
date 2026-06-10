@@ -41,9 +41,11 @@ Legend:
 
 - `Direct`: a builder player can type the command directly.
 - `Script`: the actor can run the command from an internal script source.
+- `Mob`: a mob actor can run the command directly, including when targeted by
+  nested `/cmd`.
 - `No`: the actor cannot run the command.
 
-| Command | Builder Player | Player Script | Mob Script | Room Script | Zone Script | World Script |
+| Command | Builder Player | Player Script | Mob Actor | Room Script | Zone Script | World Script |
 | --- | --- | --- | --- | --- | --- | --- |
 | `/load` | Direct | Script | Script | Script | No | No |
 | `/grantitem` | Direct | Script | Script | Script | No | No |
@@ -53,6 +55,7 @@ Legend:
 | `/send` | Direct | No | Script | Script | Script | Script |
 | `/state` | Direct | No | Script | Script | Script | Script |
 | `/stats` | Direct | No | No | No | No | No |
+| `/regen` | Direct | No | Mob | No | No | No |
 | `/set` | Direct | No | No | No | No | No |
 | `/setlevel` | Direct | No | No | No | No | No |
 | `/setclass` | Direct | Script | No | Script | No | No |
@@ -352,6 +355,37 @@ Examples:
 /stats player.456
 ```
 
+### `/regen`
+
+Formats:
+
+```text
+/regen
+/regen <target>
+/regen <target> <health|energy|stamina>
+```
+
+Restores resources to full. With no target, `/regen` restores the issuer's
+health, energy, and stamina. With a target, it restores that player or mob. With
+a resource name, it restores only that specific resource.
+
+Targets use the same builder room-character selector behavior as `/stats` and
+`/set`. Builders can target themselves, players, or mobs. Mob actors can also
+run `/regen`; this is useful for scripted healers, traps, or encounter logic
+that should restore the mob itself or a nearby character without granting the
+command to regular player characters.
+
+Examples:
+
+```text
+/regen
+/regen guard
+/regen aria energy
+/regen self health
+/cmd healer -- /regen self health
+/cmd healer -- /regen {{ actor_key }} health
+```
+
 ### `/set`
 
 Format:
@@ -584,6 +618,12 @@ Kill the triggering player in a room trap:
 
 ```yaml
 script: /cmd room -- /kill {{ actor_key }} -- The pit swallows you whole.
+```
+
+Have a scripted mob restore health:
+
+```yaml
+script: /cmd healer -- /regen {{ actor_key }} health
 ```
 
 ## Related Docs

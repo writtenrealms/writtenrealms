@@ -37,6 +37,7 @@ from rest_framework import serializers as drf_serializers
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.combat import apply_player_death
 from spawns.events import GameEvent
+from spawns.handlers.base import ChoiceResolutionError, resolve_unambiguous_choice
 from spawns.handlers.registry import (
     ActorNotFoundError,
     HandlerNotFoundError,
@@ -137,6 +138,7 @@ PLAYER_COMPUTED_STAT_FIELDS = {
     "ability_power",
     "energy_base",
 }
+REGEN_RESOURCES = ("health", "energy", "stamina")
 
 
 def _first_error_message(detail: object) -> str:
@@ -878,6 +880,50 @@ def _resource_max_for_target(target: Player | Mob, max_field: str) -> int:
         return max(1, max_value) if max_field == "health_max" else max(0, max_value)
 
     return int(getattr(target, max_field, 0) or 0)
+
+
+def _normalize_regen_resource(resource: str | None) -> str | None:
+    normalized = str(resource or "").strip().lower()
+    if not normalized:
+        return None
+    try:
+        return resolve_unambiguous_choice(
+            normalized,
+            choices=REGEN_RESOURCES,
+            aliases={
+                "hp": "health",
+                "mp": "energy",
+                "mana": "energy",
+                "endurance": "stamina",
+            },
+        )
+    except ChoiceResolutionError as exc:
+        if exc.code == "ambiguous_choice":
+            raise ActionError(
+                f"Resource is ambiguous: {', '.join(exc.matches)}.",
+                code="ambiguous_resource",
+                data={"matches": exc.matches},
+            ) from exc
+        raise ActionError(
+            "Resource must be health, energy, or stamina.",
+            code="invalid_resource",
+            data={"resource": normalized},
+        ) from exc
+
+
+def _regen_resource_snapshot(target: Player | Mob) -> dict[str, int]:
+    return {
+        "health": int(getattr(target, "health", 0) or 0),
+        "energy": int(getattr(target, "energy", 0) or 0),
+        "stamina": int(getattr(target, "stamina", 0) or 0),
+    }
+
+
+def _actor_payload_for_regen(actor: BuilderCommandActor) -> dict[str, object]:
+    if isinstance(actor, Player):
+        updated_actor = get_player_with_related(actor.id)
+        return serialize_actor(updated_actor, updated_actor.room).model_dump()
+    return _actor_summary(actor)
 
 
 def _set_character_stat_value(
@@ -1785,6 +1831,88 @@ class BuilderStatsAction:
                 )
             ]
         )
+
+
+class RegenAction:
+    def execute(
+        self,
+        *,
+        actor: BuilderCommandActor,
+        target_selector: str | None = None,
+        resource: str | None = None,
+        runtime_world: World | None = None,
+    ) -> ActionResult:
+        normalized_resource = _normalize_regen_resource(resource)
+        resources = [normalized_resource] if normalized_resource else list(REGEN_RESOURCES)
+
+        with transaction.atomic():
+            target = _resolve_builder_character_target(
+                actor=actor,
+                target_selector=target_selector,
+                runtime_world=runtime_world,
+                allow_self=True,
+            )
+            if isinstance(target, Player):
+                target = Player.objects.select_for_update().get(pk=target.pk)
+            else:
+                target = Mob.objects.select_for_update().get(pk=target.pk)
+
+            previous_resources = _regen_resource_snapshot(target)
+            update_fields: list[str] = []
+            for resource_name in resources:
+                max_value = _resource_max_for_target(target, f"{resource_name}_max")
+                if int(getattr(target, resource_name, 0) or 0) != max_value:
+                    setattr(target, resource_name, max_value)
+                    update_fields.append(resource_name)
+
+            if update_fields:
+                target.save(update_fields=update_fields)
+
+        target_payload, target_type = _serialize_builder_stats_target(target)
+        actor_payload = _actor_payload_for_regen(actor)
+        target_name = str(target_payload.get("name") or getattr(target, "name", None) or "target")
+        resource_label = normalized_resource if normalized_resource else "resources"
+        text = (
+            f"Regenerated your {resource_label}."
+            if isinstance(actor, (Player, Mob)) and actor.key == target.key
+            else f"Regenerated {target_name}'s {resource_label}."
+        )
+        data = {
+            "actor": actor_payload,
+            "target": target_payload,
+            "target_type": target_type,
+            "resource": normalized_resource,
+            "resources": resources,
+            "previous_resources": previous_resources,
+            "current_resources": _regen_resource_snapshot(target),
+        }
+        if isinstance(actor, Player):
+            updated_actor = get_player_with_related(actor.id)
+            recipient_key = updated_actor.key
+            data["room"] = _get_single_room_payload(updated_actor).model_dump()
+        else:
+            recipient_key = actor.key
+
+        events = [
+            GameEvent(
+                type="cmd./regen.success",
+                recipients=[recipient_key],
+                data=data,
+                text=text,
+            )
+        ]
+        if isinstance(target, Player) and target.key != recipient_key:
+            updated_target = get_player_with_related(target.id)
+            target_actor_payload = serialize_actor(updated_target, updated_target.room).model_dump()
+            events.append(
+                GameEvent(
+                    type="notification.regen",
+                    recipients=[updated_target.key],
+                    data={"actor": target_actor_payload},
+                    text=f"Your {resource_label} has been restored.",
+                )
+            )
+        return ActionResult(events=events)
 
 
 class SetStatAction:

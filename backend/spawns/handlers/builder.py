@@ -13,6 +13,7 @@ from spawns.actions.builder import (
     JumpAction,
     LoadTemplateAction,
     PurgeAction,
+    RegenAction,
     ResyncItemTemplatesAction,
     ResyncMobTemplatesAction,
     SendAction,
@@ -243,6 +244,23 @@ def _parse_stats_args(ctx: CommandContext) -> str | None:
     if not args:
         return None
     return " ".join(args).strip()
+
+
+def _parse_regen_args(ctx: CommandContext) -> tuple[str | None, str | None]:
+    target = ctx.payload.get("target")
+    resource = ctx.payload.get("resource")
+    if target is not None or resource is not None:
+        return (
+            str(target).strip() if target is not None else None,
+            str(resource).strip() if resource is not None else None,
+        )
+
+    args = [str(arg).strip() for arg in list(ctx.payload.get("args", [])) if str(arg).strip()]
+    if not args:
+        return None, None
+    if len(args) == 1:
+        return args[0], None
+    return " ".join(args[:-1]).strip(), args[-1]
 
 
 def _parse_setstat_args(ctx: CommandContext) -> tuple[str | None, str | None, object | None]:
@@ -876,6 +894,58 @@ class BuilderStatsHandler(CommandHandler):
         publish_events(
             result.events,
             actor_key=ctx.player.key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class RegenHandler(CommandHandler):
+    command_type = "/regen"
+    text_commands = ("/regen",)
+    builder_only = True
+    allow_mob_actor = True
+    supported_actor_types = ("player", "mob")
+    help = {
+        "name": "Regen",
+        "format": "/regen | /regen <target> [health|energy|stamina]",
+        "description": (
+            "Restore your resources to full, or restore a target player or mob in the current room. "
+            "Use an optional resource name to restore only health, energy, or stamina."
+        ),
+        "examples": [
+            "/regen",
+            "/regen guard",
+            "/regen aria energy",
+            "/cmd guard -- /regen self health",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        if not can_execute_builder_command(ctx, self):
+            ctx.publish(builder_permission_error(self.command_type))
+            return
+
+        target, resource = _parse_regen_args(ctx)
+        try:
+            result = RegenAction().execute(
+                actor=ctx.actor,
+                target_selector=target,
+                resource=resource,
+                runtime_world=ctx.world,
+            )
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd./regen.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.actor_key,
             connection_id=ctx.connection_id,
         )
 

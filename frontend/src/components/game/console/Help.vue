@@ -162,7 +162,7 @@
             <div class="cmd" @click="cmdHelp('reset')">reset</div>
             <div class="cmd" @click="cmdHelp('geta')">/geta</div>
             <div class="cmd" @click="cmdHelp('seta')">/seta</div>
-            <div class="cmd" @click="cmdHelp('regen')">/regen</div>
+            <div class="cmd" @click="cmdHelp('/regen')">/regen</div>
             <div class="cmd" @click="cmdHelp('/purge')">/purge</div>
             <div class="cmd" @click="cmdHelp('masspurge')">/masspurge</div>
             <div class="cmd" @click="cmdHelp('/cmd')">/cmd</div>

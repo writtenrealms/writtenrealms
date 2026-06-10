@@ -82,6 +82,7 @@ class CommandHandler(ABC):
     text_aliases: Mapping[str, str] = {}
     builder_only: bool = False
     allow_script_source: bool = False
+    allow_mob_actor: bool = False
     supported_actor_types: tuple[str, ...] = ("player",)
     help: dict[str, Any] | None = None
 
