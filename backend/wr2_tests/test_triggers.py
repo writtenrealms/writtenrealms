@@ -5,7 +5,12 @@ from django.contrib.contenttypes.models import ContentType
 
 from builders.models import ItemDefinition, MobTemplate, Trigger
 from config import constants as adv_consts
-from core.scoped_state import STATE_SCOPE_WORLD, replace_state_snapshot
+from core.scoped_state import (
+    STATE_SCOPE_CHARACTER,
+    STATE_SCOPE_WORLD,
+    get_state_snapshot,
+    replace_state_snapshot,
+)
 from spawns.events import GameEvent, publish_events
 from spawns.handlers import dispatch_command
 from spawns.models import Item, Mob
@@ -224,6 +229,25 @@ class TestCommandFallbackTriggers(WorldTestCase):
         echo_message = self._message_by_type(messages, "cmd./echo.success")
         self.assertIsNotNone(echo_message)
         self.assertIn("Weather: stormy.", echo_message.get("text", ""))
+
+    def test_trigger_script_sets_triggering_player_character_state(self):
+        self._create_room_trigger(
+            script="/cmd room -- /state set character {{ actor_key }} starter_gear_issued true",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "touch altar")
+
+        self.assertEqual(
+            get_state_snapshot(STATE_SCOPE_CHARACTER, self.player).get("starter_gear_issued"),
+            True,
+        )
+        state_message = self._message_by_type(messages, "cmd./state.success")
+        self.assertIsNotNone(state_message)
+        self.assertEqual(
+            state_message.get("data", {}).get("target", {}).get("key"),
+            self.player.key,
+        )
 
     def test_room_inventory_item_includes_trigger_actions(self):
         item = Item.objects.create(

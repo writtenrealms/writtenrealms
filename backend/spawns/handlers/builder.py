@@ -58,6 +58,12 @@ SET_STAT_HELP_DETAILS = [
     "Lowering a mob resource max clamps the current resource down to that max.",
 ]
 
+STATE_COMMAND_USAGE = (
+    "Usage: /state <show|get|set|clear|add> <world|zone|room> [key] [value]; "
+    "for character state use /state <show|get|set|clear|add> character <target> [key] [value]"
+)
+STATE_COMMAND_SCOPES = {"world", "zone", "room", "character"}
+
 
 def _split_delimited_args(args: list[str]) -> tuple[str, str] | tuple[None, None]:
     if "--" not in args:
@@ -136,74 +142,68 @@ def _parse_state_args(
     if not args:
         return None, None, None, None, None
 
-    def _extract_target(tokens: list[str]) -> tuple[str | None, list[str]] | None:
-        remaining: list[str] = []
-        target: str | None = None
-        idx = 0
-        while idx < len(tokens):
-            token = tokens[idx]
-            if token == "--target":
-                if idx + 1 >= len(tokens):
-                    return None
-                target = tokens[idx + 1]
-                idx += 2
-                continue
-            if token.startswith("--target="):
-                target = token.split("=", 1)[1].strip()
-                if not target:
-                    return None
-                idx += 1
-                continue
-            remaining.append(token)
-            idx += 1
-        return target, remaining
+    def _contains_target_option(tokens: list[str]) -> bool:
+        return any(token == "--target" or token.startswith("--target=") for token in tokens)
+
+    def _parse_scope_target_and_tokens(tokens: list[str]) -> tuple[str, str | None, list[str]] | None:
+        if not tokens or _contains_target_option(tokens):
+            return None
+        scope = tokens[0].lower()
+        if scope not in STATE_COMMAND_SCOPES:
+            return None
+        remaining = tokens[1:]
+        if scope != "character":
+            return scope, None, remaining
+        if not remaining:
+            return None
+        return scope, remaining[0], remaining[1:]
 
     operation = args[0].lower()
     if operation == "show":
-        parsed = _extract_target(args[1:])
+        parsed = _parse_scope_target_and_tokens(args[1:])
         if parsed is None:
             return None, None, None, None, None
-        target, tokens = parsed
-        if len(tokens) < 1:
+        scope, target, tokens = parsed
+        if tokens:
             return None, None, None, None, None
-        return operation, tokens[0], target, None, None
+        return operation, scope, target, None, None
 
     if operation in {"get", "clear"}:
-        parsed = _extract_target(args[1:])
+        parsed = _parse_scope_target_and_tokens(args[1:])
         if parsed is None:
             return None, None, None, None, None
-        target, tokens = parsed
-        if len(tokens) < 2:
+        scope, target, tokens = parsed
+        if len(tokens) != 1:
             return None, None, None, None, None
-        return operation, tokens[0], target, tokens[1], None
+        return operation, scope, target, tokens[0], None
 
     if operation == "add":
-        parsed = _extract_target(args[1:])
+        parsed = _parse_scope_target_and_tokens(args[1:])
         if parsed is None:
             return None, None, None, None, None
-        target, tokens = parsed
-        if len(tokens) < 2:
+        scope, target, tokens = parsed
+        if len(tokens) < 1:
             return None, None, None, None, None
-        amount = " ".join(tokens[2:]).strip() if len(tokens) > 2 else "1"
-        return operation, tokens[0], target, tokens[1], amount
+        amount = " ".join(tokens[1:]).strip() if len(tokens) > 1 else "1"
+        return operation, scope, target, tokens[0], amount
 
     if operation == "set":
         lhs, rhs = _split_delimited_args(args[1:])
         if rhs is not None:
-            parsed = _extract_target([token for token in (lhs or "").split() if token])
+            parsed = _parse_scope_target_and_tokens([token for token in (lhs or "").split() if token])
             if parsed is None:
                 return None, None, None, None, None
-            target, tokens = parsed
-            if len(tokens) < 2:
+            scope, target, tokens = parsed
+            if len(tokens) != 1:
                 return None, None, None, None, None
-            return operation, tokens[0], target, tokens[1], rhs
-        parsed = _extract_target(args[1:])
+            return operation, scope, target, tokens[0], rhs
+        parsed = _parse_scope_target_and_tokens(args[1:])
         if parsed is None:
             return None, None, None, None, None
-        target, tokens = parsed
-        if len(tokens) < 3:
+        scope, target, tokens = parsed
+        if len(tokens) < 2:
             return None, None, None, None, None
-        return operation, tokens[0], target, tokens[1], " ".join(tokens[2:]).strip()
+        return operation, scope, target, tokens[0], " ".join(tokens[1:]).strip()
 
     return None, None, None, None, None
 
@@ -778,9 +778,10 @@ class StateHandler(CommandHandler):
     supported_actor_types = ("player", "mob", "room", "zone", "world")
     help = {
         "name": "State",
-        "format": "/state <show|get|set|clear|add> <world|zone|room|character> [--target <target>] [key] [-- value]",
+        "format": "/state <show|get|set|clear|add> <world|zone|room> [key] [-- value] | /state <show|get|set|clear|add> character <target> [key] [-- value]",
         "description": (
             "Inspect or mutate scoped state in the current world, zone, room, or character context. "
+            "Character state always requires an explicit target. "
             "Use -- when the value contains spaces."
         ),
         "examples": [
@@ -788,8 +789,8 @@ class StateHandler(CommandHandler):
             "/state get world weather",
             "/state set world weather -- rainy",
             "/state set room lever_pulled true",
-            "/state add character rumor_count 1",
-            "/state set character --target aria pull_lever true",
+            "/state add character self rumor_count 1",
+            "/state set character aria pull_lever true",
             "/state clear room lever_pulled",
         ],
     }
@@ -813,7 +814,7 @@ class StateHandler(CommandHandler):
             ctx.publish(
                 {
                     "type": "cmd./state.error",
-                    "text": "Usage: /state <show|get|set|clear|add> <world|zone|room|character> [--target <target>] [key] [-- value]",
+                    "text": STATE_COMMAND_USAGE,
                     "data": {"error": "Missing or invalid state arguments.", "code": "invalid_args"},
                 }
             )

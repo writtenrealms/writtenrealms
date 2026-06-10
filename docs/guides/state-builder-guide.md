@@ -49,19 +49,19 @@ Examples:
 /state get world weather
 /state set world weather -- rainy
 /state set room lever_pulled true
-/state add character rumor_count 1
-/state set character --target joe pull_lever true
+/state add character self rumor_count 1
+/state set character joe pull_lever true
 /state clear room lever_pulled
 ```
 
 Supported command scopes are `world`, `zone`, `room`, and `character`.
 
-For `character` state, omit `--target` to use your own player character, or use
-`--target <player>` to edit a player in your current room. Scripted room
-triggers should prefer explicit targets:
+For `character` state, always provide the target. Use `self` for your own
+player character, or use a player name/key to edit another player. Scripted room
+triggers should use `{{ actor_key }}` for the triggering player:
 
 ```text
-/cmd room -- /state set character --target {{ actor_key }} pull_lever true
+/cmd room -- /state set character {{ actor_key }} pull_lever true
 ```
 
 ## Output Templates
@@ -128,7 +128,7 @@ Common trigger patterns:
 - gate an action with `state.world.*` or `state.room.*`
 - flip a room flag-like runtime value with `/cmd room -- /state set room ...`
 - mark the triggering player with
-  `/cmd room -- /state set character --target {{ actor_key }} ...`
+  `/cmd room -- /state set character {{ actor_key }} ...`
 - broadcast dynamic text with `{{ state.* }}` substitutions
 
 For post-entry room events such as traps, use room state to keep the event from

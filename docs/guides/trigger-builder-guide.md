@@ -264,7 +264,7 @@ Practical guidance:
 Common commands you will often use in trigger scripts:
 
 - `/cmd room -- /state set room ...`
-- `/cmd room -- /state set character --target {{ actor_key }} ...`
+- `/cmd room -- /state set character {{ actor_key }} ...`
 - `/echo -- ...`
 - `/cmd room -- /echo -- ...`
 - `/cmd room -- /send {{ actor_key }} -- <private message>`
@@ -288,15 +288,15 @@ script: /cmd room -- /state set room lever_pulled true
 This sets `state.room.lever_pulled` on the trigger room.
 
 For player character state, keep the room as the issuer and pass the triggering
-player explicitly with `--target {{ actor_key }}`:
+player explicitly with `{{ actor_key }}`:
 
 ```yaml
-script: /cmd room -- /state set character --target {{ actor_key }} pull_lever true
+script: /cmd room -- /state set character {{ actor_key }} pull_lever true
 ```
 
 This sets `state.character.pull_lever` on the player who triggered the room
-command. Prefer this explicit form over relying on an unwrapped `/state`
-command in a trigger script.
+command. Room-issued trigger scripts should use `{{ actor_key }}` rather than
+`self`, because the issuer is the room.
 
 ### Loading And Granting Items
 

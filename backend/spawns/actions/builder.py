@@ -14,6 +14,7 @@ from core.leveling import (
 )
 from core.model_mixins import CharMixin, ItemMixin, MobMixin
 from core.scoped_state import (
+    STATE_SCOPE_CHARACTER,
     clear_state_value,
     coerce_state_command_value,
     get_state_snapshot,
@@ -1557,9 +1558,12 @@ class StateAction:
         runtime_world: World | None,
     ) -> Player | None:
         if not target_selector:
-            return actor if isinstance(actor, Player) else None
+            raise ActionError(
+                "Character state commands require a target.",
+                code="invalid_target",
+            )
 
-        target = _resolve_room_character_target(
+        target = _resolve_builder_character_target(
             actor=actor,
             target_selector=target_selector,
             runtime_world=runtime_world,
@@ -1586,16 +1590,18 @@ class StateAction:
     ) -> ActionResult:
         normalized_operation = str(operation or "").strip().lower()
         normalized_scope = normalize_state_scope(scope)
-        if target_selector and normalized_scope != "character":
+        if target_selector and normalized_scope != STATE_SCOPE_CHARACTER:
             raise ActionError(
-                "--target is only supported for character state.",
+                "State targets are only supported for character state.",
                 code="invalid_target",
             )
-        character = self._resolve_character_owner(
-            actor=actor,
-            target_selector=target_selector,
-            runtime_world=runtime_world,
-        )
+        character = None
+        if normalized_scope == STATE_SCOPE_CHARACTER:
+            character = self._resolve_character_owner(
+                actor=actor,
+                target_selector=target_selector,
+                runtime_world=runtime_world,
+            )
         owner = resolve_scope_owner(
             normalized_scope,
             actor=actor,

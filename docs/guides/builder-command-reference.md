@@ -294,12 +294,19 @@ actor when a trigger should send private text:
 Formats:
 
 ```text
-/state show <world|zone|room|character>
-/state get <world|zone|room|character> [--target <target>] <key>
-/state set <world|zone|room|character> [--target <target>] <key> <value>
-/state set <world|zone|room|character> [--target <target>] <key> -- <value with spaces>
-/state add <world|zone|room|character> [--target <target>] <key> [amount]
-/state clear <world|zone|room|character> [--target <target>] <key>
+/state show <world|zone|room>
+/state get <world|zone|room> <key>
+/state set <world|zone|room> <key> <value>
+/state set <world|zone|room> <key> -- <value with spaces>
+/state add <world|zone|room> <key> [amount]
+/state clear <world|zone|room> <key>
+
+/state show character <target>
+/state get character <target> <key>
+/state set character <target> <key> <value>
+/state set character <target> <key> -- <value with spaces>
+/state add character <target> <key> [amount]
+/state clear character <target> <key>
 ```
 
 Reads or mutates scoped runtime state.
@@ -308,9 +315,9 @@ Room, zone, and world issuers should use scopes they actually own. A room issuer
 can mutate room, zone, or world state. A zone issuer can mutate zone or world
 state. A world issuer can mutate world state.
 
-For `character` state, use `--target <player>` when the issuer is not the
-player whose state should change. Targeted character state currently resolves
-players in the issuer's current room.
+For `character` state, always provide the player target. Use `self` for the
+issuing player, or a player name/key such as `joe` or `player.123`. Room-issued
+trigger scripts should use `{{ actor_key }}` for the triggering player.
 
 Examples:
 
@@ -319,10 +326,10 @@ Examples:
 /state get world weather
 /state set room lever_pulled true
 /state set world weather -- stormy
-/state add character favor 1
-/state set character --target joe pull_lever true
+/state add character self favor 1
+/state set character joe pull_lever true
 /state clear room lever_pulled
-/cmd room -- /state set character --target {{ actor_key }} pull_lever true
+/cmd room -- /state set character {{ actor_key }} pull_lever true
 ```
 
 For state authoring guidance, see
@@ -605,7 +612,7 @@ script: |
 Set character state on the triggering player:
 
 ```yaml
-script: /cmd room -- /state set character --target {{ actor_key }} pull_lever true
+script: /cmd room -- /state set character {{ actor_key }} pull_lever true
 ```
 
 Change the triggering player's class:

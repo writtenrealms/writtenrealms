@@ -120,7 +120,7 @@ class TestBuilderCommandPermissions(WorldTestCase):
             dispatch_command(
                 command_type="text",
                 player_id=self.player.id,
-                payload={"text": "/state set character pull_lever true"},
+                payload={"text": "/state set character self pull_lever true"},
                 script_source=True,
             )
 
@@ -2204,7 +2204,7 @@ class TestBuilderState(BuilderCommandTestCase):
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "/state set world weather -- rainy")
             dispatch_text_command(self.player.id, "/state set room lever_pulled true")
-            dispatch_text_command(self.player.id, "/state add character rumor_count 2")
+            dispatch_text_command(self.player.id, "/state add character self rumor_count 2")
             dispatch_text_command(self.player.id, "/state get world weather")
             dispatch_text_command(self.player.id, "/state clear room lever_pulled")
 
@@ -2229,9 +2229,9 @@ class TestBuilderState(BuilderCommandTestCase):
         target = self.create_player("Target", room=self.room)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, f"/state set character --target {target.key} pull_lever true")
-            dispatch_text_command(self.player.id, f"/state get character --target {target.key} pull_lever")
-            dispatch_text_command(self.player.id, f"/state clear character --target {target.key} pull_lever")
+            dispatch_text_command(self.player.id, f"/state set character {target.key} pull_lever true")
+            dispatch_text_command(self.player.id, f"/state get character {target.key} pull_lever")
+            dispatch_text_command(self.player.id, f"/state clear character {target.key} pull_lever")
 
         success_messages = self._messages_by_type(messages, "cmd./state.success")
         self.assertEqual(len(success_messages), 3)
@@ -2251,7 +2251,7 @@ class TestBuilderState(BuilderCommandTestCase):
         with capture_game_messages():
             dispatch_text_command(
                 self.player.id,
-                f"/state set character --target {target.key} lever_note -- pulled at the west altar",
+                f"/state set character {target.key} lever_note -- pulled at the west altar",
             )
 
         self.assertEqual(
@@ -2267,7 +2267,7 @@ class TestBuilderState(BuilderCommandTestCase):
                 command_type="text",
                 player_id=target.id,
                 payload={
-                    "text": f"/cmd room -- /state set character --target {target.key} pull_lever true"
+                    "text": f"/cmd room -- /state set character {target.key} pull_lever true"
                 },
                 script_source=True,
             )
@@ -2280,7 +2280,7 @@ class TestBuilderState(BuilderCommandTestCase):
         self.assertEqual(len(cmd_messages), 1)
         self.assertEqual(cmd_messages[0]["message"]["data"]["errors"], [])
 
-    def test_state_target_rejects_non_character_scope(self):
+    def test_state_rejects_legacy_target_option(self):
         target = self.create_player("Target", room=self.room)
 
         with capture_game_messages() as messages:
@@ -2288,8 +2288,17 @@ class TestBuilderState(BuilderCommandTestCase):
 
         error_messages = self._messages_by_type(messages, "cmd./state.error")
         self.assertEqual(len(error_messages), 1)
-        self.assertIn("--target", error_messages[0]["message"].get("text", ""))
+        self.assertIn("Usage:", error_messages[0]["message"].get("text", ""))
         self.assertNotIn("pull_lever", get_state_snapshot(STATE_SCOPE_ROOM, self.room))
+
+    def test_state_character_requires_target(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/state set character pull_lever true")
+
+        error_messages = self._messages_by_type(messages, "cmd./state.error")
+        self.assertEqual(len(error_messages), 1)
+        self.assertIn("character <target>", error_messages[0]["message"].get("text", ""))
+        self.assertNotIn("pull_lever", get_state_snapshot(STATE_SCOPE_CHARACTER, self.player))
 
     def test_state_target_rejects_mob_character_state(self):
         mob = Mob.objects.create(
@@ -2300,7 +2309,7 @@ class TestBuilderState(BuilderCommandTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, f"/state set character --target {mob.key} pull_lever true")
+            dispatch_text_command(self.player.id, f"/state set character {mob.key} pull_lever true")
 
         error_messages = self._messages_by_type(messages, "cmd./state.error")
         self.assertEqual(len(error_messages), 1)
