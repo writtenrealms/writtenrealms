@@ -789,15 +789,6 @@ const actions = {
       commit("message_add", message);
     }
 
-    // Support semicolon commands
-    var subCommands = cmd.split(";");
-    if (subCommands.length > 1) {
-      for (const subcmd of subCommands) {
-        dispatch("cmd", { cmd: subcmd, silent: true });
-      }
-      return;
-    }
-
     // Quit special case
     if (cmd.toLowerCase() === "quit") {
       dispatch("sendWSMessage", { type: "system.disconnect" });

@@ -106,6 +106,27 @@ class TestMovementCommands(WorldTestCase):
         self.assertTrue("cmd.move.success" in self._message_types(messages))
         self.assertFalse("cmd.stats.success" in self._message_types(messages))
 
+    def test_semicolon_text_movement_runs_in_order(self):
+        south_room = self.room.create_at(adv_consts.DIRECTION_SOUTH)
+        east_room = south_room.create_at(adv_consts.DIRECTION_EAST)
+        expected_cost = movement_cost(south_room.type) + movement_cost(east_room.type)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "s;e")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, east_room.id)
+        self.assertEqual(self.player.stamina, 10 - expected_cost)
+        self.assertEqual(
+            [
+                message["message"]["data"]["direction"]
+                for message in messages
+                if message["message"].get("type") == "cmd.move.success"
+            ],
+            ["south", "east"],
+        )
+        self.assertFalse("cmd.move.error" in self._message_types(messages))
+
     def test_move_rejects_when_destination_cost_exceeds_stamina(self):
         dest_room = self.room.create_at(adv_consts.DIRECTION_EAST)
         dest_room.type = adv_consts.ROOM_TYPE_MOUNTAIN

@@ -5,6 +5,7 @@ Handles raw text input from players - the primary command interface.
 """
 import re
 
+from core.utils import split_cmd
 from spawns.command_history import (
     record_player_command_history,
     resolve_player_command_history,
@@ -139,10 +140,37 @@ class TextCommandHandler(CommandHandler):
         )
         return True
 
+    def _handle_command_chain(self, ctx: CommandContext, raw_text: str) -> bool:
+        segments = [segment.strip() for segment in split_cmd(raw_text) if segment.strip()]
+        if len(segments) <= 1:
+            return False
+
+        self._record_history(ctx, raw_text)
+
+        from spawns.handlers.registry import dispatch_command
+
+        for segment in segments:
+            payload = dict(ctx.payload)
+            payload["text"] = segment
+            payload["suppress_history"] = True
+            dispatch_command(
+                command_type="text",
+                actor_type=ctx.actor_type,
+                actor_id=ctx.actor_id,
+                payload=payload,
+                connection_id=ctx.connection_id,
+                published_messages=ctx.published_messages,
+                script_source=ctx.script_source,
+            )
+        return True
+
     def handle(self, ctx: CommandContext) -> None:
         cmd_text = ctx.payload.get("text", "")
         command, args, raw_text = _parse_text_command(cmd_text)
         if not command:
+            return
+
+        if self._handle_command_chain(ctx, raw_text):
             return
 
         if self._handle_history_replay(ctx, raw_text):
