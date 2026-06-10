@@ -209,6 +209,15 @@ const receiveMessage = async ({
     commit("world_set", world_data);
   }
 
+  if (
+    (message_data.type === "cmd.alias.success" ||
+      message_data.type === "cmd.unalias.success") &&
+    message_data.data &&
+    message_data.data.aliases
+  ) {
+    commit("player_set", { aliases: message_data.data.aliases });
+  }
+
   // Disconection
   if (message_data.type === "system.disconnect.success") {
     if (rootState.auth.user.is_temporary) {
@@ -762,6 +771,14 @@ const actions = {
     const lcmd = cmd.toLowerCase();
     const lfirst_token = lcmd.split(" ")[0];
     const isHistoryReplay = /^!\d+$/.test(cmd.trim());
+    const isAliasCommand = lfirst_token === "alias" || lfirst_token === "unalias";
+    const playerAliases = state.player?.aliases || {};
+    const hasKnownAlias = !isAliasCommand && cmd
+      .split(";")
+      .some((segment) => {
+        const firstToken = segment.trim().split(/\s+/)[0]?.toLowerCase();
+        return !!(firstToken && playerAliases[firstToken]);
+      });
 
     // Special focus processing
     if (
@@ -785,7 +802,7 @@ const actions = {
     const message = { type: "cmd.text", text: cmd, echo: true };
 
     // Echo user input back to console
-    if (!silent && !isHistoryReplay) {
+    if (!silent && !isHistoryReplay && !hasKnownAlias) {
       commit("message_add", message);
     }
 

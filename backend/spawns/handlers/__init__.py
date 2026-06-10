@@ -50,6 +50,7 @@ from spawns.handlers.registry import (
 # Add new handler modules here as they are created.
 from spawns.handlers import state_sync
 from spawns.handlers import text
+from spawns.handlers import aliases
 from spawns.handlers import information
 from spawns.handlers import movement
 from spawns.handlers import combat

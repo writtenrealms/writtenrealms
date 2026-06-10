@@ -6,6 +6,7 @@ Handles raw text input from players - the primary command interface.
 import re
 
 from core.utils import split_cmd
+from spawns.aliases import expand_player_aliases
 from spawns.command_history import (
     record_player_command_history,
     resolve_player_command_history,
@@ -32,6 +33,7 @@ def _parse_text_command(text: str) -> tuple[str | None, list[str], str]:
 
 
 _HISTORY_REPLAY_PATTERN = re.compile(r"!(\d+)")
+_ALIAS_DEFINITION_COMMANDS = {"alias", "unalias"}
 
 
 @register_handler
@@ -140,6 +142,58 @@ class TextCommandHandler(CommandHandler):
         )
         return True
 
+    def _handle_alias_expansion(self, ctx: CommandContext, raw_text: str) -> bool:
+        if ctx.actor_type != "player" or ctx.player is None:
+            return False
+        if ctx.script_source or ctx.payload.get("suppress_aliases"):
+            return False
+
+        result = expand_player_aliases(ctx.player, raw_text)
+        if result.error:
+            ctx.publish(
+                {
+                    "type": "cmd.alias.error",
+                    "text": result.error,
+                    "data": {
+                        "error": result.error,
+                        "code": result.code,
+                        "chain": result.chain,
+                    },
+                }
+            )
+            return True
+        if not result.expanded:
+            return False
+
+        self._record_history(ctx, raw_text)
+        ctx.publish(
+            {
+                "type": "cmd.alias.resolve",
+                "text": f"{raw_text} -> {result.text}",
+                "echo": True,
+                "data": {
+                    "command": raw_text,
+                    "resolved": result.text,
+                },
+            }
+        )
+
+        from spawns.handlers.registry import dispatch_command
+
+        dispatch_command(
+            command_type="text",
+            actor_type="player",
+            actor_id=ctx.player.id,
+            payload={
+                "text": result.text,
+                "suppress_history": True,
+                "suppress_aliases": True,
+            },
+            connection_id=ctx.connection_id,
+            published_messages=ctx.published_messages,
+        )
+        return True
+
     def _handle_command_chain(self, ctx: CommandContext, raw_text: str) -> bool:
         segments = [segment.strip() for segment in split_cmd(raw_text) if segment.strip()]
         if len(segments) <= 1:
@@ -170,10 +224,15 @@ class TextCommandHandler(CommandHandler):
         if not command:
             return
 
-        if self._handle_command_chain(ctx, raw_text):
+        is_alias_definition = command in _ALIAS_DEFINITION_COMMANDS
+
+        if not is_alias_definition and self._handle_history_replay(ctx, raw_text):
             return
 
-        if self._handle_history_replay(ctx, raw_text):
+        if not is_alias_definition and self._handle_alias_expansion(ctx, raw_text):
+            return
+
+        if not is_alias_definition and self._handle_command_chain(ctx, raw_text):
             return
 
         if command == "eq" and not args:
