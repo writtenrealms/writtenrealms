@@ -70,6 +70,21 @@ Direct stats and attributes compound. If the world maps `strength` to
 `attack_power`, then a mob with both `attack_power: 7` and `strength: 2` spawns
 with the direct attack power plus the attack power produced by `strength`.
 
+## Power Analysis
+
+The mob definition details screen has a **POWER** action. It opens an advisory
+analysis modal for the current mob definition.
+
+The analysis uses the world's combat formulas, rating curves, level, type,
+fixed direct stats, and fixed attributes. It reports category scores, the
+strongest stat drivers, basic attack output, mitigation, effective health, and
+a same-type reference score for the mob's level.
+
+Power analysis does not change mob stats or runtime combat. It is a builder aid
+for comparing definitions before applying further YAML edits. Randomized
+attribute ranges are not included in the first pass; the modal analyzes the
+fixed values on the definition.
+
 ## Random Attribute Mobs
 
 Add `randomization.attributes` when each spawned copy should roll different

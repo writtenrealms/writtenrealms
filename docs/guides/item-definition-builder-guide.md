@@ -186,6 +186,21 @@ With the default combat level scale and the default suggestion settings, level
 | Feet | 2 | 2 |
 | Shield | 5 | 6 |
 
+## Power Analysis
+
+The item definition details screen has a **POWER** action. It opens an
+advisory analysis modal for the current item definition.
+
+The analysis uses the world's combat formulas, rating curves, item level, slot,
+fixed stats, fixed attributes, and `equipment.armor_suggestions.slot_weights`.
+It reports category scores, the strongest stat drivers, basic combat metrics,
+and slot reference values such as expected armor for armor and shield slots.
+
+Power analysis does not change item stats, item quality, or runtime combat. It
+is a builder aid for comparing definitions before applying further YAML edits.
+Randomized attribute ranges are not included in the first pass; the modal
+analyzes the fixed values on the definition.
+
 ## Random Stat Items
 
 Add `randomization.attributes` when each spawned copy should roll different

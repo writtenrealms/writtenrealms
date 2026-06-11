@@ -10,9 +10,14 @@
         @save="submitManifest"
       >
         <template #header>
-          <h2>{{ mobDefinition.name }}</h2>
-          <div class="color-text-60">
-            ID: {{ mobDefinition.id }} <span class='mx-2'>|</span> Slug: {{ mobDefinition.slug }}
+          <h2 class="definition-title">{{ mobDefinition.name }}</h2>
+          <div class="definition-meta-row">
+            <div class="definition-meta color-text-60">
+              {{ mobDefinition.id }} - {{ mobDefinition.slug }}
+            </div>
+            <button class="btn-thin definition-power" :disabled="isLoadingPower" @click="openPowerAnalysis">
+              {{ isLoadingPower ? "LOADING POWER..." : "POWER" }}
+            </button>
           </div>
         </template>
         <template #actions>
@@ -31,6 +36,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useStore } from "vuex";
 import ManifestYamlEditor from "@/components/builder/world/ManifestYamlEditor.vue";
+import PowerAnalysisModal from "@/components/builder/world/PowerAnalysisModal.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -38,11 +44,15 @@ const store = useStore();
 
 const mobDefinition = ref<any | null>(null);
 const isLoading = ref(false);
+const isLoadingPower = ref(false);
 const isSubmitting = ref(false);
 const manifestText = ref("");
 const loadedYaml = ref("");
 const endpoint = computed(() => (
   `/builder/worlds/${route.params.world_id}/mobdefinitions/${route.params.mob_definition_id}/`
+));
+const powerEndpoint = computed(() => (
+  `/builder/worlds/${route.params.world_id}/mobdefinitions/${route.params.mob_definition_id}/power/`
 ));
 const manifestApplyEndpoint = computed(() => `/builder/worlds/${route.params.world_id}/manifests/apply/`);
 
@@ -88,6 +98,26 @@ const copyDeleteYaml = async () => {
     store.commit("ui/notification_set", "Mob delete YAML copied.");
   } catch {
     store.commit("ui/notification_set_error", "Unable to copy delete YAML to clipboard.");
+  }
+};
+
+const openPowerAnalysis = async () => {
+  isLoadingPower.value = true;
+  try {
+    const resp = await axios.get(powerEndpoint.value);
+    store.commit("ui/modal/open_view", {
+      component: PowerAnalysisModal,
+      props: {
+        analysis: resp.data,
+      },
+      options: {
+        closeOnOutsideClick: true,
+      },
+    });
+  } catch (error: any) {
+    store.commit("ui/notification_set_error", extractError(error, "Could not load mob power."));
+  } finally {
+    isLoadingPower.value = false;
   }
 };
 
@@ -158,5 +188,27 @@ watch(
   box-sizing: border-box;
   min-width: 0;
   width: 100%;
+}
+
+.definition-title {
+  margin-bottom: 0.35rem;
+}
+
+.definition-meta-row {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  min-width: 0;
+  width: 100%;
+}
+
+.definition-meta {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.definition-power {
+  flex: 0 0 auto;
 }
 </style>

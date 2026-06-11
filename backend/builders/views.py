@@ -27,6 +27,10 @@ from rest_framework.views import APIView
 
 from config import constants as adv_consts
 from builders.balance.mob_suggestions import suggest_mob_definition_manifest
+from builders.balance.power_analysis import (
+    analyze_item_definition_power,
+    analyze_mob_definition_power,
+)
 from core.utils.mobs import suggest_stats
 
 from config import constants as api_consts
@@ -3142,12 +3146,20 @@ class ItemDefinitionViewSet(BaseWorldBuilderViewSet):
         item_definition = self.get_object()
         return Response(self._serialize_item_definition_response(item_definition))
 
+    @action(methods=['get'], detail=True)
+    def power(self, request, *args, **kwargs):
+        item_definition = self.get_object()
+        return Response(analyze_item_definition_power(self.world, item_definition))
+
 
 item_definition_list = ItemDefinitionViewSet.as_view({
     'get': 'list',
 })
 item_definition_detail = ItemDefinitionViewSet.as_view({
     'get': 'retrieve',
+})
+item_definition_power = ItemDefinitionViewSet.as_view({
+    'get': 'power',
 })
 
 
@@ -3555,12 +3567,20 @@ class MobDefinitionViewSet(BaseWorldBuilderViewSet):
         mob_definition = self.get_object()
         return Response(self._serialize_mob_definition_response(mob_definition))
 
+    @action(methods=['get'], detail=True)
+    def power(self, request, *args, **kwargs):
+        mob_definition = self.get_object()
+        return Response(analyze_mob_definition_power(self.world, mob_definition))
+
 
 mob_definition_list = MobDefinitionViewSet.as_view({
     'get': 'list',
 })
 mob_definition_detail = MobDefinitionViewSet.as_view({
     'get': 'retrieve',
+})
+mob_definition_power = MobDefinitionViewSet.as_view({
+    'get': 'power',
 })
 
 
