@@ -11,6 +11,7 @@ import { useStore } from "vuex";
 import { FormElement } from "@/core/forms";
 import { World, Player } from "@/core/interfaces";
 import { onOutsideClick } from "@/composables/onOutsideClick";
+import DeleteCharacterDialog from "./DeleteCharacterDialog.vue";
 
 const store = useStore();
 const world: ComputedRef<World> = computed(() => store.state.lobby.world);
@@ -46,17 +47,13 @@ const onClickEditChar = () => {
   emit('close');
 }
 
-const onClickDeleteChar = async () => {
-  const c = confirm(
-    `THIS ACTION CANNOT BE UNDONE. Are you sure you want to delete ${props.player.name}?`
-  );
-  if (!c) return;
-
-  store.commit('lobby/char_id_set', props.player.id);
-  await store.dispatch(`lobby/char_delete`, {
-    world_id: world.value.id,
-    char_id: props.player.id,
-  })
+const onClickDeleteChar = () => {
+  store.commit("ui/modal/open_view", {
+    component: DeleteCharacterDialog,
+    props: {
+      player: props.player,
+    },
+  });
   emit('close');
 }
 </script>

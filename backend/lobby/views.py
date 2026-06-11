@@ -5,7 +5,7 @@ from django.db.models import Q, Count, Subquery, OuterRef, IntegerField
 from django.utils import timezone
 
 
-from rest_framework import generics, status, viewsets, serializers
+from rest_framework import generics, status, viewsets
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -566,11 +566,6 @@ class WorldCharacters(WorldLobbyBase,
         if player.player_instances.count():
             raise ValidationError(
                 "Cannot delete a player with live instances.")
-
-        game_player = player.game_player
-        if game_player:
-            raise serializers.ValidationError(
-                "Cannot delete a player currently in a game.")
 
         player.name = "%s%s" % (player.name, player.id)
         player.pending_deletion_ts = timezone.now()

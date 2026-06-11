@@ -19,23 +19,24 @@ This document describes the current WR2 flow for getting a player from lobby to 
    - `POST /api/v1/lobby/worlds/<world_id>/chars/`
    - MPW: reuse existing multiplayer spawn world if present; otherwise create one.
    - SPW: create a new spawn world.
-3. User clicks `PLAY AS`, which dispatches `game/request_enter_world` with `player_id` and `world_id`.
+3. If the user deletes an existing character from the world lobby, the client opens a confirmation dialog and only enables deletion after the user types the character name; matching is case-insensitive. The confirmed `DELETE /api/v1/lobby/worlds/<world_id>/chars/<player_id>/` request marks the player pending deletion when the player is not in-game and has no live instances.
+4. User clicks `PLAY AS`, which dispatches `game/request_enter_world` with `player_id` and `world_id`.
 
 ## 2) Forge job: queue world entry
 
-4. Frontend sends Forge WebSocket message:
+5. Frontend sends Forge WebSocket message:
    - `{ "type": "job", "job": "enter_world", "player_id": <id>, "world_id": <id> }`
-5. FastAPI Forge handler queues Celery task `spawns.tasks.enter_world` with:
+6. FastAPI Forge handler queues Celery task `spawns.tasks.enter_world` with:
    - `player_id`, `world_id`, `client_id`, `ip`
-6. Forge stores a Redis mapping `forge:connected_player:<player_id> -> <client_id>` for return messages.
+7. Forge stores a Redis mapping `forge:connected_player:<player_id> -> <client_id>` for return messages.
 
 ## 3) Backend: execute enter-world
 
-7. Celery task `spawns.tasks.enter_world`:
+8. Celery task `spawns.tasks.enter_world`:
    - Loads the player.
    - Resolves the actual target spawn world from `player.world`.
    - Calls `WorldGate(player, world).enter(ip=...)`.
-8. `WorldGate.enter` does:
+9. `WorldGate.enter` does:
    - Auto-start world if lifecycle is `new` or `stopped` via `WorldSmith.start` (`starting` -> `running`).
    - Preflight checks (fail fast with error):
      - Site maintenance mode
@@ -50,20 +51,20 @@ This document describes the current WR2 flow for getting a player from lobby to 
    - Marks player `in_game = true`, updates connection/action timestamps.
    - Updates root world `last_entered_ts`.
    - Creates `PlayerEvent(login)`.
-9. Task publishes Forge `job_complete`:
+10. Task publishes Forge `job_complete`:
    - Success payload: `world`, `player_config`, `player_id`, `ws_uri`, `motd`
    - Error payload: `error`
 
 ## 4) Frontend handoff to gameplay socket
 
-10. Frontend Forge module receives `job_complete`:
+11. Frontend Forge module receives `job_complete`:
    - `status=error`: show error notification, stay in lobby.
    - `status=success`: dispatch `game/enter_ready_world`.
-11. `enter_ready_world` stores pregame state (`world`, `player_config`, `player_id`, `ws_uri`) and opens game WebSocket.
-12. On game WS open, client sends:
+12. `enter_ready_world` stores pregame state (`world`, `player_config`, `player_id`, `ws_uri`) and opens game WebSocket.
+13. On game WS open, client sends:
    - `{ "type": "system.connect", "data": { "player_key": "player.<id>" }, "token": "<access>" }`
-13. Game WS authenticates, replies `system.connect.success`, then queues initial state sync.
-14. On `cmd.state.sync.success`, frontend loads map/room/player/world state and routes to `/game`.
+14. Game WS authenticates, replies `system.connect.success`, then queues initial state sync.
+15. On `cmd.state.sync.success`, frontend loads map/room/player/world state and routes to `/game`.
 
 ## Room key contract (WR2)
 
