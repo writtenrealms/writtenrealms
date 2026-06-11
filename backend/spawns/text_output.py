@@ -392,6 +392,19 @@ def _render_inspect_text(data: dict) -> str | None:
     return None
 
 
+def _render_scan_text(data: dict) -> str:
+    lines: list[str] = []
+    for char in data.get("chars") or []:
+        name = _capfirst(char.get("name") or "someone")
+        target = char.get("target") or {}
+        target_name = target.get("name")
+        target_text = f", fighting {target_name}" if target_name else ""
+        lines.append(f"{name} is here{target_text}.")
+    if lines:
+        return "\n".join(lines)
+    return "There doesn't seem to be anything there."
+
+
 def _render_roll_text(event_type: str, data: dict) -> str | None:
     die = data.get("die")
     outcome = data.get("outcome")
@@ -576,6 +589,9 @@ def render_event_text(
 
     if event_type == "cmd.inspect.success":
         return _render_inspect_text(data)
+
+    if event_type == "cmd.scan.success":
+        return _render_scan_text(data)
 
     if event_type in ("cmd.kill.success", "notification.cmd.kill.success"):
         return _render_kill_text(event_type, data)

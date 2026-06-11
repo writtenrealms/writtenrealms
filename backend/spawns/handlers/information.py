@@ -11,6 +11,7 @@ from spawns.actions.information import (
     InventoryAction,
     LookAction,
     RollAction,
+    ScanAction,
     StatsAction,
     WhoAction,
 )
@@ -120,6 +121,51 @@ class InspectHandler(CommandHandler):
             ctx.publish(
                 {
                     "type": "cmd.inspect.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.player.key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class ScanHandler(CommandHandler):
+    command_type = "scan"
+    text_commands = ("scan",)
+    help = {
+        "name": "Scan",
+        "format": "scan <direction>",
+        "description": (
+            "Display the characters in an exit room provided you are not "
+            "standing in a forest or on a mountain."
+        ),
+        "examples": [
+            "scan east",
+            "scan e",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        direction = ctx.payload.get("direction") or ctx.payload.get("target")
+        if isinstance(direction, dict):
+            direction = direction.get("name") or direction.get("direction")
+        if direction is None:
+            args = ctx.payload.get("args", [])
+            if args:
+                direction = args[0]
+
+        try:
+            result = ScanAction().execute(ctx.player.id, direction=direction)
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd.scan.error",
                     "text": err.message,
                     "data": {"error": err.message, "code": err.code, **err.data},
                 }

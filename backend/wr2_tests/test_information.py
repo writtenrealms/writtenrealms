@@ -2,7 +2,7 @@ from builders.models import Faction, ItemTemplate
 from config import constants as adv_consts
 from core.computations import compute_stats
 from spawns.handlers import dispatch_command
-from spawns.models import Item
+from spawns.models import CombatEncounter, Item, Mob
 from django.utils import timezone
 from tests.base import WorldTestCase
 from wr2_tests.utils import (
@@ -147,6 +147,155 @@ class TestLookCommandText(WorldTestCase):
         message = self._message_by_type(messages, "cmd.look.error")
         self.assertIsNotNone(message)
         self.assertIn("don't see that here", message["text"].lower())
+
+
+class TestScanCommand(WorldTestCase):
+    def _message_by_type(self, messages, message_type):
+        for msg in messages:
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def setUp(self):
+        super().setUp()
+        self.exit_room = self.room.create_at("east")
+        self.soldier = Mob.objects.create(
+            name="a soldier",
+            world=self.world,
+            room=self.exit_room,
+            keywords="soldier",
+        )
+        self.priest = Mob.objects.create(
+            name="a priest",
+            world=self.world,
+            room=self.exit_room,
+            keywords="priest",
+        )
+
+    def test_scan_no_args(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "scan")
+
+        message = self._message_by_type(messages, "cmd.scan.error")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["text"], "Scan in which direction?")
+
+    def test_scan_with_invalid_arg(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "scan something")
+
+        message = self._message_by_type(messages, "cmd.scan.error")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["text"], "Something is not a valid direction.")
+
+    def test_scan_direction_with_no_exit(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "scan north")
+
+        message = self._message_by_type(messages, "cmd.scan.error")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["text"], "There is no exit north.")
+
+    def test_scan_direction(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "scan east")
+
+        message = self._message_by_type(messages, "cmd.scan.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["text"], "A priest is here.\nA soldier is here.")
+        self.assertEqual(len(message["data"]["chars"]), 2)
+        self.assertEqual(message["data"]["chars"][0]["name"], "a priest")
+        self.assertEqual(message["data"]["chars"][1]["name"], "a soldier")
+
+    def test_scan_abbreviated_direction(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "scan e")
+
+        message = self._message_by_type(messages, "cmd.scan.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["direction"], "east")
+        self.assertEqual(len(message["data"]["chars"]), 2)
+
+    def test_scan_in_empty_exit_room(self):
+        self.room.create_at("north")
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "scan north")
+
+        message = self._message_by_type(messages, "cmd.scan.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(
+            message["text"],
+            "There doesn't seem to be anything there.",
+        )
+
+    def test_scan_to_unscannable_room_type(self):
+        for room_type in adv_consts.UNSCANNABLE_ROOM_TYPES:
+            self.room.type = room_type
+            self.room.save(update_fields=["type"])
+
+            with capture_game_messages() as messages:
+                dispatch_text_command(self.player.id, "scan east")
+
+            message = self._message_by_type(messages, "cmd.scan.error")
+            self.assertIsNotNone(message)
+            self.assertEqual(message["text"], f"Cannot scan in {room_type}s.")
+
+    def test_scan_hides_invisible_chars_from_non_builder(self):
+        self.priest.is_invisible = True
+        self.priest.save(update_fields=["is_invisible"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "scan east")
+
+        message = self._message_by_type(messages, "cmd.scan.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(
+            [char["name"] for char in message["data"]["chars"]],
+            ["a soldier"],
+        )
+        self.assertEqual(message["text"], "A soldier is here.")
+
+    def test_scan_hides_invisible_chars_from_builder(self):
+        self.player.is_builder = True
+        self.player.save(update_fields=["is_builder"])
+        self.priest.is_invisible = True
+        self.priest.save(update_fields=["is_invisible"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "scan east")
+
+        message = self._message_by_type(messages, "cmd.scan.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(
+            [char["name"] for char in message["data"]["chars"]],
+            ["a soldier"],
+        )
+
+    def test_scan_includes_combat_target_text(self):
+        target = self.create_player("Target", room=self.exit_room)
+        target.in_game = True
+        target.save(update_fields=["in_game"])
+        CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.exit_room,
+            player=target,
+            mob=self.priest,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "scan east")
+
+        message = self._message_by_type(messages, "cmd.scan.success")
+        self.assertIsNotNone(message)
+        self.assertIn("Target is here, fighting a priest.", message["text"])
+        self.assertIn("A priest is here, fighting Target.", message["text"])
+        priest = next(
+            char for char in message["data"]["chars"]
+            if char["key"] == self.priest.key
+        )
+        self.assertEqual(priest["target"]["name"], "Target")
 
 
 class TestWhoCommand(WorldTestCase):

@@ -54,7 +54,7 @@ This document describes the WR2 flow from a player entering a command in the in-
    - Parses first token + args.
    - Resolves command using `resolve_text_handler` (prefix match across registered text commands).
    - Maps parsed args into payload fields expected by handlers (`direction`, `target`, `item`, etc.).
-   - Delegates to resolved domain handler (`look`, `move`, `drop`, `help`, `/load`, ...).
+   - Delegates to resolved domain handler (`look`, `scan`, `move`, `drop`, `help`, `/load`, ...).
 15. If no handler is found:
    - Builder command (`/something`) => `cmd./something.error`.
    - Non-builder unknown => `cmd.text.echo`.
@@ -97,6 +97,10 @@ This document describes the WR2 flow from a player entering a command in the in-
    - Fallback -> `Message.vue`
 29. `Message.vue` renders plain text by splitting `message.text` on newline boundaries.
 30. Console autoscroll behavior keeps view pinned to bottom unless the user has intentionally scrolled up.
+
+`scan <direction>` follows this same fallback rendering path: the backend emits
+`cmd.scan.success` with `data.chars` for the adjacent room and pre-rendered
+text, and `Console.vue` renders it with the generic `Message.vue` component.
 
 ## Quick Example (`look`)
 

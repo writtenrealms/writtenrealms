@@ -8,7 +8,7 @@ from django.utils import timezone
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.targeting import find_accessible_item_target, find_room_char_target
 from spawns.events import GameEvent
-from spawns.models import Mob, Player
+from spawns.models import CombatEncounter, Mob, Player
 from spawns.state_payloads import (
     build_map_payload,
     collect_map_room_ids,
@@ -202,6 +202,168 @@ class InspectAction:
                 )
             ]
         )
+
+
+def _resolve_scan_direction(direction: str | dict | None) -> str:
+    if isinstance(direction, dict):
+        direction = direction.get("name") or direction.get("direction")
+    normalized_direction = str(direction or "").strip().lower()
+    if not normalized_direction:
+        raise ActionError("Scan in which direction?", code="missing_direction")
+
+    for available_direction in adv_consts.DIRECTIONS:
+        if available_direction.startswith(normalized_direction):
+            return available_direction
+
+    cap_direction = (
+        normalized_direction[0].upper() + normalized_direction[1:]
+        if normalized_direction
+        else normalized_direction
+    )
+    raise ActionError(
+        f"{cap_direction} is not a valid direction.",
+        code="invalid_direction",
+    )
+
+
+class ScanAction:
+    def execute(
+        self,
+        player_id: int,
+        direction: str | dict | None = None,
+    ) -> ActionResult:
+        player = get_player_with_related(player_id)
+        room = player.room
+
+        if room is None:
+            raise ActionError("You are nowhere. Cannot scan.", code="no_room")
+        resolved_direction = _resolve_scan_direction(direction)
+        if room.type in adv_consts.UNSCANNABLE_ROOM_TYPES:
+            raise ActionError(
+                f"Cannot scan in {room.type}s.",
+                code="unscannable_room",
+                data={"room_type": room.type},
+            )
+
+        exit_room = getattr(room, resolved_direction, None)
+        if exit_room is None:
+            raise ActionError(
+                f"There is no exit {resolved_direction}.",
+                code="no_exit",
+                data={"direction": resolved_direction},
+            )
+
+        actor_payload = serialize_actor(player, room)
+        target_lookup = self._active_target_lookup(exit_room)
+        chars = [
+            self._serialize_scan_char(player, char, target_lookup)
+            for char in self._visible_exit_room_chars(exit_room)
+            if char.key != player.key
+        ]
+        data = {
+            "actor": actor_payload.model_dump(),
+            "direction": resolved_direction,
+            "chars": chars,
+        }
+        text = render_event_text("cmd.scan.success", data, viewer=player)
+
+        return ActionResult(
+            events=[
+                GameEvent(
+                    type="cmd.scan.success",
+                    recipients=[player.key],
+                    data=data,
+                    text=text,
+                )
+            ]
+        )
+
+    def _visible_exit_room_chars(self, exit_room) -> list[Player | Mob]:
+        room_players = list(
+            exit_room.players.filter(in_game=True)
+            .select_related("user", "equipment")
+            .prefetch_related("faction_assignments__faction", "clan_memberships__clan")
+        )
+        room_mobs = list(
+            exit_room.mobs.filter(is_pending_deletion=False)
+            .select_related("definition", "template", "equipment")
+            .prefetch_related("faction_assignments__faction")
+        )
+        chars: list[Player | Mob] = [*room_players, *room_mobs]
+        chars.sort(
+            key=lambda char: (
+                getattr(char, "created_ts", None),
+                getattr(char, "id", 0),
+            ),
+            reverse=True,
+        )
+
+        return [
+            char for char in chars
+            if not getattr(char, "is_invisible", False)
+            and not getattr(char, "sneak_ts", None)
+        ]
+
+    def _active_target_lookup(self, exit_room) -> dict[str, dict]:
+        lookup: dict[str, dict] = {}
+        encounters = (
+            CombatEncounter.objects.filter(
+                room=exit_room,
+                status=CombatEncounter.STATUS_ACTIVE,
+            )
+            .select_related("player", "mob")
+            .order_by("id")
+        )
+        for encounter in encounters:
+            if not encounter.player or not encounter.mob:
+                continue
+            lookup.setdefault(
+                encounter.player.key,
+                self._target_payload(encounter.mob),
+            )
+            lookup.setdefault(
+                encounter.mob.key,
+                self._target_payload(encounter.player),
+            )
+        return lookup
+
+    def _target_payload(self, char: Player | Mob) -> dict:
+        if isinstance(char, Player):
+            keywords = (
+                getattr(char, "keywords", "")
+                or f"{char.name.lower()} player {char.key}"
+            )
+        else:
+            keywords = char.keywords or ""
+            if not keywords and char.definition:
+                keywords = char.definition.keywords or ""
+            if not keywords and char.template:
+                keywords = char.template.keywords or ""
+            if not keywords:
+                keywords = char.name or ""
+
+        return {
+            "id": char.id,
+            "key": char.key,
+            "name": char.name,
+            "health": getattr(char, "health", 0),
+            "health_max": getattr(char, "health_max", getattr(char, "health", 0)),
+            "level": getattr(char, "level", 1),
+            "keywords": keywords,
+        }
+
+    def _serialize_scan_char(
+        self,
+        viewer: Player,
+        char: Player | Mob,
+        target_lookup: dict[str, dict],
+    ) -> dict:
+        if isinstance(char, Player):
+            payload = serialize_char_from_player(char, viewer=viewer).model_dump()
+        else:
+            payload = serialize_char_from_mob(char, viewer=viewer).model_dump()
+        payload["target"] = target_lookup.get(char.key)
+        return payload
 
 
 class InventoryAction:

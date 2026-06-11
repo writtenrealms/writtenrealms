@@ -57,6 +57,7 @@ class TestHelpCommands(WorldTestCase):
         self.assertIsNotNone(message)
         self.assertIn("Commands:", message.get("text", ""))
         self.assertIn("look | look <target>", message.get("text", ""))
+        self.assertIn("scan <direction>", message.get("text", ""))
         self.assertIn("/load <item|mob> <template_id|slug> [cmd]", message.get("text", ""))
         self.assertIn("/resync <item|mob> <template_id|all>", message.get("text", ""))
 
