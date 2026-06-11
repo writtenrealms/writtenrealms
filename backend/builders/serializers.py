@@ -1932,7 +1932,7 @@ class MobTemplateSerializer(serializers.ModelSerializer):
             'attributes',
             'health_max', 'health_regen', 'energy_max', 'energy_regen',
             'stamina_max', 'stamina_regen', 'regen_rate',
-            'attack_power', 'ability_power',  'crit',
+            'attack_power', 'ability_power', 'weapon_damage', 'crit',
             'resilience', 'dodge', 'armor',
             'drops_random_items', 'num_items', 'is_crafter',
             'load_specification',

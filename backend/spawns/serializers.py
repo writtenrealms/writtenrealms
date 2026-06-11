@@ -563,7 +563,7 @@ class AnimateItemSerializer(serializers.ModelSerializer):
             'health_max', 'health_regen',
             'energy_max', 'energy_regen',
             'stamina_max', 'stamina_regen',
-            'attack_power', 'ability_power', 'armor', 'crit',
+            'attack_power', 'ability_power', 'weapon_damage', 'armor', 'crit',
             'resilience', 'dodge',
             'on_use_cmd', 'on_use_description', 'on_use_equipped',
         ]

@@ -27,6 +27,7 @@ class TestCombatFormulaResolution(WorldTestCase):
             "health_max": 100,
             "attack_power": 0,
             "ability_power": 0,
+            "weapon_damage": 0,
             "armor": 0,
             "resilience": 0,
             "dodge": 0,
@@ -44,6 +45,18 @@ class TestCombatFormulaResolution(WorldTestCase):
             weapon_damage=weapon_damage,
         )
         self.player.equipment.equip(weapon, adv_consts.EQUIPMENT_SLOT_WEAPON)
+        return weapon
+
+    def _equip_mob_weapon(self, mob, *, weapon_damage, attack_power=0):
+        weapon = Item.objects.create(
+            world=self.spawn_world,
+            name="a mob test sword",
+            type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            equipment_type=adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
+            weapon_damage=weapon_damage,
+            attack_power=attack_power,
+        )
+        mob.equipment.equip(weapon, adv_consts.EQUIPMENT_SLOT_WEAPON)
         return weapon
 
     def test_default_level_scale_is_open_ended_exponential(self):
@@ -230,6 +243,111 @@ class TestCombatFormulaResolution(WorldTestCase):
         self.assertEqual(result.damage_base, 30)
         self.assertEqual(result.damage_dealt, 30)
         self.assertEqual(result.damage_taken, 30)
+
+    def test_mob_internal_weapon_damage_drives_basic_attack(self):
+        self._configure_combat({
+            "variance": {
+                "enabled": False,
+                "percent": 0,
+            },
+            "profiles": {
+                "basic_physical": {
+                    "power_scale": 0,
+                    "can_dodge": False,
+                    "can_crit": False,
+                    "mitigation": {
+                        "armor": False,
+                        "resilience": False,
+                    },
+                    "minimum": 0,
+                },
+            },
+        })
+        attacker = self._mob(name="Attacker", weapon_damage=40)
+        self._equip_mob_weapon(attacker, weapon_damage=999, attack_power=999)
+        target = self._mob()
+
+        result = resolve_attack(
+            actor=attacker,
+            target=target,
+            world=self.spawn_world,
+        )
+
+        self.assertEqual(result.damage_base, 40)
+        self.assertEqual(result.damage_dealt, 40)
+
+    def test_disarmed_mob_uses_unarmed_damage_multiplier(self):
+        self._configure_combat({
+            "variance": {
+                "enabled": False,
+                "percent": 0,
+            },
+            "profiles": {
+                "basic_physical": {
+                    "power_scale": 0,
+                    "mob_unarmed_damage_multiplier": 0.2,
+                    "can_dodge": False,
+                    "can_crit": False,
+                    "mitigation": {
+                        "armor": False,
+                        "resilience": False,
+                    },
+                    "minimum": 0,
+                },
+            },
+        })
+        attacker = self._mob(name="Attacker", weapon_damage=50)
+        target = self._mob()
+
+        armed_result = resolve_attack(
+            actor=attacker,
+            target=target,
+            world=self.spawn_world,
+        )
+        disarmed_result = resolve_attack(
+            actor=attacker,
+            target=target,
+            world=self.spawn_world,
+            actor_disarmed=True,
+        )
+
+        self.assertEqual(armed_result.damage_base, 50)
+        self.assertEqual(disarmed_result.damage_base, 10)
+
+    def test_mob_without_weapon_damage_keeps_level_based_fallback(self):
+        self._configure_combat({
+            "level_scale": {
+                "type": "flat",
+                "value": 20,
+            },
+            "variance": {
+                "enabled": False,
+                "percent": 0,
+            },
+            "profiles": {
+                "basic_physical": {
+                    "power_scale": 0,
+                    "mob_unarmed_level_scale": 0.5,
+                    "can_dodge": False,
+                    "can_crit": False,
+                    "mitigation": {
+                        "armor": False,
+                        "resilience": False,
+                    },
+                    "minimum": 0,
+                },
+            },
+        })
+        attacker = self._mob(name="Attacker")
+        target = self._mob()
+
+        result = resolve_attack(
+            actor=attacker,
+            target=target,
+            world=self.spawn_world,
+        )
+
+        self.assertEqual(result.damage_base, 10)
 
     def test_physical_damage_uses_armor_not_resilience_by_default(self):
         self._configure_combat({

@@ -15,7 +15,6 @@ import random
 import re
 from typing import Any, Callable
 
-from config import constants
 from config import game_settings as config
 from core.stat_system import compute_stats
 
@@ -61,6 +60,7 @@ PROFILE_FIELDS = {
     "weapon_damage_scale",
     "unarmed_power_scale",
     "mob_unarmed_level_scale",
+    "mob_unarmed_damage_multiplier",
     "multiplier",
     "damage_type",
     "can_dodge",
@@ -135,6 +135,7 @@ DEFAULT_COMBAT_SYSTEM: dict[str, Any] = {
             "weapon_damage_scale": 1.0,
             "unarmed_power_scale": 0.25,
             "mob_unarmed_level_scale": 0.5,
+            "mob_unarmed_damage_multiplier": 0.2,
             "multiplier": 1.0,
             "damage_type": "physical",
             "can_dodge": True,
@@ -155,6 +156,7 @@ DEFAULT_COMBAT_SYSTEM: dict[str, Any] = {
             "weapon_damage_scale": 0,
             "unarmed_power_scale": 0,
             "mob_unarmed_level_scale": 0,
+            "mob_unarmed_damage_multiplier": 0.2,
             "multiplier": 1.0,
             "damage_type": "ability",
             "can_dodge": False,
@@ -175,6 +177,7 @@ DEFAULT_COMBAT_SYSTEM: dict[str, Any] = {
             "weapon_damage_scale": 0,
             "unarmed_power_scale": 0,
             "mob_unarmed_level_scale": 0,
+            "mob_unarmed_damage_multiplier": 0.2,
             "multiplier": 1.25,
             "damage_type": "healing",
             "can_dodge": False,
@@ -197,6 +200,7 @@ class CombatantSnapshot:
     level: int
     stats: dict[str, float]
     weapon_damage: float
+    is_disarmed: bool = False
 
 
 @dataclass(frozen=True)
@@ -467,6 +471,7 @@ def _coerce_profile(
         )
 
     profile = _merge_dict(default_profile or {}, value)
+    profile.setdefault("mob_unarmed_damage_multiplier", 0.2)
     missing_fields = sorted(PROFILE_FIELDS - set(profile.keys()))
     if missing_fields:
         raise CombatFormulaValidationError(
@@ -511,6 +516,11 @@ def _coerce_profile(
         "mob_unarmed_level_scale": _coerce_number(
             profile.get("mob_unarmed_level_scale"),
             field_name=f"{field_name}.mob_unarmed_level_scale",
+            minimum=0,
+        ),
+        "mob_unarmed_damage_multiplier": _coerce_number(
+            profile.get("mob_unarmed_damage_multiplier"),
+            field_name=f"{field_name}.mob_unarmed_damage_multiplier",
             minimum=0,
         ),
         "multiplier": _coerce_number(
@@ -699,16 +709,6 @@ def _item_stat(item: Any, field_name: str) -> float:
         return 0.0
 
 
-def _iter_equipment_items(actor: Any):
-    equipment = getattr(actor, "equipment", None)
-    if not equipment:
-        return
-    for slot in constants.EQUIPMENT_SLOTS:
-        item = getattr(equipment, slot, None)
-        if item is not None:
-            yield item
-
-
 def _equipped_weapon(actor: Any) -> Any | None:
     equipment = getattr(actor, "equipment", None)
     if not equipment:
@@ -741,11 +741,11 @@ def _player_snapshot(actor: Any, world: Any) -> CombatantSnapshot:
     )
 
 
-def _mob_snapshot(actor: Any) -> CombatantSnapshot:
+def _mob_snapshot(actor: Any, *, is_disarmed: bool = False) -> CombatantSnapshot:
     snapshot_stats = {
         "attack_power": _numeric_attr(actor, "attack_power"),
         "ability_power": _numeric_attr(actor, "ability_power"),
-        "weapon_damage": _weapon_damage(actor),
+        "weapon_damage": _numeric_attr(actor, "weapon_damage"),
         "armor": _numeric_attr(actor, "armor"),
         "crit": _numeric_attr(actor, "crit"),
         "dodge": _numeric_attr(actor, "dodge"),
@@ -754,32 +754,25 @@ def _mob_snapshot(actor: Any) -> CombatantSnapshot:
         "energy_max": _numeric_attr(actor, "energy_max"),
         "stamina_max": _numeric_attr(actor, "stamina_max"),
     }
-    for item in _iter_equipment_items(actor) or ():
-        for stat_key in (
-            "attack_power",
-            "ability_power",
-            "armor",
-            "crit",
-            "dodge",
-            "resilience",
-            "health_max",
-            "energy_max",
-            "stamina_max",
-        ):
-            snapshot_stats[stat_key] += _item_stat(item, stat_key)
     return CombatantSnapshot(
         actor_type="mob",
         level=max(1, int(getattr(actor, "level", 1) or 1)),
         stats=snapshot_stats,
         weapon_damage=snapshot_stats["weapon_damage"],
+        is_disarmed=is_disarmed,
     )
 
 
-def combatant_snapshot(actor: Any, *, world: Any | None = None) -> CombatantSnapshot:
+def combatant_snapshot(
+    actor: Any,
+    *,
+    world: Any | None = None,
+    is_disarmed: bool = False,
+) -> CombatantSnapshot:
     runtime_world = world or getattr(actor, "world", None)
     if _actor_type(actor) == "player":
         return _player_snapshot(actor, runtime_world)
-    return _mob_snapshot(actor)
+    return _mob_snapshot(actor, is_disarmed=is_disarmed)
 
 
 def _stat_value(snapshot: CombatantSnapshot, stat_key: str) -> float:
@@ -876,16 +869,24 @@ def _base_output(
     if not profile["use_weapon_damage"]:
         return power_value * power_scale
 
-    if actor_snapshot.weapon_damage > 0:
-        return (
-            actor_snapshot.weapon_damage * float(profile["weapon_damage_scale"])
-            + power_value * power_scale
-        )
-
     if actor_snapshot.actor_type == "mob":
+        if actor_snapshot.weapon_damage > 0:
+            armed_output = (
+                actor_snapshot.weapon_damage * float(profile["weapon_damage_scale"])
+                + power_value * power_scale
+            )
+            if actor_snapshot.is_disarmed:
+                return armed_output * float(profile["mob_unarmed_damage_multiplier"])
+            return armed_output
         return (
             _level_scale(actor_snapshot.level, combat_system)
             * float(profile["mob_unarmed_level_scale"])
+            + power_value * power_scale
+        )
+
+    if actor_snapshot.weapon_damage > 0:
+        return (
+            actor_snapshot.weapon_damage * float(profile["weapon_damage_scale"])
             + power_value * power_scale
         )
 
@@ -900,6 +901,7 @@ def resolve_attack(
     profile_key: str | None = None,
     overrides: dict[str, Any] | None = None,
     rng: Callable[[], float] | None = None,
+    actor_disarmed: bool = False,
 ) -> CombatAttackResult:
     runtime_world = world or getattr(actor, "world", None) or getattr(target, "world", None)
     combat_system = get_world_combat_system(runtime_world)
@@ -920,7 +922,11 @@ def resolve_attack(
         )
 
     rng = rng or random.random
-    actor_snapshot = combatant_snapshot(actor, world=runtime_world)
+    actor_snapshot = combatant_snapshot(
+        actor,
+        world=runtime_world,
+        is_disarmed=actor_disarmed,
+    )
     target_snapshot = combatant_snapshot(target, world=runtime_world)
 
     base = _base_output(

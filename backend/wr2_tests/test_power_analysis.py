@@ -82,6 +82,7 @@ class TestBuilderPowerAnalysis(WorldTestCase):
                 "level": 8,
                 "health_max": 80,
                 "attack_power": 20,
+                "weapon_damage": 24,
                 "armor": 12,
                 "dodge": 4,
             },
@@ -92,10 +93,11 @@ class TestBuilderPowerAnalysis(WorldTestCase):
 
         self.assertEqual(analysis["kind"], "mobdefinition")
         self.assertEqual(analysis["summary"]["level"], 8)
+        self.assertAlmostEqual(analysis["metrics"]["basic_attack_base"], 24 + round(23 / 16, 2))
         self.assertGreater(analysis["metrics"]["expected_basic_attack"], 0)
         self.assertGreater(analysis["metrics"]["physical_effective_health"], 80)
         self.assertTrue(
-            any(driver["category"] == "offense" for driver in analysis["drivers"])
+            any(driver["stat"] == "weapon_damage" for driver in analysis["drivers"])
         )
 
     def test_power_endpoints_return_analysis_payloads(self):
@@ -119,6 +121,7 @@ class TestBuilderPowerAnalysis(WorldTestCase):
                 "level": 6,
                 "health_max": 45,
                 "attack_power": 8,
+                "weapon_damage": 12,
             },
         )
 

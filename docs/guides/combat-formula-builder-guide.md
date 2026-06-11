@@ -19,6 +19,7 @@ to be added when the builder wants to tune that model.
 Most builders should only need to tune a few combat values:
 
 - `weapon_damage` on weapon item definitions
+- `weapon_damage` on mob definitions for virtual or natural weapon damage
 - `power_scale` for how much attack power or ability power matters
 - `can_dodge` and `can_crit`
 - `crit_multiplier`
@@ -31,7 +32,8 @@ The default combat model is:
 
 - physical attacks use weapon damage plus attack power
 - unarmed players use a reduced attack power fallback
-- mobs without weapons get a level-based fallback
+- mobs use their internal `weapon_damage` stat instead of equipped item damage
+- mobs with no internal `weapon_damage` get a level-based fallback
 - armor mitigates physical damage
 - resilience mitigates ability or magical damage
 - dodge and crit use level-scaled ratings
@@ -124,6 +126,7 @@ combat:
       weapon_damage_scale: 1.0
       unarmed_power_scale: 0.25
       mob_unarmed_level_scale: 0.5
+      mob_unarmed_damage_multiplier: 0.2
       multiplier: 1.0
       damage_type: physical
       can_dodge: true
@@ -142,6 +145,7 @@ combat:
       weapon_damage_scale: 0
       unarmed_power_scale: 0
       mob_unarmed_level_scale: 0
+      mob_unarmed_damage_multiplier: 0.2
       multiplier: 1.0
       damage_type: ability
       can_dodge: false
@@ -162,25 +166,29 @@ fields you want to change.
 Combat uses the actor's effective stats at the moment the hit resolves. For a
 player, `attack_power`, `ability_power`, armor, crit, dodge, and resilience come
 from the stat system, including equipped item and augment bonuses. The equipped
-weapon's `weapon_damage` is read separately from the weapon slot. Use the
-`stats` command before testing combat if you want to confirm the exact effective
-numbers the engine is using.
+weapon's `weapon_damage` is read separately from the weapon slot. For mobs,
+combat reads `weapon_damage` from the mob's own authored stats and ignores any
+equipped weapon item for damage calculation. Use the `stats` command before
+testing combat if you want to confirm the exact effective numbers the engine is
+using.
 
 On a completely blank new world, there are no authored attributes or combat
 power formulas. The default world config still gives players baseline stamina
 and stamina regeneration so they can move, but a new unarmed player usually has
 `attack_power: 0`. With the default physical profile, that means the player
 needs either a weapon with `weapon_damage` or a stat formula that produces
-`attack_power` before their basic attack deals damage. Mobs without weapons use
-the default level-based fallback described below, so they can still hit even
-without authored stats.
+`attack_power` before their basic attack deals damage. Mobs can define
+`weapon_damage` directly on the mob definition. If they do not, they use the
+default level-based fallback described below, so they can still hit even without
+authored weapon stats.
 
 For the default physical attack profile, the base damage starts from weapon
 damage plus attack power:
 
 ```text
 power = actor.attack_power
-weapon = actor.equipped_weapon.weapon_damage
+weapon = actor.equipped_weapon.weapon_damage for players
+weapon = actor.weapon_damage for mobs
 
 if weapon > 0:
   base = weapon * weapon_damage_scale + power * power_scale
@@ -188,13 +196,17 @@ else:
   base = power * unarmed_power_scale
 ```
 
-Mobs without weapons use a level-based fallback instead of the player unarmed
-formula:
+Mobs with `weapon_damage: 0` use a level-based fallback instead of the player
+unarmed formula:
 
 ```text
 base = level_scale(actor.level) * mob_unarmed_level_scale
      + power * power_scale
 ```
+
+If a mob with internal weapon damage is disarmed, its armed base output is
+multiplied by `mob_unarmed_damage_multiplier`. The default is `0.2`, so a
+disarmed mob deals 20% of its normal basic-attack output.
 
 ### Level Scale
 
@@ -796,6 +808,7 @@ spec:
         weapon_damage_scale: 1.0
         unarmed_power_scale: 0.0417
         mob_unarmed_level_scale: 0.5
+        mob_unarmed_damage_multiplier: 0.2
         can_dodge: true
         can_crit: true
         crit_multiplier: 1.5

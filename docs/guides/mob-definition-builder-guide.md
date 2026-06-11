@@ -27,13 +27,20 @@ spec:
   level: 1
   health_max: 8
   attack_power: 1
+  weapon_damage: 2
   exp_worth: 1
 ```
 
 Common direct mob fields include `level`, `exp_worth`, `gold`, `health_max`,
 `health_regen`, `energy_max`, `energy_regen`, `stamina_max`, `stamina_regen`,
-`regen_rate`, `attack_power`, `ability_power`, `armor`, `crit`, `dodge`,
+`regen_rate`, `attack_power`, `weapon_damage`, `ability_power`, `armor`, `crit`, `dodge`,
 `resilience`, `aggression`, `fights_back`, and `is_invisible`.
+
+For mobs, `weapon_damage` is an internal combat stat. It represents the mob's
+weapon, claws, bite, slam, or other natural attack without requiring a spawned
+weapon item. Runtime mob damage ignores equipped weapon items and uses the mob's
+own `weapon_damage` plus `attack_power` scaling. If `weapon_damage` is `0`, the
+combat profile's unarmed mob fallback is used instead.
 
 Use `aggression: passive`, `normal`, `players`, `all`, or `friendly`. The
 alias `aggressive` is accepted for `all`.

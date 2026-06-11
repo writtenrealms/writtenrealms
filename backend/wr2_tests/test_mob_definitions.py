@@ -32,6 +32,7 @@ class TestMobDefinitions(WorldTestCase):
                 "aggression": "aggressive",
                 "health_max": 45,
                 "attack_power": 6,
+                "weapon_damage": 12,
             },
             attributes={"brawn": 2},
             randomization={
@@ -58,6 +59,7 @@ class TestMobDefinitions(WorldTestCase):
         self.assertEqual(mob.health_max, 45)
         self.assertEqual(mob.health, 45)
         self.assertEqual(mob.attack_power, 18)
+        self.assertEqual(mob.weapon_damage, 12)
         self.assertEqual(mob.attributes, {"brawn": 12.0})
         self.assertEqual(mob.roll_metadata["ignored_attributes"], ["luck"])
         self.assertTrue(mob.roll_metadata["randomized"])
@@ -172,6 +174,7 @@ spec:
   level: 5
   health_max: 42
   attack_power: 7
+  weapon_damage: 13
   attributes:
     brawn: 2
   randomization:
@@ -193,6 +196,7 @@ spec:
         self.assertEqual(definition.base_properties["aggression"], adv_consts.MOB_AGGRESSION_ALL)
         self.assertEqual(definition.base_properties["level"], 5)
         self.assertEqual(definition.base_properties["health_max"], 42)
+        self.assertEqual(definition.base_properties["weapon_damage"], 13)
         self.assertEqual(definition.attributes, {"brawn": 2})
         self.assertEqual(definition.randomization["attributes"][0]["mode"], "favor_high")
 
@@ -414,6 +418,7 @@ class TestMobDefinitionBuilderEndpoints(WorldTestCase):
         self.assertEqual(resp.data["manifest"]["spec"]["attributes"], {})
         self.assertGreater(resp.data["suggested_stats"]["health_max"], 0)
         self.assertGreater(resp.data["suggested_stats"]["attack_power"], 0)
+        self.assertGreater(resp.data["suggested_stats"]["weapon_damage"], 0)
         self.assertIn("kind: mobdefinition", resp.data["yaml"])
 
         apply_resp = self.client.post(

@@ -263,6 +263,7 @@ class MobMixin(models.Model):
     resilience = models.PositiveIntegerField(default=0)
     attack_power = models.PositiveIntegerField(default=1)
     ability_power = models.PositiveIntegerField(default=0)
+    weapon_damage = models.FloatField(default=0)
 
     regen_rate = models.IntegerField(default=4)
 

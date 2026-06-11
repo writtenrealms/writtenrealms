@@ -22,6 +22,7 @@ COMBAT_STAT_KEYS = (
     "stamina_max",
     "stamina_regen",
     "attack_power",
+    "weapon_damage",
     "ability_power",
     "armor",
     "crit",
@@ -547,6 +548,12 @@ def _mob_basic_attack_base(
     profile = _combat_profile(combat_system, "default_attack_profile")
     attack_power = _safe_float(stats.get("attack_power"))
     power_scale = _safe_float(profile.get("power_scale"), 0.0)
+    weapon_damage = _safe_float(stats.get("weapon_damage"))
+    weapon_scale = _safe_float(profile.get("weapon_damage_scale"), 0.0)
+    if profile.get("use_weapon_damage", True) and weapon_damage > 0:
+        return weapon_damage * weapon_scale + attack_power * power_scale
+    if not profile.get("use_weapon_damage", True):
+        return attack_power * power_scale
     unarmed_level_scale = _safe_float(profile.get("mob_unarmed_level_scale"), 0.0)
     return _level_scale(level, combat_system) * unarmed_level_scale + attack_power * power_scale
 
@@ -560,6 +567,10 @@ def _mob_score_components(
     drivers: list[dict[str, Any]] = []
     attack_profile = _combat_profile(combat_system, "default_attack_profile")
     crit_multiplier = _safe_float(attack_profile.get("crit_multiplier"), 1.5)
+    weapon_damage = _safe_float(stats.get("weapon_damage"))
+    attack_power = _safe_float(stats.get("attack_power"))
+    weapon_scale = _safe_float(attack_profile.get("weapon_damage_scale"), 0.0)
+    attack_power_scale = _safe_float(attack_profile.get("power_scale"), 0.0)
     basic_base = _mob_basic_attack_base(
         level=level,
         stats=stats,
@@ -597,11 +608,15 @@ def _mob_score_components(
     _add_driver(
         drivers,
         category="offense",
-        stat="attack_power",
+        stat="weapon_damage" if weapon_damage > 0 else "attack_power",
         label="Basic attack",
-        value=_safe_float(stats.get("attack_power")),
+        value=basic_base,
         score=expected_attack * 10,
-        detail=f"{_round(expected_attack)} expected",
+        detail=(
+            f"{_round(expected_attack)} expected; "
+            f"{_round(weapon_damage * weapon_scale)} weapon + "
+            f"{_round(attack_power * attack_power_scale)} power"
+        ),
     )
     _add_driver(
         drivers,

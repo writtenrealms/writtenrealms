@@ -33,7 +33,8 @@ The first WR2 implementation is live in the runtime:
   `attack_power` as direct damage.
 - Combat events include formula details such as base damage, damage dealt,
   damage mitigated, dodge chance, crit chance, and mitigation percentages.
-- Item templates and spawned items now have `weapon_damage`.
+- Item templates, spawned items, mob templates, and spawned mobs now have
+  `weapon_damage`.
 - Randomly generated weapons receive level-scaled `weapon_damage`.
 
 This is still the first version. Abilities, effects, PvP, groups, absorbs,
@@ -149,6 +150,7 @@ spec:
         weapon_damage_scale: 1.0
         unarmed_power_scale: 0.25
         mob_unarmed_level_scale: 0.5
+        mob_unarmed_damage_multiplier: 0.2
         multiplier: 1.0
         damage_type: physical
         can_dodge: true
@@ -168,6 +170,7 @@ spec:
         weapon_damage_scale: 0
         unarmed_power_scale: 0
         mob_unarmed_level_scale: 0
+        mob_unarmed_damage_multiplier: 0.2
         multiplier: 1.0
         damage_type: ability
         can_dodge: false
@@ -185,9 +188,11 @@ profile edits into the engine defaults.
 
 ## Important Stat Semantics
 
-`weapon_damage` is a first-class item stat. Basic weapon attacks can use it
-directly, and builders can set it on item definitions. This fixes the WR1
-awkwardness where weapon damage was effectively hidden inside level.
+`weapon_damage` is a first-class combat stat. Players read it from their
+equipped weapon item. Mobs read it from their own authored mob stats so builders
+do not need to equip every mob with a weapon item just to establish its damage
+baseline. This fixes the WR1 awkwardness where weapon damage was effectively
+hidden inside level.
 
 `attack_power` remains the physical throughput stat. It can add to weapon
 damage or drive unarmed damage, depending on the attack profile.
@@ -293,15 +298,18 @@ For players without a weapon:
 base = attack_power * unarmed_power_scale
 ```
 
-For spawned mobs without a weapon:
+For spawned mobs with `weapon_damage: 0`:
 
 ```text
 base = level_scale(actor.level) * mob_unarmed_level_scale
      + attack_power * power_scale
 ```
 
-Mobs keep this level fallback so builders do not have to put a weapon item on
-every rat, wolf, slime, or guard just to make it capable of dealing damage.
+Mobs keep this level fallback so builders do not have to author explicit
+weapon damage on every rat, wolf, slime, or guard just to make it capable of
+dealing damage. If a mob with positive `weapon_damage` is disarmed, its armed
+base output is multiplied by `mob_unarmed_damage_multiplier`; the default `0.2`
+means a disarmed mob deals 20% of normal basic-attack output.
 
 The default `unarmed_power_scale` is intentionally stronger than WR1's pure
 unarmed fallback. WR2 has no mandatory starting weapon yet, so a new world

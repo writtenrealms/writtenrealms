@@ -105,6 +105,14 @@ def _basic_attack_base(*, level: int, stats: dict[str, int], combat_system: dict
     if not profile.get("use_weapon_damage", True):
         return _ceil_stat(power_value * power_scale)
 
+    weapon_damage = float(stats.get("weapon_damage") or 0)
+    if weapon_damage > 0:
+        base = (
+            weapon_damage * float(profile.get("weapon_damage_scale") or 0)
+            + power_value * power_scale
+        )
+        return _ceil_stat(base)
+
     base = (
         _level_scale(level, combat_system)
         * float(profile.get("mob_unarmed_level_scale") or 0)
@@ -161,6 +169,7 @@ def _suggest_direct_stats(*, level: int, mob_type: str, scale: float) -> dict[st
         "stamina_regen": 0,
         "regen_rate": 4,
         "attack_power": _ceil_stat(scale * modifier.attack_power, minimum=1),
+        "weapon_damage": _ceil_stat(scale * 1.5 * modifier.attack_power, minimum=1),
         "ability_power": 0,
         "armor": _ceil_stat(scale * 0.35 * modifier.armor),
         "dodge": _ceil_stat(scale * 0.25 * modifier.dodge),
