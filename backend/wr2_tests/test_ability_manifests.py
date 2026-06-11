@@ -72,6 +72,7 @@ spec:
     rounds: 1
   cooldown:
     rounds: 2
+    trigger: on_hit
   components:
     - type: damage
       profile: basic_physical
@@ -88,7 +89,7 @@ spec:
         self.assertEqual(ability.name, "Power Strike")
         self.assertEqual(ability.command_verbs, ["strike"])
         self.assertEqual(ability.cast_time["rounds"], 1)
-        self.assertEqual(ability.cooldown["rounds"], 2)
+        self.assertEqual(ability.cooldown, {"rounds": 2, "trigger": "on_hit"})
         self.assertEqual(ability.components[0]["overrides"]["multiplier"], 1.5)
 
     def test_apply_abilities_manifest_can_create_bundle(self):
@@ -385,12 +386,31 @@ metadata:
 spec:
   ability_progression:
     max_known: uncapped
+    starting_abilities:
+      - first-aid
+      - ability: bash
+        conditions:
+          eq: [actor.archetype, hoplite]
 """
         resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
 
         self.assertEqual(resp.status_code, 200)
         self.world.config.refresh_from_db()
-        self.assertEqual(self.world.config.ability_progression["max_known"], "uncapped")
+        self.assertEqual(
+            self.world.config.ability_progression,
+            {
+                "max_known": "uncapped",
+                "starting_abilities": [
+                    {"ability": "first-aid"},
+                    {
+                        "ability": "bash",
+                        "conditions": {
+                            "eq": ["actor.archetype", "hoplite"],
+                        },
+                    },
+                ],
+            },
+        )
 
     def test_world_export_includes_ability_documents(self):
         self._create_ability(

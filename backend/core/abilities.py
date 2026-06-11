@@ -13,6 +13,8 @@ import re
 from typing import Any
 
 from core.condition_dsl import (
+    ConditionContext,
+    evaluate_condition,
     is_structured_condition_mapping,
     validate_condition_payload,
 )
@@ -31,6 +33,7 @@ TARGET_TYPES = ("hostile", "self", "ally")
 TARGET_DEFAULTS = ("current_target", "self")
 COST_RESOURCES = ("health", "energy", "stamina")
 COST_CALCS = ("fixed", "percent_max", "percent_base")
+COOLDOWN_TRIGGERS = ("on_resolve", "on_hit")
 COMPONENT_TYPES = ("damage", "healing", "effect", "state")
 EFFECT_TYPES = ("stun", "dot", "hot")
 EFFECT_APPLY_POLICIES = ("on_resolve", "on_hit")
@@ -79,13 +82,67 @@ def default_ability_progression() -> dict[str, Any]:
     }
 
 
+def _normalize_starting_ability_entry(value: Any, *, field_name: str) -> dict[str, Any]:
+    if isinstance(value, str):
+        return {
+            "ability": _coerce_slug(value, field_name=field_name, allow_hyphen=True),
+        }
+    if not isinstance(value, dict):
+        raise AbilityValidationError(f"{field_name} must be an ability slug or mapping.")
+    unknown_fields = sorted(set(value.keys()) - {"ability", "slug", "conditions"})
+    if unknown_fields:
+        raise AbilityValidationError(
+            f"{field_name} has unsupported field(s): {', '.join(unknown_fields)}."
+        )
+    raw_slug = value.get("ability", value.get("slug"))
+    normalized = {
+        "ability": _coerce_slug(
+            raw_slug,
+            field_name=f"{field_name}.ability",
+            allow_hyphen=True,
+        ),
+    }
+    if "conditions" in value:
+        conditions = deepcopy(value.get("conditions"))
+        try:
+            validate_condition_payload(
+                conditions,
+                field_name=f"{field_name}.conditions",
+            )
+        except ValueError as exc:
+            raise AbilityValidationError(str(exc))
+        normalized["conditions"] = conditions
+    return normalized
+
+
+def _normalize_starting_abilities(value: Any) -> list[dict[str, Any]]:
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise AbilityValidationError("ability_progression.starting_abilities must be a list.")
+
+    normalized: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for index, raw_entry in enumerate(value):
+        entry = _normalize_starting_ability_entry(
+            raw_entry,
+            field_name=f"ability_progression.starting_abilities[{index}]",
+        )
+        key = (entry["ability"], repr(entry.get("conditions")))
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(entry)
+    return normalized
+
+
 def normalize_ability_progression(value: Any) -> dict[str, Any]:
     if value in (None, ""):
         value = {}
     if not isinstance(value, dict):
         raise AbilityValidationError("ability_progression must be a mapping.")
 
-    unknown_fields = sorted(set(value.keys()) - {"max_known"})
+    unknown_fields = sorted(set(value.keys()) - {"max_known", "starting_abilities"})
     if unknown_fields:
         raise AbilityValidationError(
             "ability_progression has unsupported field(s): "
@@ -93,6 +150,7 @@ def normalize_ability_progression(value: Any) -> dict[str, Any]:
             + "."
         )
 
+    normalized: dict[str, Any] = {}
     raw_max_known = value.get("max_known", DEFAULT_MAX_KNOWN_ABILITIES)
     if isinstance(raw_max_known, str):
         max_known = raw_max_known.strip().lower()
@@ -100,23 +158,29 @@ def normalize_ability_progression(value: Any) -> dict[str, Any]:
             raise AbilityValidationError(
                 "ability_progression.max_known must be a positive integer or uncapped."
             )
-        return {"max_known": UNCAPPED_MAX_KNOWN_ABILITIES}
+        normalized["max_known"] = UNCAPPED_MAX_KNOWN_ABILITIES
+    else:
+        if isinstance(raw_max_known, bool):
+            raise AbilityValidationError(
+                "ability_progression.max_known must be a positive integer or uncapped."
+            )
+        try:
+            max_known_int = int(raw_max_known)
+        except (TypeError, ValueError):
+            raise AbilityValidationError(
+                "ability_progression.max_known must be a positive integer or uncapped."
+            )
+        if max_known_int < 1:
+            raise AbilityValidationError(
+                "ability_progression.max_known must be >= 1 or uncapped."
+            )
+        normalized["max_known"] = max_known_int
 
-    if isinstance(raw_max_known, bool):
-        raise AbilityValidationError(
-            "ability_progression.max_known must be a positive integer or uncapped."
+    if "starting_abilities" in value:
+        normalized["starting_abilities"] = _normalize_starting_abilities(
+            value.get("starting_abilities")
         )
-    try:
-        max_known_int = int(raw_max_known)
-    except (TypeError, ValueError):
-        raise AbilityValidationError(
-            "ability_progression.max_known must be a positive integer or uncapped."
-        )
-    if max_known_int < 1:
-        raise AbilityValidationError(
-            "ability_progression.max_known must be >= 1 or uncapped."
-        )
-    return {"max_known": max_known_int}
+    return normalized
 
 
 def max_known_abilities_for_world(world: Any) -> int | None:
@@ -130,6 +194,35 @@ def max_known_abilities_for_world(world: Any) -> int | None:
     if max_known == UNCAPPED_MAX_KNOWN_ABILITIES:
         return None
     return int(max_known)
+
+
+def starting_ability_slugs_for_actor(actor: Any, *, world: Any | None = None) -> list[str]:
+    runtime_world = world or getattr(actor, "world", None)
+    config = (
+        getattr(runtime_world, "effective_config", None)
+        or getattr(runtime_world, "config", None)
+    )
+    if config is None:
+        return []
+    progression = normalize_ability_progression(
+        getattr(config, "ability_progression", None)
+    )
+    slugs: list[str] = []
+    for entry in progression.get("starting_abilities", []):
+        conditions = entry.get("conditions")
+        if conditions and not evaluate_condition(
+            conditions,
+            context=ConditionContext(
+                actor=actor,
+                player=actor,
+                world=runtime_world,
+            ),
+        ):
+            continue
+        slug = entry["ability"]
+        if slug not in slugs:
+            slugs.append(slug)
+    return slugs
 
 
 def definition_world(world: Any) -> Any:
@@ -335,13 +428,21 @@ def _normalize_cooldown(value: Any) -> dict[str, Any]:
         return {"rounds": 0}
     if not isinstance(value, dict):
         raise AbilityValidationError("spec.cooldown must be a mapping.")
-    return {
+    normalized = {
         "rounds": _coerce_positive_int(
             value.get("rounds", 0),
             field_name="spec.cooldown.rounds",
             minimum=0,
         )
     }
+    trigger = value.get("trigger")
+    if trigger not in (None, ""):
+        normalized["trigger"] = _coerce_choice(
+            trigger,
+            choices=COOLDOWN_TRIGGERS,
+            field_name="spec.cooldown.trigger",
+        )
+    return normalized
 
 
 def _normalize_cast_time(value: Any) -> dict[str, Any]:

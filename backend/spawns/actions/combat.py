@@ -2196,7 +2196,11 @@ def _execute_pending_player_ability(
             )
         )
 
-    cooldown_started = start_ability_cooldown(player, ability)
+    cooldown_started = start_ability_cooldown(
+        player,
+        ability,
+        hit_landed=hit_landed,
+    )
     update_fields: list[str] = []
     if cost_paid:
         resource = str((ability.cost or {}).get("resource") or "").strip().lower()

@@ -95,7 +95,7 @@ class TestCombatAbilities(WorldTestCase):
             components=components,
         )
 
-    def _mob(self, *, health=None, attack_power=0, fights_back=False):
+    def _mob(self, *, health=None, attack_power=0, fights_back=False, dodge=0):
         mob = Mob.objects.create(
             world=self.spawn_world,
             room=self.room,
@@ -104,6 +104,7 @@ class TestCombatAbilities(WorldTestCase):
             health=health or self.stats["attack_power"] * 10,
             health_max=health or self.stats["attack_power"] * 10,
             attack_power=attack_power,
+            dodge=dodge,
             fights_back=fights_back,
             exp_worth=1,
         )
@@ -543,6 +544,56 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(self.player.ability_cooldowns, {"power-strike": 2})
         updates = self._messages_by_type(messages, "player.abilities.update")
         self.assertEqual(updates[-1]["data"]["actor"]["ability_cooldowns"], {"power-strike": 2})
+
+    def test_on_hit_cooldown_does_not_start_when_ability_is_dodged(self):
+        self._ability(
+            slug="bash",
+            name="Bash",
+            verbs=["bash"],
+            cooldown={"rounds": 6, "trigger": "on_hit"},
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {
+                        "multiplier": 1,
+                        "can_dodge": True,
+                        "can_crit": False,
+                    },
+                    "text": {"label": "Bash"},
+                },
+                {
+                    "type": "effect",
+                    "effect": "stun",
+                    "duration": {"rounds": 2},
+                    "apply": "on_hit",
+                    "text": {"label": "Bash"},
+                },
+            ],
+        )
+        self.player.known_abilities = ["bash"]
+        self.player.save(update_fields=["known_abilities"])
+        mob = self._mob(health=self.stats["attack_power"] * 10, dodge=100000)
+
+        with patch("core.combat_formulas.random.random", return_value=0):
+            with capture_game_messages() as messages:
+                dispatch_text_command(self.player.id, "bash rat")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.ability_cooldowns, {})
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertEqual(attacks[0]["data"]["outcome"], "dodged")
+        effects = self._messages_by_type(messages, "notification.combat.effect")
+        self.assertEqual(effects, [])
+
+        mob.dodge = 0
+        mob.save(update_fields=["dodge"])
+        with patch("core.combat_formulas.random.random", return_value=0.99):
+            with capture_game_messages():
+                dispatch_text_command(self.player.id, "bash rat")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.ability_cooldowns, {"bash": 6})
 
     def test_state_sync_includes_ability_hotkeys_cooldowns_and_definitions(self):
         from spawns.state_payloads import build_state_sync

@@ -65,6 +65,38 @@ spec:
     max_known: uncapped
 ```
 
+## Starting Abilities
+
+Use `ability_progression.starting_abilities` when newly initialized characters
+should begin with known abilities. A plain slug grants the ability to every
+new character, which works for classless worlds:
+
+```yaml
+kind: world
+spec:
+  ability_progression:
+    max_known: 8
+    starting_abilities:
+      - first-aid
+```
+
+Use a condition entry when only some characters should start with an ability.
+Conditions use the same WR2 condition DSL as triggers and ability requirements:
+
+```yaml
+kind: world
+spec:
+  ability_progression:
+    max_known: 8
+    starting_abilities:
+      - ability: bash
+        conditions:
+          eq: [actor.archetype, hoplite]
+```
+
+Starting abilities are granted from active ability definitions in the world,
+deduped, assigned hotkeys in order, and capped by `max_known`.
+
 Future progression may support feat-style choice slots where one slot chooses
 one of several abilities. Do not build worlds around that yet; the first pass is
 a simple known ability cap.
@@ -172,6 +204,26 @@ Once the ability is actively charging, it cannot be replaced by another ability.
 
 Out-of-combat utility abilities currently resolve immediately; cast times are
 combat-round behavior.
+
+## Cooldowns
+
+Use `spec.cooldown.rounds` for round-based cooldowns. By default, cooldown
+starts when the ability resolves:
+
+```yaml
+cooldown:
+  rounds: 3
+```
+
+Use `trigger: on_hit` when cooldown should start only if a damage or healing
+component lands. This is useful for dodgeable control abilities where a miss
+should not consume the cooldown:
+
+```yaml
+cooldown:
+  rounds: 6
+  trigger: on_hit
+```
 
 ## Damage Abilities
 

@@ -9,7 +9,11 @@ from django.db.utils import NotSupportedError
 from django.utils import timezone
 
 from builders.models import AbilityDefinition, MobDefinition
-from core.abilities import definition_world, max_known_abilities_for_world
+from core.abilities import (
+    definition_world,
+    max_known_abilities_for_world,
+    starting_ability_slugs_for_actor,
+)
 from core.combat_formulas import resolve_attack
 from core.computations import compute_stats
 from core.condition_dsl import (
@@ -221,6 +225,36 @@ def resolve_ability_for_hotkey(player: Player, hotkey: str | int | None) -> Abil
 
 def player_knows_ability(player: Player, ability: AbilityDefinition) -> bool:
     return ability.slug in set(known_ability_slugs(player))
+
+
+def grant_starting_abilities(player: Player) -> bool:
+    slugs = starting_ability_slugs_for_actor(player, world=player.world)
+    if not slugs:
+        return False
+
+    abilities = {
+        ability.slug: ability
+        for ability in _ability_queryset_for_world(player.world).filter(slug__in=slugs)
+    }
+    if not abilities:
+        return False
+
+    known = known_ability_slugs(player)
+    max_known = max_known_abilities_for_world(player.world)
+    changed = False
+    for slug in slugs:
+        if slug in known:
+            continue
+        ability = abilities.get(slug)
+        if not ability:
+            continue
+        if max_known is not None and len(known) >= max_known:
+            break
+        known.append(slug)
+        player.known_abilities = known
+        _assign_next_ability_hotkey(player, ability)
+        changed = True
+    return changed
 
 
 def _legacy_ability_requirements_condition(requirements: dict[str, Any]) -> Any:
@@ -654,6 +688,13 @@ def cooldown_remaining(player: Player, ability: AbilityDefinition) -> int:
     return _cooldowns(player).get(ability.slug, 0)
 
 
+def cooldown_trigger(ability: AbilityDefinition) -> str:
+    trigger = str((ability.cooldown or {}).get("trigger") or "on_resolve").strip().lower()
+    if trigger not in {"on_resolve", "on_hit"}:
+        return "on_resolve"
+    return trigger
+
+
 def decrement_ability_cooldowns(player: Player, *, exclude: set[str] | None = None) -> bool:
     exclude = exclude or set()
     cooldowns = _cooldowns(player)
@@ -676,9 +717,16 @@ def decrement_ability_cooldowns(player: Player, *, exclude: set[str] | None = No
     return True
 
 
-def start_ability_cooldown(player: Player, ability: AbilityDefinition) -> bool:
+def start_ability_cooldown(
+    player: Player,
+    ability: AbilityDefinition,
+    *,
+    hit_landed: bool = False,
+) -> bool:
     rounds = int((ability.cooldown or {}).get("rounds") or 0)
     if rounds <= 0:
+        return False
+    if cooldown_trigger(ability) == "on_hit" and not hit_landed:
         return False
     cooldowns = _cooldowns(player)
     cooldowns[ability.slug] = rounds

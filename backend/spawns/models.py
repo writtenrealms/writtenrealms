@@ -323,6 +323,9 @@ class Player(CharMixin, AdventBaseModel):
             # Delete legacy marks and canonical character state
             self.marks.all().delete()
             CharacterState.objects.filter(player=self).delete()
+            self.known_abilities = []
+            self.ability_hotkeys = {}
+            self.ability_cooldowns = {}
         elif self.level < leveling_config.starting_level:
             self.level = leveling_config.starting_level
             self.experience = experience_for_level(self.level, leveling_config)
@@ -337,6 +340,10 @@ class Player(CharMixin, AdventBaseModel):
         self.energy = int(stats.get('energy_max') or 0)
         self.stamina = int(stats.get('stamina_max') or 0)
         self.save()
+
+        from spawns.actions.abilities import grant_starting_abilities
+        if grant_starting_abilities(self):
+            self.save(update_fields=["known_abilities", "ability_hotkeys"])
 
         if starting_eq:
             char_eqs = StartingEq.objects.filter(
