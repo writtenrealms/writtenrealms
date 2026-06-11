@@ -118,6 +118,26 @@ class TestCombatAbilities(WorldTestCase):
             and msg["message"].get("type") == message_type
         ]
 
+    def _player_first_initiative(self, mob):
+        return [
+            {
+                "type": "player",
+                "id": self.player.id,
+                "key": self.player.key,
+                "side": "player_party",
+                "initiative": 20,
+                "source": "test",
+            },
+            {
+                "type": "mob",
+                "id": mob.id,
+                "key": mob.key,
+                "side": "hostile",
+                "initiative": 10,
+                "source": "test",
+            },
+        ]
+
     def test_percent_base_cost_uses_energy_base_before_equipment_modifiers(self):
         from spawns.actions.abilities import ability_cost_amount
 
@@ -834,8 +854,9 @@ class TestCombatAbilities(WorldTestCase):
         self.player.save(update_fields=["known_abilities"])
         self._mob(attack_power=9, fights_back=True)
 
-        with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "bash rat")
+        with patch("spawns.actions.combat.random.randint", side_effect=[20, 10]):
+            with capture_game_messages() as messages:
+                dispatch_text_command(self.player.id, "bash rat")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.health, self.stats["health_max"])
@@ -1026,6 +1047,7 @@ class TestCombatAbilities(WorldTestCase):
             room=self.room,
             player=self.player,
             mob=mob,
+            initiative_order=self._player_first_initiative(mob),
         )
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
@@ -1087,6 +1109,7 @@ class TestCombatAbilities(WorldTestCase):
             room=self.room,
             player=self.player,
             mob=mob,
+            initiative_order=self._player_first_initiative(mob),
         )
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
@@ -1137,6 +1160,7 @@ class TestCombatAbilities(WorldTestCase):
             room=self.room,
             player=self.player,
             mob=mob,
+            initiative_order=self._player_first_initiative(mob),
         )
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
@@ -1187,6 +1211,7 @@ class TestCombatAbilities(WorldTestCase):
             room=self.room,
             player=self.player,
             mob=mob,
+            initiative_order=self._player_first_initiative(mob),
         )
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):

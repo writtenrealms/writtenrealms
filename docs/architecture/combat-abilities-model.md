@@ -60,8 +60,9 @@ The current design decisions are:
 - known abilities are permanent until unlearned
 - worlds have a configurable maximum number of known abilities, defaulting to 8,
   with an `uncapped` option
-- multi-participant encounters resolve participants in fixed order by fray join
-  order
+- normal contact rolls a stable encounter initiative order once and stores it on
+  the encounter; charge, ambush, and prepared attacks can override the first
+  primary action through opener priority
 - the first persistent effect primitives should include stun, damage-over-time,
   and heal-over-time
 
@@ -756,7 +757,7 @@ load encounter and lock participants
 increment round number
 resolve round_start effects
 
-for each participant in deterministic order:
+for each participant in persisted encounter order:
   action = pending_primary_intent or default_auto_attack
   if action is invalid:
     emit private failure
@@ -770,12 +771,19 @@ schedule next encounter step if still active
 emit events
 ```
 
-Participant ordering should be fixed by fray join order. This keeps the first
-multi-participant model deterministic, fast, and easy to explain.
+Normal participant ordering should be rolled or derived when the encounter
+forms, then stored on encounter participant runtime state. Round resolution
+should use that persisted order, not reroll each round and not issue ordering
+queries while resolving each action.
 
-Join order should be stored on encounter participant runtime state. Round
-resolution should sort already-loaded participants by that value, not issue
-ordering queries while resolving each action.
+Opener mechanics such as charge, ambush, and prepared attacks should write an
+explicit first-round priority list before the first round resolves. Opener
+priority overrides the actor's first primary action only; the stored encounter
+order remains the default after that opening action.
+
+Fray join order is still useful as a deterministic tie-breaker and as metadata
+for explaining how the encounter formed, but it should not be the sole ordering
+rule for normal contact.
 
 ## Component Resolution
 
@@ -886,6 +894,7 @@ Preferred direction:
 - store active effects in participant or encounter runtime data
 - keep cooldowns as structured runtime data, not opaque text
 - store encounter participant join order explicitly
+- store persisted encounter initiative order and first-round opener priority
 - store normalized ability definitions and command aliases in indexed/cached
   runtime-friendly shape
 - store actor known ability ids in a shape that supports fast membership checks

@@ -553,6 +553,8 @@ class CombatEncounter(BaseModel):
     pending_player_ability = models.JSONField(default=dict)
     pending_flee = models.JSONField(default=dict)
     active_effects = models.JSONField(default=list)
+    initiative_order = models.JSONField(default=list)
+    opening_priority = models.JSONField(default=list)
 
     class Meta(BaseModel.Meta):
         indexes = [

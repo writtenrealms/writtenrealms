@@ -220,6 +220,20 @@ class CombatStepResult:
 
 
 @dataclass(frozen=True)
+class PlayerTurnOutcome:
+    events: list[GameEvent]
+    cooldown_exclude: str | None = None
+    target_defeated: bool = False
+
+
+@dataclass(frozen=True)
+class MobTurnOutcome:
+    events: list[GameEvent]
+    player_defeated: bool = False
+    actor_key: str | None = None
+
+
+@dataclass(frozen=True)
 class FleeDestination:
     direction: str
     room_id: int
@@ -257,6 +271,121 @@ def _combat_recipients(player: Player, room: Room) -> list[str]:
         .exclude(pk=player.id)
         .values_list("id", flat=True)
     ]
+
+
+def _encounter_actor_ref(actor: Player | Mob, *, side: str) -> dict:
+    actor_type = "player" if isinstance(actor, Player) else "mob"
+    return {
+        "type": actor_type,
+        "id": int(actor.id),
+        "key": actor.key,
+        "side": side,
+    }
+
+
+def _actor_ref_token(ref: dict) -> str:
+    return f"{ref.get('type')}:{int(ref.get('id') or 0)}"
+
+
+def _actor_ref_matches(ref: dict, *, actor_type: str, actor_id: int) -> bool:
+    return str(ref.get("type") or "") == actor_type and int(ref.get("id") or 0) == int(actor_id)
+
+
+def _current_encounter_participants(*, player: Player, target_mob: Mob) -> list[dict]:
+    # Near-term WR2 combat is still one player plus one mob. Keep the stored
+    # refs typed and side-aware so future CombatParticipant rows can feed this
+    # same ordering contract for parties, hostile packs, summons, and hirelings.
+    return [
+        _encounter_actor_ref(player, side="player_party"),
+        _encounter_actor_ref(target_mob, side="hostile"),
+    ]
+
+
+def _roll_initiative_order(participants: list[dict]) -> list[dict]:
+    rolls = []
+    for participant in participants:
+        rolls.append({
+            **participant,
+            "initiative": random.randint(1, 1_000_000),
+            "source": "roll",
+        })
+    return sorted(
+        rolls,
+        key=lambda ref: (
+            -int(ref.get("initiative") or 0),
+            str(ref.get("type") or ""),
+            int(ref.get("id") or 0),
+        ),
+    )
+
+
+def _valid_initiative_order(order: object, participants: list[dict]) -> bool:
+    if not isinstance(order, list) or not order:
+        return False
+    expected = {_actor_ref_token(ref) for ref in participants}
+    actual = {_actor_ref_token(ref) for ref in order if isinstance(ref, dict)}
+    return expected.issubset(actual)
+
+
+def ensure_encounter_initiative_order(
+    encounter: CombatEncounter,
+    *,
+    player: Player,
+    target_mob: Mob,
+    save: bool = True,
+) -> list[dict]:
+    participants = _current_encounter_participants(player=player, target_mob=target_mob)
+    order = encounter.initiative_order or []
+    if not _valid_initiative_order(order, participants):
+        order = _roll_initiative_order(participants)
+        encounter.initiative_order = order
+        if save and not encounter._state.adding:
+            encounter.save(update_fields=["initiative_order"])
+    return order
+
+
+def _opening_priority_for_round(encounter: CombatEncounter) -> list[dict]:
+    if int(encounter.round_number or 0) != 1:
+        return []
+    priority = encounter.opening_priority or []
+    if not isinstance(priority, list):
+        return []
+    return [ref for ref in priority if isinstance(ref, dict)]
+
+
+def _primary_turn_order(
+    encounter: CombatEncounter,
+    *,
+    player: Player,
+    target_mob: Mob,
+) -> list[dict]:
+    base_order = ensure_encounter_initiative_order(
+        encounter,
+        player=player,
+        target_mob=target_mob,
+    )
+    opening_priority = _opening_priority_for_round(encounter)
+    if not opening_priority:
+        return base_order
+
+    # Hook for charge/ambush/prepared attacks: populate `opening_priority`
+    # before the first round with the actor refs that should override normal
+    # initiative for their first primary action only. The persistent initiative
+    # order remains unchanged for later rounds.
+    prioritized_tokens = [_actor_ref_token(ref) for ref in opening_priority]
+    prioritized_token_set = set(prioritized_tokens)
+    prioritized = [
+        ref
+        for token in prioritized_tokens
+        for ref in base_order
+        if _actor_ref_token(ref) == token
+    ]
+    remaining = [
+        ref
+        for ref in base_order
+        if _actor_ref_token(ref) not in prioritized_token_set
+    ]
+    return [*prioritized, *remaining]
 
 
 def _ensure_corpse(mob: Mob) -> int:
@@ -2102,61 +2231,26 @@ def _finalize_active_round(
     return cooldowns_changed
 
 
-def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target_mob: Mob, config) -> CombatStepResult:
-    room = Room.objects.select_related("world", "zone").get(pk=encounter.room_id)
-    stand_player(player)
-    stats = _player_combat_stats(player)
-    player.health_max = stats.player_health_max
-    player.energy_max = stats.player_energy_max
-    player.stamina_max = stats.player_stamina_max
-
-    encounter.round_number = int(encounter.round_number or 0) + 1
-    encounter.last_resolution_ts = timezone.now()
-    if not encounter._state.adding:
-        encounter.save(update_fields=["round_number", "last_resolution_ts"])
-    round_id = f"encounter:{encounter.id}:{encounter.round_number}"
-
+def _apply_player_primary_turn(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    target_mob: Mob,
+    room: Room,
+    round_id: str,
+    player_health_max: int,
+    skip_primary: bool,
+) -> PlayerTurnOutcome:
     events: list[GameEvent] = []
-    cooldown_exclude: str | None = None
-
-    if (encounter.pending_flee or {}).get("status") == "ready":
-        return _complete_flee(encounter=encounter, player=player, round_id=round_id)
-
-    events.extend(
-        _resolve_periodic_effects(
-            encounter=encounter,
-            player=player,
-            target_mob=target_mob,
-            room=room,
-            round_id=round_id,
-            player_health_max=stats.player_health_max,
-        )
-    )
-
-    if target_mob.health <= 0:
-        return _handle_mob_defeated(
-            encounter=encounter,
-            player=player,
-            target_mob=target_mob,
-            room=room,
-            events=events,
-        )
-
-    flee_preparation_events = _advance_flee_preparation(
-        encounter=encounter,
-        player=player,
-        round_id=round_id,
-    )
-    events.extend(flee_preparation_events)
+    if skip_primary:
+        return PlayerTurnOutcome(events=events)
 
     player_stunned = _consume_stun(
         encounter,
         target_type="player",
         target_id=player.id,
     )
-    if flee_preparation_events:
-        pass
-    elif player_stunned:
+    if player_stunned:
         player_payload = _combat_state_payload(
             serialize_char_from_player(player).model_dump(),
             target_payload=serialize_char_from_mob(target_mob).model_dump(),
@@ -2171,108 +2265,105 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
             )
         )
         encounter.pending_player_ability = {}
-    else:
-        ability_events, ability_result = _execute_pending_player_ability(
+        return PlayerTurnOutcome(events=events)
+
+    ability_events, ability_result = _execute_pending_player_ability(
+        encounter=encounter,
+        player=player,
+        target_mob=target_mob,
+        room=room,
+        round_id=round_id,
+        player_health_max=player_health_max,
+    )
+    events.extend(ability_events)
+    cooldown_exclude = ability_result.cooldown_exclude
+
+    if target_mob.health <= 0:
+        return PlayerTurnOutcome(
+            events=events,
+            cooldown_exclude=cooldown_exclude,
+            target_defeated=True,
+        )
+
+    if ability_result.consumed_primary:
+        return PlayerTurnOutcome(events=events, cooldown_exclude=cooldown_exclude)
+
+    player_attack = resolve_attack(
+        actor=player,
+        target=target_mob,
+        world=player.world,
+    )
+    player_attack, absorb_events = _apply_damage_absorption(
+        encounter=encounter,
+        player=player,
+        target_mob=target_mob,
+        target=target_mob,
+        result=player_attack,
+        round_id=round_id,
+    )
+    events.extend(absorb_events)
+    if player_attack.damage_taken > 0:
+        target_mob.health = max(
+            0,
+            int(target_mob.health or 0) - player_attack.damage_taken,
+        )
+        target_mob.save(update_fields=["health"])
+
+    player_char = _combat_state_payload(
+        serialize_char_from_player(player).model_dump(),
+        target_payload=serialize_char_from_mob(target_mob).model_dump(),
+    )
+    target_char = _combat_state_payload(
+        serialize_char_from_mob(target_mob).model_dump(),
+        target_payload=serialize_char_from_player(player).model_dump(),
+    )
+    target_name = target_char.get("name") or "them"
+    events.extend(
+        _combat_attack_events(
+            viewer=player,
+            room=room,
+            actor_payload=player_char,
+            target_payload=target_char,
+            result=player_attack,
+            round_id=round_id,
+            actor_text=_actor_attack_text(target_name, player_attack),
+            room_text=_room_attack_text(player.name, target_name, player_attack),
+        )
+    )
+    events.extend(
+        _execute_after_damage_procs(
             encounter=encounter,
             player=player,
             target_mob=target_mob,
             room=room,
+            actor=player,
+            target=target_mob,
+            result=player_attack,
             round_id=round_id,
-            player_health_max=stats.player_health_max,
+            attack="attack",
+            label="Attack",
         )
-        events.extend(ability_events)
-        cooldown_exclude = ability_result.cooldown_exclude
+    )
 
-        if target_mob.health <= 0:
-            return _handle_mob_defeated(
-                encounter=encounter,
-                player=player,
-                target_mob=target_mob,
-                room=room,
-                events=events,
-            )
+    return PlayerTurnOutcome(
+        events=events,
+        cooldown_exclude=cooldown_exclude,
+        target_defeated=target_mob.health <= 0,
+    )
 
-        if not ability_result.consumed_primary:
-            player_attack = resolve_attack(
-                actor=player,
-                target=target_mob,
-                world=player.world,
-            )
-            player_attack, absorb_events = _apply_damage_absorption(
-                encounter=encounter,
-                player=player,
-                target_mob=target_mob,
-                target=target_mob,
-                result=player_attack,
-                round_id=round_id,
-            )
-            events.extend(absorb_events)
-            if player_attack.damage_taken > 0:
-                target_mob.health = max(
-                    0,
-                    int(target_mob.health or 0) - player_attack.damage_taken,
-                )
-                target_mob.save(update_fields=["health"])
 
-            player_char = _combat_state_payload(
-                serialize_char_from_player(player).model_dump(),
-                target_payload=serialize_char_from_mob(target_mob).model_dump(),
-            )
-            target_char = _combat_state_payload(
-                serialize_char_from_mob(target_mob).model_dump(),
-                target_payload=serialize_char_from_player(player).model_dump(),
-            )
-            target_name = target_char.get("name") or "them"
-            events.extend(
-                _combat_attack_events(
-                    viewer=player,
-                    room=room,
-                    actor_payload=player_char,
-                    target_payload=target_char,
-                    result=player_attack,
-                    round_id=round_id,
-                    actor_text=_actor_attack_text(target_name, player_attack),
-                    room_text=_room_attack_text(player.name, target_name, player_attack),
-                )
-            )
-            events.extend(
-                _execute_after_damage_procs(
-                    encounter=encounter,
-                    player=player,
-                    target_mob=target_mob,
-                    room=room,
-                    actor=player,
-                    target=target_mob,
-                    result=player_attack,
-                    round_id=round_id,
-                    attack="attack",
-                    label="Attack",
-                )
-            )
-
-            if target_mob.health <= 0:
-                return _handle_mob_defeated(
-                    encounter=encounter,
-                    player=player,
-                    target_mob=target_mob,
-                    room=room,
-                    events=events,
-                )
-
+def _apply_mob_primary_turn(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    target_mob: Mob,
+    room: Room,
+    round_id: str,
+    config,
+) -> MobTurnOutcome:
+    events: list[GameEvent] = []
     if not target_mob.fights_back:
-        _advance_non_ticking_effect_durations(encounter)
-        cooldowns_changed = _finalize_active_round(
-            encounter=encounter,
-            player=player,
-            cooldown_exclude=cooldown_exclude,
-        )
-        if cooldown_exclude or cooldowns_changed:
-            events.append(ability_state_event(player))
-        return CombatStepResult(
-            actor_key=player.key,
-            events=events,
-            encounter_active=True,
-        )
+        return MobTurnOutcome(events=events)
 
     mob_stunned = _consume_stun(
         encounter,
@@ -2293,19 +2384,7 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
                 round_id=round_id,
             )
         )
-        _advance_non_ticking_effect_durations(encounter)
-        cooldowns_changed = _finalize_active_round(
-            encounter=encounter,
-            player=player,
-            cooldown_exclude=cooldown_exclude,
-        )
-        if cooldown_exclude or cooldowns_changed:
-            events.append(ability_state_event(player))
-        return CombatStepResult(
-            actor_key=player.key,
-            events=events,
-            encounter_active=True,
-        )
+        return MobTurnOutcome(events=events)
 
     mob_attack = resolve_attack(
         actor=target_mob,
@@ -2371,12 +2450,109 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
             config=config,
         )
         events.extend(death_events)
-
-        return CombatStepResult(
-            actor_key=updated_player.key,
+        return MobTurnOutcome(
             events=events,
-            encounter_active=False,
+            player_defeated=True,
+            actor_key=updated_player.key,
         )
+
+    return MobTurnOutcome(events=events)
+
+
+def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target_mob: Mob, config) -> CombatStepResult:
+    room = Room.objects.select_related("world", "zone").get(pk=encounter.room_id)
+    stand_player(player)
+    stats = _player_combat_stats(player)
+    player.health_max = stats.player_health_max
+    player.energy_max = stats.player_energy_max
+    player.stamina_max = stats.player_stamina_max
+
+    encounter.round_number = int(encounter.round_number or 0) + 1
+    encounter.last_resolution_ts = timezone.now()
+    if not encounter._state.adding:
+        encounter.save(update_fields=["round_number", "last_resolution_ts"])
+    round_id = f"encounter:{encounter.id}:{encounter.round_number}"
+
+    events: list[GameEvent] = []
+    cooldown_exclude: str | None = None
+
+    if (encounter.pending_flee or {}).get("status") == "ready":
+        return _complete_flee(encounter=encounter, player=player, round_id=round_id)
+
+    events.extend(
+        _resolve_periodic_effects(
+            encounter=encounter,
+            player=player,
+            target_mob=target_mob,
+            room=room,
+            round_id=round_id,
+            player_health_max=stats.player_health_max,
+        )
+    )
+
+    if target_mob.health <= 0:
+        return _handle_mob_defeated(
+            encounter=encounter,
+            player=player,
+            target_mob=target_mob,
+            room=room,
+            events=events,
+        )
+
+    flee_preparation_events = _advance_flee_preparation(
+        encounter=encounter,
+        player=player,
+        round_id=round_id,
+    )
+    events.extend(flee_preparation_events)
+
+    for actor_ref in _primary_turn_order(
+        encounter,
+        player=player,
+        target_mob=target_mob,
+    ):
+        if _actor_ref_matches(actor_ref, actor_type="player", actor_id=player.id):
+            player_turn = _apply_player_primary_turn(
+                encounter=encounter,
+                player=player,
+                target_mob=target_mob,
+                room=room,
+                round_id=round_id,
+                player_health_max=stats.player_health_max,
+                skip_primary=bool(flee_preparation_events),
+            )
+            events.extend(player_turn.events)
+            cooldown_exclude = player_turn.cooldown_exclude or cooldown_exclude
+            if player_turn.target_defeated:
+                return _handle_mob_defeated(
+                    encounter=encounter,
+                    player=player,
+                    target_mob=target_mob,
+                    room=room,
+                    events=events,
+                )
+            continue
+
+        if _actor_ref_matches(actor_ref, actor_type="mob", actor_id=target_mob.id):
+            mob_turn = _apply_mob_primary_turn(
+                encounter=encounter,
+                player=player,
+                target_mob=target_mob,
+                room=room,
+                round_id=round_id,
+                config=config,
+            )
+            events.extend(mob_turn.events)
+            if mob_turn.player_defeated:
+                return CombatStepResult(
+                    actor_key=mob_turn.actor_key,
+                    events=events,
+                    encounter_active=False,
+                )
+            continue
+
+        # Future multi-participant encounters should resolve additional actor
+        # refs here after CombatParticipant runtime state lands.
 
     _advance_non_ticking_effect_durations(encounter)
     cooldowns_changed = _finalize_active_round(
@@ -2497,6 +2673,7 @@ class ScanRoomAggroAction:
                 else None
             ),
         )
+        ensure_encounter_initiative_order(encounter, player=player, target_mob=mob)
 
         if interval == -1:
             step = resolve_combat_encounter_step(
@@ -2649,6 +2826,7 @@ class KillAction:
         player.energy_max = stats.player_energy_max
         player.stamina_max = stats.player_stamina_max
 
+        initiative_order: list[dict] = []
         for round_no in range(1, MAX_AUTO_RESOLVE_ROUNDS + 1):
             encounter = CombatEncounter(
                 world=player.world,
@@ -2657,7 +2835,15 @@ class KillAction:
                 mob=target_mob,
                 resolution_interval=0,
                 round_number=round_no - 1,
+                initiative_order=initiative_order,
             )
+            if not initiative_order:
+                initiative_order = ensure_encounter_initiative_order(
+                    encounter,
+                    player=player,
+                    target_mob=target_mob,
+                    save=False,
+                )
             step = _apply_encounter_round(
                 encounter=encounter,
                 player=player,
@@ -2774,6 +2960,7 @@ class KillAction:
                     else None
                 ),
             )
+            ensure_encounter_initiative_order(encounter, player=player, target_mob=target_mob)
 
             events = _engage_events(player=player, room=room, mob=target_mob)
 

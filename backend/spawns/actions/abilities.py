@@ -1165,6 +1165,12 @@ class AbilityAction:
                 queued_round=0,
             ),
         )
+        combat_actions.ensure_encounter_initiative_order(
+            encounter,
+            player=player,
+            target_mob=target_mob,
+            save=False,
+        )
         for round_no in range(1, combat_actions.MAX_AUTO_RESOLVE_ROUNDS + 1):
             step = combat_actions._apply_encounter_round(
                 encounter=encounter,
@@ -1329,6 +1335,13 @@ class AbilityAction:
                     if interval > 0
                     else None
                 ),
+            )
+            from spawns.actions.combat import ensure_encounter_initiative_order
+
+            ensure_encounter_initiative_order(
+                encounter,
+                player=player,
+                target_mob=target_mob,
             )
 
             if interval == -1:

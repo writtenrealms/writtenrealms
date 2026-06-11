@@ -358,7 +358,12 @@ class TestKillCommand(WorldTestCase):
             self.player.key,
         )
         self.assertGreaterEqual(len(actor_attacks), 3)
-        self.assertEqual(actor_attacks[0]["data"]["damage_taken"], self.stats["attack_power"])
+        player_attack = next(
+            attack
+            for attack in actor_attacks
+            if attack["data"]["actor"]["key"] == self.player.key
+        )
+        self.assertEqual(player_attack["data"]["damage_taken"], self.stats["attack_power"])
 
         death_message = self._message_by_type(
             messages,
@@ -696,6 +701,127 @@ class TestKillCommand(WorldTestCase):
             encounter.id,
         )
         self.assertEqual(schedule_mock.call_args.kwargs["countdown"], 1.5)
+        self.assertEqual(
+            {
+                (entry["type"], entry["id"])
+                for entry in encounter.initiative_order
+            },
+            {
+                ("player", self.player.id),
+                ("mob", mob.id),
+            },
+        )
+
+    def test_stored_initiative_order_controls_attack_order_across_rounds(self):
+        self.world.config.combat_resolution_interval = 1.5
+        self.world.config.save(update_fields=["combat_resolution_interval"])
+
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Rat",
+            keywords="rat",
+            health=self.stats["attack_power"] * 10,
+            health_max=self.stats["attack_power"] * 10,
+            attack_power=4,
+            fights_back=True,
+        )
+
+        with patch("spawns.actions.combat.random.randint", side_effect=[10, 20]):
+            with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+                with self.captureOnCommitCallbacks(execute=True):
+                    dispatch_text_command(self.player.id, "kill rat")
+
+        encounter = CombatEncounter.objects.get(
+            player=self.player,
+            mob=mob,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        self.assertEqual(encounter.initiative_order[0]["type"], "mob")
+        self.assertEqual(encounter.initiative_order[0]["id"], mob.id)
+
+        for expected_round in (1, 2):
+            encounter.next_resolution_ts = timezone.now()
+            encounter.save(update_fields=["next_resolution_ts"])
+            with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+                with capture_game_messages() as messages:
+                    resolve_combat_encounter(encounter.id)
+            attacks = self._messages_by_type(
+                messages,
+                "notification.combat.attack",
+                self.player.key,
+            )
+            self.assertEqual(attacks[0]["data"]["actor"]["key"], mob.key)
+            self.assertEqual(attacks[1]["data"]["actor"]["key"], self.player.key)
+            encounter.refresh_from_db()
+            self.assertEqual(encounter.round_number, expected_round)
+
+    def test_opening_priority_overrides_only_first_round_order(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Rat",
+            keywords="rat",
+            health=self.stats["attack_power"] * 10,
+            health_max=self.stats["attack_power"] * 10,
+            attack_power=4,
+            fights_back=True,
+        )
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            status=CombatEncounter.STATUS_ACTIVE,
+            resolution_interval=-1,
+            initiative_order=[
+                {
+                    "type": "mob",
+                    "id": mob.id,
+                    "key": mob.key,
+                    "side": "hostile",
+                    "initiative": 20,
+                    "source": "roll",
+                },
+                {
+                    "type": "player",
+                    "id": self.player.id,
+                    "key": self.player.key,
+                    "side": "player_party",
+                    "initiative": 10,
+                    "source": "roll",
+                },
+            ],
+            opening_priority=[
+                {
+                    "type": "player",
+                    "id": self.player.id,
+                    "key": self.player.key,
+                    "side": "player_party",
+                    "source": "future_opener",
+                }
+            ],
+        )
+
+        with capture_game_messages() as first_round_messages:
+            resolve_combat_encounter(encounter.id)
+        first_round_attacks = self._messages_by_type(
+            first_round_messages,
+            "notification.combat.attack",
+            self.player.key,
+        )
+        self.assertEqual(first_round_attacks[0]["data"]["actor"]["key"], self.player.key)
+        self.assertEqual(first_round_attacks[1]["data"]["actor"]["key"], mob.key)
+
+        with capture_game_messages() as second_round_messages:
+            resolve_combat_encounter(encounter.id)
+        second_round_attacks = self._messages_by_type(
+            second_round_messages,
+            "notification.combat.attack",
+            self.player.key,
+        )
+        self.assertEqual(second_round_attacks[0]["data"]["actor"]["key"], mob.key)
+        self.assertEqual(second_round_attacks[1]["data"]["actor"]["key"], self.player.key)
 
     def test_bare_k_targets_single_attackable_room_mob(self):
         self.world.config.combat_resolution_interval = 1.5
@@ -846,8 +972,13 @@ class TestKillCommand(WorldTestCase):
             self.player.key,
         )
         self.assertEqual(len(actor_attacks), 2)
-        self.assertEqual(actor_attacks[0]["data"]["actor"]["state"], "combat")
-        self.assertEqual(actor_attacks[1]["data"]["target"]["key"], self.player.key)
+        self.assertEqual(
+            {attack["data"]["actor"]["key"] for attack in actor_attacks},
+            {self.player.key, mob.key},
+        )
+        self.assertTrue(
+            any(attack["data"]["target"]["key"] == self.player.key for attack in actor_attacks)
+        )
         reschedule_mock.assert_called_once()
         self.assertEqual(
             reschedule_mock.call_args.kwargs["kwargs"]["encounter_id"],

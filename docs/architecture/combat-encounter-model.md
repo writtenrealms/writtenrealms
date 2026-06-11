@@ -43,6 +43,11 @@ At a high level:
 4. The encounter advances in discrete logical iterations.
 5. Each iteration resolves all due work, persists state, and emits events.
 
+Near-term WR2 combat uses a stable encounter initiative order for normal
+contact: the order is rolled when the encounter forms and reused for later
+rounds. Opener mechanics such as charge, ambush, and prepared attacks can write
+first-round opener priority without changing that persistent order.
+
 The important distinction is:
 
 - combat logic runs on **logical ticks / steps**
@@ -105,6 +110,8 @@ It should own or reference:
 - combat state
 - current logical tick or step
 - pending intents
+- persisted initiative order
+- first-round opener priority
 - due effects
 - pacing policy
 - whether the encounter is active, paused, or finished
@@ -340,7 +347,8 @@ The following are intentionally left open for later design work:
 
 - what exact cadence should be the default for live worlds
 - whether encounters are scoped by room, party, instance, or some hybrid
-- how initiative and tie-breaking are resolved within a step
+- how initiative should incorporate stats, action speed, and tie-breaking
+  beyond the current stable random near-term rule
 - how interruptible casts should behave
 - how much intent replacement is allowed between ticks
 - how mob AI chooses and updates intents
