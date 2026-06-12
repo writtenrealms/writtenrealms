@@ -145,6 +145,7 @@ def _serialize_ability_definitions(world: World) -> dict[str, dict]:
             "cost": ability.cost or {},
             "cast_time": ability.cast_time or {},
             "cooldown": ability.cooldown or {},
+            "help": ability.help or {},
         }
     return {
         "definitions": definitions,

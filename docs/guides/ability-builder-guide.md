@@ -137,6 +137,8 @@ spec:
     rounds: 0
   cooldown:
     rounds: 3
+  help:
+    text: 1 round cast, 3 round cooldown, inflicts 1.6x physical damage on the target.
   components:
     - type: damage
       profile: basic_physical
@@ -148,6 +150,27 @@ spec:
 
 Bundled `kind: abilities` manifests are also supported for import convenience,
 but one ability per manifest should be the default authoring style.
+
+## Ability Help
+
+Players can type `help <ability>` for abilities they already know or can learn
+right now. The lookup accepts the ability slug, an authored command verb, the
+exact ability name, or an unambiguous slug/name prefix.
+The displayed line is prefixed with the resolved ability name, such as
+`Trident - 1 round cast, inflicts 1.25x ability damage on the target.`
+
+Builders may author a concise player-facing help line with `spec.help.text`:
+
+```yaml
+help:
+  text: 1 round cast, 6 round cooldown, stuns the target for 2 rounds if it lands.
+```
+
+When `spec.help.text` is absent, the runtime generates a plain text line from
+the ability definition. Generated help includes cast rounds, cooldown rounds,
+damage or healing components, stun/dot/hot effects, state updates, and costs.
+Cost resources use the world's configured player-facing labels, while damage
+wording comes from the combat profile damage type.
 
 ## Targeting And Openers
 

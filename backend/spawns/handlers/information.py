@@ -5,6 +5,12 @@ Implements information-oriented commands such as look, inventory, and help.
 """
 from spawns.command_history import get_player_command_history
 from spawns.actions.base import ActionError
+from spawns.actions.abilities import (
+    known_ability_slugs,
+    resolve_ability_for_selector,
+    trainable_abilities_for_player,
+)
+from spawns.actions.ability_help import ability_help_text
 from quests.services.discovery import available_room_prompt_opportunities_for_room
 from spawns.actions.information import (
     InspectAction,
@@ -338,15 +344,36 @@ class HelpHandler(CommandHandler):
 
         return commands
 
-    def _resolve_help_target(self, ctx: CommandContext) -> str | None:
+    def _resolve_help_target_text(self, ctx: CommandContext) -> str | None:
+        args = ctx.payload.get("args", [])
+        if args:
+            normalized = " ".join(str(arg) for arg in args).strip().lower()
+            return normalized or None
         target = ctx.payload.get("target")
         if target:
             normalized = str(target).strip().lower()
-            return "equipment" if normalized == "eq" else normalized or None
-        args = ctx.payload.get("args", [])
-        if args:
-            normalized = str(args[0]).strip().lower()
-            return "equipment" if normalized == "eq" else normalized or None
+            return normalized or None
+        return None
+
+    def _resolve_command_help_target(self, target: str) -> str | None:
+        first_token = str(target or "").strip().lower().split(maxsplit=1)[0]
+        if not first_token:
+            return None
+        return "equipment" if first_token == "eq" else first_token
+
+    def _resolve_available_ability(self, ctx: CommandContext, target: str):
+        if not ctx.player:
+            return None
+        ability = resolve_ability_for_selector(ctx.player.world, target)
+        if not ability:
+            return None
+        if ability.slug in set(known_ability_slugs(ctx.player)):
+            return ability
+
+        _trainers, trainable = trainable_abilities_for_player(ctx.player)
+        trainable_slugs = {candidate.slug for candidate, _trainer in trainable}
+        if ability.slug in trainable_slugs:
+            return ability
         return None
 
     def _render_list_text(self, commands: list[dict]) -> str:
@@ -361,30 +388,54 @@ class HelpHandler(CommandHandler):
 
     def handle(self, ctx: CommandContext) -> None:
         include_builder = has_builder_access(ctx.player)
-        target = self._resolve_help_target(ctx)
+        target = self._resolve_help_target_text(ctx)
 
         if target:
-            resolved = resolve_text_handler(target, include_builder=True)
-            if not resolved:
+            command_target = self._resolve_command_help_target(target)
+            resolved = (
+                resolve_text_handler(command_target, include_builder=True)
+                if command_target
+                else None
+            )
+
+            if resolved:
+                command_name, handler = resolved
+                if getattr(handler, "builder_only", False) and not include_builder:
+                    ctx.publish_error("help", "You do not have permission to view that command.")
+                    return
+
+                help_data = handler.get_help_data(command_name=command_name)
+                if not help_data:
+                    ctx.publish_error("help", f"No help available for {command_name}.")
+                    return
+
+                ctx.publish(
+                    {
+                        "type": "cmd.help.success",
+                        "text": handler.get_help_text(command_name=command_name),
+                        "data": {
+                            "command": help_data,
+                        },
+                    }
+                )
+                return
+
+            ability = self._resolve_available_ability(ctx, target)
+            if not ability:
                 ctx.publish_error("help", f"Unknown command: {target}")
                 return
 
-            command_name, handler = resolved
-            if getattr(handler, "builder_only", False) and not include_builder:
-                ctx.publish_error("help", "You do not have permission to view that command.")
-                return
-
-            help_data = handler.get_help_data(command_name=command_name)
-            if not help_data:
-                ctx.publish_error("help", f"No help available for {command_name}.")
-                return
-
+            text, source = ability_help_text(ability)
             ctx.publish(
                 {
                     "type": "cmd.help.success",
-                    "text": handler.get_help_text(command_name=command_name),
+                    "text": text,
                     "data": {
-                        "command": help_data,
+                        "ability": {
+                            "slug": ability.slug,
+                            "name": ability.name,
+                            "help_source": source,
+                        },
                     },
                 }
             )

@@ -25,6 +25,9 @@
         </template>
       </div>
     </div>
+    <div v-else-if="abilityHelp" class="ability-help">
+      <div>{{ message.text }}</div>
+    </div>
     <div v-else>
       <div class="cmd-group basic-commands">
         <div class="group-title">Basic Commands</div>
@@ -225,6 +228,10 @@ const canSetTitle = computed(() => store.state.game.world.players_can_set_title)
 const topicHelp = computed(() => {
   const data = props.message?.data || {};
   return data.command || null;
+});
+const abilityHelp = computed(() => {
+  const data = props.message?.data || {};
+  return data.ability || null;
 });
 const cmdHelp = (cmd) => {
   store.dispatch("game/cmd", `help ${cmd}`);

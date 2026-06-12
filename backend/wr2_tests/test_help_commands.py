@@ -1,5 +1,12 @@
+from copy import deepcopy
+
+from builders.models import AbilityDefinition
 from tests.base import WorldTestCase
-from wr2_tests.utils import capture_game_messages, dispatch_text_command
+from wr2_tests.utils import (
+    BASIC_TEST_STAT_SYSTEM,
+    capture_game_messages,
+    dispatch_text_command,
+)
 
 EXPECTED_SET_PLAYER_FIELDS = (
     "level",
@@ -48,6 +55,47 @@ class TestHelpCommands(WorldTestCase):
             if msg["message"].get("type") == message_type:
                 return msg["message"]
         return None
+
+    def _ability(
+        self,
+        *,
+        slug,
+        name,
+        verbs=None,
+        components=None,
+        target=None,
+        availability=None,
+        cost=None,
+        cast_time=None,
+        cooldown=None,
+        help=None,
+    ):
+        return AbilityDefinition.objects.create(
+            world=self.world,
+            slug=slug,
+            name=name,
+            command_verbs=verbs or [slug.replace("-", "_")],
+            action_type="primary",
+            target=target or {
+                "type": "hostile",
+                "default": "current_target",
+                "allow_out_of_combat": False,
+            },
+            availability=availability or {"classes": [], "min_level": 1},
+            requirements={},
+            cost=cost or {},
+            cast_time=cast_time or {"rounds": 0},
+            cooldown=cooldown or {"rounds": 0},
+            help=help or {},
+            components=components or [
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {},
+                    "text": {"label": name},
+                },
+            ],
+        )
 
     def test_help_lists_available_commands(self):
         with capture_game_messages() as messages:
@@ -141,3 +189,90 @@ class TestHelpCommands(WorldTestCase):
         self.assertIsNotNone(message)
         self.assertEqual(message["data"]["command"]["command"], "/resync")
         self.assertIn("/resync <item|mob> <template_id|all>", message.get("text", ""))
+
+    def test_help_known_ability_uses_authored_help_text(self):
+        self._ability(
+            slug="bash",
+            name="Bash",
+            verbs=["bash"],
+            help={"text": "A practiced shield hit that stops a foe cold."},
+        )
+        self.player.known_abilities = ["bash"]
+        self.player.save(update_fields=["known_abilities"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "help bash")
+
+        message = self._message_by_type(messages, "cmd.help.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(
+            message.get("text"),
+            "Bash - A practiced shield hit that stops a foe cold.",
+        )
+        self.assertEqual(message["data"]["ability"]["slug"], "bash")
+        self.assertEqual(message["data"]["ability"]["help_source"], "authored")
+        self.assertNotIn("command", message["data"])
+
+    def test_help_known_ability_generates_plain_text_from_definition(self):
+        self._ability(
+            slug="bash",
+            name="Bash",
+            verbs=["bash"],
+            cast_time={"rounds": 1},
+            cooldown={"rounds": 6, "trigger": "on_hit"},
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "stun",
+                    "target": "ability.target",
+                    "duration": {"rounds": 2},
+                    "apply": "on_hit",
+                    "text": {"label": "Bash"},
+                },
+            ],
+        )
+        self.player.known_abilities = ["bash"]
+        self.player.save(update_fields=["known_abilities"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "help bash")
+
+        message = self._message_by_type(messages, "cmd.help.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(
+            message.get("text"),
+            "Bash - 1 round cast, 6 round cooldown, stuns the target for 2 rounds if it lands.",
+        )
+        self.assertEqual(message["data"]["ability"]["help_source"], "generated")
+
+    def test_help_learnable_ability_generates_damage_and_cost_text_with_name(self):
+        stat_system = deepcopy(BASIC_TEST_STAT_SYSTEM)
+        stat_system.setdefault("labels", {}).setdefault("resources", {})["energy"] = "Ichor"
+        self.world.config.stat_system = stat_system
+        self.world.config.save(update_fields=["stat_system"])
+        self._ability(
+            slug="trident",
+            name="Trident",
+            verbs=["trident"],
+            cast_time={"rounds": 1},
+            cost={"resource": "energy", "amount": 20, "calc": "percent_base"},
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_ability",
+                    "overrides": {"multiplier": 1.25},
+                    "text": {"label": "Trident"},
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "h tri")
+
+        message = self._message_by_type(messages, "cmd.help.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(
+            message.get("text"),
+            "Trident - 1 round cast, inflicts 1.25x ability damage on the target. Costs 20% of base ichor.",
+        )
+        self.assertEqual(message["data"]["ability"]["slug"], "trident")

@@ -1746,6 +1746,7 @@ class AbilityDefinition(BaseModel):
     cost = models.JSONField(default=dict)
     cast_time = models.JSONField(default=dict)
     cooldown = models.JSONField(default=dict)
+    help = models.JSONField(default=dict)
     components = models.JSONField(default=list)
     is_active = models.BooleanField(default=True, db_index=True)
 

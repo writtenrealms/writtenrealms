@@ -109,6 +109,7 @@ def resolve_ability_for_command(world, command: str) -> AbilityDefinition | None
         "cost",
         "cast_time",
         "cooldown",
+        "help",
         "components",
         "is_active",
     ):

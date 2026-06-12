@@ -73,6 +73,8 @@ spec:
   cooldown:
     rounds: 2
     trigger: on_hit
+  help:
+    text: 1 round cast, 2 round cooldown, inflicts 1.5x physical damage on the target.
   components:
     - type: damage
       profile: basic_physical
@@ -90,6 +92,12 @@ spec:
         self.assertEqual(ability.command_verbs, ["strike"])
         self.assertEqual(ability.cast_time["rounds"], 1)
         self.assertEqual(ability.cooldown, {"rounds": 2, "trigger": "on_hit"})
+        self.assertEqual(
+            ability.help,
+            {
+                "text": "1 round cast, 2 round cooldown, inflicts 1.5x physical damage on the target.",
+            },
+        )
         self.assertEqual(ability.components[0]["overrides"]["multiplier"], 1.5)
 
     def test_apply_abilities_manifest_can_create_bundle(self):
@@ -489,6 +497,7 @@ spec:
         self.assertEqual(ability_data["command_verbs"], ["strike"])
         self.assertEqual(ability_data["action_type"], "primary")
         self.assertEqual(ability_data["target"]["type"], "hostile")
+        self.assertEqual(ability_data["help"], {})
         self.assertTrue(ability_data["is_active"])
         self.assertIn("kind: ability", ability_data["yaml"])
         self.assertIn("slug: power-strike", ability_data["yaml"])

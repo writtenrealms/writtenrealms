@@ -1302,6 +1302,7 @@ def ability_to_manifest(ability: AbilityDefinition) -> dict[str, Any]:
             "cost": ability.cost or {},
             "cast_time": ability.cast_time or {},
             "cooldown": ability.cooldown or {},
+            "help": ability.help or {},
             "components": ability.components or [],
             "is_active": bool(ability.is_active),
         },
@@ -1338,6 +1339,7 @@ def serialize_ability_payload(ability: AbilityDefinition) -> dict[str, Any]:
         "cost": ability.cost or {},
         "cast_time": ability.cast_time or {},
         "cooldown": ability.cooldown or {},
+        "help": ability.help or {},
         "components": ability.components or [],
         "is_active": bool(ability.is_active),
         "manifest": manifest,
@@ -4297,6 +4299,7 @@ def apply_ability_manifest(parsed: ParsedAbilityManifest) -> AbilityDefinition:
         "cost": spec["cost"],
         "cast_time": spec["cast_time"],
         "cooldown": spec["cooldown"],
+        "help": spec["help"],
         "components": spec["components"],
         "is_active": spec["is_active"],
     }

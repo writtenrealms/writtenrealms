@@ -72,6 +72,7 @@ ABILITY_DEFINITION_FIELDS = {
     "cost",
     "cast_time",
     "cooldown",
+    "help",
     "components",
     "is_active",
 }
@@ -495,6 +496,26 @@ def _normalize_text(value: Any, *, default_label: str) -> dict[str, str]:
         raise AbilityValidationError("component.text must be a mapping.")
     label = _coerce_text(value.get("label", default_label)).strip() or default_label
     return {"label": label}
+
+
+def _normalize_ability_help(value: Any) -> dict[str, str]:
+    if value in (None, "", {}):
+        return {}
+    if isinstance(value, str):
+        text = value.strip()
+        return {"text": text} if text else {}
+    if not isinstance(value, dict):
+        raise AbilityValidationError("spec.help must be a string or mapping.")
+
+    unknown_fields = sorted(set(value.keys()) - {"text"})
+    if unknown_fields:
+        raise AbilityValidationError(
+            "spec.help has unsupported field(s): "
+            + ", ".join(unknown_fields)
+            + "."
+        )
+    text = _coerce_text(value.get("text")).strip()
+    return {"text": text} if text else {}
 
 
 def _normalize_output_component(
@@ -961,6 +982,7 @@ def normalize_ability_definition(
         "cost": _normalize_cost(value.get("cost")),
         "cast_time": _normalize_cast_time(value.get("cast_time")),
         "cooldown": _normalize_cooldown(value.get("cooldown")),
+        "help": _normalize_ability_help(value.get("help")),
         "components": [
             _normalize_component(
                 component,

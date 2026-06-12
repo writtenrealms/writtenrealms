@@ -55,6 +55,9 @@ This document describes the WR2 flow from a player entering a command in the in-
    - Resolves command using `resolve_text_handler` (prefix match across registered text commands).
    - Maps parsed args into payload fields expected by handlers (`direction`, `target`, `item`, etc.).
    - Delegates to resolved domain handler (`look`, `scan`, `move`, `drop`, `help`, `/load`, ...).
+   - `help <target>` first checks command help, then checks abilities the player
+     already knows or can learn right now. Ability help is returned as plain
+     console text with `data.ability`, not as the structured command help table.
 15. If no handler is found:
    - Builder command (`/something`) => `cmd./something.error`.
    - Non-builder unknown => `cmd.text.echo`.
