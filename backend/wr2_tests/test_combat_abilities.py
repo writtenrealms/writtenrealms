@@ -8,6 +8,7 @@ from core.combat_formulas import normalize_combat_system
 from core.computations import compute_stats
 from core.scoped_state import STATE_SCOPE_CHARACTER, get_state_value
 from django.utils import timezone
+from spawns.actions.movement_costs import movement_cost
 from spawns.models import CombatEncounter, Item, Mob
 from spawns.tasks import resolve_combat_encounter
 from tests.base import WorldTestCase
@@ -95,10 +96,10 @@ class TestCombatAbilities(WorldTestCase):
             components=components,
         )
 
-    def _mob(self, *, health=None, attack_power=0, fights_back=False, dodge=0):
+    def _mob(self, *, room=None, health=None, attack_power=0, fights_back=False, dodge=0):
         mob = Mob.objects.create(
             world=self.spawn_world,
-            room=self.room,
+            room=room or self.room,
             name="Rat",
             keywords="rat",
             health=health or self.stats["attack_power"] * 10,
@@ -110,6 +111,30 @@ class TestCombatAbilities(WorldTestCase):
         )
         mob.create_corpse()
         return mob
+
+    def _charge_ability(self):
+        return self._ability(
+            slug="charge",
+            name="Charge",
+            verbs=["charge"],
+            target={
+                "type": "hostile",
+                "default": "current_target",
+                "allow_out_of_combat": True,
+                "range": "current_or_adjacent_room",
+                "move_actor": True,
+                "opener_priority": True,
+            },
+            cooldown={"rounds": 10},
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 1.5},
+                    "text": {"label": "Charge"},
+                }
+            ],
+        )
 
     def _messages_by_type(self, messages, message_type):
         return [
@@ -652,6 +677,120 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(len(attacks), 1)
         self.assertEqual(attacks[0]["data"]["attack"], "power-strike")
         self.assertEqual(attacks[0]["data"]["damage_taken"], self.stats["attack_power"] * 2)
+
+    def test_charge_moves_to_adjacent_room_and_attacks_with_opener_priority(self):
+        self.world.config.combat_resolution_interval = 1.5
+        self.world.config.save(update_fields=["combat_resolution_interval"])
+        self._charge_ability()
+        self.player.known_abilities = ["charge"]
+        self.player.save(update_fields=["known_abilities"])
+        dest_room = self.room.create_at(adv_consts.DIRECTION_EAST)
+        mob = self._mob(room=dest_room, attack_power=4, fights_back=True)
+        expected_damage = math.ceil(self.stats["attack_power"] * 1.5)
+
+        with patch("spawns.actions.combat.random.randint", side_effect=[10, 20]):
+            with patch("spawns.tasks.resolve_combat_encounter.apply_async") as schedule_mock:
+                with capture_game_messages() as messages:
+                    with self.captureOnCommitCallbacks(execute=True):
+                        dispatch_text_command(self.player.id, "charge rat east")
+
+        self.player.refresh_from_db()
+        mob.refresh_from_db()
+        encounter = CombatEncounter.objects.get(
+            player=self.player,
+            mob=mob,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        self.assertEqual(self.player.room_id, dest_room.id)
+        self.assertEqual(self.player.stamina, self.stats["stamina_max"] - movement_cost(dest_room))
+        self.assertEqual(encounter.round_number, 1)
+        self.assertEqual(encounter.resolution_interval, 1.5)
+        self.assertIsNotNone(encounter.next_resolution_ts)
+        self.assertEqual(encounter.initiative_order[0]["type"], "mob")
+        self.assertEqual(encounter.opening_priority[0]["source"], "charge")
+
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertEqual(attacks[0]["data"]["actor"]["key"], self.player.key)
+        self.assertEqual(attacks[0]["data"]["attack"], "charge")
+        self.assertEqual(attacks[0]["data"]["damage_taken"], expected_damage)
+        self.assertEqual(attacks[1]["data"]["actor"]["key"], mob.key)
+        moves = self._messages_by_type(messages, "cmd.move.success")
+        self.assertEqual(len(moves), 1)
+        self.assertEqual(moves[0]["data"]["direction"], "east")
+
+        self.assertEqual(self.player.ability_cooldowns, {"charge": 10})
+        schedule_mock.assert_called_once()
+        self.assertEqual(
+            schedule_mock.call_args.kwargs["kwargs"]["encounter_id"],
+            encounter.id,
+        )
+        self.assertEqual(schedule_mock.call_args.kwargs["countdown"], 1.5)
+
+    def test_charge_accepts_direction_before_target(self):
+        self._charge_ability()
+        self.player.known_abilities = ["charge"]
+        self.player.save(update_fields=["known_abilities"])
+        dest_room = self.room.create_at(adv_consts.DIRECTION_NORTH)
+        mob = self._mob(room=dest_room)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "charge north rat")
+
+        self.player.refresh_from_db()
+        mob.refresh_from_db()
+        self.assertEqual(self.player.room_id, dest_room.id)
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertEqual(attacks[0]["data"]["actor"]["key"], self.player.key)
+        self.assertEqual(attacks[0]["data"]["target"]["key"], mob.key)
+
+    def test_charge_can_open_current_room_combat_without_direction(self):
+        self._charge_ability()
+        self.player.known_abilities = ["charge"]
+        self.player.save(update_fields=["known_abilities"])
+        mob = self._mob(attack_power=4, fights_back=True)
+        expected_damage = math.ceil(self.stats["attack_power"] * 1.5)
+
+        with patch("spawns.actions.combat.random.randint", side_effect=[10, 20]):
+            with capture_game_messages() as messages:
+                dispatch_text_command(self.player.id, "charge rat")
+
+        self.player.refresh_from_db()
+        mob.refresh_from_db()
+        encounter = CombatEncounter.objects.get(
+            player=self.player,
+            mob=mob,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        self.assertEqual(self.player.room_id, self.room.id)
+        self.assertEqual(encounter.round_number, 1)
+        self.assertEqual(encounter.initiative_order[0]["type"], "mob")
+        self.assertEqual(encounter.opening_priority[0]["source"], "charge")
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertEqual(attacks[0]["data"]["actor"]["key"], self.player.key)
+        self.assertEqual(attacks[0]["data"]["attack"], "charge")
+        self.assertEqual(attacks[0]["data"]["damage_taken"], expected_damage)
+        self.assertEqual(attacks[1]["data"]["actor"]["key"], mob.key)
+        self.assertEqual(self._messages_by_type(messages, "cmd.move.success"), [])
+        self.assertEqual(self.player.ability_cooldowns, {"charge": 10})
+
+    def test_charge_can_only_be_used_out_of_combat(self):
+        self._charge_ability()
+        self.player.known_abilities = ["charge"]
+        self.player.save(update_fields=["known_abilities"])
+        mob = self._mob()
+        CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "charge rat")
+
+        errors = self._messages_by_type(messages, "cmd.ability.error")
+        self.assertEqual(errors[0]["data"]["code"], "combat_in_progress")
 
     def test_cast_time_ability_charges_one_round_before_resolving(self):
         self._ability(

@@ -221,7 +221,7 @@ def resolve_room_mob_target(
     empty_candidate_filter: Callable[[Mob], bool] | None = None,
 ) -> Mob:
     normalized = _normalize_selector(selector)
-    room_mobs = list(room.mobs.select_related("definition", "template"))
+    room_mobs = list(room.mobs.select_related("definition", "template").order_by("id"))
     if not normalized:
         if allow_single_match_when_empty:
             candidates = room_mobs

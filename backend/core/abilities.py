@@ -31,6 +31,7 @@ UNCAPPED_MAX_KNOWN_ABILITIES = "uncapped"
 ACTION_TYPES = ("primary", "utility")
 TARGET_TYPES = ("hostile", "self", "ally")
 TARGET_DEFAULTS = ("current_target", "self")
+TARGET_RANGES = ("current_room", "adjacent_room", "current_or_adjacent_room")
 COST_RESOURCES = ("health", "energy", "stamina")
 COST_CALCS = ("fixed", "percent_max", "percent_base")
 COOLDOWN_TRIGGERS = ("on_resolve", "on_hit")
@@ -338,6 +339,24 @@ def _normalize_target(value: Any) -> dict[str, Any]:
     allow_out_of_combat = value.get("allow_out_of_combat")
     if allow_out_of_combat is None:
         allow_out_of_combat = target_type in {"self", "ally"}
+    target_range = _coerce_choice(
+        value.get("range", "current_room"),
+        choices=TARGET_RANGES,
+        field_name="spec.target.range",
+    )
+    move_actor = _coerce_bool(
+        value.get("move_actor", False),
+        field_name="spec.target.move_actor",
+    )
+    opener_priority = _coerce_bool(
+        value.get("opener_priority", False),
+        field_name="spec.target.opener_priority",
+    )
+    if move_actor and target_range not in {"adjacent_room", "current_or_adjacent_room"}:
+        raise AbilityValidationError(
+            "spec.target.move_actor requires spec.target.range to be adjacent_room "
+            "or current_or_adjacent_room."
+        )
     return {
         "type": target_type,
         "default": default,
@@ -345,6 +364,9 @@ def _normalize_target(value: Any) -> dict[str, Any]:
             allow_out_of_combat,
             field_name="spec.target.allow_out_of_combat",
         ),
+        "range": target_range,
+        "move_actor": move_actor,
+        "opener_priority": opener_priority,
     }
 
 

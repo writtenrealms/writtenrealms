@@ -9,6 +9,7 @@ from django.db.utils import NotSupportedError
 from django.utils import timezone
 
 from builders.models import AbilityDefinition, MobDefinition
+from config import constants as adv_consts
 from core.abilities import (
     definition_world,
     max_known_abilities_for_world,
@@ -29,15 +30,31 @@ from core.scoped_state import (
     set_state_value,
 )
 from spawns.actions.base import ActionError, ActionResult
+from spawns.actions.movement import (
+    AdjustStaminaAction,
+    BuildMoveEventsAction,
+    ChangeRoomAction,
+    ResolveMoveAction,
+)
 from spawns.actions.player_state import stand_player
 from spawns.actions.targeting import resolve_room_mob_target
 from spawns.events import GameEvent
 from spawns.models import CombatEncounter, Mob, Player
 from spawns.state_payloads import serialize_char_from_mob, serialize_char_from_player
+from spawns.triggers import evaluate_movement_policies
 from worlds.models import Room
 
 
 MAX_ABILITY_HOTKEY = 8
+
+DIRECTION_ALIASES = {
+    "n": adv_consts.DIRECTION_NORTH,
+    "e": adv_consts.DIRECTION_EAST,
+    "s": adv_consts.DIRECTION_SOUTH,
+    "w": adv_consts.DIRECTION_WEST,
+    "u": adv_consts.DIRECTION_UP,
+    "d": adv_consts.DIRECTION_DOWN,
+}
 
 
 @dataclass(frozen=True)
@@ -914,6 +931,57 @@ def _combat_interval(config) -> float:
         return 0.0
 
 
+def _normalized_direction(token: str | None) -> str | None:
+    normalized = str(token or "").strip().lower()
+    if normalized in adv_consts.DIRECTIONS:
+        return normalized
+    return DIRECTION_ALIASES.get(normalized)
+
+
+def _split_room_opener_args(args: list[str], *, ability: AbilityDefinition) -> tuple[str | None, str]:
+    direction_indexes: list[tuple[int, str]] = []
+    for index, token in enumerate(args):
+        direction = _normalized_direction(token)
+        if direction:
+            direction_indexes.append((index, direction))
+
+    if len(direction_indexes) > 1:
+        raise ActionError(
+            "Use a direction and target, such as charge rabbit east.",
+            code="invalid_args",
+        )
+
+    direction_index = None
+    direction = None
+    if direction_indexes:
+        direction_index, direction = direction_indexes[0]
+
+    target_tokens = [
+        token
+        for index, token in enumerate(args)
+        if index != direction_index
+    ]
+    target_selector = " ".join(target_tokens).strip()
+    if not target_selector:
+        raise ActionError(
+            f"{ability.name} what?",
+            code="missing_target",
+        )
+    return direction, target_selector
+
+
+def ability_uses_room_opener(ability: AbilityDefinition) -> bool:
+    target = ability.target or {}
+    # Charge uses this path today. Future movement-based openers such as
+    # ambush or prepared attacks can opt in with the same target metadata, then
+    # write `opening_priority` before round one resolves.
+    return (
+        target.get("type") == "hostile"
+        and target.get("range") in {"adjacent_room", "current_or_adjacent_room"}
+        and bool(target.get("move_actor"))
+    )
+
+
 class LearnAbilityAction:
     def execute(self, player_id: int, selector: str | None) -> ActionResult:
         with transaction.atomic():
@@ -1191,6 +1259,7 @@ class AbilityAction:
         ability: AbilityDefinition,
         command: str,
         config,
+        opening_priority: list[dict[str, Any]] | None = None,
     ) -> ActionResult:
         from spawns.actions import combat as combat_actions
 
@@ -1212,6 +1281,7 @@ class AbilityAction:
                 target_id=target_mob.id,
                 queued_round=0,
             ),
+            opening_priority=opening_priority or [],
         )
         combat_actions.ensure_encounter_initiative_order(
             encounter,
@@ -1233,6 +1303,153 @@ class AbilityAction:
             player.refresh_from_db()
 
         raise ActionError("Combat stalled before anyone died.", code="combat_stalled")
+
+    def _resolve_room_opener(
+        self,
+        *,
+        player: Player,
+        ability: AbilityDefinition,
+        command: str,
+        args: list[str],
+        config,
+        active_encounter: CombatEncounter | None,
+    ) -> ActionResult:
+        if active_encounter:
+            raise ActionError(
+                f"{ability.name} can only be used out of combat.",
+                code="combat_in_progress",
+            )
+        if not (ability.target or {}).get("allow_out_of_combat"):
+            raise ActionError(
+                f"{ability.name} can only be used out of combat.",
+                code="combat_required",
+            )
+
+        direction, target_selector = _split_room_opener_args(args, ability=ability)
+        if not direction and (ability.target or {}).get("range") == "adjacent_room":
+            raise ActionError(
+                "Use a direction and target, such as charge rabbit east.",
+                code="invalid_args",
+            )
+
+        move_events: list[GameEvent] = []
+        if direction:
+            movement = ResolveMoveAction().execute(player, direction)
+            move_context = movement.data["context"]
+
+            for policy_event in (
+                adv_consts.TRIGGER_EVENT_BEFORE_MOVE_EXIT,
+                adv_consts.TRIGGER_EVENT_BEFORE_MOVE_ENTER,
+            ):
+                policy_result = evaluate_movement_policies(
+                    actor=player,
+                    event=policy_event,
+                    direction=move_context.direction,
+                    origin_room_id=move_context.origin_room_id,
+                    destination_room_id=move_context.dest_room_id,
+                    world_id=move_context.trigger_world_id,
+                )
+                if not policy_result.allowed:
+                    raise ActionError(
+                        policy_result.feedback or "You cannot go that way.",
+                        code=policy_result.code,
+                        data={"trigger_id": policy_result.trigger_id},
+                    )
+
+            dest_room = Room.objects.select_related("world", "zone").get(pk=move_context.dest_room_id)
+        else:
+            dest_room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
+
+        target_ref = resolve_room_mob_target(
+            dest_room,
+            target_selector,
+            empty_error=f"Use {ability.name} on what?",
+            not_found_error="You don't see them there." if direction else "You don't see them here.",
+        )
+        target_mob = (
+            Mob.objects.select_for_update()
+            .filter(pk=target_ref.id, is_pending_deletion=False)
+            .first()
+        )
+        if not target_mob:
+            raise ActionError("You don't see them there.", code="target_missing")
+        if not getattr(target_mob, "attackable", True):
+            raise ActionError("You cannot attack them.", code="not_attackable")
+        if CombatEncounter.objects.select_for_update().filter(
+            mob=target_mob,
+            status=CombatEncounter.STATUS_ACTIVE,
+        ).exists():
+            raise ActionError(
+                f"{target_mob.name or 'They'} are already fighting someone else.",
+                code="target_busy",
+            )
+
+        if direction:
+            ChangeRoomAction().execute(player, move_context.dest_room_id)
+            AdjustStaminaAction().execute(player, -move_context.movement_cost)
+            stand_player(player)
+            player.save(update_fields=["room", "stamina", "state", "last_action_ts"])
+            player.viewed_rooms.add(move_context.dest_room_id)
+            move_events = BuildMoveEventsAction().execute(move_context).events
+        else:
+            stand_player(player)
+            player.save(update_fields=["state"])
+
+        from spawns.actions import combat as combat_actions
+        from spawns.actions.combat import encounter_opening_priority_ref
+
+        opening_priority = []
+        if (ability.target or {}).get("opener_priority"):
+            opening_priority = [
+                encounter_opening_priority_ref(
+                    player,
+                    side="player_party",
+                    source=ability.slug,
+                )
+            ]
+
+        interval = _combat_interval(config)
+        if interval == 0:
+            result = self._resolve_immediately(
+                player=player,
+                target_mob=target_mob,
+                ability=ability,
+                command=command,
+                config=config,
+                opening_priority=opening_priority,
+            )
+            return ActionResult(events=[*move_events, *result.events])
+
+        encounter = CombatEncounter.objects.create(
+            world=player.world,
+            room=dest_room,
+            player=player,
+            mob=target_mob,
+            resolution_interval=interval,
+            pending_player_ability=_pending_payload(
+                ability=ability,
+                command=command,
+                target_type="mob",
+                target_id=target_mob.id,
+                queued_round=0,
+            ),
+            opening_priority=opening_priority,
+        )
+        combat_actions.ensure_encounter_initiative_order(
+            encounter,
+            player=player,
+            target_mob=target_mob,
+        )
+
+        step = combat_actions.resolve_combat_encounter_step(
+            encounter.id,
+            auto_advance=interval > 0,
+        )
+        return ActionResult(events=[
+            *move_events,
+            _ability_ack(player=player, ability=ability, replaced=False, target=target_mob),
+            *step.events,
+        ])
 
     def execute(
         self,
@@ -1256,6 +1473,16 @@ class AbilityAction:
             target_type = (ability.target or {}).get("type") or "hostile"
             active_encounter = _active_player_encounter(player)
             target_selector = " ".join(args).strip()
+
+            if ability_uses_room_opener(ability):
+                return self._resolve_room_opener(
+                    player=player,
+                    ability=ability,
+                    command=command,
+                    args=args,
+                    config=config,
+                    active_encounter=active_encounter,
+                )
 
             if target_type in {"self", "ally"}:
                 if active_encounter:

@@ -149,6 +149,47 @@ spec:
 Bundled `kind: abilities` manifests are also supported for import convenience,
 but one ability per manifest should be the default authoring style.
 
+## Targeting And Openers
+
+Hostile abilities normally target mobs in the current room. Runtime target
+fields can opt an ability into opener behavior:
+
+- `range: current_room` is the default.
+- `range: adjacent_room` requires one direction in the command.
+- `range: current_or_adjacent_room` allows the command to omit direction for a
+  current-room target, or include one direction for an adjacent-room target.
+- `move_actor: true` moves the actor before combat when a direction is supplied.
+- `opener_priority: true` gives the actor first-action priority for the first
+  encounter round only.
+
+Charge-style abilities should also set `allow_out_of_combat: true` because they
+start combat from outside an existing encounter:
+
+```yaml
+kind: ability
+metadata:
+  slug: charge
+  name: Charge
+spec:
+  command:
+    verbs: [charge]
+  action_type: primary
+  target:
+    type: hostile
+    default: current_target
+    allow_out_of_combat: true
+    range: current_or_adjacent_room
+    move_actor: true
+    opener_priority: true
+  cooldown:
+    rounds: 10
+  components:
+    - type: damage
+      profile: basic_physical
+      overrides:
+        multiplier: 1.5
+```
+
 ## Costs
 
 `spec.cost.resource` supports `health`, `energy`, and `stamina`.

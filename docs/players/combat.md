@@ -10,9 +10,26 @@ This means a fight may start with you acting before the mob, or the mob acting
 before you. Once the order is set, you can plan around it until the encounter
 ends.
 
-Future opener abilities, such as charge, ambush, or prepared attacks, are meant
-to override the first combat action only. After that opening action, the
-encounter returns to its stored combat order.
+Opener abilities, such as Charge, can override the first combat action only.
+After that opening action, the encounter returns to its stored combat order.
+
+## Charge
+
+Charge can only be used while you are out of combat.
+
+```text
+charge rabbit
+charge rabbit east
+charge east rabbit
+```
+
+Without a direction, Charge targets a mob in your current room. With one
+direction, Charge first moves you through that exit, using the normal movement
+rules, then attacks the named mob in the destination room.
+
+Charge starts combat immediately. Its opening attack gets first-action priority
+for the first round only; later rounds use the encounter order that was rolled
+when combat started.
 
 ## Rounds
 

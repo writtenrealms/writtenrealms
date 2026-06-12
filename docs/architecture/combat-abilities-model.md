@@ -777,9 +777,11 @@ should use that persisted order, not reroll each round and not issue ordering
 queries while resolving each action.
 
 Opener mechanics such as charge, ambush, and prepared attacks should write an
-explicit first-round priority list before the first round resolves. Opener
-priority overrides the actor's first primary action only; the stored encounter
-order remains the default after that opening action.
+explicit first-round priority list before the first round resolves. Charge can
+open against a current-room target or move through one exit before opening
+against an adjacent-room target. Opener priority overrides the actor's first
+primary action only; the stored encounter order remains the default after that
+opening action.
 
 Fray join order is still useful as a deterministic tie-breaker and as metadata
 for explaining how the encounter formed, but it should not be the sole ordering

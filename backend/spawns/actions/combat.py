@@ -301,6 +301,12 @@ def _current_encounter_participants(*, player: Player, target_mob: Mob) -> list[
     ]
 
 
+def encounter_opening_priority_ref(actor: Player | Mob, *, side: str, source: str) -> dict:
+    ref = _encounter_actor_ref(actor, side=side)
+    ref["source"] = source
+    return ref
+
+
 def _roll_initiative_order(participants: list[dict]) -> list[dict]:
     rolls = []
     for participant in participants:

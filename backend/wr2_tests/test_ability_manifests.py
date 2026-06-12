@@ -184,6 +184,49 @@ spec:
             {"resource": "energy", "amount": 5.0, "calc": "percent_base"},
         )
 
+    def test_apply_ability_manifest_accepts_current_or_adjacent_room_openers(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: charge
+  name: Charge
+spec:
+  command:
+    verbs: [charge]
+  target:
+    type: hostile
+    default: current_target
+    allow_out_of_combat: true
+    range: current_or_adjacent_room
+    move_actor: true
+    opener_priority: true
+  cooldown:
+    rounds: 10
+  components:
+    - type: damage
+      profile: basic_physical
+      overrides:
+        multiplier: 1.5
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        ability = AbilityDefinition.objects.get(world=self.world, slug="charge")
+        self.assertEqual(
+            ability.target,
+            {
+                "type": "hostile",
+                "default": "current_target",
+                "allow_out_of_combat": True,
+                "range": "current_or_adjacent_room",
+                "move_actor": True,
+                "opener_priority": True,
+            },
+        )
+        self.assertEqual(ability.cooldown, {"rounds": 10})
+        self.assertEqual(ability.components[0]["overrides"]["multiplier"], 1.5)
+
     def test_apply_ability_manifest_accepts_state_components_and_scaling(self):
         manifest = f"""
 kind: ability
