@@ -17,6 +17,7 @@ from core.condition_dsl import ConditionContext, evaluate_condition
 from core.leveling import ExperienceGrant, apply_experience
 from builders.models import AbilityDefinition
 from spawns.actions.base import ActionError, ActionResult
+from spawns.actions.effects import advance_character_effect_durations, component_targets_character_effect
 from spawns.actions.movement_costs import movement_cost
 from spawns.actions.targeting import resolve_room_mob_target
 from spawns.events import GameEvent
@@ -66,6 +67,12 @@ def decrement_ability_cooldowns(*args, **kwargs):
 
 def execute_state_component(*args, **kwargs):
     from spawns.actions.abilities import execute_state_component as fn
+
+    return fn(*args, **kwargs)
+
+
+def execute_character_effect_component(*args, **kwargs):
+    from spawns.actions.abilities import execute_character_effect_component as fn
 
     return fn(*args, **kwargs)
 
@@ -2161,6 +2168,18 @@ def _execute_pending_player_ability(
             continue
         if component.get("apply") == "on_hit" and not hit_landed:
             continue
+        if component_targets_character_effect(component):
+            events.extend(
+                execute_character_effect_component(
+                    component=component,
+                    player=player,
+                    ability=ability,
+                    room=room,
+                    hit_landed=hit_landed,
+                    round_id=round_id,
+                )
+            )
+            continue
         effect_type = component.get("effect")
         duration = int(((component.get("duration") or {}).get("rounds")) or 1)
         target_type, target_id = _effect_target_for_component(
@@ -2229,16 +2248,23 @@ def _finalize_active_round(
     encounter: CombatEncounter,
     player: Player,
     cooldown_exclude: str | None,
+    round_id: str | None = None,
 ) -> bool:
     cooldowns_changed = decrement_ability_cooldowns(
         player,
         exclude={cooldown_exclude} if cooldown_exclude else set(),
     )
+    effects_changed = advance_character_effect_durations(player, current_round_id=round_id)
+    update_fields: list[str] = []
     if cooldowns_changed:
-        player.save(update_fields=["ability_cooldowns"])
+        update_fields.append("ability_cooldowns")
+    if effects_changed:
+        update_fields.append("active_effects")
+    if update_fields:
+        player.save(update_fields=update_fields)
     if not encounter._state.adding:
         encounter.save(update_fields=["pending_player_ability", "pending_flee", "active_effects"])
-    return cooldowns_changed
+    return cooldowns_changed or effects_changed
 
 
 def _apply_player_primary_turn(
@@ -2569,6 +2595,7 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
         encounter=encounter,
         player=player,
         cooldown_exclude=cooldown_exclude,
+        round_id=round_id,
     )
     if cooldown_exclude or cooldowns_changed:
         events.append(ability_state_event(player))

@@ -30,6 +30,13 @@ from core.scoped_state import (
     set_state_value,
 )
 from spawns.actions.base import ActionError, ActionResult
+from spawns.actions.effects import (
+    active_character_effects,
+    build_character_effect,
+    component_targets_character_effect,
+    refresh_or_add_character_effect,
+    targets_for_character_effect_component,
+)
 from spawns.actions.movement import (
     AdjustStaminaAction,
     BuildMoveEventsAction,
@@ -186,6 +193,7 @@ def ability_state_payload(player: Player) -> dict[str, Any]:
         "known_abilities": known_ability_slugs(player),
         "ability_hotkeys": ability_hotkeys(player),
         "ability_cooldowns": _cooldowns(player),
+        "active_effects": active_character_effects(player),
     }
 
 
@@ -479,6 +487,67 @@ def execute_state_component(
         data=data,
         text=text,
     )
+
+
+def execute_character_effect_component(
+    *,
+    component: dict,
+    player: Player,
+    ability: AbilityDefinition,
+    room: Room | None = None,
+    hit_landed: bool = False,
+    round_id: str | None = None,
+) -> list[GameEvent]:
+    if component.get("type") != "effect":
+        return []
+    if not component_targets_character_effect(component):
+        return []
+    if component.get("apply") == "on_hit" and not hit_landed:
+        return []
+
+    events: list[GameEvent] = []
+    targets = targets_for_character_effect_component(
+        actor=player,
+        component=component,
+        room=room,
+    )
+    duration = int(((component.get("duration") or {}).get("rounds")) or 1)
+    effect_key = str(component.get("effect") or "").strip().lower()
+    label = str((component.get("text") or {}).get("label") or ability.name or ability.slug).strip()
+    for target in targets:
+        effect = build_character_effect(
+            component=component,
+            source=player,
+            target=target,
+            round_id=round_id,
+        )
+        action = refresh_or_add_character_effect(target, effect)
+        target.save(update_fields=["active_effects"])
+        if target.pk == player.pk:
+            player.active_effects = target.active_effects
+
+        events.append(
+            GameEvent(
+                type="notification.ability.effect",
+                recipients=[target.key],
+                data={
+                    "ability": ability.slug,
+                    "effect": effect_key,
+                    "label": label,
+                    "action": action,
+                    "duration_rounds": duration,
+                    "active_effects": active_character_effects(target),
+                    "target": serialize_char_from_player(target).model_dump(),
+                    "round_id": round_id,
+                },
+                text=(
+                    f"You use {ability.name}."
+                    if target.pk == player.pk
+                    else f"{player.name} uses {ability.name}."
+                ),
+            )
+        )
+    return events
 
 
 def _trainer_config(definition: MobDefinition | None) -> dict[str, Any]:
@@ -1195,6 +1264,18 @@ class AbilityAction:
         hit_landed = False
         for component in ability.components or []:
             component_type = component.get("type")
+            if component_type == "effect" and component_targets_character_effect(component):
+                events.extend(
+                    execute_character_effect_component(
+                        component=component,
+                        player=player,
+                        ability=ability,
+                        room=getattr(player, "room", None),
+                        hit_landed=hit_landed,
+                    )
+                )
+                continue
+
             if component_type == "state":
                 state_event = execute_state_component(
                     component=component,

@@ -156,6 +156,46 @@ class TestHeartbeatRegen(WorldTestCase):
             {"power-strike": 1},
         )
 
+    def test_heartbeat_decrements_active_effects_outside_combat(self):
+        self.player.in_game = True
+        self.player.active_effects = [
+            {
+                "effect": "shout",
+                "category": "buff",
+                "scope": "character",
+                "source": {"type": "player", "id": self.player.id},
+                "target": {"type": "player", "id": self.player.id},
+                "remaining_rounds": 2,
+                "duration_rounds": 2,
+                "rounds_elapsed": 0,
+                "label": "Shout",
+                "stack_key": "shout-damage-output",
+                "stacking": "refresh",
+                "primitives": [
+                    {
+                        "type": "combat_modifier",
+                        "phase": "outgoing_damage",
+                        "multiplier": 1.2,
+                    }
+                ],
+            }
+        ]
+        self.player.save(update_fields=["in_game", "active_effects"])
+
+        with patch("spawns.tasks.publish_events") as publish_mock:
+            result = run_heartbeat_regen()
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.active_effects[0]["remaining_rounds"], 1)
+        self.assertEqual(result["active_effects"], 1)
+        publish_mock.assert_called_once()
+
+        with patch("spawns.tasks.publish_events"):
+            run_heartbeat_regen()
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.active_effects, [])
+
     def test_heartbeat_leaves_active_combat_ability_cooldowns_to_combat_rounds(self):
         stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
 

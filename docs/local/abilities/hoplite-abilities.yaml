@@ -64,3 +64,38 @@ spec:
         multiplier: 1.5
       text:
         label: Charge
+---
+kind: ability
+metadata:
+  slug: shout
+  name: Shout
+spec:
+  command:
+    verbs: [shout]
+  action_type: primary
+  target:
+    type: self
+    default: self
+    allow_out_of_combat: true
+  availability:
+    classes: [hoplite]
+    min_level: 1
+  cooldown:
+    rounds: 12
+  help:
+    text: 12 rounds cooldown, grants the caster and friendly units in the room 20% increased damage output for 4 rounds. The shout does not stack; a later shout refreshes the duration.
+  components:
+    - type: effect
+      effect: shout
+      category: buff
+      target: room.allies
+      stack_key: shout-damage-output
+      stacking: refresh
+      duration:
+        rounds: 4
+      primitives:
+        - type: combat_modifier
+          phase: outgoing_damage
+          multiplier: 1.2
+      text:
+        label: Shout

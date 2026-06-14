@@ -191,6 +191,7 @@ class Player(CharMixin, AdventBaseModel):
     known_abilities = models.JSONField(default=list)
     ability_hotkeys = models.JSONField(default=dict)
     ability_cooldowns = models.JSONField(default=dict)
+    active_effects = models.JSONField(default=list)
     command_history = models.JSONField(default=list)
 
     def __str__(self):
@@ -326,6 +327,7 @@ class Player(CharMixin, AdventBaseModel):
             self.known_abilities = []
             self.ability_hotkeys = {}
             self.ability_cooldowns = {}
+            self.active_effects = []
         elif self.level < leveling_config.starting_level:
             self.level = leveling_config.starting_level
             self.experience = experience_for_level(self.level, leveling_config)

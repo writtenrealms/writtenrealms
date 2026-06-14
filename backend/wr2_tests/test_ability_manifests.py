@@ -429,6 +429,63 @@ spec:
             },
         )
 
+    def test_apply_ability_manifest_accepts_combat_modifier_effects(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: shout
+  name: Shout
+spec:
+  command:
+    verbs: [shout]
+  target:
+    type: self
+    default: self
+    allow_out_of_combat: true
+  cooldown:
+    rounds: 12
+  components:
+    - type: effect
+      effect: shout
+      category: buff
+      target: room.allies
+      stack_key: shout-damage-output
+      stacking: refresh
+      duration:
+        rounds: 4
+      primitives:
+        - type: combat_modifier
+          phase: outgoing_damage
+          multiplier: 1.2
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        ability = AbilityDefinition.objects.get(world=self.world, slug="shout")
+        self.assertEqual(ability.cooldown, {"rounds": 12})
+        self.assertEqual(
+            ability.components[0],
+            {
+                "type": "effect",
+                "effect": "shout",
+                "category": "buff",
+                "target": "room.allies",
+                "duration": {"rounds": 4},
+                "apply": "on_resolve",
+                "text": {"label": "Shout"},
+                "stack_key": "shout-damage-output",
+                "stacking": "refresh",
+                "primitives": [
+                    {
+                        "type": "combat_modifier",
+                        "phase": "outgoing_damage",
+                        "multiplier": 1.2,
+                    }
+                ],
+            },
+        )
+
     def test_world_manifest_accepts_ability_progression(self):
         manifest = f"""
 kind: world

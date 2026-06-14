@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from builders.models import AbilityDefinition, ItemTemplate, MobDefinition
 from config import constants as adv_consts
-from core.combat_formulas import normalize_combat_system
+from core.combat_formulas import normalize_combat_system, resolve_attack
 from core.computations import compute_stats
 from core.scoped_state import STATE_SCOPE_CHARACTER, get_state_value
 from django.utils import timezone
@@ -132,6 +132,34 @@ class TestCombatAbilities(WorldTestCase):
                     "profile": "basic_physical",
                     "overrides": {"multiplier": 1.5},
                     "text": {"label": "Charge"},
+                }
+            ],
+        )
+
+    def _shout_ability(self):
+        return self._ability(
+            slug="shout",
+            name="Shout",
+            verbs=["shout"],
+            target={"type": "self", "default": "self", "allow_out_of_combat": True},
+            cooldown={"rounds": 12},
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "shout",
+                    "category": "buff",
+                    "target": "room.allies",
+                    "stack_key": "shout-damage-output",
+                    "stacking": "refresh",
+                    "duration": {"rounds": 4},
+                    "primitives": [
+                        {
+                            "type": "combat_modifier",
+                            "phase": "outgoing_damage",
+                            "multiplier": 1.2,
+                        }
+                    ],
+                    "text": {"label": "Shout"},
                 }
             ],
         )
@@ -1202,6 +1230,142 @@ class TestCombatAbilities(WorldTestCase):
         dispatch_text_command(self.player.id, "kill rat")
         self.player.refresh_from_db()
         self.assertEqual(self.player.energy, 6)
+
+    def test_room_damage_buff_refreshes_without_stacking_across_casters(self):
+        self._shout_ability()
+        ally = self.create_player(
+            "Ally",
+            user=self.create_user("ally@example.com"),
+            room=self.room,
+        )
+        ally.in_game = True
+        ally.known_abilities = ["shout"]
+        ally.save(update_fields=["in_game", "known_abilities"])
+        self.player.known_abilities = ["shout"]
+        self.player.save(update_fields=["known_abilities"])
+        mob = self._mob(health=self.stats["attack_power"] * 20)
+
+        baseline = resolve_attack(
+            actor=self.player,
+            target=mob,
+            world=self.player.world,
+            profile_key="basic_physical",
+        ).damage_taken
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "shout")
+        self.player.refresh_from_db()
+        ally.refresh_from_db()
+
+        self.assertFalse(
+            CombatEncounter.objects.filter(
+                player=self.player,
+                status=CombatEncounter.STATUS_ACTIVE,
+            ).exists()
+        )
+        self.assertEqual(len(self.player.active_effects), 1)
+        self.assertEqual(len(ally.active_effects), 1)
+        self.assertEqual(self.player.active_effects[0]["remaining_rounds"], 4)
+        self.assertEqual(ally.active_effects[0]["remaining_rounds"], 4)
+        self_effect_messages = self._messages_by_type(messages, "notification.ability.effect")
+        self.assertEqual(
+            self_effect_messages[-1]["data"]["active_effects"][0]["remaining_rounds"],
+            4,
+        )
+        ally_effect_messages = [
+            msg["message"]
+            for msg in messages
+            if msg["player_key"] == ally.key
+            and msg["message"].get("type") == "notification.ability.effect"
+        ]
+        self.assertEqual(
+            ally_effect_messages[-1]["data"]["active_effects"][0]["remaining_rounds"],
+            4,
+        )
+
+        buffed = resolve_attack(
+            actor=self.player,
+            target=mob,
+            world=self.player.world,
+            profile_key="basic_physical",
+        ).damage_taken
+        self.assertEqual(buffed, math.ceil(baseline * 1.2))
+
+        self.player.active_effects[0]["remaining_rounds"] = 2
+        ally.active_effects[0]["remaining_rounds"] = 2
+        self.player.save(update_fields=["active_effects"])
+        ally.save(update_fields=["active_effects"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(ally.id, "shout")
+        self.player.refresh_from_db()
+        ally.refresh_from_db()
+
+        self.assertEqual(len(self.player.active_effects), 1)
+        self.assertEqual(len(ally.active_effects), 1)
+        self.assertEqual(self.player.active_effects[0]["remaining_rounds"], 4)
+        self.assertEqual(ally.active_effects[0]["remaining_rounds"], 4)
+        self.assertEqual(self.player.active_effects[0]["source"]["id"], ally.id)
+        self.assertEqual(ally.active_effects[0]["source"]["id"], ally.id)
+        refreshed_messages = self._messages_by_type(messages, "notification.ability.effect")
+        self.assertEqual(refreshed_messages[-1]["data"]["action"], "refreshed")
+        self.assertEqual(
+            refreshed_messages[-1]["data"]["active_effects"][0]["source"]["id"],
+            ally.id,
+        )
+
+        refreshed = resolve_attack(
+            actor=self.player,
+            target=mob,
+            world=self.player.world,
+            profile_key="basic_physical",
+        ).damage_taken
+        self.assertEqual(refreshed, buffed)
+
+    def test_character_damage_buff_duration_advances_in_combat_rounds(self):
+        mob = self._mob(health=self.stats["attack_power"] * 20, fights_back=False)
+        self.player.active_effects = [
+            {
+                "effect": "shout",
+                "category": "buff",
+                "scope": "character",
+                "source": {"type": "player", "id": self.player.id},
+                "target": {"type": "player", "id": self.player.id},
+                "remaining_rounds": 2,
+                "duration_rounds": 2,
+                "rounds_elapsed": 0,
+                "label": "Shout",
+                "stack_key": "shout-damage-output",
+                "stacking": "refresh",
+                "primitives": [
+                    {
+                        "type": "combat_modifier",
+                        "phase": "outgoing_damage",
+                        "multiplier": 1.2,
+                    }
+                ],
+            }
+        ]
+        self.player.save(update_fields=["active_effects"])
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            initiative_order=self._player_first_initiative(mob),
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            resolve_combat_encounter(encounter.id)
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.active_effects[0]["remaining_rounds"], 1)
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            resolve_combat_encounter(encounter.id)
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.active_effects, [])
 
     def test_self_barrier_absorbs_incoming_physical_damage_until_depleted(self):
         self._ability(

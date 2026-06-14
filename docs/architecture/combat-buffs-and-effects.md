@@ -13,9 +13,10 @@ This document describes the target architecture for effects that:
 - grant special states such as invisibility
 - trigger follow-up behavior, such as restoring energy when an attack lands
 
-This is an architecture target. The current runtime only covers the first
-playable encounter-scoped effect primitives: stun, damage-over-time,
-heal-over-time, resource changes, damage absorption, and `after_damage` procs.
+This is an architecture target. The current runtime covers the first playable
+encounter-scoped effect primitives: stun, damage-over-time, heal-over-time,
+resource changes, damage absorption, and `after_damage` procs. It also supports
+character-scoped outgoing damage modifiers for refreshable room-wide buffs.
 
 Related documents:
 

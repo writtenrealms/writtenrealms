@@ -256,6 +256,7 @@ class Actor(BaseModel):
     known_abilities: List[str] = Field(default_factory=list)
     ability_hotkeys: Dict[str, str] = Field(default_factory=dict)
     ability_cooldowns: Dict[str, int] = Field(default_factory=dict)
+    active_effects: List[Dict[str, Any]] = Field(default_factory=list)
     trophy: Dict[int, int] = Field(default_factory=dict)
 
     # Player character type

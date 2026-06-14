@@ -779,6 +779,44 @@ def _stat_value(snapshot: CombatantSnapshot, stat_key: str) -> float:
     return float(snapshot.stats.get(stat_key, 0.0) or 0.0)
 
 
+def _outgoing_damage_multiplier(actor: Any) -> float:
+    effects = getattr(actor, "active_effects", []) or []
+    if not isinstance(effects, list):
+        return 1.0
+
+    multiplier = 1.0
+    applied_stack_keys: set[str] = set()
+    for effect in effects:
+        if not isinstance(effect, dict):
+            continue
+        try:
+            remaining = int(effect.get("remaining_rounds") or 0)
+        except (TypeError, ValueError):
+            remaining = 0
+        if remaining <= 0:
+            continue
+
+        stack_key = str(effect.get("stack_key") or "").strip().lower()
+        if stack_key:
+            if stack_key in applied_stack_keys:
+                continue
+            applied_stack_keys.add(stack_key)
+
+        for primitive in effect.get("primitives") or []:
+            if not isinstance(primitive, dict):
+                continue
+            if primitive.get("type") != "combat_modifier":
+                continue
+            if primitive.get("phase") != "outgoing_damage":
+                continue
+            try:
+                primitive_multiplier = float(primitive.get("multiplier") or 1)
+            except (TypeError, ValueError):
+                primitive_multiplier = 1.0
+            multiplier *= max(0.0, primitive_multiplier)
+    return multiplier
+
+
 def _rating_percent(
     *,
     rating_config: dict[str, Any],
@@ -935,6 +973,8 @@ def resolve_attack(
         combat_system=combat_system,
     )
     output = base * float(profile["multiplier"])
+    if profile["kind"] == "damage":
+        output *= _outgoing_damage_multiplier(actor)
 
     dodge_chance = 0.0
     if profile["can_dodge"] and "dodge" in combat_system["ratings"]:

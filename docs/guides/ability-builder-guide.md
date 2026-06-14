@@ -7,7 +7,9 @@ wired into the runtime for player commands, encounter-round queueing, direct
 damage, healing, cast times, stun, damage-over-time, heal-over-time, and
 out-of-combat self utility. Encounter-scoped effects also support resource
 change ticks, damage absorption barriers, and `after_damage` procs for bounded
-buff behavior such as energy return on landed attacks.
+buff behavior such as energy return on landed attacks. Character-scoped effects
+support outgoing damage modifiers for room-wide buffs that can survive into
+combat after out-of-combat use.
 
 Ability `requirements` use the shared WR2 condition DSL. For condition
 operators and paths, read
@@ -613,6 +615,50 @@ spec:
 `resource` supports `health`, `energy`, and `stamina`. `calc` supports the same
 `fixed`, `percent_max`, and `percent_base` vocabulary used by ability costs.
 Resource changes clamp to the target's current maximum pool.
+
+## Damage Output Buffs
+
+Use a character-scoped `combat_modifier` primitive when an effect should change
+future outgoing damage. `phase: outgoing_damage` multiplies damage components
+and basic attacks, but does not change healing.
+
+Room-wide friendly buffs can target `room.allies`. In the current WR2 combat
+runtime, room allies are in-game players in the caster's room, including the
+caster.
+
+Use `stack_key` with `stacking: refresh` when the buff should not stack. A later
+application with the same stack key replaces the previous active effect and
+resets its duration:
+
+```yaml
+kind: ability
+metadata:
+  slug: shout
+  name: Shout
+spec:
+  command:
+    verbs: [shout]
+  action_type: primary
+  target:
+    type: self
+    default: self
+    allow_out_of_combat: true
+  cooldown:
+    rounds: 12
+  components:
+    - type: effect
+      effect: shout
+      category: buff
+      target: room.allies
+      stack_key: shout-damage-output
+      stacking: refresh
+      duration:
+        rounds: 4
+      primitives:
+        - type: combat_modifier
+          phase: outgoing_damage
+          multiplier: 1.2
+```
 
 ## Damage Absorption Barriers
 

@@ -218,6 +218,17 @@ const receiveMessage = async ({
     commit("player_set", { aliases: message_data.data.aliases });
   }
 
+  if (
+    message_data.type === "notification.ability.effect" &&
+    message_data.data &&
+    message_data.data.target &&
+    state.player &&
+    message_data.data.target.key === state.player.key &&
+    Array.isArray(message_data.data.active_effects)
+  ) {
+    commit("player_active_effects_set", message_data.data.active_effects);
+  }
+
   // Disconection
   if (message_data.type === "system.disconnect.success") {
     if (rootState.auth.user.is_temporary) {
@@ -936,6 +947,14 @@ const mutations = {
     if (player.level && player.level != state.player_level) {
       state.player_level = player.level;
     }
+  },
+
+  player_active_effects_set: (state, active_effects) => {
+    if (!state.player) return;
+    state.player = {
+      ...state.player,
+      active_effects: Array.isArray(active_effects) ? active_effects : [],
+    };
   },
 
   player_remove_from_inventory: (state, items) => {

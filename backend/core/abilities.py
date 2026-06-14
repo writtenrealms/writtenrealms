@@ -39,10 +39,21 @@ COMPONENT_TYPES = ("damage", "healing", "effect", "state")
 EFFECT_TYPES = ("stun", "dot", "hot")
 EFFECT_APPLY_POLICIES = ("on_resolve", "on_hit")
 EFFECT_CATEGORIES = ("buff", "debuff", "neutral")
-EFFECT_TARGETS = ("actor", "self", "target", "ability.target", "effect.source", "effect.target")
+EFFECT_TARGETS = (
+    "actor",
+    "self",
+    "target",
+    "ability.target",
+    "effect.source",
+    "effect.target",
+    "room.allies",
+    "room.players",
+)
 EFFECT_TICK_PHASES = ("round_start",)
-EFFECT_PRIMITIVE_TYPES = ("resource_change", "proc", "damage_absorb")
+EFFECT_PRIMITIVE_TYPES = ("resource_change", "proc", "damage_absorb", "combat_modifier")
 EFFECT_PROC_PHASES = ("after_damage",)
+EFFECT_STACKING_POLICIES = ("refresh", "independent")
+COMBAT_MODIFIER_PHASES = ("outgoing_damage",)
 DAMAGE_ABSORB_CALCS = ("fixed", "percent_max")
 DAMAGE_ABSORB_SCALING_SOURCES = (
     "health_max",
@@ -677,6 +688,19 @@ def _normalize_effect_component(
         "apply": apply_policy,
         "text": _normalize_text(value.get("text"), default_label=default_label),
     }
+    stack_key = str(value.get("stack_key") or "").strip().lower()
+    if stack_key:
+        normalized["stack_key"] = _coerce_slug(
+            stack_key,
+            field_name=f"{field_name}.stack_key",
+            allow_hyphen=True,
+        )
+    if "stacking" in value:
+        normalized["stacking"] = _coerce_choice(
+            value.get("stacking"),
+            choices=EFFECT_STACKING_POLICIES,
+            field_name=f"{field_name}.stacking",
+        )
     primitives = _normalize_effect_primitives(
         value.get("primitives"),
         field_name=f"{field_name}.primitives",
@@ -744,7 +768,30 @@ def _normalize_effect_primitive(value: Any, *, field_name: str) -> dict[str, Any
         return _normalize_resource_change_primitive(value, field_name=field_name)
     if primitive_type == "damage_absorb":
         return _normalize_damage_absorb_primitive(value, field_name=field_name)
+    if primitive_type == "combat_modifier":
+        return _normalize_combat_modifier_primitive(value, field_name=field_name)
     return _normalize_proc_primitive(value, field_name=field_name)
+
+
+def _normalize_combat_modifier_primitive(value: dict[str, Any], *, field_name: str) -> dict[str, Any]:
+    unknown_fields = sorted(set(value.keys()) - {"type", "phase", "multiplier"})
+    if unknown_fields:
+        raise AbilityValidationError(
+            f"{field_name} has unsupported field(s): {', '.join(unknown_fields)}."
+        )
+    return {
+        "type": "combat_modifier",
+        "phase": _coerce_choice(
+            value.get("phase"),
+            choices=COMBAT_MODIFIER_PHASES,
+            field_name=f"{field_name}.phase",
+        ),
+        "multiplier": _coerce_number(
+            value.get("multiplier", 1),
+            field_name=f"{field_name}.multiplier",
+            minimum=0,
+        ),
+    }
 
 
 def _normalize_resource_change_primitive(value: dict[str, Any], *, field_name: str) -> dict[str, Any]:

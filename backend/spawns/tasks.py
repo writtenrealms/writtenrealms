@@ -227,9 +227,11 @@ def _regen_mob(mob: Mob, *, in_combat: bool = False) -> bool:
 
 def run_heartbeat_regen() -> dict[str, int]:
     from spawns.actions.abilities import ability_state_event, decrement_ability_cooldowns
+    from spawns.actions.effects import advance_character_effect_durations
 
     players_regenerated = 0
     player_cooldowns_updated = 0
+    player_effects_updated = 0
     mobs_regenerated = 0
 
     active_players = Player.objects.filter(
@@ -247,6 +249,7 @@ def run_heartbeat_regen() -> dict[str, int]:
         "known_abilities",
         "ability_hotkeys",
         "ability_cooldowns",
+        "active_effects",
     )
     active_world_ids = list(active_players.values_list("world_id", flat=True).distinct())
     active_combat_player_ids = set(
@@ -281,13 +284,22 @@ def run_heartbeat_regen() -> dict[str, int]:
                     },
                 },
             )
-        if player.id not in active_combat_player_ids and decrement_ability_cooldowns(player):
-            player.save(update_fields=["ability_cooldowns"])
-            player_cooldowns_updated += 1
-            publish_events(
-                [ability_state_event(player)],
-                actor_key=player.key,
-            )
+        if player.id not in active_combat_player_ids:
+            cooldowns_changed = decrement_ability_cooldowns(player)
+            effects_changed = advance_character_effect_durations(player)
+            update_fields = []
+            if cooldowns_changed:
+                update_fields.append("ability_cooldowns")
+                player_cooldowns_updated += 1
+            if effects_changed:
+                update_fields.append("active_effects")
+                player_effects_updated += 1
+            if update_fields:
+                player.save(update_fields=update_fields)
+                publish_events(
+                    [ability_state_event(player)],
+                    actor_key=player.key,
+                )
 
     if active_world_ids:
         mobs_qs = (
@@ -326,6 +338,7 @@ def run_heartbeat_regen() -> dict[str, int]:
         "players": players_regenerated,
         "mobs": mobs_regenerated,
         "ability_cooldowns": player_cooldowns_updated,
+        "active_effects": player_effects_updated,
     }
 
 
