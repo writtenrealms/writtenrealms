@@ -23,9 +23,14 @@ from builders.models import (
     MobDefinition,
     MobTemplate,
     MobTemplateInventory,
+    Path,
+    PathRoom,
+    SpawnEntry,
+    SpawnPlan,
     Trigger,
 )
 from config import constants as adv_consts
+from core.condition_dsl import validate_condition_payload
 from core.scoped_state import STATE_SCOPE_ZONE, get_state_snapshot, replace_state_snapshot
 from quests import entity_refs as quest_entity_refs
 from quests import manifests as quest_manifests
@@ -37,11 +42,14 @@ WORLD_MANIFEST_KIND = "world"
 CURRENCY_MANIFEST_KIND = "currency"
 ZONE_MANIFEST_KIND = "zone"
 ROOM_MANIFEST_KIND = "room"
+PATH_MANIFEST_KIND = "path"
 MOB_TEMPLATE_MANIFEST_KIND = "mobtemplate"
+SPAWN_PLAN_MANIFEST_KIND = "spawnplan"
 
 _WORLD_KIND_ALIASES = {"world"}
 _ZONE_KIND_ALIASES = {"zone"}
 _ROOM_KIND_ALIASES = {"room"}
+_PATH_KIND_ALIASES = {"path"}
 _CURRENCY_KIND_ALIASES = {"currency"}
 _ITEM_TEMPLATE_KIND_ALIASES = {"itemtemplate", "item-template", "item_template"}
 _ITEM_DEFINITION_KIND_ALIASES = {"itemdefinition", "item-definition", "item_definition"}
@@ -49,6 +57,7 @@ _ITEM_BUNDLE_KIND_ALIASES = {"itembundle", "item-bundle", "item_bundle"}
 _MERCHANT_PROFILE_KIND_ALIASES = {"merchantprofile", "merchant-profile", "merchant_profile"}
 _MOB_TEMPLATE_KIND_ALIASES = {"mobtemplate", "mob-template", "mob_template"}
 _MOB_DEFINITION_KIND_ALIASES = {"mobdefinition", "mob-definition", "mob_definition"}
+_SPAWN_PLAN_KIND_ALIASES = {"spawnplan", "spawn-plan", "spawn_plan"}
 _QUEST_KIND_ALIASES = {quest_manifests.QUEST_MANIFEST_KIND}
 _QUEST_ARC_KIND_ALIASES = {
     quest_manifests.QUEST_ARC_MANIFEST_KIND,
@@ -60,11 +69,14 @@ _ABILITY_KIND_ALIASES = {builder_manifests.ABILITY_MANIFEST_KIND}
 _ABILITIES_KIND_ALIASES = {builder_manifests.ABILITIES_MANIFEST_KIND}
 
 _ROOM_REF_PREFIX = "room@"
+_ZONE_REF_PREFIX = "zone@"
+_PATH_REF_PREFIX = "path@"
 _ITEM_REF_PREFIX = "itemtemplate."
 _ITEM_DEFINITION_REF_PREFIX = "itemdefinition."
 _ITEM_BUNDLE_REF_PREFIX = "itembundle."
 _MERCHANT_PROFILE_REF_PREFIX = "merchantprofile."
 _MOB_REF_PREFIX = "mobtemplate."
+_MOB_DEFINITION_REF_PREFIX = "mobdefinition."
 
 _ZONE_SORT_KEY = lambda zone: ((zone.name or "").lower(), zone.id)
 _ROOM_SORT_KEY = lambda room: (room.z, room.y, room.x, room.id)
@@ -166,6 +178,8 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
         return ZONE_MANIFEST_KIND
     if raw_kind in _ROOM_KIND_ALIASES:
         return ROOM_MANIFEST_KIND
+    if raw_kind in _PATH_KIND_ALIASES:
+        return PATH_MANIFEST_KIND
     if raw_kind in _ITEM_TEMPLATE_KIND_ALIASES:
         return builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND
     if raw_kind in _ITEM_DEFINITION_KIND_ALIASES:
@@ -178,6 +192,8 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
         return MOB_TEMPLATE_MANIFEST_KIND
     if raw_kind in _MOB_DEFINITION_KIND_ALIASES:
         return builder_manifests.MOB_DEFINITION_MANIFEST_KIND
+    if raw_kind in _SPAWN_PLAN_KIND_ALIASES:
+        return SPAWN_PLAN_MANIFEST_KIND
     if raw_kind in _QUEST_ARC_KIND_ALIASES:
         return quest_manifests.QUEST_ARC_MANIFEST_KIND
     if raw_kind in _QUEST_KIND_ALIASES:
@@ -190,7 +206,7 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
         return builder_manifests.ABILITIES_MANIFEST_KIND
     raise serializers.ValidationError(
         "Unsupported manifest kind. Supported kinds: "
-        "world, currency, zone, room, itemtemplate, itemdefinition, itembundle, merchantprofile, mobtemplate, mobdefinition, questarc, quest, trigger, ability, abilities."
+        "world, currency, zone, room, path, itemtemplate, itemdefinition, itembundle, merchantprofile, mobtemplate, mobdefinition, spawnplan, questarc, quest, trigger, ability, abilities."
     )
 
 
@@ -202,6 +218,20 @@ def _room_ref(room: Room | None) -> str:
     if room is None:
         return ""
     return _room_ref_from_coords(x=room.x, y=room.y, z=room.z)
+
+
+def _zone_ref(zone: Zone | None) -> str:
+    if zone is None:
+        return ""
+    relative_id = zone.relative_id or zone.id
+    return f"{_ZONE_REF_PREFIX}{relative_id}"
+
+
+def _path_ref(path: Path | None) -> str:
+    if path is None:
+        return ""
+    relative_id = path.relative_id or path.id
+    return f"{_PATH_REF_PREFIX}{relative_id}"
 
 
 def _parse_room_ref(value: Any) -> tuple[int, int, int]:
@@ -222,6 +252,50 @@ def _parse_room_ref(value: Any) -> tuple[int, int, int]:
         raise serializers.ValidationError(
             "Room references must use integer coordinates in the form 'room@x,y,z'."
         )
+
+
+def _parse_zone_ref(value: Any, *, field_name: str = "zone") -> int:
+    text = str(value or "").strip()
+    if not text.startswith(_ZONE_REF_PREFIX):
+        raise serializers.ValidationError(
+            f"{field_name} must use the portable form 'zone@<relative_id>'."
+        )
+    raw_relative_id = text[len(_ZONE_REF_PREFIX):].strip()
+    if not raw_relative_id:
+        raise serializers.ValidationError(
+            f"{field_name} must use the portable form 'zone@<relative_id>'."
+        )
+    try:
+        relative_id = int(raw_relative_id)
+    except ValueError:
+        raise serializers.ValidationError(
+            f"{field_name} must use an integer relative id in the form 'zone@<relative_id>'."
+        )
+    if relative_id <= 0:
+        raise serializers.ValidationError(f"{field_name} relative id must be positive.")
+    return relative_id
+
+
+def _parse_path_ref(value: Any, *, field_name: str = "path") -> int:
+    text = str(value or "").strip()
+    if not text.startswith(_PATH_REF_PREFIX):
+        raise serializers.ValidationError(
+            f"{field_name} must use the portable form 'path@<relative_id>'."
+        )
+    raw_relative_id = text[len(_PATH_REF_PREFIX):].strip()
+    if not raw_relative_id:
+        raise serializers.ValidationError(
+            f"{field_name} must use the portable form 'path@<relative_id>'."
+        )
+    try:
+        relative_id = int(raw_relative_id)
+    except ValueError:
+        raise serializers.ValidationError(
+            f"{field_name} must use an integer relative id in the form 'path@<relative_id>'."
+        )
+    if relative_id <= 0:
+        raise serializers.ValidationError(f"{field_name} relative id must be positive.")
+    return relative_id
 
 
 def _item_ref(item_template: ItemTemplate | None) -> str:
@@ -246,6 +320,12 @@ def _mob_ref(mob_template: MobTemplate | None) -> str:
     if mob_template is None or not mob_template.slug:
         return ""
     return f"{_MOB_REF_PREFIX}{mob_template.slug}"
+
+
+def _mob_definition_ref(mob_definition: MobDefinition | None) -> str:
+    if mob_definition is None or not mob_definition.slug:
+        return ""
+    return f"{_MOB_DEFINITION_REF_PREFIX}{mob_definition.slug}"
 
 
 def _parse_template_slug_ref(value: Any, *, expected_prefix: str, field_name: str) -> str:
@@ -334,6 +414,7 @@ def _serialize_zone_manifest(zone: Zone) -> dict[str, Any]:
     return {
         "kind": ZONE_MANIFEST_KIND,
         "metadata": {
+            "ref": _zone_ref(zone),
             "name": zone.name or "",
         },
         "spec": {
@@ -356,7 +437,7 @@ def _serialize_room_manifest(room: Room) -> dict[str, Any]:
             "name": room.name or "",
         },
         "spec": {
-            "zone": room.zone.name if room.zone else "",
+            "zone": _zone_ref(room.zone),
             "description": room.description or "",
             "note": room.note or "",
             "type": room.type,
@@ -385,6 +466,27 @@ def _serialize_room_manifest(room: Room) -> dict[str, Any]:
                     "default_state": door.default_state,
                 }
                 for door in room.doors_from.all().select_related("key", "to_room").order_by("direction", "id")
+            ],
+        },
+    }
+
+
+def _serialize_path_manifest(path: Path) -> dict[str, Any]:
+    return {
+        "kind": PATH_MANIFEST_KIND,
+        "metadata": {
+            "ref": _path_ref(path),
+            "name": path.name or "",
+        },
+        "spec": {
+            "zone": _zone_ref(path.zone),
+            "notes": path.notes or "",
+            "entry_room": _room_ref(path.entry_room),
+            "max_per_room": path.max_per_room,
+            "max_per_path": path.max_per_path,
+            "rooms": [
+                _room_ref(path_room.room)
+                for path_room in PathRoom.objects.filter(path=path).select_related("room").order_by("id")
             ],
         },
     }
@@ -485,6 +587,104 @@ def _serialize_mob_definition_manifest(mob_definition: MobDefinition) -> dict[st
     manifest["metadata"].pop("id", None)
     manifest["metadata"].pop("key", None)
     return manifest
+
+
+def _serialize_spawn_entry(entry: SpawnEntry) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "slug": entry.slug,
+        "order": int(entry.order),
+        "target": copy.deepcopy(entry.target),
+        "count": copy.deepcopy(entry.count),
+    }
+    if entry.name:
+        data["name"] = entry.name
+    if not entry.is_active:
+        data["is_active"] = False
+    source = copy.deepcopy(entry.source)
+    if isinstance(source, dict) and "pool" in source:
+        data["source_pool"] = source["pool"]
+    else:
+        data["source"] = source
+    if entry.placement:
+        data["placement"] = copy.deepcopy(entry.placement)
+    if entry.affixes:
+        data["affixes"] = copy.deepcopy(entry.affixes)
+    if entry.conditions:
+        data["conditions"] = copy.deepcopy(entry.conditions)
+    return data
+
+
+def _serialize_spawn_plan_manifest(spawn_plan: SpawnPlan) -> dict[str, Any]:
+    spec: dict[str, Any] = {
+        "zone": _zone_ref(spawn_plan.zone),
+        "order": int(spawn_plan.order),
+        "is_active": bool(spawn_plan.is_active),
+        "reset": copy.deepcopy(spawn_plan.reset_policy),
+        "respawn": copy.deepcopy(spawn_plan.respawn_policy),
+        "entries": [
+            _serialize_spawn_entry(entry)
+            for entry in spawn_plan.entries.all().order_by("order", "created_ts", "id")
+        ],
+    }
+    if spawn_plan.randomization:
+        spec["randomization"] = copy.deepcopy(spawn_plan.randomization)
+    if spawn_plan.conditions:
+        spec["conditions"] = copy.deepcopy(spawn_plan.conditions)
+    return {
+        "kind": SPAWN_PLAN_MANIFEST_KIND,
+        "metadata": {
+            "slug": spawn_plan.slug,
+            "name": spawn_plan.name or "",
+        },
+        "spec": spec,
+    }
+
+
+def serialize_spawn_plan_payload(
+    spawn_plan: SpawnPlan,
+    *,
+    include_yaml: bool = True,
+) -> dict[str, Any]:
+    zone = spawn_plan.zone
+    zone_ref = _zone_ref(zone)
+    respawn_policy = copy.deepcopy(spawn_plan.respawn_policy or {})
+    entry_count = spawn_plan.entries.count()
+    payload: dict[str, Any] = {
+        "id": spawn_plan.id,
+        "key": f"spawnplan.{spawn_plan.id}",
+        "slug": spawn_plan.slug,
+        "name": spawn_plan.name or "",
+        "modified_ts": spawn_plan.modified_ts,
+        "model_type": "spawnplan",
+        "zone": {
+            "id": zone.id,
+            "key": zone.key,
+            "relative_id": zone.relative_id,
+            "manifest_ref": zone_ref,
+            "name": zone.name,
+        },
+        "zone_ref": zone_ref,
+        "order": int(spawn_plan.order),
+        "is_active": bool(spawn_plan.is_active),
+        "num_entries": entry_count,
+        "entry_count": entry_count,
+        "entries": entry_count,
+        "respawn_mode": respawn_policy.get("mode", ""),
+        "respawn_seconds": respawn_policy.get("seconds"),
+    }
+    if include_yaml:
+        manifest = _serialize_spawn_plan_manifest(spawn_plan)
+        delete_manifest = {
+            "kind": SPAWN_PLAN_MANIFEST_KIND,
+            "operation": builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE,
+            "metadata": {
+                "slug": spawn_plan.slug,
+            },
+        }
+        payload["manifest"] = manifest
+        payload["yaml"] = _manifest_to_yaml(manifest)
+        payload["delete_yaml"] = _manifest_to_yaml(delete_manifest)
+    return payload
 
 
 def _serialize_ability_manifest(ability: AbilityDefinition) -> dict[str, Any]:
@@ -819,6 +1019,12 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             ).order_by("z", "y", "x", "id")
         ],
         *[
+            _serialize_path_manifest(path)
+            for path in world.paths.select_related("zone", "entry_room").order_by(
+                "zone__name", "relative_id", "id"
+            )
+        ],
+        *[
             _serialize_mob_template_manifest(mob_template)
             for mob_template in world.mob_templates.prefetch_related(
                 "template_inventories__item_template",
@@ -829,6 +1035,12 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
         *[
             _serialize_mob_definition_manifest(mob_definition)
             for mob_definition in world.mob_definitions.all().order_by("slug", "id")
+        ],
+        *[
+            _serialize_spawn_plan_manifest(spawn_plan)
+            for spawn_plan in world.spawn_plans.prefetch_related("entries").select_related("zone").order_by(
+                "zone__name", "order", "slug", "id"
+            )
         ],
         *[
             _serialize_ability_manifest(ability)
@@ -858,12 +1070,14 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
         "currencies": 0,
         "zones": 0,
         "rooms": 0,
+        "paths": 0,
         "item_templates": 0,
         "item_definitions": 0,
         "item_bundles": 0,
         "merchant_profiles": 0,
         "mob_templates": 0,
         "mob_definitions": 0,
+        "spawn_plans": 0,
         "abilities": 0,
         "quest_arcs": 0,
         "quests": 0,
@@ -877,6 +1091,8 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
             counts["zones"] += 1
         elif kind == ROOM_MANIFEST_KIND:
             counts["rooms"] += 1
+        elif kind == PATH_MANIFEST_KIND:
+            counts["paths"] += 1
         elif kind == builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND:
             counts["item_templates"] += 1
         elif kind == builder_manifests.ITEM_DEFINITION_MANIFEST_KIND:
@@ -889,6 +1105,8 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
             counts["mob_templates"] += 1
         elif kind == builder_manifests.MOB_DEFINITION_MANIFEST_KIND:
             counts["mob_definitions"] += 1
+        elif kind == SPAWN_PLAN_MANIFEST_KIND:
+            counts["spawn_plans"] += 1
         elif kind == builder_manifests.ABILITY_MANIFEST_KIND:
             counts["abilities"] += 1
         elif kind == quest_manifests.QUEST_ARC_MANIFEST_KIND:
@@ -952,10 +1170,27 @@ def _find_placeholder_room(world: World) -> Room | None:
     return room
 
 
-def _get_or_create_zone(*, world: World, zone_name: str) -> Zone | None:
+def _get_or_create_zone(*, world: World, zone_name: str, zone_ref: Any = None) -> Zone | None:
     name = str(zone_name or "").strip()
-    if not name:
+    ref_text = str(zone_ref or "").strip()
+    if not name and not ref_text:
         return None
+    if ref_text:
+        relative_id = _parse_zone_ref(ref_text, field_name="zone")
+        zone = Zone.objects.filter(world=world, relative_id=relative_id).first()
+        if zone:
+            return zone
+        placeholder = _find_placeholder_zone(world)
+        if placeholder:
+            placeholder.name = name or placeholder.name
+            placeholder.relative_id = relative_id
+            placeholder.save(update_fields=["name", "relative_id"])
+            return placeholder
+        zone = Zone.objects.create(world=world, name=name or f"Zone {relative_id}")
+        if zone.relative_id != relative_id:
+            zone.relative_id = relative_id
+            zone.save(update_fields=["relative_id"])
+        return zone
     zone = Zone.objects.filter(world=world, name=name).order_by("id").first()
     if zone:
         return zone
@@ -1131,6 +1366,238 @@ def _get_or_create_mob_template(*, world: World, value: Any, field_name: str) ->
     return serializer.save(world=world)
 
 
+def _resolve_spawn_plan_zone(*, world: World, value: Any, field_name: str) -> Zone:
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(f"{field_name} is required.")
+    relative_id = _parse_zone_ref(text, field_name=field_name)
+    zone = Zone.objects.filter(world=world, relative_id=relative_id).first()
+    if zone is None:
+        raise serializers.ValidationError(f"{field_name} references an unknown zone.")
+    return zone
+
+
+def _resolve_spawn_plan_room(*, world: World, value: Any, field_name: str) -> Room:
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(f"{field_name} is required.")
+    if text.startswith(_ROOM_REF_PREFIX):
+        x, y, z = _parse_room_ref(text)
+        room = Room.objects.filter(world=world, x=x, y=y, z=z).first()
+    else:
+        prefix, sep, raw = text.partition(".")
+        if sep == "." and prefix == "room" and raw.isdigit():
+            room = Room.objects.filter(world=world, pk=int(raw)).first()
+        else:
+            room = Room.objects.filter(world=world, name=text).order_by("id").first()
+    if room is None:
+        raise serializers.ValidationError(f"{field_name} references an unknown room.")
+    return room
+
+
+def _resolve_spawn_plan_path(*, world: World, value: Any, field_name: str) -> Path:
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(f"{field_name} is required.")
+    relative_id = _parse_path_ref(text, field_name=field_name)
+    path = Path.objects.filter(world=world, relative_id=relative_id).first()
+    if path is None:
+        raise serializers.ValidationError(f"{field_name} references an unknown path.")
+    return path
+
+
+def _validate_condition_payload_or_error(value: Any, *, field_name: str) -> None:
+    try:
+        validate_condition_payload(value, field_name=field_name)
+    except ValueError as exc:
+        raise serializers.ValidationError(str(exc))
+
+
+def _normalize_spawn_source(entry_spec: dict[str, Any], *, field_name: str) -> Any:
+    has_source = "source" in entry_spec
+    has_source_pool = "source_pool" in entry_spec
+    if has_source and has_source_pool:
+        raise serializers.ValidationError(f"{field_name} must specify either source or source_pool, not both.")
+    if has_source_pool:
+        source_pool = entry_spec.get("source_pool")
+        if not isinstance(source_pool, list) or not source_pool:
+            raise serializers.ValidationError(f"{field_name}.source_pool must be a non-empty list.")
+        normalized_pool = []
+        for index, raw_entry in enumerate(source_pool):
+            if isinstance(raw_entry, str):
+                normalized_pool.append(raw_entry)
+                continue
+            if not isinstance(raw_entry, dict):
+                raise serializers.ValidationError(
+                    f"{field_name}.source_pool[{index}] must be a source ref or mapping."
+                )
+            source_ref = raw_entry.get("ref") or raw_entry.get("source")
+            if not source_ref:
+                raise serializers.ValidationError(
+                    f"{field_name}.source_pool[{index}] must include ref or source."
+                )
+            normalized_entry = copy.deepcopy(raw_entry)
+            if "weight" in normalized_entry:
+                try:
+                    weight = int(normalized_entry.get("weight"))
+                except (TypeError, ValueError):
+                    raise serializers.ValidationError(
+                        f"{field_name}.source_pool[{index}].weight must be an integer."
+                    )
+                if weight < 0:
+                    raise serializers.ValidationError(
+                        f"{field_name}.source_pool[{index}].weight cannot be negative."
+                    )
+                normalized_entry["weight"] = weight
+            normalized_pool.append(normalized_entry)
+        return {"pool": normalized_pool}
+    source = entry_spec.get("source")
+    if not source:
+        raise serializers.ValidationError(f"{field_name}.source is required.")
+    return copy.deepcopy(source)
+
+
+def _spawn_source_refs(source: Any) -> list[Any]:
+    if isinstance(source, dict) and "pool" in source:
+        refs = []
+        for entry in source.get("pool") or []:
+            if isinstance(entry, dict):
+                refs.append(entry.get("ref") or entry.get("source"))
+            else:
+                refs.append(entry)
+        return refs
+    if isinstance(source, dict):
+        return [source.get("ref") or source.get("source")]
+    return [source]
+
+
+def _validate_spawn_source(*, world: World, source: Any, field_name: str) -> None:
+    from spawns.spawn_plans import resolve_source
+
+    for index, source_ref in enumerate(_spawn_source_refs(source)):
+        ref_field = f"{field_name}[{index}]" if isinstance(source, dict) and "pool" in source else field_name
+        resolve_source(world=world, source_spec=source_ref, field_name=ref_field)
+
+
+def _normalize_spawn_count(value: Any, *, field_name: str) -> Any:
+    if value in (None, ""):
+        return 1
+    if isinstance(value, bool):
+        raise serializers.ValidationError(f"{field_name} must be an integer or a min/max mapping.")
+    if isinstance(value, int):
+        if value < 0:
+            raise serializers.ValidationError(f"{field_name} cannot be negative.")
+        return value
+    if isinstance(value, str):
+        try:
+            count = int(value)
+        except ValueError:
+            raise serializers.ValidationError(f"{field_name} must be an integer.")
+        if count < 0:
+            raise serializers.ValidationError(f"{field_name} cannot be negative.")
+        return count
+    if isinstance(value, dict):
+        normalized = copy.deepcopy(value)
+        if not any(key in normalized for key in ("value", "min", "max")):
+            raise serializers.ValidationError(
+                f"{field_name} must include value or min/max."
+            )
+        if "value" in normalized:
+            try:
+                normalized["value"] = int(normalized.get("value") or 0)
+            except (TypeError, ValueError):
+                raise serializers.ValidationError(f"{field_name}.value must be an integer.")
+            if normalized["value"] < 0:
+                raise serializers.ValidationError(f"{field_name}.value cannot be negative.")
+        if "min" in normalized or "max" in normalized:
+            try:
+                minimum = int(normalized.get("min", 0) or 0)
+                maximum = int(normalized.get("max", minimum) or minimum)
+            except (TypeError, ValueError):
+                raise serializers.ValidationError(f"{field_name}.min and max must be integers.")
+            if minimum < 0 or maximum < 0:
+                raise serializers.ValidationError(f"{field_name}.min and max cannot be negative.")
+            if minimum > maximum:
+                raise serializers.ValidationError(f"{field_name}.min cannot be greater than max.")
+            normalized["min"] = minimum
+            normalized["max"] = maximum
+        return normalized
+    raise serializers.ValidationError(f"{field_name} must be an integer or a min/max mapping.")
+
+
+def _normalize_spawn_affixes(value: Any, *, field_name: str) -> dict[str, Any]:
+    if value in (None, ""):
+        return {}
+    if not isinstance(value, dict):
+        raise serializers.ValidationError(f"{field_name} must be a mapping.")
+    normalized = copy.deepcopy(value)
+    if "guaranteed" in normalized:
+        guaranteed = normalized.get("guaranteed") or []
+        if not isinstance(guaranteed, list):
+            raise serializers.ValidationError(f"{field_name}.guaranteed must be a list.")
+        normalized["guaranteed"] = [str(key).strip() for key in guaranteed if str(key).strip()]
+    if "chance" in normalized:
+        try:
+            chance = int(normalized.get("chance") or 0)
+        except (TypeError, ValueError):
+            raise serializers.ValidationError(f"{field_name}.chance must be an integer.")
+        if chance < 0 or chance > 100:
+            raise serializers.ValidationError(f"{field_name}.chance must be between 0 and 100.")
+        normalized["chance"] = chance
+    if "pool" in normalized:
+        pool = normalized.get("pool") or []
+        if not isinstance(pool, list):
+            raise serializers.ValidationError(f"{field_name}.pool must be a list.")
+        normalized_pool = []
+        for index, option in enumerate(pool):
+            if not isinstance(option, dict):
+                raise serializers.ValidationError(f"{field_name}.pool[{index}] must be a mapping.")
+            key = str(option.get("key") or "").strip()
+            if not key:
+                raise serializers.ValidationError(f"{field_name}.pool[{index}].key is required.")
+            normalized_option = copy.deepcopy(option)
+            normalized_option["key"] = key
+            if "weight" in normalized_option:
+                try:
+                    weight = int(normalized_option.get("weight") or 0)
+                except (TypeError, ValueError):
+                    raise serializers.ValidationError(f"{field_name}.pool[{index}].weight must be an integer.")
+                if weight < 0:
+                    raise serializers.ValidationError(f"{field_name}.pool[{index}].weight cannot be negative.")
+                normalized_option["weight"] = weight
+            if "modifiers" in normalized_option and not isinstance(normalized_option.get("modifiers"), dict):
+                raise serializers.ValidationError(f"{field_name}.pool[{index}].modifiers must be a mapping.")
+            normalized_pool.append(normalized_option)
+        normalized["pool"] = normalized_pool
+    return normalized
+
+
+def _validate_spawn_target(*, world: World, target: Any, entry_slugs: set[str], field_name: str) -> dict[str, Any]:
+    if isinstance(target, str):
+        target = {"room": target}
+    if not isinstance(target, dict):
+        raise serializers.ValidationError(f"{field_name} must be a mapping.")
+    normalized = copy.deepcopy(target)
+    if normalized.get("room"):
+        _resolve_spawn_plan_room(world=world, value=normalized.get("room"), field_name=f"{field_name}.room")
+        return normalized
+    if normalized.get("room_ref"):
+        _resolve_spawn_plan_room(world=world, value=normalized.get("room_ref"), field_name=f"{field_name}.room_ref")
+        return normalized
+    if normalized.get("zone"):
+        _resolve_spawn_plan_zone(world=world, value=normalized.get("zone"), field_name=f"{field_name}.zone")
+        return normalized
+    if normalized.get("path"):
+        _resolve_spawn_plan_path(world=world, value=normalized.get("path"), field_name=f"{field_name}.path")
+        return normalized
+    entry_slug = str(normalized.get("entry") or normalized.get("parent_entry") or "").strip()
+    if entry_slug:
+        if entry_slug not in entry_slugs:
+            raise serializers.ValidationError(f"{field_name}.entry references an unknown entry slug.")
+        return normalized
+    raise serializers.ValidationError(f"{field_name} must target a room, zone, path, or entry.")
+
+
 def apply_currency_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Currency, bool]:
     if parse_document_kind(manifest) != CURRENCY_MANIFEST_KIND:
         raise serializers.ValidationError("Unsupported manifest kind. Expected 'currency'.")
@@ -1173,15 +1640,20 @@ def apply_zone_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Zone
 
     metadata = _manifest_metadata(manifest)
     spec = _manifest_spec(manifest)
+    ref = str(metadata.get("ref") or "").strip()
     name = str(metadata.get("name") or "").strip()
     if not name:
         raise serializers.ValidationError("metadata.name is required.")
 
-    existing = Zone.objects.filter(world=world, name=name).order_by("id").first()
+    if ref:
+        relative_id = _parse_zone_ref(ref, field_name="metadata.ref")
+        existing = Zone.objects.filter(world=world, relative_id=relative_id).first()
+    else:
+        existing = Zone.objects.filter(world=world, name=name).order_by("id").first()
     created = existing is None
 
     with transaction.atomic():
-        zone = existing or _get_or_create_zone(world=world, zone_name=name)
+        zone = existing or _get_or_create_zone(world=world, zone_name=name, zone_ref=ref)
         zone.name = name
         if "description" in spec or created:
             zone.description = str(spec.get("description", zone.description or ""))
@@ -1236,10 +1708,15 @@ def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room
     created = existing is None
 
     with transaction.atomic():
-        zone_name = str(spec.get("zone") or "").strip() if "zone" in spec else (
-            existing.zone.name if existing and existing.zone else ""
+        zone_ref = str(spec.get("zone") or "").strip() if "zone" in spec else (
+            _zone_ref(existing.zone) if existing and existing.zone else ""
         )
-        zone = _get_or_create_zone(world=world, zone_name=zone_name) if zone_name else None
+        zone = None
+        if zone_ref:
+            if zone_ref.startswith(_ZONE_REF_PREFIX):
+                zone = _get_or_create_zone(world=world, zone_name="", zone_ref=zone_ref)
+            else:
+                zone = _get_or_create_zone(world=world, zone_name=zone_ref)
 
         room = existing or _get_or_create_room(world=world, room_ref=room_ref, zone=zone)
         if zone is not None or "zone" in spec:
@@ -1348,6 +1825,113 @@ def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room
                 )
 
     return room, created
+
+
+def apply_path_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Path, bool]:
+    if parse_document_kind(manifest) != PATH_MANIFEST_KIND:
+        raise serializers.ValidationError("Unsupported manifest kind. Expected 'path'.")
+    if builder_manifests.parse_manifest_operation(manifest) != builder_manifests.TRIGGER_MANIFEST_OPERATION_APPLY:
+        raise serializers.ValidationError("Path manifests only support operation 'apply'.")
+
+    metadata = _manifest_metadata(manifest)
+    spec = _manifest_spec(manifest)
+    path_ref = str(metadata.get("ref") or "").strip()
+    if not path_ref:
+        raise serializers.ValidationError("metadata.ref is required.")
+    path_name = str(metadata.get("name") or "").strip()
+    if not path_name:
+        raise serializers.ValidationError("metadata.name is required.")
+    zone_ref = str(spec.get("zone") or "").strip()
+    if not zone_ref:
+        raise serializers.ValidationError("spec.zone is required.")
+
+    rooms = spec.get("rooms", [])
+    if rooms is None:
+        rooms = []
+    if not isinstance(rooms, list):
+        raise serializers.ValidationError("spec.rooms must be a list.")
+
+    def optional_positive_int(value: Any, *, field_name: str) -> int | None:
+        if value in (None, ""):
+            return None
+        try:
+            integer = int(value)
+        except (TypeError, ValueError):
+            raise serializers.ValidationError(f"{field_name} must be a positive integer or empty.")
+        if integer <= 0:
+            raise serializers.ValidationError(f"{field_name} must be a positive integer or empty.")
+        return integer
+
+    relative_id = _parse_path_ref(path_ref, field_name="metadata.ref")
+    max_per_room = optional_positive_int(
+        spec.get("max_per_room"),
+        field_name="spec.max_per_room",
+    )
+    max_per_path = optional_positive_int(
+        spec.get("max_per_path"),
+        field_name="spec.max_per_path",
+    )
+
+    with transaction.atomic():
+        zone = _resolve_spawn_plan_zone(
+            world=world,
+            value=zone_ref,
+            field_name="spec.zone",
+        )
+        existing = Path.objects.filter(world=world, relative_id=relative_id).first()
+        created = existing is None
+
+        resolved_rooms = []
+        seen_room_refs = set()
+        for index, room_ref in enumerate(rooms):
+            room_ref_text = str(room_ref or "").strip()
+            _parse_room_ref(room_ref_text)
+            if room_ref_text in seen_room_refs:
+                raise serializers.ValidationError(f"spec.rooms[{index}] duplicates room ref '{room_ref_text}'.")
+            seen_room_refs.add(room_ref_text)
+            resolved_rooms.append(_get_or_create_room(world=world, room_ref=room_ref_text))
+
+        entry_room = None
+        entry_room_ref = str(spec.get("entry_room") or "").strip()
+        if entry_room_ref:
+            _parse_room_ref(entry_room_ref)
+            entry_room = _get_or_create_room(world=world, room_ref=entry_room_ref)
+
+        path = existing or Path(world=world)
+        path.relative_id = relative_id
+        path.name = path_name
+        path.zone = zone
+        path.notes = str(spec.get("notes") or "")
+        path.entry_room = entry_room
+        path.max_per_room = max_per_room
+        path.max_per_path = max_per_path
+        path.save()
+        if path.relative_id != relative_id:
+            path.relative_id = relative_id
+            path.save(update_fields=["relative_id"])
+
+        PathRoom.objects.filter(path=path).delete()
+        for room in resolved_rooms:
+            PathRoom.objects.create(path=path, room=room)
+
+    return path, created
+
+
+def delete_path_manifest(*, world: World, manifest: dict[str, Any]) -> Path:
+    if parse_document_kind(manifest) != PATH_MANIFEST_KIND:
+        raise serializers.ValidationError("Unsupported manifest kind. Expected 'path'.")
+    if builder_manifests.parse_manifest_operation(manifest) != builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+        raise serializers.ValidationError("Path delete manifests require operation 'delete'.")
+    metadata = _manifest_metadata(manifest)
+    path_ref = str(metadata.get("ref") or "").strip()
+    if not path_ref:
+        raise serializers.ValidationError("metadata.ref is required.")
+    relative_id = _parse_path_ref(path_ref, field_name="metadata.ref")
+    path = Path.objects.filter(world=world, relative_id=relative_id).first()
+    if path is None:
+        raise serializers.ValidationError("Path delete manifest does not resolve to an existing path.")
+    path.delete()
+    return path
 
 
 def _apply_item_template_inventory(*, world: World, container: ItemTemplate, inventory: list[Any]) -> None:
@@ -1539,6 +2123,137 @@ def apply_mob_template_manifest(*, world: World, manifest: dict[str, Any]) -> tu
             )
 
     return saved_mob, created
+
+
+def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[SpawnPlan, bool]:
+    if parse_document_kind(manifest) != SPAWN_PLAN_MANIFEST_KIND:
+        raise serializers.ValidationError("Unsupported manifest kind. Expected 'spawnplan'.")
+    if builder_manifests.parse_manifest_operation(manifest) != builder_manifests.TRIGGER_MANIFEST_OPERATION_APPLY:
+        raise serializers.ValidationError("Spawn plan manifests only support operation 'apply' in this parser.")
+
+    metadata = _manifest_metadata(manifest)
+    spec = _manifest_spec(manifest)
+    slug_source = metadata.get("slug") or metadata.get("name")
+    slug = _slug_or_error(slug_source, "metadata.slug")
+    name = str(metadata.get("name") or slug.replace("-", " ").title()).strip()
+    if not name:
+        raise serializers.ValidationError("metadata.name cannot be empty.")
+
+    zone = _resolve_spawn_plan_zone(world=world, value=spec.get("zone"), field_name="spec.zone")
+    if spec.get("zone_ref") not in (None, ""):
+        zone_ref = _resolve_spawn_plan_zone(world=world, value=spec.get("zone_ref"), field_name="spec.zone_ref")
+        if zone_ref.id != zone.id:
+            raise serializers.ValidationError("spec.zone_ref must match spec.zone when provided.")
+    conditions = copy.deepcopy(spec.get("conditions") or {})
+    _validate_condition_payload_or_error(conditions, field_name="spec.conditions")
+
+    entries = spec.get("entries") or []
+    if not isinstance(entries, list):
+        raise serializers.ValidationError("spec.entries must be a list.")
+    entry_slugs = set()
+    for index, entry_spec in enumerate(entries):
+        if not isinstance(entry_spec, dict):
+            raise serializers.ValidationError(f"spec.entries[{index}] must be a mapping.")
+        entry_slug = _slug_or_error(
+            entry_spec.get("slug") or entry_spec.get("name") or f"entry-{index + 1}",
+            f"spec.entries[{index}].slug",
+        )
+        if entry_slug in entry_slugs:
+            raise serializers.ValidationError(f"Duplicate spawn entry slug '{entry_slug}'.")
+        entry_slugs.add(entry_slug)
+
+    normalized_entries = []
+    for index, entry_spec in enumerate(entries):
+        entry_field = f"spec.entries[{index}]"
+        entry_slug = _slug_or_error(
+            entry_spec.get("slug") or entry_spec.get("name") or f"entry-{index + 1}",
+            f"{entry_field}.slug",
+        )
+        source = _normalize_spawn_source(entry_spec, field_name=entry_field)
+        _validate_spawn_source(world=world, source=source, field_name=f"{entry_field}.source")
+        target = _validate_spawn_target(
+            world=world,
+            target=entry_spec.get("target"),
+            entry_slugs=entry_slugs,
+            field_name=f"{entry_field}.target",
+        )
+        entry_conditions = copy.deepcopy(entry_spec.get("conditions") or {})
+        _validate_condition_payload_or_error(entry_conditions, field_name=f"{entry_field}.conditions")
+        normalized_entries.append({
+            "slug": entry_slug,
+            "name": str(entry_spec.get("name") or ""),
+            "order": int(entry_spec.get("order", index + 1) or 0),
+            "is_active": bool(entry_spec.get("is_active", True)),
+            "source": source,
+            "target": target,
+            "count": _normalize_spawn_count(entry_spec.get("count", 1), field_name=f"{entry_field}.count"),
+            "placement": copy.deepcopy(entry_spec.get("placement") or {}),
+            "affixes": _normalize_spawn_affixes(entry_spec.get("affixes"), field_name=f"{entry_field}.affixes"),
+            "conditions": entry_conditions,
+        })
+
+    with transaction.atomic():
+        spawn_plan = SpawnPlan.objects.filter(world=world, slug=slug).first()
+        created = spawn_plan is None
+        if spawn_plan is None:
+            spawn_plan = SpawnPlan(world=world, slug=slug)
+        spawn_plan.zone = zone
+        spawn_plan.name = name
+        spawn_plan.notes = str(spec.get("notes") or "")
+        spawn_plan.order = int(spec.get("order", spawn_plan.order or 0) or 0)
+        spawn_plan.is_active = bool(spec.get("is_active", True))
+        spawn_plan.reset_policy = copy.deepcopy(spec.get("reset") or {})
+        spawn_plan.respawn_policy = copy.deepcopy(spec.get("respawn") or {})
+        spawn_plan.randomization = copy.deepcopy(spec.get("randomization") or {})
+        spawn_plan.conditions = conditions
+        spawn_plan.save()
+
+        seen_entry_slugs = []
+        for normalized in normalized_entries:
+            seen_entry_slugs.append(normalized["slug"])
+            entry = SpawnEntry.objects.filter(plan=spawn_plan, slug=normalized["slug"]).first()
+            if entry is None:
+                entry = SpawnEntry(plan=spawn_plan, slug=normalized["slug"])
+            for field_name in (
+                "name",
+                "order",
+                "is_active",
+                "source",
+                "target",
+                "count",
+                "placement",
+                "affixes",
+                "conditions",
+            ):
+                setattr(entry, field_name, normalized[field_name])
+            entry.save()
+        spawn_plan.entries.exclude(slug__in=seen_entry_slugs).delete()
+
+    return spawn_plan, created
+
+
+def delete_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> SpawnPlan:
+    if parse_document_kind(manifest) != SPAWN_PLAN_MANIFEST_KIND:
+        raise serializers.ValidationError("Unsupported manifest kind. Expected 'spawnplan'.")
+    if builder_manifests.parse_manifest_operation(manifest) != builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+        raise serializers.ValidationError("Spawn plan delete manifests require operation 'delete'.")
+    metadata = _manifest_metadata(manifest)
+    slug = str(metadata.get("slug") or "").strip()
+    key = str(metadata.get("key") or "").strip()
+    spawn_plan = None
+    if slug:
+        spawn_plan = SpawnPlan.objects.filter(world=world, slug=slug).first()
+    elif key:
+        plan_id = builder_manifests._parse_entity_ref(key, "spawnplan", "metadata.key")
+        spawn_plan = SpawnPlan.objects.filter(world=world, pk=plan_id).first()
+    if spawn_plan is None:
+        raise serializers.ValidationError("Spawn plan delete manifest does not resolve to an existing spawn plan.")
+    spawn_plan._deleted_payload = serialize_spawn_plan_payload(
+        spawn_plan,
+        include_yaml=False,
+    )
+    spawn_plan.delete()
+    return spawn_plan
 
 
 def apply_world_manifest(*, world: World, manifest: dict[str, Any]) -> None:

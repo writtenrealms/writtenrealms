@@ -662,6 +662,10 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
                              related_name='rules',
                              on_delete=models.SET_NULL,
                              **optional)
+    spawn_placement = models.ForeignKey('builders.SpawnPlacement',
+                                        related_name='mobs',
+                                        on_delete=models.SET_NULL,
+                                        **optional)
 
     # Generic FK to keep track of where a mob is supposed to roam
     roams_type = models.ForeignKey(ContentType,
@@ -868,6 +872,10 @@ class Item(ItemMixin, AdventBaseModel):
                              related_name='item_rules',
                              on_delete=models.SET_NULL,
                              **optional)
+    spawn_placement = models.ForeignKey('builders.SpawnPlacement',
+                                        related_name='items',
+                                        on_delete=models.SET_NULL,
+                                        **optional)
 
     # Rather than outright removing items when following extraction we see
     # that they no longer belong to a player, we mark them as pending.

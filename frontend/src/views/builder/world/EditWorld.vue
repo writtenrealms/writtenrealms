@@ -2,7 +2,7 @@
   <div id="edit-world-manifest">
     <h2>{{ world.name.toUpperCase() }} EDIT WORLD</h2>
     <div class="color-text-60 mb-6">
-      Paste one or more YAML manifests. Each YAML document is applied in order. Supported kinds: world, currency, zone, room, itemtemplate, itemdefinition, itembundle, merchantprofile, mobtemplate, mobdefinition, ability, abilities, quest, questarc, and trigger.
+      Paste one or more YAML manifests. Each YAML document is applied in order. Supported kinds: world, currency, zone, room, path, itemtemplate, itemdefinition, itembundle, merchantprofile, mobtemplate, mobdefinition, spawnplan, ability, abilities, quest, questarc, and trigger.
     </div>
 
     <template v-if="!hasApplyResult">
@@ -102,9 +102,11 @@ const payloadKeyByKind: Record<string, string> = {
   merchantprofile: "merchant_profile",
   mobdefinition: "mob_definition",
   mobtemplate: "mob_template",
+  path: "path",
   quest: "quest",
   questarc: "quest_arc",
   room: "room",
+  spawnplan: "spawn_plan",
   trigger: "trigger",
   zone: "zone",
 };
@@ -119,9 +121,11 @@ const kindLabels: Record<string, string> = {
   merchantprofile: "Merchant profile",
   mobdefinition: "Mob",
   mobtemplate: "Mob template",
+  path: "Path",
   quest: "Quest template",
   questarc: "Quest arc",
   room: "Room",
+  spawnplan: "Spawn plan",
   trigger: "Trigger",
   world: "World config",
   zone: "Zone",
@@ -208,6 +212,12 @@ const routeForEntity = (
   if (kind === "room" && id) {
     return { name: "builder_room_index", params: { world_id: worldId, room_id: id } };
   }
+  if (kind === "path" && id && payload?.zone?.id) {
+    return {
+      name: "builder_zone_path_details",
+      params: { world_id: worldId, zone_id: payload.zone.id, path_id: id },
+    };
+  }
   if (kind === "itemtemplate" && id) {
     return {
       name: "builder_item_template_details",
@@ -248,6 +258,12 @@ const routeForEntity = (
     return {
       name: "builder_world_quest_template_details",
       params: { world_id: worldId, quest_template_id: id },
+    };
+  }
+  if (kind === "spawnplan" && id && payload?.zone?.id) {
+    return {
+      name: "builder_zone_loader_details",
+      params: { world_id: worldId, zone_id: payload.zone.id, loader_id: id },
     };
   }
 
@@ -475,6 +491,23 @@ spec:
   is_active: true
 `;
 
+const newSpawnPlanYaml = () => {
+  const zone = store.state.builder.zone;
+  const zoneRef = zone?.manifest_ref || (zone?.relative_id ? `zone@${zone.relative_id}` : "zone@ZONE_RELATIVE_ID");
+  const zoneName = zone?.name || "Zone";
+  return `kind: spawnplan
+metadata:
+  slug: ${slugifyName(`${zoneName} Spawn Plan`)}
+  name: ${zoneName} Spawn Plan
+spec:
+  zone: ${zoneRef}
+  respawn:
+    mode: fixed
+    seconds: 300
+  entries: []
+`;
+};
+
 const newTriggerYaml = (roomIdOverride?: string) => {
   const roomId = roomIdOverride || store.state.builder.room?.id || "ROOM_ID";
   return `kind: trigger
@@ -499,6 +532,14 @@ spec:
   order: 0
   is_active: true
 `;
+};
+
+const slugifyName = (value: string): string => {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "new-spawn-plan";
 };
 
 const loadItemDefinitionYaml = async () => {
@@ -674,6 +715,9 @@ onMounted(async () => {
   } else if (route.query.prefill === "new-mob-definition") {
     clearApplyResult();
     manifestText.value = newMobDefinitionYaml;
+  } else if (route.query.prefill === "new-spawn-plan") {
+    clearApplyResult();
+    manifestText.value = newSpawnPlanYaml();
   } else if (route.query.prefill === "merchant-profile") {
     await loadMerchantProfileYaml();
   } else if (route.query.prefill === "new-merchant-profile") {

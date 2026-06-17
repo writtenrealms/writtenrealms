@@ -1,0 +1,445 @@
+import yaml
+
+from django.urls import reverse
+
+from builders.models import MobDefinition, Path, PathRoom, SpawnEntry, SpawnPlan, SpawnPlacement, SpawnPlanRun
+from config import constants as adv_consts
+from spawns.loading import run_loaders
+from spawns.models import Mob
+from tests.base import WorldTestCase
+from worlds.services import WorldSmith
+
+
+class TestSpawnPlanManifests(WorldTestCase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_authenticate(self.user)
+        self.apply_ep = reverse("builder-world-manifest-apply", args=[self.world.pk])
+        self.zone_ep = reverse("builder-zone-detail", args=[self.world.pk, self.zone.pk])
+        self.mob_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="practice-dummy",
+            name="a practice dummy",
+            mob_type=adv_consts.MOB_TYPE_CONSTRUCT,
+            base_properties={"health_max": 10},
+        )
+
+    def test_zone_detail_exposes_manifest_ref(self):
+        resp = self.client.get(self.zone_ep)
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data["relative_id"], self.zone.relative_id)
+        self.assertEqual(resp.data["manifest_ref"], f"zone@{self.zone.relative_id}")
+
+    def test_apply_spawn_plan_manifest_creates_plan_and_entries(self):
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: training-grounds
+  name: Training Grounds
+spec:
+  zone: zone@{self.zone.relative_id}
+  respawn:
+    mode: fixed
+    seconds: 0
+  entries:
+    - slug: practice-dummy
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+      count: 1
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["kind"], "spawnplan")
+        plan = SpawnPlan.objects.get(world=self.world, slug="training-grounds")
+        self.assertEqual(plan.zone, self.zone)
+        self.assertEqual(plan.respawn_policy["seconds"], 0)
+        entry = plan.entries.get(slug="practice-dummy")
+        self.assertEqual(entry.source, "mobdefinition.practice-dummy")
+        self.assertEqual(entry.target["room"], f"room@{self.room.x},{self.room.y},{self.room.z}")
+        self.assertEqual(entry.count, 1)
+
+    def test_apply_spawn_plan_manifest_accepts_transition_metadata_and_source_pool(self):
+        manifest = f"""
+kind: spawnplan
+metadata:
+  world: world.{self.world.id}
+  slug: training-patrols
+  name: Training Patrols
+  legacy:
+    model: Loader
+    id: 99
+spec:
+  zone: zone@{self.zone.relative_id}
+  zone_ref: zone@{self.zone.relative_id}
+  legacy:
+    inherit_zone_wait: false
+  entries:
+    - slug: dummy-patrol
+      source_pool:
+        - ref: mobdefinition.{self.mob_definition.slug}
+          weight: 2
+      source_legacy_ref: mob_definition.{self.mob_definition.id}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+        room_ref: room.{self.room.id}
+        name: {self.room.name}
+      count:
+        min: 1
+        max: 1
+      affixes:
+        guaranteed:
+          - sturdy
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        plan = SpawnPlan.objects.get(world=self.world, slug="training-patrols")
+        entry = plan.entries.get(slug="dummy-patrol")
+        self.assertEqual(entry.source["pool"][0]["ref"], "mobdefinition.practice-dummy")
+        self.assertEqual(entry.source["pool"][0]["weight"], 2)
+        self.assertEqual(entry.target["room_ref"], f"room.{self.room.id}")
+        self.assertEqual(entry.target["name"], self.room.name)
+        self.assertEqual(entry.count, {"min": 1, "max": 1})
+        self.assertEqual(entry.affixes["guaranteed"], ["sturdy"])
+
+    def test_apply_spawn_plan_manifest_rejects_zone_names(self):
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: ambiguous-zone
+  name: Ambiguous Zone
+spec:
+  zone: {self.zone.name}
+  entries:
+    - slug: practice-dummy
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+      count: 1
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(SpawnPlan.objects.filter(world=self.world, slug="ambiguous-zone").exists())
+
+    def test_apply_spawn_plan_manifest_replaces_entry_list(self):
+        plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug="training-grounds",
+            name="Training Grounds",
+        )
+        SpawnEntry.objects.create(
+            plan=plan,
+            slug="old-entry",
+            source="mobdefinition.practice-dummy",
+            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            count=1,
+        )
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: training-grounds
+  name: Training Grounds
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: new-entry
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+      count: 1
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 200)
+        plan.refresh_from_db()
+        self.assertFalse(plan.entries.filter(slug="old-entry").exists())
+        self.assertTrue(plan.entries.filter(slug="new-entry").exists())
+
+    def test_spawn_plan_manifest_rejects_unknown_source(self):
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: broken-plan
+  name: Broken Plan
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: missing-source
+      source: mobdefinition.missing
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+      count: 1
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(SpawnPlan.objects.filter(world=self.world, slug="broken-plan").exists())
+
+    def test_apply_spawn_plan_manifest_accepts_path_ref_target(self):
+        path = Path.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Patrol Loop",
+        )
+        PathRoom.objects.create(path=path, room=self.room)
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: path-plan
+  name: Path Plan
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: practice-dummy
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        path: path@{path.relative_id}
+      count: 1
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        plan = SpawnPlan.objects.get(world=self.world, slug="path-plan")
+        self.assertEqual(plan.entries.get().target["path"], f"path@{path.relative_id}")
+
+    def test_apply_spawn_plan_manifest_rejects_path_names(self):
+        Path.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Patrol Loop",
+        )
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: named-path-plan
+  name: Named Path Plan
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: practice-dummy
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        path: Patrol Loop
+      count: 1
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(SpawnPlan.objects.filter(world=self.world, slug="named-path-plan").exists())
+
+    def test_zone_loaders_endpoint_lists_spawn_plans(self):
+        plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug="training-grounds",
+            name="Training Grounds",
+            respawn_policy={"mode": "fixed", "seconds": 60},
+        )
+        SpawnEntry.objects.create(
+            plan=plan,
+            slug="practice-dummy",
+            source=f"mobdefinition.{self.mob_definition.slug}",
+            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            count=1,
+        )
+        list_ep = reverse("builder-zone-loaders", args=[self.world.pk, self.zone.pk])
+
+        resp = self.client.get(list_ep)
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(len(resp.data["results"]), 1)
+        payload = resp.data["results"][0]
+        self.assertEqual(payload["id"], plan.id)
+        self.assertEqual(payload["slug"], "training-grounds")
+        self.assertEqual(payload["zone_ref"], f"zone@{self.zone.relative_id}")
+        self.assertEqual(payload["num_entries"], 1)
+        self.assertNotIn("yaml", payload)
+
+    def test_zone_loader_detail_returns_spawn_plan_yaml(self):
+        plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug="training-grounds",
+            name="Training Grounds",
+            respawn_policy={"mode": "fixed", "seconds": 60},
+        )
+        SpawnEntry.objects.create(
+            plan=plan,
+            slug="practice-dummy",
+            source=f"mobdefinition.{self.mob_definition.slug}",
+            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            count=1,
+        )
+        detail_ep = reverse(
+            "builder-zone-loader-detail",
+            args=[self.world.pk, self.zone.pk, plan.pk],
+        )
+
+        resp = self.client.get(detail_ep)
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data["slug"], "training-grounds")
+        self.assertEqual(resp.data["zone"]["manifest_ref"], f"zone@{self.zone.relative_id}")
+        self.assertIn("kind: spawnplan", resp.data["yaml"])
+        self.assertIn(f"zone: zone@{self.zone.relative_id}", resp.data["yaml"])
+        self.assertIn("operation: delete", resp.data["delete_yaml"])
+
+
+class TestSpawnPlanRuntime(WorldTestCase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_authenticate(self.user)
+        self.mob_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="practice-dummy",
+            name="a practice dummy",
+            mob_type=adv_consts.MOB_TYPE_CONSTRUCT,
+            base_properties={"health_max": 10},
+        )
+        self.plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug="training-grounds",
+            name="Training Grounds",
+            respawn_policy={"mode": "fixed", "seconds": 0},
+        )
+        self.entry = SpawnEntry.objects.create(
+            plan=self.plan,
+            slug="practice-dummy",
+            source=f"mobdefinition.{self.mob_definition.slug}",
+            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            count=1,
+            affixes={
+                "guaranteed": ["sturdy"],
+                "chance": 100,
+                "pool": [
+                    {
+                        "key": "armored",
+                        "weight": 1,
+                        "modifiers": {
+                            "armor": 2,
+                            "health_max_multiplier": 1.5,
+                        },
+                    }
+                ],
+            },
+        )
+
+    def test_world_start_runs_spawn_plans(self):
+        spawn_world = self.world.create_spawn_world()
+
+        WorldSmith(spawn_world).start()
+
+        mob = Mob.objects.get(world=spawn_world, definition=self.mob_definition)
+        self.assertEqual(mob.room, self.room)
+        self.assertIsNotNone(mob.spawn_placement)
+        self.assertEqual(
+            mob.roll_metadata["spawn_plan"]["affixes"],
+            ["sturdy", "armored"],
+        )
+        self.assertEqual(
+            mob.roll_metadata["spawn_plan"]["modifiers"],
+            {
+                "armor": 2,
+                "health_max_multiplier": 1.5,
+            },
+        )
+        self.assertEqual(mob.armor, 2)
+        self.assertEqual(mob.health_max, 15)
+        self.assertEqual(mob.health, 15)
+        run = SpawnPlanRun.objects.get(spawn_world=spawn_world, plan=self.plan)
+        self.assertEqual(run.placements.count(), 1)
+        placement = run.placements.get()
+        self.assertEqual(placement.entry_slug, self.entry.slug)
+        self.assertEqual(placement.room, self.room)
+
+    def test_world_start_resolves_path_ref_targets(self):
+        path = Path.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Patrol Loop",
+        )
+        PathRoom.objects.create(path=path, room=self.room)
+        self.entry.target = {"path": f"path@{path.relative_id}"}
+        self.entry.save(update_fields=["target"])
+        spawn_world = self.world.create_spawn_world()
+
+        WorldSmith(spawn_world).start()
+
+        mob = Mob.objects.get(world=spawn_world, definition=self.mob_definition)
+        self.assertEqual(mob.room, self.room)
+        placement = SpawnPlacement.objects.get(run__plan=self.plan)
+        self.assertEqual(placement.room, self.room)
+
+    def test_run_loaders_reconciles_missing_spawn_plan_copy(self):
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        first_mob = Mob.objects.get(world=spawn_world, definition=self.mob_definition)
+        first_placement = first_mob.spawn_placement
+
+        first_mob.delete()
+        output = run_loaders(world=spawn_world)
+
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 1)
+        replacement = Mob.objects.get(world=spawn_world, definition=self.mob_definition)
+        self.assertEqual(replacement.spawn_placement, first_placement)
+        self.assertEqual(
+            Mob.objects.filter(
+                world=spawn_world,
+                definition=self.mob_definition,
+                is_pending_deletion=False,
+            ).count(),
+            1,
+        )
+        self.assertEqual(SpawnPlacement.objects.filter(run__plan=self.plan).count(), 1)
+
+
+class TestSpawnPlanExport(WorldTestCase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_authenticate(self.user)
+        self.export_ep = reverse("builder-world-export", args=[self.world.pk])
+        self.mob_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="practice-dummy",
+            name="a practice dummy",
+            mob_type=adv_consts.MOB_TYPE_CONSTRUCT,
+            base_properties={"health_max": 10},
+        )
+        self.plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug="training-grounds",
+            name="Training Grounds",
+            respawn_policy={"mode": "fixed", "seconds": 0},
+        )
+        SpawnEntry.objects.create(
+            plan=self.plan,
+            slug="practice-dummy",
+            source=f"mobdefinition.{self.mob_definition.slug}",
+            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            count=1,
+        )
+
+    def test_world_export_includes_spawn_plan_manifest(self):
+        resp = self.client.get(self.export_ep)
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data["summary"]["spawn_plans"], 1)
+        docs = [doc for doc in yaml.safe_load_all(resp.data["yaml"]) if doc is not None]
+        spawn_doc = next(doc for doc in docs if doc["kind"] == "spawnplan")
+        self.assertEqual(spawn_doc["metadata"]["slug"], "training-grounds")
+        self.assertEqual(spawn_doc["spec"]["zone"], f"zone@{self.zone.relative_id}")
+        self.assertEqual(spawn_doc["spec"]["entries"][0]["source"], "mobdefinition.practice-dummy")

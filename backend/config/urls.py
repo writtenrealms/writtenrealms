@@ -173,6 +173,7 @@ api_v1_urls = [
     path('builder/worlds/<world_pk>/zones/<pk>/paths/', builder_views.zone_path_list, name='builder-zone-path-list'),
     path('builder/worlds/<world_pk>/zones/<pk>/map/', builder_views.zone_map, name='builder-zone-map'),
     path('builder/worlds/<world_pk>/zones/<pk>/loaders/', builder_views.zone_loaders, name='builder-zone-loaders'),
+    path('builder/worlds/<world_pk>/zones/<pk>/loaders/<loader_pk>/', builder_views.zone_loader_detail, name='builder-zone-loader-detail'),
     path('builder/worlds/<world_pk>/zones/<pk>/quests/', builder_views.zone_quest_list, name='builder-zone-quest_list'),
     path('builder/worlds/<world_pk>/zones/<pk>/loads/', builder_views.zone_loads, name='builder-zone-loads'),
     path('builder/worlds/<world_pk>/zones/<pk>/move/', builder_views.zone_move, name='builder-zone-move'),

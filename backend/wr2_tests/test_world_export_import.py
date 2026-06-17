@@ -10,6 +10,8 @@ from builders.models import (
     ItemTemplateInventory,
     MobTemplate,
     MobTemplateInventory,
+    Path,
+    PathRoom,
     Trigger,
 )
 from config import constants as adv_consts
@@ -89,6 +91,18 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         self.start_room.save(update_fields=["east"])
         self.harbor_zone.center = self.harbor_room
         self.harbor_zone.save(update_fields=["center"])
+
+        self.patrol_path = Path.objects.create(
+            world=self.world,
+            zone=self.harbor_zone,
+            name="Patrol Loop",
+            notes="Harbor guard patrol route.",
+            entry_room=self.harbor_room,
+            max_per_room=2,
+            max_per_path=5,
+        )
+        PathRoom.objects.create(path=self.patrol_path, room=self.start_room)
+        PathRoom.objects.create(path=self.patrol_path, room=self.harbor_room)
 
         self.world.config.starting_room = self.harbor_room
         self.world.config.death_room = self.harbor_room
@@ -363,20 +377,55 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(resp.data["summary"]["documents"], len(exported_docs))
         self.assertEqual(resp.data["summary"]["rooms"], 2)
         self.assertEqual(resp.data["summary"]["zones"], 2)
+        self.assertEqual(resp.data["summary"]["paths"], 1)
         self.assertEqual(exported_docs[-1]["kind"], "world")
 
         expected_kinds = (
             ["currency"] * resp.data["summary"]["currencies"]
             + ["itemtemplate"] * resp.data["summary"]["item_templates"]
+            + ["itemdefinition"] * resp.data["summary"]["item_definitions"]
+            + ["itembundle"] * resp.data["summary"]["item_bundles"]
+            + ["merchantprofile"] * resp.data["summary"]["merchant_profiles"]
             + ["zone"] * resp.data["summary"]["zones"]
             + ["room"] * resp.data["summary"]["rooms"]
+            + ["path"] * resp.data["summary"]["paths"]
             + ["mobtemplate"] * resp.data["summary"]["mob_templates"]
+            + ["mobdefinition"] * resp.data["summary"]["mob_definitions"]
+            + ["spawnplan"] * resp.data["summary"]["spawn_plans"]
+            + ["ability"] * resp.data["summary"]["abilities"]
             + ["questarc"] * resp.data["summary"]["quest_arcs"]
             + ["quest"] * resp.data["summary"]["quests"]
             + ["trigger"] * resp.data["summary"]["triggers"]
             + ["world"]
         )
         self.assertEqual([doc["kind"] for doc in exported_docs], expected_kinds)
+
+        zone_docs = [doc for doc in exported_docs if doc["kind"] == "zone"]
+        self.assertEqual(
+            {doc["metadata"]["name"]: doc["metadata"]["ref"] for doc in zone_docs},
+            {
+                self.start_zone.name: f"zone@{self.start_zone.relative_id}",
+                self.harbor_zone.name: f"zone@{self.harbor_zone.relative_id}",
+            },
+        )
+        room_doc = next(
+            doc for doc in exported_docs
+            if doc["kind"] == "room" and doc["metadata"]["ref"] == f"room@{self.harbor_room.x},{self.harbor_room.y},{self.harbor_room.z}"
+        )
+        self.assertEqual(room_doc["spec"]["zone"], f"zone@{self.harbor_zone.relative_id}")
+
+        path_doc = next(doc for doc in exported_docs if doc["kind"] == "path")
+        self.assertEqual(path_doc["metadata"]["ref"], f"path@{self.patrol_path.relative_id}")
+        self.assertEqual(path_doc["metadata"]["name"], "Patrol Loop")
+        self.assertEqual(path_doc["spec"]["zone"], f"zone@{self.harbor_zone.relative_id}")
+        self.assertEqual(path_doc["spec"]["entry_room"], f"room@{self.harbor_room.x},{self.harbor_room.y},{self.harbor_room.z}")
+        self.assertEqual(
+            path_doc["spec"]["rooms"],
+            [
+                f"room@{self.start_room.x},{self.start_room.y},{self.start_room.z}",
+                f"room@{self.harbor_room.x},{self.harbor_room.y},{self.harbor_room.z}",
+            ],
+        )
 
     def test_world_export_round_trips_into_fresh_world(self):
         self.maxDiff = None

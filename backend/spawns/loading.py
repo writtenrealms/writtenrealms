@@ -174,6 +174,7 @@ def run_loaders(world, zone_id=None, initial=False, repopulate=False):
     output = {
         'rules': [],
         'doors': [],
+        'spawn_plans': [],
     }
 
     if zone_id:
@@ -227,6 +228,16 @@ def run_loaders(world, zone_id=None, initial=False, repopulate=False):
                     check=check,
                     should_zone_reset=should_zone_reset,
                 ).execute(force=force))
+
+        from spawns.spawn_plans import run_spawn_plans
+        output['spawn_plans'].extend(
+            run_spawn_plans(
+                world=world,
+                zone_id=zone.id,
+                initial=initial,
+                repopulate=repopulate,
+            )
+        )
 
     world.last_loader_run_ts = timezone.now()
     world.save(update_fields=['last_loader_run_ts'])

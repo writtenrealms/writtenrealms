@@ -7,6 +7,14 @@
         <button class="btn-small ml-2" @click="deletePath">DELETE</button>
       </div>
     </h2>
+    <div class="path-meta color-text-60 mb-4">
+      <span>Database ID {{ path.id }}</span>
+      <span>Relative ID {{ path.relative_id }}</span>
+      <span>Manifest Ref <code>{{ path.manifest_ref }}</code></span>
+      <button class="btn-thin" :disabled="!path.manifest_ref" @click="copyManifestRef">
+        COPY REF
+      </button>
+    </div>
     <div class="map-and-rooms">
       <Map
         class="path-rooms-map"
@@ -177,6 +185,15 @@ const editInfo = () => {
 const deletePath = () => {
   store.dispatch('builder/path_delete');
 };
+
+const copyManifestRef = async () => {
+  try {
+    await navigator.clipboard.writeText(path.value.manifest_ref || "");
+    store.commit("ui/notification_set", "Path manifest ref copied.");
+  } catch {
+    store.commit("ui/notification_set_error", "Unable to copy path manifest ref.");
+  }
+};
 </script>
 
 <style lang='scss' scoped>
@@ -188,6 +205,17 @@ h2 {
   margin-bottom: 10px;
   display: flex;
   justify-content: space-between;
+}
+
+.path-meta {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+
+  code {
+    color: $color-text;
+  }
 }
 
 .map-and-rooms {

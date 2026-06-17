@@ -820,12 +820,15 @@ class ZoneBuilderSerializer(serializers.ModelSerializer):
     center = serializers.SerializerMethodField()
     zone_data = serializers.SerializerMethodField()
     has_assignment = serializers.SerializerMethodField()
+    manifest_ref = serializers.SerializerMethodField()
 
     class Meta:
         model = Zone
         fields = (
             'id',
             'key',
+            'relative_id',
+            'manifest_ref',
             'name',
             'modified_ts',
             'num_rooms',
@@ -835,6 +838,7 @@ class ZoneBuilderSerializer(serializers.ModelSerializer):
             'pvp_zone',
             'has_assignment'
         )
+        read_only_fields = ('relative_id', 'manifest_ref')
 
     def get_num_rooms(self, zone):
         return zone.rooms.count()
@@ -849,6 +853,9 @@ class ZoneBuilderSerializer(serializers.ModelSerializer):
 
     def get_zone_data(self, zone):
         return get_state_snapshot(STATE_SCOPE_ZONE, zone)
+
+    def get_manifest_ref(self, zone):
+        return f"zone@{zone.relative_id or zone.id}"
 
     def get_has_assignment(self, zone):
         try:
@@ -2870,30 +2877,46 @@ class FactionSerializer(serializers.ModelSerializer):
 # Paths
 
 class PathListSerializer(serializers.ModelSerializer):
+    manifest_ref = serializers.SerializerMethodField()
+
     class Meta:
         model = Path
         fields = [
             'id',
+            'relative_id',
+            'manifest_ref',
             'name',
             'key',
             'modified_ts',
         ]
+        read_only_fields = ('relative_id', 'manifest_ref')
+
+    def get_manifest_ref(self, path):
+        return f"path@{path.relative_id or path.id}"
 
 
 class PathDetailsSerializer(serializers.ModelSerializer):
     rooms = serializers.SerializerMethodField()
+    manifest_ref = serializers.SerializerMethodField()
     class Meta:
         model = Path
         fields = [
             'id',
+            'relative_id',
+            'manifest_ref',
             'name',
             'key',
+            'zone',
             'rooms',
         ]
+        read_only_fields = ('relative_id', 'manifest_ref', 'zone')
 
     def get_rooms(self, path):
         qs = MapRoomSerializer.prefetch_map(path.rooms.all())
         return MapRoomSerializer(qs, many=True).data
+
+    def get_manifest_ref(self, path):
+        return f"path@{path.relative_id or path.id}"
 
     def create(self, validated_data):
         zone = self.context['zone']

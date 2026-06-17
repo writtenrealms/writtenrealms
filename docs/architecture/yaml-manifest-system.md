@@ -15,10 +15,12 @@ Implemented manifest kinds currently include the current WR2 authoring path:
 - `currency`
 - `zone`
 - `room`
+- `path`
 - `itemdefinition`
 - `itembundle`
 - `merchantprofile`
 - `mobdefinition`
+- `spawnplan`
 - `ability`
 - `abilities`
 - `quest`
@@ -33,6 +35,7 @@ Builder-facing trigger authoring guidance lives in:
 - [docs/guides/builder-command-reference.md](/Users/teebes/code/writtenrealms/docs/guides/builder-command-reference.md)
 - [docs/guides/combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md)
 - [docs/guides/leveling-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/leveling-builder-guide.md)
+- [docs/guides/spawn-plan-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/spawn-plan-builder-guide.md)
 
 ## Current Flows
 
@@ -68,7 +71,20 @@ item definition as YAML.
 The legacy **Item Templates** screens still expose `kind: itemtemplate` YAML for
 old content and legacy-only surfaces.
 
-### 4. World Edit Screen
+### 4. Zone Loads Screen
+
+In zone navigation, **Loads** lists manifest-backed spawn plans for that zone.
+
+- The list is backed by `SpawnPlan`, not legacy `Loader` rows.
+- Each spawn plan opens a YAML edit screen at
+  `/build/worlds/<world_id>/zones/<zone_id>/loaders/<spawn_plan_id>`.
+- The **Add** action opens a new spawn-plan YAML template for the current zone.
+- Zone API responses expose both `relative_id` and `manifest_ref`; manifests
+  should use the `manifest_ref` value, such as `zone@1`.
+- Path API responses also expose `relative_id` and `manifest_ref`; spawn-plan
+  path targets should use `path@<relative_id>`, not path names.
+
+### 5. World Edit Screen
 
 A new world-level **Edit World** view accepts a YAML manifest textarea.
 
@@ -78,10 +94,12 @@ A new world-level **Edit World** view accepts a YAML manifest textarea.
   - `kind: currency`
   - `kind: zone`
   - `kind: room`
+  - `kind: path`
   - `kind: itemdefinition`
   - `kind: itembundle`
   - `kind: merchantprofile`
   - `kind: mobdefinition`
+  - `kind: spawnplan`
   - `kind: ability`
   - `kind: abilities`
   - `kind: quest`
@@ -94,6 +112,12 @@ A new world-level **Edit World** view accepts a YAML manifest textarea.
   - **create** (no `metadata.id` / `metadata.key`)
   - **update** (include `metadata.id` or `metadata.key`)
   - **delete** (`operation: delete` with `metadata.id` or `metadata.key`)
+
+Zone manifests exported by the system include `metadata.ref` in the portable
+form `zone@<relative_id>`. Path manifests use `metadata.ref` in the portable
+form `path@<relative_id>`. Spawn plans and exported room/path manifests use
+those portable refs instead of names or database ids, so duplicate names do not
+make imports ambiguous and prod/dev database ids do not need to match.
 
 Quest authoring details, including field-by-field manifest docs and current
 runtime behavior notes, live in:
@@ -115,6 +139,11 @@ Mob definition authoring details, including plain mobs, fixed stat mobs, and
 randomized stat mobs, live in:
 
 - [docs/guides/mob-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-definition-builder-guide.md)
+
+Spawn plan authoring details, including fixed room spawns, weighted source
+pools, guided dungeon density, affixes, and respawn behavior, live in:
+
+- [docs/guides/spawn-plan-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/spawn-plan-builder-guide.md)
 
 ## Trigger Manifest Shapes
 
@@ -425,7 +454,7 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 
 ## Validation Rules (Current)
 
-- `kind` must resolve to `trigger`, `world`, `currency`, `zone`, `room`, `itemdefinition`, `itembundle`, `merchantprofile`, `mobdefinition`, `ability`, `abilities`, `quest`, or `questarc`. The legacy `itemtemplate` and `mobtemplate` kinds are also accepted during the transition.
+- `kind` must resolve to `trigger`, `world`, `currency`, `zone`, `room`, `path`, `itemdefinition`, `itembundle`, `merchantprofile`, `mobdefinition`, `spawnplan`, `ability`, `abilities`, `quest`, or `questarc`. The legacy `itemtemplate` and `mobtemplate` kinds are also accepted during the transition.
 - For update: `metadata.id` or `metadata.key` must reference an existing trigger in the selected world.
 - For create: omit both `metadata.id` and `metadata.key`.
 - For delete: set `operation: delete` and include `metadata.id` or `metadata.key`.

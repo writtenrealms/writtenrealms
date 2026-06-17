@@ -1,67 +1,75 @@
 <template>
   <ElementList
-    title="Zone Loaders"
-    :schema="list_schema"
+    title="Spawn Plans"
+    :schema="listSchema"
     :endpoint="endpoint"
-    :resolve_route="resolve_route"
+    :resolve_route="resolveRoute"
+    table-variant="data"
     default-sort="-modified_ts"
     @add="onClickAdd"
   />
 </template>
 
-
-<script lang='ts' setup>
+<script lang="ts" setup>
+import { onMounted } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { useStore } from "vuex";
-import { useRoute } from "vue-router";
 import ElementList from "@/components/elementlist/ElementList.vue";
-import { BUILDER_FORMS } from "@/core/forms.ts";
 import { formatRelativeModifiedDate } from "@/core/utils.ts";
 
 const store = useStore();
 const route = useRoute();
+const router = useRouter();
 
 const endpoint = `/builder/worlds/${route.params.world_id}/zones/${route.params.zone_id}/loaders/`;
 
-const resolve_route = element => {
+const resolveRoute = element => {
   return {
     name: "builder_zone_loader_details",
     params: {
       world_id: route.params.world_id,
-      loader_id: element.id
-    }
+      zone_id: route.params.zone_id,
+      loader_id: element.id,
+    },
   };
 };
 
-const list_schema: any[] = [
+const formatBoolean = value => value ? "Yes" : "No";
+
+const listSchema: any[] = [
   { name: "id", label: "ID", sortable: true },
   { name: "name", label: "Name", nowrap: true, sortable: true },
-  { name: "num_rules", label: "Rules" },
+  { name: "slug", label: "Slug", nowrap: true, sortable: true },
+  { name: "zone_ref", label: "Zone Ref", nowrap: true },
+  { name: "num_entries", label: "Entries" },
+  { name: "is_active", label: "Active", light: true, format: formatBoolean },
   {
     name: "modified_ts",
     label: "Modified",
     nowrap: true,
     sortable: true,
-    format: formatRelativeModifiedDate
-  }
+    format: formatRelativeModifiedDate,
+  },
 ];
 
-const onClickAdd = () => {
-  const new_loader = {
-    name: "Unnamed Loader",
-    respawn_wait: 300,
-    description: "",
-    zone: store.state.builder.zone,
-    loader_condition: ""
-  };
-
-  const schema = BUILDER_FORMS.LOADER_INFO;
-
-  const modal = {
-    title: "Add Loader",
-    data: new_loader,
-    schema: schema,
-    action: "builder/zones/loader_create"
-  };
-  store.commit('ui/modal/open_form', modal);
+const ensureRouteZone = async () => {
+  if (String(store.state.builder.zone?.id || "") === String(route.params.zone_id)) return;
+  await store.dispatch("builder/zone_fetch", {
+    world_id: route.params.world_id,
+    zone_id: route.params.zone_id,
+  });
 };
+
+const onClickAdd = () => {
+  router.push({
+    name: "builder_zone_loader_details",
+    params: {
+      world_id: route.params.world_id,
+      zone_id: route.params.zone_id,
+      loader_id: "new",
+    },
+  });
+};
+
+onMounted(ensureRouteZone);
 </script>

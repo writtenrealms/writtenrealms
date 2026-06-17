@@ -482,6 +482,7 @@ const actions = {
       name: 'builder_zone_path_details',
       params: {
         world_id: state.world.id,
+        zone_id: state.zone.id,
         path_id: resp.data.id
       }
     });

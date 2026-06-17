@@ -863,6 +863,109 @@ class Rule(AdventBaseModel):
 models.signals.post_save.connect(Rule.post_rule_save, Rule)
 
 
+class SpawnPlan(AdventBaseModel):
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='spawn_plans')
+    zone = models.ForeignKey(
+        'worlds.Zone',
+        on_delete=models.CASCADE,
+        related_name='spawn_plans')
+    slug = models.SlugField(max_length=120, blank=True)
+    name = models.TextField(default='Unnamed Spawn Plan')
+    notes = models.TextField(**optional)
+    order = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    reset_policy = models.JSONField(default=dict, blank=True)
+    respawn_policy = models.JSONField(default=dict, blank=True)
+    randomization = models.JSONField(default=dict, blank=True)
+    conditions = models.JSONField(default=dict, blank=True)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('world', 'slug')]
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = _generate_unique_world_slug(
+                self,
+                fallback_prefix='spawn-plan',
+            )
+        super().save(*args, **kwargs)
+
+
+class SpawnEntry(AdventBaseModel):
+    plan = models.ForeignKey(
+        'builders.SpawnPlan',
+        on_delete=models.CASCADE,
+        related_name='entries')
+    slug = models.SlugField(max_length=120)
+    name = models.TextField(blank=True)
+    order = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    source = models.JSONField(default=dict, blank=True)
+    target = models.JSONField(default=dict, blank=True)
+    count = models.JSONField(default=dict, blank=True)
+    placement = models.JSONField(default=dict, blank=True)
+    affixes = models.JSONField(default=dict, blank=True)
+    conditions = models.JSONField(default=dict, blank=True)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('plan', 'slug')]
+
+
+class SpawnPlanRun(AdventBaseModel):
+    STATUS_ACTIVE = 'active'
+    STATUS_RESET = 'reset'
+
+    spawn_world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='spawn_plan_runs')
+    plan = models.ForeignKey(
+        'builders.SpawnPlan',
+        on_delete=models.CASCADE,
+        related_name='runs')
+    seed = models.TextField()
+    spec_hash = models.TextField(blank=True)
+    status = models.TextField(default=STATUS_ACTIVE)
+    generated_at = models.DateTimeField(default=timezone.now)
+    last_reconciled_at = models.DateTimeField(**optional)
+    reset_at = models.DateTimeField(**optional)
+
+    class Meta(AdventBaseModel.Meta):
+        indexes = [
+            models.Index(fields=['spawn_world', 'plan', 'status']),
+        ]
+
+
+class SpawnPlacement(AdventBaseModel):
+    run = models.ForeignKey(
+        'builders.SpawnPlanRun',
+        on_delete=models.CASCADE,
+        related_name='placements')
+    entry_slug = models.SlugField(max_length=120)
+    slot_index = models.PositiveIntegerField()
+    room = models.ForeignKey(
+        'worlds.Room',
+        on_delete=models.CASCADE,
+        related_name='spawn_placements')
+    source_type = models.TextField()
+    source_slug = models.SlugField(max_length=120)
+    source_id = models.PositiveIntegerField(**optional)
+    parent_entry_slug = models.SlugField(max_length=120, blank=True)
+    parent_slot_index = models.PositiveIntegerField(**optional)
+    affixes = models.JSONField(default=list, blank=True)
+    modifiers = models.JSONField(default=dict, blank=True)
+    state = models.JSONField(default=dict, blank=True)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('run', 'entry_slug', 'slot_index')]
+        indexes = [
+            models.Index(fields=['run', 'entry_slug']),
+        ]
+
+
 class RoomCommandCheck(AdventBaseModel):
     """
     For single-player worlds only, at least if the intent is to track states.

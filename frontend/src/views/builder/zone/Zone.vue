@@ -1,6 +1,14 @@
 <template>
   <div id="zone-details" v-if="zone">
     <h2 class="zone-name entity-title">{{ zone.name }}</h2>
+    <div class="zone-meta color-text-60 mb-4">
+      <span>Database ID {{ zone.id }}</span>
+      <span>Relative ID {{ zone.relative_id }}</span>
+      <span>Manifest Ref <code>{{ zone.manifest_ref }}</code></span>
+      <button class="btn-thin" :disabled="!zone.manifest_ref" @click="copyManifestRef">
+        COPY REF
+      </button>
+    </div>
 
     <div v-if="store.state.builder.world.builder_info.builder_rank < 3 && zone.has_assignment != undefined" class="color-text-50 mb-4">
       <span v-if="zone.has_assignment">This zone is assigned to you, you can edit it.</span>
@@ -231,6 +239,15 @@ const deleteZone = async () => {
   );
 };
 
+const copyManifestRef = async () => {
+  try {
+    await navigator.clipboard.writeText(zone.value.manifest_ref || "");
+    store.commit("ui/notification_set", "Zone manifest ref copied.");
+  } catch {
+    store.commit("ui/notification_set_error", "Unable to copy zone manifest ref.");
+  }
+};
+
 const onChangeRespawns = (event: Event) => {
   const checked = (event.target as HTMLInputElement).checked;
   let respawn_wait = -1;
@@ -299,6 +316,17 @@ const item_link = (item_id) => {
 
 #zone-details {
   width: 100%;
+
+  .zone-meta {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+
+    code {
+      color: $color-text;
+    }
+  }
 
   .zone-map-and-data {
     display: flex;

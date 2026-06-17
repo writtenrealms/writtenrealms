@@ -40,6 +40,10 @@ from builders.models import (
     RoomGetTrigger,
     Rule,
     Social,
+    SpawnEntry,
+    SpawnPlacement,
+    SpawnPlan,
+    SpawnPlanRun,
     TransformationTemplate,
     WorldBuilder,
     WorldReview)
@@ -216,6 +220,29 @@ class LoaderAdmin(BaseAdmin):
 class RuleAdmin(BaseAdmin):
     list_display = ['id', 'loader', 'order']
     raw_id_fields = ['loader']
+
+
+class SpawnEntryInline(admin.TabularInline):
+    model = SpawnEntry
+    extra = 0
+
+
+class SpawnPlanAdmin(BaseAdmin):
+    list_display = ['id', 'slug', 'name', 'world', 'zone', 'order', 'is_active']
+    raw_id_fields = ['world', 'zone']
+    list_filter = (DirectRootWorldFilter, 'is_active')
+    inlines = [SpawnEntryInline]
+
+
+class SpawnPlanRunAdmin(BaseAdmin):
+    list_display = ['id', 'spawn_world', 'plan', 'status', 'generated_at', 'last_reconciled_at']
+    raw_id_fields = ['spawn_world', 'plan']
+    list_filter = ('status',)
+
+
+class SpawnPlacementAdmin(BaseAdmin):
+    list_display = ['id', 'run', 'entry_slug', 'slot_index', 'room', 'source_type', 'source_slug']
+    raw_id_fields = ['run', 'room']
 
 
 def room_world(obj):
@@ -410,6 +437,9 @@ admin.site.register(RoomCommandCheck, RoomCommandCheckAdmin)
 admin.site.register(RoomGetTrigger, RoomGetTriggerAdmin)
 admin.site.register(Rule, RuleAdmin)
 admin.site.register(Social, SocialAdmin)
+admin.site.register(SpawnPlan, SpawnPlanAdmin)
+admin.site.register(SpawnPlanRun, SpawnPlanRunAdmin)
+admin.site.register(SpawnPlacement, SpawnPlacementAdmin)
 admin.site.register(TransformationTemplate, TransformationTemplateAdmin)
 admin.site.register(WorldBuilder, WorldBuilderAdmin)
 admin.site.register(WorldReview, WorldReviewAdmin)

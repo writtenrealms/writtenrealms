@@ -275,10 +275,22 @@ const isWorldBuilderRoute = computed(() => {
   return routes.includes(route.name as string);
 });
 // Zone
-const isZonePathRoute = computed(() => { return route.name === 'builder_zone_path_details'; });
-const isZoneLoadsRoute = computed(() => { return route.name === 'builder_zone_loader_details'; });
-const isZoneQuestsRoute = computed(() => { return route.name === 'builder_zone_quest_details'; });
-const isZoneConfigRoute = computed(() => { return route.name === 'builder_zone_procession_list'; });
+const isZonePathRoute = computed(() => {
+  return ['builder_zone_path_list', 'builder_zone_path_details'].includes(route.name as string);
+});
+const isZoneLoadsRoute = computed(() => {
+  return ['builder_zone_loader_list', 'builder_zone_loader_details'].includes(route.name as string);
+});
+const isZoneQuestsRoute = computed(() => {
+  return ['builder_zone_quest_list', 'builder_zone_quest_details'].includes(route.name as string);
+});
+const isZoneConfigRoute = computed(() => {
+  return [
+    'builder_zone_config',
+    'builder_zone_procession_list',
+    'builder_zone_procession_details',
+  ].includes(route.name as string);
+});
 </script>
 
 <style lang="scss">

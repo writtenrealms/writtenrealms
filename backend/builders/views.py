@@ -65,6 +65,7 @@ from builders.models import (
     MobTemplateInventory,
     MerchantProfile,
     MerchantInventory,
+    SpawnPlan,
     TransformationTemplate,
     Loader,
     Rule,
@@ -686,6 +687,7 @@ class ZoneBuilderViewSet(WorldCreationMixin,
             'paths',
             'map',
             'loaders',
+            'loader_detail',
             'quest_list']:
             return obj
 
@@ -778,16 +780,8 @@ class ZoneBuilderViewSet(WorldCreationMixin,
 
     @action(detail=False)
     def loaders(self, request, world_pk, pk):
-        zone = Zone.objects.get(pk=pk)
-        qs = zone.loaders.all().order_by('-created_ts')
-
-        # Filter down further if this is a rank 1 builder
-        if self._builder_rank <= 1:
-            zone_ids = BuilderAssignment.objects.filter(
-                builder__user=self.request.user,
-                assignment_type=ContentType.objects.get_for_model(Zone),
-            ).values_list('assignment_id', flat=True)
-            qs = qs.filter(zone_id__in=zone_ids)
+        zone = self.get_object()
+        qs = zone.spawn_plans.all().select_related('zone').order_by('-created_ts')
 
         query = self.request.query_params.get('query')
         if query:
@@ -795,13 +789,30 @@ class ZoneBuilderViewSet(WorldCreationMixin,
                 query = int(query)
                 qs = qs.filter(pk=query)
             except ValueError:
-                qs = qs.filter(name__icontains=query)
+                qs = qs.filter(Q(name__icontains=query) | Q(slug__icontains=query))
         sorting = self.request.query_params.get('sort_by')
         if sorting is not None:
             qs = qs.order_by(sorting)
         page = self.paginate_queryset(qs)
-        serializer = builder_serializers.LoaderSerializer(page, many=True)
-        return self.get_paginated_response(serializer.data)
+        data = [
+            builder_world_export.serialize_spawn_plan_payload(
+                spawn_plan,
+                include_yaml=False,
+            )
+            for spawn_plan in page
+        ]
+        return self.get_paginated_response(data)
+
+    @action(detail=False)
+    def loader_detail(self, request, world_pk, pk, loader_pk):
+        zone = self.get_object()
+        spawn_plan = get_object_or_404(
+            zone.spawn_plans.select_related('zone'),
+            pk=loader_pk,
+        )
+        return Response(
+            builder_world_export.serialize_spawn_plan_payload(spawn_plan)
+        )
 
     @action(detail=False)
     def create_path(self, request, world_pk, pk):
@@ -934,6 +945,9 @@ zone_map = ZoneBuilderViewSet.as_view({
 })
 zone_loaders = ZoneBuilderViewSet.as_view({
     'get': 'loaders',
+})
+zone_loader_detail = ZoneBuilderViewSet.as_view({
+    'get': 'loader_detail',
 })
 zone_quest_list = ZoneBuilderViewSet.as_view({
     'get': 'quest_list',
@@ -1967,6 +1981,110 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             )
         _assert_can_edit_room(view=self, room=room)
 
+    def _assert_can_edit_path_manifest(self, manifest):
+        if self._builder_rank >= 3:
+            return
+        operation = builder_manifests.parse_manifest_operation(manifest)
+        if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+            metadata = manifest.get("metadata") or {}
+            path_ref = str(metadata.get("ref") or "").strip()
+            if not path_ref:
+                return
+            try:
+                relative_id = builder_world_export._parse_path_ref(
+                    path_ref,
+                    field_name="metadata.ref",
+                )
+            except serializers.ValidationError:
+                return
+            path = (
+                Path.objects
+                .select_related("zone")
+                .filter(world=self.world, relative_id=relative_id)
+                .first()
+            )
+            if path is None:
+                return
+            if _has_zone_assignment(user=self.request.user, zone=path.zone):
+                return
+            raise drf_exceptions.PermissionDenied(
+                "You do not have permission to alter this path."
+            )
+
+        spec = manifest.get("spec") or {}
+        zone_ref = str(spec.get("zone") or "").strip()
+        if not zone_ref:
+            return
+        try:
+            zone = builder_world_export._resolve_spawn_plan_zone(
+                world=self.world,
+                value=zone_ref,
+                field_name="spec.zone",
+            )
+        except serializers.ValidationError:
+            return
+        if _has_zone_assignment(user=self.request.user, zone=zone):
+            return
+        raise drf_exceptions.PermissionDenied(
+            "You do not have permission to alter this path."
+        )
+
+    def _assert_can_edit_spawn_plan_manifest(self, manifest):
+        if self._builder_rank >= 3:
+            return
+        operation = builder_manifests.parse_manifest_operation(manifest)
+        if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+            metadata = manifest.get("metadata") or {}
+            slug = str(metadata.get("slug") or "").strip()
+            key = str(metadata.get("key") or "").strip()
+            spawn_plan = None
+            if slug:
+                spawn_plan = (
+                    SpawnPlan.objects
+                    .select_related("zone")
+                    .filter(world=self.world, slug=slug)
+                    .first()
+                )
+            elif key:
+                try:
+                    plan_id = builder_manifests._parse_entity_ref(
+                        key,
+                        "spawnplan",
+                        "metadata.key",
+                    )
+                except serializers.ValidationError:
+                    return
+                spawn_plan = (
+                    SpawnPlan.objects
+                    .select_related("zone")
+                    .filter(world=self.world, pk=plan_id)
+                    .first()
+                )
+            if spawn_plan is None:
+                return
+            if _has_zone_assignment(user=self.request.user, zone=spawn_plan.zone):
+                return
+            raise drf_exceptions.PermissionDenied(
+                "You do not have permission to alter this spawn plan."
+            )
+        spec = manifest.get("spec") or {}
+        zone_ref = spec.get("zone")
+        if not zone_ref:
+            return
+        try:
+            zone = builder_world_export._resolve_spawn_plan_zone(
+                world=self.world,
+                value=zone_ref,
+                field_name="spec.zone",
+            )
+        except serializers.ValidationError:
+            return
+        if _has_zone_assignment(user=self.request.user, zone=zone):
+            return
+        raise drf_exceptions.PermissionDenied(
+            "You do not have permission to alter this spawn plan."
+        )
+
     def _apply_trigger_manifest(self, manifest):
         operation = builder_manifests.parse_manifest_operation(manifest)
         if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
@@ -2456,6 +2574,53 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
         )
 
+    def _serialize_path_manifest_response(self, path):
+        zone = path.zone
+        return {
+            "id": path.id,
+            "key": path.key,
+            "ref": builder_world_export._path_ref(path),
+            "relative_id": path.relative_id,
+            "name": path.name,
+            "zone": {
+                "id": zone.id,
+                "key": zone.key,
+                "relative_id": zone.relative_id,
+                "manifest_ref": builder_world_export._zone_ref(zone),
+                "name": zone.name,
+            } if zone else None,
+        }
+
+    def _apply_path_manifest(self, manifest):
+        self._assert_can_edit_path_manifest(manifest)
+        operation = builder_manifests.parse_manifest_operation(manifest)
+        if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+            path = builder_world_export.delete_path_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            return Response(
+                {
+                    "kind": builder_world_export.PATH_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "path": self._serialize_path_manifest_response(path),
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        path, is_create = builder_world_export.apply_path_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        return Response(
+            {
+                "kind": builder_world_export.PATH_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "path": self._serialize_path_manifest_response(path),
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
     def _apply_mob_template_manifest(self, manifest):
         metadata = manifest.get("metadata") or {}
         slug = str(metadata.get("slug") or "").strip()
@@ -2492,6 +2657,44 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
         )
 
+    def _apply_spawn_plan_manifest(self, manifest):
+        self._assert_can_edit_spawn_plan_manifest(manifest)
+        operation = builder_manifests.parse_manifest_operation(manifest)
+        if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+            spawn_plan = builder_world_export.delete_spawn_plan_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            spawn_plan_payload = getattr(spawn_plan, "_deleted_payload", None)
+            if spawn_plan_payload is None:
+                spawn_plan_payload = builder_world_export.serialize_spawn_plan_payload(
+                    spawn_plan,
+                    include_yaml=False,
+                )
+            return Response(
+                {
+                    "kind": builder_world_export.SPAWN_PLAN_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "spawn_plan": spawn_plan_payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        spawn_plan, is_create = builder_world_export.apply_spawn_plan_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        return Response(
+            {
+                "kind": builder_world_export.SPAWN_PLAN_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "spawn_plan": builder_world_export.serialize_spawn_plan_payload(
+                    spawn_plan
+                ),
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
     def _dispatch_manifest(self, manifest):
         manifest_kind = builder_world_export.parse_document_kind(manifest)
 
@@ -2503,6 +2706,8 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             return self._apply_zone_manifest(manifest)
         if manifest_kind == builder_world_export.ROOM_MANIFEST_KIND:
             return self._apply_room_manifest(manifest)
+        if manifest_kind == builder_world_export.PATH_MANIFEST_KIND:
+            return self._apply_path_manifest(manifest)
         if manifest_kind == builder_manifests.TRIGGER_MANIFEST_KIND:
             return self._apply_trigger_manifest(manifest)
         if manifest_kind == builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND:
@@ -2521,6 +2726,8 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             return self._apply_abilities_manifest(manifest)
         if manifest_kind == builder_world_export.MOB_TEMPLATE_MANIFEST_KIND:
             return self._apply_mob_template_manifest(manifest)
+        if manifest_kind == builder_world_export.SPAWN_PLAN_MANIFEST_KIND:
+            return self._apply_spawn_plan_manifest(manifest)
         if manifest_kind == quest_manifests.QUEST_MANIFEST_KIND:
             return self._apply_quest_manifest(manifest)
         if manifest_kind == quest_manifests.QUEST_ARC_MANIFEST_KIND:

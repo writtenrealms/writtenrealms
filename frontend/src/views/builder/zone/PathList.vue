@@ -26,6 +26,7 @@ const resolve_route = (element: any) => {
     name: 'builder_zone_path_details',
     params: {
       world_id: store.state.builder.world.id,
+      zone_id: route.params.zone_id,
       path_id: element.id
     }
   };
@@ -33,6 +34,7 @@ const resolve_route = (element: any) => {
 
 const list_schema: any[] = [
   { name: "id", label: "ID", sortable: true },
+  { name: "manifest_ref", label: "Manifest Ref", nowrap: true },
   { name: "name", label: "Name", nowrap: true, sortable: true },
   {
     name: "modified_ts",
