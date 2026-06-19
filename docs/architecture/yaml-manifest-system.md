@@ -36,6 +36,7 @@ Builder-facing trigger authoring guidance lives in:
 - [docs/guides/combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md)
 - [docs/guides/leveling-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/leveling-builder-guide.md)
 - [docs/guides/spawn-plan-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/spawn-plan-builder-guide.md)
+- [docs/guides/mob-trait-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-trait-builder-guide.md)
 
 ## Current Flows
 
@@ -141,9 +142,19 @@ randomized stat mobs, live in:
 - [docs/guides/mob-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-definition-builder-guide.md)
 
 Spawn plan authoring details, including fixed room spawns, weighted source
-pools, guided dungeon density, affixes, and respawn behavior, live in:
+pools, guided dungeon density, spawn-plan trait/affix configuration, and
+respawn behavior, live in:
 
 - [docs/guides/spawn-plan-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/spawn-plan-builder-guide.md)
+
+Mob trait architecture, including the rename from the earlier draft term
+`affixes` to `traits`, lives in:
+
+- [docs/architecture/mob-traits.md](/Users/teebes/code/writtenrealms/docs/architecture/mob-traits.md)
+
+Builder-facing mob trait authoring guidance lives in:
+
+- [docs/guides/mob-trait-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-trait-builder-guide.md)
 
 ## Trigger Manifest Shapes
 

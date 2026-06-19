@@ -56,6 +56,7 @@ from core.leveling import (
     normalize_leveling_curve,
     validate_leveling_config,
 )
+from core.mob_traits import normalize_trait_list
 from core.stat_system import (
     StatSystemValidationError,
     get_world_stat_system,
@@ -297,6 +298,7 @@ _MOB_DEFINITION_SPEC_FIELDS = (
     "assists",
     "attributes",
     "randomization",
+    "traits",
     "combat",
     "merchant",
     "trainer",
@@ -1047,6 +1049,8 @@ def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[st
         "assists": bool(mob_definition.assists),
     }
     for field_name, value in (mob_definition.base_properties or {}).items():
+        if field_name == "traits":
+            continue
         if value is None:
             spec[field_name] = ""
         else:
@@ -1064,6 +1068,8 @@ def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[st
         spec["trainer"] = mob_definition.trainer or {}
     spec["attributes"] = mob_definition.attributes or {}
     spec["randomization"] = mob_definition.randomization or {}
+    if mob_definition.traits:
+        spec["traits"] = mob_definition.traits or []
     return spec
 
 
@@ -2795,6 +2801,14 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         spec_patch=spec_patch,
         existing=existing,
     )
+    try:
+        traits = (
+            normalize_trait_list(spec_patch.get("traits"), field_name="spec.traits")
+            if "traits" in spec_patch
+            else list(existing.traits or []) if existing else []
+        )
+    except ValueError as exc:
+        raise serializers.ValidationError(str(exc))
 
     return {
         "description": _coerce_text(
@@ -2829,6 +2843,7 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         "base_properties": base_properties,
         "attributes": attributes,
         "randomization": randomization,
+        "traits": traits,
         "attackable": attackable,
         "merchant_profile": merchant_profile,
         "merchant_availability": merchant_availability,

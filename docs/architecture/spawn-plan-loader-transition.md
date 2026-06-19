@@ -7,7 +7,7 @@ spawn planning system.
 The immediate motivation is to support dungeon zones with fixed room layouts
 and guided random population. A dungeon's rooms, exits, and authored geography
 should remain stable, while each dungeon instance or reset can vary which mobs
-appear, where they appear, how dense the population is, and which affixes or
+appear, where they appear, how dense the population is, and which traits or
 modifiers are applied.
 
 This is not a proposal to generate random room layouts. It is a proposal to
@@ -33,7 +33,7 @@ Use new transitional names for the clean WR2 path:
 - `SpawnPlan`: the new authored replacement for a legacy `Loader`
 - `SpawnEntry`: the new authored replacement for a legacy `Rule`
 - `SpawnPlanRun`: runtime state for one generated plan in one spawn world
-- `SpawnPlacement`: one generated target/source/affix slot within a run
+- `SpawnPlacement`: one generated target/source/trait slot within a run
 
 These names are intentionally transitional so they can coexist with the old
 `Loader` and `Rule` tables. The long-term target is not to keep two parallel
@@ -57,7 +57,7 @@ In other words:
 - Keep authored data separate from runtime state.
 - Make random generation deterministic under a stored seed.
 - Allow builders to control density, source pools, placement constraints,
-  difficulty budgets, and affix/modifier tables.
+  difficulty budgets, and trait/modifier tables.
 - Keep legacy Loader/Rule content working during migration.
 - Provide a clear path to retire the legacy models.
 - Align spawn execution with WR2's Command -> Action -> Event architecture over
@@ -166,7 +166,7 @@ class SpawnEntry(models.Model):
     target = models.JSONField(default=dict, blank=True)
     count = models.JSONField(default=dict, blank=True)
     placement = models.JSONField(default=dict, blank=True)
-    affixes = models.JSONField(default=dict, blank=True)
+    traits = models.JSONField(default=dict, blank=True)
     conditions = models.JSONField(default=dict, blank=True)
 ```
 
@@ -241,7 +241,7 @@ class SpawnPlacement(models.Model):
     parent_entry_slug = models.SlugField(max_length=120, blank=True)
     parent_slot_index = models.PositiveIntegerField(null=True, blank=True)
 
-    affixes = models.JSONField(default=list, blank=True)
+    traits = models.JSONField(default=list, blank=True)
     modifiers = models.JSONField(default=dict, blank=True)
     state = models.JSONField(default=dict, blank=True)
 ```
@@ -256,7 +256,7 @@ Spawned mobs and items need stable origin metadata so reconciliation can answer:
 
 - Which placement created this entity?
 - Is the desired slot already occupied?
-- Which affixes/modifiers were applied?
+- Which traits/modifiers were applied?
 - Should this entity be replaced on reset?
 
 Implementation options:
@@ -280,7 +280,7 @@ controlled variation:
 - positioning: room tags, room roles, paths, depth bands, spacing rules
 - difficulty: total budget, per-room caps, elite caps, party-size scaling later
 - source pools: weighted mobs, item definitions, or item bundles
-- affixes: weighted or guaranteed modifiers with compatibility rules
+- traits: weighted or guaranteed modifiers with compatibility rules
 - seed scope: instance, world reset, daily rotation, or explicit test seed
 
 Example transitional manifest:
@@ -319,7 +319,7 @@ spec:
       placement:
         max_per_room: 1
         min_room_distance: 2
-      affixes:
+      traits:
         chance: 35
         pool:
           - key: shielded
@@ -338,7 +338,7 @@ spec:
         rooms:
           tags: [boss_approach]
       count: 1
-      affixes:
+      traits:
         guaranteed: [elite]
 ```
 
@@ -379,20 +379,25 @@ Selectors should be validated at import time when possible. A selector that
 matches no rooms should be a warning or validation error depending on whether
 the entry is required.
 
-## Affixes And Modifiers
+## Mob Traits And Modifiers
 
-Affixes are authored modifiers applied to a spawned mob or item at placement
-generation time.
+Mob traits are authored modifiers or behaviors applied to a spawned mob at
+definition or placement generation time. This replaces the earlier draft term
+`affixes`; import code may accept `affixes` as a transitional alias, but
+manifests should export `traits`.
 
-Phase 1 should keep affixes simple:
+The dedicated mob trait architecture lives in
+[mob-traits.md](/Users/teebes/code/writtenrealms/docs/architecture/mob-traits.md).
 
-- affix keys are authored strings
+Phase 1 should keep spawn-plan traits simple:
+
+- trait keys are authored strings
 - placement stores the chosen keys
-- mob/item spawn code receives chosen affixes
+- mob spawn code receives chosen traits
 - modifiers are persisted on the runtime entity
 - combat/runtime systems interpret only supported modifier keys
 
-Do not make affixes an arbitrary formula language in the first pass. They
+Do not make traits an arbitrary formula language in the first pass. They
 should be structured data with known operators and bounded effects.
 
 Example generated placement state:
@@ -403,7 +408,7 @@ Example generated placement state:
   "slot_index": 3,
   "room_ref": "room@2,0,0",
   "source": "mobdefinition.drowned-guard",
-  "affixes": ["shielded"],
+  "traits": ["shielded"],
   "modifiers": {
     "health_max_multiplier": 1.2,
     "armor": 2
@@ -411,7 +416,7 @@ Example generated placement state:
 }
 ```
 
-Longer term, affixes can become their own manifest-backed definition type if
+Longer term, traits can become their own manifest-backed definition type if
 they grow beyond spawn-local modifiers.
 
 ## Conditions
@@ -453,7 +458,7 @@ When a spawn world or dungeon instance starts:
 2. For each due plan, create or reuse a `SpawnPlanRun`.
 3. Compute a deterministic seed from the configured seed scope.
 4. Generate `SpawnPlacement` rows from entries, room selectors, budgets, and
-   affix rules.
+   trait rules.
 5. Reconcile placements into concrete mobs/items.
 
 ### Reconciliation
@@ -465,7 +470,7 @@ Reconciliation should be idempotent:
 3. For each placement, check whether the desired runtime entity exists by
    origin metadata.
 4. Spawn missing entities.
-5. Do not reroll source, room, or affixes during ordinary reconciliation.
+5. Do not reroll source, room, or traits during ordinary reconciliation.
 
 This supports reload behavior without losing the generated identity of the
 dungeon instance.
@@ -614,7 +619,7 @@ converted plans, skipped loaders, warnings, and unsupported rule shapes.
 - Add weighted source pools.
 - Add count ranges and density profiles.
 - Add difficulty budgets and basic placement constraints.
-- Add affix/modifier selection and persistence.
+- Add trait/modifier selection and persistence.
 - Add deterministic seeded test coverage.
 
 ### Phase 4: Lifecycle Integration
@@ -649,8 +654,8 @@ loader/spawn authoring system.
 
 - Should room tags live on `Room`, `RoomDetail`, a separate relation, or only in
   manifest/runtime JSON at first?
-- Should affixes be local spawn-plan data in phase 1, or their own authored
-  definition type from the start?
+- Should reusable mob traits become their own authored definition type, or stay
+  local to mob definitions and spawn plans until repeated configs justify it?
 - Should generated placements be one row per desired entity, or one row per
   entry plus a JSON list of selected slots?
 - Should spawn plan reset be tied to zone reset, instance lifecycle, explicit

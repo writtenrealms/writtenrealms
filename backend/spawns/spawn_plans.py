@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import copy
 import random
 from dataclasses import dataclass
 from datetime import timedelta
@@ -25,6 +26,13 @@ from builders.models import (
 )
 from config import constants as adv_consts
 from core.condition_dsl import ConditionContext, evaluate_condition
+from core.mob_traits import (
+    apply_numeric_modifiers,
+    normalize_trait_table,
+    trait_instances,
+    trait_keys,
+    trait_modifiers,
+)
 from worlds.models import Room, World, Zone
 
 
@@ -40,34 +48,6 @@ SOURCE_MODELS = {
     "mobtemplate": MobTemplate,
     "mob_template": MobTemplate,
 }
-
-NUMERIC_MODIFIER_FIELDS = {
-    "ability_power",
-    "armor",
-    "attack_power",
-    "cost",
-    "crit",
-    "dodge",
-    "energy_max",
-    "energy_regen",
-    "exp_worth",
-    "food_value",
-    "gold",
-    "health_max",
-    "health_regen",
-    "level",
-    "resilience",
-    "stamina_max",
-    "stamina_regen",
-    "weapon_damage",
-}
-
-CURRENT_RESOURCE_FIELDS = {
-    "energy_max": "energy",
-    "health_max": "health",
-    "stamina_max": "stamina",
-}
-
 
 @dataclass(frozen=True)
 class ResolvedSource:
@@ -91,7 +71,7 @@ def _plan_spec_hash(plan: SpawnPlan) -> str:
             "target": entry.target,
             "count": entry.count,
             "placement": entry.placement,
-            "affixes": entry.affixes,
+            "traits": entry.traits,
             "conditions": entry.conditions,
         }
         for entry in plan.entries.all().order_by("order", "created_ts", "id")
@@ -377,15 +357,30 @@ def _plan_conditions_pass(*, spawn_world: World, plan: SpawnPlan) -> bool:
     )
 
 
-def _generate_affixes(entry: SpawnEntry, rng: random.Random) -> tuple[list[str], dict[str, Any]]:
-    affixes = entry.affixes if isinstance(entry.affixes, dict) else {}
-    selected = list(affixes.get("guaranteed") or [])
+def _placement_trait(trait: dict[str, Any]) -> dict[str, Any]:
+    payload = copy.deepcopy(trait)
+    payload.pop("weight", None)
+    return payload
+
+
+def _generate_traits(entry: SpawnEntry, rng: random.Random) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     try:
-        chance = int(affixes.get("chance", 0) or 0)
+        traits = normalize_trait_table(
+            entry.traits if isinstance(entry.traits, dict) else {},
+            field_name=f"Spawn entry '{entry.slug}' traits",
+        )
+    except ValueError as exc:
+        raise serializers.ValidationError(str(exc))
+    selected = [
+        _placement_trait(trait)
+        for trait in traits.get("guaranteed") or []
+    ]
+    try:
+        chance = int(traits.get("chance", 0) or 0)
     except (TypeError, ValueError):
-        raise serializers.ValidationError(f"Spawn entry '{entry.slug}' affixes.chance must be an integer.")
-    pool = affixes.get("pool") or []
-    modifiers: dict[str, Any] = {}
+        raise serializers.ValidationError(f"Spawn entry '{entry.slug}' traits.chance must be an integer.")
+    pool = traits.get("pool") or []
+    modifiers: dict[str, Any] = trait_modifiers(selected)
     if chance > 0 and pool and rng.randint(1, 100) <= chance:
         weighted = []
         total = 0
@@ -396,7 +391,7 @@ def _generate_affixes(entry: SpawnEntry, rng: random.Random) -> tuple[list[str],
                 weight = int(option.get("weight", 1) or 1)
             except (TypeError, ValueError):
                 raise serializers.ValidationError(
-                    f"Spawn entry '{entry.slug}' affix pool weights must be integers."
+                    f"Spawn entry '{entry.slug}' trait pool weights must be integers."
                 )
             if weight <= 0:
                 continue
@@ -408,11 +403,9 @@ def _generate_affixes(entry: SpawnEntry, rng: random.Random) -> tuple[list[str],
             for option, weight in weighted:
                 cumulative += weight
                 if target <= cumulative:
-                    key = str(option.get("key") or "").strip()
-                    if key:
-                        selected.append(key)
-                    if isinstance(option.get("modifiers"), dict):
-                        modifiers.update(option["modifiers"])
+                    selected_trait = _placement_trait(option)
+                    selected.append(selected_trait)
+                    modifiers.update(trait_modifiers([selected_trait]))
                     break
     return selected, modifiers
 
@@ -461,7 +454,7 @@ def _generate_placements_for_run(*, run: SpawnPlanRun) -> None:
                         source_spec=source_spec,
                         field_name=f"entries.{entry.slug}.source",
                     )
-                    affixes, modifiers = _generate_affixes(entry, rng)
+                    traits, modifiers = _generate_traits(entry, rng)
                     created.append(
                         SpawnPlacement.objects.create(
                             run=run,
@@ -473,7 +466,7 @@ def _generate_placements_for_run(*, run: SpawnPlanRun) -> None:
                             source_id=source.source_id,
                             parent_entry_slug=parent.entry_slug,
                             parent_slot_index=parent.slot_index,
-                            affixes=affixes,
+                            traits=traits,
                             modifiers=modifiers,
                             state={"target_type": "entry"},
                         )
@@ -492,7 +485,7 @@ def _generate_placements_for_run(*, run: SpawnPlanRun) -> None:
                     source_type=source.source_type,
                     rng=rng,
                 )
-                affixes, modifiers = _generate_affixes(entry, rng)
+                traits, modifiers = _generate_traits(entry, rng)
                 created.append(
                     SpawnPlacement.objects.create(
                         run=run,
@@ -502,7 +495,7 @@ def _generate_placements_for_run(*, run: SpawnPlanRun) -> None:
                         source_type=source.source_type,
                         source_slug=source.source_slug,
                         source_id=source.source_id,
-                        affixes=affixes,
+                        traits=traits,
                         modifiers=modifiers,
                         state=state,
                     )
@@ -540,56 +533,16 @@ def _apply_spawn_origin_metadata(entity: Any, placement: SpawnPlacement) -> None
         "entry_slug": placement.entry_slug,
         "slot_index": placement.slot_index,
         "source": f"{placement.source_type}.{placement.source_slug}",
-        "affixes": list(placement.affixes or []),
+        "traits": list(placement.traits or []),
+        "trait_keys": trait_keys(list(placement.traits or [])),
         "modifiers": dict(placement.modifiers or {}),
     }
     entity.roll_metadata = metadata
 
 
-def _numeric_modifier_value(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _minimum_for_numeric_field(field_name: str) -> int:
-    if field_name in {"health_max", "level"}:
-        return 1
-    return 0
-
-
 def _apply_spawn_modifiers(entity: Any, placement: SpawnPlacement) -> list[str]:
     modifiers = placement.modifiers if isinstance(placement.modifiers, dict) else {}
-    update_fields = []
-    for raw_key, raw_value in modifiers.items():
-        key = str(raw_key or "").strip()
-        multiplier = False
-        if key.endswith("_multiplier"):
-            field_name = key[: -len("_multiplier")]
-            multiplier = True
-        else:
-            field_name = key
-        if field_name not in NUMERIC_MODIFIER_FIELDS or not hasattr(entity, field_name):
-            continue
-        modifier_value = _numeric_modifier_value(raw_value)
-        current_value = _numeric_modifier_value(getattr(entity, field_name, None))
-        if modifier_value is None or current_value is None:
-            continue
-        if multiplier:
-            next_value = int(round(current_value * modifier_value))
-        else:
-            next_value = int(round(current_value + modifier_value))
-        next_value = max(_minimum_for_numeric_field(field_name), next_value)
-        setattr(entity, field_name, next_value)
-        update_fields.append(field_name)
-        resource_field = CURRENT_RESOURCE_FIELDS.get(field_name)
-        if resource_field and hasattr(entity, resource_field):
-            setattr(entity, resource_field, next_value)
-            update_fields.append(resource_field)
-    return list(dict.fromkeys(update_fields))
+    return apply_numeric_modifiers(entity, modifiers)
 
 
 def _placement_roams(placement: SpawnPlacement):
@@ -668,10 +621,20 @@ def _materialize_placement(*, placement: SpawnPlacement, spawn_world: World):
         spawned = source.spawn(**spawn_kwargs)
         spawned.spawn_placement = placement
         _apply_spawn_origin_metadata(spawned, placement)
+        placement_trait_instances = trait_instances(
+            list(placement.traits or []),
+            source="spawn_plan",
+            source_ref=f"spawnplan.{placement.run.plan.slug}/{placement.entry_slug}/{placement.slot_index}",
+        )
+        spawned.trait_instances = [
+            *(spawned.trait_instances or []),
+            *placement_trait_instances,
+        ]
         modifier_fields = _apply_spawn_modifiers(spawned, placement)
         spawned.save(update_fields=[
             "spawn_placement",
             "roll_metadata",
+            "trait_instances",
             *modifier_fields,
             "modified_ts",
         ])

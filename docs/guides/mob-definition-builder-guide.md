@@ -45,6 +45,33 @@ combat profile's unarmed mob fallback is used instead.
 Use `aggression: passive`, `normal`, `players`, `all`, or `friendly`. The
 alias `aggressive` is accepted for `all`.
 
+## Traits
+
+Use `traits` when a mob should spawn with structured modifiers or behavior
+metadata. Numeric modifiers apply immediately to spawned mobs.
+
+```yaml
+kind: mobdefinition
+metadata:
+  slug: crypt-brute
+  name: a crypt brute
+spec:
+  type: humanoid
+  health_max: 80
+  attack_power: 12
+  traits:
+    - key: colossal
+      modifiers:
+        health_max_multiplier: 2
+    - key: enraged
+      modifiers:
+        attack_power_multiplier: 1.5
+```
+
+For weighted spawn-plan traits and compatibility notes for the older draft name
+`affixes`, see
+[mob-trait-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-trait-builder-guide.md).
+
 ## Fixed Attribute Mobs
 
 Use `attributes` for world-defined attributes such as `strength`,

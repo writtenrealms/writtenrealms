@@ -200,6 +200,60 @@ spec:
         self.assertEqual(definition.attributes, {"brawn": 2})
         self.assertEqual(definition.randomization["attributes"][0]["mode"], "favor_high")
 
+    def test_apply_mob_definition_manifest_accepts_structured_traits(self):
+        manifest = f"""
+kind: mobdefinition
+metadata:
+  world: world.{self.world.id}
+  slug: volatile-sentry
+  name: a volatile sentry
+spec:
+  type: construct
+  health_max: 10
+  attack_power: 6
+  traits:
+    - key: colossal
+      modifiers:
+        health_max_multiplier: 2
+    - key: enraged
+      modifiers:
+        attack_power_multiplier: 1.5
+    - key: exploder
+      visibility: hidden_until_death
+      params:
+        delay_rounds:
+          min: 1
+          max: 2
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        definition = MobDefinition.objects.get(world=self.world, slug="volatile-sentry")
+        self.assertEqual(
+            [trait["key"] for trait in definition.traits],
+            ["colossal", "enraged", "exploder"],
+        )
+        self.assertNotIn("traits", definition.base_properties)
+
+        mob = definition.spawn(self.room, self.spawn_world)
+
+        self.assertEqual(mob.health_max, 20)
+        self.assertEqual(mob.health, 20)
+        self.assertEqual(mob.attack_power, 9)
+        self.assertEqual(
+            [trait["key"] for trait in mob.trait_instances],
+            ["colossal", "enraged", "exploder"],
+        )
+        self.assertEqual(
+            {trait["key"]: trait["source"] for trait in mob.trait_instances},
+            {
+                "colossal": "mob_definition",
+                "enraged": "mob_definition",
+                "exploder": "mob_definition",
+            },
+        )
+
     def test_apply_mob_definition_manifest_normalizes_aggressive_alias(self):
         manifest = f"""
 kind: mobdefinition

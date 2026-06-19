@@ -9,6 +9,11 @@ from builders.item_definitions import (
     normalize_attribute_map,
     roll_item_randomization,
 )
+from core.mob_traits import (
+    apply_numeric_modifiers,
+    modifiers_from_trait_instances,
+    trait_instances,
+)
 from core.stat_system import DIRECT_STAT_KEYS, compute_attribute_formula_stats
 from core.model_mixins import CharMixin, MobMixin
 from config import constants as adv_consts
@@ -35,6 +40,7 @@ def mob_definition_property_fields() -> tuple[str, ...]:
         "energy",
         "stamina",
         "group_id",
+        "traits",
     }
     return tuple(sorted(MOB_BASE_FIELD_NAMES - excluded))
 
@@ -106,6 +112,7 @@ def _mob_fields_from_definition(definition, attributes: dict[str, float]) -> dic
             "energy",
             "stamina",
             "group_id",
+            "traits",
         }:
             continue
         if key == "aggression":
@@ -184,6 +191,21 @@ def spawn_mob_from_definition(
         rule=rule,
         **mob_fields,
     )
+    definition_trait_instances = trait_instances(
+        definition.traits or [],
+        source="mob_definition",
+        source_ref=f"mobdefinition.{definition.slug}",
+    )
+    trait_update_fields = apply_numeric_modifiers(
+        mob,
+        modifiers_from_trait_instances(definition_trait_instances),
+    )
+    mob.trait_instances = definition_trait_instances
+    mob.save(update_fields=list(dict.fromkeys([
+        "trait_instances",
+        *trait_update_fields,
+        "modified_ts",
+    ])))
     mob.create_corpse()
     if definition.merchant_profile_id:
         from spawns.merchants import create_or_update_merchant_runtime
@@ -221,6 +243,24 @@ def sync_spawned_mobs_from_definition(definition) -> int:
         mob.health = mob.health_max
         mob.stamina = mob.stamina_max
         mob.energy = mob.energy_max
+        existing_trait_instances = [
+            instance
+            for instance in (mob.trait_instances or [])
+            if (instance or {}).get("source") != "mob_definition"
+        ]
+        definition_trait_instances = trait_instances(
+            definition.traits or [],
+            source="mob_definition",
+            source_ref=f"mobdefinition.{definition.slug}",
+        )
+        mob.trait_instances = [
+            *definition_trait_instances,
+            *existing_trait_instances,
+        ]
+        trait_update_fields = apply_numeric_modifiers(
+            mob,
+            modifiers_from_trait_instances(mob.trait_instances),
+        )
         mob.roll_metadata = {
             **roll_metadata,
             "source_definition_slug": definition.slug,
@@ -228,16 +268,18 @@ def sync_spawned_mobs_from_definition(definition) -> int:
         }
         mob.definition_slug_snapshot = definition.slug
         mob.save(
-            update_fields=[
+            update_fields=list(dict.fromkeys([
                 *mob_fields.keys(),
                 "health",
                 "stamina",
                 "energy",
                 "attackable",
+                "trait_instances",
+                *trait_update_fields,
                 "roll_metadata",
                 "definition_slug_snapshot",
                 "modified_ts",
-            ]
+            ]))
         )
         from spawns.merchants import create_or_update_merchant_runtime
 

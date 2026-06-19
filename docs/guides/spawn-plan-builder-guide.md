@@ -214,7 +214,7 @@ spec:
       count:
         min: 4
         max: 7
-      affixes:
+      traits:
         chance: 35
         pool:
           - key: shielded
@@ -234,15 +234,20 @@ spec:
   the plan changes.
 - `explicit`: use `randomization.seed` for repeatable tests.
 
-Affixes are stored on the generated placement and copied to spawned mobs/items
-in `roll_metadata.spawn_plan`.
+Traits are stored on the generated placement and copied to spawned mobs in
+`trait_instances` and `roll_metadata.spawn_plan`.
 
 The first implementation also applies simple numeric modifiers to spawned
 mobs/items when the key names a supported runtime field. A direct key adds to
 the field, such as `armor: 2`. A key ending in `_multiplier` multiplies the base
 field, such as `health_max_multiplier: 1.2` or
-`attack_power_multiplier: 1.15`. Unsupported modifier keys are still preserved
-as metadata for later systems, but they do not change combat by themselves.
+`attack_power_multiplier: 1.15`. Unsupported modifier keys and behavior trait
+params are still preserved as metadata for later systems, but they do not
+change combat by themselves.
+
+The older draft field name `affixes` is accepted as an import alias during the
+transition. New manifests should use `traits`, and exported spawn plans use
+`traits`.
 
 ## Conditions
 

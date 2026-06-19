@@ -105,7 +105,66 @@ spec:
         self.assertEqual(entry.target["room_ref"], f"room.{self.room.id}")
         self.assertEqual(entry.target["name"], self.room.name)
         self.assertEqual(entry.count, {"min": 1, "max": 1})
-        self.assertEqual(entry.affixes["guaranteed"], ["sturdy"])
+        self.assertEqual(entry.traits["guaranteed"], [{"key": "sturdy"}])
+
+    def test_apply_spawn_plan_manifest_accepts_traits(self):
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: traited-patrols
+  name: Traited Patrols
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: dummy-patrol
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+      traits:
+        guaranteed:
+          - key: resilient
+            modifiers:
+              resilience_multiplier: 1.5
+        chance: 25
+        pool:
+          - key: enraged
+            weight: 2
+            modifiers:
+              attack_power_multiplier: 1.5
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        entry = SpawnPlan.objects.get(world=self.world, slug="traited-patrols").entries.get()
+        self.assertEqual(entry.traits["chance"], 25)
+        self.assertEqual(entry.traits["guaranteed"][0]["key"], "resilient")
+        self.assertEqual(entry.traits["pool"][0]["key"], "enraged")
+        self.assertEqual(entry.traits["pool"][0]["weight"], 2)
+
+    def test_spawn_plan_manifest_rejects_traits_and_affixes_together(self):
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: confused-patrols
+  name: Confused Patrols
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: dummy-patrol
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+      traits:
+        guaranteed: [resilient]
+      affixes:
+        guaranteed: [armored]
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(SpawnPlan.objects.filter(world=self.world, slug="confused-patrols").exists())
 
     def test_apply_spawn_plan_manifest_rejects_zone_names(self):
         manifest = f"""
@@ -321,7 +380,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
             source=f"mobdefinition.{self.mob_definition.slug}",
             target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
             count=1,
-            affixes={
+            traits={
                 "guaranteed": ["sturdy"],
                 "chance": 100,
                 "pool": [
@@ -346,7 +405,11 @@ class TestSpawnPlanRuntime(WorldTestCase):
         self.assertEqual(mob.room, self.room)
         self.assertIsNotNone(mob.spawn_placement)
         self.assertEqual(
-            mob.roll_metadata["spawn_plan"]["affixes"],
+            mob.roll_metadata["spawn_plan"]["trait_keys"],
+            ["sturdy", "armored"],
+        )
+        self.assertEqual(
+            [trait["key"] for trait in mob.roll_metadata["spawn_plan"]["traits"]],
             ["sturdy", "armored"],
         )
         self.assertEqual(
@@ -359,11 +422,20 @@ class TestSpawnPlanRuntime(WorldTestCase):
         self.assertEqual(mob.armor, 2)
         self.assertEqual(mob.health_max, 15)
         self.assertEqual(mob.health, 15)
+        self.assertEqual(
+            [trait["key"] for trait in mob.trait_instances],
+            ["sturdy", "armored"],
+        )
+        self.assertEqual(
+            {trait["key"]: trait["source"] for trait in mob.trait_instances},
+            {"sturdy": "spawn_plan", "armored": "spawn_plan"},
+        )
         run = SpawnPlanRun.objects.get(spawn_world=spawn_world, plan=self.plan)
         self.assertEqual(run.placements.count(), 1)
         placement = run.placements.get()
         self.assertEqual(placement.entry_slug, self.entry.slug)
         self.assertEqual(placement.room, self.room)
+        self.assertEqual([trait["key"] for trait in placement.traits], ["sturdy", "armored"])
 
     def test_world_start_resolves_path_ref_targets(self):
         path = Path.objects.create(
@@ -431,6 +503,14 @@ class TestSpawnPlanExport(WorldTestCase):
             source=f"mobdefinition.{self.mob_definition.slug}",
             target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
             count=1,
+            traits={
+                "guaranteed": [
+                    {
+                        "key": "armored",
+                        "modifiers": {"armor": 2},
+                    }
+                ]
+            },
         )
 
     def test_world_export_includes_spawn_plan_manifest(self):
@@ -443,3 +523,8 @@ class TestSpawnPlanExport(WorldTestCase):
         self.assertEqual(spawn_doc["metadata"]["slug"], "training-grounds")
         self.assertEqual(spawn_doc["spec"]["zone"], f"zone@{self.zone.relative_id}")
         self.assertEqual(spawn_doc["spec"]["entries"][0]["source"], "mobdefinition.practice-dummy")
+        self.assertEqual(
+            spawn_doc["spec"]["entries"][0]["traits"]["guaranteed"][0]["key"],
+            "armored",
+        )
+        self.assertNotIn("affixes", spawn_doc["spec"]["entries"][0])

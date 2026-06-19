@@ -648,6 +648,7 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
                                    **optional)
     definition_slug_snapshot = models.SlugField(max_length=120, blank=True)
     roll_metadata = models.JSONField(default=dict, blank=True)
+    trait_instances = models.JSONField(default=list, blank=True)
     equipment = models.OneToOneField('spawns.Equipment',
                                      related_name='mob',
                                      on_delete=models.CASCADE,

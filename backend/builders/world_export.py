@@ -31,6 +31,7 @@ from builders.models import (
 )
 from config import constants as adv_consts
 from core.condition_dsl import validate_condition_payload
+from core.mob_traits import normalize_trait_table
 from core.scoped_state import STATE_SCOPE_ZONE, get_state_snapshot, replace_state_snapshot
 from quests import entity_refs as quest_entity_refs
 from quests import manifests as quest_manifests
@@ -607,8 +608,8 @@ def _serialize_spawn_entry(entry: SpawnEntry) -> dict[str, Any]:
         data["source"] = source
     if entry.placement:
         data["placement"] = copy.deepcopy(entry.placement)
-    if entry.affixes:
-        data["affixes"] = copy.deepcopy(entry.affixes)
+    if entry.traits:
+        data["traits"] = copy.deepcopy(entry.traits)
     if entry.conditions:
         data["conditions"] = copy.deepcopy(entry.conditions)
     return data
@@ -1525,51 +1526,23 @@ def _normalize_spawn_count(value: Any, *, field_name: str) -> Any:
     raise serializers.ValidationError(f"{field_name} must be an integer or a min/max mapping.")
 
 
-def _normalize_spawn_affixes(value: Any, *, field_name: str) -> dict[str, Any]:
-    if value in (None, ""):
-        return {}
-    if not isinstance(value, dict):
-        raise serializers.ValidationError(f"{field_name} must be a mapping.")
-    normalized = copy.deepcopy(value)
-    if "guaranteed" in normalized:
-        guaranteed = normalized.get("guaranteed") or []
-        if not isinstance(guaranteed, list):
-            raise serializers.ValidationError(f"{field_name}.guaranteed must be a list.")
-        normalized["guaranteed"] = [str(key).strip() for key in guaranteed if str(key).strip()]
-    if "chance" in normalized:
-        try:
-            chance = int(normalized.get("chance") or 0)
-        except (TypeError, ValueError):
-            raise serializers.ValidationError(f"{field_name}.chance must be an integer.")
-        if chance < 0 or chance > 100:
-            raise serializers.ValidationError(f"{field_name}.chance must be between 0 and 100.")
-        normalized["chance"] = chance
-    if "pool" in normalized:
-        pool = normalized.get("pool") or []
-        if not isinstance(pool, list):
-            raise serializers.ValidationError(f"{field_name}.pool must be a list.")
-        normalized_pool = []
-        for index, option in enumerate(pool):
-            if not isinstance(option, dict):
-                raise serializers.ValidationError(f"{field_name}.pool[{index}] must be a mapping.")
-            key = str(option.get("key") or "").strip()
-            if not key:
-                raise serializers.ValidationError(f"{field_name}.pool[{index}].key is required.")
-            normalized_option = copy.deepcopy(option)
-            normalized_option["key"] = key
-            if "weight" in normalized_option:
-                try:
-                    weight = int(normalized_option.get("weight") or 0)
-                except (TypeError, ValueError):
-                    raise serializers.ValidationError(f"{field_name}.pool[{index}].weight must be an integer.")
-                if weight < 0:
-                    raise serializers.ValidationError(f"{field_name}.pool[{index}].weight cannot be negative.")
-                normalized_option["weight"] = weight
-            if "modifiers" in normalized_option and not isinstance(normalized_option.get("modifiers"), dict):
-                raise serializers.ValidationError(f"{field_name}.pool[{index}].modifiers must be a mapping.")
-            normalized_pool.append(normalized_option)
-        normalized["pool"] = normalized_pool
-    return normalized
+def _normalize_spawn_traits(value: Any, *, field_name: str) -> dict[str, Any]:
+    try:
+        return normalize_trait_table(value, field_name=field_name)
+    except ValueError as exc:
+        raise serializers.ValidationError(str(exc))
+
+
+def _entry_traits_spec(entry_spec: dict[str, Any], *, field_name: str) -> Any:
+    has_traits = "traits" in entry_spec and entry_spec.get("traits") not in (None, "")
+    has_affixes = "affixes" in entry_spec and entry_spec.get("affixes") not in (None, "")
+    if has_traits and has_affixes:
+        raise serializers.ValidationError(
+            f"{field_name} cannot define both traits and affixes. Use traits."
+        )
+    if has_traits:
+        return entry_spec.get("traits")
+    return entry_spec.get("affixes")
 
 
 def _validate_spawn_target(*, world: World, target: Any, entry_slugs: set[str], field_name: str) -> dict[str, Any]:
@@ -2188,7 +2161,10 @@ def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tupl
             "target": target,
             "count": _normalize_spawn_count(entry_spec.get("count", 1), field_name=f"{entry_field}.count"),
             "placement": copy.deepcopy(entry_spec.get("placement") or {}),
-            "affixes": _normalize_spawn_affixes(entry_spec.get("affixes"), field_name=f"{entry_field}.affixes"),
+            "traits": _normalize_spawn_traits(
+                _entry_traits_spec(entry_spec, field_name=entry_field),
+                field_name=f"{entry_field}.traits",
+            ),
             "conditions": entry_conditions,
         })
 
@@ -2222,7 +2198,7 @@ def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tupl
                 "target",
                 "count",
                 "placement",
-                "affixes",
+                "traits",
                 "conditions",
             ):
                 setattr(entry, field_name, normalized[field_name])
