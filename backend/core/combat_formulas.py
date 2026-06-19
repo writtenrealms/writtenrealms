@@ -79,6 +79,22 @@ COMBAT_SYSTEM_FIELDS = {
     "variance",
     "ratings",
     "profiles",
+    "attack_routine",
+}
+ATTACK_ROUTINE_STACKING_MODES = ("max", "sum")
+ATTACK_ROUTINE_WEAPON_SLOTS = ("weapon", "offhand")
+DEFAULT_ATTACK_ROUTINE = {
+    "base_mainhand_strikes": 1,
+    "stacking": {
+        "extra_mainhand_strikes": "max",
+        "max_primary_strikes": 2,
+    },
+    "dual_wield": {
+        "enabled": False,
+        "grants_offhand_strike": False,
+        "offhand_damage_multiplier": 0.5,
+        "offhand_weapon_slot": "offhand",
+    },
 }
 
 
@@ -191,6 +207,7 @@ DEFAULT_COMBAT_SYSTEM: dict[str, Any] = {
             "minimum": 1,
         },
     },
+    "attack_routine": DEFAULT_ATTACK_ROUTINE,
 }
 
 
@@ -582,6 +599,125 @@ def _coerce_profiles(value: Any, *, rating_keys: set[str]) -> dict[str, Any]:
     return normalized
 
 
+def _coerce_positive_int(
+    value: Any,
+    *,
+    field_name: str,
+    minimum: int = 0,
+) -> int:
+    if isinstance(value, bool):
+        raise CombatFormulaValidationError(f"{field_name} must be an integer.")
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        raise CombatFormulaValidationError(f"{field_name} must be an integer.")
+    if normalized < minimum:
+        raise CombatFormulaValidationError(f"{field_name} must be >= {minimum}.")
+    return normalized
+
+
+def _coerce_choice(value: Any, *, choices: tuple[str, ...], field_name: str) -> str:
+    normalized = str(value or "").strip()
+    if normalized not in choices:
+        raise CombatFormulaValidationError(
+            f"{field_name} must be one of: {', '.join(choices)}."
+        )
+    return normalized
+
+
+def _coerce_attack_routine(value: Any) -> dict[str, Any]:
+    if value in (None, ""):
+        value = {}
+    if not isinstance(value, dict):
+        raise CombatFormulaValidationError("combat.attack_routine must be a mapping.")
+
+    unknown_fields = sorted(
+        set(value.keys()) - {"base_mainhand_strikes", "stacking", "dual_wield"}
+    )
+    if unknown_fields:
+        raise CombatFormulaValidationError(
+            "combat.attack_routine has unsupported field(s): "
+            + ", ".join(unknown_fields)
+            + "."
+        )
+
+    normalized = deepcopy(DEFAULT_ATTACK_ROUTINE)
+    if "base_mainhand_strikes" in value:
+        normalized["base_mainhand_strikes"] = _coerce_positive_int(
+            value.get("base_mainhand_strikes"),
+            field_name="combat.attack_routine.base_mainhand_strikes",
+            minimum=0,
+        )
+
+    stacking = value.get("stacking") or {}
+    if not isinstance(stacking, dict):
+        raise CombatFormulaValidationError("combat.attack_routine.stacking must be a mapping.")
+    unknown_stacking = sorted(
+        set(stacking.keys()) - {"extra_mainhand_strikes", "max_primary_strikes"}
+    )
+    if unknown_stacking:
+        raise CombatFormulaValidationError(
+            "combat.attack_routine.stacking has unsupported field(s): "
+            + ", ".join(unknown_stacking)
+            + "."
+        )
+    if "extra_mainhand_strikes" in stacking:
+        normalized["stacking"]["extra_mainhand_strikes"] = _coerce_choice(
+            stacking.get("extra_mainhand_strikes"),
+            choices=ATTACK_ROUTINE_STACKING_MODES,
+            field_name="combat.attack_routine.stacking.extra_mainhand_strikes",
+        )
+    if "max_primary_strikes" in stacking:
+        normalized["stacking"]["max_primary_strikes"] = _coerce_positive_int(
+            stacking.get("max_primary_strikes"),
+            field_name="combat.attack_routine.stacking.max_primary_strikes",
+            minimum=0,
+        )
+
+    dual_wield = value.get("dual_wield") or {}
+    if not isinstance(dual_wield, dict):
+        raise CombatFormulaValidationError("combat.attack_routine.dual_wield must be a mapping.")
+    unknown_dual = sorted(
+        set(dual_wield.keys())
+        - {
+            "enabled",
+            "grants_offhand_strike",
+            "offhand_damage_multiplier",
+            "offhand_weapon_slot",
+        }
+    )
+    if unknown_dual:
+        raise CombatFormulaValidationError(
+            "combat.attack_routine.dual_wield has unsupported field(s): "
+            + ", ".join(unknown_dual)
+            + "."
+        )
+    if "enabled" in dual_wield:
+        normalized["dual_wield"]["enabled"] = _coerce_bool(
+            dual_wield.get("enabled"),
+            field_name="combat.attack_routine.dual_wield.enabled",
+        )
+    if "grants_offhand_strike" in dual_wield:
+        normalized["dual_wield"]["grants_offhand_strike"] = _coerce_bool(
+            dual_wield.get("grants_offhand_strike"),
+            field_name="combat.attack_routine.dual_wield.grants_offhand_strike",
+        )
+    if "offhand_damage_multiplier" in dual_wield:
+        normalized["dual_wield"]["offhand_damage_multiplier"] = _coerce_number(
+            dual_wield.get("offhand_damage_multiplier"),
+            field_name="combat.attack_routine.dual_wield.offhand_damage_multiplier",
+            minimum=0,
+        )
+    if "offhand_weapon_slot" in dual_wield:
+        normalized["dual_wield"]["offhand_weapon_slot"] = _coerce_choice(
+            dual_wield.get("offhand_weapon_slot"),
+            choices=ATTACK_ROUTINE_WEAPON_SLOTS,
+            field_name="combat.attack_routine.dual_wield.offhand_weapon_slot",
+        )
+
+    return normalized
+
+
 def normalize_combat_system(value: Any) -> dict[str, Any]:
     if value in (None, ""):
         value = {}
@@ -633,6 +769,7 @@ def normalize_combat_system(value: Any) -> dict[str, Any]:
         ),
         "ratings": ratings,
         "profiles": profiles,
+        "attack_routine": _coerce_attack_routine(value.get("attack_routine")),
     }
 
     for field_name in (
@@ -709,18 +846,20 @@ def _item_stat(item: Any, field_name: str) -> float:
         return 0.0
 
 
-def _equipped_weapon(actor: Any) -> Any | None:
+def _equipped_weapon(actor: Any, *, weapon_slot: str = "weapon") -> Any | None:
     equipment = getattr(actor, "equipment", None)
     if not equipment:
         return None
+    if weapon_slot == "offhand":
+        return getattr(equipment, "offhand", None)
     return getattr(equipment, "weapon", None)
 
 
-def _weapon_damage(actor: Any) -> float:
-    return max(0.0, _item_stat(_equipped_weapon(actor), "weapon_damage"))
+def _weapon_damage(actor: Any, *, weapon_slot: str = "weapon") -> float:
+    return max(0.0, _item_stat(_equipped_weapon(actor, weapon_slot=weapon_slot), "weapon_damage"))
 
 
-def _player_snapshot(actor: Any, world: Any) -> CombatantSnapshot:
+def _player_snapshot(actor: Any, world: Any, *, weapon_slot: str = "weapon") -> CombatantSnapshot:
     stats = compute_stats(
         actor.level,
         actor.archetype,
@@ -732,7 +871,7 @@ def _player_snapshot(actor: Any, world: Any) -> CombatantSnapshot:
         for key in SNAPSHOT_STAT_KEYS
         if key != "weapon_damage"
     }
-    snapshot_stats["weapon_damage"] = _weapon_damage(actor)
+    snapshot_stats["weapon_damage"] = _weapon_damage(actor, weapon_slot=weapon_slot)
     return CombatantSnapshot(
         actor_type="player",
         level=max(1, int(getattr(actor, "level", 1) or 1)),
@@ -768,10 +907,11 @@ def combatant_snapshot(
     *,
     world: Any | None = None,
     is_disarmed: bool = False,
+    weapon_slot: str = "weapon",
 ) -> CombatantSnapshot:
     runtime_world = world or getattr(actor, "world", None)
     if _actor_type(actor) == "player":
-        return _player_snapshot(actor, runtime_world)
+        return _player_snapshot(actor, runtime_world, weapon_slot=weapon_slot)
     return _mob_snapshot(actor, is_disarmed=is_disarmed)
 
 
@@ -940,6 +1080,8 @@ def resolve_attack(
     overrides: dict[str, Any] | None = None,
     rng: Callable[[], float] | None = None,
     actor_disarmed: bool = False,
+    weapon_slot: str = "weapon",
+    damage_multiplier: float = 1.0,
 ) -> CombatAttackResult:
     runtime_world = world or getattr(actor, "world", None) or getattr(target, "world", None)
     combat_system = get_world_combat_system(runtime_world)
@@ -964,6 +1106,7 @@ def resolve_attack(
         actor,
         world=runtime_world,
         is_disarmed=actor_disarmed,
+        weapon_slot=weapon_slot,
     )
     target_snapshot = combatant_snapshot(target, world=runtime_world)
 
@@ -972,7 +1115,7 @@ def resolve_attack(
         profile=profile,
         combat_system=combat_system,
     )
-    output = base * float(profile["multiplier"])
+    output = base * float(profile["multiplier"]) * max(0.0, float(damage_multiplier or 0))
     if profile["kind"] == "damage":
         output *= _outgoing_damage_multiplier(actor)
 

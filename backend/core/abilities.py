@@ -53,7 +53,8 @@ EFFECT_TICK_PHASES = ("round_start",)
 EFFECT_PRIMITIVE_TYPES = ("resource_change", "proc", "damage_absorb", "combat_modifier")
 EFFECT_PROC_PHASES = ("after_damage",)
 EFFECT_STACKING_POLICIES = ("refresh", "independent")
-COMBAT_MODIFIER_PHASES = ("outgoing_damage",)
+COMBAT_MODIFIER_PHASES = ("outgoing_damage", "attack_routine")
+ATTACK_ROUTINE_WEAPON_SLOTS = ("weapon", "offhand")
 DAMAGE_ABSORB_CALCS = ("fixed", "percent_max")
 DAMAGE_ABSORB_SCALING_SOURCES = (
     "health_max",
@@ -774,24 +775,86 @@ def _normalize_effect_primitive(value: Any, *, field_name: str) -> dict[str, Any
 
 
 def _normalize_combat_modifier_primitive(value: dict[str, Any], *, field_name: str) -> dict[str, Any]:
-    unknown_fields = sorted(set(value.keys()) - {"type", "phase", "multiplier"})
+    unknown_fields = sorted(set(value.keys()) - {"type", "phase", "multiplier", "attack_routine"})
     if unknown_fields:
         raise AbilityValidationError(
             f"{field_name} has unsupported field(s): {', '.join(unknown_fields)}."
         )
+    phase = _coerce_choice(
+        value.get("phase"),
+        choices=COMBAT_MODIFIER_PHASES,
+        field_name=f"{field_name}.phase",
+    )
+    if phase == "attack_routine":
+        return {
+            "type": "combat_modifier",
+            "phase": phase,
+            "attack_routine": _normalize_attack_routine_modifier(
+                value.get("attack_routine"),
+                field_name=f"{field_name}.attack_routine",
+            ),
+        }
     return {
         "type": "combat_modifier",
-        "phase": _coerce_choice(
-            value.get("phase"),
-            choices=COMBAT_MODIFIER_PHASES,
-            field_name=f"{field_name}.phase",
-        ),
+        "phase": phase,
         "multiplier": _coerce_number(
             value.get("multiplier", 1),
             field_name=f"{field_name}.multiplier",
             minimum=0,
         ),
     }
+
+
+def _normalize_attack_routine_modifier(value: Any, *, field_name: str) -> dict[str, Any]:
+    if value in (None, ""):
+        value = {}
+    if not isinstance(value, dict):
+        raise AbilityValidationError(f"{field_name} must be a mapping.")
+    unknown_fields = sorted(set(value.keys()) - {"extra_mainhand_strikes", "strike"})
+    if unknown_fields:
+        raise AbilityValidationError(
+            f"{field_name} has unsupported field(s): {', '.join(unknown_fields)}."
+        )
+    normalized: dict[str, Any] = {}
+    if "extra_mainhand_strikes" in value:
+        normalized["extra_mainhand_strikes"] = _coerce_positive_int(
+            value.get("extra_mainhand_strikes"),
+            field_name=f"{field_name}.extra_mainhand_strikes",
+            minimum=0,
+        )
+    strike = value.get("strike") or {}
+    if strike not in ({}, None):
+        if not isinstance(strike, dict):
+            raise AbilityValidationError(f"{field_name}.strike must be a mapping.")
+        unknown_strike = sorted(
+            set(strike.keys()) - {"source", "weapon_slot", "damage_multiplier", "label"}
+        )
+        if unknown_strike:
+            raise AbilityValidationError(
+                f"{field_name}.strike has unsupported field(s): {', '.join(unknown_strike)}."
+            )
+        normalized_strike: dict[str, Any] = {}
+        if "source" in strike:
+            normalized_strike["source"] = _coerce_slug(
+                strike.get("source"),
+                field_name=f"{field_name}.strike.source",
+            )
+        if "weapon_slot" in strike:
+            normalized_strike["weapon_slot"] = _coerce_choice(
+                strike.get("weapon_slot"),
+                choices=ATTACK_ROUTINE_WEAPON_SLOTS,
+                field_name=f"{field_name}.strike.weapon_slot",
+            )
+        if "damage_multiplier" in strike:
+            normalized_strike["damage_multiplier"] = _coerce_number(
+                strike.get("damage_multiplier"),
+                field_name=f"{field_name}.strike.damage_multiplier",
+                minimum=0,
+            )
+        if "label" in strike:
+            normalized_strike["label"] = str(strike.get("label") or "").strip()
+        normalized["strike"] = normalized_strike
+    return normalized
 
 
 def _normalize_resource_change_primitive(value: dict[str, Any], *, field_name: str) -> dict[str, Any]:

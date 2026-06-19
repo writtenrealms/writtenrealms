@@ -5,6 +5,10 @@ are what some systems call affixes: authored or rolled modifiers that make a
 spawned mob behave differently, such as `exploder`, `tracker`, `enraged`,
 `colossal`, `linker`, `armored`, or `resilient`.
 
+Related combat-routine behavior, including dual-wielding mobs and multiattack
+traits, is covered in
+[attack-routines-and-dual-wielding.md](/Users/teebes/code/writtenrealms/docs/architecture/attack-routines-and-dual-wielding.md).
+
 ## Decision Summary
 
 - Use the builder-facing name `traits`, not `affixes`.

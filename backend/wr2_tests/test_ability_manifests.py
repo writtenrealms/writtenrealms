@@ -368,6 +368,59 @@ spec:
             },
         )
 
+    def test_apply_ability_manifest_accepts_attack_routine_modifier(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: battle-trance
+  name: Battle Trance
+spec:
+  command:
+    verbs: [trance]
+  action_type: utility
+  target:
+    type: self
+    default: self
+  components:
+    - type: effect
+      effect: battle-trance
+      category: buff
+      target: self
+      duration:
+        rounds: 6
+      stacking: refresh
+      stack_key: battle-trance
+      primitives:
+        - type: combat_modifier
+          phase: attack_routine
+          attack_routine:
+            extra_mainhand_strikes: 1
+            strike:
+              source: battle-trance
+              weapon_slot: weapon
+              damage_multiplier: 1
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        ability = AbilityDefinition.objects.get(world=self.world, slug="battle-trance")
+        self.assertEqual(
+            ability.components[0]["primitives"][0],
+            {
+                "type": "combat_modifier",
+                "phase": "attack_routine",
+                "attack_routine": {
+                    "extra_mainhand_strikes": 1,
+                    "strike": {
+                        "source": "battle-trance",
+                        "weapon_slot": "weapon",
+                        "damage_multiplier": 1.0,
+                    },
+                },
+            },
+        )
+
     def test_apply_ability_manifest_accepts_damage_absorb_effects(self):
         manifest = f"""
 kind: ability

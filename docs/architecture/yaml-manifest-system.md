@@ -152,6 +152,15 @@ Mob trait architecture, including the rename from the earlier draft term
 
 - [docs/architecture/mob-traits.md](/Users/teebes/code/writtenrealms/docs/architecture/mob-traits.md)
 
+Attack routine and dual-wielding architecture, including proposed manifest
+ownership for extra attacks and offhand weapon permissions, lives in:
+
+- [docs/architecture/attack-routines-and-dual-wielding.md](/Users/teebes/code/writtenrealms/docs/architecture/attack-routines-and-dual-wielding.md)
+
+Builder-facing attack routine and dual-wielding authoring guidance lives in:
+
+- [docs/guides/attack-routine-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/attack-routine-builder-guide.md)
+
 Builder-facing mob trait authoring guidance lives in:
 
 - [docs/guides/mob-trait-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-trait-builder-guide.md)

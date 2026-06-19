@@ -6,7 +6,10 @@ from typing import Callable
 from django.db import transaction
 
 from config import constants as adv_consts
-from core.equipment_system import can_actor_equip_item_by_armor_class
+from core.equipment_system import (
+    can_actor_equip_item_by_armor_class,
+    can_actor_equip_offhand_weapon,
+)
 from core.utils.items import type_to_slot
 from quests.services.room_items import (
     QuestRoomItemProjection,
@@ -351,7 +354,7 @@ def _resolve_equipment_slot(player: Player, item: Item) -> str | None:
             return adv_consts.EQUIPMENT_SLOT_WEAPON
         if (
             not getattr(equipment, "offhand", None)
-            and player.archetype == adv_consts.ARCHETYPE_ASSASSIN
+            and can_actor_equip_offhand_weapon(player, item).allowed
         ):
             return adv_consts.EQUIPMENT_SLOT_OFFHAND
         return adv_consts.EQUIPMENT_SLOT_WEAPON
@@ -494,7 +497,7 @@ class EquipAction:
                     offhand = getattr(equipment, adv_consts.EQUIPMENT_SLOT_OFFHAND, None)
                     if offhand:
                         extra_conflicts.append((adv_consts.EQUIPMENT_SLOT_OFFHAND, offhand))
-                elif eq_type == adv_consts.EQUIPMENT_TYPE_SHIELD:
+                elif slot == adv_consts.EQUIPMENT_SLOT_OFFHAND:
                     weapon = getattr(equipment, adv_consts.EQUIPMENT_SLOT_WEAPON, None)
                     if (
                         weapon

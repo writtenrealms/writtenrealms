@@ -48,6 +48,7 @@ from core.equipment_system import (
     get_armor_class_keys,
     get_world_equipment_system,
     has_authored_armor_classes,
+    has_authored_offhand_weapon_policy,
     normalize_equipment_system,
     validate_armor_class_reference,
 )
@@ -213,11 +214,19 @@ def _export_equipment_system(world: World) -> dict[str, Any] | None:
     config = world.config
     if not config or not _has_authored_world_config_map(config.equipment_system):
         return None
+    raw_equipment_system = (
+        config.equipment_system
+        if isinstance(config.equipment_system, dict)
+        else {}
+    )
     try:
         equipment_system = get_world_equipment_system(world)
     except EquipmentSystemValidationError:
         return None
-    if not has_authored_armor_classes(equipment_system):
+    if (
+        not has_authored_armor_classes(equipment_system)
+        and not has_authored_offhand_weapon_policy(raw_equipment_system)
+    ):
         return None
     return equipment_system
 

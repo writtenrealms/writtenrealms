@@ -11,6 +11,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from config import constants as adv_consts
+from core.attack_routines import CombatStrike, resolve_attack_routine
 from core.combat_formulas import CombatAttackResult, combatant_snapshot, resolve_attack
 from core.computations import compute_stats
 from core.condition_dsl import ConditionContext, evaluate_condition
@@ -238,6 +239,12 @@ class MobTurnOutcome:
     events: list[GameEvent]
     player_defeated: bool = False
     actor_key: str | None = None
+
+
+@dataclass(frozen=True)
+class StrikeOutcome:
+    events: list[GameEvent]
+    target_defeated: bool = False
 
 
 @dataclass(frozen=True)
@@ -1801,6 +1808,90 @@ def _apply_damage_absorption(
     )
 
 
+def _serialize_combat_char(actor: Player | Mob) -> dict:
+    if isinstance(actor, Player):
+        return serialize_char_from_player(actor).model_dump()
+    return serialize_char_from_mob(actor).model_dump()
+
+
+def _apply_combat_strike(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    target_mob: Mob,
+    room: Room,
+    actor: Player | Mob,
+    target: Player | Mob,
+    strike: CombatStrike,
+    round_id: str,
+) -> StrikeOutcome:
+    result = resolve_attack(
+        actor=actor,
+        target=target,
+        world=player.world,
+        weapon_slot=strike.weapon_slot,
+        damage_multiplier=strike.damage_multiplier,
+    )
+    result, absorb_events = _apply_damage_absorption(
+        encounter=encounter,
+        player=player,
+        target_mob=target_mob,
+        target=target,
+        result=result,
+        round_id=round_id,
+    )
+    events = list(absorb_events)
+
+    if result.damage_taken > 0:
+        target.health = max(0, int(target.health or 0) - result.damage_taken)
+        target.save(update_fields=["health"])
+
+    actor_base = _serialize_combat_char(actor)
+    target_base = _serialize_combat_char(target)
+    actor_payload = _combat_state_payload(actor_base, target_payload=target_base)
+    target_payload = _combat_state_payload(target_base, target_payload=actor_base)
+
+    actor_name = actor_payload.get("name") or "Something"
+    target_name = target_payload.get("name") or "them"
+    if isinstance(actor, Player):
+        actor_text = _actor_attack_text(target_name, result)
+    else:
+        actor_text = _actor_hit_text(actor_name, result)
+
+    events.extend(
+        _combat_attack_events(
+            viewer=player,
+            room=room,
+            actor_payload=actor_payload,
+            target_payload=target_payload,
+            result=result,
+            round_id=round_id,
+            actor_text=actor_text,
+            room_text=_room_attack_text(actor_name, target_name, result),
+            attack=strike.attack,
+            label=strike.label,
+        )
+    )
+    events.extend(
+        _execute_after_damage_procs(
+            encounter=encounter,
+            player=player,
+            target_mob=target_mob,
+            room=room,
+            actor=actor,
+            target=target,
+            result=result,
+            round_id=round_id,
+            attack=strike.attack,
+            label=strike.label,
+        )
+    )
+    return StrikeOutcome(
+        events=events,
+        target_defeated=int(getattr(target, "health", 0) or 0) <= 0,
+    )
+
+
 def _execute_output_component(
     *,
     encounter: CombatEncounter,
@@ -2324,62 +2415,20 @@ def _apply_player_primary_turn(
     if ability_result.consumed_primary:
         return PlayerTurnOutcome(events=events, cooldown_exclude=cooldown_exclude)
 
-    player_attack = resolve_attack(
-        actor=player,
-        target=target_mob,
-        world=player.world,
-    )
-    player_attack, absorb_events = _apply_damage_absorption(
-        encounter=encounter,
-        player=player,
-        target_mob=target_mob,
-        target=target_mob,
-        result=player_attack,
-        round_id=round_id,
-    )
-    events.extend(absorb_events)
-    if player_attack.damage_taken > 0:
-        target_mob.health = max(
-            0,
-            int(target_mob.health or 0) - player_attack.damage_taken,
-        )
-        target_mob.save(update_fields=["health"])
-
-    player_char = _combat_state_payload(
-        serialize_char_from_player(player).model_dump(),
-        target_payload=serialize_char_from_mob(target_mob).model_dump(),
-    )
-    target_char = _combat_state_payload(
-        serialize_char_from_mob(target_mob).model_dump(),
-        target_payload=serialize_char_from_player(player).model_dump(),
-    )
-    target_name = target_char.get("name") or "them"
-    events.extend(
-        _combat_attack_events(
-            viewer=player,
-            room=room,
-            actor_payload=player_char,
-            target_payload=target_char,
-            result=player_attack,
-            round_id=round_id,
-            actor_text=_actor_attack_text(target_name, player_attack),
-            room_text=_room_attack_text(player.name, target_name, player_attack),
-        )
-    )
-    events.extend(
-        _execute_after_damage_procs(
+    for strike in resolve_attack_routine(actor=player, target=target_mob, world=player.world):
+        strike_outcome = _apply_combat_strike(
             encounter=encounter,
             player=player,
             target_mob=target_mob,
             room=room,
             actor=player,
             target=target_mob,
-            result=player_attack,
+            strike=strike,
             round_id=round_id,
-            attack="attack",
-            label="Attack",
         )
-    )
+        events.extend(strike_outcome.events)
+        if strike_outcome.target_defeated:
+            break
 
     return PlayerTurnOutcome(
         events=events,
@@ -2422,59 +2471,21 @@ def _apply_mob_primary_turn(
         )
         return MobTurnOutcome(events=events)
 
-    mob_attack = resolve_attack(
-        actor=target_mob,
-        target=player,
-        world=player.world,
-    )
-    mob_attack, absorb_events = _apply_damage_absorption(
-        encounter=encounter,
-        player=player,
-        target_mob=target_mob,
-        target=player,
-        result=mob_attack,
-        round_id=round_id,
-    )
-    events.extend(absorb_events)
-    if mob_attack.damage_taken > 0:
-        player.health = max(0, int(player.health or 0) - mob_attack.damage_taken)
-        player.save(update_fields=["health"])
-
-    mob_char = _combat_state_payload(
-        serialize_char_from_mob(target_mob).model_dump(),
-        target_payload=serialize_char_from_player(player).model_dump(),
-    )
-    player_char = _combat_state_payload(
-        serialize_char_from_player(player).model_dump(),
-        target_payload=serialize_char_from_mob(target_mob).model_dump(),
-    )
-    mob_name = mob_char.get("name") or "Something"
-    events.extend(
-        _combat_attack_events(
-            viewer=player,
-            room=room,
-            actor_payload=mob_char,
-            target_payload=player_char,
-            result=mob_attack,
-            round_id=round_id,
-            actor_text=_actor_hit_text(mob_name, mob_attack),
-            room_text=_room_attack_text(mob_name, player.name, mob_attack),
-        )
-    )
-    events.extend(
-        _execute_after_damage_procs(
+    mob_name = target_mob.name or "Something"
+    for strike in resolve_attack_routine(actor=target_mob, target=player, world=player.world):
+        strike_outcome = _apply_combat_strike(
             encounter=encounter,
             player=player,
             target_mob=target_mob,
             room=room,
             actor=target_mob,
             target=player,
-            result=mob_attack,
+            strike=strike,
             round_id=round_id,
-            attack="attack",
-            label="Attack",
         )
-    )
+        events.extend(strike_outcome.events)
+        if strike_outcome.target_defeated:
+            break
 
     if player.health <= 0:
         updated_player, death_events = apply_player_death(

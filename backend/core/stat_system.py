@@ -335,6 +335,93 @@ def _coerce_armor_proficiencies(
     return normalized
 
 
+def _coerce_weapon_grips(value: Any, *, field_name: str) -> list[str]:
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise StatSystemValidationError(f"{field_name} must be a list.")
+    normalized: list[str] = []
+    for index, raw_grip in enumerate(value):
+        grip = str(raw_grip or "").strip()
+        if grip not in constants.WEAPON_GRIPS:
+            raise StatSystemValidationError(
+                f"{field_name}[{index}] must be a supported weapon grip."
+            )
+        if grip not in normalized:
+            normalized.append(grip)
+    return normalized
+
+
+def _coerce_profile_features(value: Any, *, field_name: str) -> dict[str, Any]:
+    if value in (None, ""):
+        return {}
+    if not isinstance(value, dict):
+        raise StatSystemValidationError(f"{field_name} must be a mapping.")
+
+    unknown_fields = sorted(set(value.keys()) - {"combat", "equipment"})
+    if unknown_fields:
+        raise StatSystemValidationError(
+            f"Unsupported {field_name} field(s): {', '.join(unknown_fields)}."
+        )
+
+    normalized: dict[str, Any] = {}
+    combat = value.get("combat") or {}
+    if combat not in ({}, None):
+        if not isinstance(combat, dict):
+            raise StatSystemValidationError(f"{field_name}.combat must be a mapping.")
+        unknown_combat = sorted(set(combat.keys()) - {"extra_mainhand_strikes"})
+        if unknown_combat:
+            raise StatSystemValidationError(
+                f"Unsupported {field_name}.combat field(s): {', '.join(unknown_combat)}."
+            )
+        if "extra_mainhand_strikes" in combat:
+            extra_strikes = combat.get("extra_mainhand_strikes")
+            if isinstance(extra_strikes, bool):
+                raise StatSystemValidationError(
+                    f"{field_name}.combat.extra_mainhand_strikes must be an integer."
+                )
+            try:
+                extra_strikes = int(extra_strikes)
+            except (TypeError, ValueError):
+                raise StatSystemValidationError(
+                    f"{field_name}.combat.extra_mainhand_strikes must be an integer."
+                )
+            if extra_strikes < 0:
+                raise StatSystemValidationError(
+                    f"{field_name}.combat.extra_mainhand_strikes must be >= 0."
+                )
+            normalized.setdefault("combat", {})["extra_mainhand_strikes"] = extra_strikes
+
+    equipment = value.get("equipment") or {}
+    if equipment not in ({}, None):
+        if not isinstance(equipment, dict):
+            raise StatSystemValidationError(f"{field_name}.equipment must be a mapping.")
+        unknown_equipment = sorted(
+            set(equipment.keys())
+            - {"can_equip_offhand_weapon", "allowed_offhand_weapon_grips"}
+        )
+        if unknown_equipment:
+            raise StatSystemValidationError(
+                f"Unsupported {field_name}.equipment field(s): {', '.join(unknown_equipment)}."
+            )
+        if "can_equip_offhand_weapon" in equipment:
+            if not isinstance(equipment.get("can_equip_offhand_weapon"), bool):
+                raise StatSystemValidationError(
+                    f"{field_name}.equipment.can_equip_offhand_weapon must be true or false."
+                )
+            normalized.setdefault("equipment", {})["can_equip_offhand_weapon"] = equipment[
+                "can_equip_offhand_weapon"
+            ]
+        if "allowed_offhand_weapon_grips" in equipment:
+            normalized.setdefault("equipment", {})[
+                "allowed_offhand_weapon_grips"
+            ] = _coerce_weapon_grips(
+                equipment.get("allowed_offhand_weapon_grips"),
+                field_name=f"{field_name}.equipment.allowed_offhand_weapon_grips",
+            )
+    return normalized
+
+
 def _merge_dict(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     merged = deepcopy(base)
     for key, value in patch.items():
@@ -365,6 +452,7 @@ def _coerce_profile(
         "attribute_weights",
         "stat_rules",
         "armor_proficiencies",
+        "features",
     }
     unknown_profile_keys = sorted(set(raw_profile.keys()) - allowed_profile_keys)
     if unknown_profile_keys:
@@ -408,6 +496,13 @@ def _coerce_profile(
         )
     elif "armor_proficiencies" in base_profile:
         normalized["armor_proficiencies"] = list(base_profile["armor_proficiencies"])
+    if "features" in raw_profile:
+        normalized["features"] = _coerce_profile_features(
+            raw_profile.get("features"),
+            field_name=f"{field_name}.features",
+        )
+    elif "features" in base_profile:
+        normalized["features"] = deepcopy(base_profile["features"])
     return normalized
 
 

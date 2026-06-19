@@ -385,6 +385,74 @@ spec:
             ["light", "heavy"],
         )
 
+    def test_apply_world_config_manifest_accepts_attack_routine_and_offhand_features(self):
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{self.world.id}
+spec:
+  equipment:
+    offhand_weapons:
+      default_allowed: false
+      allowed_grips: [one_hand]
+  combat:
+    attack_routine:
+      base_mainhand_strikes: 1
+      stacking:
+        extra_mainhand_strikes: max
+        max_primary_strikes: 2
+      dual_wield:
+        enabled: true
+        grants_offhand_strike: true
+        offhand_damage_multiplier: 0.5
+  stats:
+    attributes:
+      - key: brawn
+        label: Brawn
+    class_profiles:
+      assassin:
+        label: Assassin
+        main_attribute: brawn
+        attribute_weights:
+          brawn: 4
+        features:
+          equipment:
+            can_equip_offhand_weapon: true
+            allowed_offhand_weapon_grips: [one_hand]
+          combat:
+            extra_mainhand_strikes: 1
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.world.config.refresh_from_db()
+        self.assertEqual(
+            self.world.config.equipment_system["offhand_weapons"],
+            {
+                "default_allowed": False,
+                "allowed_grips": ["one_hand"],
+            },
+        )
+        self.assertTrue(
+            self.world.config.combat_system["attack_routine"]["dual_wield"]["enabled"]
+        )
+        assassin = self.world.config.stat_system["class_profiles"]["assassin"]
+        self.assertTrue(
+            assassin["features"]["equipment"]["can_equip_offhand_weapon"]
+        )
+        self.assertEqual(assassin["features"]["combat"]["extra_mainhand_strikes"], 1)
+
+        export_resp = self.client.get(self.export_ep)
+        export_docs = [doc for doc in yaml.safe_load_all(export_resp.data["yaml"]) if doc is not None]
+        world_manifest = export_docs[-1]
+        self.assertEqual(
+            world_manifest["spec"]["equipment"]["offhand_weapons"]["allowed_grips"],
+            ["one_hand"],
+        )
+        self.assertTrue(
+            world_manifest["spec"]["combat"]["attack_routine"]["dual_wield"]["enabled"]
+        )
+
     def test_apply_world_config_manifest_rejects_unknown_armor_proficiency(self):
         manifest = f"""
 kind: world
