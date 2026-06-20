@@ -240,6 +240,78 @@ Once any trainer in the world offers an ability, `learn <ability>` and
 room. Use `availability: alive_and_present` when a pending-deletion or defeated
 trainer should not teach.
 
+## Combat Ability Loadouts
+
+Mobs can use authored abilities in combat by referencing existing ability
+slugs from `combat.abilities`. Define the ability as `kind: ability` first, then
+attach it to one or more mob definitions. Do not inline full ability bodies
+inside the mob definition; reusable ability definitions are the canonical
+builder-facing shape.
+
+```yaml
+kind: ability
+metadata:
+  slug: shadow-bolt
+  name: Shadow Bolt
+spec:
+  command:
+    verbs: [shadowbolt]
+  target:
+    type: hostile
+    default: current_target
+  cooldown:
+    rounds: 2
+  components:
+    - type: damage
+      profile: basic_ability
+      overrides:
+        multiplier: 1.4
+      text:
+        label: Shadow Bolt
+---
+kind: mobdefinition
+metadata:
+  slug: cave-shaman
+  name: a cave shaman
+spec:
+  type: humanoid
+  health_max: 80
+  ability_power: 12
+  combat:
+    attackable: true
+    abilities:
+      - ability: shadow-bolt
+        weight: 3
+```
+
+Each loadout entry supports:
+
+- `ability`: required ability slug, id, or `ability.<id>` key.
+- `weight`: optional positive integer. Higher weights make the ability more
+  likely when multiple entries are eligible.
+- `when`: optional WR2 condition DSL gate. Use this for health thresholds,
+  phases, room state, or world state.
+
+Example self-heal that only becomes eligible when the mob is wounded:
+
+```yaml
+combat:
+  abilities:
+    - ability: mend-self
+      weight: 1
+      when:
+        lte:
+          - actor.health_percent
+          - 40
+```
+
+Mob abilities use the same round-based cast time and cooldown fields as player
+abilities. If no loadout entry is eligible, the mob falls back to its normal
+basic attack. Current mob loadout execution supports damage, healing, and
+encounter-scoped effects such as stun, DOT, HOT, resource ticks, and barriers.
+Character state components and room-wide player buff components are ignored for
+mob actors until mob runtime state is expanded.
+
 ## Transition Notes
 
 `MobDefinition` is a transition name while WR2 still has the older

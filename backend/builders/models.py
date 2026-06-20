@@ -431,6 +431,7 @@ class MobDefinition(AdventBaseModel):
     attributes = models.JSONField(default=dict, blank=True)
     randomization = models.JSONField(default=dict, blank=True)
     traits = models.JSONField(default=list, blank=True)
+    combat_abilities = models.JSONField(default=list, blank=True)
     attackable = models.BooleanField(default=True)
     merchant_profile = models.ForeignKey(
         'builders.MerchantProfile',

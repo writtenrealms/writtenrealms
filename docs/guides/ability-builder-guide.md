@@ -5,7 +5,8 @@
 This guide describes the WR2 ability authoring model. Ability manifests are
 wired into the runtime for player commands, encounter-round queueing, direct
 damage, healing, cast times, stun, damage-over-time, heal-over-time, and
-out-of-combat self utility. Encounter-scoped effects also support resource
+out-of-combat self utility. Mob definitions can also reference active ability
+definitions from combat loadouts. Encounter-scoped effects support resource
 change ticks, damage absorption barriers, and `after_damage` procs for bounded
 buff behavior such as energy return on landed attacks. Character-scoped effects
 support outgoing damage modifiers for room-wide buffs that can survive into

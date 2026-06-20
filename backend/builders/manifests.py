@@ -38,6 +38,7 @@ from core.abilities import (
     normalize_ability_definition,
     normalize_ability_progression,
 )
+from core.condition_dsl import validate_condition_payload
 from core.combat_formulas import (
     CombatFormulaValidationError,
     get_world_combat_system,
@@ -1068,6 +1069,8 @@ def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[st
     spec["combat"] = {
         "attackable": bool(mob_definition.attackable),
     }
+    if mob_definition.combat_abilities:
+        spec["combat"]["abilities"] = mob_definition.combat_abilities or []
     if mob_definition.merchant_profile_id:
         spec["merchant"] = {
             "profile": f"merchantprofile.{mob_definition.merchant_profile.slug}",
@@ -1128,6 +1131,7 @@ def serialize_mob_definition_payload(mob_definition: MobDefinition) -> dict[str,
         "base_properties": mob_definition.base_properties or {},
         "attributes": mob_definition.attributes or {},
         "randomization": mob_definition.randomization or {},
+        "combat_abilities": mob_definition.combat_abilities or [],
         "attackable": bool(mob_definition.attackable),
         "trainer": mob_definition.trainer or {},
         "merchant_profile": (
@@ -2722,6 +2726,81 @@ def _coerce_trainer_config(
     }
 
 
+def _coerce_mob_combat_ability_entry(
+    *,
+    world: World,
+    entry: Any,
+    index: int,
+) -> dict[str, Any]:
+    field_name = f"spec.combat.abilities[{index}]"
+    if isinstance(entry, dict):
+        unknown_fields = sorted(set(entry.keys()) - {"ability", "slug", "weight", "when", "conditions"})
+        if unknown_fields:
+            raise serializers.ValidationError(
+                f"Unsupported {field_name} field(s): {', '.join(unknown_fields)}."
+            )
+        ability_ref = entry.get("ability", entry.get("slug"))
+        ability_slug = _resolve_ability_slug_reference(
+            world=world,
+            value=ability_ref,
+            field_name=f"{field_name}.ability",
+        )
+        weight = _coerce_int(entry.get("weight", 1), f"{field_name}.weight")
+        if weight <= 0:
+            raise serializers.ValidationError(f"{field_name}.weight must be positive.")
+        conditions = entry.get("when", entry.get("conditions", {}))
+    else:
+        ability_slug = _resolve_ability_slug_reference(
+            world=world,
+            value=entry,
+            field_name=field_name,
+        )
+        weight = 1
+        conditions = {}
+
+    if conditions in (None, "", []):
+        conditions = {}
+    try:
+        validate_condition_payload(conditions, field_name=f"{field_name}.when")
+    except ValueError as exc:
+        raise serializers.ValidationError(str(exc))
+
+    normalized = {
+        "ability": ability_slug,
+        "weight": weight,
+    }
+    if conditions:
+        normalized["when"] = conditions
+    return normalized
+
+
+def _coerce_mob_combat_abilities(
+    *,
+    world: World,
+    combat: dict[str, Any],
+    existing: MobDefinition | None,
+) -> list[dict[str, Any]]:
+    if "abilities" not in combat:
+        return list(existing.combat_abilities or []) if existing else []
+
+    raw_abilities = combat.get("abilities")
+    if raw_abilities in (None, ""):
+        return []
+    if isinstance(raw_abilities, (str, int)):
+        raw_abilities = [raw_abilities]
+    if not isinstance(raw_abilities, list):
+        raise serializers.ValidationError("spec.combat.abilities must be a list.")
+
+    return [
+        _coerce_mob_combat_ability_entry(
+            world=world,
+            entry=entry,
+            index=index,
+        )
+        for index, entry in enumerate(raw_abilities)
+    ]
+
+
 def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], existing: MobDefinition | None) -> dict[str, Any]:
     mob_type = spec_patch.get(
         "type",
@@ -2747,13 +2826,13 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         combat = {}
     if not isinstance(combat, dict):
         raise serializers.ValidationError("spec.combat must be a mapping.")
-    combat_unknown = sorted(set(combat.keys()) - {"attackable", "health", *_MOB_DEFINITION_BASE_PROPERTY_FIELDS})
+    combat_unknown = sorted(set(combat.keys()) - {"attackable", "health", "abilities", *_MOB_DEFINITION_BASE_PROPERTY_FIELDS})
     if combat_unknown:
         raise serializers.ValidationError(
             f"Unsupported spec.combat field(s): {', '.join(combat_unknown)}."
         )
     for field_name, value in combat.items():
-        if field_name == "attackable":
+        if field_name in {"attackable", "abilities"}:
             continue
         if field_name == "health":
             base_properties["health_max"] = value
@@ -2810,6 +2889,11 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         spec_patch=spec_patch,
         existing=existing,
     )
+    combat_abilities = _coerce_mob_combat_abilities(
+        world=world,
+        combat=combat,
+        existing=existing,
+    )
     try:
         traits = (
             normalize_trait_list(spec_patch.get("traits"), field_name="spec.traits")
@@ -2853,6 +2937,7 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         "attributes": attributes,
         "randomization": randomization,
         "traits": traits,
+        "combat_abilities": combat_abilities,
         "attackable": attackable,
         "merchant_profile": merchant_profile,
         "merchant_availability": merchant_availability,

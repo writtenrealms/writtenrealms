@@ -2,7 +2,7 @@ import yaml
 
 from rest_framework.reverse import reverse
 
-from builders.models import AbilityDefinition, WorldBuilder
+from builders.models import AbilityDefinition, MobDefinition, WorldBuilder
 from tests.base import WorldTestCase
 
 
@@ -134,6 +134,49 @@ spec:
         self.assertEqual(len(resp.data["abilities"]), 2)
         self.assertTrue(AbilityDefinition.objects.filter(world=self.world, slug="mend").exists())
         self.assertTrue(AbilityDefinition.objects.filter(world=self.world, slug="stun-bash").exists())
+
+    def test_mob_definition_manifest_accepts_combat_ability_loadout(self):
+        self._create_ability(
+            slug="shadow-bolt",
+            name="Shadow Bolt",
+            command_verbs=["shadowbolt"],
+        )
+        manifest = f"""
+kind: mobdefinition
+metadata:
+  world: world.{self.world.id}
+  slug: cave-shaman
+  name: a cave shaman
+spec:
+  type: humanoid
+  health_max: 40
+  ability_power: 8
+  combat:
+    attackable: true
+    abilities:
+      - ability: shadow-bolt
+        weight: 3
+        when:
+          lte:
+            - actor.health_percent
+            - 50
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        mob_definition = MobDefinition.objects.get(world=self.world, slug="cave-shaman")
+        expected = [
+            {
+                "ability": "shadow-bolt",
+                "weight": 3,
+                "when": {"lte": ["actor.health_percent", 50]},
+            }
+        ]
+        self.assertEqual(mob_definition.combat_abilities, expected)
+        self.assertEqual(
+            resp.data["mob_definition"]["manifest"]["spec"]["combat"]["abilities"],
+            expected,
+        )
 
     def test_apply_ability_manifest_accepts_condition_requirements(self):
         manifest = f"""

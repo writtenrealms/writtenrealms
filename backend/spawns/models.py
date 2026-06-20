@@ -560,6 +560,7 @@ class CombatEncounter(BaseModel):
     next_resolution_ts = models.DateTimeField(db_index=True, **optional)
     last_resolution_ts = models.DateTimeField(db_index=True, **optional)
     pending_player_ability = models.JSONField(default=dict)
+    pending_mob_ability = models.JSONField(default=dict)
     pending_flee = models.JSONField(default=dict)
     active_effects = models.JSONField(default=list)
     initiative_order = models.JSONField(default=list)
@@ -649,6 +650,7 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
     definition_slug_snapshot = models.SlugField(max_length=120, blank=True)
     roll_metadata = models.JSONField(default=dict, blank=True)
     trait_instances = models.JSONField(default=list, blank=True)
+    ability_cooldowns = models.JSONField(default=dict, blank=True)
     equipment = models.OneToOneField('spawns.Equipment',
                                      related_name='mob',
                                      on_delete=models.CASCADE,

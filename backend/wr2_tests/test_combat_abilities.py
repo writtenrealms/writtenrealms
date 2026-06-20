@@ -192,6 +192,69 @@ class TestCombatAbilities(WorldTestCase):
             },
         ]
 
+    def test_definition_backed_mob_uses_combat_ability_loadout(self):
+        self._ability(
+            slug="shadow-bolt",
+            name="Shadow Bolt",
+            verbs=["shadowbolt"],
+            cooldown={"rounds": 2},
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 2},
+                    "text": {"label": "Shadow Bolt"},
+                }
+            ],
+        )
+        mob_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="cave-shaman",
+            name="a cave shaman",
+            keywords="cave shaman",
+            base_properties={
+                "level": 1,
+                "health_max": 200,
+                "attack_power": 7,
+                "weapon_damage": 0,
+                "fights_back": True,
+            },
+            combat_abilities=[
+                {
+                    "ability": "shadow-bolt",
+                    "weight": 1,
+                }
+            ],
+        )
+        mob = mob_definition.spawn(self.room, self.spawn_world)
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            initiative_order=self._player_first_initiative(mob),
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with patch("spawns.actions.combat.random.randint", return_value=1):
+                with capture_game_messages() as messages:
+                    resolve_combat_encounter(encounter.id)
+
+        self.player.refresh_from_db()
+        mob.refresh_from_db()
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        mob_ability_attacks = [
+            attack
+            for attack in attacks
+            if attack["data"]["attack"] == "shadow-bolt"
+        ]
+        self.assertEqual(len(mob_ability_attacks), 1)
+        self.assertEqual(mob_ability_attacks[0]["data"]["label"], "Shadow Bolt")
+        self.assertEqual(mob_ability_attacks[0]["data"]["actor"]["key"], mob.key)
+        self.assertEqual(mob_ability_attacks[0]["data"]["target"]["key"], self.player.key)
+        self.assertEqual(mob.ability_cooldowns, {"shadow-bolt": 2})
+        self.assertLess(self.player.health, self.stats["health_max"])
+
     def test_percent_base_cost_uses_energy_base_before_equipment_modifiers(self):
         from spawns.actions.abilities import ability_cost_amount
 

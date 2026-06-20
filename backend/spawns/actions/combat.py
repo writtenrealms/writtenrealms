@@ -5,6 +5,7 @@ from datetime import timedelta
 import logging
 import math
 import random
+from typing import Any
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
@@ -14,7 +15,8 @@ from config import constants as adv_consts
 from core.attack_routines import CombatStrike, resolve_attack_routine
 from core.combat_formulas import CombatAttackResult, combatant_snapshot, resolve_attack
 from core.computations import compute_stats
-from core.condition_dsl import ConditionContext, evaluate_condition
+from core.abilities import definition_world
+from core.condition_dsl import ConditionContext, evaluate_condition, resolve_path
 from core.leveling import ExperienceGrant, apply_experience
 from builders.models import AbilityDefinition
 from spawns.actions.base import ActionError, ActionResult
@@ -239,6 +241,7 @@ class MobTurnOutcome:
     events: list[GameEvent]
     player_defeated: bool = False
     actor_key: str | None = None
+    cooldown_exclude: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1268,6 +1271,363 @@ def _ability_casting_event(
     )
 
 
+def _mob_ability_casting_event(
+    *,
+    player: Player,
+    mob: Mob,
+    ability: AbilityDefinition,
+    round_id: str,
+    rounds_remaining: int,
+) -> GameEvent:
+    mob_name = mob.name or "Something"
+    if rounds_remaining > 0:
+        text = f"{safe_capitalize(mob_name)} continues charging {ability.name}."
+    else:
+        text = f"{safe_capitalize(mob_name)} charges {ability.name}."
+    return GameEvent(
+        type="notification.combat.ability_casting",
+        recipients=[player.key],
+        data={
+            "ability": {
+                "slug": ability.slug,
+                "name": ability.name,
+                "action_type": ability.action_type,
+            },
+            "actor": serialize_char_from_mob(mob).model_dump(),
+            "round_id": round_id,
+            "rounds_remaining": rounds_remaining,
+        },
+        text=text,
+    )
+
+
+def _combat_actor_type(actor: Player | Mob) -> str:
+    return "player" if isinstance(actor, Player) else "mob"
+
+
+def _combat_actor_payload(actor: Player | Mob) -> dict:
+    if isinstance(actor, Player):
+        return serialize_char_from_player(actor).model_dump()
+    return serialize_char_from_mob(actor).model_dump()
+
+
+def _condition_actor_data(actor: Player | Mob) -> dict:
+    data: dict[str, int | float] = {}
+    for resource in ("health", "energy", "stamina"):
+        current = int(getattr(actor, resource, 0) or 0)
+        maximum = _resource_limit(actor, resource)
+        data[resource] = current
+        data[f"{resource}_max"] = maximum
+        data[f"{resource}_percent"] = int((current / maximum) * 100) if maximum > 0 else 0
+    return data
+
+
+def _ability_condition_context_for_actor(
+    *,
+    actor: Player | Mob,
+    ability: AbilityDefinition,
+    room: Room | None,
+    viewer: Player | None = None,
+) -> ConditionContext:
+    current_room = room or getattr(actor, "room", None)
+    return ConditionContext(
+        actor=actor,
+        player=actor if isinstance(actor, Player) else viewer,
+        room=current_room,
+        zone=getattr(current_room, "zone", None),
+        world=getattr(actor, "world", None) or getattr(viewer, "world", None),
+        ability=ability,
+        actor_data=_condition_actor_data(actor),
+    )
+
+
+def _ability_component_overrides_for_actor(
+    component: dict,
+    *,
+    actor: Player | Mob,
+    ability: AbilityDefinition | None,
+    room: Room | None = None,
+    viewer: Player | None = None,
+) -> dict[str, Any]:
+    overrides = dict(component.get("overrides") or {})
+    if not ability:
+        return overrides
+
+    scaling = component.get("scaling") or {}
+    if not isinstance(scaling, dict):
+        return overrides
+
+    source = str(scaling.get("from") or "").strip()
+    if not source:
+        return overrides
+    raw_value = resolve_path(
+        source,
+        _ability_condition_context_for_actor(
+            actor=actor,
+            ability=ability,
+            room=room,
+            viewer=viewer,
+        ),
+    )
+    try:
+        points = float(raw_value or 0)
+    except (TypeError, ValueError):
+        points = 0.0
+    points = max(0.0, points)
+    if "max_points" in scaling:
+        try:
+            points = min(points, max(0.0, float(scaling.get("max_points") or 0)))
+        except (TypeError, ValueError):
+            pass
+
+    try:
+        base_multiplier = float(overrides.get("multiplier", 1))
+    except (TypeError, ValueError):
+        base_multiplier = 1.0
+    try:
+        multiplier_per_point = float(scaling.get("multiplier_per_point") or 0)
+    except (TypeError, ValueError):
+        multiplier_per_point = 0.0
+    overrides["multiplier"] = base_multiplier + points * multiplier_per_point
+    return overrides
+
+
+def _mob_ability_cooldowns(mob: Mob) -> dict[str, int]:
+    if not isinstance(mob.ability_cooldowns, dict):
+        return {}
+    cooldowns: dict[str, int] = {}
+    for raw_slug, raw_rounds in mob.ability_cooldowns.items():
+        slug = str(raw_slug or "").strip().lower()
+        if not slug:
+            continue
+        try:
+            rounds = int(raw_rounds or 0)
+        except (TypeError, ValueError):
+            rounds = 0
+        if rounds > 0:
+            cooldowns[slug] = rounds
+    return cooldowns
+
+
+def _mob_ability_cooldown_remaining(mob: Mob, ability: AbilityDefinition) -> int:
+    return _mob_ability_cooldowns(mob).get(ability.slug, 0)
+
+
+def _start_mob_ability_cooldown(
+    mob: Mob,
+    ability: AbilityDefinition,
+    *,
+    hit_landed: bool = False,
+) -> bool:
+    rounds = int((ability.cooldown or {}).get("rounds") or 0)
+    if rounds <= 0:
+        return False
+    trigger = str((ability.cooldown or {}).get("trigger") or "on_resolve").strip().lower()
+    if trigger == "on_hit" and not hit_landed:
+        return False
+    cooldowns = _mob_ability_cooldowns(mob)
+    cooldowns[ability.slug] = rounds
+    mob.ability_cooldowns = cooldowns
+    return True
+
+
+def _decrement_mob_ability_cooldowns(mob: Mob, *, exclude: set[str] | None = None) -> bool:
+    exclude = exclude or set()
+    cooldowns = _mob_ability_cooldowns(mob)
+    if not cooldowns:
+        if mob.ability_cooldowns not in ({}, None):
+            mob.ability_cooldowns = {}
+            return True
+        return False
+
+    updated = {
+        slug: remaining - 1
+        for slug, remaining in cooldowns.items()
+        if slug not in exclude and remaining - 1 > 0
+    }
+    for slug in exclude:
+        if slug in cooldowns:
+            updated[slug] = cooldowns[slug]
+    if updated == mob.ability_cooldowns:
+        return False
+    mob.ability_cooldowns = updated
+    return True
+
+
+def _mob_ability_resource_amount(mob: Mob, ability: AbilityDefinition) -> tuple[str, int]:
+    cost = ability.cost or {}
+    if not cost:
+        return "", 0
+    resource = str(cost.get("resource") or "").strip().lower()
+    if resource not in {"health", "energy", "stamina"}:
+        return "", 0
+    try:
+        amount = float(cost.get("amount") or 0)
+    except (TypeError, ValueError):
+        amount = 0.0
+    calc = str(cost.get("calc") or "fixed").strip().lower()
+    if calc in {"percent_max", "percent_base"}:
+        amount = _resource_limit(mob, resource) * (amount / 100)
+    return resource, max(0, int(amount))
+
+
+def _mob_can_pay_ability_cost(mob: Mob, ability: AbilityDefinition) -> bool:
+    resource, amount = _mob_ability_resource_amount(mob, ability)
+    if not resource or amount <= 0:
+        return True
+    return int(getattr(mob, resource, 0) or 0) >= amount
+
+
+def _pay_mob_ability_cost(mob: Mob, ability: AbilityDefinition) -> str | None:
+    resource, amount = _mob_ability_resource_amount(mob, ability)
+    if not resource or amount <= 0:
+        return None
+    current = int(getattr(mob, resource, 0) or 0)
+    if current < amount:
+        return None
+    setattr(mob, resource, max(0, current - amount))
+    return resource
+
+
+def _ability_definition_for_mob(mob: Mob, slug: str) -> AbilityDefinition | None:
+    source_world = definition_world(mob.world)
+    return AbilityDefinition.objects.filter(
+        world=source_world,
+        slug=slug,
+        is_active=True,
+    ).first()
+
+
+def _pending_ability_payload(
+    *,
+    ability: AbilityDefinition,
+    command: str,
+    target_type: str,
+    target_id: int,
+    queued_round: int,
+) -> dict:
+    payload = {
+        "ability": ability.slug,
+        "command": command,
+        "target": {
+            "type": target_type,
+            "id": target_id,
+        },
+        "queued_round": queued_round,
+    }
+    cast_rounds = ability_cast_rounds(ability)
+    if cast_rounds > 0:
+        payload["status"] = "queued"
+        payload["cast_rounds_remaining"] = cast_rounds
+    return payload
+
+
+def _mob_ability_target_ref(
+    *,
+    ability: AbilityDefinition,
+    mob: Mob,
+    player: Player,
+) -> tuple[str, int]:
+    target_type = str((ability.target or {}).get("type") or "hostile").strip().lower()
+    if target_type in {"self", "ally"}:
+        return "mob", mob.id
+    return "player", player.id
+
+
+def _mob_loadout_entries(mob: Mob) -> list[dict]:
+    definition = getattr(mob, "definition", None)
+    if not definition or not isinstance(definition.combat_abilities, list):
+        return []
+    return [
+        entry
+        for entry in definition.combat_abilities
+        if isinstance(entry, dict) and str(entry.get("ability") or "").strip()
+    ]
+
+
+def _mob_loadout_entry_matches(
+    *,
+    entry: dict,
+    mob: Mob,
+    player: Player,
+    room: Room,
+    ability: AbilityDefinition,
+) -> bool:
+    if _mob_ability_cooldown_remaining(mob, ability) > 0:
+        return False
+    if not _mob_can_pay_ability_cost(mob, ability):
+        return False
+    condition = entry.get("when") or {}
+    if condition in (None, {}, []):
+        return True
+    return evaluate_condition(
+        condition,
+        context=_ability_condition_context_for_actor(
+            actor=mob,
+            ability=ability,
+            room=room,
+            viewer=player,
+        ),
+    )
+
+
+def _choose_mob_ability(
+    *,
+    mob: Mob,
+    player: Player,
+    room: Room,
+) -> AbilityDefinition | None:
+    entries = _mob_loadout_entries(mob)
+    if not entries:
+        return None
+
+    source_world = definition_world(mob.world)
+    slugs = [
+        str(entry.get("ability") or "").strip().lower()
+        for entry in entries
+        if str(entry.get("ability") or "").strip()
+    ]
+    abilities_by_slug = {
+        ability.slug: ability
+        for ability in AbilityDefinition.objects.filter(
+            world=source_world,
+            slug__in=slugs,
+            is_active=True,
+        )
+    }
+
+    weighted: list[tuple[AbilityDefinition, int]] = []
+    for entry in entries:
+        slug = str(entry.get("ability") or "").strip().lower()
+        ability = abilities_by_slug.get(slug)
+        if not ability or ability.action_type != "primary":
+            continue
+        if not _mob_loadout_entry_matches(
+            entry=entry,
+            mob=mob,
+            player=player,
+            room=room,
+            ability=ability,
+        ):
+            continue
+        try:
+            weight = max(1, int(entry.get("weight") or 1))
+        except (TypeError, ValueError):
+            weight = 1
+        weighted.append((ability, weight))
+
+    if not weighted:
+        return None
+    total = sum(weight for _ability, weight in weighted)
+    roll = random.randint(1, total)
+    cursor = 0
+    for ability, weight in weighted:
+        cursor += weight
+        if roll <= cursor:
+            return ability
+    return weighted[-1][0]
+
+
 def _effect_applies_to(effect: dict, *, target_type: str, target_id: int) -> bool:
     target = effect.get("target") or {}
     return target.get("type") == target_type and int(target.get("id") or 0) == target_id
@@ -1434,19 +1794,18 @@ def _stun_event(
         if recipients:
             events.append(
                 GameEvent(
-                type="notification.combat.effect",
-                recipients=recipients,
-                data=data,
-                text=f"{safe_capitalize(target_name)} is stunned and cannot act.",
-            )
+                    type="notification.combat.effect",
+                    recipients=recipients,
+                    data=data,
+                    text=f"{safe_capitalize(target_name)} is stunned and cannot act.",
+                )
             )
     return events
 
 
 def _apply_healing(
     *,
-    actor: Player,
-    target: Player,
+    target: Player | Mob,
     result: CombatAttackResult,
     health_max: int,
 ) -> None:
@@ -1489,7 +1848,11 @@ def _resolve_effect_target(
 ) -> Player | Mob | None:
     selector = str(target_selector or "effect.target").strip().lower()
     if selector in {"actor", "self", "effect.source"}:
-        return player
+        return _actor_for_effect_ref(
+            effect.get("source"),
+            player=player,
+            target_mob=target_mob,
+        )
     if selector in {"target", "ability.target", "effect.target"}:
         target = effect.get("target") or {}
         if target.get("type") == "player" and int(target.get("id") or 0) == player.id:
@@ -1902,35 +2265,49 @@ def _execute_output_component(
     ability: AbilityDefinition | None,
     round_id: str,
     player_health_max: int,
+    actor: Player | Mob | None = None,
+    target: Player | Mob | None = None,
 ) -> tuple[list[GameEvent], bool]:
     component_type = component.get("type")
     label = _component_label(component, ability)
     events: list[GameEvent] = []
+    actor = actor or player
+    if target is None:
+        target = player if component_type == "healing" else target_mob
 
     if component_type == "healing":
         result = resolve_attack(
-            actor=player,
-            target=player,
+            actor=actor,
+            target=target,
             world=player.world,
             profile_key=component.get("profile"),
-            overrides=ability_component_overrides(
+            overrides=_ability_component_overrides_for_actor(
                 component,
-                player=player,
+                actor=actor,
                 ability=ability,
                 room=room,
-            ) if ability else component.get("overrides") or {},
+                viewer=player,
+            ),
         )
         _apply_healing(
-            actor=player,
-            target=player,
             result=result,
-            health_max=player_health_max,
+            target=target,
+            health_max=player_health_max if isinstance(target, Player) else _resource_limit(target, "health"),
         )
         actor_payload = _combat_state_payload(
-            serialize_char_from_player(player).model_dump(),
-            target_payload=serialize_char_from_mob(target_mob).model_dump(),
+            _combat_actor_payload(actor),
+            target_payload=_combat_actor_payload(target),
         )
-        target_payload = actor_payload
+        target_payload = _combat_state_payload(
+            _combat_actor_payload(target),
+            target_payload=_combat_actor_payload(actor),
+        )
+        if isinstance(actor, Player) and isinstance(target, Player) and actor.pk == target.pk:
+            actor_text = f"You use {label} and heal for {result.healing_done}."
+        elif isinstance(actor, Mob) and isinstance(target, Mob) and actor.pk == target.pk:
+            actor_text = f"{safe_capitalize(actor.name or 'Something')} uses {label} and heals for {result.healing_done}."
+        else:
+            actor_text = f"{actor_payload.get('name') or 'Something'} uses {label}."
         events.extend(
             _combat_attack_events(
                 viewer=player,
@@ -1939,8 +2316,8 @@ def _execute_output_component(
                 target_payload=target_payload,
                 result=result,
                 round_id=round_id,
-                actor_text=f"You use {label} and heal for {result.healing_done}.",
-                room_text=f"{player.name} uses {label}.",
+                actor_text=actor_text,
+                room_text=f"{actor_payload.get('name') or 'Something'} uses {label}.",
                 attack=ability.slug if ability else "effect",
                 label=label,
             )
@@ -1948,55 +2325,65 @@ def _execute_output_component(
         return events, result.healing_done > 0
 
     result = resolve_attack(
-        actor=player,
-        target=target_mob,
+        actor=actor,
+        target=target,
         world=player.world,
         profile_key=component.get("profile"),
-        overrides=ability_component_overrides(
+        overrides=_ability_component_overrides_for_actor(
             component,
-            player=player,
+            actor=actor,
             ability=ability,
             room=room,
-        ) if ability else component.get("overrides") or {},
+            viewer=player,
+        ),
     )
     result, absorb_events = _apply_damage_absorption(
         encounter=encounter,
         player=player,
         target_mob=target_mob,
-        target=target_mob,
+        target=target,
         result=result,
         round_id=round_id,
     )
     events.extend(absorb_events)
     if result.damage_taken > 0:
-        target_mob.health = max(0, int(target_mob.health or 0) - result.damage_taken)
-        target_mob.save(update_fields=["health"])
+        target.health = max(0, int(target.health or 0) - result.damage_taken)
+        target.save(update_fields=["health"])
 
-    player_char = _combat_state_payload(
-        serialize_char_from_player(player).model_dump(),
-        target_payload=serialize_char_from_mob(target_mob).model_dump(),
+    actor_char = _combat_state_payload(
+        _combat_actor_payload(actor),
+        target_payload=_combat_actor_payload(target),
     )
     target_char = _combat_state_payload(
-        serialize_char_from_mob(target_mob).model_dump(),
-        target_payload=serialize_char_from_player(player).model_dump(),
+        _combat_actor_payload(target),
+        target_payload=_combat_actor_payload(actor),
     )
+    actor_name = actor_char.get("name") or "Something"
     target_name = target_char.get("name") or "them"
-    if result.outcome == "dodged":
-        actor_text = f"{target_name} dodges {label}."
-    elif result.is_crit_hit:
-        actor_text = f"You critically hit {target_name} with {label} for {result.damage_taken} damage."
+    if isinstance(actor, Player):
+        if result.outcome == "dodged":
+            actor_text = f"{target_name} dodges {label}."
+        elif result.is_crit_hit:
+            actor_text = f"You critically hit {target_name} with {label} for {result.damage_taken} damage."
+        else:
+            actor_text = f"You hit {target_name} with {label} for {result.damage_taken} damage."
     else:
-        actor_text = f"You hit {target_name} with {label} for {result.damage_taken} damage."
+        if result.outcome == "dodged":
+            actor_text = f"You dodge {label}."
+        elif result.is_crit_hit:
+            actor_text = f"{safe_capitalize(actor_name)} critically hits you with {label} for {result.damage_taken} damage."
+        else:
+            actor_text = f"{safe_capitalize(actor_name)} hits you with {label} for {result.damage_taken} damage."
     events.extend(
         _combat_attack_events(
             viewer=player,
             room=room,
-            actor_payload=player_char,
+            actor_payload=actor_char,
             target_payload=target_char,
             result=result,
             round_id=round_id,
             actor_text=actor_text,
-            room_text=_room_attack_text(player.name, target_name, result),
+            room_text=_room_attack_text(actor_name, target_name, result),
             attack=ability.slug if ability else "effect",
             label=label,
         )
@@ -2007,8 +2394,8 @@ def _execute_output_component(
             player=player,
             target_mob=target_mob,
             room=room,
-            actor=player,
-            target=target_mob,
+            actor=actor,
+            target=target,
             result=result,
             round_id=round_id,
             attack=ability.slug if ability else "effect",
@@ -2065,6 +2452,16 @@ def _resolve_periodic_effects(
                 )
             else:
                 tick_component = tick.get("component") or {}
+                source_actor = _actor_for_effect_ref(
+                    effect.get("source"),
+                    player=player,
+                    target_mob=target_mob,
+                ) or player
+                target_actor = _actor_for_effect_ref(
+                    effect.get("target"),
+                    player=player,
+                    target_mob=target_mob,
+                ) or target_mob
                 component_events, _ = _execute_output_component(
                     encounter=encounter,
                     player=player,
@@ -2074,6 +2471,8 @@ def _resolve_periodic_effects(
                     ability=None,
                     round_id=round_id,
                     player_health_max=player_health_max,
+                    actor=source_actor,
+                    target=target_actor,
                 )
                 events.extend(component_events)
 
@@ -2092,23 +2491,27 @@ def _effect_target_for_component(
     pending: dict,
     player: Player,
     target_mob: Mob,
-) -> tuple[str, int]:
+    actor: Player | Mob | None = None,
+    default_target: Player | Mob | None = None,
+) -> tuple[str, int, Player | Mob]:
+    actor = actor or player
+    default_target = default_target or target_mob
     selector = str(component.get("target") or "ability.target").strip().lower()
     if selector in {"actor", "self", "effect.source"}:
-        return "player", player.id
+        return _combat_actor_type(actor), actor.id, actor
 
     pending_target = pending.get("target") or {}
     pending_target_type = str(pending_target.get("type") or "").strip().lower()
     if selector in {"target", "ability.target", "effect.target"}:
         if pending_target_type == "player":
-            return "player", player.id
+            return "player", player.id, player
         if pending_target_type == "mob":
-            return "mob", target_mob.id
+            return "mob", target_mob.id, target_mob
 
     ability_target_type = str((ability.target or {}).get("type") or "").strip().lower()
     if ability_target_type in {"self", "ally"}:
-        return "player", player.id
-    return "mob", target_mob.id
+        return _combat_actor_type(actor), actor.id, actor
+    return _combat_actor_type(default_target), default_target.id, default_target
 
 
 def _advance_non_ticking_effect_durations(encounter: CombatEncounter) -> None:
@@ -2273,14 +2676,13 @@ def _execute_pending_player_ability(
             continue
         effect_type = component.get("effect")
         duration = int(((component.get("duration") or {}).get("rounds")) or 1)
-        target_type, target_id = _effect_target_for_component(
+        target_type, target_id, effect_target = _effect_target_for_component(
             component=component,
             ability=ability,
             pending=pending,
             player=player,
             target_mob=target_mob,
         )
-        effect_target = player if target_type == "player" else target_mob
         _append_effect(
             encounter,
             effect=effect_type,
@@ -2334,16 +2736,177 @@ def _execute_pending_player_ability(
     )
 
 
+def _execute_pending_mob_ability(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    target_mob: Mob,
+    room: Room,
+    round_id: str,
+    player_health_max: int,
+) -> tuple[list[GameEvent], AbilityRoundResult]:
+    pending = encounter.pending_mob_ability or {}
+    if not pending:
+        return [], AbilityRoundResult(consumed_primary=False)
+
+    encounter.pending_mob_ability = {}
+    ability_slug = str(pending.get("ability") or "").strip().lower()
+    ability = _ability_definition_for_mob(target_mob, ability_slug)
+    if not ability:
+        return [], AbilityRoundResult(consumed_primary=False)
+
+    if _mob_ability_cooldown_remaining(target_mob, ability) > 0:
+        return [], AbilityRoundResult(consumed_primary=False)
+
+    target = pending.get("target") or {}
+    pending_target_type = str(target.get("type") or "").strip().lower()
+    pending_target_id = int(target.get("id") or 0)
+    if pending_target_type == "player" and pending_target_id != player.id:
+        return [], AbilityRoundResult(consumed_primary=False)
+    if pending_target_type == "mob" and pending_target_id != target_mob.id:
+        return [], AbilityRoundResult(consumed_primary=False)
+
+    cast_rounds_remaining = _pending_cast_rounds_remaining(pending, ability)
+    if cast_rounds_remaining > 0:
+        next_remaining = cast_rounds_remaining - 1
+        encounter.pending_mob_ability = {
+            **pending,
+            "status": "casting",
+            "cast_rounds_remaining": next_remaining,
+        }
+        return [
+            _mob_ability_casting_event(
+                player=player,
+                mob=target_mob,
+                ability=ability,
+                round_id=round_id,
+                rounds_remaining=next_remaining,
+            )
+        ], AbilityRoundResult(consumed_primary=True)
+
+    paid_resource = _pay_mob_ability_cost(target_mob, ability)
+    if paid_resource is None and not _mob_can_pay_ability_cost(target_mob, ability):
+        return [], AbilityRoundResult(consumed_primary=False)
+
+    events: list[GameEvent] = []
+    hit_landed = False
+    health_changed = False
+    for component in ability.components or []:
+        component_type = component.get("type")
+        if component_type in {"damage", "healing"}:
+            component_target = target_mob if component_type == "healing" else player
+            component_events, component_hit = _execute_output_component(
+                encounter=encounter,
+                player=player,
+                target_mob=target_mob,
+                room=room,
+                component=component,
+                ability=ability,
+                round_id=round_id,
+                player_health_max=player_health_max,
+                actor=target_mob,
+                target=component_target,
+            )
+            events.extend(component_events)
+            hit_landed = hit_landed or component_hit
+            health_changed = health_changed or (
+                component_type == "healing" and component_target.pk == target_mob.pk
+            )
+            if player.health <= 0:
+                break
+            continue
+
+        if component_type == "state":
+            # Character-scoped state is currently player-backed; skip state
+            # components for mob actors until mob runtime state lands.
+            continue
+
+        if component_type != "effect":
+            continue
+        if component.get("apply") == "on_hit" and not hit_landed:
+            continue
+        if component_targets_character_effect(component):
+            continue
+        effect_type = component.get("effect")
+        duration = int(((component.get("duration") or {}).get("rounds")) or 1)
+        target_type, target_id, effect_target = _effect_target_for_component(
+            component=component,
+            ability=ability,
+            pending=pending,
+            player=player,
+            target_mob=target_mob,
+            actor=target_mob,
+            default_target=player,
+        )
+        _append_effect(
+            encounter,
+            effect=effect_type,
+            source_type="mob",
+            source_id=target_mob.id,
+            target_type=target_type,
+            target_id=target_id,
+            duration_rounds=duration,
+            label=_component_label(component, ability),
+            category=component.get("category") or "neutral",
+            primitives=_initialize_effect_primitives(
+                component.get("primitives") or [],
+                target=effect_target,
+                source=target_mob,
+            ),
+            tick=component.get("tick") or {},
+        )
+        events.append(
+            GameEvent(
+                type="notification.combat.effect",
+                recipients=[player.key],
+                data={
+                    "ability": ability.slug,
+                    "actor": serialize_char_from_mob(target_mob).model_dump(),
+                    "effect": effect_type,
+                    "duration_rounds": duration,
+                    "round_id": round_id,
+                },
+                text=f"{safe_capitalize(target_mob.name or 'Something')} uses {ability.name}.",
+            )
+        )
+
+    cooldown_started = _start_mob_ability_cooldown(
+        target_mob,
+        ability,
+        hit_landed=hit_landed,
+    )
+    update_fields: list[str] = []
+    if paid_resource:
+        update_fields.append(paid_resource)
+    if health_changed:
+        update_fields.append("health")
+    if cooldown_started:
+        update_fields.append("ability_cooldowns")
+    if update_fields:
+        target_mob.save(update_fields=list(dict.fromkeys(update_fields)))
+
+    return events, AbilityRoundResult(
+        consumed_primary=True,
+        cooldown_exclude=ability.slug if cooldown_started else None,
+    )
+
+
 def _finalize_active_round(
     *,
     encounter: CombatEncounter,
     player: Player,
+    target_mob: Mob,
     cooldown_exclude: str | None,
+    mob_cooldown_exclude: str | None,
     round_id: str | None = None,
 ) -> bool:
     cooldowns_changed = decrement_ability_cooldowns(
         player,
         exclude={cooldown_exclude} if cooldown_exclude else set(),
+    )
+    mob_cooldowns_changed = _decrement_mob_ability_cooldowns(
+        target_mob,
+        exclude={mob_cooldown_exclude} if mob_cooldown_exclude else set(),
     )
     effects_changed = advance_character_effect_durations(player, current_round_id=round_id)
     update_fields: list[str] = []
@@ -2353,9 +2916,16 @@ def _finalize_active_round(
         update_fields.append("active_effects")
     if update_fields:
         player.save(update_fields=update_fields)
+    if mob_cooldowns_changed:
+        target_mob.save(update_fields=["ability_cooldowns"])
     if not encounter._state.adding:
-        encounter.save(update_fields=["pending_player_ability", "pending_flee", "active_effects"])
-    return cooldowns_changed or effects_changed
+        encounter.save(update_fields=[
+            "pending_player_ability",
+            "pending_mob_ability",
+            "pending_flee",
+            "active_effects",
+        ])
+    return cooldowns_changed or mob_cooldowns_changed or effects_changed
 
 
 def _apply_player_primary_turn(
@@ -2469,9 +3039,61 @@ def _apply_mob_primary_turn(
                 round_id=round_id,
             )
         )
+        encounter.pending_mob_ability = {}
         return MobTurnOutcome(events=events)
 
+    if not encounter.pending_mob_ability:
+        ability = _choose_mob_ability(
+            mob=target_mob,
+            player=player,
+            room=room,
+        )
+        if ability:
+            target_type, target_id = _mob_ability_target_ref(
+                ability=ability,
+                mob=target_mob,
+                player=player,
+            )
+            encounter.pending_mob_ability = _pending_ability_payload(
+                ability=ability,
+                command=ability.slug,
+                target_type=target_type,
+                target_id=target_id,
+                queued_round=encounter.round_number,
+            )
+
+    ability_events, ability_result = _execute_pending_mob_ability(
+        encounter=encounter,
+        player=player,
+        target_mob=target_mob,
+        room=room,
+        round_id=round_id,
+        player_health_max=player.health_max,
+    )
+    events.extend(ability_events)
+    cooldown_exclude = ability_result.cooldown_exclude
+
     mob_name = target_mob.name or "Something"
+    if player.health <= 0:
+        updated_player, death_events = apply_player_death(
+            player=player,
+            origin_room=room,
+            killer=target_mob,
+            target_text="You have been slain.",
+            room_text=f"{mob_name} kills {player.name}.",
+            config=config,
+        )
+        events.extend(death_events)
+        return MobTurnOutcome(
+            events=events,
+            player_defeated=True,
+            actor_key=updated_player.key,
+            cooldown_exclude=cooldown_exclude,
+        )
+
+    if ability_result.consumed_primary:
+        return MobTurnOutcome(events=events, cooldown_exclude=cooldown_exclude)
+
     for strike in resolve_attack_routine(actor=target_mob, target=player, world=player.world):
         strike_outcome = _apply_combat_strike(
             encounter=encounter,
@@ -2501,9 +3123,10 @@ def _apply_mob_primary_turn(
             events=events,
             player_defeated=True,
             actor_key=updated_player.key,
+            cooldown_exclude=cooldown_exclude,
         )
 
-    return MobTurnOutcome(events=events)
+    return MobTurnOutcome(events=events, cooldown_exclude=cooldown_exclude)
 
 
 def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target_mob: Mob, config) -> CombatStepResult:
@@ -2522,6 +3145,7 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
 
     events: list[GameEvent] = []
     cooldown_exclude: str | None = None
+    mob_cooldown_exclude: str | None = None
 
     if (encounter.pending_flee or {}).get("status") == "ready":
         return _complete_flee(encounter=encounter, player=player, round_id=round_id)
@@ -2590,6 +3214,7 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
                 config=config,
             )
             events.extend(mob_turn.events)
+            mob_cooldown_exclude = mob_turn.cooldown_exclude or mob_cooldown_exclude
             if mob_turn.player_defeated:
                 return CombatStepResult(
                     actor_key=mob_turn.actor_key,
@@ -2605,7 +3230,9 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
     cooldowns_changed = _finalize_active_round(
         encounter=encounter,
         player=player,
+        target_mob=target_mob,
         cooldown_exclude=cooldown_exclude,
+        mob_cooldown_exclude=mob_cooldown_exclude,
         round_id=round_id,
     )
     if cooldown_exclude or cooldowns_changed:
@@ -2644,7 +3271,8 @@ def resolve_combat_encounter_step(
 
         player = Player.objects.select_for_update().get(pk=encounter.player_id)
         target_mob = (
-            Mob.objects.select_for_update()
+            Mob.objects.select_for_update(of=("self",))
+            .select_related("definition")
             .filter(pk=encounter.mob_id, is_pending_deletion=False)
             .first()
         )
