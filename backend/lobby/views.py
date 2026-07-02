@@ -563,7 +563,7 @@ class WorldCharacters(WorldLobbyBase,
             raise ValidationError(
                 "Cannot delete a player currently in a game.")
 
-        if player.player_instances.count():
+        if player.instance_participations.filter(exited_at__isnull=True).count():
             raise ValidationError(
                 "Cannot delete a player with live instances.")
 

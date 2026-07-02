@@ -49,6 +49,9 @@ SOURCE_MODELS = {
     "mob_template": MobTemplate,
 }
 
+INHERITED_INSTANCE_SOURCE_MODELS = {ItemBundle, ItemDefinition, MobDefinition}
+LEGACY_INSTANCE_SOURCE_MODELS = {ItemTemplate, MobTemplate}
+
 @dataclass(frozen=True)
 class ResolvedSource:
     source_type: str
@@ -116,11 +119,19 @@ def _resolve_zone(*, world: World, value: Any, field_name: str = "spec.zone") ->
     text = str(value or "").strip()
     if not text:
         raise serializers.ValidationError(f"{field_name} is required.")
-    prefix, ref_value = _parse_key_ref(text, expected_prefixes={"zone"})
-    if prefix == "zone" and ref_value and ref_value.isdigit():
-        zone = Zone.objects.filter(world=world, pk=int(ref_value)).first()
+    if text.startswith("zone@"):
+        raw_relative_id = text[len("zone@"):].strip()
+        try:
+            relative_id = int(raw_relative_id)
+        except ValueError:
+            raise serializers.ValidationError(f"{field_name} must use integer zone@<relative_id>.")
+        zone = Zone.objects.filter(world=world, relative_id=relative_id).first()
     else:
-        zone = Zone.objects.filter(world=world, name=text).order_by("id").first()
+        prefix, ref_value = _parse_key_ref(text, expected_prefixes={"zone"})
+        if prefix == "zone" and ref_value and ref_value.isdigit():
+            zone = Zone.objects.filter(world=world, pk=int(ref_value)).first()
+        else:
+            zone = Zone.objects.filter(world=world, name=text).order_by("id").first()
     if zone is None:
         raise serializers.ValidationError(f"{field_name} does not resolve to a zone in this world.")
     return zone
@@ -208,6 +219,25 @@ def _choose_source_spec(entry: SpawnEntry, rng: random.Random) -> Any:
     return weighted[-1][0]
 
 
+def _source_lookup_world(*, world: World, model_cls: type) -> World:
+    if world.instance_of_id and model_cls in INHERITED_INSTANCE_SOURCE_MODELS:
+        return world.instance_of
+    return world
+
+
+def _source_resolution_scope(*, world: World, model_cls: type) -> str:
+    if world.instance_of_id and model_cls in INHERITED_INSTANCE_SOURCE_MODELS:
+        return "the inherited base world"
+    return "this world"
+
+
+def _reject_legacy_instance_source(*, world: World, model_cls: type, field_name: str) -> None:
+    if world.instance_of_id and model_cls in LEGACY_INSTANCE_SOURCE_MODELS:
+        raise serializers.ValidationError(
+            f"{field_name} must use mobdefinition, itemdefinition, or itembundle in an instance template."
+        )
+
+
 def resolve_source(*, world: World, source_spec: Any, field_name: str = "source") -> ResolvedSource:
     source_ref = _source_ref_from_value(source_spec)
     prefix, ref_value = _parse_key_ref(source_ref)
@@ -216,13 +246,16 @@ def resolve_source(*, world: World, source_spec: Any, field_name: str = "source"
             f"{field_name} must use a supported ref such as mobdefinition.slug or itemdefinition.slug."
         )
     model_cls = SOURCE_MODELS[prefix]
-    queryset = model_cls.objects.filter(world=world)
+    _reject_legacy_instance_source(world=world, model_cls=model_cls, field_name=field_name)
+    lookup_world = _source_lookup_world(world=world, model_cls=model_cls)
+    queryset = model_cls.objects.filter(world=lookup_world)
     if ref_value.isdigit():
         source = queryset.filter(pk=int(ref_value)).first()
     else:
         source = queryset.filter(slug=ref_value).first()
     if source is None:
-        raise serializers.ValidationError(f"{field_name} does not resolve to authored content in this world.")
+        scope = _source_resolution_scope(world=world, model_cls=model_cls)
+        raise serializers.ValidationError(f"{field_name} does not resolve to authored content in {scope}.")
     source_slug = getattr(source, "slug", "") or str(source.pk)
     canonical_type = {
         ItemBundle: "itembundle",

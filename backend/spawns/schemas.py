@@ -466,7 +466,9 @@ class World(BaseModel):
     key: str
     name: str
     context: str  # Context world key
+    context_id: Optional[int] = None
     instance_of: Optional[str] = None
+    instance_of_id: Optional[int] = None
     instance_ref: Optional[str] = None
 
     is_multiplayer: bool = False

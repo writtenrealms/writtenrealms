@@ -55,10 +55,13 @@ source: mobdefinition.tidecaller-trainer
 Supported source refs:
 
 - `mobdefinition.<slug>`
-- `mobtemplate.<slug>` for transitional legacy mobs
 - `itemdefinition.<slug>`
-- `itemtemplate.<slug>` for transitional legacy items
 - `itembundle.<slug>`
+
+When the spawn plan is authored on an instance template, these refs resolve
+against the base world's definitions and bundles. The plan's targets still
+resolve inside the instance template, so copy `zone@`, `room@`, and `path@`
+values from the instance template's own zone, room, and path screens.
 
 Use `source_pool` when each generated slot should roll from a weighted list:
 

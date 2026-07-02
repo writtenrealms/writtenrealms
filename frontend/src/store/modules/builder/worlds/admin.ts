@@ -3,7 +3,8 @@ const initial_state = () => {
   return {
     world_admin: {
       id: null,
-      spawn_worlds: [],
+      spawned_worlds: [],
+      instance_runs: [],
     },
 
     // Instance details currently being viewed

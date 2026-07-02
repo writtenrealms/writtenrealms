@@ -48,7 +48,16 @@ from tests.base import WorldTestCase
 from spawns import serializers as spawn_serializers
 from spawns.models import Player, Mob, DoorState, Item
 from users.models import User
-from worlds.models import World, Zone, Room, RoomFlag, RoomDetail, Door
+from worlds.models import (
+    InstanceParticipant,
+    InstanceRun,
+    World,
+    Zone,
+    Room,
+    RoomFlag,
+    RoomDetail,
+    Door,
+)
 
 
 # Base class
@@ -307,6 +316,102 @@ class TestWorldAdminInstanceEndpoint(BuilderTestCase):
             resp.data['world_state'],
             {'weather': 'spawn-rainy', 'lodging_base_price': 12},
         )
+
+    def test_world_admin_lists_spawned_instance_runs(self):
+        instance_template = World.objects.new_world(
+            name='Battlefield',
+            author=self.user,
+            is_multiplayer=True,
+            instance_of=self.world,
+        )
+        spawned_instance = instance_template.create_spawn_world(
+            instance_ref='battlefield-1',
+            leader=self.player,
+        )
+        now = timezone.now()
+        run = InstanceRun.objects.create(
+            base_world=self.world,
+            template_world=instance_template,
+            spawned_world=spawned_instance,
+            ref='battlefield-1',
+            leader=self.player,
+            status=InstanceRun.STATUS_ACTIVE,
+            started_at=now,
+            last_active_at=now,
+            seed='battlefield-1',
+        )
+        InstanceParticipant.objects.create(
+            run=run,
+            player=self.player,
+            role=InstanceParticipant.ROLE_LEADER,
+            transfer_from=self.room,
+        )
+
+        resp = self.client.get(reverse('builder-world-admin', args=[self.world.pk]))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            [spawn_world['id'] for spawn_world in resp.data['spawned_worlds']],
+            [self.spawn_world.id],
+        )
+        self.assertEqual(len(resp.data['instance_runs']), 1)
+        payload = resp.data['instance_runs'][0]
+        self.assertEqual(payload['id'], run.id)
+        self.assertEqual(payload['ref'], 'battlefield-1')
+        self.assertEqual(payload['status'], InstanceRun.STATUS_ACTIVE)
+        self.assertTrue(payload['is_active'])
+        self.assertEqual(payload['template_world']['id'], instance_template.id)
+        self.assertEqual(payload['template_world']['name'], 'Battlefield')
+        self.assertEqual(payload['spawned_world']['id'], spawned_instance.id)
+        self.assertEqual(payload['spawned_world']['lifecycle'], spawned_instance.lifecycle)
+        self.assertEqual(payload['leader']['name'], self.player.name)
+        self.assertEqual(payload['participant_count'], 1)
+        self.assertEqual(payload['active_participant_count'], 1)
+
+    def test_returns_spawned_instance_dashboard_metrics(self):
+        instance_template = World.objects.new_world(
+            name='Battlefield',
+            author=self.user,
+            is_multiplayer=True,
+            instance_of=self.world,
+        )
+        spawned_instance = instance_template.create_spawn_world(
+            instance_ref='battlefield-1',
+            leader=self.player,
+        )
+        now = timezone.now()
+        run = InstanceRun.objects.create(
+            base_world=self.world,
+            template_world=instance_template,
+            spawned_world=spawned_instance,
+            ref='battlefield-1',
+            leader=self.player,
+            status=InstanceRun.STATUS_ACTIVE,
+            started_at=now,
+            last_active_at=now,
+            seed='battlefield-1',
+        )
+        InstanceParticipant.objects.create(
+            run=run,
+            player=self.player,
+            role=InstanceParticipant.ROLE_LEADER,
+            transfer_from=self.room,
+        )
+
+        resp = self.client.get(
+            reverse(
+                'builder-world-admin-instance',
+                args=[self.world.pk, spawned_instance.pk],
+            )
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['id'], spawned_instance.id)
+        self.assertEqual(resp.data['context_world']['id'], instance_template.id)
+        self.assertEqual(resp.data['parent_world']['id'], self.world.id)
+        self.assertEqual(resp.data['instance_run']['id'], run.id)
+        self.assertEqual(resp.data['instance_run']['ref'], 'battlefield-1')
+        self.assertEqual(resp.data['instance_run']['participant_count'], 1)
 
     def test_rejects_spawn_world_from_another_template_world(self):
         other_world = World.objects.new_world(

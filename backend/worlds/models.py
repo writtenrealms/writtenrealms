@@ -2,7 +2,6 @@ from datetime import datetime
 import json
 import logging
 import traceback
-import uuid
 
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericRelation
@@ -558,65 +557,15 @@ class World(AdventBaseModel):
         """
         Get or create the appropriate instance of a world for a player.
         """
-        if self.context:
-            raise TypeError("Cannot create an instance of a spawn world.")
-        if not self.instance_of:
-            raise TypeError("Cannot create an instance of a base world.")
-
-        # If an instance ref is passed, we join that instance, creating
-        # an instance assignment first if need be.
-        if ref:
-            ref_instance = World.objects.filter(instance_ref=ref).first()
-            if not ref_instance:
-                raise RuntimeError("Invalid instance reference %s" % ref)
-
-            player_assignment = InstanceAssignment.objects.filter(
-                instance=ref_instance,
-                player=player).first()
-            if not player_assignment:
-                player_assignment = InstanceAssignment.objects.create(
-                    instance=ref_instance,
-                    player=player,
-                    transfer_from=transfer_from)
-
-            if member_ids and not player_assignment.member_ids:
-                player_assignment.member_ids = ' '.join(member_ids)
-                player_assignment.save(update_fields=['member_ids'])
-
-            return ref_instance
-
-        # No instance ref is passed, we either fetch or create an instance
-        # with the player as its leader (and create an instance assignment
-        # if need be).
-        instance = self.spawned_worlds.filter(leader=player).first()
-        if instance:
-            player_assignment = InstanceAssignment.objects.filter(
-                instance=instance,
-                player=player).first()
-            if not player_assignment:
-                player_assignment = InstanceAssignment.objects.create(
-                    instance=instance,
-                    player=player,
-                    transfer_from=transfer_from,
-                    member_ids=' '.join(member_ids or []),
-                )
-
-            if member_ids and not player_assignment.member_ids:
-                player_assignment.member_ids = ' '.join(member_ids)
-                player_assignment.save(update_fields=['member_ids'])
-
-            return instance
-
-        instance = self.create_spawn_world(
-            instance_ref=uuid.uuid4().hex,
-            leader=player,
-            **kwargs)
-        InstanceAssignment.objects.create(
+        from worlds.instances import get_or_create_instance_run
+        run = get_or_create_instance_run(
+            self,
             player=player,
-            instance=instance,
             transfer_from=transfer_from,
-            member_ids=' '.join(member_ids or []))
-        return instance
+            ref=ref,
+            member_ids=member_ids,
+            **kwargs)
+        return run.spawned_world
 
 
     def can_edit(self, user, builder=None):
@@ -649,59 +598,21 @@ class World(AdventBaseModel):
 
     @classmethod
     def enter_instance(cls, player, transfer_to_id, transfer_from_id, ref=None, member_ids=None):
+        from worlds.instances import enter_instance
         transfer_to = Room.objects.get(pk=transfer_to_id)
         transfer_from = Room.objects.get(pk=transfer_from_id)
-        instance = transfer_to.world.instance_for(
-            player,
+        run = enter_instance(
+            player=player,
+            transfer_to=transfer_to,
             transfer_from=transfer_from,
             ref=ref,
             member_ids=member_ids)
-        player.world = instance
-        player.room = transfer_to
-        player.save()
-        return instance
+        return run.spawned_world
 
     @classmethod
     def leave_instance(cls, player):
-        # Leave instance means that the player is going back to the main
-        # world, for example after invoking the 'leave' command.
-        base_world_context = player.world.context.instance_of
-        if not base_world_context:
-            raise ValueError("Player is not in an instance.")
-
-        base_spawn_world = base_world_context.spawned_worlds.filter(
-            is_multiplayer=True).get()
-
-        room = None
-        try:
-            instance_assignment = InstanceAssignment.objects.get(
-                player=player,
-                instance=player.world)
-            room = instance_assignment.transfer_from
-        except InstanceAssignment.DoesNotExist:
-            pass
-
-        if not room:
-            room = base_world_context.config.starting_room
-
-        player.world = base_spawn_world
-        player.room = room
-        player.save(update_fields=['world', 'room'])
-
-        # If leaving an instance, make sure that all items in the
-        # player's inventory or equipment are set to the base world.
-        inv_ids = list(player.inventory.values_list('id', flat=True))
-        eq_ids = list(player.equipment.inventory.values_list('id', flat=True))
-        from spawns.models import Item
-        Item.objects.filter(
-            Q(id__in=inv_ids) | Q(id__in=eq_ids)
-        ).update(world_id=base_spawn_world.id)
-        Item.objects.filter(
-            container_type=ContentType.objects.get_for_model(Item),
-            container_id__in=inv_ids + eq_ids
-        ).update(world_id=base_spawn_world.id)
-
-        return player
+        from worlds.instances import leave_instance
+        return leave_instance(player=player)
 
     def exit_instance(self, player):
         template_world = self.context
@@ -881,6 +792,120 @@ class InstanceAssignment(BaseModel):
                                related_name='leader_instances',
                                on_delete=models.SET_NULL,
                                **optional)
+
+
+class InstanceRun(BaseModel):
+    STATUS_CREATED = 'created'
+    STATUS_ACTIVE = 'active'
+    STATUS_RESOLVING = 'resolving'
+    STATUS_COMPLETED = 'completed'
+    STATUS_FAILED = 'failed'
+    STATUS_EXPIRED = 'expired'
+    STATUS_ABANDONED = 'abandoned'
+    STATUS_CLOSED = 'closed'
+    STATUS_CLEANED = 'cleaned'
+    STATUS_CHOICES = (
+        STATUS_CREATED,
+        STATUS_ACTIVE,
+        STATUS_RESOLVING,
+        STATUS_COMPLETED,
+        STATUS_FAILED,
+        STATUS_EXPIRED,
+        STATUS_ABANDONED,
+        STATUS_CLOSED,
+        STATUS_CLEANED,
+    )
+    ACTIVE_STATUSES = (
+        STATUS_CREATED,
+        STATUS_ACTIVE,
+        STATUS_RESOLVING,
+    )
+
+    base_world = models.ForeignKey(
+        'worlds.World',
+        related_name='instance_runs_as_base',
+        on_delete=models.CASCADE)
+    template_world = models.ForeignKey(
+        'worlds.World',
+        related_name='instance_runs_as_template',
+        on_delete=models.CASCADE)
+    spawned_world = models.OneToOneField(
+        'worlds.World',
+        related_name='instance_run',
+        on_delete=models.CASCADE)
+    ref = models.TextField(db_index=True)
+    leader = models.ForeignKey(
+        'spawns.Player',
+        related_name='led_instance_runs',
+        on_delete=models.SET_NULL,
+        **optional)
+    status = models.TextField(
+        choices=list_to_choice(STATUS_CHOICES),
+        default=STATUS_ACTIVE,
+        db_index=True)
+    started_at = models.DateTimeField(**optional)
+    last_active_at = models.DateTimeField(**optional)
+    completed_at = models.DateTimeField(**optional)
+    failed_at = models.DateTimeField(**optional)
+    expires_at = models.DateTimeField(**optional)
+    closed_at = models.DateTimeField(**optional)
+    cleanup_after = models.DateTimeField(**optional)
+    goal_spec = models.JSONField(default=dict, blank=True)
+    progress = models.JSONField(default=dict, blank=True)
+    outcome = models.JSONField(default=dict, blank=True)
+    seed = models.TextField(blank=True)
+    initial_member_ids = models.JSONField(default=list, blank=True)
+
+    class Meta(BaseModel.Meta):
+        indexes = [
+            models.Index(fields=['status']),
+            models.Index(fields=['ref']),
+            models.Index(fields=['base_world', 'status']),
+            models.Index(fields=['template_world', 'status']),
+        ]
+
+    def __str__(self):
+        return "InstanceRun %s for %s" % (self.id, self.template_world)
+
+
+class InstanceParticipant(BaseModel):
+    ROLE_LEADER = 'leader'
+    ROLE_MEMBER = 'member'
+    ROLE_CHOICES = (
+        ROLE_LEADER,
+        ROLE_MEMBER,
+    )
+
+    run = models.ForeignKey(
+        'worlds.InstanceRun',
+        related_name='participants',
+        on_delete=models.CASCADE)
+    player = models.ForeignKey(
+        'spawns.Player',
+        related_name='instance_participations',
+        on_delete=models.CASCADE)
+    role = models.TextField(
+        choices=list_to_choice(ROLE_CHOICES),
+        default=ROLE_MEMBER,
+        db_index=True)
+    transfer_from = models.ForeignKey(
+        'worlds.Room',
+        related_name='instance_participants_from',
+        on_delete=models.SET_NULL,
+        **optional)
+    joined_at = models.DateTimeField(default=timezone.now)
+    exited_at = models.DateTimeField(**optional)
+
+    class Meta(BaseModel.Meta):
+        unique_together = ('run', 'player')
+        indexes = [
+            models.Index(fields=['player', 'exited_at']),
+            models.Index(fields=['run', 'exited_at']),
+            models.Index(fields=['role']),
+        ]
+
+    def __str__(self):
+        return "%s in %s" % (self.player, self.run)
 
 
 class WorldLocks(BaseModel):

@@ -868,6 +868,10 @@ def serialize_world(world: World) -> Dict:
 
     if not data.get("context"):
         data["context"] = world.context.key if world.context else world.key
+    data["context_id"] = world.context_id
+    data["instance_of_id"] = None
+    if world.context and world.context.instance_of_id:
+        data["instance_of_id"] = world.context.instance_of_id
 
     return data
 

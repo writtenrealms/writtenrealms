@@ -3,7 +3,7 @@ import re
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
-from django.db.models import F, Q
+from django.db.models import Count, F, Q
 from django.db.utils import IntegrityError
 from django.utils import timezone
 from django.utils.text import slugify
@@ -87,6 +87,7 @@ from users.models import User
 from worlds import serializers as world_serializers
 from worlds.models import (
     InstanceAssignment,
+    InstanceRun,
     World,
     WorldConfig,
     Zone,
@@ -515,12 +516,13 @@ class WorldAdminSerializer(serializers.ModelSerializer):
 
     stats = serializers.SerializerMethodField()
     spawned_worlds = serializers.SerializerMethodField()
+    instance_runs = serializers.SerializerMethodField()
 
     class Meta:
         model = World
         fields = [
             'id', 'name', 'is_multiplayer', 'maintenance_mode',
-            'stats', 'spawned_worlds',
+            'stats', 'spawned_worlds', 'instance_runs',
         ]
 
     def get_stats(self, world):
@@ -538,6 +540,28 @@ class WorldAdminSerializer(serializers.ModelSerializer):
             WorldAdminSpawnWorldSerializer(instance).data
             for instance in instances
         ]
+
+    def get_instance_runs(self, world):
+        runs = InstanceRun.objects.filter(
+            base_world=world,
+        ).exclude(
+            status=InstanceRun.STATUS_CLEANED,
+        ).annotate(
+            admin_participant_count=Count('participants'),
+            admin_active_participant_count=Count(
+                'participants',
+                filter=Q(participants__exited_at__isnull=True),
+            ),
+        ).select_related(
+            'template_world',
+            'spawned_world',
+            'leader',
+        ).order_by(
+            '-last_active_at',
+            '-started_at',
+            '-id',
+        )[:100]
+        return WorldAdminInstanceRunSerializer(runs, many=True).data
 
 
 class WorldAdminSpawnWorldSerializer(serializers.ModelSerializer):
@@ -569,6 +593,71 @@ class WorldAdminSpawnWorldSerializer(serializers.ModelSerializer):
         }
 
 
+class WorldAdminInstanceRunSerializer(serializers.ModelSerializer):
+    template_world = serializers.SerializerMethodField()
+    spawned_world = serializers.SerializerMethodField()
+    leader = serializers.SerializerMethodField()
+    participant_count = serializers.SerializerMethodField()
+    active_participant_count = serializers.SerializerMethodField()
+    is_active = serializers.SerializerMethodField()
+
+    class Meta:
+        model = InstanceRun
+        fields = [
+            'id',
+            'ref',
+            'status',
+            'is_active',
+            'started_at',
+            'last_active_at',
+            'completed_at',
+            'failed_at',
+            'expires_at',
+            'closed_at',
+            'cleanup_after',
+            'template_world',
+            'spawned_world',
+            'leader',
+            'participant_count',
+            'active_participant_count',
+        ]
+
+    def get_template_world(self, run):
+        return {
+            'id': run.template_world_id,
+            'name': run.template_world.name,
+        }
+
+    def get_spawned_world(self, run):
+        return {
+            'id': run.spawned_world_id,
+            'name': run.spawned_world.name,
+            'lifecycle': run.spawned_world.lifecycle,
+            'is_multiplayer': run.spawned_world.is_multiplayer,
+        }
+
+    def get_leader(self, run):
+        if not run.leader_id:
+            return None
+        return {
+            'id': run.leader_id,
+            'name': run.leader.name,
+        }
+
+    def get_participant_count(self, run):
+        if hasattr(run, 'admin_participant_count'):
+            return run.admin_participant_count
+        return run.participants.count()
+
+    def get_active_participant_count(self, run):
+        if hasattr(run, 'admin_active_participant_count'):
+            return run.admin_active_participant_count
+        return run.participants.filter(exited_at__isnull=True).count()
+
+    def get_is_active(self, run):
+        return run.status in InstanceRun.ACTIVE_STATUSES
+
+
 class WorldAdminInstancePlayerSerializer(serializers.ModelSerializer):
     room = serializers.SerializerMethodField()
 
@@ -597,6 +686,7 @@ class WorldAdminInstanceSerializer(serializers.ModelSerializer):
     context_world = serializers.SerializerMethodField()
     parent_world = serializers.SerializerMethodField()
     leader = serializers.SerializerMethodField()
+    instance_run = serializers.SerializerMethodField()
     world_state = serializers.SerializerMethodField()
     lifecycle_details = serializers.SerializerMethodField()
     loader_details = serializers.SerializerMethodField()
@@ -614,6 +704,7 @@ class WorldAdminInstanceSerializer(serializers.ModelSerializer):
             'context_world',
             'parent_world',
             'leader',
+            'instance_run',
             'world_state',
             'lifecycle_details',
             'loader_details',
@@ -650,6 +741,29 @@ class WorldAdminInstanceSerializer(serializers.ModelSerializer):
         return {
             'id': spawn_world.leader_id,
             'name': spawn_world.leader.name,
+        }
+
+    def get_instance_run(self, spawn_world):
+        try:
+            run = spawn_world.instance_run
+        except InstanceRun.DoesNotExist:
+            return None
+
+        active_participants = run.participants.filter(exited_at__isnull=True)
+        return {
+            'id': run.id,
+            'ref': run.ref,
+            'status': run.status,
+            'started_at': run.started_at,
+            'last_active_at': run.last_active_at,
+            'completed_at': run.completed_at,
+            'failed_at': run.failed_at,
+            'expires_at': run.expires_at,
+            'closed_at': run.closed_at,
+            'cleanup_after': run.cleanup_after,
+            'participant_count': run.participants.count(),
+            'active_participant_count': active_participants.count(),
+            'initial_member_ids': run.initial_member_ids,
         }
 
     def get_world_state(self, spawn_world):
@@ -710,6 +824,11 @@ class WorldAdminInstanceSerializer(serializers.ModelSerializer):
             'instance_assignments': InstanceAssignment.objects.filter(
                 instance=spawn_world
             ).count(),
+            'instance_participants': getattr(
+                spawn_world,
+                'instance_run',
+                None
+            ).participants.count() if hasattr(spawn_world, 'instance_run') else 0,
             'items_by_container_type': {
                 'rooms': active_items_qs.filter(
                     container_type_id=room_ct_id

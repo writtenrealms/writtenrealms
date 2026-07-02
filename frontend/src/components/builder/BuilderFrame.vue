@@ -154,9 +154,10 @@
 </template>
 
 <script lang='ts' setup>
-import { computed, onMounted, onUnmounted } from 'vue';
+import { computed, onUnmounted, watch } from 'vue';
 import { useStore } from 'vuex';
 import { useRoute } from 'vue-router';
+import axios from 'axios';
 
 const store = useStore();
 const route = useRoute();
@@ -166,6 +167,20 @@ const worldId = computed(() => route.params.world_id);
 const room = computed(() => store.state.builder.room);
 const zone = computed(() => store.state.builder.zone);
 const map = computed(() => store.state.builder.map);
+let worldContextLoadId = 0;
+
+const routeParam = (param) => {
+  return Array.isArray(param) ? param[0] : param;
+};
+
+const routeWorldId = computed(() => routeParam(route.params.world_id));
+
+const cancelPendingBuilderRequest = () => {
+  if (store.state.builder.cancelPreviousRequest) {
+    store.state.builder.cancelPreviousRequest();
+  }
+};
+
 const world_admin_link = computed(() => {
     return {
       name: 'builder_world_admin',
@@ -179,18 +194,26 @@ const world_factions_link = computed(() => {
   };
 });
 
-const fetchWorldInfo = async () => {
-  store.dispatch(
-    'builder/fetch_world_map',
-    route.params.world_id)
+const fetchWorldInfo = async (worldId) => {
+  const loadId = ++worldContextLoadId;
+  cancelPendingBuilderRequest();
+  store.commit('builder/reset_state');
 
-  const world = await store.dispatch(
-    'builder/fetch_world',
-    route.params.world_id
-  );
+  const [worldResp, mapResp] = await Promise.all([
+    axios.get(`/builder/worlds/${worldId}/`),
+    axios.get(`/builder/worlds/${worldId}/map/`),
+  ]);
 
-  if (!store.state.builder.room) {
-    const room = world.last_viewed_room;
+  if (loadId !== worldContextLoadId || String(routeWorldId.value) !== String(worldId)) {
+    return null;
+  }
+
+  const world = worldResp.data;
+  store.commit('builder/world_set', world);
+  store.commit('builder/map_set', mapResp.data.rooms);
+
+  const room = world.last_viewed_room;
+  if (room) {
     store.commit('builder/room_set', room);
     store.commit('builder/zone_set', room.zone);
   }
@@ -198,12 +221,19 @@ const fetchWorldInfo = async () => {
   return world;
 };
 
-onMounted(async () => {
-  return await fetchWorldInfo();
-});
+watch(
+  routeWorldId,
+  async (worldId) => {
+    if (!worldId) return;
+    await fetchWorldInfo(worldId);
+  },
+  { immediate: true },
+);
 
 onUnmounted(async () => {
-  await store.commit('builder/reset_state');
+  worldContextLoadId += 1;
+  cancelPendingBuilderRequest();
+  store.commit('builder/reset_state');
 });
 
 const viewType = computed(() => {

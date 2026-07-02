@@ -2,11 +2,12 @@ import yaml
 
 from django.urls import reverse
 
-from builders.models import MobDefinition, Path, PathRoom, SpawnEntry, SpawnPlan, SpawnPlacement, SpawnPlanRun
+from builders.models import MobDefinition, MobTemplate, Path, PathRoom, SpawnEntry, SpawnPlan, SpawnPlacement, SpawnPlanRun
 from config import constants as adv_consts
 from spawns.loading import run_loaders
 from spawns.models import Mob
 from tests.base import WorldTestCase
+from worlds.models import World, WorldConfig
 from worlds.services import WorldSmith
 
 
@@ -244,6 +245,85 @@ spec:
         self.assertEqual(resp.status_code, 400)
         self.assertFalse(SpawnPlan.objects.filter(world=self.world, slug="broken-plan").exists())
 
+    def test_apply_spawn_plan_manifest_on_instance_resolves_base_world_source(self):
+        instance_template = World.objects.new_world(
+            name="Training Instance",
+            author=self.user,
+            config=WorldConfig.objects.create(),
+            is_multiplayer=True,
+            instance_of=self.world,
+        )
+        instance_zone = instance_template.zones.get()
+        instance_room = instance_zone.rooms.get()
+        apply_ep = reverse("builder-world-manifest-apply", args=[instance_template.pk])
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: instance-training-grounds
+  name: Instance Training Grounds
+spec:
+  zone: zone@{instance_zone.relative_id}
+  respawn:
+    mode: none
+  entries:
+    - slug: practice-dummy
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{instance_room.x},{instance_room.y},{instance_room.z}
+      count: 1
+"""
+
+        resp = self.client.post(apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertFalse(
+            MobDefinition.objects.filter(
+                world=instance_template,
+                slug=self.mob_definition.slug,
+            ).exists()
+        )
+        plan = SpawnPlan.objects.get(world=instance_template, slug="instance-training-grounds")
+        self.assertEqual(plan.zone, instance_zone)
+        entry = plan.entries.get(slug="practice-dummy")
+        self.assertEqual(entry.source, "mobdefinition.practice-dummy")
+        self.assertEqual(entry.target["room"], f"room@{instance_room.x},{instance_room.y},{instance_room.z}")
+
+    def test_apply_spawn_plan_manifest_on_instance_rejects_legacy_source(self):
+        instance_template = World.objects.new_world(
+            name="Training Instance",
+            author=self.user,
+            config=WorldConfig.objects.create(),
+            is_multiplayer=True,
+            instance_of=self.world,
+        )
+        instance_zone = instance_template.zones.get()
+        instance_room = instance_zone.rooms.get()
+        MobTemplate.objects.create(
+            world=instance_template,
+            slug="legacy-dummy",
+            name="legacy dummy",
+        )
+        apply_ep = reverse("builder-world-manifest-apply", args=[instance_template.pk])
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: legacy-instance-plan
+  name: Legacy Instance Plan
+spec:
+  zone: zone@{instance_zone.relative_id}
+  entries:
+    - slug: legacy-dummy
+      source: mobtemplate.legacy-dummy
+      target:
+        room: room@{instance_room.x},{instance_room.y},{instance_room.z}
+      count: 1
+"""
+
+        resp = self.client.post(apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(SpawnPlan.objects.filter(world=instance_template, slug="legacy-instance-plan").exists())
+
     def test_apply_spawn_plan_manifest_accepts_path_ref_target(self):
         path = Path.objects.create(
             world=self.world,
@@ -454,6 +534,56 @@ class TestSpawnPlanRuntime(WorldTestCase):
         self.assertEqual(mob.room, self.room)
         placement = SpawnPlacement.objects.get(run__plan=self.plan)
         self.assertEqual(placement.room, self.room)
+
+    def test_world_start_resolves_zone_ref_targets(self):
+        self.entry.target = {"zone": f"zone@{self.zone.relative_id}"}
+        self.entry.save(update_fields=["target"])
+        spawn_world = self.world.create_spawn_world()
+
+        WorldSmith(spawn_world).start()
+
+        mob = Mob.objects.get(world=spawn_world, definition=self.mob_definition)
+        self.assertEqual(mob.room.zone, self.zone)
+        placement = SpawnPlacement.objects.get(run__plan=self.plan)
+        self.assertEqual(placement.room.zone, self.zone)
+
+    def test_instance_spawn_plan_runtime_resolves_base_world_source(self):
+        instance_template = World.objects.new_world(
+            name="Training Instance",
+            author=self.user,
+            config=WorldConfig.objects.create(),
+            is_multiplayer=True,
+            instance_of=self.world,
+        )
+        instance_zone = instance_template.zones.get()
+        instance_room = instance_zone.rooms.get()
+        plan = SpawnPlan.objects.create(
+            world=instance_template,
+            zone=instance_zone,
+            slug="instance-training-grounds",
+            name="Instance Training Grounds",
+            respawn_policy={"mode": "none"},
+        )
+        SpawnEntry.objects.create(
+            plan=plan,
+            slug="practice-dummy",
+            source=f"mobdefinition.{self.mob_definition.slug}",
+            target={"room": f"room@{instance_room.x},{instance_room.y},{instance_room.z}"},
+            count=1,
+        )
+        spawned_instance = instance_template.create_spawn_world(
+            instance_ref="training-instance",
+            leader=self.player,
+        )
+
+        WorldSmith(spawned_instance).start()
+
+        mob = Mob.objects.get(world=spawned_instance, definition=self.mob_definition)
+        self.assertEqual(mob.room, instance_room)
+        run = SpawnPlanRun.objects.get(spawn_world=spawned_instance, plan=plan)
+        placement = run.placements.get()
+        self.assertEqual(placement.source_type, "mobdefinition")
+        self.assertEqual(placement.source_id, self.mob_definition.id)
 
     def test_run_loaders_reconciles_missing_spawn_plan_copy(self):
         spawn_world = self.world.create_spawn_world()

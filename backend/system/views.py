@@ -636,7 +636,8 @@ class EnterInstance(SystemView):
         except (KeyError, Player.DoesNotExist):
             raise serializers.ValidationError("Player does not exist.")
 
-        if player.player_instances.count() >= 2:
+        from worlds.instances import active_participation_count
+        if active_participation_count(player) >= 2:
             raise serializers.ValidationError("Too many instance assignments.")
 
         # Validate the reference if there is one, which could either be the

@@ -461,8 +461,8 @@ def _get_builder_admin_spawn_world(root_world, pk):
             'leader',
             'worldlocks',
         ),
+        Q(context=root_world) | Q(context__instance_of=root_world),
         pk=pk,
-        context=root_world,
     )
 
 

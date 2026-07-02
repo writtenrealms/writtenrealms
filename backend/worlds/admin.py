@@ -4,6 +4,8 @@ from core.admin import BaseAdmin, DirectRootWorldFilter
 from worlds.models import (
     Door,
     InstanceAssignment,
+    InstanceParticipant,
+    InstanceRun,
     Room,
     RoomFlag,
     RoomDetail,
@@ -129,6 +131,27 @@ class InstanceAssignmentAdmin(BaseAdmin):
     raw_id_fields = ['instance', 'player', 'transfer_from', 'leader']
 
 
+class InstanceRunAdmin(BaseAdmin):
+    list_display = [
+        'id',
+        'template_world',
+        'spawned_world',
+        'status',
+        'leader',
+        'started_at',
+        'last_active_at',
+    ]
+    list_filter = ['status']
+    raw_id_fields = ['base_world', 'template_world', 'spawned_world', 'leader']
+    search_fields = ['id', 'ref', 'template_world__name', 'spawned_world__name']
+
+
+class InstanceParticipantAdmin(BaseAdmin):
+    list_display = ['id', 'run', 'player', 'role', 'transfer_from', 'joined_at', 'exited_at']
+    list_filter = ['role']
+    raw_id_fields = ['run', 'player', 'transfer_from']
+
+
 admin.site.register(World, WorldAdmin)
 admin.site.register(WorldConfig, WorldConfigAdmin)
 admin.site.register(Zone, ZoneAdmin)
@@ -139,3 +162,5 @@ admin.site.register(StartingEq, StartingEqAdmin)
 admin.site.register(Door, DoorAdmin)
 admin.site.register(WorldURL, WorldURLAdmin)
 admin.site.register(InstanceAssignment, InstanceAssignmentAdmin)
+admin.site.register(InstanceRun, InstanceRunAdmin)
+admin.site.register(InstanceParticipant, InstanceParticipantAdmin)

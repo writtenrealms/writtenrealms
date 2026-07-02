@@ -31,17 +31,67 @@
           </div>
         </div>
 
-        <div>
-          <h3 class="mt-8 mb-2">SPAWNED WORLDS</h3>
-          <div v-for="spawn_world in world_admin.spawned_worlds" v-bind:key="spawn_world.id">
-            <div class="mb-2">
-              <router-link :to="admin_instance_link(spawn_world.id)">{{ spawn_world.id }}</router-link> - {{ spawn_world.name }} <span class="color-text-50 ml-2">[ {{ spawn_world.lifecycle }} ]</span>
+        <div class="admin-section mt-8">
+          <div class="section-heading">
+            <h3>SPAWNED WORLDS</h3>
+            <div class="color-text-50">{{ spawnedWorlds.length }} total</div>
+          </div>
+
+          <div v-if="spawnedWorlds.length" class="admin-list">
+            <div v-for="spawn_world in spawnedWorlds" v-bind:key="spawn_world.id" class="admin-row">
+              <div class="admin-row-main">
+                <div>
+                  <router-link :to="admin_instance_link(spawn_world.id)">#{{ spawn_world.id }}</router-link>
+                  - {{ spawn_world.name }}
+                  <span class="color-text-50 ml-2">[ {{ spawn_world.lifecycle }} ]</span>
+                </div>
+                <div class="meta-row color-text-60">
+                  {{ spawn_world.forge_data.num_players }} players,
+                  {{ spawn_world.forge_data.num_mobs }} mobs,
+                  {{ spawn_world.forge_data.num_items }} items
+                </div>
+              </div>
+              <div class="actions">
+                <button class="btn btn-small start" :disabled="disableStart(spawn_world)" @click="onStart(spawn_world)">START</button>
+                <button class="btn btn-small stop ml-2" :disabled="disableStop(spawn_world)" @click="onStop(spawn_world)">STOP</button>
+              </div>
             </div>
-            <div class="actions">
-              <button class="btn btn-small start" :disabled="disableStart(spawn_world)" @click="onStart(spawn_world)">START</button>
-              <button class="btn btn-small stop ml-2" :disabled="disableStop(spawn_world)" @click="onStop(spawn_world)">STOP</button>
-              <!-- <button class="btn btn-small kill ml-2" :disabled="disableKill(spawn_world)" @click="onKill(spawn_world)">KILL</button> -->
+          </div>
+          <div v-else class="empty-state color-text-60">
+            No spawned worlds for this world.
+          </div>
+        </div>
+
+        <div class="admin-section mt-8">
+          <div class="section-heading">
+            <h3>SPAWNED INSTANCES</h3>
+            <div class="color-text-50">{{ instanceRuns.length }} total</div>
+          </div>
+
+          <div v-if="instanceRuns.length" class="admin-list">
+            <div v-for="run in instanceRuns" v-bind:key="run.id" class="admin-row">
+              <div class="admin-row-main">
+                <div>
+                  <router-link :to="admin_instance_link(run.spawned_world.id)">
+                    #{{ run.spawned_world.id }}
+                  </router-link>
+                  - {{ run.template_world.name }}
+                  <span class="color-text-50 ml-2">[ {{ run.status }} / {{ run.spawned_world.lifecycle }} ]</span>
+                </div>
+                <div class="meta-row color-text-60">
+                  Ref {{ run.ref || "none" }},
+                  {{ run.active_participant_count }}/{{ run.participant_count }} active participants,
+                  last active {{ formatTimestamp(run.last_active_at) }}
+                </div>
+              </div>
+              <div class="actions">
+                <button class="btn btn-small start" :disabled="disableStart(run.spawned_world)" @click="onStart(run.spawned_world)">START</button>
+                <button class="btn btn-small stop ml-2" :disabled="disableStop(run.spawned_world)" @click="onStop(run.spawned_world)">STOP</button>
+              </div>
             </div>
+          </div>
+          <div v-else class="empty-state color-text-60">
+            No spawned instances for this world.
           </div>
         </div>
 
@@ -71,14 +121,16 @@ const route = useRoute();
 
 // Index of which worlds have an action that was just fired off, so that we
 // can disable the other actions in order not to spam the server.
-const action_submitted = ref({});
+const action_submitted = ref<Record<number, boolean>>({});
 const maintenance_msg = ref('');
 
-const root_world: any = computed(() => store.state.builder.world);
-const world_admin = computed(() => store.state.builder.worlds.admin.world_admin);
+const root_world = computed<any>(() => store.state.builder.world);
+const world_admin = computed<any>(() => store.state.builder.worlds.admin.world_admin);
+const spawnedWorlds = computed<any[]>(() => world_admin.value?.spawned_worlds || []);
+const instanceRuns = computed<any[]>(() => world_admin.value?.instance_runs || []);
 
 onMounted(async () => {
-  maintenance_msg.value = root_world.maintenance_msg;
+  maintenance_msg.value = root_world.value.maintenance_msg || '';
 
   await store.dispatch('forge/send', {
     'type': 'sub',
@@ -100,7 +152,7 @@ onUnmounted(async () => {
   })
 });
 
-const admin_instance_link = (instance_id) => {
+const admin_instance_link = (instance_id: number | string) => {
   return {
     name: 'builder_world_admin_instance',
     params: {
@@ -110,17 +162,19 @@ const admin_instance_link = (instance_id) => {
   }
 };
 
-const disableStart = (instance) => {
+const disableStart = (instance: any) => {
+  if (action_submitted.value[instance.id]) return true;
   if (instance.lifecycle == 'stopped' || instance.lifecycle == 'new') return false;
   return true;
 };
 
-const disableStop = (instance) => {
+const disableStop = (instance: any) => {
+  if (action_submitted.value[instance.id]) return true;
   if (instance.lifecycle == 'running') return false;
   return true;
 };
 
-const onStart = async (instance) => {
+const onStart = async (instance: any) => {
   action_submitted.value[instance.id] = true;
   store.commit('ui/notification_set', {
     text: "Starting world, this may take a minute...",
@@ -135,7 +189,7 @@ const onStart = async (instance) => {
   action_submitted.value[instance.id] = false;
 };
 
-const onStop = async (instance) => {
+const onStop = async (instance: any) => {
   action_submitted.value[instance.id] = true;
   store.commit('ui/notification_set', {
     text: "Stopping world, this may take a minute...",
@@ -158,6 +212,19 @@ const onSliderChange = async (newValue: boolean) => {
     });
 };
 
+const formatTimestamp = (value: string | null | undefined) => {
+  if (!value) {
+    return 'never';
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return parsed.toLocaleString();
+};
+
 </script>
 
 <style lang="scss" scoped>
@@ -167,6 +234,48 @@ const onSliderChange = async (newValue: boolean) => {
   color: $color-text-half;
   border-color: $color-text-half;
   cursor: not-allowed;
+}
+
+.admin-section {
+  width: 100%;
+  max-width: 920px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.section-heading h3 {
+  margin: 0;
+}
+
+.admin-list {
+  border-top: 1px solid $color-background-light-border;
+}
+
+.admin-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 12px 0;
+  border-bottom: 1px solid $color-background-light-border;
+}
+
+.admin-row-main {
+  min-width: 0;
+}
+
+.meta-row {
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+.empty-state {
+  padding: 10px 0;
 }
 
 .world-status {

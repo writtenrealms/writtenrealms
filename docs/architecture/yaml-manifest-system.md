@@ -147,6 +147,13 @@ respawn behavior, live in:
 
 - [docs/guides/spawn-plan-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/spawn-plan-builder-guide.md)
 
+Instance architecture, including inherited base-world content, instance-local
+layout/config overrides, goals, timers, leaderboards, and cleanup policy, lives
+in:
+
+- [docs/architecture/instance-system.md](/Users/teebes/code/writtenrealms/docs/architecture/instance-system.md)
+- [docs/guides/instance-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/instance-builder-guide.md)
+
 Mob trait architecture, including the rename from the earlier draft term
 `affixes` to `traits`, lives in:
 
