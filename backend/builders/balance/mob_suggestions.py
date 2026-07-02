@@ -30,7 +30,7 @@ TYPE_MODIFIERS: dict[str, TypeModifier] = {
     adv_consts.MOB_TYPE_BEAST: TypeModifier(
         health=1.1,
         attack_power=1.15,
-        armor=0.75,
+        armor=1.1,
         dodge=1.1,
         crit=0.8,
         resilience=0.5,
@@ -65,6 +65,13 @@ TYPE_MODIFIERS: dict[str, TypeModifier] = {
         dodge=0.75,
         resilience=1.1,
     ),
+}
+
+STANDARD_RATING_PERCENT_TARGETS = {
+    "armor": 8.0,
+    "dodge": 7.0,
+    "crit": 5.0,
+    "resilience": 3.0,
 }
 
 
@@ -142,6 +149,70 @@ def _rating_preview(
     )
 
 
+def _rating_from_percent(
+    *,
+    rating_key: str,
+    percent: float,
+    level: int,
+    combat_system: dict[str, Any],
+) -> int | None:
+    rating_config = (combat_system.get("ratings") or {}).get(rating_key)
+    if not rating_config:
+        return None
+
+    target = max(0.0, float(percent) / 100.0)
+    base = float(rating_config["base"])
+    cap = float(rating_config["cap"])
+    target = min(cap, target)
+    if target <= base:
+        return 0
+
+    if rating_config["type"] == "percentage_points":
+        return _ceil_stat((target - base) * 100.0)
+
+    constant = float(rating_config["constant"])
+    scale = max(0.0001, _level_scale(level, combat_system))
+    scaled_constant = scale * constant
+
+    if rating_config["type"] == "linear_rating":
+        return _ceil_stat((target - base) * scaled_constant)
+
+    denominator = 1.0 - target
+    if denominator <= 0:
+        return None
+    return _ceil_stat(scaled_constant * (target - base) / denominator)
+
+
+def _apply_requested_rating_percents(
+    *,
+    stats: dict[str, int],
+    rating_percents: dict[str, float | int | None] | None,
+    level: int,
+    combat_system: dict[str, Any],
+) -> None:
+    for rating_key, percent in (rating_percents or {}).items():
+        if percent is None or rating_key not in stats:
+            continue
+        rating = _rating_from_percent(
+            rating_key=rating_key,
+            percent=float(percent),
+            level=level,
+            combat_system=combat_system,
+        )
+        if rating is not None:
+            stats[rating_key] = rating
+
+
+def _default_rating_percents(*, mob_type: str) -> dict[str, float]:
+    modifier = TYPE_MODIFIERS.get(mob_type, TypeModifier())
+    return {
+        "armor": STANDARD_RATING_PERCENT_TARGETS["armor"] * modifier.armor,
+        "dodge": STANDARD_RATING_PERCENT_TARGETS["dodge"] * modifier.dodge,
+        "crit": STANDARD_RATING_PERCENT_TARGETS["crit"] * modifier.crit,
+        "resilience": STANDARD_RATING_PERCENT_TARGETS["resilience"] * modifier.resilience,
+    }
+
+
 def _diagnostics(*, world, stat_system: dict[str, Any]) -> list[str]:
     diagnostics = ["Generated direct mob stats; no attributes emitted."]
     if not stat_system.get("class_profiles"):
@@ -185,6 +256,7 @@ def suggest_mob_definition_manifest(
     slug: str,
     mob_type: str,
     level: int,
+    rating_percents: dict[str, float | int | None] | None = None,
 ) -> dict[str, Any]:
     context_world = _context_world(world)
     normalized_level = clamp_level(level, get_world_leveling_config(context_world))
@@ -195,6 +267,18 @@ def suggest_mob_definition_manifest(
         level=normalized_level,
         mob_type=mob_type,
         scale=scale,
+    )
+    _apply_requested_rating_percents(
+        stats=stats,
+        rating_percents=_default_rating_percents(mob_type=mob_type),
+        level=normalized_level,
+        combat_system=combat_system,
+    )
+    _apply_requested_rating_percents(
+        stats=stats,
+        rating_percents=rating_percents,
+        level=normalized_level,
+        combat_system=combat_system,
     )
     keywords = _slug_keywords(slug)
     room_description = f"{_capitalize_sentence(name)} is here." if name else ""

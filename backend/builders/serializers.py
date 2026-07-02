@@ -2527,9 +2527,33 @@ class MobDefinitionSuggestionSerializer(serializers.Serializer):
     slug = serializers.SlugField(max_length=120)
     type = serializers.ChoiceField(
         choices=adv_consts.MOB_TYPES,
-        default=adv_consts.MOB_TYPE_BEAST,
+        default=adv_consts.MOB_TYPE_HUMANOID,
     )
     level = serializers.IntegerField(default=1, min_value=1)
+    crit_percent = serializers.FloatField(
+        required=False,
+        allow_null=True,
+        min_value=0,
+        max_value=100,
+    )
+    resilience_percent = serializers.FloatField(
+        required=False,
+        allow_null=True,
+        min_value=0,
+        max_value=100,
+    )
+    armor_percent = serializers.FloatField(
+        required=False,
+        allow_null=True,
+        min_value=0,
+        max_value=100,
+    )
+    dodge_percent = serializers.FloatField(
+        required=False,
+        allow_null=True,
+        min_value=0,
+        max_value=100,
+    )
 
 
 class RandomItemProfileSerializer(serializers.ModelSerializer):

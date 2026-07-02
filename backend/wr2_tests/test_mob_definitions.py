@@ -490,6 +490,88 @@ class TestMobDefinitionBuilderEndpoints(WorldTestCase):
             resp.data["suggested_stats"]["health_max"],
         )
 
+    def test_suggest_mob_definition_uses_standard_rating_percent_defaults(self):
+        resp = self.client.post(
+            self.suggestion_ep,
+            {
+                "name": "a guard",
+                "slug": "guard",
+                "type": adv_consts.MOB_TYPE_HUMANOID,
+                "level": 4,
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        stats = resp.data["suggested_stats"]
+        for rating_key in ("crit", "resilience", "armor", "dodge"):
+            self.assertEqual(resp.data["manifest"]["spec"][rating_key], stats[rating_key])
+            self.assertGreater(stats[rating_key], 0)
+
+        preview = resp.data["combat_preview"]
+        self.assertAlmostEqual(preview["same_level_armor_mitigation"], 0.08, delta=0.01)
+        self.assertAlmostEqual(preview["same_level_dodge_chance"], 0.07, delta=0.01)
+        self.assertAlmostEqual(preview["same_level_crit_chance"], 0.05, delta=0.01)
+        self.assertAlmostEqual(preview["same_level_resilience_mitigation"], 0.03, delta=0.01)
+
+    def test_suggest_mob_definition_gives_beasts_more_armor_than_humanoids(self):
+        humanoid_resp = self.client.post(
+            self.suggestion_ep,
+            {
+                "name": "a guard",
+                "slug": "guard",
+                "type": adv_consts.MOB_TYPE_HUMANOID,
+                "level": 4,
+            },
+            format="json",
+        )
+        beast_resp = self.client.post(
+            self.suggestion_ep,
+            {
+                "name": "a wolf",
+                "slug": "wolf",
+                "type": adv_consts.MOB_TYPE_BEAST,
+                "level": 4,
+            },
+            format="json",
+        )
+
+        self.assertEqual(humanoid_resp.status_code, 200, humanoid_resp.data)
+        self.assertEqual(beast_resp.status_code, 200, beast_resp.data)
+        self.assertGreater(
+            beast_resp.data["combat_preview"]["same_level_armor_mitigation"],
+            humanoid_resp.data["combat_preview"]["same_level_armor_mitigation"],
+        )
+
+    def test_suggest_mob_definition_converts_rating_percentages(self):
+        resp = self.client.post(
+            self.suggestion_ep,
+            {
+                "name": "a cave wolf",
+                "slug": "cave-wolf",
+                "type": adv_consts.MOB_TYPE_BEAST,
+                "level": 4,
+                "crit_percent": 10,
+                "resilience_percent": 20,
+                "armor_percent": 25,
+                "dodge_percent": 15,
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        stats = resp.data["suggested_stats"]
+        spec = resp.data["manifest"]["spec"]
+        for rating_key in ("crit", "resilience", "armor", "dodge"):
+            self.assertEqual(spec[rating_key], stats[rating_key])
+            self.assertGreater(stats[rating_key], 0)
+
+        preview = resp.data["combat_preview"]
+        self.assertAlmostEqual(preview["same_level_crit_chance"], 0.10, delta=0.01)
+        self.assertAlmostEqual(preview["same_level_resilience_mitigation"], 0.20, delta=0.01)
+        self.assertAlmostEqual(preview["same_level_armor_mitigation"], 0.25, delta=0.01)
+        self.assertAlmostEqual(preview["same_level_dodge_chance"], 0.15, delta=0.01)
+
     def test_suggest_mob_definition_validates_level(self):
         resp = self.client.post(
             self.suggestion_ep,

@@ -4626,6 +4626,12 @@ class MobDefinitionSuggestion(BaseWorldBuilderView):
                 slug=serializer.validated_data["slug"],
                 mob_type=serializer.validated_data["type"],
                 level=serializer.validated_data["level"],
+                rating_percents={
+                    "crit": serializer.validated_data.get("crit_percent"),
+                    "resilience": serializer.validated_data.get("resilience_percent"),
+                    "armor": serializer.validated_data.get("armor_percent"),
+                    "dodge": serializer.validated_data.get("dodge_percent"),
+                },
             )
         except LevelingConfigError as exc:
             raise serializers.ValidationError({"level": [str(exc)]})

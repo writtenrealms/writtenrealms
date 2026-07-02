@@ -8,6 +8,24 @@ Use `kind: mobdefinition` for one authored mob. The legacy `MobTemplate` editor
 still exists at `/mobtemplates` for old content and specialized legacy surfaces,
 but new mob authoring should start here.
 
+## Add Mob Suggestions
+
+Use **World > Mobs > Add** to open the Add Mob modal. The form accepts name,
+slug, type, level, and optional target percentages for `crit`, `resilience`,
+`armor`, and `dodge`.
+
+When a percentage is supplied, the suggestion endpoint converts it into the
+direct rating needed at the entered level using the world's combat rating
+curves. Empty percentage fields keep the normal suggested rating defaults. The
+modal shows those defaults as same-level percentages for the selected level and
+type. The generated YAML still opens in **World > Edit** for review before
+applying.
+
+Standard humanoid suggestions target `8%` armor, `7%` dodge, `5%` crit, and
+`3%` resilience before converting those targets into level-appropriate ratings.
+Other mob types apply their type modifiers to those targets; for example,
+beasts receive more natural armor and dodge but less crit and resilience.
+
 ## Plain Mobs
 
 A mob definition with no `randomization` creates stable mobs. Mobs never stack in
