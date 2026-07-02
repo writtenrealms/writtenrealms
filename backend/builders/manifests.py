@@ -64,6 +64,10 @@ from core.stat_system import (
     get_world_stat_system,
     normalize_stat_system,
 )
+from core.world_config import (
+    INSTANCE_INHERITED_MANIFEST_FIELDS,
+    INSTANCE_LOCAL_MANIFEST_FIELDS,
+)
 from spawns import trigger_matcher
 from worlds.models import Room, World, Zone
 
@@ -162,6 +166,7 @@ _WORLD_CONFIG_CONFIG_INT_FIELDS = (
 )
 _WORLD_CONFIG_CONFIG_FLOAT_FIELDS = (
     "combat_resolution_interval",
+    "death_gold_penalty",
 )
 _WORLD_CONFIG_CONFIG_CHOICE_FIELDS = {
     "death_mode": adv_consts.DEATH_MODES,
@@ -739,24 +744,13 @@ def world_config_to_manifest(
     if not config:
         raise serializers.ValidationError("World has no config to serialize.")
 
+    is_instance_world = bool(getattr(world, "instance_of_id", None))
     spec = {
         "name": world.name or "",
         "short_description": world.short_description or "",
         "description": world.description or "",
         "motd": world.motd or "",
         "is_public": bool(world.is_public),
-        "starting_gold": int(config.starting_gold),
-        "starting_level": int(config.starting_level),
-        _WORLD_CONFIG_LEVELING_FIELD: normalize_leveling_curve(
-            config.leveling_curve
-        ),
-        _WORLD_CONFIG_ABILITY_PROGRESS_FIELD: normalize_ability_progression(
-            config.ability_progression
-        ),
-        "max_level": int(config.max_level),
-        "combat_resolution_interval": _serialize_number(
-            config.combat_resolution_interval
-        ),
         "starting_room": _serialize_world_room_reference(
             room=config.starting_room,
             mode=room_reference_mode,
@@ -767,29 +761,47 @@ def world_config_to_manifest(
         ),
         "death_mode": config.death_mode,
         "death_route": config.death_route,
+        "death_gold_penalty": _serialize_number(config.death_gold_penalty),
         "pvp_mode": config.pvp_mode,
-        "can_select_faction": bool(config.can_select_faction),
-        "auto_equip": bool(config.auto_equip),
-        "is_narrative": bool(config.is_narrative),
-        "players_can_set_title": bool(config.players_can_set_title),
         "allow_pvp": bool(config.allow_pvp),
-        "non_ascii_names": bool(config.non_ascii_names),
-        "globals_enabled": bool(config.globals_enabled),
-        "decay_glory": bool(config.decay_glory),
         "built_by": config.built_by or "",
         "small_background": config.small_background or "",
         "large_background": config.large_background or "",
-        "name_exclusions": config.name_exclusions or "",
     }
-    stat_system = _export_stat_system(world)
-    if stat_system:
-        spec[_WORLD_CONFIG_STATS_FIELD] = stat_system
-    combat_system = _export_combat_system(world)
-    if combat_system:
-        spec[_WORLD_CONFIG_COMBAT_FIELD] = combat_system
-    equipment_system = _export_equipment_system(world)
-    if equipment_system:
-        spec[_WORLD_CONFIG_EQUIPMENT_FIELD] = equipment_system
+    if not is_instance_world:
+        spec.update(
+            {
+                "starting_gold": int(config.starting_gold),
+                "starting_level": int(config.starting_level),
+                _WORLD_CONFIG_LEVELING_FIELD: normalize_leveling_curve(
+                    config.leveling_curve
+                ),
+                _WORLD_CONFIG_ABILITY_PROGRESS_FIELD: normalize_ability_progression(
+                    config.ability_progression
+                ),
+                "max_level": int(config.max_level),
+                "combat_resolution_interval": _serialize_number(
+                    config.combat_resolution_interval
+                ),
+                "is_narrative": bool(config.is_narrative),
+                "can_select_faction": bool(config.can_select_faction),
+                "auto_equip": bool(config.auto_equip),
+                "players_can_set_title": bool(config.players_can_set_title),
+                "non_ascii_names": bool(config.non_ascii_names),
+                "globals_enabled": bool(config.globals_enabled),
+                "decay_glory": bool(config.decay_glory),
+                "name_exclusions": config.name_exclusions or "",
+            }
+        )
+        stat_system = _export_stat_system(world)
+        if stat_system:
+            spec[_WORLD_CONFIG_STATS_FIELD] = stat_system
+        combat_system = _export_combat_system(world)
+        if combat_system:
+            spec[_WORLD_CONFIG_COMBAT_FIELD] = combat_system
+        equipment_system = _export_equipment_system(world)
+        if equipment_system:
+            spec[_WORLD_CONFIG_EQUIPMENT_FIELD] = equipment_system
 
     manifest = {
         "kind": manifest_kind,
@@ -826,12 +838,55 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
     if not config:
         raise serializers.ValidationError("World has no config to serialize.")
 
+    is_instance_world = bool(getattr(world, "instance_of_id", None))
     manifest_data = serialize_world_config_manifest(
         world=world,
         manifest_kind=WORLD_MANIFEST_KIND,
         include_metadata=False,
         room_reference_mode="coords",
     )
+    config_payload = {
+        "starting_room": _serialize_room_reference(config.starting_room),
+        "death_room": _serialize_room_reference(config.death_room),
+        "death_mode": config.death_mode,
+        "death_route": config.death_route,
+        "death_gold_penalty": _serialize_number(config.death_gold_penalty),
+        "small_background": config.small_background or "",
+        "large_background": config.large_background or "",
+        "allow_pvp": bool(config.allow_pvp),
+        "pvp_mode": config.pvp_mode,
+        "built_by": config.built_by or "",
+    }
+    if not is_instance_world:
+        config_payload.update(
+            {
+                "starting_gold": int(config.starting_gold),
+                "starting_level": int(config.starting_level),
+                _WORLD_CONFIG_LEVELING_FIELD: normalize_leveling_curve(
+                    config.leveling_curve
+                ),
+                _WORLD_CONFIG_ABILITY_PROGRESS_FIELD: normalize_ability_progression(
+                    config.ability_progression
+                ),
+                "max_level": int(config.max_level),
+                "combat_resolution_interval": _serialize_number(
+                    config.combat_resolution_interval
+                ),
+                "allow_combat": bool(config.allow_combat),
+                "is_narrative": bool(config.is_narrative),
+                "can_select_faction": bool(config.can_select_faction),
+                "auto_equip": bool(config.auto_equip),
+                "players_can_set_title": bool(config.players_can_set_title),
+                "non_ascii_names": bool(config.non_ascii_names),
+                "decay_glory": bool(config.decay_glory),
+                "name_exclusions": config.name_exclusions or "",
+                "globals_enabled": bool(config.globals_enabled),
+                "stat_system": _export_stat_system(world) or {},
+                "combat_system": _export_combat_system(world) or {},
+                "equipment_system": _export_equipment_system(world) or {},
+            }
+        )
+
     return {
         "world": {
             "id": world.id,
@@ -841,45 +896,9 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
             "description": world.description or "",
             "motd": world.motd or "",
             "is_public": bool(world.is_public),
+            "instance_of_id": world.instance_of_id,
         },
-        "config": {
-            "starting_gold": int(config.starting_gold),
-            "starting_level": int(config.starting_level),
-            _WORLD_CONFIG_LEVELING_FIELD: normalize_leveling_curve(
-                config.leveling_curve
-            ),
-            _WORLD_CONFIG_ABILITY_PROGRESS_FIELD: normalize_ability_progression(
-                config.ability_progression
-            ),
-            "max_level": int(config.max_level),
-            "combat_resolution_interval": _serialize_number(
-                config.combat_resolution_interval
-            ),
-            "starting_room": _serialize_room_reference(config.starting_room),
-            "death_room": _serialize_room_reference(config.death_room),
-            "death_mode": config.death_mode,
-            "death_route": config.death_route,
-            "small_background": config.small_background or "",
-            "large_background": config.large_background or "",
-            "can_select_faction": bool(config.can_select_faction),
-            "auto_equip": bool(config.auto_equip),
-            "allow_combat": bool(config.allow_combat),
-            "is_narrative": bool(config.is_narrative),
-            "players_can_set_title": bool(config.players_can_set_title),
-            "allow_pvp": bool(config.allow_pvp),
-            "pvp_mode": config.pvp_mode,
-            "built_by": config.built_by or "",
-            "non_ascii_names": bool(config.non_ascii_names),
-            "decay_glory": bool(config.decay_glory),
-            "name_exclusions": config.name_exclusions or "",
-            "globals_enabled": bool(config.globals_enabled),
-            "stat_system": _export_stat_system(world) or {},
-            "combat_system": _export_combat_system(world) or {},
-            "equipment_system": _export_equipment_system(world) or {},
-            "ability_progression": normalize_ability_progression(
-                config.ability_progression
-            ),
-        },
+        "config": config_payload,
         "manifest": manifest_data["manifest"],
         "yaml": manifest_data["yaml"],
     }
@@ -4140,6 +4159,21 @@ def parse_world_config_manifest(
         raise serializers.ValidationError(
             f"Unsupported spec field(s): {', '.join(unknown_fields)}."
         )
+
+    if world.instance_of_id:
+        requested_fields = set(spec.keys())
+        inherited_fields = sorted(requested_fields & INSTANCE_INHERITED_MANIFEST_FIELDS)
+        if inherited_fields:
+            raise serializers.ValidationError(
+                "Instance worlds inherit core systems from their base world. "
+                f"Cannot alter: {', '.join(inherited_fields)}."
+            )
+        disallowed_fields = sorted(requested_fields - INSTANCE_LOCAL_MANIFEST_FIELDS)
+        if disallowed_fields:
+            raise serializers.ValidationError(
+                "Instance world config manifests can only alter local instance fields. "
+                f"Cannot alter: {', '.join(disallowed_fields)}."
+            )
 
     world_updates: dict[str, Any] = {}
     for field_name in _WORLD_CONFIG_WORLD_TEXT_FIELDS:

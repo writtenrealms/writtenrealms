@@ -48,6 +48,7 @@ import { useStore } from "vuex";
 import Status from "@/components/game/panel/Status.vue";
 import Abilities from "@/components/game/panel/Abilities.vue";
 import Combat from "@/components/game/panel/Combat.vue";
+import { resourcePercent } from "@/core/utils";
 
 const store = useStore();
 
@@ -61,16 +62,13 @@ const staminaLabel = computed(() => resourceLabels.value.stamina || "Stamina");
 const energyCurrent = computed(() => player.value.energy ?? 0);
 const energyMax = computed(() => player.value.energy_max ?? 0);
 const healthPerc = computed(() => {
-  const max = player.value.health_max || 1;
-  return (player.value.health / max) * 100 + "%";
+  return `${resourcePercent(player.value.health, player.value.health_max)}%`;
 });
 const energyPerc = computed(() => {
-  const max = energyMax.value || 1;
-  return (energyCurrent.value / max) * 100 + "%";
+  return `${resourcePercent(energyCurrent.value, energyMax.value)}%`;
 });
 const staminaPerc = computed(() => {
-  const max = player.value.stamina_max || 1;
-  return (player.value.stamina / max) * 100 + "%";
+  return `${resourcePercent(player.value.stamina, player.value.stamina_max)}%`;
 });
 const hasEnergy = computed(() => energyMax.value > 0);
 </script>

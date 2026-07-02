@@ -5,7 +5,7 @@ from rest_framework.reverse import reverse
 from builders.models import WorldBuilder
 from config import game_settings as adv_config
 from tests.base import WorldTestCase
-from worlds.models import Room
+from worlds.models import Room, World, WorldConfig
 
 
 class AuthenticatedBuilderWorldTestCase(WorldTestCase):
@@ -28,6 +28,17 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.apply_ep = reverse(
             "builder-world-manifest-apply",
             args=[self.world.pk],
+        )
+
+    def _instance_world(self):
+        self.world.is_multiplayer = True
+        self.world.save(update_fields=["is_multiplayer"])
+        return World.objects.new_world(
+            name="Trial Instance",
+            author=self.user,
+            config=WorldConfig.objects.create(),
+            is_multiplayer=True,
+            instance_of=self.world,
         )
 
     def test_world_config_endpoint_matches_export_world_document(self):
@@ -120,6 +131,7 @@ spec:
   starting_room: room.{starting_room.id}
   death_room: room.{death_room.id}
   death_mode: lose_gold
+  death_gold_penalty: 0.35
   death_route: nearest_in_zone
   pvp_mode: zone
   can_select_faction: false
@@ -238,6 +250,7 @@ spec:
         self.assertEqual(config.starting_room_id, starting_room.id)
         self.assertEqual(config.death_room_id, death_room.id)
         self.assertEqual(config.death_mode, "lose_gold")
+        self.assertEqual(config.death_gold_penalty, 0.35)
         self.assertEqual(config.death_route, "nearest_in_zone")
         self.assertEqual(config.pvp_mode, "zone")
         self.assertFalse(config.can_select_faction)
@@ -313,6 +326,168 @@ spec:
 
         self.world.config.refresh_from_db()
         self.assertEqual(self.world.config.combat_resolution_interval, -1)
+
+    def test_instance_config_payload_omits_inherited_core_system_fields(self):
+        instance = self._instance_world()
+        ep = reverse("builder-world-config", args=[instance.pk])
+
+        resp = self.client.get(ep)
+
+        self.assertEqual(resp.status_code, 200)
+        spec = resp.data["manifest"]["spec"]
+        for field_name in (
+            "ability_progression",
+            "allow_combat",
+            "combat",
+            "combat_resolution_interval",
+            "decay_glory",
+            "equipment",
+            "globals_enabled",
+            "is_narrative",
+            "leveling_curve",
+            "max_level",
+            "name_exclusions",
+            "players_can_set_title",
+            "starting_level",
+            "starting_gold",
+            "stats",
+        ):
+            self.assertNotIn(field_name, spec)
+            self.assertNotIn(field_name, resp.data["config"])
+        self.assertIn("starting_room", spec)
+        self.assertIn("death_room", spec)
+        self.assertIn("death_mode", spec)
+        self.assertIn("death_gold_penalty", spec)
+
+    def test_instance_world_config_manifest_rejects_inherited_core_system_fields(self):
+        instance = self._instance_world()
+        ep = reverse("builder-world-manifest-apply", args=[instance.pk])
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{instance.id}
+spec:
+  death_mode: destroy_eq
+  combat_resolution_interval: 1.5
+  leveling_curve: [0, 10, 30]
+  ability_progression:
+    max_known: 4
+  stats: {{}}
+  combat: {{}}
+  equipment: {{}}
+"""
+
+        resp = self.client.post(ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        text = str(resp.data)
+        self.assertIn("Instance worlds inherit core systems", text)
+        self.assertIn("stats", text)
+        self.assertIn("combat_resolution_interval", text)
+
+    def test_instance_world_config_manifest_rejects_nonlocal_world_rules(self):
+        instance = self._instance_world()
+        ep = reverse("builder-world-manifest-apply", args=[instance.pk])
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{instance.id}
+spec:
+  death_mode: destroy_eq
+  starting_gold: 123
+  players_can_set_title: false
+  globals_enabled: false
+"""
+
+        resp = self.client.post(ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        text = str(resp.data)
+        self.assertIn("can only alter local instance fields", text)
+        self.assertIn("starting_gold", text)
+        self.assertIn("players_can_set_title", text)
+
+    def test_instance_world_config_manifest_allows_local_death_settings(self):
+        instance = self._instance_world()
+        death_room = Room.objects.create(
+            world=instance,
+            zone=instance.config.starting_room.zone,
+            name="Instance Infirmary",
+            x=1,
+            y=0,
+            z=0,
+        )
+        ep = reverse("builder-world-manifest-apply", args=[instance.pk])
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{instance.id}
+spec:
+  death_room: room.{death_room.id}
+  death_mode: destroy_eq
+  death_gold_penalty: 0.1
+  death_route: near_room
+"""
+
+        resp = self.client.post(ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        instance.config.refresh_from_db()
+        self.assertEqual(instance.config.death_room_id, death_room.id)
+        self.assertEqual(instance.config.death_mode, "destroy_eq")
+        self.assertEqual(instance.config.death_gold_penalty, 0.1)
+        self.assertEqual(instance.config.death_route, "near_room")
+
+    def test_instance_direct_config_patch_rejects_inherited_core_system_fields(self):
+        instance = self._instance_world()
+        ep = reverse("builder-world-config", args=[instance.pk])
+
+        resp = self.client.patch(
+            ep,
+            {
+                "combat_system": {"profiles": {}},
+                "leveling_curve": [0, 10, 30],
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("Instance worlds inherit core systems", str(resp.data))
+
+    def test_instance_direct_config_patch_rejects_nonlocal_world_rules(self):
+        instance = self._instance_world()
+        ep = reverse("builder-world-config", args=[instance.pk])
+
+        resp = self.client.patch(
+            ep,
+            {
+                "starting_gold": 123,
+                "players_can_set_title": False,
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        text = str(resp.data)
+        self.assertIn("can only alter local instance config", text)
+        self.assertIn("starting_gold", text)
+
+    def test_instance_local_config_patch_does_not_rewrite_inherited_combat_flags(self):
+        instance = self._instance_world()
+        instance.config.is_narrative = True
+        instance.config.allow_combat = True
+        instance.config.save(update_fields=["is_narrative", "allow_combat"])
+        ep = reverse("builder-world-config", args=[instance.pk])
+
+        resp = self.client.patch(
+            ep,
+            {"death_mode": "destroy_eq"},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        instance.config.refresh_from_db()
+        self.assertTrue(instance.config.allow_combat)
 
     def test_apply_world_config_manifest_accepts_equipment_armor_proficiencies(self):
         manifest = f"""

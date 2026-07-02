@@ -14,6 +14,7 @@ from django.utils import timezone
 
 from builders.models import AbilityDefinition
 from config import constants as adv_consts
+from core.abilities import definition_world
 from core.combat_formulas import get_world_combat_system, rating_display_percent
 from core.equipment_system import get_world_equipment_payload
 from core.scoped_state import STATE_SCOPE_WORLD, get_state_snapshot
@@ -75,7 +76,7 @@ def first_keyword(value: Optional[str], fallback: Optional[str] = None) -> str:
 
 
 def _definition_world(world: World) -> World:
-    return getattr(world, "config_source_world", None) or getattr(world, "context", None) or world
+    return definition_world(world)
 
 
 def _known_ability_slugs(player: Player) -> list[str]:
@@ -431,6 +432,7 @@ def serialize_char_from_player(
     include_equipment: bool = False,
 ) -> Char:
     keywords = getattr(player, "keywords", "") or f"{player.name.lower()} player {player.key}"
+    stat_payload = build_player_stat_payload(player)
     return Char(
         id=player.id,
         key=player.key,
@@ -443,7 +445,11 @@ def serialize_char_from_player(
         state=player_state(player),
         stance="normal",
         health=player.health,
-        health_max=getattr(player, "health_max", player.health),
+        health_max=int(
+            stat_payload.get("health_max")
+            or getattr(player, "health_max", player.health)
+            or 1
+        ),
         energy=player.energy,
         level=player.level,
         gender=player.gender or "male",

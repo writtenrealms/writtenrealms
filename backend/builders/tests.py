@@ -133,6 +133,28 @@ class TestCreateWorld(WorldTestCase):
     def test_create_instance(self):
         self.world.is_multiplayer = True
         self.world.save()
+        self.world.config.combat_resolution_interval = 1.5
+        self.world.config.combat_system = {
+            'profiles': {
+                'basic_physical': {
+                    'power_scale': 1.25,
+                },
+            },
+        }
+        self.world.config.death_mode = adv_consts.DEATH_MODE_DESTROY_EQ
+        self.world.config.death_gold_penalty = 0.35
+        self.world.config.ability_progression = {
+            'max_known': 'uncapped',
+            'starting_abilities': [{'ability': 'bash'}],
+        }
+        self.world.config.save(update_fields=[
+            'combat_resolution_interval',
+            'combat_system',
+            'death_mode',
+            'death_gold_penalty',
+            'ability_progression',
+        ])
+
         resp = self.client.post(self.endpoint, {
             'name': 'New World Instance',
             'instance_of': self.world.pk,
@@ -141,6 +163,20 @@ class TestCreateWorld(WorldTestCase):
         instance = World.objects.get(pk=resp.json()['id'])
         self.assertEqual(instance.name, 'New World Instance')
         self.assertEqual(instance.instance_of, self.world)
+        self.assertTrue(instance.is_multiplayer)
+        self.assertNotEqual(instance.config_id, self.world.config_id)
+        self.assertNotEqual(instance.config.combat_resolution_interval, 1.5)
+        self.assertNotEqual(instance.config.combat_system, self.world.config.combat_system)
+        self.assertEqual(instance.config.death_mode, adv_consts.DEATH_MODE_DESTROY_EQ)
+        self.assertEqual(instance.config.death_gold_penalty, 0.35)
+        self.assertNotEqual(
+            instance.config.ability_progression,
+            self.world.config.ability_progression)
+        self.assertEqual(instance.config.starting_room.world, instance)
+        self.assertEqual(instance.config.death_room.world, instance)
+        self.assertNotEqual(
+            instance.config.starting_room_id,
+            self.world.config.starting_room_id)
 
     def test_cannot_create_instance_of_spw(self):
         self.world.is_multiplayer = False

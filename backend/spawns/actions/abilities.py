@@ -29,6 +29,7 @@ from core.scoped_state import (
     resolve_scope_owner,
     set_state_value,
 )
+from core.world_config import inherited_system_config
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.effects import (
     active_character_effects,
@@ -1394,6 +1395,7 @@ class AbilityAction:
         command: str,
         args: list[str],
         config,
+        rules_config,
         active_encounter: CombatEncounter | None,
     ) -> ActionResult:
         if active_encounter:
@@ -1490,7 +1492,7 @@ class AbilityAction:
                 )
             ]
 
-        interval = _combat_interval(config)
+        interval = _combat_interval(rules_config)
         if interval == 0:
             result = self._resolve_immediately(
                 player=player,
@@ -1546,9 +1548,10 @@ class AbilityAction:
             if not player.room_id:
                 raise ActionError("You are nowhere.", code="no_room")
 
-            config = player.world.effective_config
-            if config and not config.allow_combat and ability.target.get("type") == "hostile":
+            rules_config = inherited_system_config(player.world)
+            if rules_config and not rules_config.allow_combat and ability.target.get("type") == "hostile":
                 raise ActionError("Combat is disabled here.", code="combat_disabled")
+            death_config = player.world.effective_config
 
             validate_ability_ready(player, ability)
 
@@ -1562,7 +1565,8 @@ class AbilityAction:
                     ability=ability,
                     command=command,
                     args=args,
-                    config=config,
+                    config=death_config,
+                    rules_config=rules_config,
                     active_encounter=active_encounter,
                 )
 
@@ -1662,7 +1666,7 @@ class AbilityAction:
                     code="target_busy",
                 )
 
-            interval = _combat_interval(config)
+            interval = _combat_interval(rules_config)
             if interval == 0:
                 stand_player(player)
                 return self._resolve_immediately(
@@ -1670,7 +1674,7 @@ class AbilityAction:
                     target_mob=target_mob,
                     ability=ability,
                     command=command,
-                    config=config,
+                    config=death_config,
                 )
 
             stand_player(player)

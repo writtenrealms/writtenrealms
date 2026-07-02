@@ -4,6 +4,7 @@ from rest_framework.reverse import reverse
 
 from builders.models import AbilityDefinition, MobDefinition, WorldBuilder
 from tests.base import WorldTestCase
+from worlds.models import World, WorldConfig
 
 
 class AuthenticatedBuilderWorldTestCase(WorldTestCase):
@@ -53,6 +54,14 @@ class TestAbilityManifests(AuthenticatedBuilderWorldTestCase):
         }
         fields.update(overrides)
         return AbilityDefinition.objects.create(**fields)
+
+    def _create_instance_world(self):
+        return World.objects.new_world(
+            name="Trial Instance",
+            author=self.user,
+            config=WorldConfig.objects.create(),
+            instance_of=self.world,
+        )
 
     def test_apply_ability_manifest_can_create_ability(self):
         manifest = f"""
@@ -664,6 +673,84 @@ spec:
         self.assertEqual(detail_resp.status_code, 200)
         self.assertEqual(detail_resp.data["id"], ability.id)
         self.assertEqual(detail_resp.data["manifest"]["spec"]["cast_time"], {"rounds": 1})
+
+    def test_instance_ability_list_reads_base_world_definitions(self):
+        ability = self._create_ability()
+        instance_world = self._create_instance_world()
+
+        list_resp = self.client.get(
+            reverse(
+                "builder-world-ability-list",
+                args=[instance_world.pk],
+            )
+        )
+        detail_resp = self.client.get(
+            reverse(
+                "builder-world-ability-detail",
+                args=[instance_world.pk, ability.pk],
+            )
+        )
+
+        self.assertEqual(list_resp.status_code, 200)
+        self.assertEqual(list_resp.data["count"], 1)
+        self.assertEqual(list_resp.data["results"][0]["id"], ability.id)
+        self.assertEqual(detail_resp.status_code, 200)
+        self.assertEqual(detail_resp.data["id"], ability.id)
+
+    def test_instance_world_cannot_apply_ability_manifest(self):
+        instance_world = self._create_instance_world()
+        instance_apply_ep = reverse(
+            "builder-world-manifest-apply",
+            args=[instance_world.pk],
+        )
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{instance_world.id}
+  slug: instance-strike
+  name: Instance Strike
+spec:
+  command:
+    verbs: [instancestrike]
+  target:
+    type: self
+    default: self
+  components: []
+"""
+
+        resp = self.client.post(instance_apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("Abilities are inherited from the base world", str(resp.data))
+        self.assertFalse(AbilityDefinition.objects.filter(world=instance_world).exists())
+
+    def test_instance_world_cannot_apply_abilities_bundle_manifest(self):
+        instance_world = self._create_instance_world()
+        instance_apply_ep = reverse(
+            "builder-world-manifest-apply",
+            args=[instance_world.pk],
+        )
+        manifest = f"""
+kind: abilities
+metadata:
+  world: world.{instance_world.id}
+spec:
+  abilities:
+    - slug: instance-mend
+      name: Instance Mend
+      command:
+        verbs: [instancemend]
+      target:
+        type: self
+        default: self
+      components: []
+"""
+
+        resp = self.client.post(instance_apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("Abilities are inherited from the base world", str(resp.data))
+        self.assertFalse(AbilityDefinition.objects.filter(world=instance_world).exists())
 
     def test_world_ability_list_supports_filters_search_and_sort(self):
         power_strike = self._create_ability()

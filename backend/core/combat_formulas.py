@@ -17,6 +17,7 @@ from typing import Any, Callable
 
 from config import game_settings as config
 from core.stat_system import compute_stats
+from core.world_config import inherited_system_config
 
 
 class CombatFormulaValidationError(ValueError):
@@ -789,8 +790,7 @@ def normalize_combat_system(value: Any) -> dict[str, Any]:
 def get_world_combat_system(world) -> dict[str, Any]:
     if world is None:
         return deepcopy(DEFAULT_COMBAT_SYSTEM)
-    effective_config = getattr(world, "effective_config", None)
-    config_obj = effective_config or getattr(world, "config", None)
+    config_obj = inherited_system_config(world)
     if config_obj is None:
         return deepcopy(DEFAULT_COMBAT_SYSTEM)
     return normalize_combat_system(getattr(config_obj, "combat_system", None))

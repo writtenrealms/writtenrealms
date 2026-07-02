@@ -18,6 +18,7 @@ from core.condition_dsl import (
     is_structured_condition_mapping,
     validate_condition_payload,
 )
+from core.world_config import inherited_system_config
 
 
 class AbilityValidationError(ValueError):
@@ -198,7 +199,7 @@ def normalize_ability_progression(value: Any) -> dict[str, Any]:
 
 
 def max_known_abilities_for_world(world: Any) -> int | None:
-    config = getattr(world, "effective_config", None) or getattr(world, "config", None)
+    config = inherited_system_config(world)
     if config is None:
         return DEFAULT_MAX_KNOWN_ABILITIES
     progression = normalize_ability_progression(
@@ -212,10 +213,7 @@ def max_known_abilities_for_world(world: Any) -> int | None:
 
 def starting_ability_slugs_for_actor(actor: Any, *, world: Any | None = None) -> list[str]:
     runtime_world = world or getattr(actor, "world", None)
-    config = (
-        getattr(runtime_world, "effective_config", None)
-        or getattr(runtime_world, "config", None)
-    )
+    config = inherited_system_config(runtime_world)
     if config is None:
         return []
     progression = normalize_ability_progression(
@@ -240,7 +238,14 @@ def starting_ability_slugs_for_actor(actor: Any, *, world: Any | None = None) ->
 
 
 def definition_world(world: Any) -> Any:
-    return getattr(world, "config_source_world", None) or getattr(world, "context", None) or world
+    if world is None:
+        return None
+
+    context_world = getattr(world, "context", None)
+    if context_world is not None:
+        return getattr(context_world, "instance_of", None) or context_world
+
+    return getattr(world, "instance_of", None) or world
 
 
 def _coerce_slug(value: Any, *, field_name: str, allow_hyphen: bool = True) -> str:

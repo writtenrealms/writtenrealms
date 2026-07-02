@@ -182,9 +182,7 @@ Good initial override candidates:
 | `death_mode` | A base world may use gold loss while an instance destroys equipment or drops inventory. |
 | `death_gold_penalty` | Needed if the instance uses gold-loss death. |
 | `death_route` | Needed if faction or route-specific death behavior should differ. |
-| `allow_combat` | Useful for puzzle/social instances or safe staging areas. |
 | `allow_pvp` / `pvp_mode` | Instances often need stricter PvP policy than the base world. |
-| `combat_resolution_interval` | Encounter pacing may differ between open world and dungeon content. |
 | `never_reload` or spawn reload policy | Completion-sensitive instances may need loader reconciliation disabled or constrained. |
 | presentation fields | Instance lobby/entry art and text can differ from the base world. |
 | cleanup policy | Run lifetime is inherently instance-specific. |
@@ -194,14 +192,20 @@ Fields that should stay inherited initially:
 | Field | Reason |
 | --- | --- |
 | `leveling_curve` / `max_level` / `starting_level` | Hidden per-instance progression curves make player growth hard to reason about. |
+| `starting_gold` / starting equipment | Character creation rewards should come from the base world. |
+| character creation and naming policy | Gender, faction, title, class, and name restrictions are base-world player policy. |
 | `stat_system` | Player stats should mean the same thing across the world. |
 | `equipment_system` | Equipment slot and armor-class behavior should not fork silently. |
 | `combat_system` formulas | Balance should come from mobs, traits, spawn plans, and encounter design before formula forks. |
+| `allow_combat` | Combat availability is part of the base ruleset, not an instance-local toggle. |
+| `combat_resolution_interval` | Encounter pacing is part of the base combat system and should stay consistent. |
 | `ability_progression` | Learned/available abilities should remain base-world player progression. |
+| global channels and glory decay | Shared social/economy-style policy should not fork inside an instance. |
 | currencies | Currency definitions must stay shared so rewards and penalties resolve consistently. |
 
-If later we need formula overrides, they should be introduced as a deliberate
-feature with strong builder UI warnings and manifest diff visibility.
+If later we need any of these overrides, they should be introduced as deliberate
+features with strong builder UI warnings, manifest diff visibility, and runtime
+tests proving the inheritance boundary is still explicit.
 
 ## Runtime Aggregate
 
@@ -876,7 +880,6 @@ spec:
   overrides:
     death_mode: destroy_eq
     allow_pvp: false
-    combat_resolution_interval: 3
 
   goal:
     mode: objective

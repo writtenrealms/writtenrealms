@@ -11,14 +11,23 @@
           </div>
         </div>
 
+        <div v-if="isInstanceWorld" class="inherited-notice">
+          Abilities in instances are inherited from the parent world.
+          <router-link
+            :to="{ name: 'builder_world_ability_list', params: { world_id: inheritedWorld.id } }"
+          >
+            Open {{ inheritedWorld.name }} Abilities
+          </router-link>
+        </div>
+
         <div class="ability-actions">
           <button class="btn-small" :disabled="!ability.yaml" @click="copyYaml">
             COPY YAML
           </button>
-          <button class="btn-small" :disabled="!ability.yaml" @click="editYaml">
+          <button v-if="!isInstanceWorld" class="btn-small" :disabled="!ability.yaml" @click="editYaml">
             EDIT
           </button>
-          <button class="btn-thin" :disabled="!ability.delete_yaml" @click="copyDeleteYaml">
+          <button v-if="!isInstanceWorld" class="btn-thin" :disabled="!ability.delete_yaml" @click="copyDeleteYaml">
             COPY DELETE YAML
           </button>
         </div>
@@ -86,6 +95,8 @@ const store = useStore();
 
 const ability = ref<any | null>(null);
 const isLoading = ref(false);
+const inheritedWorld = computed(() => store.state.builder.world.instance_of || {});
+const isInstanceWorld = computed(() => !!inheritedWorld.value.id);
 const endpoint = computed(() => (
   `/builder/worlds/${route.params.world_id}/abilities/${route.params.ability_id}/`
 ));
@@ -192,6 +203,11 @@ watch(
     flex-shrink: 0;
     flex-wrap: wrap;
     gap: 0.5rem;
+  }
+
+  .inherited-notice {
+    color: $color-text-hex-60;
+    line-height: 1.4;
   }
 
   .ability-summary {

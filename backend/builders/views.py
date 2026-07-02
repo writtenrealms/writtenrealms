@@ -35,6 +35,7 @@ from core.utils.mobs import suggest_stats
 
 from config import constants as api_consts
 from config import game_settings as adv_config
+from core.abilities import definition_world
 from core.leveling import LevelingConfigError
 from core.scoped_state import STATE_SCOPE_WORLD, get_state_snapshot
 from core.serializers import KeyNameSerializer, ReferenceField
@@ -628,13 +629,20 @@ class WorldConfigViewSet(WorldViewSet):
             builder_manifests.serialize_world_config_payload(world=self.world)
         )
 
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["world"] = self.world
+        return context
+
     def perform_update(self, serializer):
         config = serializer.save()
+        if self.world.instance_of_id:
+            return config
         if config.is_narrative:
             config.allow_combat = False
         else:
             config.allow_combat = True
-        config.save()
+        config.save(update_fields=["allow_combat"])
         return config
 
 
@@ -1760,7 +1768,7 @@ class WorldAbilityViewSet(BaseWorldBuilderViewSet):
     def get_queryset(self):
         self._assert_can_view_abilities()
 
-        qs = AbilityDefinition.objects.filter(world=self.world)
+        qs = AbilityDefinition.objects.filter(world=definition_world(self.world))
 
         action_type = self.request.query_params.get('action_type')
         if action_type in ('primary', 'utility'):
@@ -1897,6 +1905,10 @@ class WorldManifestApplyView(BaseWorldBuilderView):
         )
 
     def _assert_can_edit_abilities(self):
+        if self.world.instance_of_id:
+            raise serializers.ValidationError(
+                "Abilities are inherited from the base world and cannot be altered on an instance world."
+            )
         if self._builder_rank >= 3:
             return
         raise drf_exceptions.PermissionDenied(

@@ -58,6 +58,7 @@ Instances should use WR Core definitions from the base world:
 - leveling configuration
 - stat and equipment systems
 - combat formulas
+- combat availability and combat pacing
 - merchant profiles
 
 Do not create separate item or mob libraries inside an instance. Spawn plans in
@@ -102,6 +103,34 @@ From the base world:
 
 The instance template editor should feel like editing a small world, but its
 resource libraries come from the base world.
+
+Instance templates do not own a separate ruleset. WR2 always resolves core
+systems through the base world while the player is inside a spawned instance.
+That includes stat formulas, combat formulas, combat availability, combat
+resolution timing, equipment rules, leveling, max level, starting level, and
+ability progression. Instance config manifests and direct config API updates
+reject those fields for instance worlds, even if a builder manually navigates to
+the underlying editor URL.
+
+The instance template owns instance-local content and policy instead: starting
+room, death room, zones, rooms, paths, spawn plans, goals, timer settings,
+cleanup policy, presentation fields, and supported local rules such as death
+behavior. A base world can use a gold-loss death penalty while an instance sends
+dead players to an instance-local death room and uses a different supported
+death mode, but the combat math and player progression still come from the base
+world.
+
+Instance world config manifests only accept local fields: identity text,
+visibility, starting/death rooms, death mode, death route, death gold penalty,
+PvP policy, builder credit, and background art. Player-creation and global
+policy fields such as starting gold, title rules, naming rules, globals, class
+selection, starting equipment, leveling, stats, equipment, combat, and abilities
+belong to the base world.
+
+Learned player abilities also resolve through the base world while the player is
+inside a spawned instance. Ability definitions cannot be authored on instance
+templates; define them on the base world and use requirements or conditions when
+an ability should only matter in a particular instance.
 
 ## Connecting A Base Room To An Instance
 

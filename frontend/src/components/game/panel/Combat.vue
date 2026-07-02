@@ -55,7 +55,7 @@
 <script lang='ts' setup>
 import { computed, ref, watch, onUnmounted } from "vue";
 import { useStore } from "vuex";
-import { capfirst } from "@/core/utils";
+import { capfirst, resourcePercent } from "@/core/utils";
 import ProgressBar from "@/components/game/ProgressBar.vue";
 
 const store = useStore();
@@ -116,7 +116,7 @@ onUnmounted(() => {
 });
 
 const healthPerc = computed(() => {
-  return (player_target.value.health / player_target.value.health_max) * 100;
+  return resourcePercent(player_target.value?.health, player_target.value?.health_max);
 });
 
 const target_effects = computed(() => {

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from config import constants
+from core.world_config import inherited_system_config
 
 
 class EquipmentSystemValidationError(ValueError):
@@ -233,8 +234,7 @@ def has_authored_offhand_weapon_policy(equipment_system: dict[str, Any] | None) 
 def get_world_equipment_system(world) -> dict[str, Any]:
     if world is None:
         return default_equipment_system()
-    effective_config = getattr(world, "effective_config", None)
-    config_obj = effective_config or getattr(world, "config", None)
+    config_obj = inherited_system_config(world)
     if config_obj is None:
         return default_equipment_system()
     return normalize_equipment_system(getattr(config_obj, "equipment_system", None))
@@ -319,8 +319,7 @@ def _offhand_weapon_feature(actor: Any, world: Any | None) -> dict[str, Any]:
 def _raw_world_equipment_system(world: Any | None) -> dict[str, Any]:
     if world is None:
         return {}
-    effective_config = getattr(world, "effective_config", None)
-    config_obj = effective_config or getattr(world, "config", None)
+    config_obj = inherited_system_config(world)
     if config_obj is None:
         return {}
     value = getattr(config_obj, "equipment_system", None)

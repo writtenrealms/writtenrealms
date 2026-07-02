@@ -23,6 +23,7 @@ from typing import Any
 
 from config import constants
 from config import game_settings as config
+from core.world_config import inherited_system_config
 from core.equipment_system import (
     get_armor_class_keys,
     get_world_equipment_system,
@@ -848,8 +849,7 @@ def normalize_stat_system(
 def get_world_stat_system(world) -> dict[str, Any]:
     if world is None:
         return deepcopy(DEFAULT_STAT_SYSTEM)
-    effective_config = getattr(world, "effective_config", None)
-    config_obj = effective_config or getattr(world, "config", None)
+    config_obj = inherited_system_config(world)
     if config_obj is None:
         return deepcopy(DEFAULT_STAT_SYSTEM)
     equipment_system = get_world_equipment_system(world)

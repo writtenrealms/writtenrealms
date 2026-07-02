@@ -712,6 +712,43 @@ class TestKillCommand(WorldTestCase):
             },
         )
 
+    def test_kill_engage_payload_uses_computed_player_health_max(self):
+        self.world.config.combat_resolution_interval = 1.5
+        self.world.config.save(update_fields=["combat_resolution_interval"])
+        expected_health_max = compute_stats(
+            self.player.level,
+            self.player.archetype,
+            char=self.player,
+            world=self.world,
+        )["health_max"]
+        self.assertGreater(expected_health_max, 1)
+        current_health = max(expected_health_max - 3, 1)
+        self.player.health = current_health
+        self.player.save(update_fields=["health"])
+
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Rat",
+            keywords="rat",
+            health=self.stats["attack_power"] + 5,
+            health_max=self.stats["attack_power"] + 5,
+            attack_power=4,
+            exp_worth=17,
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with self.captureOnCommitCallbacks(execute=True):
+                with capture_game_messages() as messages:
+                    dispatch_text_command(self.player.id, "kill rat")
+
+        engage_message = self._message_by_type(messages, "cmd.kill.success", self.player.key)
+        self.assertIsNotNone(engage_message)
+        actor = engage_message["data"]["actor"]
+        self.assertEqual(actor["health"], current_health)
+        self.assertEqual(actor["health_max"], expected_health_max)
+        self.assertEqual(actor["target"]["key"], mob.key)
+
     def test_stored_initiative_order_controls_attack_order_across_rounds(self):
         self.world.config.combat_resolution_interval = 1.5
         self.world.config.save(update_fields=["combat_resolution_interval"])

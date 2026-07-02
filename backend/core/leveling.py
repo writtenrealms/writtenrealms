@@ -5,6 +5,7 @@ from typing import Any
 
 from config import game_settings as config
 from core.stat_system import compute_stats
+from core.world_config import inherited_system_config
 
 
 DEFAULT_STARTING_LEVEL = 1
@@ -145,10 +146,7 @@ def get_leveling_config(config_obj: Any | None) -> LevelingConfig:
 
 
 def get_world_leveling_config(world: Any | None) -> LevelingConfig:
-    config_obj = None
-    if world is not None:
-        config_obj = getattr(world, "effective_config", None) or getattr(world, "config", None)
-    return get_leveling_config(config_obj)
+    return get_leveling_config(inherited_system_config(world))
 
 
 def clamp_level(level: Any, config_obj: Any | None = None) -> int:

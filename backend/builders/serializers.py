@@ -1,3 +1,4 @@
+import copy
 import json
 import re
 
@@ -41,6 +42,10 @@ from core.stat_system import (
     StatSystemValidationError,
     normalize_stat_system,
     world_uses_classes,
+)
+from core.world_config import (
+    INSTANCE_INHERITED_CONFIG_FIELDS,
+    INSTANCE_LOCAL_CONFIG_FIELDS,
 )
 from builders.models import (
     BuilderAssignment,
@@ -197,6 +202,28 @@ def _normalize_template_slug(serializer, value, *, model_cls, field_label):
     return normalized
 
 
+_INSTANCE_CONFIG_LOCAL_ROOM_FIELDS = {"starting_room", "death_room", "exits_to"}
+_WORLD_CONFIG_CLONE_SKIP_FIELDS = {
+    "id",
+    "created_ts",
+    "modified_ts",
+    *_INSTANCE_CONFIG_LOCAL_ROOM_FIELDS,
+    *INSTANCE_INHERITED_CONFIG_FIELDS,
+}
+
+
+def _clone_world_config_for_instance(base_config):
+    values = {}
+    for field in WorldConfig._meta.fields:
+        if field.primary_key or field.name in _WORLD_CONFIG_CLONE_SKIP_FIELDS:
+            continue
+        values[field.name] = copy.deepcopy(getattr(base_config, field.name))
+
+    config = WorldConfig.objects.create(**values)
+    config.starting_eq.set(base_config.starting_eq.all())
+    return config
+
+
 class WorldSerializer(serializers.ModelSerializer):
     """
     World as seen by a builder, which gets loaded by the
@@ -334,24 +361,41 @@ class WorldSerializer(serializers.ModelSerializer):
             } for currency in world.currencies.all()
         ]
 
+    def _instance_base_world(self):
+        raw_instance_of = self.context['request'].data.get('instance_of')
+        if not raw_instance_of:
+            return None
+
+        try:
+            instance_of = World.objects.get(pk=raw_instance_of)
+        except (TypeError, ValueError, World.DoesNotExist):
+            raise serializers.ValidationError({
+                'instance_of': 'Selected base world was not found.',
+            })
+
+        if not instance_of.is_multiplayer:
+            raise serializers.ValidationError(
+                'Cannot create an instance of a singleplayer world.')
+        return instance_of
+
     def create(self, validated_data):
         if 'author' not in validated_data:
             validated_data['author'] = self.context['request'].user
 
-        world = World.objects.new_world(**validated_data)
+        instance_of = self._instance_base_world()
+        with transaction.atomic():
+            if instance_of:
+                validated_data['instance_of'] = instance_of
+                validated_data['is_multiplayer'] = True
+                if instance_of.config_id:
+                    validated_data['config'] = _clone_world_config_for_instance(
+                        instance_of.config)
 
-        if self.context['request'].data.get('instance_of'):
-            instance_of = World.objects.get(
-                pk=self.context['request'].data['instance_of'])
+            world = World.objects.new_world(**validated_data)
 
-            if not instance_of.is_multiplayer:
-                raise serializers.ValidationError(
-                    'Cannot create an instance of a singleplayer world.')
+            if instance_of:
+                return world
 
-            world.instance_of = instance_of
-            world.is_multiplayer = True
-            world.save()
-        else:
             Currency.objects.create(
                 code='gold',
                 name='Gold',
@@ -395,6 +439,7 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'death_room',
             'death_mode',
             'death_route',
+            'death_gold_penalty',
             'small_background',
             'large_background',
             'can_select_faction',
@@ -449,6 +494,23 @@ class WorldConfigSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         attrs = super().validate(attrs)
         config = self.instance
+        world = self.context.get("world") if isinstance(self.context, dict) else None
+        if world is None and config is not None:
+            world = config.configured_worlds.filter(instance_of__isnull=False).first()
+        if getattr(world, "instance_of_id", None):
+            requested_fields = set(attrs.keys())
+            inherited_fields = sorted(requested_fields & INSTANCE_INHERITED_CONFIG_FIELDS)
+            if inherited_fields:
+                raise serializers.ValidationError(
+                    "Instance worlds inherit core systems from their base world. "
+                    f"Cannot alter: {', '.join(inherited_fields)}."
+                )
+            disallowed_fields = sorted(requested_fields - INSTANCE_LOCAL_CONFIG_FIELDS)
+            if disallowed_fields:
+                raise serializers.ValidationError(
+                    "Instance worlds can only alter local instance config. "
+                    f"Cannot alter: {', '.join(disallowed_fields)}."
+                )
         equipment_system = attrs.get(
             "equipment_system",
             getattr(config, "equipment_system", None),

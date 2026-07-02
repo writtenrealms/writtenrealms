@@ -18,6 +18,7 @@ from core.computations import compute_stats
 from core.abilities import definition_world
 from core.condition_dsl import ConditionContext, evaluate_condition, resolve_path
 from core.leveling import ExperienceGrant, apply_experience
+from core.world_config import inherited_system_config
 from builders.models import AbilityDefinition
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.effects import advance_character_effect_durations, component_targets_character_effect
@@ -893,7 +894,7 @@ def _available_flee_destinations(player: Player) -> list[FleeDestination]:
 
     room = _room_with_exits(player.room_id)
     door_states = door_state_lookup(player.world, [room.id]).get(room.id, {})
-    config = player.world.effective_config
+    config = inherited_system_config(player.world)
     viewed_room_ids: set[int] = set()
     if config and not config.flee_to_unknown_rooms:
         viewed_room_ids = set(player.viewed_rooms.values_list("id", flat=True))
@@ -1208,7 +1209,7 @@ class AbilityRoundResult:
 
 
 def _ability_definition_for_player(player: Player, slug: str) -> AbilityDefinition | None:
-    source_world = player.world.config_source_world
+    source_world = definition_world(player.world)
     return AbilityDefinition.objects.filter(
         world=source_world,
         slug=slug,
@@ -3322,9 +3323,10 @@ class ScanRoomAggroAction:
         player: Player,
         room: Room,
         mob: Mob,
-        config,
+        rules_config,
+        death_config,
     ) -> ActionResult:
-        interval = _combat_interval(config)
+        interval = _combat_interval(rules_config)
         events = _aggro_engage_events(player=player, room=room, mob=mob)
 
         if interval == 0:
@@ -3332,7 +3334,7 @@ class ScanRoomAggroAction:
             result = KillAction()._resolve_immediately(
                 player=player,
                 target_mob=mob,
-                config=config,
+                config=death_config,
             )
             return ActionResult(events=[*events, *result.events])
 
@@ -3376,9 +3378,10 @@ class ScanRoomAggroAction:
             ):
                 return ActionResult()
 
-            config = player.world.effective_config
-            if config and not config.allow_combat:
+            rules_config = inherited_system_config(player.world)
+            if rules_config and not rules_config.allow_combat:
                 return ActionResult()
+            death_config = player.world.effective_config
 
             room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
             if CombatEncounter.objects.select_for_update().filter(
@@ -3413,7 +3416,8 @@ class ScanRoomAggroAction:
                         player=player,
                         room=room,
                         mob=mob,
-                        config=config,
+                        rules_config=rules_config,
+                        death_config=death_config,
                     )
 
         return ActionResult()
@@ -3538,9 +3542,10 @@ class KillAction:
             if not player.room_id:
                 raise ActionError("You are nowhere. Cannot kill anything.", code="no_room")
 
-            config = player.world.effective_config
-            if config and not config.allow_combat:
+            rules_config = inherited_system_config(player.world)
+            if rules_config and not rules_config.allow_combat:
                 raise ActionError("Combat is disabled here.", code="combat_disabled")
+            death_config = player.world.effective_config
 
             room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
             target_ref = resolve_room_mob_target(
@@ -3562,7 +3567,7 @@ class KillAction:
             if not getattr(target_mob, "attackable", True):
                 raise ActionError("You cannot attack them.", code="not_attackable")
 
-            interval = _combat_interval(config)
+            interval = _combat_interval(rules_config)
 
             active_player_encounter = (
                 CombatEncounter.objects.select_for_update()
@@ -3620,7 +3625,7 @@ class KillAction:
                 return self._resolve_immediately(
                     player=player,
                     target_mob=target_mob,
-                    config=config,
+                    config=death_config,
                 )
 
             stand_player(player)

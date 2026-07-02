@@ -1,6 +1,9 @@
-from builders.models import ItemDefinition, MobDefinition, SpawnEntry, SpawnPlan
+from unittest.mock import patch
+
+from builders.models import AbilityDefinition, ItemDefinition, MobDefinition, SpawnEntry, SpawnPlan
 from config import constants as adv_consts
-from spawns.models import Item, Mob
+from core.computations import compute_stats
+from spawns.models import CombatEncounter, Item, Mob
 from tests.base import WorldTestCase
 from worlds.models import (
     InstanceAssignment,
@@ -9,7 +12,7 @@ from worlds.models import (
     World,
     WorldConfig,
 )
-from wr2_tests.utils import capture_game_messages, dispatch_text_command
+from wr2_tests.utils import apply_basic_stat_system, capture_game_messages, dispatch_text_command
 
 
 class TestInstanceRuntimeFoundation(WorldTestCase):
@@ -56,6 +59,26 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
             slug=slug,
             name=name,
             item_type=item_type,
+        )
+
+    def _ability(self, *, slug="battle-focus", name="Battle Focus", verbs=None):
+        return AbilityDefinition.objects.create(
+            world=self.world,
+            slug=slug,
+            name=name,
+            command_verbs=verbs or ["focus"],
+            action_type="utility",
+            target={
+                "type": "self",
+                "default": "self",
+                "allow_out_of_combat": True,
+            },
+            availability={"classes": [], "min_level": 1},
+            requirements={},
+            cost={},
+            cast_time={},
+            cooldown={"rounds": 0},
+            components=[],
         )
 
     def test_enter_instance_creates_run_and_leader_participant(self):
@@ -113,6 +136,104 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self.assertIsNotNone(spawned_instance.last_loader_run_ts)
         mob = Mob.objects.get(world=spawned_instance, definition=mob_definition)
         self.assertEqual(mob.room, self.instance_room)
+
+    def test_instance_state_sync_inherits_base_world_ability_definitions(self):
+        self._ability()
+        self.player.known_abilities = ["battle-focus"]
+        self.player.ability_hotkeys = {"1": "battle-focus"}
+        self.player.save(update_fields=["known_abilities", "ability_hotkeys"])
+
+        self._enter()
+        self.player.refresh_from_db()
+
+        from spawns.state_payloads import build_state_sync
+
+        payload = build_state_sync(self.player).model_dump()
+        definitions = payload["world"]["abilities"]["definitions"]
+
+        self.assertEqual(payload["actor"]["known_abilities"], ["battle-focus"])
+        self.assertEqual(payload["actor"]["ability_hotkeys"], {"1": "battle-focus"})
+        self.assertIn("battle-focus", definitions)
+        self.assertEqual(definitions["battle-focus"]["name"], "Battle Focus")
+
+    def test_instance_ability_resolvers_inherit_base_world_definitions(self):
+        ability = self._ability()
+        self.player.known_abilities = ["battle-focus"]
+        self.player.ability_hotkeys = {"1": "battle-focus"}
+        self.player.save(update_fields=["known_abilities", "ability_hotkeys"])
+
+        self._enter()
+        self.player.refresh_from_db()
+
+        from spawns.actions.abilities import resolve_ability_for_command, resolve_ability_for_hotkey
+        from spawns.actions.combat import _ability_definition_for_player
+
+        self.assertEqual(resolve_ability_for_command(self.player.world, "focus"), ability)
+        self.assertEqual(resolve_ability_for_hotkey(self.player, "1"), ability)
+        self.assertEqual(_ability_definition_for_player(self.player, "battle-focus"), ability)
+
+    def test_instance_state_sync_uses_base_world_stats_with_empty_template_config(self):
+        apply_basic_stat_system(self.world)
+        self.player.attributes = {
+            "brawn": 15,
+            "grit": 30,
+            "focus": 5,
+        }
+        expected_stats = compute_stats(
+            self.player.level,
+            self.player.archetype,
+            char=self.player,
+            world=self.world,
+        )
+        current_health = max(expected_stats["health_max"] - 4, 1)
+        self.player.health = current_health
+        self.player.save(update_fields=["attributes", "health"])
+
+        spawned_instance = self._enter()
+        self.player.refresh_from_db()
+
+        from spawns.state_payloads import build_state_sync
+
+        payload = build_state_sync(self.player).model_dump()
+        actor = payload["actor"]
+
+        self.assertEqual(self.player.world, spawned_instance)
+        self.assertEqual(actor["health"], current_health)
+        self.assertEqual(actor["health_max"], expected_stats["health_max"])
+        self.assertEqual(actor["attack_power"], expected_stats["attack_power"])
+        self.assertEqual(actor["attributes"]["brawn"], expected_stats["brawn"])
+        self.assertEqual(payload["world"]["labels"]["order"]["attributes"], ["brawn", "grit", "focus"])
+
+    def test_instance_combat_pacing_uses_base_world_config(self):
+        apply_basic_stat_system(self.world)
+        self.world.config.combat_resolution_interval = 1.5
+        self.world.config.save(update_fields=["combat_resolution_interval"])
+        self.instance_template.config.combat_resolution_interval = 0
+        self.instance_template.config.save(update_fields=["combat_resolution_interval"])
+        spawned_instance = self._enter()
+        self.player.refresh_from_db()
+        mob = Mob.objects.create(
+            world=spawned_instance,
+            room=self.instance_room,
+            name="Instance Rat",
+            keywords="rat",
+            health=50,
+            health_max=50,
+            attack_power=4,
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async") as schedule_mock:
+            with self.captureOnCommitCallbacks(execute=True):
+                with capture_game_messages() as messages:
+                    dispatch_text_command(self.player.id, "kill rat")
+
+        encounter = CombatEncounter.objects.get(player=self.player, mob=mob)
+        mob.refresh_from_db()
+        self.assertEqual(encounter.resolution_interval, 1.5)
+        self.assertEqual(mob.health, 50)
+        self.assertIsNotNone(self._message_by_type(messages, "cmd.kill.success"))
+        self.assertIsNone(self._message_by_type(messages, "notification.combat.attack"))
+        schedule_mock.assert_called_once()
 
     def test_group_member_joins_existing_run_by_reference(self):
         member = self.create_player("Member")

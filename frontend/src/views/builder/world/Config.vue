@@ -305,7 +305,7 @@ const manifestGroups = [
   },
   {
     title: "Combat",
-    keys: ["combat_resolution_interval", "combat", "death_mode", "death_route"],
+    keys: ["combat_resolution_interval", "combat", "death_mode", "death_route", "death_gold_penalty"],
     wide: true,
   },
   {

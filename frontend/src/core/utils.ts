@@ -52,6 +52,15 @@ export const formatPercent = value => {
   return String(rounded).replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1");
 };
 
+export const resourcePercent = (current, maximum) => {
+  const currentValue = Number(current ?? 0);
+  const maximumValue = Number(maximum ?? 0);
+  if (!Number.isFinite(currentValue) || !Number.isFinite(maximumValue) || maximumValue <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, (currentValue / maximumValue) * 100));
+};
+
 export const getRatingConfigForStat = (world, key) => {
   const ratings = world?.combat?.ratings || {};
   const direct = ratings[key];
