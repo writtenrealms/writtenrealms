@@ -1,5 +1,7 @@
 from unittest.mock import patch
 
+from django.utils import timezone
+
 from builders.models import AbilityDefinition, ItemDefinition, MobDefinition, SpawnEntry, SpawnPlan
 from config import constants as adv_consts
 from core.computations import compute_stats
@@ -12,6 +14,7 @@ from worlds.models import (
     World,
     WorldConfig,
 )
+from worlds.tasks import monitor_worlds
 from wr2_tests.utils import apply_basic_stat_system, capture_game_messages, dispatch_text_command
 
 
@@ -344,6 +347,30 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self.assertIsNotNone(participant.exited_at)
         self.assertEqual(self.player.world, self.spawn_world)
         self.assertEqual(self.player.room, self.room)
+
+    def test_monitor_keeps_recently_vacated_instance_running(self):
+        spawned_instance = self._enter()
+        World.leave_instance(player=self.player)
+        run = spawned_instance.instance_run
+        run.last_active_at = timezone.now() - timezone.timedelta(minutes=4)
+        run.save(update_fields=["last_active_at"])
+
+        with patch("worlds.tasks.WorldSmith.stop") as mock_stop:
+            monitor_worlds()
+
+        mock_stop.assert_not_called()
+
+    def test_monitor_stops_vacated_instance_after_idle_grace(self):
+        spawned_instance = self._enter()
+        World.leave_instance(player=self.player)
+        run = spawned_instance.instance_run
+        run.last_active_at = timezone.now() - timezone.timedelta(minutes=6)
+        run.save(update_fields=["last_active_at"])
+
+        with patch("worlds.tasks.WorldSmith.stop") as mock_stop:
+            monitor_worlds()
+
+        mock_stop.assert_called_once()
 
     def test_enter_command_uses_current_room_instance_link(self):
         self._link_current_room_to_instance()

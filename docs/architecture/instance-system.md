@@ -701,6 +701,11 @@ safe.
 
 Cleanup should be policy-driven and status-aware.
 
+Current implementation: active spawned instance worlds with no in-game players
+use the `InstanceRun.last_active_at` timestamp as their idle reference and are
+stopped/deleted after roughly five minutes of inactivity, plus monitor cadence.
+This is intentionally hardcoded until the fuller policy below is implemented.
+
 Recommended template policy:
 
 ```yaml

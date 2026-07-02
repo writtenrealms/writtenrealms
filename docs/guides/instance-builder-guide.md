@@ -177,6 +177,12 @@ If a player previously had a solo run and then joins a group's run, their old
 solo participation is marked exited. The old run is not destroyed immediately;
 cleanup policy handles inactive runs later.
 
+Current inactive cleanup is hardcoded rather than builder-configurable. When the
+last active player leaves a spawned instance, WR2 records activity on the
+`InstanceRun` and the world monitor keeps the empty instance alive for about five
+minutes, plus up to one monitor tick, before stopping and deleting the spawned
+runtime world.
+
 ## Inventory And Equipment
 
 When a player enters an instance, WR2 moves the world ownership of carried and

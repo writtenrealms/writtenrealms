@@ -13,12 +13,13 @@ from spawns.models import Player
 from spawns.loading import run_loaders
 from spawns.services import WorldGate
 from users.models import User
-from worlds.models import World
+from worlds.models import InstanceRun, World
 from worlds.services import WorldSmith
 
 
 logger = logging.getLogger('lifecycle')
 LOADERS_TASK_LOCK_KEY = 'run_world_loaders_lock'
+MAX_WORLD_IDLE_SECONDS = 5 * 60
 
 
 def _loader_interval_seconds() -> float:
@@ -89,6 +90,26 @@ def _disconnect_idle_players(spawn_world) -> int:
         disconnected_players += 1
 
     return disconnected_players
+
+
+def _instance_idle_reference_ts(spawn_world):
+    if not getattr(spawn_world.context, 'instance_of_id', None):
+        return None
+
+    run = InstanceRun.objects.filter(spawned_world=spawn_world).first()
+    if not run:
+        return spawn_world.lifecycle_change_ts
+    return run.last_active_at or run.started_at or spawn_world.lifecycle_change_ts
+
+
+def _world_idle_seconds(spawn_world, *, now):
+    idle_reference_ts = _instance_idle_reference_ts(spawn_world)
+    if idle_reference_ts is None:
+        idle_reference_ts = spawn_world.last_played_ts
+
+    if idle_reference_ts:
+        return (now - idle_reference_ts).total_seconds()
+    return MAX_WORLD_IDLE_SECONDS + 100
 
 
 @shared_task
@@ -221,14 +242,8 @@ def monitor_worlds():
             world__context__instance_of=spawn_world.context).exists():
             continue
 
-        # 5 minutes, might be worth making this configurable
-        MAX_WORLD_IDLE = 5 * 60
-        last_played_on_ts = spawn_world.last_played_ts
-        if last_played_on_ts:
-            delta = (timezone.now() - last_played_on_ts).total_seconds()
-        else: # Set it to a high mark
-            delta = MAX_WORLD_IDLE + 100
-        if delta > MAX_WORLD_IDLE:
+        delta = _world_idle_seconds(spawn_world, now=timezone.now())
+        if delta > MAX_WORLD_IDLE_SECONDS:
             logger.info("World is idle for %s seconds, stopping..." % delta)
             # Start the stopping process
             WorldSmith(spawn_world).stop()
