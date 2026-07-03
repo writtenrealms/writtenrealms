@@ -7,6 +7,7 @@ from core.scoped_state import (
     STATE_SCOPE_ZONE,
     get_state_snapshot,
 )
+from core.factions import core_faction_policy
 
 from config import constants as adv_consts
 from core.utils import is_ascii
@@ -196,19 +197,18 @@ class PlayerSerializer(serializers.ModelSerializer):
             member_type__model='player',
             member_id=player.id)
 
-        core_assignment = qs.filter(faction__is_core=True).first()
+        core_assignment = qs.filter(faction__type='core').first()
         if core_assignment:
             return core_assignment.faction.name
 
-        default_faction = Faction.objects.filter(
-            world=player.world.context,
-            is_core=True,
-            is_default=True).first()
-        if default_faction:
-            FactionAssignment.objects.create(
-                member=player,
-                faction=default_faction)
-            return default_faction.name
+        policy = core_faction_policy(player.world.context or player.world)
+        if policy.default:
+            default_faction = Faction.objects.filter(
+                world=player.world.context or player.world,
+                type='core',
+                code=policy.default).first()
+            if default_faction:
+                return default_faction.name
         return adv_consts.FACTION_CORE_HUMAN
 
     def get_title(self, player):
@@ -863,9 +863,10 @@ class AnimateMobSerializer(serializers.ModelSerializer):
 
         mob_type = mob.template.type if mob.template else mob.type
 
-        fa_qs = mob.template.faction_assignments.all()
+        faction_source = mob.template or mob.definition or mob
+        fa_qs = faction_source.faction_assignments.all()
 
-        core_assignment = fa_qs.filter(faction__is_core=True).first()
+        core_assignment = fa_qs.filter(faction__type='core').first()
         core_faction = core_assignment.faction.code if core_assignment else None
         """
         if mob_type == adv_consts.MOB_TYPE_HUMANOID and not core_faction:
@@ -883,7 +884,7 @@ class AnimateMobSerializer(serializers.ModelSerializer):
         factions = {'core': core_faction} if core_faction else {}
 
         # get other factions
-        for f_assignment in fa_qs.filter(faction__is_core=False):
+        for f_assignment in fa_qs.filter(faction__type='reputation'):
             factions[f_assignment.faction.code] = f_assignment.value
 
         return factions
@@ -1072,7 +1073,7 @@ class AnimatePlayerSerializer(serializers.ModelSerializer):
     def get_keywords(self, player):
         keywords = [player.name.lower(), 'player', player.key]
         fa_qs = player.faction_assignments.all()
-        core_assignment = fa_qs.filter(faction__is_core=True).first()
+        core_assignment = fa_qs.filter(faction__type='core').first()
         if core_assignment:
             keywords.append(core_assignment.faction.code.lower())
         return ' '.join(keywords)

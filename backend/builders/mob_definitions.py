@@ -3,7 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from django.db.models import NOT_PROVIDED
+from django.db.models import Q
 
+from builders.models import (
+    FACTION_ASSIGNMENT_SOURCE_MOB_DEFINITION,
+    FACTION_TYPE_CORE,
+)
 from builders.item_definitions import (
     RollResult,
     normalize_attribute_map,
@@ -142,6 +147,37 @@ def _runtime_group_id(definition, rule):
     return None
 
 
+def _copy_definition_faction_assignments(mob, definition) -> None:
+    mob.faction_assignments.filter(
+        source=FACTION_ASSIGNMENT_SOURCE_MOB_DEFINITION,
+    ).delete()
+
+    definition_assignments = list(
+        definition.faction_assignments.select_related("faction").all()
+    )
+    for assignment in definition_assignments:
+        faction = assignment.faction
+        if not faction:
+            continue
+        is_core = faction.type == FACTION_TYPE_CORE or faction.is_core
+        if is_core:
+            has_existing_core = (
+                mob.faction_assignments
+                .filter(Q(faction__type=FACTION_TYPE_CORE) | Q(faction__is_core=True))
+                .exists()
+            )
+            if has_existing_core:
+                continue
+        elif mob.faction_assignments.filter(faction=faction).exists():
+            continue
+
+        mob.faction_assignments.create(
+            faction=faction,
+            value=assignment.value,
+            source=FACTION_ASSIGNMENT_SOURCE_MOB_DEFINITION,
+        )
+
+
 def spawn_mob_from_definition(
     definition,
     target,
@@ -207,6 +243,7 @@ def spawn_mob_from_definition(
         "modified_ts",
     ])))
     mob.create_corpse()
+    _copy_definition_faction_assignments(mob, definition)
     if definition.merchant_profile_id:
         from spawns.merchants import create_or_update_merchant_runtime
 
@@ -281,6 +318,7 @@ def sync_spawned_mobs_from_definition(definition) -> int:
                 "modified_ts",
             ]))
         )
+        _copy_definition_faction_assignments(mob, definition)
         from spawns.merchants import create_or_update_merchant_runtime
 
         create_or_update_merchant_runtime(mob)

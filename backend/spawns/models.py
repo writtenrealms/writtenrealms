@@ -396,7 +396,7 @@ class Player(CharMixin, AdventBaseModel):
         # case in the future we allow multiple, and since it doesn't
         # make the code slower otherwise, we treat the future case.
         core_factions = self.faction_assignments.filter(
-            faction__is_core=True
+            models.Q(faction__type='core') | models.Q(faction__is_core=True)
         ).order_by('created_ts')
         for core_faction in core_factions:
             if core_faction.faction.starting_room:

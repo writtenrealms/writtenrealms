@@ -2,7 +2,7 @@
   <div id="edit-world-manifest">
     <h2>{{ world.name.toUpperCase() }} EDIT WORLD</h2>
     <div class="color-text-60 mb-6">
-      Paste one or more YAML manifests. Each YAML document is applied in order. Supported kinds: world, currency, zone, room, path, itemtemplate, itemdefinition, itembundle, merchantprofile, mobtemplate, mobdefinition, spawnplan, ability, abilities, quest, questarc, and trigger.
+      Paste one or more YAML manifests. Each YAML document is applied in order. Supported kinds: world, currency, faction, zone, room, path, itemtemplate, itemdefinition, itembundle, merchantprofile, mobtemplate, mobdefinition, spawnplan, ability, abilities, quest, questarc, and trigger.
     </div>
 
     <template v-if="!hasApplyResult">
@@ -96,6 +96,7 @@ type AppliedEntity = {
 const payloadKeyByKind: Record<string, string> = {
   ability: "ability",
   currency: "currency",
+  faction: "faction",
   itembundle: "item_bundle",
   itemdefinition: "item_definition",
   itemtemplate: "item_template",
@@ -115,6 +116,7 @@ const kindLabels: Record<string, string> = {
   ability: "Ability",
   abilities: "Ability",
   currency: "Currency",
+  faction: "Faction",
   itembundle: "Item bundle",
   itemdefinition: "Item",
   itemtemplate: "Item template",
@@ -169,6 +171,15 @@ const routeForEntity = (
   }
   if (kind === "currency") {
     return { name: "builder_world_currency_list", params: { world_id: worldId } };
+  }
+  if (kind === "faction" && id) {
+    return {
+      name: "builder_world_faction_details",
+      params: { world_id: worldId, faction_id: id },
+    };
+  }
+  if (kind === "faction") {
+    return { name: "builder_world_faction_list", params: { world_id: worldId } };
   }
   if (kind === "ability" && id) {
     return {
@@ -405,6 +416,23 @@ spec:
   entries: []
 `;
 
+const newFactionYaml = `kind: faction
+metadata:
+  code: new_faction
+  name: New Faction
+spec:
+  type: reputation
+  description: ''
+  notes: ''
+  ranks:
+    - standing: -1000
+      name: Hostile
+    - standing: 0
+      name: Neutral
+    - standing: 1000
+      name: Friendly
+`;
+
 const newMobDefinitionYaml = `kind: mobdefinition
 metadata:
   slug: new-mob
@@ -582,6 +610,26 @@ const loadItemBundleYaml = async () => {
   }
 };
 
+const loadFactionYaml = async () => {
+  clearApplyResult();
+  const rawFactionId = route.query.faction_id;
+  const factionId = Array.isArray(rawFactionId)
+    ? rawFactionId[0]
+    : rawFactionId;
+  if (!factionId) {
+    manifestText.value = "";
+    return;
+  }
+  try {
+    const resp = await axios.get(
+      `/builder/worlds/${route.params.world_id}/factions/${factionId}/`
+    );
+    manifestText.value = resp.data?.yaml || "";
+  } catch (error: any) {
+    store.commit("ui/notification_set_error", extractError(error));
+  }
+};
+
 const loadMobDefinitionYaml = async () => {
   clearApplyResult();
   const rawMobDefinitionId = route.query.mob_definition_id;
@@ -708,6 +756,11 @@ onMounted(async () => {
   } else if (route.query.prefill === "new-item-bundle") {
     clearApplyResult();
     manifestText.value = newItemBundleYaml;
+  } else if (route.query.prefill === "faction") {
+    await loadFactionYaml();
+  } else if (route.query.prefill === "new-faction") {
+    clearApplyResult();
+    manifestText.value = newFactionYaml;
   } else if (route.query.prefill === "mob-definition") {
     await loadMobDefinitionYaml();
   } else if (route.query.prefill === "suggested-mob-definition") {

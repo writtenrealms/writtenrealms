@@ -15,6 +15,7 @@ from builders import serializers as builder_serializers
 from builders.models import (
     AbilityDefinition,
     Currency,
+    Faction,
     ItemBundle,
     ItemDefinition,
     ItemTemplate,
@@ -56,6 +57,7 @@ _ITEM_TEMPLATE_KIND_ALIASES = {"itemtemplate", "item-template", "item_template"}
 _ITEM_DEFINITION_KIND_ALIASES = {"itemdefinition", "item-definition", "item_definition"}
 _ITEM_BUNDLE_KIND_ALIASES = {"itembundle", "item-bundle", "item_bundle"}
 _MERCHANT_PROFILE_KIND_ALIASES = {"merchantprofile", "merchant-profile", "merchant_profile"}
+_FACTION_KIND_ALIASES = {"faction"}
 _MOB_TEMPLATE_KIND_ALIASES = {"mobtemplate", "mob-template", "mob_template"}
 _MOB_DEFINITION_KIND_ALIASES = {"mobdefinition", "mob-definition", "mob_definition"}
 _SPAWN_PLAN_KIND_ALIASES = {"spawnplan", "spawn-plan", "spawn_plan"}
@@ -189,6 +191,8 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
         return builder_manifests.ITEM_BUNDLE_MANIFEST_KIND
     if raw_kind in _MERCHANT_PROFILE_KIND_ALIASES:
         return builder_manifests.MERCHANT_PROFILE_MANIFEST_KIND
+    if raw_kind in _FACTION_KIND_ALIASES:
+        return builder_manifests.FACTION_MANIFEST_KIND
     if raw_kind in _MOB_TEMPLATE_KIND_ALIASES:
         return MOB_TEMPLATE_MANIFEST_KIND
     if raw_kind in _MOB_DEFINITION_KIND_ALIASES:
@@ -207,7 +211,7 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
         return builder_manifests.ABILITIES_MANIFEST_KIND
     raise serializers.ValidationError(
         "Unsupported manifest kind. Supported kinds: "
-        "world, currency, zone, room, path, itemtemplate, itemdefinition, itembundle, merchantprofile, mobtemplate, mobdefinition, spawnplan, questarc, quest, trigger, ability, abilities."
+        "world, currency, zone, room, path, itemtemplate, itemdefinition, itembundle, merchantprofile, faction, mobtemplate, mobdefinition, spawnplan, questarc, quest, trigger, ability, abilities."
     )
 
 
@@ -554,6 +558,17 @@ def _serialize_merchant_profile_manifest(merchant_profile: MerchantProfile) -> d
             slot["item_definition"] = f"{_ITEM_DEFINITION_REF_PREFIX}{slot['item_definition']}"
         if "item_bundle" in slot:
             slot["item_bundle"] = f"{_ITEM_BUNDLE_REF_PREFIX}{slot['item_bundle']}"
+    return manifest
+
+
+def _serialize_faction_manifest(faction: Faction) -> dict[str, Any]:
+    manifest = builder_manifests.faction_to_manifest(
+        faction,
+        room_reference_mode="coords",
+    )
+    manifest["metadata"].pop("world", None)
+    manifest["metadata"].pop("id", None)
+    manifest["metadata"].pop("key", None)
     return manifest
 
 
@@ -999,6 +1014,13 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             ).select_related("funds_currency").order_by("slug", "id")
         ],
         *[
+            _serialize_faction_manifest(faction)
+            for faction in world.world_factions.prefetch_related("ranks").select_related(
+                "starting_room",
+                "death_room",
+            ).order_by("type", "code", "id")
+        ],
+        *[
             _serialize_zone_manifest(zone)
             for zone in world.zones.all().order_by("name", "id")
         ],
@@ -1076,6 +1098,7 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
         "item_definitions": 0,
         "item_bundles": 0,
         "merchant_profiles": 0,
+        "factions": 0,
         "mob_templates": 0,
         "mob_definitions": 0,
         "spawn_plans": 0,
@@ -1102,6 +1125,8 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
             counts["item_bundles"] += 1
         elif kind == builder_manifests.MERCHANT_PROFILE_MANIFEST_KIND:
             counts["merchant_profiles"] += 1
+        elif kind == builder_manifests.FACTION_MANIFEST_KIND:
+            counts["factions"] += 1
         elif kind == MOB_TEMPLATE_MANIFEST_KIND:
             counts["mob_templates"] += 1
         elif kind == builder_manifests.MOB_DEFINITION_MANIFEST_KIND:
@@ -1994,6 +2019,47 @@ def apply_merchant_profile_manifest(*, world: World, manifest: dict[str, Any]) -
     )
     created = parsed.merchant_profile is None
     return builder_manifests.apply_merchant_profile_manifest(parsed), created
+
+
+def _normalize_faction_manifest_for_import(*, world: World, manifest: dict[str, Any]) -> dict[str, Any]:
+    normalized = copy.deepcopy(manifest)
+    spec = normalized.get("spec") or {}
+    if not isinstance(spec, dict):
+        return normalized
+    for field_name in ("starting_room", "death_room"):
+        room_ref = str(spec.get(field_name) or "").strip()
+        if not room_ref.startswith(_ROOM_REF_PREFIX):
+            continue
+        room = _get_or_create_room(world=world, room_ref=room_ref)
+        spec[field_name] = f"room.{room.id}"
+    normalized["spec"] = spec
+    return normalized
+
+
+def apply_faction_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Faction, bool]:
+    if parse_document_kind(manifest) != builder_manifests.FACTION_MANIFEST_KIND:
+        raise serializers.ValidationError("Unsupported manifest kind. Expected 'faction'.")
+
+    normalized = _normalize_faction_manifest_for_import(world=world, manifest=manifest)
+    parsed = builder_manifests.parse_faction_manifest(
+        world=world,
+        manifest=normalized,
+    )
+    created = parsed.faction is None
+    return builder_manifests.apply_faction_manifest(parsed), created
+
+
+def delete_faction_manifest(*, world: World, manifest: dict[str, Any]) -> Faction:
+    if parse_document_kind(manifest) != builder_manifests.FACTION_MANIFEST_KIND:
+        raise serializers.ValidationError("Unsupported manifest kind. Expected 'faction'.")
+    parsed = builder_manifests.parse_faction_delete_manifest(
+        world=world,
+        manifest=manifest,
+    )
+    faction = parsed.faction
+    faction._deleted_payload = builder_manifests.serialize_faction_payload(faction)
+    faction.delete()
+    return faction
 
 
 def _apply_mob_template_inventory(*, world: World, container: MobTemplate, inventory: list[Any]) -> None:

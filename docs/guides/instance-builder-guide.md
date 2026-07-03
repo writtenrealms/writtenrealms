@@ -362,20 +362,19 @@ quest, reward, and narrative systems can react to the choice.
 Suppose you want an instance where the player or group clears every Blackfin mob
 and WR2 records how long the clear took.
 
-### Choose Core Or Minor Faction
+### Choose Core Or Reputation Faction
 
 Use a core faction when the faction is a character identity or major alignment,
 such as a player race, nation, order, or side.
 
-Use a minor faction when the faction is a local organization, reputation group,
-dungeon enemy set, or temporary story group.
+Use a reputation faction when the faction is a local organization, reputation
+group, dungeon enemy set, or story group whose standing can change.
 
-For a one-instance hostile force, start with a minor faction such as
+For a one-instance hostile force, start with a reputation faction such as
 `blackfin`.
 
-Current WR2 mob definitions do not yet expose faction assignment in their
-manifest. Until that lands, mark the relevant spawn entries with guaranteed
-spawn traits so the future goal runtime has a stable cohort marker.
+If the group is only a temporary encounter marker and does not need standing,
+use spawn entry slugs or traits instead of creating a faction.
 
 ### Author The Mobs
 
@@ -393,6 +392,9 @@ spec:
   health_max: 45
   attack_power: 7
   weapon_damage: 6
+  factions:
+    reputation:
+      blackfin: 100
 ```
 
 ```yaml

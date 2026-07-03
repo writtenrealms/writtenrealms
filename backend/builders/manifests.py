@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
+from django.db.models import Q
 from django.utils.text import slugify
 from rest_framework import serializers
 
@@ -22,6 +23,13 @@ from builders.mob_definitions import mob_definition_property_fields
 from builders.models import (
     AbilityDefinition,
     Currency,
+    FACTION_ASSIGNMENT_SOURCE_MOB_DEFINITION,
+    FACTION_TYPE_CORE,
+    FACTION_TYPE_REPUTATION,
+    FACTION_TYPES,
+    Faction,
+    FactionAssignment,
+    FactionRank,
     ItemBundle,
     ItemBundleEntry,
     ItemDefinition,
@@ -53,6 +61,13 @@ from core.equipment_system import (
     normalize_equipment_system,
     validate_armor_class_reference,
 )
+from core.factions import (
+    faction_is_core,
+    faction_is_reputation,
+    faction_type_filter,
+    normalize_faction_code,
+    normalize_player_creation_config,
+)
 from core.leveling import (
     LevelingConfigError,
     normalize_leveling_curve,
@@ -82,6 +97,7 @@ ITEM_TEMPLATE_MANIFEST_KIND = "itemtemplate"
 ITEM_DEFINITION_MANIFEST_KIND = "itemdefinition"
 ITEM_BUNDLE_MANIFEST_KIND = "itembundle"
 MERCHANT_PROFILE_MANIFEST_KIND = "merchantprofile"
+FACTION_MANIFEST_KIND = "faction"
 MOB_DEFINITION_MANIFEST_KIND = "mobdefinition"
 ABILITY_MANIFEST_KIND = "ability"
 ABILITIES_MANIFEST_KIND = "abilities"
@@ -116,6 +132,9 @@ _MERCHANT_PROFILE_MANIFEST_KIND_ALIASES = {
     "merchant-profile",
     "merchant_profile",
 }
+_FACTION_MANIFEST_KIND_ALIASES = {
+    FACTION_MANIFEST_KIND,
+}
 _MOB_DEFINITION_MANIFEST_KIND_ALIASES = {
     MOB_DEFINITION_MANIFEST_KIND,
     "mob-definition",
@@ -146,7 +165,6 @@ _WORLD_CONFIG_CONFIG_TEXT_FIELDS = (
     "name_exclusions",
 )
 _WORLD_CONFIG_CONFIG_BOOL_FIELDS = (
-    "can_select_faction",
     "can_select_gender",
     "auto_equip",
     "is_narrative",
@@ -183,6 +201,7 @@ _WORLD_CONFIG_COMBAT_FIELD = "combat"
 _WORLD_CONFIG_EQUIPMENT_FIELD = "equipment"
 _WORLD_CONFIG_LEVELING_FIELD = "leveling_curve"
 _WORLD_CONFIG_ABILITY_PROGRESS_FIELD = "ability_progression"
+_WORLD_CONFIG_PLAYER_CREATION_FIELD = "player_creation"
 _WORLD_FIELDS_PROPAGATED_TO_SPAWNS = {
     "name",
     "short_description",
@@ -315,6 +334,7 @@ _MOB_DEFINITION_SPEC_FIELDS = (
     "randomization",
     "traits",
     "combat",
+    "factions",
     "merchant",
     "trainer",
     *_MOB_DEFINITION_BASE_PROPERTY_FIELDS,
@@ -441,6 +461,24 @@ class ParsedMerchantProfileDeleteManifest:
 
 
 @dataclass
+class ParsedFactionManifest:
+    world: World
+    faction: Faction | None
+    faction_id: int | None
+    code: str
+    name: str
+    fields: dict[str, Any]
+    ranks: list[dict[str, Any]] | None
+
+
+@dataclass
+class ParsedFactionDeleteManifest:
+    world: World
+    faction: Faction
+    faction_id: int
+
+
+@dataclass
 class ParsedMobDefinitionManifest:
     world: World
     mob_definition: MobDefinition | None
@@ -448,6 +486,7 @@ class ParsedMobDefinitionManifest:
     slug: str
     name: str
     fields: dict[str, Any]
+    factions: dict[str, Any] | None
 
 
 @dataclass
@@ -583,6 +622,8 @@ def parse_manifest_kind(manifest: dict[str, Any]) -> str:
         return ITEM_BUNDLE_MANIFEST_KIND
     if manifest_kind in _MERCHANT_PROFILE_MANIFEST_KIND_ALIASES:
         return MERCHANT_PROFILE_MANIFEST_KIND
+    if manifest_kind in _FACTION_MANIFEST_KIND_ALIASES:
+        return FACTION_MANIFEST_KIND
     if manifest_kind in _MOB_DEFINITION_MANIFEST_KIND_ALIASES:
         return MOB_DEFINITION_MANIFEST_KIND
     if manifest_kind in _ABILITY_MANIFEST_KIND_ALIASES:
@@ -595,7 +636,7 @@ def parse_manifest_kind(manifest: dict[str, Any]) -> str:
         return QUEST_ARC_MANIFEST_KIND
     raise serializers.ValidationError(
         f"Unsupported manifest kind '{manifest_kind}'. "
-        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_MANIFEST_KIND}, {ITEM_TEMPLATE_MANIFEST_KIND}, {ITEM_DEFINITION_MANIFEST_KIND}, {ITEM_BUNDLE_MANIFEST_KIND}, {MERCHANT_PROFILE_MANIFEST_KIND}, {MOB_DEFINITION_MANIFEST_KIND}, {ABILITY_MANIFEST_KIND}, {ABILITIES_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
+        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_MANIFEST_KIND}, {ITEM_TEMPLATE_MANIFEST_KIND}, {ITEM_DEFINITION_MANIFEST_KIND}, {ITEM_BUNDLE_MANIFEST_KIND}, {MERCHANT_PROFILE_MANIFEST_KIND}, {FACTION_MANIFEST_KIND}, {MOB_DEFINITION_MANIFEST_KIND}, {ABILITY_MANIFEST_KIND}, {ABILITIES_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
     )
 
 
@@ -784,7 +825,7 @@ def world_config_to_manifest(
                     config.combat_resolution_interval
                 ),
                 "is_narrative": bool(config.is_narrative),
-                "can_select_faction": bool(config.can_select_faction),
+                _WORLD_CONFIG_PLAYER_CREATION_FIELD: config.player_creation or {},
                 "auto_equip": bool(config.auto_equip),
                 "players_can_set_title": bool(config.players_can_set_title),
                 "non_ascii_names": bool(config.non_ascii_names),
@@ -874,6 +915,7 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
                 ),
                 "allow_combat": bool(config.allow_combat),
                 "is_narrative": bool(config.is_narrative),
+                _WORLD_CONFIG_PLAYER_CREATION_FIELD: config.player_creation or {},
                 "can_select_faction": bool(config.can_select_faction),
                 "auto_equip": bool(config.auto_equip),
                 "players_can_set_title": bool(config.players_can_set_title),
@@ -1061,11 +1103,141 @@ def serialize_item_definition_payload(item_definition: ItemDefinition) -> dict[s
     }
 
 
+def _faction_spec_from_instance(
+    faction: Faction,
+    *,
+    room_reference_mode: str = "key",
+) -> dict[str, Any]:
+    faction_type = FACTION_TYPE_CORE if faction_is_core(faction) else FACTION_TYPE_REPUTATION
+    spec: dict[str, Any] = {
+        "type": faction_type,
+        "description": faction.description or "",
+    }
+    if faction.notes:
+        spec["notes"] = faction.notes
+    if faction_type == FACTION_TYPE_CORE:
+        spec["playable"] = bool(faction.playable or faction.is_selectable)
+        spec["starting_room"] = _serialize_world_room_reference(
+            room=faction.starting_room,
+            mode=room_reference_mode,
+        )
+        spec["death_room"] = _serialize_world_room_reference(
+            room=faction.death_room,
+            mode=room_reference_mode,
+        )
+        if faction.default_languages:
+            spec["default_languages"] = list(faction.default_languages or [])
+    else:
+        ranks = [
+            {
+                "standing": int(rank.standing),
+                "name": rank.name or "",
+            }
+            for rank in faction.ranks.all().order_by("standing", "id")
+        ]
+        if ranks:
+            spec["ranks"] = ranks
+    return spec
+
+
+def faction_to_manifest(
+    faction: Faction,
+    *,
+    room_reference_mode: str = "key",
+) -> dict[str, Any]:
+    return {
+        "kind": FACTION_MANIFEST_KIND,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, faction.world_id),
+            "id": faction.id,
+            "key": _entity_key(FACTION_MANIFEST_KIND, faction.id),
+            "code": faction.code,
+            "name": faction.name or "",
+        },
+        "spec": _faction_spec_from_instance(
+            faction,
+            room_reference_mode=room_reference_mode,
+        ),
+    }
+
+
+def faction_delete_manifest(faction: Faction) -> dict[str, Any]:
+    return {
+        "kind": FACTION_MANIFEST_KIND,
+        "operation": TRIGGER_MANIFEST_OPERATION_DELETE,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, faction.world_id),
+            "id": faction.id,
+            "key": _entity_key(FACTION_MANIFEST_KIND, faction.id),
+            "code": faction.code,
+            "name": faction.name or "",
+        },
+    }
+
+
+def serialize_faction_payload(faction: Faction) -> dict[str, Any]:
+    manifest = faction_to_manifest(faction)
+    delete_manifest = faction_delete_manifest(faction)
+    return {
+        "id": faction.id,
+        "key": _entity_key(FACTION_MANIFEST_KIND, faction.id),
+        "code": faction.code,
+        "name": faction.name or "",
+        "description": faction.description or "",
+        "notes": faction.notes or "",
+        "type": manifest["spec"]["type"],
+        "playable": bool(faction.playable),
+        "default_languages": faction.default_languages or [],
+        "starting_room": _serialize_room_reference(faction.starting_room),
+        "death_room": _serialize_room_reference(faction.death_room),
+        "ranks": [
+            {
+                "standing": int(rank.standing),
+                "name": rank.name or "",
+            }
+            for rank in faction.ranks.all().order_by("standing", "id")
+        ],
+        "manifest": manifest,
+        "yaml": manifest_to_yaml(manifest),
+        "delete_manifest": delete_manifest,
+        "delete_yaml": manifest_to_yaml(delete_manifest),
+    }
+
+
 def _mob_definition_aggression(mob_definition: MobDefinition) -> str:
     return adv_consts.canonical_mob_aggression(
         (mob_definition.base_properties or {}).get("aggression")
         or adv_consts.MOB_AGGRESSION_PASSIVE
     )
+
+
+def faction_assignments_to_manifest_spec(member) -> dict[str, Any]:
+    prefetched = getattr(member, "_prefetched_objects_cache", {})
+    assignments = prefetched.get("faction_assignments")
+    if assignments is None:
+        assignments = member.faction_assignments.select_related("faction").all()
+
+    core_code = None
+    reputation: dict[str, int] = {}
+    for assignment in assignments:
+        faction = assignment.faction
+        if not faction:
+            continue
+        if faction_is_core(faction):
+            if core_code is None:
+                core_code = faction.code
+            continue
+        reputation[faction.code] = int(assignment.value or 0)
+
+    spec: dict[str, Any] = {}
+    if core_code:
+        spec["core"] = core_code
+    if reputation:
+        spec["reputation"] = {
+            code: reputation[code]
+            for code in sorted(reputation.keys())
+        }
+    return spec
 
 
 def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[str, Any]:
@@ -1101,6 +1273,9 @@ def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[st
     spec["randomization"] = mob_definition.randomization or {}
     if mob_definition.traits:
         spec["traits"] = mob_definition.traits or []
+    factions = faction_assignments_to_manifest_spec(mob_definition)
+    if factions:
+        spec["factions"] = factions
     return spec
 
 
@@ -1150,6 +1325,7 @@ def serialize_mob_definition_payload(mob_definition: MobDefinition) -> dict[str,
         "base_properties": mob_definition.base_properties or {},
         "attributes": mob_definition.attributes or {},
         "randomization": mob_definition.randomization or {},
+        "factions": faction_assignments_to_manifest_spec(mob_definition),
         "combat_abilities": mob_definition.combat_abilities or [],
         "attackable": bool(mob_definition.attackable),
         "trainer": mob_definition.trainer or {},
@@ -2187,6 +2363,108 @@ def _resolve_mob_definition_reference(
     return mob_definition, mob_definition.id
 
 
+def _parse_faction_reference(value: Any, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or a faction key."
+        )
+    if isinstance(value, int):
+        return value
+
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or a faction key."
+        )
+    if text.isdigit():
+        return int(text)
+
+    entity_type, sep, raw_id = text.partition(".")
+    if sep != "." or entity_type != FACTION_MANIFEST_KIND or not raw_id.isdigit():
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or a faction key."
+        )
+    return int(raw_id)
+
+
+def _resolve_faction_reference(
+    *,
+    world: World,
+    metadata: dict[str, Any],
+) -> tuple[Faction | None, int | None]:
+    faction_id = metadata.get("id")
+    faction_key = metadata.get("key")
+    faction_code = str(metadata.get("code") or "").strip()
+
+    resolved_by_id = None
+    if faction_id is not None:
+        parsed_id = _parse_faction_reference(faction_id, "metadata.id")
+        resolved_by_id = Faction.objects.filter(world=world, pk=parsed_id).first()
+        if not resolved_by_id:
+            raise serializers.ValidationError(
+                "Faction referenced by metadata.id was not found."
+            )
+
+    resolved_by_key = None
+    if faction_key not in (None, ""):
+        parsed_key_id = _parse_faction_reference(faction_key, "metadata.key")
+        resolved_by_key = Faction.objects.filter(world=world, pk=parsed_key_id).first()
+        if not resolved_by_key:
+            raise serializers.ValidationError(
+                "Faction referenced by metadata.key was not found."
+            )
+
+    resolved_by_code = None
+    if faction_code:
+        resolved_by_code = Faction.objects.filter(world=world, code=faction_code).first()
+
+    resolved = [item for item in (resolved_by_id, resolved_by_key, resolved_by_code) if item]
+    if len({item.pk for item in resolved}) > 1:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, and metadata.code refer to different factions."
+        )
+
+    faction = resolved_by_id or resolved_by_key or resolved_by_code
+    if faction is None:
+        return None, None
+    return faction, faction.id
+
+
+def _resolve_faction_code_reference(
+    *,
+    world: World,
+    value: Any,
+    expected_type: str,
+    field_name: str,
+) -> Faction:
+    if isinstance(value, int):
+        faction = Faction.objects.filter(world=world, pk=value).first()
+    else:
+        raw_text = str(value or "").strip()
+        faction = None
+        if raw_text.startswith(f"{FACTION_MANIFEST_KIND}."):
+            raw_ref = raw_text.split(".", 1)[1]
+            if raw_ref.isdigit():
+                faction = Faction.objects.filter(world=world, pk=int(raw_ref)).first()
+            else:
+                faction = Faction.objects.filter(
+                    world=world,
+                    code=normalize_faction_code(raw_ref, field_name=field_name),
+                ).first()
+        elif raw_text:
+            faction = Faction.objects.filter(
+                world=world,
+                code=normalize_faction_code(raw_text, field_name=field_name),
+            ).first()
+    if faction is None:
+        raise serializers.ValidationError(f"{field_name} references an unknown faction.")
+    if expected_type == FACTION_TYPE_CORE and not faction_is_core(faction):
+        raise serializers.ValidationError(f"{field_name} must reference a core faction.")
+    if expected_type == FACTION_TYPE_REPUTATION and not faction_is_reputation(faction):
+        raise serializers.ValidationError(f"{field_name} must reference a reputation faction.")
+    return faction
+
+
 def _parse_item_bundle_reference(value: Any, field_name: str) -> int:
     if isinstance(value, bool):
         raise serializers.ValidationError(
@@ -2964,6 +3242,324 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
     }
 
 
+def _coerce_faction_room(
+    *,
+    world: World,
+    value: Any,
+    field_name: str,
+) -> Room | None:
+    if value in (None, ""):
+        return None
+    room_id = _parse_entity_ref(value, expected_type="room", field_name=field_name)
+    room = Room.objects.filter(world=world, pk=room_id).first()
+    if room is None:
+        raise serializers.ValidationError(
+            f"Room referenced by {field_name} was not found in this world."
+        )
+    return room
+
+
+def _coerce_default_languages(value: Any, field_name: str) -> list[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        raise serializers.ValidationError(f"{field_name} must be a list.")
+    languages: list[str] = []
+    for index, raw_language in enumerate(value):
+        language = str(raw_language or "").strip().lower()
+        if not language:
+            raise serializers.ValidationError(f"{field_name}[{index}] cannot be empty.")
+        if language not in languages:
+            languages.append(language)
+    return languages
+
+
+def _coerce_faction_ranks(value: Any, field_name: str) -> list[dict[str, Any]]:
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise serializers.ValidationError(f"{field_name} must be a list.")
+    ranks: list[dict[str, Any]] = []
+    seen_standings: set[int] = set()
+    for index, entry in enumerate(value):
+        if not isinstance(entry, dict):
+            raise serializers.ValidationError(f"{field_name}[{index}] must be a mapping.")
+        unknown_fields = sorted(set(entry.keys()) - {"standing", "name"})
+        if unknown_fields:
+            raise serializers.ValidationError(
+                f"Unsupported {field_name}[{index}] field(s): {', '.join(unknown_fields)}."
+            )
+        standing = _coerce_int(entry.get("standing"), f"{field_name}[{index}].standing")
+        if standing in seen_standings:
+            raise serializers.ValidationError(
+                f"{field_name}[{index}].standing duplicates another rank."
+            )
+        seen_standings.add(standing)
+        name = _coerce_text(entry.get("name"))
+        if not name.strip():
+            raise serializers.ValidationError(f"{field_name}[{index}].name cannot be empty.")
+        ranks.append({"standing": standing, "name": name})
+    return ranks
+
+
+def _coerce_faction_fields(
+    *,
+    world: World,
+    spec_patch: dict[str, Any],
+    existing: Faction | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]] | None]:
+    faction_type = _coerce_choice(
+        spec_patch.get("type", existing.type if existing else FACTION_TYPE_REPUTATION),
+        choices=list(FACTION_TYPES),
+        field_name="spec.type",
+    )
+    fields: dict[str, Any] = {
+        "type": faction_type,
+        "is_core": faction_type == FACTION_TYPE_CORE,
+        "description": _coerce_text(
+            spec_patch.get("description", existing.description if existing else "")
+        ),
+        "notes": _coerce_text(
+            spec_patch.get("notes", existing.notes if existing else "")
+        ),
+    }
+    if faction_type == FACTION_TYPE_CORE:
+        playable = _coerce_bool(
+            spec_patch.get("playable", existing.playable if existing else False),
+            "spec.playable",
+        )
+        fields["playable"] = playable
+        fields["is_selectable"] = playable
+        fields["starting_room"] = (
+            _coerce_faction_room(
+                world=world,
+                value=spec_patch.get("starting_room"),
+                field_name="spec.starting_room",
+            )
+            if "starting_room" in spec_patch
+            else existing.starting_room if existing else None
+        )
+        fields["death_room"] = (
+            _coerce_faction_room(
+                world=world,
+                value=spec_patch.get("death_room"),
+                field_name="spec.death_room",
+            )
+            if "death_room" in spec_patch
+            else existing.death_room if existing else None
+        )
+        fields["default_languages"] = (
+            _coerce_default_languages(
+                spec_patch.get("default_languages"),
+                "spec.default_languages",
+            )
+            if "default_languages" in spec_patch
+            else list(existing.default_languages or []) if existing else []
+        )
+        ranks = None
+    else:
+        fields.update(
+            {
+                "playable": False,
+                "is_selectable": False,
+                "is_default": False,
+                "starting_room": None,
+                "death_room": None,
+                "default_languages": [],
+            }
+        )
+        ranks = (
+            _coerce_faction_ranks(spec_patch.get("ranks"), "spec.ranks")
+            if "ranks" in spec_patch
+            else None
+        )
+    return fields, ranks
+
+
+def _coerce_mob_definition_factions(
+    *,
+    world: World,
+    spec_patch: dict[str, Any],
+) -> dict[str, Any] | None:
+    if "factions" not in spec_patch:
+        return None
+    raw_factions = spec_patch.get("factions")
+    if raw_factions in (None, ""):
+        return {"core": None, "reputation": {}}
+    if not isinstance(raw_factions, dict):
+        raise serializers.ValidationError("spec.factions must be a mapping.")
+
+    unknown_fields = sorted(set(raw_factions.keys()) - {"core", "reputation"})
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported spec.factions field(s): {', '.join(unknown_fields)}."
+        )
+
+    core = None
+    if "core" in raw_factions and raw_factions.get("core") not in (None, ""):
+        core = _resolve_faction_code_reference(
+            world=world,
+            value=raw_factions.get("core"),
+            expected_type=FACTION_TYPE_CORE,
+            field_name="spec.factions.core",
+        )
+
+    reputation: dict[int, int] = {}
+    raw_reputation = raw_factions.get("reputation") or {}
+    if not isinstance(raw_reputation, dict):
+        raise serializers.ValidationError("spec.factions.reputation must be a mapping.")
+    for raw_code, raw_value in raw_reputation.items():
+        faction = _resolve_faction_code_reference(
+            world=world,
+            value=raw_code,
+            expected_type=FACTION_TYPE_REPUTATION,
+            field_name=f"spec.factions.reputation.{raw_code}",
+        )
+        reputation[faction.id] = _coerce_int(
+            raw_value,
+            f"spec.factions.reputation.{raw_code}",
+        )
+
+    return {
+        "core": core.id if core else None,
+        "reputation": reputation,
+    }
+
+
+def parse_faction_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedFactionManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != FACTION_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{FACTION_MANIFEST_KIND}'."
+        )
+
+    operation = parse_manifest_operation(manifest)
+    if operation != TRIGGER_MANIFEST_OPERATION_APPLY:
+        raise serializers.ValidationError(
+            f"Faction manifests only support operation '{TRIGGER_MANIFEST_OPERATION_APPLY}' in this parser."
+        )
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError("Manifest world does not match the selected world.")
+
+    faction, faction_id = _resolve_faction_reference(world=world, metadata=metadata)
+
+    spec_patch = manifest.get("spec") or {}
+    if not isinstance(spec_patch, dict):
+        raise serializers.ValidationError("spec must be a mapping.")
+    if faction is None and not spec_patch:
+        raise serializers.ValidationError("spec is required when creating a faction.")
+
+    allowed_fields = {
+        "type",
+        "description",
+        "notes",
+        "playable",
+        "starting_room",
+        "death_room",
+        "default_languages",
+        "ranks",
+    }
+    unknown_fields = sorted(set(spec_patch.keys()) - allowed_fields)
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported spec field(s): {', '.join(unknown_fields)}."
+        )
+
+    raw_code = metadata.get("code", faction.code if faction else None)
+    code = normalize_faction_code(raw_code, field_name="metadata.code")
+    if Faction.objects.filter(world=world, code=code).exclude(pk=faction_id).exists():
+        raise serializers.ValidationError(
+            "metadata.code is already used by another faction."
+        )
+
+    default_name = faction.name if faction else code.replace("_", " ").title()
+    name = _coerce_text(metadata.get("name", default_name))
+    if not name.strip():
+        raise serializers.ValidationError("metadata.name cannot be empty.")
+
+    fields, ranks = _coerce_faction_fields(
+        world=world,
+        spec_patch=spec_patch,
+        existing=faction,
+    )
+    fields["code"] = code
+    fields["name"] = name
+
+    return ParsedFactionManifest(
+        world=world,
+        faction=faction,
+        faction_id=faction_id,
+        code=code,
+        name=name,
+        fields=fields,
+        ranks=ranks,
+    )
+
+
+def parse_faction_delete_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedFactionDeleteManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != FACTION_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{FACTION_MANIFEST_KIND}'."
+        )
+
+    operation = parse_manifest_operation(manifest)
+    if operation != TRIGGER_MANIFEST_OPERATION_DELETE:
+        raise serializers.ValidationError("Delete parser requires operation: delete.")
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError("Manifest world does not match the selected world.")
+
+    faction, faction_id = _resolve_faction_reference(world=world, metadata=metadata)
+    if faction is None or faction_id is None:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, or metadata.code is required for operation: delete."
+        )
+
+    spec = manifest.get("spec")
+    if spec not in (None, {}):
+        raise serializers.ValidationError("spec is not allowed for operation: delete.")
+
+    return ParsedFactionDeleteManifest(
+        world=world,
+        faction=faction,
+        faction_id=faction_id,
+    )
+
+
 def parse_item_definition_manifest(
     *,
     world: World,
@@ -3165,6 +3761,10 @@ def parse_mob_definition_manifest(
             spec_patch=spec_patch,
             existing=mob_definition,
         )
+        factions = _coerce_mob_definition_factions(
+            world=world,
+            spec_patch=spec_patch,
+        )
     except ItemDefinitionError as exc:
         raise serializers.ValidationError(str(exc))
     fields["slug"] = slug
@@ -3177,6 +3777,7 @@ def parse_mob_definition_manifest(
         slug=slug,
         name=name,
         fields=fields,
+        factions=factions,
     )
 
 
@@ -4153,6 +4754,7 @@ def parse_world_config_manifest(
     allowed_fields.add(_WORLD_CONFIG_EQUIPMENT_FIELD)
     allowed_fields.add(_WORLD_CONFIG_LEVELING_FIELD)
     allowed_fields.add(_WORLD_CONFIG_ABILITY_PROGRESS_FIELD)
+    allowed_fields.add(_WORLD_CONFIG_PLAYER_CREATION_FIELD)
 
     unknown_fields = sorted(set(spec.keys()) - allowed_fields)
     if unknown_fields:
@@ -4301,6 +4903,18 @@ def parse_world_config_manifest(
         except AbilityValidationError as exc:
             raise serializers.ValidationError(str(exc))
 
+    if _WORLD_CONFIG_PLAYER_CREATION_FIELD in spec:
+        config_updates[_WORLD_CONFIG_PLAYER_CREATION_FIELD] = normalize_player_creation_config(
+            spec.get(_WORLD_CONFIG_PLAYER_CREATION_FIELD),
+            world=world,
+            existing=config.player_creation or {},
+        )
+        core_policy = config_updates[_WORLD_CONFIG_PLAYER_CREATION_FIELD].get("core_faction") or {}
+        config_updates["can_select_faction"] = core_policy.get("mode") in {
+            "choose_required",
+            "choose_optional",
+        }
+
     try:
         validate_leveling_config(
             starting_level=config_updates.get(
@@ -4383,14 +4997,81 @@ def apply_item_definition_manifest(parsed: ParsedItemDefinitionManifest) -> Item
 
 
 def apply_mob_definition_manifest(parsed: ParsedMobDefinitionManifest) -> MobDefinition:
-    if parsed.mob_definition is None:
-        return MobDefinition.objects.create(world=parsed.world, **parsed.fields)
+    with transaction.atomic():
+        was_existing = parsed.mob_definition is not None
+        if parsed.mob_definition is None:
+            mob_definition = MobDefinition.objects.create(world=parsed.world, **parsed.fields)
+        else:
+            mob_definition = parsed.mob_definition
+            for field_name, value in parsed.fields.items():
+                setattr(mob_definition, field_name, value)
+            mob_definition.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
 
-    mob_definition = parsed.mob_definition
-    for field_name, value in parsed.fields.items():
-        setattr(mob_definition, field_name, value)
-    mob_definition.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
-    return mob_definition
+        _apply_faction_assignments(
+            member=mob_definition,
+            factions=parsed.factions,
+            source=FACTION_ASSIGNMENT_SOURCE_MOB_DEFINITION,
+        )
+        if was_existing and parsed.factions is not None:
+            from builders.mob_definitions import sync_spawned_mobs_from_definition
+
+            sync_spawned_mobs_from_definition(mob_definition)
+        return mob_definition
+
+
+def _apply_faction_assignments(
+    *,
+    member,
+    factions: dict[str, Any] | None,
+    source: str,
+) -> None:
+    if factions is None:
+        return
+
+    member.faction_assignments.filter(source=source).delete()
+
+    core_faction_id = factions.get("core")
+    if core_faction_id:
+        has_existing_core = (
+            member.faction_assignments
+            .filter(Q(faction__type=FACTION_TYPE_CORE) | Q(faction__is_core=True))
+            .exists()
+        )
+        if not has_existing_core:
+            member.faction_assignments.create(
+                faction_id=core_faction_id,
+                value=1,
+                source=source,
+            )
+
+    for faction_id, value in (factions.get("reputation") or {}).items():
+        if member.faction_assignments.filter(faction_id=faction_id).exists():
+            continue
+        member.faction_assignments.create(
+            faction_id=faction_id,
+            value=int(value or 0),
+            source=source,
+        )
+
+
+def apply_faction_manifest(parsed: ParsedFactionManifest) -> Faction:
+    with transaction.atomic():
+        if parsed.faction is None:
+            faction = Faction.objects.create(world=parsed.world, **parsed.fields)
+        else:
+            faction = parsed.faction
+            for field_name, value in parsed.fields.items():
+                setattr(faction, field_name, value)
+            faction.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
+
+        if faction_is_core(faction):
+            FactionRank.objects.filter(faction=faction).delete()
+        elif parsed.ranks is not None:
+            FactionRank.objects.filter(faction=faction).delete()
+            for rank in parsed.ranks:
+                FactionRank.objects.create(faction=faction, **rank)
+
+        return faction
 
 
 def apply_item_bundle_manifest(parsed: ParsedItemBundleManifest) -> ItemBundle:

@@ -364,6 +364,7 @@ Use canonical effect `type` values when authoring new manifests:
 | `set_local`   | `key`, `value` or `set_local: [key, value]` | Writes quest-local state under `quest.local_state`. |
 | `grant_gold`  | `amount`                                    | Adds gold to the player immediately.                |
 | `grant_xp`    | `amount`                                    | Adds experience and applies world leveling immediately. |
+| `adjust_reputation` | `faction`, `amount`                   | Adds or subtracts player standing with a reputation faction. |
 | `mob_command` | `mob_template` and `command` or `commands`  | Runs a constrained mob speech/emote/echo command.   |
 
 

@@ -1025,6 +1025,7 @@ class WorldConfig(BaseModel):
     combat_resolution_interval = models.FloatField(default=0)
     combat_system = models.JSONField(default=dict)
     ability_progression = models.JSONField(default=default_ability_progression)
+    player_creation = models.JSONField(default=dict, blank=True)
     players_can_set_title = models.BooleanField(default=True)
     allow_pvp = models.BooleanField(default=True)
     is_narrative = models.BooleanField(default=False)

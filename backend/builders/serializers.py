@@ -63,6 +63,8 @@ from builders.models import (
     MobTemplateInventory,
     MerchantInventory,
     TransformationTemplate,
+    FACTION_TYPE_CORE,
+    FACTION_TYPE_REPUTATION,
     Faction,
     FactionAssignment,
     FactionRank,
@@ -2952,6 +2954,10 @@ class FactionSerializer(serializers.ModelSerializer):
             'code',
             'name',
             'description',
+            'modified_ts',
+            'type',
+            'playable',
+            'default_languages',
             'is_core',
             'starting_room',
             'death_room',
@@ -2970,12 +2976,33 @@ class FactionSerializer(serializers.ModelSerializer):
                 pk=instance.id
             ).update(is_default=False)
 
+    def _normalize_type_fields(self, validated_data):
+        if 'is_core' in validated_data:
+            validated_data['type'] = (
+                FACTION_TYPE_CORE
+                if validated_data.pop('is_core')
+                else FACTION_TYPE_REPUTATION
+            )
+        if 'is_selectable' in validated_data:
+            validated_data['playable'] = validated_data['is_selectable']
+        if validated_data.get('type') == FACTION_TYPE_REPUTATION:
+            validated_data['playable'] = False
+            validated_data['is_selectable'] = False
+            validated_data['is_default'] = False
+        elif validated_data.get('type') == FACTION_TYPE_CORE:
+            validated_data['is_core'] = True
+            if 'playable' in validated_data:
+                validated_data['is_selectable'] = validated_data['playable']
+        return validated_data
+
     def create(self, validated_data):
+        validated_data = self._normalize_type_fields(validated_data)
         instance = super().create(validated_data)
         self.check_default(instance, validated_data)
         return instance
 
     def update(self, instance, validated_data):
+        validated_data = self._normalize_type_fields(validated_data)
         instance = super().update(instance, validated_data)
         self.check_default(instance, validated_data)
         return instance
@@ -3035,13 +3062,13 @@ class FactionSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError(
                         'A faction with this code already exists.')
 
-        # Can't switch from minor to core if a char has that faction assigned
+        # Can't switch from reputation to core if a char has that faction assigned
         # as well as a core faction already.
         if (faction
             and not faction.is_core
             and 'is_core' in data
             and data['is_core']):
-            # If we're switching the faction from minor to core
+            # If we're switching the faction from reputation to core
 
             error = ('Cannot change to core faction when characters with '
                      'this faction already have a core faction.')

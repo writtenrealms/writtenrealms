@@ -17,6 +17,7 @@ from core.combat_formulas import CombatAttackResult, combatant_snapshot, resolve
 from core.computations import compute_stats
 from core.abilities import definition_world
 from core.condition_dsl import ConditionContext, evaluate_condition, resolve_path
+from core.factions import faction_is_core
 from core.leveling import ExperienceGrant, apply_experience
 from core.world_config import inherited_system_config
 from builders.models import AbilityDefinition
@@ -216,7 +217,7 @@ def _explicit_assignment_factions(actor) -> dict:
         faction = assignment.faction
         if not faction:
             continue
-        if faction.is_core:
+        if faction_is_core(faction):
             factions["core"] = faction.code
         else:
             factions[faction.code] = assignment.value

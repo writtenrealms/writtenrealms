@@ -231,6 +231,15 @@ const configLinks = computed(() => [
     },
   },
   {
+    title: "Factions",
+    description: "Core identities, reputation standings, ranks, and language defaults.",
+    rootOnly: true,
+    to: {
+      name: "builder_world_faction_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
     title: "Starting EQ",
     description: "Items granted to new players when they enter the world.",
     rootOnly: true,

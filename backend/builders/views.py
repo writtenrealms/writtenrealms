@@ -534,10 +534,26 @@ class FactionViewSet(BaseWorldBuilderViewSet):
 
     serializer_class = builder_serializers.FactionSerializer
 
+    def _serialize_faction_response(self, faction):
+        payload = builder_manifests.serialize_faction_payload(faction)
+        payload["modified_ts"] = faction.modified_ts
+        payload["model_type"] = faction.model_type
+        return payload
+
     def get_queryset(self):
         world = self.world.instance_of or self.world
 
         factions_qs = Faction.objects.filter(world=world)
+
+        faction_type = self.request.query_params.get('type', None)
+        if faction_type:
+            factions_qs = factions_qs.filter(type=faction_type)
+
+        playable = self.request.query_params.get('playable', None)
+        if playable in ('true', '1'):
+            factions_qs = factions_qs.filter(playable=True)
+        elif playable in ('false', '0'):
+            factions_qs = factions_qs.filter(playable=False)
 
         is_core = self.request.query_params.get('is_core', None)
         if is_core is not None:
@@ -549,6 +565,10 @@ class FactionViewSet(BaseWorldBuilderViewSet):
         factions_qs = self.search_queryset(factions_qs)
 
         return factions_qs
+
+    def retrieve(self, request, *args, **kwargs):
+        faction = self.get_object()
+        return Response(self._serialize_faction_response(faction))
 
     def update_live_instances(self, world):
         return
@@ -2429,6 +2449,51 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
         )
 
+    def _apply_faction_manifest(self, manifest):
+        self._assert_can_edit_world_config()
+        operation = builder_manifests.parse_manifest_operation(manifest)
+        if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+            parsed_delete = builder_manifests.parse_faction_delete_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            faction = parsed_delete.faction
+            if FactionAssignment.objects.filter(
+                faction=faction,
+                faction__type=builder_manifests.FACTION_TYPE_CORE,
+            ).exists():
+                raise serializers.ValidationError(
+                    "Cannot delete a core faction with assignments."
+                )
+            faction_payload = {
+                "id": faction.id,
+                "key": f"faction.{faction.id}",
+                "code": faction.code,
+                "name": faction.name,
+            }
+            faction.delete()
+            return Response(
+                {
+                    "kind": builder_manifests.FACTION_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "faction": faction_payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        faction, is_create = builder_world_export.apply_faction_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        return Response(
+            {
+                "kind": builder_manifests.FACTION_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "faction": builder_manifests.serialize_faction_payload(faction),
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
     def _apply_ability_manifest(self, manifest):
         self._assert_can_edit_abilities()
         operation = builder_manifests.parse_manifest_operation(manifest)
@@ -2730,6 +2795,8 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             return self._apply_item_bundle_manifest(manifest)
         if manifest_kind == builder_manifests.MERCHANT_PROFILE_MANIFEST_KIND:
             return self._apply_merchant_profile_manifest(manifest)
+        if manifest_kind == builder_manifests.FACTION_MANIFEST_KIND:
+            return self._apply_faction_manifest(manifest)
         if manifest_kind == builder_manifests.MOB_DEFINITION_MANIFEST_KIND:
             return self._apply_mob_definition_manifest(manifest)
         if manifest_kind == builder_manifests.ABILITY_MANIFEST_KIND:

@@ -46,6 +46,7 @@ At the time of writing, the runtime supports:
   - `grant_gold`
   - `grant_item`
   - `grant_xp`
+  - `adjust_reputation`
   - `set_state`
   - `increment_state`
   - `clear_state`

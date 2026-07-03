@@ -36,6 +36,16 @@ from core.model_mixins import CharMixin, ItemMixin, MobMixin
 from core.stat_system import fold_declared_attributes
 
 
+FACTION_TYPE_CORE = 'core'
+FACTION_TYPE_REPUTATION = 'reputation'
+FACTION_TYPES = (
+    FACTION_TYPE_CORE,
+    FACTION_TYPE_REPUTATION,
+)
+
+FACTION_ASSIGNMENT_SOURCE_MOB_DEFINITION = 'mob_definition'
+
+
 def _generate_unique_world_slug(instance, *, fallback_prefix: str) -> str:
     base_text = getattr(instance, "name", "") or fallback_prefix
     base_slug = slugify(base_text) or fallback_prefix
@@ -442,6 +452,10 @@ class MobDefinition(AdventBaseModel):
         default='present',
         blank=True)
     trainer = models.JSONField(default=dict, blank=True)
+    faction_assignments = GenericRelation(
+        'FactionAssignment',
+        content_type_field='member_type',
+        object_id_field='member_id')
 
     class Meta(AdventBaseModel.Meta):
         unique_together = [('world', 'slug')]
@@ -1567,6 +1581,11 @@ class Faction(AdventBaseModel):
     world = models.ForeignKey('worlds.World',
                               on_delete=models.CASCADE,
                               related_name='world_factions')
+    type = models.TextField(
+        choices=list_to_choice(FACTION_TYPES),
+        default=FACTION_TYPE_REPUTATION)
+    playable = models.BooleanField(default=False)
+    default_languages = models.JSONField(default=list, blank=True)
     is_core = models.BooleanField(default=False)
     is_default = models.BooleanField(default=False)
     # applicable to core faction only, allows creation of a core faction
@@ -1591,6 +1610,32 @@ class Faction(AdventBaseModel):
     def __str__(self):
         return "%s in %s" % (self.name, self.world.name)
 
+    def save(self, *args, **kwargs):
+        if self.type == FACTION_TYPE_CORE:
+            self.is_core = True
+            self.playable = bool(self.playable)
+            self.is_selectable = bool(self.playable)
+        elif self.is_core:
+            self.type = FACTION_TYPE_CORE
+            self.playable = bool(self.is_selectable)
+        else:
+            self.type = FACTION_TYPE_REPUTATION
+            self.is_core = False
+            self.is_default = False
+            self.is_selectable = False
+            self.playable = False
+        if kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = list(dict.fromkeys([
+                *kwargs["update_fields"],
+                "type",
+                "is_core",
+                "is_default",
+                "is_selectable",
+                "playable",
+                "modified_ts",
+            ]))
+        return super().save(*args, **kwargs)
+
 
 class FactionRank(BaseModel):
     faction = models.ForeignKey('builders.Faction',
@@ -1607,6 +1652,7 @@ class FactionAssignment(BaseModel):
                                 on_delete=models.CASCADE,
                                 related_name='assignments_for')
     value = models.IntegerField(default=0)
+    source = models.TextField(blank=True, default='')
 
     member_type = models.ForeignKey(ContentType,
                                      on_delete=models.CASCADE,
@@ -1630,11 +1676,13 @@ class FactionAssignment(BaseModel):
             return
 
         # Guard against multiple core-faction assignments for a single member.
-        if Faction.objects.filter(pk=self.faction_id, is_core=True).exists():
+        core_faction_filter = models.Q(type=FACTION_TYPE_CORE) | models.Q(is_core=True)
+        if Faction.objects.filter(pk=self.faction_id).filter(core_faction_filter).exists():
             qs = FactionAssignment.objects.filter(
                 member_type_id=self.member_type_id,
                 member_id=self.member_id,
-                faction__is_core=True,
+            ).filter(
+                models.Q(faction__type=FACTION_TYPE_CORE) | models.Q(faction__is_core=True)
             )
             if self.pk:
                 qs = qs.exclude(pk=self.pk)

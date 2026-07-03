@@ -106,7 +106,7 @@ class CharMixin(models.Model):
         core = None
         for assignment in assignments:
             faction = assignment.faction
-            if faction and faction.is_core:
+            if faction and (faction.type == 'core' or faction.is_core):
                 core = faction.code
                 break
 
@@ -115,8 +115,8 @@ class CharMixin(models.Model):
             context_world = self.world.context if self.world.context else self.world
             core_factions = Faction.objects.filter(
                 world=context_world,
-                is_core=True,
-                is_selectable=True)
+                type='core',
+                playable=True)
             default_faction = core_factions.filter(is_default=True).first()
             if default_faction:
                 core = default_faction.code
@@ -128,7 +128,7 @@ class CharMixin(models.Model):
         # Get the other factions.
         for assignment in assignments:
             faction = assignment.faction
-            if faction and not faction.is_core:
+            if faction and faction.type != 'core' and not faction.is_core:
                 factions[faction.code] = assignment.value
 
         return factions
@@ -149,7 +149,7 @@ class CharMixin(models.Model):
         # If we have a non-human core race, return that.
         for assignment in assignments:
             faction = assignment.faction
-            if faction and faction.is_core and faction.code != 'human':
+            if faction and (faction.type == 'core' or faction.is_core) and faction.code != 'human':
                 return faction.name
 
         # If we belong to any non-core faction, return the highest standing
@@ -157,7 +157,7 @@ class CharMixin(models.Model):
         best_assignment = None
         for assignment in assignments:
             faction = assignment.faction
-            if not faction or faction.is_core or assignment.value < 100:
+            if not faction or faction.type == 'core' or faction.is_core or assignment.value < 100:
                 continue
             if not best_assignment or assignment.value > best_assignment.value:
                 best_assignment = assignment

@@ -11,12 +11,12 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 
 from config import constants as adv_consts
+from core.factions import resolve_player_creation_core_faction
 from core.utils import distinct_list
 
 from config import constants as api_consts
 
 from builders.models import (
-    Faction,
     FactionAssignment,
     LastViewedRoom,
     WorldBuilder,
@@ -527,24 +527,23 @@ class WorldCharacters(WorldLobbyBase,
         else:
             spawn_world = self.world.create_spawn_world()
 
+        core_faction = resolve_player_creation_core_faction(
+            spawn_world.context or self.world,
+            self.request.data.get('faction'),
+        )
+
         # Create the player object
         player = serializer.save(
             user=self.request.user,
             world=spawn_world,
             last_connection_ts=timezone.now())
 
-        if self.request.data.get('faction'):
-            try:
-                faction = spawn_world.context.world_factions.get(
-                    code=self.request.data.get('faction'))
-                FactionAssignment.objects.create(
-                    faction=faction,
-                    value=1,
-                    member_type=ContentType.objects.get_for_model(player),
-                    member_id=player.id)
-
-            except Faction.DoesNotExist:
-                pass
+        if core_faction:
+            FactionAssignment.objects.create(
+                faction=core_faction,
+                value=1,
+                member_type=ContentType.objects.get_for_model(player),
+                member_id=player.id)
 
         player.room = player.get_starting_room()
         player.save()

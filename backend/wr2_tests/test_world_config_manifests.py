@@ -82,6 +82,8 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(world_manifest["spec"]["starting_room"], "room@0,0,0")
         self.assertEqual(world_manifest["spec"]["death_room"], "room@0,0,0")
         self.assertEqual(world_manifest["spec"]["combat_resolution_interval"], 0)
+        self.assertIn("player_creation", world_manifest["spec"])
+        self.assertNotIn("can_select_faction", world_manifest["spec"])
         self.assertNotIn("is_classless", world_manifest["spec"])
         self.assertEqual(
             world_manifest["spec"]["stats"]["formulas"]["base_resources"]["stamina"]["flat"],
@@ -134,7 +136,9 @@ spec:
   death_gold_penalty: 0.35
   death_route: nearest_in_zone
   pvp_mode: zone
-  can_select_faction: false
+  player_creation:
+    core_faction:
+      mode: none
   can_select_gender: false
   default_gender: male
   auto_equip: false

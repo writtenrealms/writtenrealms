@@ -6,6 +6,7 @@ from rest_framework import serializers
 from config import constants as api_consts
 from builders import serializers as builder_serializers
 from builders.models import WorldBuilder
+from core.factions import core_faction_policy, selectable_core_factions
 from core.serializers import AuthorField
 from core.stat_system import world_uses_classes
 from spawns.models import Player
@@ -38,6 +39,7 @@ class LobbyWorldSerializer(WorldSerializer):
     is_private = serializers.SerializerMethodField()
 
     core_factions = serializers.SerializerMethodField()
+    player_creation = serializers.SerializerMethodField()
 
     default_gender = serializers.CharField(source='config.default_gender',
                                            read_only=True)
@@ -72,6 +74,7 @@ class LobbyWorldSerializer(WorldSerializer):
             'can_edit',
             'can_create_chars',
             'can_select_faction',
+            'player_creation',
             'small_background', 'large_background',
             'core_factions',
             'allow_combat', 'is_narrative',
@@ -139,11 +142,19 @@ class LobbyWorldSerializer(WorldSerializer):
         return False
 
     def get_core_factions(self, world):
-        factions = world.world_factions.filter(
-            is_core=True
-        ).order_by('created_ts')
+        factions = selectable_core_factions(world)
         return builder_serializers.FactionSerializer(
             factions, many=True).data
+
+    def get_player_creation(self, world):
+        policy = core_faction_policy(world)
+        return {
+            "core_faction": {
+                "mode": policy.mode,
+                "default": policy.default,
+                "options": policy.options,
+            },
+        }
 
     def get_is_private(self, world):
         return not world.is_public

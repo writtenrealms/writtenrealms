@@ -96,6 +96,7 @@ const routes = [
       { path: 'players/:player_id', name: 'builder_world_player_details', component: () => import('@/views/builder/world/PlayerDetails.vue') },
       { path: 'players/:player_id/restoration', name: 'builder_world_player_restoration', component: () => import('@/views/builder/world/PlayerRestoration.vue') },
       { path: 'factions', name: 'builder_world_faction_list', component: () => import('@/views/builder/world/FactionList.vue') },
+      { path: 'factions/:faction_id', name: 'builder_world_faction_details', component: () => import('@/views/builder/world/FactionDetails.vue') },
       { path: 'factions/:faction_id/ranks', name: 'builder_world_faction_rank_list', component: () => import('@/views/builder/world/FactionRankList.vue') },
       { path: 'abilities', name: 'builder_world_ability_list', component: () => import('@/views/builder/world/Abilities.vue') },
       { path: 'abilities/:ability_id', name: 'builder_world_ability_details', component: () => import('@/views/builder/world/AbilityDetails.vue') },

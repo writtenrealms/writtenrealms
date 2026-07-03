@@ -19,6 +19,7 @@ INSTANCE_INHERITED_CONFIG_FIELDS = {
     "is_narrative",
     "leveling_curve",
     "max_level",
+    "player_creation",
     "starting_level",
     "stat_system",
 }
@@ -46,6 +47,7 @@ INSTANCE_INHERITED_MANIFEST_FIELDS = {
     "is_narrative",
     "leveling_curve",
     "max_level",
+    "player_creation",
     "starting_level",
     "stats",
 }

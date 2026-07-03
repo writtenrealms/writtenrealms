@@ -63,6 +63,33 @@ combat profile's unarmed mob fallback is used instead.
 Use `aggression: passive`, `normal`, `players`, `all`, or `friendly`. The
 alias `aggressive` is accepted for `all`.
 
+## Factions
+
+Use `spec.factions` when a mob definition belongs to a core faction or carries
+standing with reputation factions.
+
+```yaml
+kind: mobdefinition
+metadata:
+  slug: blackfin-raider
+  name: a Blackfin raider
+spec:
+  type: humanoid
+  aggression: normal
+  factions:
+    core: orc
+    reputation:
+      blackfin: 100
+      town_watch: -50
+```
+
+`core` must reference a core faction. `reputation` keys must reference
+reputation factions and values are integer standings. Spawned mobs receive
+concrete assignments copied from the definition.
+
+For faction documents and player creation policy, see
+[faction-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/faction-builder-guide.md).
+
 ## Traits
 
 Use `traits` when a mob should spawn with structured modifiers or behavior

@@ -1,98 +1,113 @@
 <template>
-  <div v-if="store.state.builder.world.builder_info.builder_rank > 2">
-    <div v-if="store.state.builder.world.instance_of.id">
-      <h2 class="mb-4">WORLD FACTIONS</h2>
-      <p>The factions of an instance are inherited from the parent world:</p>
-      <p>
-        <router-link
-          :to="{name: 'builder_world_faction_list', params: {world_id: store.state.builder.world.instance_of.id}}">
-          {{ store.state.builder.world.instance_of.name }} Item Templates
-        </router-link>
-      </p>
-    </div>
-
-    <div class="w-full" v-else>
-      <EditableCollection
-        title="World Faction"
-        name="factions"
-        :endpoint="endpoint"
-        :display_component="display_component"
-        :schema="schema"
-        action_add="builder/worlds/faction_add"
-        action_edit="builder/worlds/faction_edit"
-        action_delete="builder/worlds/faction_delete"
-        registration_name="factions"
-        :page_size="50"
-      />
-    </div>
+  <div v-if="isInstanceWorld">
+    <h2 class="mb-4">FACTIONS</h2>
+    <p>The factions of an instance are inherited from the parent world:</p>
+    <p>
+      <router-link
+        :to="{ name: 'builder_world_faction_list', params: { world_id: inheritedWorld.id } }"
+      >
+        {{ inheritedWorld.name }} Factions
+      </router-link>
+    </p>
   </div>
+
+  <div v-else-if="store.state.builder.world.builder_info.builder_rank > 2">
+    <ElementList
+      title="Factions"
+      :schema="listSchema"
+      :filters="listFilters"
+      :endpoint="endpoint"
+      :resolve_route="resolveRoute"
+      filter-display="dropdown"
+      table-variant="data"
+      default-sort="-modified_ts"
+      @add="onClickAdd"
+    />
+  </div>
+
   <div v-else>
-    <div>
-      You do not have permission to manage factions for this world.
-    </div>
+    You do not have permission to manage factions for this world.
   </div>
 </template>
 
 <script lang="ts" setup>
+import { computed } from "vue";
+import { useRouter } from "vue-router";
 import { useStore } from "vuex";
-import { useRoute, onBeforeRouteUpdate } from "vue-router";
-import FactionDetails from "@/components/builder/world/FactionDetails.vue";
-import EditableCollection from "@/components/editablecollection/EditableCollection.vue";
-import { FormElement, DESCRIPTION } from "@/core/forms.ts";
+import ElementList from "@/components/elementlist/ElementList.vue";
+import { formatRelativeModifiedDate } from "@/core/utils.ts";
 
-const route = useRoute();
 const store = useStore();
+const router = useRouter();
 
+const inheritedWorld = computed(() => store.state.builder.world.instance_of || {});
+const isInstanceWorld = computed(() => !!inheritedWorld.value.id);
+const endpoint = `/builder/worlds/${store.state.builder.world.id}/factions/`;
 
-const endpoint = `/builder/worlds/${route.params.world_id}/factions/`;
-const display_component = FactionDetails;
-const schema: FormElement[] = [
+const resolveRoute = (element) => {
+  return {
+    name: "builder_world_faction_details",
+    params: {
+      world_id: store.state.builder.world.id,
+      faction_id: element.id,
+    },
+  };
+};
+
+const formatFactionType = (value) => {
+  if (value === "core") return "Core";
+  if (value === "reputation") return "Reputation";
+  return value || "";
+};
+const formatBoolean = (value) => value ? "Yes" : "No";
+const formatLanguages = (value) => Array.isArray(value) ? value.join(", ") : "";
+const formatRanks = (_value, faction) => Array.isArray(faction.ranks) ? String(faction.ranks.length) : "0";
+
+const listSchema: any[] = [
+  { name: "id", label: "ID", sortable: true },
+  { name: "name", label: "Name", nowrap: true, sortable: true },
+  { name: "code", label: "Code", nowrap: true, sortable: true },
+  { name: "type", label: "Type", light: true, sortable: true, format: formatFactionType },
+  { name: "playable", label: "Playable", light: true, sortable: true, format: formatBoolean },
+  { name: "default_languages", label: "Languages", light: true, format: formatLanguages },
+  { name: "ranks", label: "Ranks", light: true, format: formatRanks },
   {
-    attr: "code",
-    label: "Code",
-  },
-  {
-    attr: "name",
-    label: "Name",
-  },
-  DESCRIPTION,
-  {
-    attr: "is_core",
-    label: "Is Core",
-    widget: "checkbox",
-    default: true,
-  },
-  {
-    attr: "starting_room",
-    label: "Starting Room",
-    widget: "reference",
-    references: "room",
-    help: `Only applicable for core factions.`
-  },
-  {
-    attr: "is_default",
-    label: "Is Default",
-    widget: "checkbox",
-    default: false,
-    help: `Only applicable for core factions. If this is checked and "Can Select Core Faction" is checked in the world's advanced configuration, this faction will be the default selectable faction.`,
-  },
-  {
-    attr: "is_selectable",
-    label: "Is Selectable",
-    widget: "checkbox",
-    default: true,
-    help: `Only applicable for core factions. Whether the faction can be selected at character creation screen. Will only be applicable if "Can Select Core Faction" is checked in the world's advanced configuration.`,
+    name: "modified_ts",
+    label: "Modified",
+    nowrap: true,
+    sortable: true,
+    format: formatRelativeModifiedDate,
   },
 ];
 
-onBeforeRouteUpdate(async (to, from, next) => {
-  if (to.params.world_id !== from.params.world_id) {
-    const world = await store.dispatch(
-      'builder/fetch_world',
-      to.params.world_id);
-    store.commit('builder/room_set', world.last_viewed_room);
-    store.commit('builder/zone_set', world.last_viewed_room.zone);
-  }
-  next();
-});
+const listFilters: any[] = [
+  {
+    label: "Type",
+    attr: "type",
+    filter_options: [
+      { key: "core", name: "Core" },
+      { key: "reputation", name: "Reputation" },
+    ],
+  },
+  {
+    label: "Playable",
+    attr: "playable",
+    filter_options: [
+      { key: "true", name: "Playable" },
+      { key: "false", name: "Not Playable" },
+    ],
+  },
+];
+
+const onClickAdd = () => {
+  router.push({
+    name: "builder_world_edit",
+    params: {
+      world_id: store.state.builder.world.id,
+    },
+    query: {
+      prefill: "new-faction",
+    },
+  });
+};
 </script>

@@ -19,6 +19,7 @@ Implemented manifest kinds currently include the current WR2 authoring path:
 - `itemdefinition`
 - `itembundle`
 - `merchantprofile`
+- `faction`
 - `mobdefinition`
 - `spawnplan`
 - `ability`
@@ -99,6 +100,7 @@ A new world-level **Edit World** view accepts a YAML manifest textarea.
   - `kind: itemdefinition`
   - `kind: itembundle`
   - `kind: merchantprofile`
+  - `kind: faction`
   - `kind: mobdefinition`
   - `kind: spawnplan`
   - `kind: ability`
@@ -357,7 +359,13 @@ spec:
   death_mode: lose_gold
   death_route: nearest_in_zone
   pvp_mode: zone
-  can_select_faction: true
+  player_creation:
+    core_faction:
+      mode: choose_required
+      default: human
+      options:
+        - human
+        - elf
   auto_equip: true
   is_narrative: false
   players_can_set_title: true
@@ -481,7 +489,7 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 
 ## Validation Rules (Current)
 
-- `kind` must resolve to `trigger`, `world`, `currency`, `zone`, `room`, `path`, `itemdefinition`, `itembundle`, `merchantprofile`, `mobdefinition`, `spawnplan`, `ability`, `abilities`, `quest`, or `questarc`. The legacy `itemtemplate` and `mobtemplate` kinds are also accepted during the transition.
+- `kind` must resolve to `trigger`, `world`, `currency`, `zone`, `room`, `path`, `itemdefinition`, `itembundle`, `merchantprofile`, `faction`, `mobdefinition`, `spawnplan`, `ability`, `abilities`, `quest`, or `questarc`. The legacy `itemtemplate` and `mobtemplate` kinds are also accepted during the transition.
 - For update: `metadata.id` or `metadata.key` must reference an existing trigger in the selected world.
 - For create: omit both `metadata.id` and `metadata.key`.
 - For delete: set `operation: delete` and include `metadata.id` or `metadata.key`.

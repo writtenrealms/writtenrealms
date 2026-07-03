@@ -4,7 +4,8 @@ from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Any
 
-from builders.models import ItemTemplate
+from builders.models import Faction, ItemTemplate
+from core.factions import faction_type_filter, normalize_faction_code
 from core.scoped_state import (
     STATE_SCOPE_QUEST,
     clear_state_value,
@@ -87,6 +88,22 @@ def _effect_world(*, player=None, template=None):
         getattr(template, "world", None)
         or getattr(getattr(player, "world", None), "context", None)
         or getattr(player, "world", None)
+    )
+
+
+def _resolve_reputation_faction(effect: dict[str, Any], *, player=None, template=None) -> Faction | None:
+    raw_faction = effect.get("faction") or effect.get("code")
+    if raw_faction in (None, ""):
+        return None
+    world = _effect_world(player=player, template=template)
+    if world is None:
+        return None
+    code = normalize_faction_code(raw_faction, field_name="faction")
+    return (
+        Faction.objects
+        .filter(world=world, code=code)
+        .filter(faction_type_filter("reputation"))
+        .first()
     )
 
 
@@ -482,6 +499,38 @@ def apply_quest_effects(
                 result.reward_summaries.append(f"{amount} experience")
                 if leveling.leveled_up:
                     result.reward_summaries.append(f"level {leveling.new_level}")
+            continue
+
+        if effect_type in {"adjust_reputation", "reputation"}:
+            if not player:
+                continue
+            faction = _resolve_reputation_faction(
+                effect,
+                player=player,
+                template=template,
+            )
+            if not faction:
+                continue
+            resolved_amount = resolve_value(
+                effect.get("amount", 0),
+                player=player,
+                template=template,
+                quest_instance=quest_instance,
+                event_data=event_data,
+            )
+            amount = _coerce_amount(resolved_amount)
+            if not amount:
+                continue
+            assignment, _created = player.faction_assignments.get_or_create(
+                faction=faction,
+                defaults={"value": 0},
+            )
+            assignment.value = int(assignment.value or 0) + amount
+            assignment.save(update_fields=["value", "modified_ts"])
+            sign = "+" if amount > 0 else ""
+            result.reward_summaries.append(
+                f"{sign}{amount} {faction.name or faction.code} reputation"
+            )
             continue
 
         if effect_type in {"grant_item", "spawn_item"}:
