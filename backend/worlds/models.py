@@ -1023,6 +1023,7 @@ class WorldConfig(BaseModel):
     #   0   => resolve immediately
     #   -1  => never auto-advance (manual / fully async progression)
     combat_resolution_interval = models.FloatField(default=0)
+    default_roam_chance = models.PositiveIntegerField(default=10)
     combat_system = models.JSONField(default=dict)
     ability_progression = models.JSONField(default=default_ability_progression)
     player_creation = models.JSONField(default=dict, blank=True)

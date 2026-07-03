@@ -94,6 +94,11 @@ target:
   zone: zone@1
 ```
 
+For mob entries, a zone target also becomes the mob's roaming area. The mob
+spawns in one eligible room in that zone, then can wander to adjacent rooms
+inside the same zone on heartbeat ticks. Rooms flagged `no_roam` are excluded
+both at spawn time and while wandering.
+
 Spawn on a path:
 
 ```yaml
@@ -104,6 +109,21 @@ target:
 Path names are not accepted in spawn-plan targets because they are not
 guaranteed to be unique. Use the path's `manifest_ref` value from the path
 detail screen or path API response.
+
+For mob entries, a path target also becomes the mob's roaming path. The mob can
+only wander to adjacent rooms that belong to that path. If the path has an
+`entry_room`, the initial placement uses that room.
+
+A fixed room target is static:
+
+```yaml
+target:
+  room: room@2,0,2
+```
+
+Mobs loaded into a specific room do not roam by default. Ambient roam chance is
+configured on the world manifest with `default_roam_chance`, which defaults to
+`10` percent per heartbeat.
 
 ## Path Manifests
 

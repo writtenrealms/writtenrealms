@@ -532,6 +532,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
 
         mob = Mob.objects.get(world=spawn_world, definition=self.mob_definition)
         self.assertEqual(mob.room, self.room)
+        self.assertEqual(mob.roams, path)
         placement = SpawnPlacement.objects.get(run__plan=self.plan)
         self.assertEqual(placement.room, self.room)
 
@@ -544,6 +545,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
 
         mob = Mob.objects.get(world=spawn_world, definition=self.mob_definition)
         self.assertEqual(mob.room.zone, self.zone)
+        self.assertEqual(mob.roams, self.zone)
         placement = SpawnPlacement.objects.get(run__plan=self.plan)
         self.assertEqual(placement.room.zone, self.zone)
 

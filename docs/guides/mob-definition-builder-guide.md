@@ -52,7 +52,8 @@ spec:
 Common direct mob fields include `level`, `exp_worth`, `gold`, `health_max`,
 `health_regen`, `energy_max`, `energy_regen`, `stamina_max`, `stamina_regen`,
 `regen_rate`, `attack_power`, `weapon_damage`, `ability_power`, `armor`, `crit`, `dodge`,
-`resilience`, `aggression`, `target_priority`, `fights_back`, and `is_invisible`.
+`resilience`, `aggression`, `target_priority`, `fights_back`, `roam_chance`, and
+`is_invisible`.
 
 For mobs, `weapon_damage` is an internal combat stat. It represents the mob's
 weapon, claws, bite, slam, or other natural attack without requiring a spawned
@@ -69,6 +70,11 @@ Higher values are targeted first; ties keep the normal room mob order. Negative
 values sit behind default-priority mobs. This is useful for encounters such as a
 `target_priority: 1` shieldbearer protecting a default-priority fighter and a
 `target_priority: -1` archer in the same room.
+
+Use `roam_chance` to override the world's default ambient roam chance for that
+mob. A value of `0` means "use the world default". Mobs only roam when the
+loader or spawn plan gives them a zone or path target; mobs loaded into a fixed
+room stay static.
 
 ## Factions
 

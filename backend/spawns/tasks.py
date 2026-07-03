@@ -1,12 +1,15 @@
 import os
 import math
+import random
 
 from celery import shared_task
 
+from builders.models import Path
 from config import constants as api_consts
 from config import game_settings as adv_config
 from backend.config.exceptions import ServiceError
 from core.computations import compute_stats
+from core.world_config import inherited_system_config
 from django.core.cache import cache
 from django.db.models import F, Q
 from spawns.services import WorldGate
@@ -20,7 +23,8 @@ from spawns.handlers import (
     PlayerNotFoundError,
 )
 from spawns.state_payloads import safe_capitalize, serialize_char_from_player
-from worlds.models import World
+from spawns.state_payloads import door_state_lookup, serialize_char_from_mob
+from worlds.models import Room, RoomFlag, World, Zone
 from worlds.serializers import WorldSerializer
 
 from fastapi_app.game_ws import publish_to_player
@@ -28,6 +32,7 @@ from fastapi_app.forge_ws import complete_job, exit_world as notify_exit_world
 
 WR2_STANDING_REGEN_RATE = adv_config.PLAYER_STARTING_STAMINA_REGEN
 WR2_RESTING_REGEN_MULTIPLIER = 3
+DEFAULT_MOB_ROAM_CHANCE = getattr(adv_config, "DEFAULT_MOB_ROAM_CHANCE", 10)
 HEARTBEAT_REGEN_LOCK_KEY = "heartbeat_regen_lock"
 
 
@@ -88,6 +93,211 @@ def _as_non_negative_int(value, default: int = 0) -> int:
     except (TypeError, ValueError):
         return default
     return max(parsed, 0)
+
+
+def _as_percent_int(value, default: int = 0) -> int:
+    return min(_as_non_negative_int(value, default=default), 100)
+
+
+def _world_default_roam_chance(world: World) -> int:
+    config = inherited_system_config(world)
+    if not config:
+        return _as_percent_int(DEFAULT_MOB_ROAM_CHANCE, default=10)
+    return _as_percent_int(
+        getattr(config, "default_roam_chance", DEFAULT_MOB_ROAM_CHANCE),
+        default=DEFAULT_MOB_ROAM_CHANCE,
+    )
+
+
+def _mob_roam_chance(mob: Mob, *, world_default_chance: int) -> int:
+    explicit_chance = _as_percent_int(getattr(mob, "roam_chance", 0), default=0)
+    if explicit_chance:
+        return explicit_chance
+    return world_default_chance
+
+
+def _room_with_roam_exits(room_id: int) -> Room | None:
+    return (
+        Room.objects.select_related(
+            "north",
+            "east",
+            "south",
+            "west",
+            "up",
+            "down",
+            "zone",
+            "world",
+        )
+        .filter(pk=room_id)
+        .first()
+    )
+
+
+def _room_is_no_roam(room_id: int | None) -> bool:
+    if not room_id:
+        return True
+    return RoomFlag.objects.filter(
+        room_id=room_id,
+        code=api_consts.ROOM_FLAG_NO_ROAM,
+    ).exists()
+
+
+def _roam_target_allows_room(roams, room: Room) -> bool:
+    if isinstance(roams, Zone):
+        return room.zone_id == roams.id
+    if isinstance(roams, Path):
+        return roams.rooms.filter(pk=room.id).exists()
+    return False
+
+
+def _eligible_mob_roam_options(mob: Mob) -> list[tuple[str, Room]]:
+    if not mob.room_id or not mob.roams:
+        return []
+
+    current_room = _room_with_roam_exits(mob.room_id)
+    if current_room is None or _room_is_no_roam(current_room.id):
+        return []
+
+    door_states = door_state_lookup(mob.world, [current_room.id]).get(current_room.id, {})
+    options: list[tuple[str, Room]] = []
+    for direction in api_consts.DIRECTIONS:
+        if door_states.get(direction) in ("closed", "locked"):
+            continue
+        destination = getattr(current_room, direction, None)
+        if destination is None or _room_is_no_roam(destination.id):
+            continue
+        if not _roam_target_allows_room(mob.roams, destination):
+            continue
+        options.append((direction, destination))
+    return options
+
+
+def _arrival_source_text(reverse_direction: str) -> str:
+    if reverse_direction == "up":
+        return "above"
+    if reverse_direction == "down":
+        return "below"
+    return f"the {reverse_direction}"
+
+
+def _publish_mob_roam_events(
+    *,
+    mob: Mob,
+    origin_room_id: int,
+    destination_room_id: int,
+    direction: str,
+) -> None:
+    if getattr(mob, "is_invisible", False):
+        return
+
+    actor_payload = serialize_char_from_mob(mob).model_dump()
+    actor_name = safe_capitalize(actor_payload.get("name") or mob.name or "Someone")
+    events: list[GameEvent] = []
+
+    origin_recipient_ids = (
+        Player.objects.filter(
+            world=mob.world,
+            room_id=origin_room_id,
+            in_game=True,
+        )
+        .values_list("id", flat=True)
+    )
+    if origin_recipient_ids:
+        events.append(
+            GameEvent(
+                type="notification.movement.exit",
+                recipients=[f"player.{player_id}" for player_id in origin_recipient_ids],
+                data={"actor": actor_payload, "direction": direction},
+                text=f"{actor_name} leaves {direction}.",
+            )
+        )
+
+    destination_recipient_ids = (
+        Player.objects.filter(
+            world=mob.world,
+            room_id=destination_room_id,
+            in_game=True,
+        )
+        .values_list("id", flat=True)
+    )
+    if destination_recipient_ids:
+        reverse_direction = api_consts.REVERSE_DIRECTIONS[direction]
+        events.append(
+            GameEvent(
+                type="notification.movement.enter",
+                recipients=[f"player.{player_id}" for player_id in destination_recipient_ids],
+                data={"actor": actor_payload, "direction": reverse_direction},
+                text=f"{actor_name} has arrived from {_arrival_source_text(reverse_direction)}.",
+            )
+        )
+
+    if events:
+        publish_events(events, actor_key=mob.key)
+
+
+def _try_roam_mob(mob: Mob, *, world_default_chance: int) -> bool:
+    chance = _mob_roam_chance(mob, world_default_chance=world_default_chance)
+    if chance <= 0 or random.randint(1, 100) > chance:
+        return False
+
+    options = _eligible_mob_roam_options(mob)
+    if not options:
+        return False
+
+    direction, destination = random.choice(options)
+    origin_room_id = mob.room_id
+    mob.room = destination
+    mob.save(update_fields=["room", "modified_ts"])
+    _publish_mob_roam_events(
+        mob=mob,
+        origin_room_id=origin_room_id,
+        destination_room_id=destination.id,
+        direction=direction,
+    )
+    return True
+
+
+def run_mob_roaming(*, active_combat_mob_ids: set[int] | None = None) -> int:
+    active_combat_mob_ids = active_combat_mob_ids or set()
+    running_worlds = list(
+        World.objects.filter(
+            context__isnull=False,
+            lifecycle=api_consts.WORLD_LIFECYCLE_RUNNING,
+        ).select_related(
+            "config",
+            "context",
+            "context__config",
+            "context__instance_of",
+            "context__instance_of__config",
+        )
+    )
+    if not running_worlds:
+        return 0
+
+    worlds_by_id = {world.id: world for world in running_worlds}
+    default_chance_by_world_id = {
+        world.id: _world_default_roam_chance(world)
+        for world in running_worlds
+    }
+    roamed_count = 0
+    mobs_qs = (
+        Mob.objects.filter(
+            is_pending_deletion=False,
+            room_id__isnull=False,
+            roams_type__isnull=False,
+            roams_id__isnull=False,
+            world_id__in=worlds_by_id.keys(),
+        )
+        .select_related("world", "definition", "template")
+        .order_by("id")
+    )
+    for mob in mobs_qs.iterator(chunk_size=200):
+        if mob.id in active_combat_mob_ids:
+            continue
+        world_default_chance = default_chance_by_world_id.get(mob.world_id, 0)
+        if _try_roam_mob(mob, world_default_chance=world_default_chance):
+            roamed_count += 1
+    return roamed_count
 
 
 def _regen_resource(current_value: int, max_value: int, regen_amount: int) -> int:
@@ -233,6 +443,7 @@ def run_heartbeat_regen() -> dict[str, int]:
     player_cooldowns_updated = 0
     player_effects_updated = 0
     mobs_regenerated = 0
+    mobs_roamed = 0
 
     active_players = Player.objects.filter(
         in_game=True,
@@ -334,9 +545,12 @@ def run_heartbeat_regen() -> dict[str, int]:
         if _regen_mob(mob, in_combat=mob.id in active_combat_mob_ids):
             mobs_regenerated += 1
 
+    mobs_roamed = run_mob_roaming(active_combat_mob_ids=active_combat_mob_ids)
+
     return {
         "players": players_regenerated,
         "mobs": mobs_regenerated,
+        "mobs_roamed": mobs_roamed,
         "ability_cooldowns": player_cooldowns_updated,
         "active_effects": player_effects_updated,
     }

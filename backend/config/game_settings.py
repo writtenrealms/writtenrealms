@@ -25,6 +25,8 @@ MOVEMENT_COST = 2
 GAME_HEARTBEAT_INTERVAL_SECONDS = 2
 # Loader cadence for periodic world respawn processing.
 GAME_LOADER_INTERVAL_SECONDS = 15
+# Default percent chance that a roaming mob moves on each heartbeat.
+DEFAULT_MOB_ROAM_CHANCE = 10
 
 LEVEL_EXPERIENCE = [
     0,      # 1

@@ -181,6 +181,7 @@ _WORLD_CONFIG_CONFIG_INT_FIELDS = (
     "starting_gold",
     "starting_level",
     "max_level",
+    "default_roam_chance",
 )
 _WORLD_CONFIG_CONFIG_FLOAT_FIELDS = (
     "combat_resolution_interval",
@@ -824,6 +825,7 @@ def world_config_to_manifest(
                 "combat_resolution_interval": _serialize_number(
                     config.combat_resolution_interval
                 ),
+                "default_roam_chance": int(config.default_roam_chance),
                 "is_narrative": bool(config.is_narrative),
                 _WORLD_CONFIG_PLAYER_CREATION_FIELD: config.player_creation or {},
                 "auto_equip": bool(config.auto_equip),
@@ -913,6 +915,7 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
                 "combat_resolution_interval": _serialize_number(
                     config.combat_resolution_interval
                 ),
+                "default_roam_chance": int(config.default_roam_chance),
                 "allow_combat": bool(config.allow_combat),
                 "is_narrative": bool(config.is_narrative),
                 _WORLD_CONFIG_PLAYER_CREATION_FIELD: config.player_creation or {},
@@ -4822,6 +4825,10 @@ def parse_world_config_manifest(
             if value < min_value:
                 raise serializers.ValidationError(
                     f"spec.{field_name} must be >= {min_value}."
+                )
+            if field_name == "default_roam_chance" and value > 100:
+                raise serializers.ValidationError(
+                    "spec.default_roam_chance must be <= 100."
                 )
             config_updates[field_name] = value
 

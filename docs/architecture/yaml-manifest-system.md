@@ -30,8 +30,9 @@ Implemented manifest kinds currently include the current WR2 authoring path:
 The legacy `itemtemplate` and `mobtemplate` kinds are still supported during the
 transition for old content and legacy-only builder surfaces.
 
-Builder-facing trigger authoring guidance lives in:
+Builder-facing authoring guidance lives in:
 
+- [docs/guides/world-config-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/world-config-builder-guide.md)
 - [docs/guides/trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md)
 - [docs/guides/builder-command-reference.md](/Users/teebes/code/writtenrealms/docs/guides/builder-command-reference.md)
 - [docs/guides/combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md)
@@ -336,6 +337,9 @@ metadata:
 
 World config edits are update-only manifests (no create/delete mode). The config screen and the full world export emit the same single world document shape:
 
+For a full field reference, see
+[world-config-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/world-config-builder-guide.md).
+
 ```yaml
 kind: world
 spec:
@@ -354,6 +358,7 @@ spec:
     - 400
     - 1000
   combat_resolution_interval: 0
+  default_roam_chance: 10
   starting_room: room@0,0,0
   death_room: room@10,0,0
   death_mode: lose_gold
@@ -398,6 +403,12 @@ and the current placeholder `kill <mob>` combat flow now honors it:
 
 Broader encounter scheduling, queued abilities, and non-basic combat actions are
 still future work.
+
+`default_roam_chance` is the percent chance that a mob with a zone or path
+roaming target moves on each WR2 heartbeat. The default is `10`, matching the
+old WR1 `ROAM_CHANCE`. Set it to `0` to disable default ambient roaming.
+Mobs loaded into a fixed room have no roaming target and stay static unless a
+future explicit behavior system moves them.
 
 `starting_level`, `max_level`, and `leveling_curve` control player progression.
 `leveling_curve` is a cumulative XP threshold list where the first entry is

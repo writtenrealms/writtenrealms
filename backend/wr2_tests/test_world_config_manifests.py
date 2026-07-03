@@ -55,6 +55,7 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(config_resp.data["config"]["max_level"], 20)
         self.assertEqual(config_resp.data["config"]["leveling_curve"][1], 30)
         self.assertEqual(config_resp.data["config"]["combat_resolution_interval"], 0)
+        self.assertEqual(config_resp.data["config"]["default_roam_chance"], 10)
         stat_system = config_resp.data["config"]["stat_system"]
         self.assertEqual(
             stat_system["formulas"]["base_resources"]["stamina"]["flat"],
@@ -82,6 +83,7 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(world_manifest["spec"]["starting_room"], "room@0,0,0")
         self.assertEqual(world_manifest["spec"]["death_room"], "room@0,0,0")
         self.assertEqual(world_manifest["spec"]["combat_resolution_interval"], 0)
+        self.assertEqual(world_manifest["spec"]["default_roam_chance"], 10)
         self.assertIn("player_creation", world_manifest["spec"])
         self.assertNotIn("can_select_faction", world_manifest["spec"])
         self.assertNotIn("is_classless", world_manifest["spec"])
@@ -130,6 +132,7 @@ spec:
   max_level: 5
   leveling_curve: [0, 10, 30, 60, 100]
   combat_resolution_interval: 1.5
+  default_roam_chance: 25
   starting_room: room.{starting_room.id}
   death_room: room.{death_room.id}
   death_mode: lose_gold
@@ -251,6 +254,7 @@ spec:
         self.assertEqual(config.max_level, 5)
         self.assertEqual(config.leveling_curve, [0, 10, 30, 60, 100])
         self.assertEqual(config.combat_resolution_interval, 1.5)
+        self.assertEqual(config.default_roam_chance, 25)
         self.assertEqual(config.starting_room_id, starting_room.id)
         self.assertEqual(config.death_room_id, death_room.id)
         self.assertEqual(config.death_mode, "lose_gold")
@@ -331,6 +335,23 @@ spec:
         self.world.config.refresh_from_db()
         self.assertEqual(self.world.config.combat_resolution_interval, -1)
 
+    def test_apply_world_config_manifest_rejects_invalid_default_roam_chance(self):
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{self.world.id}
+spec:
+  default_roam_chance: 101
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("default_roam_chance", str(resp.data))
+
     def test_instance_config_payload_omits_inherited_core_system_fields(self):
         instance = self._instance_world()
         ep = reverse("builder-world-config", args=[instance.pk])
@@ -345,6 +366,7 @@ spec:
             "combat",
             "combat_resolution_interval",
             "decay_glory",
+            "default_roam_chance",
             "equipment",
             "globals_enabled",
             "is_narrative",
@@ -373,6 +395,7 @@ metadata:
 spec:
   death_mode: destroy_eq
   combat_resolution_interval: 1.5
+  default_roam_chance: 25
   leveling_curve: [0, 10, 30]
   ability_progression:
     max_known: 4

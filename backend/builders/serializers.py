@@ -448,6 +448,7 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'auto_equip',
             'allow_combat',
             'combat_resolution_interval',
+            'default_roam_chance',
             'combat_system',
             'is_narrative',
             'players_can_set_title',
@@ -466,6 +467,13 @@ class WorldConfigSerializer(serializers.ModelSerializer):
         if value < 0 and value != -1:
             raise serializers.ValidationError(
                 "combat_resolution_interval must be -1 or >= 0."
+            )
+        return value
+
+    def validate_default_roam_chance(self, value):
+        if value < 0 or value > 100:
+            raise serializers.ValidationError(
+                "default_roam_chance must be between 0 and 100."
             )
         return value
 
