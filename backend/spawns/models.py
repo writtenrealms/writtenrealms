@@ -565,6 +565,7 @@ class CombatEncounter(BaseModel):
     active_effects = models.JSONField(default=list)
     initiative_order = models.JSONField(default=list)
     opening_priority = models.JSONField(default=list)
+    faceoff_override = models.BooleanField(default=False)
 
     class Meta(BaseModel.Meta):
         indexes = [
@@ -680,6 +681,7 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
     is_pending_deletion = models.BooleanField(default=False)
     pending_deletion_ts = models.DateTimeField(db_index=True, **optional)
     attackable = models.BooleanField(default=True)
+    target_priority = models.IntegerField(default=0)
 
     class Meta:
         indexes = [

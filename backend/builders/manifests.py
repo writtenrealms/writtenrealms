@@ -3116,6 +3116,8 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         value = spec_patch.get(field_name)
         if field_name == "aggression":
             value = _coerce_mob_aggression(value, "spec.aggression")
+        elif field_name == "target_priority":
+            value = _coerce_int(value, "spec.target_priority")
         base_properties[field_name] = value
 
     combat = spec_patch.get("combat", {})
@@ -3136,6 +3138,8 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         elif field_name in _MOB_DEFINITION_BASE_PROPERTY_FIELDS:
             if field_name == "aggression":
                 value = _coerce_mob_aggression(value, "spec.combat.aggression")
+            elif field_name == "target_priority":
+                value = _coerce_int(value, "spec.combat.target_priority")
             base_properties[field_name] = value
 
     merchant = spec_patch.get("merchant", {})

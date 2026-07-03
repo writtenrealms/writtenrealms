@@ -834,6 +834,129 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(attacks[0]["data"]["actor"]["key"], self.player.key)
         self.assertEqual(attacks[0]["data"]["target"]["key"], mob.key)
 
+    def test_charge_direction_without_target_uses_first_attackable_mob(self):
+        self._charge_ability()
+        self.player.known_abilities = ["charge"]
+        self.player.save(update_fields=["known_abilities"])
+        dest_room = self.room.create_at(adv_consts.DIRECTION_SOUTH)
+        Mob.objects.create(
+            world=self.spawn_world,
+            room=dest_room,
+            name="Blacksmith",
+            keywords="blacksmith",
+            health=self.stats["attack_power"] * 10,
+            health_max=self.stats["attack_power"] * 10,
+            attackable=False,
+        )
+        mob = self._mob(room=dest_room)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "charge south")
+
+        self.player.refresh_from_db()
+        mob.refresh_from_db()
+        self.assertEqual(self.player.room_id, dest_room.id)
+        encounter = CombatEncounter.objects.get(
+            player=self.player,
+            mob=mob,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        self.assertTrue(encounter.faceoff_override)
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertEqual(attacks[0]["data"]["actor"]["key"], self.player.key)
+        self.assertEqual(attacks[0]["data"]["target"]["key"], mob.key)
+        self.assertEqual(attacks[0]["data"]["attack"], "charge")
+
+    def test_charge_target_overrides_room_aggro_target_priority(self):
+        self._charge_ability()
+        self.player.known_abilities = ["charge"]
+        self.player.save(update_fields=["known_abilities"])
+        dest_room = self.room.create_at(adv_consts.DIRECTION_SOUTH)
+        archer = Mob.objects.create(
+            world=self.spawn_world,
+            room=dest_room,
+            name="Persian Archer",
+            keywords="persian archer",
+            health=self.stats["attack_power"] * 10,
+            health_max=self.stats["attack_power"] * 10,
+            attack_power=3,
+            fights_back=True,
+            aggression=adv_consts.MOB_AGGRESSION_ALL,
+            target_priority=-1,
+        )
+        archer.create_corpse()
+        tank = Mob.objects.create(
+            world=self.spawn_world,
+            room=dest_room,
+            name="Sparabara",
+            keywords="sparabara",
+            health=self.stats["attack_power"] * 10,
+            health_max=self.stats["attack_power"] * 10,
+            attack_power=3,
+            fights_back=True,
+            aggression=adv_consts.MOB_AGGRESSION_ALL,
+            target_priority=1,
+        )
+        tank.create_corpse()
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "charge archer south")
+
+        archer_encounter = CombatEncounter.objects.get(
+            player=self.player,
+            mob=archer,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        tank_encounter = CombatEncounter.objects.get(
+            player=self.player,
+            mob=tank,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        self.assertTrue(archer_encounter.faceoff_override)
+        self.assertFalse(tank_encounter.faceoff_override)
+
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertTrue(
+            any(
+                attack["data"]["actor"]["key"] == self.player.key
+                and attack["data"]["target"]["key"] == archer.key
+                and attack["data"]["attack"] == "charge"
+                for attack in attacks
+            )
+        )
+        self.assertTrue(
+            any(attack["data"]["actor"]["key"] == tank.key for attack in attacks)
+        )
+        self.assertFalse(
+            any(
+                attack["data"]["actor"]["key"] == self.player.key
+                and attack["data"]["target"]["key"] == tank.key
+                for attack in attacks
+            )
+        )
+
+        with capture_game_messages() as followup_messages:
+            dispatch_text_command(self.player.id, "k")
+
+        followup_attacks = self._messages_by_type(
+            followup_messages,
+            "notification.combat.attack",
+        )
+        self.assertTrue(
+            any(
+                attack["data"]["actor"]["key"] == self.player.key
+                and attack["data"]["target"]["key"] == archer.key
+                for attack in followup_attacks
+            )
+        )
+        self.assertFalse(
+            any(
+                attack["data"]["actor"]["key"] == self.player.key
+                and attack["data"]["target"]["key"] == tank.key
+                for attack in followup_attacks
+            )
+        )
+
     def test_charge_can_open_current_room_combat_without_direction(self):
         self._charge_ability()
         self.player.known_abilities = ["charge"]

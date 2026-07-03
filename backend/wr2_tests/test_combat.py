@@ -619,6 +619,282 @@ class TestKillCommand(WorldTestCase):
         )
         self.assertEqual(schedule_mock.call_args.kwargs["countdown"], 1.5)
 
+    def test_all_opposing_core_faction_mobs_aggro_when_player_enters_room(self):
+        self.world.config.combat_resolution_interval = 1.5
+        self.world.config.save(update_fields=["combat_resolution_interval"])
+
+        human = Faction.objects.create(
+            world=self.world,
+            code="aggro_human_pack",
+            name="Aggro Human Pack",
+            is_core=True,
+        )
+        orc = Faction.objects.create(
+            world=self.world,
+            code="aggro_orc_pack",
+            name="Aggro Orc Pack",
+            is_core=True,
+        )
+        self.player.faction_assignments.create(faction=human)
+
+        destination = Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Barracks",
+            x=self.room.x + 1,
+            y=self.room.y,
+            z=self.room.z,
+        )
+        self.room.east = destination
+        self.room.save(update_fields=["east"])
+        destination.west = self.room
+        destination.save(update_fields=["west"])
+
+        mobs = []
+        for idx in range(3):
+            mob = Mob.objects.create(
+                world=self.spawn_world,
+                room=destination,
+                name=f"Raider {idx + 1}",
+                keywords=f"raider {idx + 1}",
+                health=20,
+                health_max=20,
+                attack_power=4,
+                aggression=adv_consts.MOB_AGGRESSION_NORMAL,
+            )
+            mob.faction_assignments.create(faction=orc)
+            mobs.append(mob)
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async") as schedule_mock:
+            with self.captureOnCommitCallbacks(execute=True):
+                with capture_game_messages() as messages:
+                    dispatch_text_command(self.player.id, "east")
+
+        active_encounters = CombatEncounter.objects.filter(
+            player=self.player,
+            mob__in=mobs,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        self.assertEqual(active_encounters.count(), 3)
+        self.assertEqual(schedule_mock.call_count, 3)
+
+        engage_messages = self._messages_by_type(
+            messages,
+            "cmd.kill.success",
+            self.player.key,
+        )
+        self.assertEqual(len(engage_messages), 3)
+        self.assertEqual(
+            {message["data"]["target"]["key"] for message in engage_messages},
+            {mob.key for mob in mobs},
+        )
+        self.assertTrue(
+            all(
+                message["data"]["actor"]["target"]["key"] == mobs[0].key
+                for message in engage_messages
+            )
+        )
+
+    def test_target_priority_controls_primary_faceoff_for_pack_aggro(self):
+        self.world.config.combat_resolution_interval = 1.5
+        self.world.config.save(update_fields=["combat_resolution_interval"])
+
+        destination = Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Shield Line",
+            x=self.room.x + 1,
+            y=self.room.y,
+            z=self.room.z,
+        )
+        self.room.east = destination
+        self.room.save(update_fields=["east"])
+        destination.west = self.room
+        destination.save(update_fields=["west"])
+
+        archer = Mob.objects.create(
+            world=self.spawn_world,
+            room=destination,
+            name="Archer",
+            keywords="archer",
+            health=40,
+            health_max=40,
+            attack_power=3,
+            aggression=adv_consts.MOB_AGGRESSION_ALL,
+            target_priority=-1,
+        )
+        shieldbearer = Mob.objects.create(
+            world=self.spawn_world,
+            room=destination,
+            name="Shieldbearer",
+            keywords="shieldbearer",
+            health=80,
+            health_max=80,
+            attack_power=2,
+            aggression=adv_consts.MOB_AGGRESSION_ALL,
+            target_priority=1,
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with self.captureOnCommitCallbacks(execute=True):
+                with capture_game_messages() as messages:
+                    dispatch_text_command(self.player.id, "east")
+
+        engage_messages = self._messages_by_type(
+            messages,
+            "cmd.kill.success",
+            self.player.key,
+        )
+        self.assertEqual(len(engage_messages), 2)
+        self.assertTrue(
+            all(
+                message["data"]["actor"]["target"]["key"] == shieldbearer.key
+                for message in engage_messages
+            )
+        )
+
+        archer_encounter = CombatEncounter.objects.get(
+            player=self.player,
+            mob=archer,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        archer_encounter.next_resolution_ts = timezone.now()
+        archer_encounter.save(update_fields=["next_resolution_ts"])
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with capture_game_messages() as archer_messages:
+                resolve_combat_encounter(archer_encounter.id)
+
+        archer_attacks = self._messages_by_type(
+            archer_messages,
+            "notification.combat.attack",
+            self.player.key,
+        )
+        self.assertTrue(
+            any(attack["data"]["actor"]["key"] == archer.key for attack in archer_attacks)
+        )
+        self.assertFalse(
+            any(
+                attack["data"]["actor"]["key"] == self.player.key
+                and attack["data"]["target"]["key"] == archer.key
+                for attack in archer_attacks
+            )
+        )
+        archer.refresh_from_db()
+        self.assertEqual(archer.health, archer.health_max)
+
+        shield_encounter = CombatEncounter.objects.get(
+            player=self.player,
+            mob=shieldbearer,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        shield_encounter.next_resolution_ts = timezone.now()
+        shield_encounter.save(update_fields=["next_resolution_ts"])
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with capture_game_messages() as shield_messages:
+                resolve_combat_encounter(shield_encounter.id)
+
+        shield_attacks = self._messages_by_type(
+            shield_messages,
+            "notification.combat.attack",
+            self.player.key,
+        )
+        self.assertTrue(
+            any(
+                attack["data"]["actor"]["key"] == self.player.key
+                and attack["data"]["target"]["key"] == shieldbearer.key
+                for attack in shield_attacks
+            )
+        )
+
+    def test_next_priority_target_takes_over_after_primary_mob_dies(self):
+        self.world.config.combat_resolution_interval = -1
+        self.world.config.save(update_fields=["combat_resolution_interval"])
+
+        shieldbearer = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Shieldbearer",
+            keywords="shieldbearer",
+            health=1,
+            health_max=1,
+            attack_power=0,
+            fights_back=False,
+            target_priority=1,
+        )
+        skirmisher = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Skirmisher",
+            keywords="skirmisher",
+            health=50,
+            health_max=50,
+            attack_power=0,
+            fights_back=False,
+        )
+        archer = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Archer",
+            keywords="archer",
+            health=50,
+            health_max=50,
+            attack_power=0,
+            fights_back=False,
+            target_priority=-1,
+        )
+        self.assertEqual(skirmisher.target_priority, 0)
+        shield_encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=shieldbearer,
+            status=CombatEncounter.STATUS_ACTIVE,
+            resolution_interval=-1,
+        )
+        skirmisher_encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=skirmisher,
+            status=CombatEncounter.STATUS_ACTIVE,
+            resolution_interval=-1,
+        )
+        archer_encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=archer,
+            status=CombatEncounter.STATUS_ACTIVE,
+            resolution_interval=-1,
+        )
+
+        with capture_game_messages():
+            resolve_combat_encounter(shield_encounter.id)
+
+        self.assertFalse(Mob.objects.filter(pk=shieldbearer.id).exists())
+        skirmisher_encounter.refresh_from_db()
+        self.assertEqual(skirmisher_encounter.status, CombatEncounter.STATUS_ACTIVE)
+        archer_encounter.refresh_from_db()
+        self.assertEqual(archer_encounter.status, CombatEncounter.STATUS_ACTIVE)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "k")
+
+        attacks = self._messages_by_type(
+            messages,
+            "notification.combat.attack",
+            self.player.key,
+        )
+        self.assertTrue(
+            any(
+                attack["data"]["actor"]["key"] == self.player.key
+                and attack["data"]["target"]["key"] == skirmisher.key
+                for attack in attacks
+            )
+        )
+        archer.refresh_from_db()
+        self.assertEqual(archer.health, archer.health_max)
+
     def test_passive_mob_does_not_aggro_when_player_enters_room(self):
         self.world.config.combat_resolution_interval = 1.5
         self.world.config.save(update_fields=["combat_resolution_interval"])

@@ -21,15 +21,24 @@ Charge can only be used while you are out of combat.
 charge rabbit
 charge rabbit east
 charge east rabbit
+charge east
 ```
 
 Without a direction, Charge targets a mob in your current room. With one
 direction, Charge first moves you through that exit, using the normal movement
 rules, then attacks the named mob in the destination room.
 
+If you provide a direction without a target, Charge picks the first attackable
+living mob in the destination room, matching the implicit targeting used by
+bare `kill`.
+
 Charge starts combat immediately. Its opening attack gets first-action priority
 for the first round only; later rounds use the encounter order that was rolled
 when combat started.
+
+When Charge moves you into a room with multiple hostile mobs, the mob you
+charged becomes your automatic faceoff target even if another mob has a higher
+`target_priority`. Other hostile mobs in the room can still engage you.
 
 ## Rounds
 
@@ -39,6 +48,16 @@ use your normal auto-attack when your turn in the encounter order comes up.
 
 Some effects can change what happens on a turn. For example, stun can prevent a
 combatant from taking their primary action.
+
+## Multiple Hostiles
+
+Several hostile mobs in the same room can engage you at once. You still have one
+automatic faceoff target for normal attacks. Builders can give mobs a
+`target_priority`; higher-priority mobs become your automatic target first, and
+the next hostile takes over after that target dies. Unset priority is `0`, so
+positive values stand ahead of default mobs and negative values stand behind
+them. Explicit opener abilities such as Charge can temporarily override that
+priority by making the chosen opener target your current faceoff target.
 
 ## Leaving Combat
 

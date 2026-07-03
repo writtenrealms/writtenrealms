@@ -946,10 +946,25 @@ def _ability_ack(
 
 
 def _active_player_encounter(player: Player) -> CombatEncounter | None:
-    return (
-        CombatEncounter.objects.select_for_update()
-        .filter(player=player, status=CombatEncounter.STATUS_ACTIVE)
-        .first()
+    room = Room.objects.filter(pk=player.room_id).first() if player.room_id else None
+    from spawns.actions.combat import primary_active_encounter_for_player
+
+    return primary_active_encounter_for_player(player, room=room, lock=True)
+
+
+def _active_player_encounter_for_mob(
+    player: Player,
+    *,
+    mob_id: int,
+) -> CombatEncounter | None:
+    room = Room.objects.filter(pk=player.room_id).first() if player.room_id else None
+    from spawns.actions.combat import active_player_encounter_for_mob
+
+    return active_player_encounter_for_mob(
+        player,
+        mob_id=mob_id,
+        room=room,
+        lock=True,
     )
 
 
@@ -1033,12 +1048,15 @@ def _split_room_opener_args(args: list[str], *, ability: AbilityDefinition) -> t
         if index != direction_index
     ]
     target_selector = " ".join(target_tokens).strip()
-    if not target_selector:
-        raise ActionError(
-            f"{ability.name} what?",
-            code="missing_target",
-        )
     return direction, target_selector
+
+
+def _is_implicit_room_opener_target(mob: Mob) -> bool:
+    return (
+        not getattr(mob, "is_pending_deletion", False)
+        and getattr(mob, "attackable", True)
+        and int(getattr(mob, "health", 0) or 0) > 0
+    )
 
 
 def ability_uses_room_opener(ability: AbilityDefinition) -> bool:
@@ -1449,6 +1467,9 @@ class AbilityAction:
             target_selector,
             empty_error=f"Use {ability.name} on what?",
             not_found_error="You don't see them there." if direction else "You don't see them here.",
+            allow_single_match_when_empty=True,
+            allow_first_match_when_empty=True,
+            empty_candidate_filter=_is_implicit_room_opener_target,
         )
         target_mob = (
             Mob.objects.select_for_update()
@@ -1480,7 +1501,11 @@ class AbilityAction:
             player.save(update_fields=["state"])
 
         from spawns.actions import combat as combat_actions
-        from spawns.actions.combat import encounter_opening_priority_ref
+        from spawns.actions.combat import (
+            ScanRoomAggroAction,
+            encounter_opening_priority_ref,
+            set_faceoff_override,
+        )
 
         opening_priority = []
         if (ability.target or {}).get("opener_priority"):
@@ -1502,7 +1527,8 @@ class AbilityAction:
                 config=config,
                 opening_priority=opening_priority,
             )
-            return ActionResult(events=[*move_events, *result.events])
+            aggro_result = ScanRoomAggroAction().execute(player.id)
+            return ActionResult(events=[*move_events, *result.events, *aggro_result.events])
 
         encounter = CombatEncounter.objects.create(
             world=player.world,
@@ -1518,7 +1544,9 @@ class AbilityAction:
                 queued_round=0,
             ),
             opening_priority=opening_priority,
+            faceoff_override=True,
         )
+        set_faceoff_override(encounter)
         combat_actions.ensure_encounter_initiative_order(
             encounter,
             player=player,
@@ -1529,10 +1557,12 @@ class AbilityAction:
             encounter.id,
             auto_advance=interval > 0,
         )
+        aggro_result = ScanRoomAggroAction().execute(player.id)
         return ActionResult(events=[
             *move_events,
             _ability_ack(player=player, ability=ability, replaced=False, target=target_mob),
             *step.events,
+            *aggro_result.events,
         ])
 
     def execute(
@@ -1603,6 +1633,7 @@ class AbilityAction:
                 _raise_if_ability_casting(active_encounter.pending_player_ability)
                 if not active_encounter.mob_id:
                     raise ActionError("You are already in combat.", code="combat_in_progress")
+                selected_encounter = active_encounter
                 target_mob = (
                     Mob.objects.select_for_update()
                     .filter(pk=active_encounter.mob_id, is_pending_deletion=False)
@@ -1618,23 +1649,37 @@ class AbilityAction:
                         not_found_error="You don't see them here.",
                     )
                     if target_ref.id != active_encounter.mob_id:
-                        raise ActionError(
-                            f"You are already fighting {target_mob.name or 'them'}.",
-                            code="combat_in_progress",
+                        targeted_encounter = _active_player_encounter_for_mob(
+                            player,
+                            mob_id=target_ref.id,
                         )
-                replaced = bool(active_encounter.pending_player_ability)
-                active_encounter.pending_player_ability = _pending_payload(
+                        if not targeted_encounter:
+                            raise ActionError(
+                                f"You are already fighting {target_mob.name or 'them'}.",
+                                code="combat_in_progress",
+                            )
+                        selected_encounter = targeted_encounter
+                        target_mob = (
+                            Mob.objects.select_for_update()
+                            .filter(pk=targeted_encounter.mob_id, is_pending_deletion=False)
+                            .first()
+                        )
+                        if not target_mob:
+                            raise ActionError("Your selected target is gone.", code="target_missing")
+                _raise_if_ability_casting(selected_encounter.pending_player_ability)
+                replaced = bool(selected_encounter.pending_player_ability)
+                selected_encounter.pending_player_ability = _pending_payload(
                     ability=ability,
                     command=command,
                     target_type="mob",
-                    target_id=active_encounter.mob_id,
-                    queued_round=active_encounter.round_number,
+                    target_id=selected_encounter.mob_id,
+                    queued_round=selected_encounter.round_number,
                 )
-                active_encounter.save(update_fields=["pending_player_ability"])
-                if active_encounter.resolution_interval == -1:
+                selected_encounter.save(update_fields=["pending_player_ability"])
+                if selected_encounter.resolution_interval == -1:
                     from spawns.actions.combat import resolve_combat_encounter_step
 
-                    step = resolve_combat_encounter_step(active_encounter.id, auto_advance=False)
+                    step = resolve_combat_encounter_step(selected_encounter.id, auto_advance=False)
                     return ActionResult(events=[
                         _ability_ack(player=player, ability=ability, replaced=replaced, target=target_mob),
                         *step.events,

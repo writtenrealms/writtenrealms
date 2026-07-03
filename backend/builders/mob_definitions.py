@@ -30,6 +30,7 @@ def _field_names(model_cls) -> set[str]:
 
 CHAR_FIELD_NAMES = _field_names(CharMixin)
 MOB_FIELD_NAMES = _field_names(MobMixin)
+MOB_DEFINITION_RUNTIME_FIELD_NAMES = {"target_priority"}
 MOB_BASE_FIELD_NAMES = CHAR_FIELD_NAMES | MOB_FIELD_NAMES
 
 
@@ -47,7 +48,7 @@ def mob_definition_property_fields() -> tuple[str, ...]:
         "group_id",
         "traits",
     }
-    return tuple(sorted(MOB_BASE_FIELD_NAMES - excluded))
+    return tuple(sorted((MOB_BASE_FIELD_NAMES | MOB_DEFINITION_RUNTIME_FIELD_NAMES) - excluded))
 
 
 def _default_for_field(field) -> Any:
@@ -67,6 +68,7 @@ def _template_field_defaults() -> dict[str, Any]:
             if field.name == "id":
                 continue
             fields[field.name] = _default_for_field(field)
+    fields["target_priority"] = 0
     return fields
 
 
@@ -110,7 +112,7 @@ def _mob_fields_from_definition(definition, attributes: dict[str, float]) -> dic
     fields["type"] = definition.mob_type or fields.get("type")
 
     for key, value in (definition.base_properties or {}).items():
-        if key not in MOB_BASE_FIELD_NAMES or key in {
+        if key not in MOB_BASE_FIELD_NAMES | MOB_DEFINITION_RUNTIME_FIELD_NAMES or key in {
             "attributes",
             "name",
             "health",

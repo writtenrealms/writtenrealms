@@ -292,6 +292,117 @@ def _combat_recipients(player: Player, room: Room) -> list[str]:
     ]
 
 
+def _mob_target_priority(mob: Mob | None) -> int:
+    if mob is None:
+        return 0
+    try:
+        return int(getattr(mob, "target_priority", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _target_priority_sort_key(mob: Mob) -> tuple[int, int]:
+    return (-_mob_target_priority(mob), int(mob.id or 0))
+
+
+def _encounter_target_priority_sort_key(encounter: CombatEncounter) -> tuple[int, int, int]:
+    mob = getattr(encounter, "mob", None)
+    mob_id = int(getattr(mob, "id", None) or encounter.mob_id or 0)
+    return (
+        -int(bool(getattr(encounter, "faceoff_override", False))),
+        -_mob_target_priority(mob),
+        mob_id,
+        int(encounter.id or 0),
+    )
+
+
+def _active_faceoff_encounter_queryset(
+    player: Player,
+    *,
+    room: Room | None = None,
+    lock: bool = False,
+):
+    queryset = (
+        CombatEncounter.objects
+        .select_related("mob")
+        .filter(
+            player=player,
+            status=CombatEncounter.STATUS_ACTIVE,
+            mob_id__isnull=False,
+            mob__is_pending_deletion=False,
+            mob__health__gt=0,
+        )
+    )
+    if room is not None:
+        queryset = queryset.filter(room=room, mob__room=room)
+    if lock:
+        queryset = queryset.select_for_update(of=("self",))
+    return queryset
+
+
+def primary_active_encounter_for_player(
+    player: Player,
+    *,
+    room: Room | None = None,
+    lock: bool = False,
+) -> CombatEncounter | None:
+    encounters = list(_active_faceoff_encounter_queryset(player, room=room, lock=lock))
+    if not encounters:
+        return None
+    return sorted(encounters, key=_encounter_target_priority_sort_key)[0]
+
+
+def active_player_encounter_for_mob(
+    player: Player,
+    *,
+    mob_id: int,
+    room: Room | None = None,
+    lock: bool = False,
+) -> CombatEncounter | None:
+    return (
+        _active_faceoff_encounter_queryset(player, room=room, lock=lock)
+        .filter(mob_id=mob_id)
+        .first()
+    )
+
+
+def set_faceoff_override(encounter: CombatEncounter) -> None:
+    if encounter._state.adding:
+        encounter.faceoff_override = True
+        return
+
+    CombatEncounter.objects.filter(
+        player_id=encounter.player_id,
+        status=CombatEncounter.STATUS_ACTIVE,
+    ).exclude(pk=encounter.pk).update(faceoff_override=False)
+    if not encounter.faceoff_override:
+        encounter.faceoff_override = True
+        encounter.save(update_fields=["faceoff_override"])
+
+
+def _is_primary_faceoff_encounter(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    room: Room,
+) -> bool:
+    primary = primary_active_encounter_for_player(player, room=room)
+    return bool(primary and primary.id == encounter.id)
+
+
+def _encounter_mob_name(encounter: CombatEncounter | None) -> str:
+    mob = getattr(encounter, "mob", None)
+    if not mob:
+        return "them"
+    if mob.name:
+        return mob.name
+    if getattr(mob, "template", None):
+        return mob.template.name or "them"
+    if getattr(mob, "definition", None):
+        return mob.definition.name or "them"
+    return "them"
+
+
 def _encounter_actor_ref(actor: Player | Mob, *, side: str) -> dict:
     actor_type = "player" if isinstance(actor, Player) else "mob"
     return {
@@ -760,10 +871,16 @@ def _engage_events(*, player: Player, room: Room, mob: Mob) -> list[GameEvent]:
     ]
 
 
-def _aggro_engage_events(*, player: Player, room: Room, mob: Mob) -> list[GameEvent]:
+def _aggro_engage_events(
+    *,
+    player: Player,
+    room: Room,
+    mob: Mob,
+    primary_mob: Mob | None = None,
+) -> list[GameEvent]:
     player_payload = _combat_state_payload(
         serialize_char_from_player(player).model_dump(),
-        target_payload=serialize_char_from_mob(mob).model_dump(),
+        target_payload=serialize_char_from_mob(primary_mob or mob).model_dump(),
     )
     target_payload = _combat_state_payload(
         serialize_char_from_mob(mob).model_dump(),
@@ -2900,17 +3017,21 @@ def _finalize_active_round(
     target_mob: Mob,
     cooldown_exclude: str | None,
     mob_cooldown_exclude: str | None,
+    advance_player_state: bool = True,
     round_id: str | None = None,
 ) -> bool:
-    cooldowns_changed = decrement_ability_cooldowns(
-        player,
-        exclude={cooldown_exclude} if cooldown_exclude else set(),
-    )
+    cooldowns_changed = False
+    effects_changed = False
+    if advance_player_state:
+        cooldowns_changed = decrement_ability_cooldowns(
+            player,
+            exclude={cooldown_exclude} if cooldown_exclude else set(),
+        )
+        effects_changed = advance_character_effect_durations(player, current_round_id=round_id)
     mob_cooldowns_changed = _decrement_mob_ability_cooldowns(
         target_mob,
         exclude={mob_cooldown_exclude} if mob_cooldown_exclude else set(),
     )
-    effects_changed = advance_character_effect_durations(player, current_round_id=round_id)
     update_fields: list[str] = []
     if cooldowns_changed:
         update_fields.append("ability_cooldowns")
@@ -2938,10 +3059,15 @@ def _apply_player_primary_turn(
     room: Room,
     round_id: str,
     player_health_max: int,
-    skip_primary: bool,
+    allow_basic_attack: bool,
+    skip_turn: bool,
 ) -> PlayerTurnOutcome:
     events: list[GameEvent] = []
-    if skip_primary:
+    if skip_turn:
+        return PlayerTurnOutcome(events=events)
+
+    has_pending_ability = bool(encounter.pending_player_ability)
+    if not allow_basic_attack and not has_pending_ability:
         return PlayerTurnOutcome(events=events)
 
     player_stunned = _consume_stun(
@@ -2985,6 +3111,9 @@ def _apply_player_primary_turn(
         )
 
     if ability_result.consumed_primary:
+        return PlayerTurnOutcome(events=events, cooldown_exclude=cooldown_exclude)
+
+    if not allow_basic_attack:
         return PlayerTurnOutcome(events=events, cooldown_exclude=cooldown_exclude)
 
     for strike in resolve_attack_routine(actor=player, target=target_mob, world=player.world):
@@ -3131,7 +3260,14 @@ def _apply_mob_primary_turn(
     return MobTurnOutcome(events=events, cooldown_exclude=cooldown_exclude)
 
 
-def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target_mob: Mob, config) -> CombatStepResult:
+def _apply_encounter_round(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    target_mob: Mob,
+    config,
+    player_primary_enabled: bool = True,
+) -> CombatStepResult:
     room = Room.objects.select_related("world", "zone").get(pk=encounter.room_id)
     stand_player(player)
     stats = _player_combat_stats(player)
@@ -3178,6 +3314,7 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
         round_id=round_id,
     )
     events.extend(flee_preparation_events)
+    player_had_pending_ability = bool(encounter.pending_player_ability)
 
     for actor_ref in _primary_turn_order(
         encounter,
@@ -3192,7 +3329,8 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
                 room=room,
                 round_id=round_id,
                 player_health_max=stats.player_health_max,
-                skip_primary=bool(flee_preparation_events),
+                allow_basic_attack=player_primary_enabled,
+                skip_turn=bool(flee_preparation_events),
             )
             events.extend(player_turn.events)
             cooldown_exclude = player_turn.cooldown_exclude or cooldown_exclude
@@ -3235,6 +3373,7 @@ def _apply_encounter_round(*, encounter: CombatEncounter, player: Player, target
         target_mob=target_mob,
         cooldown_exclude=cooldown_exclude,
         mob_cooldown_exclude=mob_cooldown_exclude,
+        advance_player_state=player_primary_enabled or player_had_pending_ability,
         round_id=round_id,
     )
     if cooldown_exclude or cooldowns_changed:
@@ -3292,6 +3431,11 @@ def resolve_combat_encounter_step(
             player=player,
             target_mob=target_mob,
             config=config,
+            player_primary_enabled=_is_primary_faceoff_encounter(
+                encounter=encounter,
+                player=player,
+                room=encounter.room,
+            ),
         )
 
         if result.encounter_active and auto_advance and encounter.resolution_interval > 0:
@@ -3324,11 +3468,17 @@ class ScanRoomAggroAction:
         player: Player,
         room: Room,
         mob: Mob,
+        primary_mob: Mob | None,
         rules_config,
         death_config,
     ) -> ActionResult:
         interval = _combat_interval(rules_config)
-        events = _aggro_engage_events(player=player, room=room, mob=mob)
+        events = _aggro_engage_events(
+            player=player,
+            room=room,
+            mob=mob,
+            primary_mob=primary_mob,
+        )
 
         if interval == 0:
             stand_player(player)
@@ -3385,12 +3535,6 @@ class ScanRoomAggroAction:
             death_config = player.world.effective_config
 
             room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
-            if CombatEncounter.objects.select_for_update().filter(
-                player=player,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists():
-                return ActionResult()
-
             active_mob_ids = set(
                 CombatEncounter.objects.select_for_update()
                 .filter(
@@ -3409,17 +3553,39 @@ class ScanRoomAggroAction:
                 .filter(room=room, is_pending_deletion=False)
                 .order_by("id")
             )
+            aggro_mobs: list[Mob] = []
             for mob in mobs:
                 if mob.id in active_mob_ids or not self._can_aggro(mob):
                     continue
                 if mob_should_aggro_player(mob, player):
-                    return self._start_aggro_encounter(
-                        player=player,
-                        room=room,
-                        mob=mob,
-                        rules_config=rules_config,
-                        death_config=death_config,
-                    )
+                    aggro_mobs.append(mob)
+
+            if not aggro_mobs:
+                return ActionResult()
+
+            aggro_mobs = sorted(aggro_mobs, key=_target_priority_sort_key)
+            existing_primary = primary_active_encounter_for_player(player, room=room)
+            primary_mob = (
+                existing_primary.mob
+                if existing_primary and existing_primary.mob
+                else aggro_mobs[0]
+            )
+            events: list[GameEvent] = []
+            for mob in aggro_mobs:
+                result = self._start_aggro_encounter(
+                    player=player,
+                    room=room,
+                    mob=mob,
+                    primary_mob=primary_mob,
+                    rules_config=rules_config,
+                    death_config=death_config,
+                )
+                events.extend(result.events)
+                active_mob_ids.add(mob.id)
+                player.refresh_from_db(fields=["health", "room"])
+                if int(player.health or 0) <= 0 or player.room_id != room.id:
+                    break
+            return ActionResult(events=events)
 
         return ActionResult()
 
@@ -3428,10 +3594,11 @@ class FleeAction:
     def execute(self, player_id: int) -> ActionResult:
         with transaction.atomic():
             player = Player.objects.select_for_update().get(pk=player_id)
-            encounter = (
-                CombatEncounter.objects.select_for_update()
-                .filter(player=player, status=CombatEncounter.STATUS_ACTIVE)
-                .first()
+            room = Room.objects.filter(pk=player.room_id).first() if player.room_id else None
+            encounter = primary_active_encounter_for_player(
+                player,
+                room=room,
+                lock=True,
             )
             if not encounter:
                 raise ActionError("You are not in combat.", code="not_in_combat")
@@ -3549,15 +3716,23 @@ class KillAction:
             death_config = player.world.effective_config
 
             room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
-            target_ref = resolve_room_mob_target(
-                room,
-                target_selector,
-                empty_error="Kill what?",
-                not_found_error="You don't see them here.",
-                allow_single_match_when_empty=True,
-                allow_first_match_when_empty=True,
-                empty_candidate_filter=self._is_implicit_target_candidate,
+            active_player_encounter = primary_active_encounter_for_player(
+                player,
+                room=room,
+                lock=True,
             )
+            if active_player_encounter and not str(target_selector or "").strip():
+                target_ref = active_player_encounter.mob
+            else:
+                target_ref = resolve_room_mob_target(
+                    room,
+                    target_selector,
+                    empty_error="Kill what?",
+                    not_found_error="You don't see them here.",
+                    allow_single_match_when_empty=True,
+                    allow_first_match_when_empty=True,
+                    empty_candidate_filter=self._is_implicit_target_candidate,
+                )
             target_mob = (
                 Mob.objects.select_for_update()
                 .filter(pk=target_ref.id, is_pending_deletion=False)
@@ -3570,27 +3745,8 @@ class KillAction:
 
             interval = _combat_interval(rules_config)
 
-            active_player_encounter = (
-                CombatEncounter.objects.select_for_update()
-                .filter(
-                    player=player,
-                    status=CombatEncounter.STATUS_ACTIVE,
-                )
-                .first()
-            )
             if active_player_encounter:
-                active_name = (
-                    (
-                        active_player_encounter.mob.name
-                        or (
-                            active_player_encounter.mob.template.name
-                            if active_player_encounter.mob and active_player_encounter.mob.template
-                            else "them"
-                        )
-                    )
-                    if active_player_encounter.mob
-                    else "them"
-                )
+                active_name = _encounter_mob_name(active_player_encounter)
                 if active_player_encounter.mob_id != target_mob.id:
                     raise ActionError(
                         f"You are already fighting {active_name}.",

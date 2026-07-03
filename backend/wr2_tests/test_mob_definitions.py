@@ -33,6 +33,7 @@ class TestMobDefinitions(WorldTestCase):
                 "health_max": 45,
                 "attack_power": 6,
                 "weapon_damage": 12,
+                "target_priority": 9,
             },
             attributes={"brawn": 2},
             randomization={
@@ -60,6 +61,7 @@ class TestMobDefinitions(WorldTestCase):
         self.assertEqual(mob.health, 45)
         self.assertEqual(mob.attack_power, 18)
         self.assertEqual(mob.weapon_damage, 12)
+        self.assertEqual(mob.target_priority, 9)
         self.assertEqual(mob.attributes, {"brawn": 12.0})
         self.assertEqual(mob.roll_metadata["ignored_attributes"], ["luck"])
         self.assertTrue(mob.roll_metadata["randomized"])
@@ -175,6 +177,7 @@ spec:
   health_max: 42
   attack_power: 7
   weapon_damage: 13
+  target_priority: -1
   attributes:
     brawn: 2
   randomization:
@@ -197,6 +200,7 @@ spec:
         self.assertEqual(definition.base_properties["level"], 5)
         self.assertEqual(definition.base_properties["health_max"], 42)
         self.assertEqual(definition.base_properties["weapon_damage"], 13)
+        self.assertEqual(definition.base_properties["target_priority"], -1)
         self.assertEqual(definition.attributes, {"brawn": 2})
         self.assertEqual(definition.randomization["attributes"][0]["mode"], "favor_high")
 
