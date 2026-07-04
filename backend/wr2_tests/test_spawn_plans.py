@@ -170,6 +170,183 @@ spec:
         self.assertEqual(entry.placement["cohort_role"], "leader")
         self.assertEqual(entry.placement["cohort_policy"], "refill_missing")
 
+    def test_apply_spawn_plan_manifest_accepts_cohort_followers_targeting_leader(self):
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: paired-patrols
+  name: Paired Patrols
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: patrol-leaders
+      order: 1
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+      count: 4
+      cohort: west-patrol
+      cohort_role: leader
+    - slug: patrol-followers
+      order: 2
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        entry: patrol-leaders
+      count: 1
+      cohort: west-patrol
+      cohort_role: follower
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        plan = SpawnPlan.objects.get(world=self.world, slug="paired-patrols")
+        leader = plan.entries.get(slug="patrol-leaders")
+        follower = plan.entries.get(slug="patrol-followers")
+        self.assertEqual(leader.count, 4)
+        self.assertEqual(follower.target["entry"], "patrol-leaders")
+        self.assertEqual(follower.placement["cohort_role"], "follower")
+
+    def test_spawn_plan_manifest_rejects_follower_without_entry_target(self):
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: detached-followers
+  name: Detached Followers
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: patrol-follower
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+      cohort: west-patrol
+      cohort_role: follower
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("cohort_role follower requires target.entry", str(resp.data))
+        self.assertFalse(SpawnPlan.objects.filter(world=self.world, slug="detached-followers").exists())
+
+    def test_spawn_plan_manifest_rejects_entry_target_after_child(self):
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: late-parent
+  name: Late Parent
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: child
+      order: 1
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        entry: parent
+    - slug: parent
+      order: 2
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("earlier active entry", str(resp.data))
+        self.assertFalse(SpawnPlan.objects.filter(world=self.world, slug="late-parent").exists())
+
+    def test_spawn_plan_manifest_rejects_entry_target_to_inactive_parent(self):
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: inactive-parent
+  name: Inactive Parent
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: parent
+      order: 1
+      is_active: false
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+    - slug: child
+      order: 2
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        entry: parent
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("must reference an active entry", str(resp.data))
+        self.assertFalse(SpawnPlan.objects.filter(world=self.world, slug="inactive-parent").exists())
+
+    def test_spawn_plan_manifest_rejects_follower_cohort_mismatch(self):
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: mismatched-cohort
+  name: Mismatched Cohort
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: patrol-leader
+      order: 1
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+      cohort: west-patrol
+      cohort_role: leader
+    - slug: patrol-follower
+      order: 2
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        entry: patrol-leader
+      cohort: east-patrol
+      cohort_role: follower
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("cohort must match", str(resp.data))
+        self.assertFalse(SpawnPlan.objects.filter(world=self.world, slug="mismatched-cohort").exists())
+
+    def test_spawn_plan_manifest_rejects_multiple_leader_entries_for_same_cohort(self):
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: duplicate-leaders
+  name: Duplicate Leaders
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: west-leader
+      order: 1
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+      cohort: west-patrol
+      cohort_role: leader
+    - slug: east-leader
+      order: 2
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+      cohort: west-patrol
+      cohort_role: leader
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("more than one leader entry", str(resp.data))
+        self.assertFalse(SpawnPlan.objects.filter(world=self.world, slug="duplicate-leaders").exists())
+
     def test_spawn_plan_manifest_rejects_traits_and_affixes_together(self):
         manifest = f"""
 kind: spawnplan

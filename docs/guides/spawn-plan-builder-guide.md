@@ -219,6 +219,13 @@ patrol template do not merge.
 `leader` for predictable roaming. If no live leader exists, the runtime picks
 the first surviving member as the temporary anchor.
 
+Follower entries must target another entry with `target.entry`. The target
+entry must be active and have a lower `order` than the follower, because the
+runtime generates parent placements before child placements. When both entries
+declare a `cohort`, the cohort values must match. A cohort template can have
+only one leader entry; increase that leader entry's `count` to create multiple
+copies of the same patrol.
+
 `cohort_policy` currently supports `refill_missing`, which is also the default.
 When a cohort is due to respawn:
 

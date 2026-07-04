@@ -1665,6 +1665,77 @@ def _validate_spawn_target(*, world: World, target: Any, entry_slugs: set[str], 
     raise serializers.ValidationError(f"{field_name} must target a room, zone, path, or entry.")
 
 
+def _spawn_target_entry_slug(target: Any) -> str:
+    if not isinstance(target, dict):
+        return ""
+    return str(target.get("entry") or target.get("parent_entry") or "").strip()
+
+
+def _effective_spawn_cohort_role(entry: dict[str, Any]) -> str:
+    placement = entry.get("placement") if isinstance(entry.get("placement"), dict) else {}
+    cohort = str(placement.get("cohort") or "").strip()
+    if not cohort:
+        return ""
+    role = str(placement.get("cohort_role") or "").strip().lower()
+    if role:
+        return role
+    if _spawn_target_entry_slug(entry.get("target")):
+        return "follower"
+    return "leader"
+
+
+def _validate_spawn_entry_relationships(entries: list[dict[str, Any]]) -> None:
+    active_entries = {
+        entry["slug"]: entry
+        for entry in entries
+        if entry.get("is_active")
+    }
+    leader_by_cohort = {}
+
+    for index, entry in enumerate(entries):
+        if not entry.get("is_active"):
+            continue
+
+        entry_field = f"spec.entries[{index}]"
+        target_entry_slug = _spawn_target_entry_slug(entry.get("target"))
+        placement = entry.get("placement") if isinstance(entry.get("placement"), dict) else {}
+        cohort = str(placement.get("cohort") or "").strip()
+        role = _effective_spawn_cohort_role(entry)
+
+        if target_entry_slug:
+            parent = active_entries.get(target_entry_slug)
+            if parent is None:
+                raise serializers.ValidationError(
+                    f"{entry_field}.target.entry must reference an active entry."
+                )
+            if int(parent["order"]) >= int(entry["order"]):
+                raise serializers.ValidationError(
+                    f"{entry_field}.target.entry must reference an earlier active entry with a lower order."
+                )
+            parent_placement = (
+                parent.get("placement")
+                if isinstance(parent.get("placement"), dict)
+                else {}
+            )
+            parent_cohort = str(parent_placement.get("cohort") or "").strip()
+            if cohort and parent_cohort and cohort != parent_cohort:
+                raise serializers.ValidationError(
+                    f"{entry_field}.cohort must match the target entry cohort."
+                )
+
+        if role == "follower" and not target_entry_slug:
+            raise serializers.ValidationError(
+                f"{entry_field}.cohort_role follower requires target.entry."
+            )
+
+        if role == "leader":
+            if cohort in leader_by_cohort:
+                raise serializers.ValidationError(
+                    f"{entry_field}.cohort has more than one leader entry."
+                )
+            leader_by_cohort[cohort] = entry["slug"]
+
+
 def apply_currency_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Currency, bool]:
     if parse_document_kind(manifest) != CURRENCY_MANIFEST_KIND:
         raise serializers.ValidationError("Unsupported manifest kind. Expected 'currency'.")
@@ -2302,6 +2373,8 @@ def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tupl
             ),
             "conditions": entry_conditions,
         })
+
+    _validate_spawn_entry_relationships(normalized_entries)
 
     with transaction.atomic():
         spawn_plan = SpawnPlan.objects.filter(world=world, slug=slug).first()
