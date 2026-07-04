@@ -569,6 +569,58 @@ def _room_attack_text(actor_name: str, target_name: str, result: CombatAttackRes
     return f"{safe_capitalize(actor_name)} hits {target_name} for {result.damage_taken} damage."
 
 
+def _combat_name(actor: Player | Mob) -> str:
+    fallback = "Someone" if isinstance(actor, Player) else "Something"
+    return str(getattr(actor, "name", "") or fallback).strip()
+
+
+def _possessive(name: str) -> str:
+    name = str(name or "").strip() or "Something"
+    suffix = "'" if name.lower().endswith("s") else "'s"
+    return f"{name}{suffix}"
+
+
+def _effect_source_text(*, source: Player | Mob, viewer: Player, label: str) -> str:
+    if isinstance(source, Player) and source.pk == viewer.pk:
+        return f"your {label}"
+    return f"{_possessive(_combat_name(source))} {label}"
+
+
+def _periodic_damage_text(
+    *,
+    viewer: Player,
+    source: Player | Mob,
+    target: Player | Mob,
+    label: str,
+    result: CombatAttackResult,
+) -> str:
+    source_text = _effect_source_text(source=source, viewer=viewer, label=label)
+    if result.outcome == "dodged":
+        if isinstance(target, Player) and target.pk == viewer.pk:
+            return f"You avoid {source_text}."
+        return f"{safe_capitalize(_combat_name(target))} avoids {source_text}."
+    if isinstance(target, Player) and target.pk == viewer.pk:
+        return f"You suffer {result.damage_taken} damage from {source_text}."
+    return (
+        f"{safe_capitalize(_combat_name(target))} suffers "
+        f"{result.damage_taken} damage from {source_text}."
+    )
+
+
+def _periodic_damage_room_text(
+    *,
+    source: Player | Mob,
+    target: Player | Mob,
+    label: str,
+    result: CombatAttackResult,
+) -> str:
+    source_text = f"{_possessive(_combat_name(source))} {label}"
+    target_name = safe_capitalize(_combat_name(target))
+    if result.outcome == "dodged":
+        return f"{target_name} avoids {source_text}."
+    return f"{target_name} suffers {result.damage_taken} damage from {source_text}."
+
+
 def _mob_death_text(mob_name: str | None) -> str:
     name = str(mob_name or "").strip() or "Something"
     return f"{safe_capitalize(name)} is dead! R.I.P."
@@ -1345,6 +1397,10 @@ def _component_label(component: dict, ability: AbilityDefinition | None = None) 
     return "Ability"
 
 
+def _ability_consumes_primary_action(ability: AbilityDefinition) -> bool:
+    return bool(getattr(ability, "consumes_primary_action", True))
+
+
 def _combat_failure_event(player: Player, text: str, *, code: str) -> GameEvent:
     return GameEvent(
         type="notification.combat.ability_failed",
@@ -1382,6 +1438,7 @@ def _ability_casting_event(
                 "slug": ability.slug,
                 "name": ability.name,
                 "action_type": ability.action_type,
+                "consumes_primary_action": _ability_consumes_primary_action(ability),
             },
             "round_id": round_id,
             "rounds_remaining": rounds_remaining,
@@ -1411,6 +1468,7 @@ def _mob_ability_casting_event(
                 "slug": ability.slug,
                 "name": ability.name,
                 "action_type": ability.action_type,
+                "consumes_primary_action": _ability_consumes_primary_action(ability),
             },
             "actor": serialize_char_from_mob(mob).model_dump(),
             "round_id": round_id,
@@ -2386,6 +2444,7 @@ def _execute_output_component(
     player_health_max: int,
     actor: Player | Mob | None = None,
     target: Player | Mob | None = None,
+    periodic_effect: dict | None = None,
 ) -> tuple[list[GameEvent], bool]:
     component_type = component.get("type")
     label = _component_label(component, ability)
@@ -2479,7 +2538,22 @@ def _execute_output_component(
     )
     actor_name = actor_char.get("name") or "Something"
     target_name = target_char.get("name") or "them"
-    if isinstance(actor, Player):
+    if periodic_effect:
+        actor_text = _periodic_damage_text(
+            viewer=player,
+            source=actor,
+            target=target,
+            label=label,
+            result=result,
+        )
+        room_text = _periodic_damage_room_text(
+            source=actor,
+            target=target,
+            label=label,
+            result=result,
+        )
+    elif isinstance(actor, Player):
+        room_text = _room_attack_text(actor_name, target_name, result)
         if result.outcome == "dodged":
             actor_text = f"{target_name} dodges {label}."
         elif result.is_crit_hit:
@@ -2487,6 +2561,7 @@ def _execute_output_component(
         else:
             actor_text = f"You hit {target_name} with {label} for {result.damage_taken} damage."
     else:
+        room_text = _room_attack_text(actor_name, target_name, result)
         if result.outcome == "dodged":
             actor_text = f"You dodge {label}."
         elif result.is_crit_hit:
@@ -2502,7 +2577,7 @@ def _execute_output_component(
             result=result,
             round_id=round_id,
             actor_text=actor_text,
-            room_text=_room_attack_text(actor_name, target_name, result),
+            room_text=room_text,
             attack=ability.slug if ability else "effect",
             label=label,
         )
@@ -2592,6 +2667,7 @@ def _resolve_periodic_effects(
                     player_health_max=player_health_max,
                     actor=source_actor,
                     target=target_actor,
+                    periodic_effect=effect,
                 )
                 events.extend(component_events)
 
@@ -2732,7 +2808,9 @@ def _execute_pending_player_ability(
                 round_id=round_id,
                 rounds_remaining=next_remaining,
             )
-        ], AbilityRoundResult(consumed_primary=True)
+        ], AbilityRoundResult(
+            consumed_primary=_ability_consumes_primary_action(ability)
+        )
 
     try:
         cost_paid = pay_ability_cost(player, ability)
@@ -2850,7 +2928,7 @@ def _execute_pending_player_ability(
         player.save(update_fields=list(dict.fromkeys(field for field in update_fields if field)))
 
     return events, AbilityRoundResult(
-        consumed_primary=True,
+        consumed_primary=_ability_consumes_primary_action(ability),
         cooldown_exclude=ability.slug if cooldown_started else None,
     )
 
@@ -2901,7 +2979,9 @@ def _execute_pending_mob_ability(
                 round_id=round_id,
                 rounds_remaining=next_remaining,
             )
-        ], AbilityRoundResult(consumed_primary=True)
+        ], AbilityRoundResult(
+            consumed_primary=_ability_consumes_primary_action(ability)
+        )
 
     paid_resource = _pay_mob_ability_cost(target_mob, ability)
     if paid_resource is None and not _mob_can_pay_ability_cost(target_mob, ability):
@@ -3005,7 +3085,7 @@ def _execute_pending_mob_ability(
         target_mob.save(update_fields=list(dict.fromkeys(update_fields)))
 
     return events, AbilityRoundResult(
-        consumed_primary=True,
+        consumed_primary=_ability_consumes_primary_action(ability),
         cooldown_exclude=ability.slug if cooldown_started else None,
     )
 

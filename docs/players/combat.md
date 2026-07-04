@@ -42,9 +42,12 @@ charged becomes your automatic faceoff target even if another mob has a higher
 
 ## Rounds
 
-Combat resolves in encounter rounds. If you have queued an ability, that ability
-uses your primary action for the round. If you have not queued an ability, you
-use your normal auto-attack when your turn in the encounter order comes up.
+Combat resolves in encounter rounds. Most queued abilities use your primary
+action for the round, replacing your normal auto-attack. Some builder-authored
+supplemental abilities can resolve without using that primary action, allowing
+your normal auto-attack to happen in the same round. If you have not queued an
+ability, you use your normal auto-attack when your turn in the encounter order
+comes up.
 
 Some effects can change what happens on a turn. For example, stun can prevent a
 combatant from taking their primary action.

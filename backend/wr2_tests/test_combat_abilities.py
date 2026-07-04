@@ -4,12 +4,12 @@ from unittest.mock import patch
 
 from builders.models import AbilityDefinition, ItemTemplate, MobDefinition
 from config import constants as adv_consts
-from core.combat_formulas import normalize_combat_system, resolve_attack
+from core.combat_formulas import CombatAttackResult, normalize_combat_system, resolve_attack
 from core.computations import compute_stats
 from core.scoped_state import STATE_SCOPE_CHARACTER, get_state_value
 from django.utils import timezone
 from spawns.actions.movement_costs import movement_cost
-from spawns.models import CombatEncounter, Item, Mob
+from spawns.models import CombatEncounter, Item, Mob, Player
 from spawns.tasks import resolve_combat_encounter
 from tests.base import WorldTestCase
 from wr2_tests.utils import (
@@ -76,6 +76,7 @@ class TestCombatAbilities(WorldTestCase):
         cost=None,
         cast_time=None,
         cooldown=None,
+        consumes_primary_action=True,
     ):
         return AbilityDefinition.objects.create(
             world=self.world,
@@ -83,6 +84,7 @@ class TestCombatAbilities(WorldTestCase):
             name=name,
             command_verbs=verbs,
             action_type="primary",
+            consumes_primary_action=consumes_primary_action,
             target=target or {
                 "type": "hostile",
                 "default": "current_target",
@@ -740,6 +742,11 @@ class TestCombatAbilities(WorldTestCase):
             payload["world"]["abilities"]["definitions"]["power-strike"]["cast_time"],
             {"rounds": 1},
         )
+        self.assertTrue(
+            payload["world"]["abilities"]["definitions"]["power-strike"][
+                "consumes_primary_action"
+            ]
+        )
 
     def test_queued_ability_replaces_auto_attack_for_the_round(self):
         self._ability(
@@ -1298,9 +1305,138 @@ class TestCombatAbilities(WorldTestCase):
         mob.refresh_from_db()
         self.assertEqual(mob.health, self.stats["attack_power"] * 6)
 
-        dispatch_text_command(self.player.id, "kill rat")
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "kill rat")
         mob.refresh_from_db()
         self.assertEqual(mob.health, self.stats["attack_power"] * 4)
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        dot_attack = next(msg for msg in attacks if msg["data"]["label"] == "Bleed")
+        self.assertEqual(
+            dot_attack["text"],
+            f"Rat suffers {dot_attack['data']['damage_taken']} damage from your Bleed.",
+        )
+
+    def test_dot_tick_against_player_uses_passive_recipient_text(self):
+        self.player.name = "Hoplite"
+        self.player.save(update_fields=["name"])
+        mob = self._mob(
+            health=self.stats["attack_power"] * 6,
+            attack_power=self.stats["attack_power"],
+            fights_back=False,
+        )
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            initiative_order=self._player_first_initiative(mob),
+            active_effects=[
+                {
+                    "effect": "dot",
+                    "category": "debuff",
+                    "source": {"type": "mob", "id": mob.id},
+                    "target": {"type": "player", "id": self.player.id},
+                    "remaining_rounds": 1,
+                    "rounds_elapsed": 0,
+                    "label": "Venom",
+                    "primitives": [],
+                    "tick": {
+                        "every_rounds": 1,
+                        "component": {
+                            "type": "damage",
+                            "profile": "basic_physical",
+                            "overrides": {"multiplier": 1},
+                            "text": {"label": "Venom"},
+                        },
+                    },
+                }
+            ],
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with capture_game_messages() as messages:
+                resolve_combat_encounter(encounter.id)
+
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        dot_attack = next(msg for msg in attacks if msg["data"]["label"] == "Venom")
+        self.assertEqual(
+            dot_attack["text"],
+            f"You suffer {dot_attack['data']['damage_taken']} damage from Rat's Venom.",
+        )
+
+    def test_dot_tick_from_another_player_uses_source_possessive(self):
+        from spawns.actions.combat import _periodic_damage_text
+
+        source = Player.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Hoplite",
+            user=self.create_user("hoplite@example.com"),
+        )
+        result = CombatAttackResult(
+            profile="basic_physical",
+            damage_type="physical",
+            outcome="hit",
+            damage_base=16,
+            damage_dealt=16,
+            damage_taken=16,
+            damage_mitigated=0,
+            damage_absorbed=0,
+            healing_done=0,
+            is_crit_hit=False,
+            is_heal=False,
+            dodge_chance=0,
+            crit_chance=0,
+            armor_mitigation=0,
+            resilience_mitigation=0,
+        )
+
+        self.assertEqual(
+            _periodic_damage_text(
+                viewer=self.player,
+                source=source,
+                target=self.player,
+                label="Wound",
+                result=result,
+            ),
+            "You suffer 16 damage from Hoplite's Wound.",
+        )
+
+    def test_non_consuming_dot_allows_auto_attack_in_application_round(self):
+        self._ability(
+            slug="bleeding-cut",
+            name="Bleeding Cut",
+            verbs=["bleed"],
+            consumes_primary_action=False,
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "dot",
+                    "duration": {"rounds": 2},
+                    "tick": {
+                        "every_rounds": 1,
+                        "component": {
+                            "type": "damage",
+                            "profile": "basic_physical",
+                            "overrides": {"multiplier": 1},
+                            "text": {"label": "Bleed"},
+                        },
+                    },
+                    "apply": "on_resolve",
+                }
+            ],
+        )
+        self.player.known_abilities = ["bleeding-cut"]
+        self.player.save(update_fields=["known_abilities"])
+        mob = self._mob(health=self.stats["attack_power"] * 6)
+
+        dispatch_text_command(self.player.id, "bleed rat")
+        mob.refresh_from_db()
+        self.assertEqual(mob.health, self.stats["attack_power"] * 5)
+
+        dispatch_text_command(self.player.id, "kill rat")
+        mob.refresh_from_db()
+        self.assertEqual(mob.health, self.stats["attack_power"] * 3)
 
     def test_resource_change_effect_ticks_energy_during_following_rounds(self):
         self._ability(

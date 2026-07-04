@@ -143,6 +143,7 @@ def _serialize_ability_definitions(world: World) -> dict[str, dict]:
             "name": ability.name or ability.slug,
             "command_verbs": list(ability.command_verbs or []),
             "action_type": ability.action_type,
+            "consumes_primary_action": bool(ability.consumes_primary_action),
             "target": ability.target or {},
             "cost": ability.cost or {},
             "cast_time": ability.cast_time or {},

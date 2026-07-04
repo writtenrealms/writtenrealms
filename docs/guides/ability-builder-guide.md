@@ -29,13 +29,16 @@ An ability is an authored command that resolves one or more components:
 - damage absorption barriers
 - resource-changing damage procs
 
-In combat, an ability is queued as the actor's primary action for the next
-encounter round. It replaces the auto-attack for that round.
+In combat, an ability is queued for the next encounter round. By default, it
+consumes the actor's primary action and replaces the auto-attack for that
+round. Builders can set `consumes_primary_action: false` for supplemental
+abilities that should resolve without suppressing the normal attack.
 
-If an ability has `cast_time.rounds`, the queued ability consumes that many
+If an ability has `cast_time.rounds`, the queued ability spends that many
 encounter rounds charging before its components resolve. For `rounds: 1`, the
 sequence is: prepare the ability, spend the next encounter round charging, then
-resolve the damage or healing on the following encounter round.
+resolve the damage or healing on the following encounter round. Charging rounds
+consume the primary action only when `consumes_primary_action` is true.
 
 If no ability is queued, the actor uses the normal auto-attack.
 
@@ -129,6 +132,7 @@ spec:
       - strike
       - powerstrike
   action_type: primary
+  consumes_primary_action: true
   target:
     type: hostile
     default: current_target
@@ -271,6 +275,53 @@ Once the ability is actively charging, it cannot be replaced by another ability.
 
 Out-of-combat utility abilities currently resolve immediately; cast times are
 combat-round behavior.
+
+## Primary Action Consumption
+
+Abilities default to consuming the actor's primary action:
+
+```yaml
+consumes_primary_action: true
+```
+
+This preserves the standard "ability instead of auto-attack" combat rhythm.
+Use `consumes_primary_action: false` for supplemental abilities such as light
+DOTs, marks, minor debuffs, or quick setup effects that should apply while the
+actor still takes their normal attack in the same encounter round:
+
+```yaml
+kind: ability
+metadata:
+  slug: minor-bleed
+  name: Minor Bleed
+spec:
+  command:
+    verbs: [minorbleed]
+  action_type: primary
+  consumes_primary_action: false
+  target:
+    type: hostile
+    default: current_target
+  cooldown:
+    rounds: 3
+  components:
+    - type: effect
+      effect: dot
+      duration:
+        rounds: 2
+      tick:
+        every_rounds: 1
+        component:
+          type: damage
+          profile: basic_physical
+          overrides:
+            multiplier: 0.25
+```
+
+Non-consuming abilities still use normal requirements, costs, cooldowns, target
+validation, and cast-time delays. If a cast-time ability should occupy the
+caster's combat rounds while it charges, leave `consumes_primary_action` at the
+default `true`.
 
 ## Cooldowns
 
@@ -538,7 +589,11 @@ spec:
 ```
 
 DOT ticks should resolve during encounter rounds, not as separate wall-clock
-timers.
+timers. DOT application consumes the primary action by default; set
+`consumes_primary_action: false` when the DOT is meant to be supplemental
+damage alongside the caster's normal attack. Tick damage is presented as
+passive harm from the effect, such as `A guard suffers 12 damage from your
+Bleed.`, rather than as a fresh direct hit.
 
 ## Heal-Over-Time
 

@@ -111,6 +111,7 @@ def resolve_ability_for_command(world, command: str) -> AbilityDefinition | None
         "command_verbs",
         "world_id",
         "action_type",
+        "consumes_primary_action",
         "target",
         "availability",
         "requirements",
@@ -931,6 +932,7 @@ def _ability_ack(
             "slug": ability.slug,
             "name": ability.name,
             "action_type": ability.action_type,
+            "consumes_primary_action": bool(ability.consumes_primary_action),
         }
     }
     if isinstance(target, Mob):

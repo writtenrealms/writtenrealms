@@ -3,81 +3,41 @@
     <div v-if="isLoading" class="color-text-60">Loading ability...</div>
 
     <template v-else-if="ability">
-      <div class="ability-header mb-4">
-        <div>
-          <h2>{{ ability.name || ability.slug }}</h2>
-          <div class="color-text-60">
-            ID: {{ ability.id }} | Slug: {{ ability.slug }} | {{ formatActionType(ability.action_type) }}
+      <ManifestYamlEditor
+        v-model="manifestText"
+        :loaded-value="loadedYaml"
+        :is-submitting="isSubmitting"
+        :disabled="isInstanceWorld"
+        copy-success-message="Ability YAML copied."
+        @save="submitManifest"
+      >
+        <template #header>
+          <h2 class="definition-title">{{ ability.name || ability.slug }}</h2>
+          <div class="definition-meta-row">
+            <div class="definition-meta color-text-60">
+              {{ ability.id }} - {{ ability.slug }} - {{ formatActionType(ability.action_type) }}
+            </div>
           </div>
-        </div>
-
-        <div v-if="isInstanceWorld" class="inherited-notice">
-          Abilities in instances are inherited from the parent world.
-          <router-link
-            :to="{ name: 'builder_world_ability_list', params: { world_id: inheritedWorld.id } }"
+          <div v-if="isInstanceWorld" class="inherited-notice">
+            Abilities in instances are inherited from the parent world.
+            <router-link
+              :to="{ name: 'builder_world_ability_list', params: { world_id: inheritedWorld.id } }"
+            >
+              Open {{ inheritedWorld.name }} Abilities
+            </router-link>
+          </div>
+        </template>
+        <template #actions>
+          <button
+            v-if="!isInstanceWorld"
+            class="btn-thin"
+            :disabled="!ability.delete_yaml"
+            @click="copyDeleteYaml"
           >
-            Open {{ inheritedWorld.name }} Abilities
-          </router-link>
-        </div>
-
-        <div class="ability-actions">
-          <button class="btn-small" :disabled="!ability.yaml" @click="copyYaml">
-            COPY YAML
-          </button>
-          <button v-if="!isInstanceWorld" class="btn-small" :disabled="!ability.yaml" @click="editYaml">
-            EDIT
-          </button>
-          <button v-if="!isInstanceWorld" class="btn-thin" :disabled="!ability.delete_yaml" @click="copyDeleteYaml">
             COPY DELETE YAML
           </button>
-        </div>
-      </div>
-
-      <section class="ability-summary mb-4">
-        <div class="summary-row">
-          <div class="summary-label">Status</div>
-          <div>{{ ability.is_active ? "Active" : "Inactive" }}</div>
-        </div>
-        <div class="summary-row">
-          <div class="summary-label">Commands</div>
-          <ManifestValue :value="ability.command_verbs || []" />
-        </div>
-        <div class="summary-row">
-          <div class="summary-label">Target</div>
-          <ManifestValue :value="ability.target || {}" />
-        </div>
-        <div class="summary-row">
-          <div class="summary-label">Availability</div>
-          <ManifestValue :value="ability.availability || {}" />
-        </div>
-        <div class="summary-row">
-          <div class="summary-label">Requirements</div>
-          <ManifestValue :value="ability.requirements || {}" />
-        </div>
-        <div class="summary-row">
-          <div class="summary-label">Cost</div>
-          <ManifestValue :value="ability.cost || {}" />
-        </div>
-        <div class="summary-row">
-          <div class="summary-label">Cast Time</div>
-          <ManifestValue :value="ability.cast_time || {}" />
-        </div>
-        <div class="summary-row">
-          <div class="summary-label">Cooldown</div>
-          <ManifestValue :value="ability.cooldown || {}" />
-        </div>
-        <div class="summary-row full">
-          <div class="summary-label">Components</div>
-          <ManifestValue :value="ability.components || []" :collapse-complex="true" />
-        </div>
-      </section>
-
-      <textarea
-        :value="ability.yaml || ''"
-        class="manifest-output"
-        readonly
-        spellcheck="false"
-      />
+        </template>
+      </ManifestYamlEditor>
     </template>
   </div>
 </template>
@@ -87,7 +47,7 @@ import axios from "axios";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useStore } from "vuex";
-import ManifestValue from "@/components/builder/world/ManifestValue.vue";
+import ManifestYamlEditor from "@/components/builder/world/ManifestYamlEditor.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -95,11 +55,15 @@ const store = useStore();
 
 const ability = ref<any | null>(null);
 const isLoading = ref(false);
+const isSubmitting = ref(false);
+const manifestText = ref("");
+const loadedYaml = ref("");
 const inheritedWorld = computed(() => store.state.builder.world.instance_of || {});
 const isInstanceWorld = computed(() => !!inheritedWorld.value.id);
 const endpoint = computed(() => (
   `/builder/worlds/${route.params.world_id}/abilities/${route.params.ability_id}/`
 ));
+const manifestApplyEndpoint = computed(() => `/builder/worlds/${route.params.world_id}/manifests/apply/`);
 
 const formatActionType = (value) => {
   return String(value || "")
@@ -107,11 +71,11 @@ const formatActionType = (value) => {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 };
 
-const extractError = (error: any): string => {
+const extractError = (error: any, fallbackMessage = "Could not load ability."): string => {
   const data = error?.response?.data;
-  if (!data) return "Could not load ability.";
+  if (!data) return fallbackMessage;
   if (typeof data === "string") return data;
-  if (Array.isArray(data)) return data[0] || "Could not load ability.";
+  if (Array.isArray(data)) return data[0] || fallbackMessage;
   if (typeof data === "object") {
     if (typeof data.detail === "string") return data.detail;
     const firstKey = Object.keys(data)[0];
@@ -119,28 +83,27 @@ const extractError = (error: any): string => {
     if (Array.isArray(value)) return value[0];
     if (typeof value === "string") return value;
   }
-  return "Could not load ability.";
+  return fallbackMessage;
+};
+
+const setLoadedState = (payload: any) => {
+  ability.value = payload;
+  loadedYaml.value = payload?.yaml || "";
+  manifestText.value = payload?.yaml || "";
 };
 
 const fetchAbility = async () => {
   isLoading.value = true;
   try {
     const resp = await axios.get(endpoint.value);
-    ability.value = resp.data;
+    setLoadedState(resp.data);
   } catch (error: any) {
     ability.value = null;
+    loadedYaml.value = "";
+    manifestText.value = "";
     store.commit("ui/notification_set_error", extractError(error));
   } finally {
     isLoading.value = false;
-  }
-};
-
-const copyYaml = async () => {
-  try {
-    await navigator.clipboard.writeText(ability.value?.yaml || "");
-    store.commit("ui/notification_set", "Ability YAML copied.");
-  } catch {
-    store.commit("ui/notification_set_error", "Unable to copy YAML to clipboard.");
   }
 };
 
@@ -153,18 +116,56 @@ const copyDeleteYaml = async () => {
   }
 };
 
-const editYaml = () => {
-  if (!ability.value) return;
-  router.push({
-    name: "builder_world_edit",
+const syncRouteToAbility = async (payload: any) => {
+  const id = payload?.id;
+  if (!id || String(route.params.ability_id) === String(id)) return;
+  await router.replace({
+    name: "builder_world_ability_details",
     params: {
       world_id: route.params.world_id,
-    },
-    query: {
-      prefill: "ability",
-      ability_id: ability.value.id,
+      ability_id: id,
     },
   });
+};
+
+const submitManifest = async () => {
+  if (isInstanceWorld.value) return;
+  isSubmitting.value = true;
+  try {
+    const resp = await axios.post(manifestApplyEndpoint.value, {
+      manifest: manifestText.value,
+    });
+    if (resp.data.kind !== "ability") {
+      throw new Error("Unexpected manifest response kind.");
+    }
+    if (resp.data.operation === "deleted") {
+      ability.value = null;
+      loadedYaml.value = "";
+      manifestText.value = "";
+      store.commit("ui/notification_set", "Ability deleted.");
+      await router.push({
+        name: "builder_world_ability_list",
+        params: {
+          world_id: route.params.world_id,
+        },
+      });
+      return;
+    }
+    const appliedAbility = resp.data.ability || null;
+    if (appliedAbility) {
+      setLoadedState(appliedAbility);
+      await syncRouteToAbility(appliedAbility);
+    }
+    store.commit("ui/notification_set", `Ability ${resp.data.operation}.`);
+  } catch (error: any) {
+    if (error?.message === "Unexpected manifest response kind.") {
+      store.commit("ui/notification_set_error", "Manifest apply did not return an ability payload.");
+    } else {
+      store.commit("ui/notification_set_error", extractError(error, "Could not apply ability manifest."));
+    }
+  } finally {
+    isSubmitting.value = false;
+  }
 };
 
 onMounted(fetchAbility);
@@ -180,68 +181,34 @@ watch(
 
 <style lang="scss" scoped>
 @import "@/styles/colors.scss";
-@import "@/styles/layout.scss";
 
 #ability-details {
   box-sizing: border-box;
   min-width: 0;
   width: 100%;
+}
 
-  .ability-header {
-    align-items: flex-start;
-    display: flex;
-    gap: 1rem;
-    justify-content: space-between;
+.definition-title {
+  margin-bottom: 0.35rem;
+}
 
-    @media ($mobile-site) {
-      flex-direction: column;
-    }
-  }
+.definition-meta-row {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  min-width: 0;
+  width: 100%;
+}
 
-  .ability-actions {
-    display: flex;
-    flex-shrink: 0;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
+.definition-meta {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 
-  .inherited-notice {
-    color: $color-text-hex-60;
-    line-height: 1.4;
-  }
-
-  .ability-summary {
-    border-top: 1px solid $color-background-light-border;
-    display: grid;
-    gap: 1rem;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    max-width: 960px;
-    padding-top: 1rem;
-  }
-
-  .summary-row {
-    min-width: 0;
-
-    &.full {
-      grid-column: 1 / -1;
-    }
-  }
-
-  .summary-label {
-    color: $color-text-hex-60;
-    margin-bottom: 0.35rem;
-  }
-
-  .manifest-output {
-    box-sizing: border-box;
-    width: 100%;
-    min-height: 520px;
-    padding: 0.75rem;
-    border: 1px solid $color-form-border;
-    background: $color-background;
-    color: $color-text;
-    font-family: monospace;
-    line-height: 1.35;
-  }
+.inherited-notice {
+  color: $color-text-hex-60;
+  line-height: 1.4;
+  margin-top: 0.5rem;
 }
 </style>

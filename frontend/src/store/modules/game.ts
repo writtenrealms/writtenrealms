@@ -885,12 +885,27 @@ function uuidv4() {
   });
 }
 
+const combatRoundGroup = (message) => {
+  const roundId = message?.data?.round_id;
+  if (!roundId) return null;
+
+  const encounterRound = String(roundId).match(/^encounter:[^:]+:(\d+)$/);
+  if (encounterRound) {
+    return `combat-round:${encounterRound[1]}`;
+  }
+
+  return roundId;
+};
+
 const mutations = {
   message_add: (state, message) => {
     message.receive_ts = new Date().getTime();
     message.message_id = uuidv4();
-    if (message.data && message.data.round_id && !message.group) {
-      message.group = message.data.round_id;
+    if (!message.group) {
+      const group = combatRoundGroup(message);
+      if (group) {
+        message.group = group;
+      }
     }
 
     state.messages.push(message);

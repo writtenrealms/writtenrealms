@@ -79,6 +79,7 @@ ABILITY_DEFINITION_FIELDS = {
     "version",
     "command",
     "action_type",
+    "consumes_primary_action",
     "target",
     "availability",
     "requirements",
@@ -1090,6 +1091,10 @@ def normalize_ability_definition(
             value.get("action_type", "primary"),
             choices=ACTION_TYPES,
             field_name="spec.action_type",
+        ),
+        "consumes_primary_action": _coerce_bool(
+            value.get("consumes_primary_action", True),
+            field_name="spec.consumes_primary_action",
         ),
         "target": _normalize_target(value.get("target")),
         "availability": _normalize_availability(value.get("availability")),

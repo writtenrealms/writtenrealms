@@ -61,14 +61,13 @@ const messageText = computed(() => {
   return text;
 });
 
+const messageGroup = (message) => {
+  return message?.group || message?.data?.round_id;
+};
+
 const isGrouped = computed(() => {
-  const prevMessage = props.previousMessage;
-  if (prevMessage &&
-      prevMessage.data &&
-      prevMessage.data.round_id &&
-      prevMessage.data.round_id === props.message.data.round_id)
-    return true;
-  return false;
+  const group = messageGroup(props.message);
+  return !!group && messageGroup(props.previousMessage) === group;
 });
 
 

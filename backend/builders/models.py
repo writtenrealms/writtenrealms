@@ -1893,6 +1893,7 @@ class AbilityDefinition(BaseModel):
     name = models.TextField()
     command_verbs = models.JSONField(default=list)
     action_type = models.TextField(default='primary', db_index=True)
+    consumes_primary_action = models.BooleanField(default=True)
     target = models.JSONField(default=dict)
     availability = models.JSONField(default=dict)
     requirements = models.JSONField(default=dict)
