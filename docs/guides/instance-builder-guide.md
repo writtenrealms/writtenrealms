@@ -158,6 +158,7 @@ game commands from the linked base room.
 | `enter <instance_ref>` | Join an existing active run for the same instance template. |
 | `leave` | Leave the current instance and return to the remembered base-world room. |
 | `instance` | Show the linked entrance, or show the current run's Instance ID while inside. |
+| `/reset` | Builder-only: reset the current instance run to its initial spawned state. |
 
 When the first player enters, WR2 prints the run's Instance ID in the room
 output. The leader can share that ID with group members. A group member should
@@ -167,6 +168,13 @@ leader's run.
 If a player types `enter` in a room with no instance link, WR2 reports that
 there is no instance entrance there. If a player types `leave` outside an
 instance, WR2 reports that they are not in an instance.
+
+Builders inside an instance can type `/reset` to rebuild that active run in
+place. The Instance ID and active participants are kept, player inventory and
+equipment are preserved, active participants are moved to the instance starting
+room, and the instance reruns its initial loaders and spawn plans. Room and
+zone scoped state reset when no other active run shares the same instance
+template; otherwise WR2 leaves that shared template-scoped state untouched.
 
 ## Group Play
 

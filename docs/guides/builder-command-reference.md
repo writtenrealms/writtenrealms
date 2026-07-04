@@ -61,6 +61,7 @@ Legend:
 | `/setclass` | Direct | Script | No | Script | No | No |
 | `/cmd`, `/force`, `/rcmd`, `/zcmd`, `/wcmd` | Direct | Script | Script | Script | Script | Script |
 | `/jump` | Direct | No | No | No | No | No |
+| `/reset` | Direct | No | No | No | No | No |
 | `/resync` | Direct | No | No | No | No | No |
 
 ## Command Details
@@ -553,6 +554,35 @@ Examples:
 /jump room.50201
 /jump north
 /jump n
+```
+
+This command is direct-builder-only.
+
+### `/reset`
+
+Format:
+
+```text
+/reset
+```
+
+Resets the current instance run to its initial spawned state. The command is
+only available to builder characters and only works while the builder is inside
+an instance.
+
+Reset keeps the same active run and Instance ID, moves active participants to
+the instance starting room, clears spawned mobs, ground items, combat, door
+overrides, and instance world state, and then reruns the instance's initial
+loaders and spawn plans. Player inventory and equipment are preserved.
+
+Room and zone scoped state are cleared when no other active run is using the
+same instance template. If another run is active, WR2 leaves that shared
+template-scoped state alone to avoid changing the other run.
+
+Examples:
+
+```text
+/reset
 ```
 
 This command is direct-builder-only.

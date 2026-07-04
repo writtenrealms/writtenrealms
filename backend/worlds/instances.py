@@ -1,4 +1,5 @@
 import uuid
+from dataclasses import dataclass
 
 from django.db import transaction
 from django.utils import timezone
@@ -10,6 +11,19 @@ from worlds.models import (
     InstanceRun,
     World,
 )
+
+
+@dataclass(frozen=True)
+class InstanceResetResult:
+    run_id: int
+    instance_ref: str
+    spawned_world_id: int
+    player_ids: list[int]
+    mobs_deleted: int
+    items_deleted: int
+    combat_encounters_deleted: int
+    spawn_plan_runs_reset: int
+    template_scoped_state_reset: bool
 
 
 def _normalize_member_ids(member_ids):
@@ -341,6 +355,174 @@ def leave_instance(*, player):
         run.save(update_fields=['last_active_at'])
 
     return player
+
+
+def _assert_spawned_instance(spawned_world):
+    if not spawned_world.context or not spawned_world.context.instance_of_id:
+        raise ValueError("You are not in an instance.")
+
+
+def _active_participant_players(run):
+    from spawns.models import Player
+
+    participant_player_ids = run.participants.filter(
+        exited_at__isnull=True,
+    ).values_list('player_id', flat=True)
+    return list(
+        Player.objects.select_for_update()
+        .filter(
+            pk__in=participant_player_ids,
+            world=run.spawned_world,
+        )
+        .order_by('id')
+    )
+
+
+def _instance_starting_room(spawned_world):
+    config = getattr(spawned_world, 'config', None)
+    if config and config.starting_room_id:
+        return config.starting_room
+    template_world = spawned_world.context
+    if template_world and template_world.config and template_world.config.starting_room_id:
+        return template_world.config.starting_room
+    raise ValueError("This instance does not have a starting room.")
+
+
+def _protected_player_item_ids(players):
+    item_ids = set()
+    for player in players:
+        item_ids.update(player_carried_item_ids(player))
+    return item_ids
+
+
+def _reset_spawn_plan_runs(spawned_world):
+    from builders.models import SpawnPlanRun
+
+    return SpawnPlanRun.objects.filter(
+        spawn_world=spawned_world,
+        status=SpawnPlanRun.STATUS_ACTIVE,
+    ).update(
+        status=SpawnPlanRun.STATUS_RESET,
+        reset_at=timezone.now(),
+    )
+
+
+def _has_other_active_template_runs(run):
+    return InstanceRun.objects.filter(
+        template_world=run.template_world,
+        status__in=InstanceRun.ACTIVE_STATUSES,
+    ).exclude(pk=run.pk).exists()
+
+
+def _reset_template_scoped_state(run):
+    from core.scoped_state import (
+        STATE_SCOPE_ROOM,
+        STATE_SCOPE_ZONE,
+        replace_state_snapshot,
+    )
+
+    for zone in run.template_world.zones.all():
+        replace_state_snapshot(STATE_SCOPE_ZONE, zone, {})
+    for room in run.template_world.rooms.all():
+        replace_state_snapshot(STATE_SCOPE_ROOM, room, {})
+
+
+def reset_instance(*, player) -> InstanceResetResult:
+    """
+    Rebuild the player's active spawned instance world in place.
+
+    The run/ref and active participants remain, while transient instance
+    population, combat, door overrides, and runtime state are reset before
+    initial loaders and spawn plans run again.
+    """
+    from core.scoped_state import STATE_SCOPE_WORLD, replace_state_snapshot
+    from spawns.loading import run_loaders
+    from spawns.models import (
+        CombatEncounter,
+        DoorState,
+        Item,
+        Mob,
+        RoomCommandCheckState,
+    )
+    from worlds.models import WorldState
+
+    with transaction.atomic():
+        player = player.__class__.objects.select_for_update().get(pk=player.pk)
+        spawned_world = World.objects.select_for_update().get(pk=player.world_id)
+        _assert_spawned_instance(spawned_world)
+
+        try:
+            run = InstanceRun.objects.select_for_update().select_related(
+                'spawned_world',
+                'template_world',
+                'base_world',
+            ).get(spawned_world=spawned_world)
+        except InstanceRun.DoesNotExist:
+            run = _run_for_spawned_world(
+                spawned_world,
+                leader=spawned_world.leader or player,
+            )
+            run = InstanceRun.objects.select_for_update().get(pk=run.pk)
+
+        starting_room = _instance_starting_room(spawned_world)
+        active_players = _active_participant_players(run)
+        if all(active_player.id != player.id for active_player in active_players):
+            active_players.append(player)
+        protected_item_ids = _protected_player_item_ids(active_players)
+
+        combat_encounters_qs = CombatEncounter.objects.filter(world=spawned_world)
+        combat_encounters_deleted = combat_encounters_qs.count()
+        combat_encounters_qs.delete()
+
+        items_qs = Item.objects.filter(world=spawned_world)
+        if protected_item_ids:
+            items_qs = items_qs.exclude(pk__in=protected_item_ids)
+        items_deleted = items_qs.count()
+        items_qs.delete()
+
+        mobs_qs = Mob.objects.filter(world=spawned_world)
+        mobs_deleted = mobs_qs.count()
+        mobs_qs.delete()
+
+        DoorState.objects.filter(world=spawned_world).delete()
+        RoomCommandCheckState.objects.filter(world=spawned_world).delete()
+        WorldState.objects.filter(world=spawned_world).delete()
+        replace_state_snapshot(STATE_SCOPE_WORLD, spawned_world, {})
+        template_scoped_state_reset = False
+        if not _has_other_active_template_runs(run):
+            _reset_template_scoped_state(run)
+            template_scoped_state_reset = True
+
+        spawn_plan_runs_reset = _reset_spawn_plan_runs(spawned_world)
+
+        player_ids = [active_player.id for active_player in active_players]
+        if player_ids:
+            player.__class__.objects.filter(
+                pk__in=player_ids,
+            ).update(room=starting_room)
+
+        run.progress = {}
+        run.outcome = {}
+        run.last_active_at = timezone.now()
+        run.save(update_fields=['progress', 'outcome', 'last_active_at', 'modified_ts'])
+
+        spawned_world.is_clean = True
+        spawned_world.last_loader_run_ts = None
+        spawned_world.save(update_fields=['is_clean', 'last_loader_run_ts'])
+
+        run_loaders(world=spawned_world, initial=True)
+
+    return InstanceResetResult(
+        run_id=run.id,
+        instance_ref=run.ref,
+        spawned_world_id=spawned_world.id,
+        player_ids=player_ids,
+        mobs_deleted=mobs_deleted,
+        items_deleted=items_deleted,
+        combat_encounters_deleted=combat_encounters_deleted,
+        spawn_plan_runs_reset=spawn_plan_runs_reset,
+        template_scoped_state_reset=template_scoped_state_reset,
+    )
 
 
 def active_participation_count(player):

@@ -25,7 +25,7 @@ from spawns.actions.builder import (
     StateAction,
     WizKillAction,
 )
-from spawns.events import publish_events
+from spawns.events import GameEvent, publish_events
 from spawns.handlers.base import (
     ChoiceResolutionError,
     CommandContext,
@@ -38,6 +38,9 @@ from spawns.handlers.permissions import (
     has_builder_access,
 )
 from spawns.handlers.registry import register_handler
+from spawns.state_payloads import build_state_sync, get_player_with_related
+from spawns.text_output import render_event_text
+from worlds.instances import reset_instance
 
 SCOPED_ECHO_ALIASES = {
     "/wecho": "world",
@@ -1394,5 +1397,89 @@ class ResyncHandler(CommandHandler):
         publish_events(
             result.events,
             actor_key=ctx.player.key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class ResetInstanceHandler(CommandHandler):
+    command_type = "/reset"
+    text_commands = ("/reset",)
+    builder_only = True
+    help = {
+        "name": "Reset Instance",
+        "format": "/reset",
+        "description": "Reset the current instance run to its initial spawned state.",
+        "details": [
+            "Only builder characters can use this command directly.",
+            (
+                "The active run and Instance ID are kept, while spawned mobs, "
+                "ground items, combat, door overrides, and instance world state are rebuilt."
+            ),
+            (
+                "Active participants remain in the instance and are moved to "
+                "the instance starting room."
+            ),
+        ],
+        "examples": [
+            "/reset",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        if not can_execute_builder_command(ctx, self):
+            ctx.publish(builder_permission_error(self.command_type))
+            return
+
+        try:
+            result = reset_instance(player=ctx.player)
+        except ValueError as err:
+            ctx.publish(
+                {
+                    "type": "cmd./reset.error",
+                    "text": str(err),
+                    "data": {"error": str(err), "code": "invalid_instance"},
+                }
+            )
+            return
+
+        events = [
+            GameEvent(
+                type="cmd./reset.success",
+                recipients=[ctx.actor_key],
+                data={
+                    "reset_scope": "instance",
+                    "run_id": result.run_id,
+                    "instance_ref": result.instance_ref,
+                    "world_id": result.spawned_world_id,
+                    "players_reset": len(result.player_ids),
+                    "mobs_deleted": result.mobs_deleted,
+                    "items_deleted": result.items_deleted,
+                    "combat_encounters_deleted": result.combat_encounters_deleted,
+                    "spawn_plan_runs_reset": result.spawn_plan_runs_reset,
+                    "template_scoped_state_reset": result.template_scoped_state_reset,
+                },
+                text="Instance reset.",
+            )
+        ]
+        for player_id in result.player_ids:
+            player = get_player_with_related(player_id)
+            payload = build_state_sync(player).model_dump()
+            events.append(
+                GameEvent(
+                    type="cmd.state.sync.success",
+                    recipients=[player.key],
+                    data=payload,
+                    text=render_event_text(
+                        "cmd.state.sync.success",
+                        payload,
+                        viewer=player,
+                    ),
+                )
+            )
+
+        publish_events(
+            events,
+            actor_key=ctx.actor_key,
             connection_id=ctx.connection_id,
         )

@@ -531,7 +531,10 @@ const receiveMessage = async ({
   }
 
   // Resets
-  if (message_data.type === "cmd./reset.success") {
+  if (
+    message_data.type === "cmd./reset.success" &&
+    (!message_data.data || message_data.data.reset_scope !== "instance")
+  ) {
     commit("full_screen_message_set", "Resetting...");
     dispatch("request_enter_world", {
       player_id: state.player.id,

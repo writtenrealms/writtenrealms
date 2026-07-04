@@ -2,9 +2,23 @@ from unittest.mock import patch
 
 from django.utils import timezone
 
-from builders.models import AbilityDefinition, ItemDefinition, MobDefinition, SpawnEntry, SpawnPlan
+from builders.models import (
+    AbilityDefinition,
+    ItemDefinition,
+    MobDefinition,
+    SpawnEntry,
+    SpawnPlan,
+    SpawnPlanRun,
+)
 from config import constants as adv_consts
 from core.computations import compute_stats
+from core.scoped_state import (
+    STATE_SCOPE_ROOM,
+    STATE_SCOPE_WORLD,
+    STATE_SCOPE_ZONE,
+    get_state_snapshot,
+    replace_state_snapshot,
+)
 from spawns.models import CombatEncounter, Item, Mob
 from tests.base import WorldTestCase
 from worlds.models import (
@@ -449,6 +463,134 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
 
         self.assertIsNotNone(message)
         self.assertIn("not in an instance", message["text"].lower())
+
+    def test_reset_command_requires_builder_character(self):
+        spawned_instance = self._enter()
+        mob = Mob.objects.create(
+            world=spawned_instance,
+            room=self.instance_room,
+            name="Instance Rat",
+            keywords="rat",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/reset")
+
+        message = self._message_by_type(messages, "cmd./reset.error")
+
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["error"], "Builder permissions required.")
+        self.assertTrue(Mob.objects.filter(pk=mob.pk).exists())
+
+    def test_reset_command_rebuilds_current_instance(self):
+        self.player.is_builder = True
+        self.player.save(update_fields=["is_builder"])
+        side_room = self.instance_room.create_at(adv_consts.DIRECTION_NORTH)
+        mob_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="reset-guard",
+            name="a reset guard",
+            mob_type=adv_consts.MOB_TYPE_CONSTRUCT,
+            base_properties={"health_max": 10},
+        )
+        plan = SpawnPlan.objects.create(
+            world=self.instance_template,
+            zone=self.instance_room.zone,
+            slug="reset-population",
+            name="Reset Population",
+            respawn_policy={"mode": "none"},
+        )
+        SpawnEntry.objects.create(
+            plan=plan,
+            slug="guard",
+            source="mobdefinition.reset-guard",
+            target={
+                "room": (
+                    f"room@{self.instance_room.x},"
+                    f"{self.instance_room.y},"
+                    f"{self.instance_room.z}"
+                )
+            },
+            count=1,
+        )
+        spawned_instance = self._enter()
+        initial_guard = Mob.objects.get(
+            world=spawned_instance,
+            definition=mob_definition,
+        )
+        extra_mob = Mob.objects.create(
+            world=spawned_instance,
+            room=self.instance_room,
+            name="Extra Rat",
+            keywords="rat",
+        )
+        ground_item = Item.objects.create(
+            world=spawned_instance,
+            container=self.instance_room,
+            name="Ground Rock",
+        )
+        bag = Item.objects.create(
+            world=spawned_instance,
+            container=self.player,
+            name="Canvas Pack",
+            type=adv_consts.ITEM_TYPE_CONTAINER,
+        )
+        nested_item = Item.objects.create(
+            world=spawned_instance,
+            container=bag,
+            name="Blue Gem",
+        )
+        CombatEncounter.objects.create(
+            world=spawned_instance,
+            room=self.instance_room,
+            player=self.player,
+            mob=initial_guard,
+        )
+        replace_state_snapshot(STATE_SCOPE_WORLD, spawned_instance, {"lever_pulled": True})
+        replace_state_snapshot(STATE_SCOPE_ZONE, self.instance_room.zone, {"fog": True})
+        replace_state_snapshot(STATE_SCOPE_ROOM, self.instance_room, {"door_opened": True})
+        self.player.room = side_room
+        self.player.save(update_fields=["room"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/reset")
+
+        self.player.refresh_from_db()
+        reset_message = self._message_by_type(messages, "cmd./reset.success")
+        state_message = self._message_by_type(messages, "cmd.state.sync.success")
+        replacement_guard = Mob.objects.get(world=spawned_instance, definition=mob_definition)
+
+        self.assertIsNotNone(reset_message)
+        self.assertEqual(reset_message["data"]["reset_scope"], "instance")
+        self.assertTrue(reset_message["data"]["template_scoped_state_reset"])
+        self.assertIsNotNone(state_message)
+        self.assertEqual(self.player.world, spawned_instance)
+        self.assertEqual(self.player.room, self.instance_room)
+        self.assertEqual(state_message["data"]["room"]["id"], self.instance_room.id)
+        self.assertFalse(Mob.objects.filter(pk=initial_guard.pk).exists())
+        self.assertFalse(Mob.objects.filter(pk=extra_mob.pk).exists())
+        self.assertNotEqual(replacement_guard.pk, initial_guard.pk)
+        self.assertFalse(Item.objects.filter(pk=ground_item.pk).exists())
+        self.assertTrue(Item.objects.filter(pk=bag.pk).exists())
+        self.assertTrue(Item.objects.filter(pk=nested_item.pk).exists())
+        self.assertFalse(CombatEncounter.objects.filter(world=spawned_instance).exists())
+        self.assertEqual(get_state_snapshot(STATE_SCOPE_WORLD, spawned_instance), {})
+        self.assertEqual(get_state_snapshot(STATE_SCOPE_ZONE, self.instance_room.zone), {})
+        self.assertEqual(get_state_snapshot(STATE_SCOPE_ROOM, self.instance_room), {})
+        self.assertEqual(
+            SpawnPlanRun.objects.filter(
+                spawn_world=spawned_instance,
+                status=SpawnPlanRun.STATUS_RESET,
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            SpawnPlanRun.objects.filter(
+                spawn_world=spawned_instance,
+                status=SpawnPlanRun.STATUS_ACTIVE,
+            ).count(),
+            1,
+        )
 
     def test_instance_command_reports_entrance_or_active_run(self):
         self._link_current_room_to_instance()
