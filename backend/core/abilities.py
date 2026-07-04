@@ -51,7 +51,13 @@ EFFECT_TARGETS = (
     "room.players",
 )
 EFFECT_TICK_PHASES = ("round_start",)
-EFFECT_PRIMITIVE_TYPES = ("resource_change", "proc", "damage_absorb", "combat_modifier")
+EFFECT_PRIMITIVE_TYPES = (
+    "resource_change",
+    "proc",
+    "damage_absorb",
+    "combat_modifier",
+    "stat_modifier",
+)
 EFFECT_PROC_PHASES = ("after_damage",)
 EFFECT_STACKING_POLICIES = ("refresh", "independent")
 COMBAT_MODIFIER_PHASES = ("outgoing_damage", "attack_routine")
@@ -72,6 +78,21 @@ DAMAGE_ABSORB_SCALING_SOURCES = (
     "stamina_regen",
     "weapon_damage",
 )
+STAT_MODIFIER_STATS = (
+    "health_max",
+    "energy_max",
+    "stamina_max",
+    "attack_power",
+    "ability_power",
+    "armor",
+    "crit",
+    "dodge",
+    "resilience",
+    "health_regen",
+    "energy_regen",
+    "stamina_regen",
+)
+STAT_MODIFIER_OPS = ("add", "multiply")
 STATE_COMPONENT_SCOPES = ("world", "zone", "room", "character")
 STATE_COMPONENT_OPERATIONS = ("set", "increment", "clear")
 
@@ -777,6 +798,8 @@ def _normalize_effect_primitive(value: Any, *, field_name: str) -> dict[str, Any
         return _normalize_damage_absorb_primitive(value, field_name=field_name)
     if primitive_type == "combat_modifier":
         return _normalize_combat_modifier_primitive(value, field_name=field_name)
+    if primitive_type == "stat_modifier":
+        return _normalize_stat_modifier_primitive(value, field_name=field_name)
     return _normalize_proc_primitive(value, field_name=field_name)
 
 
@@ -891,6 +914,54 @@ def _normalize_resource_change_primitive(value: dict[str, Any], *, field_name: s
             field_name=f"{field_name}.target",
         ),
     }
+
+
+def _normalize_stat_modifier_primitive(value: dict[str, Any], *, field_name: str) -> dict[str, Any]:
+    unknown_fields = sorted(set(value.keys()) - {"type", "stat", "op", "amount", "multiplier"})
+    if unknown_fields:
+        raise AbilityValidationError(
+            f"{field_name} has unsupported field(s): {', '.join(unknown_fields)}."
+        )
+
+    raw_op = value.get("op")
+    if raw_op in (None, ""):
+        raw_op = "multiply" if "multiplier" in value and "amount" not in value else "add"
+    op = _coerce_choice(
+        raw_op,
+        choices=STAT_MODIFIER_OPS,
+        field_name=f"{field_name}.op",
+    )
+    stat = _coerce_choice(
+        value.get("stat"),
+        choices=STAT_MODIFIER_STATS,
+        field_name=f"{field_name}.stat",
+    )
+    normalized = {
+        "type": "stat_modifier",
+        "stat": stat,
+        "op": op,
+    }
+    if op == "add":
+        if "multiplier" in value:
+            raise AbilityValidationError(
+                f"{field_name}.multiplier is only supported for op multiply."
+            )
+        normalized["amount"] = _coerce_number(
+            value.get("amount", 0),
+            field_name=f"{field_name}.amount",
+        )
+        return normalized
+
+    if "amount" in value:
+        raise AbilityValidationError(
+            f"{field_name}.amount is only supported for op add."
+        )
+    normalized["multiplier"] = _coerce_number(
+        value.get("multiplier", 1),
+        field_name=f"{field_name}.multiplier",
+        minimum=0,
+    )
+    return normalized
 
 
 def _normalize_damage_absorb_types(value: Any, *, field_name: str) -> list[str]:

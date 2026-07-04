@@ -9,7 +9,7 @@ out-of-combat self utility. Mob definitions can also reference active ability
 definitions from combat loadouts. Encounter-scoped effects support resource
 change ticks, damage absorption barriers, and `after_damage` procs for bounded
 buff behavior such as energy return on landed attacks. Character-scoped effects
-support outgoing damage modifiers for room-wide buffs that can survive into
+support outgoing damage and stat modifiers for buffs that can survive into
 combat after out-of-combat use.
 
 Ability `requirements` use the shared WR2 condition DSL. For condition
@@ -715,6 +715,60 @@ spec:
           phase: outgoing_damage
           multiplier: 1.2
 ```
+
+## Stat Buffs
+
+Use a character-scoped `stat_modifier` primitive when an effect should change a
+canonical stat such as `armor`, `attack_power`, `ability_power`, `crit`,
+`dodge`, `resilience`, or a maximum resource stat for later combat and stat
+checks.
+
+Flat modifiers use `op: add` and `amount`:
+
+```yaml
+primitives:
+  - type: stat_modifier
+    stat: armor
+    op: add
+    amount: 20
+```
+
+Multiplicative modifiers use `op: multiply` and `multiplier`:
+
+```yaml
+kind: ability
+metadata:
+  slug: shield-wall
+  name: Shield Wall
+spec:
+  command:
+    verbs: [shieldwall]
+  action_type: primary
+  target:
+    type: self
+    default: self
+  cooldown:
+    rounds: 12
+  components:
+    - type: effect
+      effect: shield-wall
+      category: buff
+      target: self
+      stack_key: shield-wall-armor
+      stacking: refresh
+      duration:
+        rounds: 3
+      primitives:
+        - type: stat_modifier
+          stat: armor
+          op: multiply
+          multiplier: 3
+```
+
+For a self or friendly room buff, set the effect `target` to `self` or
+`room.allies`. Flat additions apply before multipliers, regardless of primitive
+order. A refreshed effect with the same `stack_key` replaces the previous active
+effect and resets its duration.
 
 ## Damage Absorption Barriers
 

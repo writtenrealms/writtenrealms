@@ -9,6 +9,7 @@ from spawns.models import Player
 
 
 ROOM_ALLY_TARGETS = {"room.allies", "room.players"}
+CHARACTER_SELF_TARGETS = {"actor", "self", "effect.source"}
 
 
 def _positive_int(value: Any, default: int = 0) -> int:
@@ -42,9 +43,34 @@ def _combat_modifier_primitives(component: dict[str, Any]) -> list[dict[str, Any
     ]
 
 
-def component_targets_character_effect(component: dict[str, Any]) -> bool:
+def _stat_modifier_primitives(component: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        primitive
+        for primitive in component.get("primitives") or []
+        if isinstance(primitive, dict) and primitive.get("type") == "stat_modifier"
+    ]
+
+
+def component_targets_character_effect(
+    component: dict[str, Any],
+    *,
+    ability: Any | None = None,
+) -> bool:
     target_selector = str(component.get("target") or "").strip().lower()
-    return target_selector in ROOM_ALLY_TARGETS or bool(_combat_modifier_primitives(component))
+    if target_selector in ROOM_ALLY_TARGETS:
+        return True
+    if _combat_modifier_primitives(component):
+        return True
+    if not _stat_modifier_primitives(component):
+        return False
+    if target_selector in CHARACTER_SELF_TARGETS:
+        return True
+    if target_selector == "ability.target":
+        ability_target = str(
+            (getattr(ability, "target", None) or {}).get("type") or ""
+        ).strip().lower()
+        return ability_target == "self"
+    return False
 
 
 def room_ally_players(actor: Player, *, room=None) -> list[Player]:
@@ -63,6 +89,7 @@ def targets_for_character_effect_component(
     *,
     actor: Player,
     component: dict[str, Any],
+    ability: Any | None = None,
     room=None,
 ) -> list[Player]:
     target_selector = str(component.get("target") or "self").strip().lower()
@@ -75,6 +102,12 @@ def targets_for_character_effect_component(
             seen.add(target.id)
             targets.append(target)
         return targets
+    if target_selector == "ability.target":
+        ability_target = str(
+            (getattr(ability, "target", None) or {}).get("type") or ""
+        ).strip().lower()
+        if ability_target == "self":
+            return [actor]
     return [actor]
 
 

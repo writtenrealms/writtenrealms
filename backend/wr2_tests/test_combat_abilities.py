@@ -1689,6 +1689,106 @@ class TestCombatAbilities(WorldTestCase):
         self.player.refresh_from_db()
         self.assertEqual(self.player.active_effects, [])
 
+    def test_character_stat_modifier_adds_fixed_armor_to_effective_stats(self):
+        self.player.active_effects = [
+            {
+                "effect": "guard",
+                "category": "buff",
+                "scope": "character",
+                "source": {"type": "player", "id": self.player.id},
+                "target": {"type": "player", "id": self.player.id},
+                "remaining_rounds": 2,
+                "duration_rounds": 2,
+                "rounds_elapsed": 0,
+                "label": "Guard",
+                "primitives": [
+                    {
+                        "type": "stat_modifier",
+                        "stat": "armor",
+                        "op": "add",
+                        "amount": 25,
+                    }
+                ],
+            }
+        ]
+        self.player.save(update_fields=["active_effects"])
+
+        stats = compute_stats(
+            self.player.level,
+            self.player.archetype,
+            char=self.player,
+            world=self.player.world,
+        )
+
+        self.assertEqual(stats["armor"], self.stats["armor"] + 25)
+
+    def test_self_stat_modifier_multiplies_armor_for_incoming_physical_damage(self):
+        stat_system = deepcopy(BASIC_TEST_STAT_SYSTEM)
+        stat_system["formulas"]["base_stats"] = {"armor": 60}
+        combat_system = deepcopy(self.world.config.combat_system)
+        combat_system["profiles"]["basic_physical"]["mitigation"]["armor"] = True
+        self.world.config.stat_system = stat_system
+        self.world.config.combat_system = normalize_combat_system(combat_system)
+        self.world.config.save(update_fields=["stat_system", "combat_system"])
+
+        self._ability(
+            slug="shield-wall",
+            name="Shield Wall",
+            verbs=["shieldwall"],
+            target={"type": "self", "default": "self", "allow_out_of_combat": False},
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "shield-wall",
+                    "category": "buff",
+                    "target": "self",
+                    "duration": {"rounds": 3},
+                    "primitives": [
+                        {
+                            "type": "stat_modifier",
+                            "stat": "armor",
+                            "op": "multiply",
+                            "multiplier": 3,
+                        }
+                    ],
+                    "apply": "on_resolve",
+                    "text": {"label": "Shield Wall"},
+                }
+            ],
+        )
+        self.player.known_abilities = ["shield-wall"]
+        self.player.health = 1000
+        self.player.save(update_fields=["known_abilities", "health"])
+        mob = self._mob(health=1000, attack_power=100, fights_back=True)
+        unbuffed = resolve_attack(
+            actor=mob,
+            target=self.player,
+            world=self.player.world,
+            profile_key="basic_physical",
+            rng=lambda: 0.99,
+        )
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            initiative_order=self._player_first_initiative(mob),
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with capture_game_messages() as messages:
+                dispatch_text_command(self.player.id, "shieldwall")
+                resolve_combat_encounter(encounter.id)
+
+        self.player.refresh_from_db()
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertEqual(self.player.active_effects[0]["effect"], "shield-wall")
+        self.assertLess(attacks[-1]["data"]["damage_taken"], unbuffed.damage_taken)
+        self.assertGreater(
+            attacks[-1]["data"]["armor_mitigation"],
+            unbuffed.armor_mitigation,
+        )
+
     def test_self_barrier_absorbs_incoming_physical_damage_until_depleted(self):
         self._ability(
             slug="ward",

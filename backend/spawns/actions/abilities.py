@@ -502,7 +502,7 @@ def execute_character_effect_component(
 ) -> list[GameEvent]:
     if component.get("type") != "effect":
         return []
-    if not component_targets_character_effect(component):
+    if not component_targets_character_effect(component, ability=ability):
         return []
     if component.get("apply") == "on_hit" and not hit_landed:
         return []
@@ -511,6 +511,7 @@ def execute_character_effect_component(
     targets = targets_for_character_effect_component(
         actor=player,
         component=component,
+        ability=ability,
         room=room,
     )
     duration = int(((component.get("duration") or {}).get("rounds")) or 1)
@@ -1285,7 +1286,10 @@ class AbilityAction:
         hit_landed = False
         for component in ability.components or []:
             component_type = component.get("type")
-            if component_type == "effect" and component_targets_character_effect(component):
+            if component_type == "effect" and component_targets_character_effect(
+                component,
+                ability=ability,
+            ):
                 events.extend(
                     execute_character_effect_component(
                         component=component,

@@ -2859,7 +2859,7 @@ def _execute_pending_player_ability(
             continue
         if component.get("apply") == "on_hit" and not hit_landed:
             continue
-        if component_targets_character_effect(component):
+        if component_targets_character_effect(component, ability=ability):
             events.extend(
                 execute_character_effect_component(
                     component=component,
@@ -3024,7 +3024,7 @@ def _execute_pending_mob_ability(
             continue
         if component.get("apply") == "on_hit" and not hit_landed:
             continue
-        if component_targets_character_effect(component):
+        if component_targets_character_effect(component, ability=ability):
             continue
         effect_type = component.get("effect")
         duration = int(((component.get("duration") or {}).get("rounds")) or 1)

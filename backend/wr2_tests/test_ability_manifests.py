@@ -627,6 +627,74 @@ spec:
             },
         )
 
+    def test_apply_ability_manifest_accepts_stat_modifier_effects(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: shield-wall
+  name: Shield Wall
+spec:
+  command:
+    verbs: [shieldwall]
+  target:
+    type: self
+    default: self
+    allow_out_of_combat: true
+  cooldown:
+    rounds: 12
+  components:
+    - type: effect
+      effect: shield-wall
+      category: buff
+      target: self
+      stack_key: shield-wall-armor
+      stacking: refresh
+      duration:
+        rounds: 3
+      primitives:
+        - type: stat_modifier
+          stat: armor
+          op: add
+          amount: 12
+        - type: stat_modifier
+          stat: armor
+          op: multiply
+          multiplier: 3
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        ability = AbilityDefinition.objects.get(world=self.world, slug="shield-wall")
+        self.assertEqual(
+            ability.components[0],
+            {
+                "type": "effect",
+                "effect": "shield-wall",
+                "category": "buff",
+                "target": "self",
+                "duration": {"rounds": 3},
+                "apply": "on_resolve",
+                "text": {"label": "Shield Wall"},
+                "stack_key": "shield-wall-armor",
+                "stacking": "refresh",
+                "primitives": [
+                    {
+                        "type": "stat_modifier",
+                        "stat": "armor",
+                        "op": "add",
+                        "amount": 12.0,
+                    },
+                    {
+                        "type": "stat_modifier",
+                        "stat": "armor",
+                        "op": "multiply",
+                        "multiplier": 3.0,
+                    },
+                ],
+            },
+        )
+
     def test_world_manifest_accepts_ability_progression(self):
         manifest = f"""
 kind: world

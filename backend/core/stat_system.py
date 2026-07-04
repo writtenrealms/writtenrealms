@@ -1143,6 +1143,73 @@ def _derive_runtime_world(char: Any = None, world=None):
     return getattr(char, "world", None)
 
 
+def _active_effects(actor: Any) -> list[dict[str, Any]]:
+    effects = getattr(actor, "active_effects", []) or []
+    if not isinstance(effects, list):
+        return []
+    return [effect for effect in effects if isinstance(effect, dict)]
+
+
+def _effect_is_active(effect: dict[str, Any]) -> bool:
+    try:
+        return int(effect.get("remaining_rounds") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _effect_stat_modifiers(actor: Any) -> list[dict[str, Any]]:
+    modifiers: list[dict[str, Any]] = []
+    applied_stack_keys: set[str] = set()
+    for effect in _active_effects(actor):
+        if not _effect_is_active(effect):
+            continue
+        stack_key = str(effect.get("stack_key") or "").strip().lower()
+        if stack_key:
+            if stack_key in applied_stack_keys:
+                continue
+            applied_stack_keys.add(stack_key)
+
+        for primitive in effect.get("primitives") or []:
+            if not isinstance(primitive, dict):
+                continue
+            if primitive.get("type") == "stat_modifier":
+                modifiers.append(primitive)
+    return modifiers
+
+
+def _apply_active_stat_modifiers(stats: dict[str, float], actor: Any) -> None:
+    additions: dict[str, float] = {}
+    multipliers: dict[str, float] = {}
+    for modifier in _effect_stat_modifiers(actor):
+        stat_key = str(modifier.get("stat") or "").strip()
+        if stat_key not in stats:
+            continue
+        op = str(modifier.get("op") or "add").strip().lower()
+        if op == "multiply":
+            try:
+                raw_multiplier = modifier.get("multiplier", 1)
+                if raw_multiplier in (None, ""):
+                    raw_multiplier = 1
+                multiplier = float(raw_multiplier)
+            except (TypeError, ValueError):
+                multiplier = 1.0
+            multipliers[stat_key] = (
+                multipliers.get(stat_key, 1.0) * max(0.0, multiplier)
+            )
+            continue
+
+        try:
+            amount = float(modifier.get("amount") or 0)
+        except (TypeError, ValueError):
+            amount = 0.0
+        additions[stat_key] = additions.get(stat_key, 0.0) + amount
+
+    for stat_key, amount in additions.items():
+        stats[stat_key] = float(stats.get(stat_key, 0.0) or 0.0) + amount
+    for stat_key, multiplier in multipliers.items():
+        stats[stat_key] = float(stats.get(stat_key, 0.0) or 0.0) * multiplier
+
+
 def compute_stats(
     level,
     archetype=None,
@@ -1292,6 +1359,9 @@ def compute_stats(
         total_attributes=own_attributes,
         own_attributes=own_attributes,
     )
+
+    if char is not None:
+        _apply_active_stat_modifiers(stats, char)
 
     finalized: dict[str, int] = {}
     for key, value in stats.items():
