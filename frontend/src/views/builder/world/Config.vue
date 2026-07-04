@@ -6,6 +6,13 @@
       <section class="config-links">
         <div class="top-actions">
           <router-link class="config-action" :to="editWorldPrefillLink">Edit World</router-link>
+          <router-link
+            v-if="baseWorld.id"
+            class="config-action"
+            :to="baseWorldConfigLink"
+          >
+            {{ baseWorld.name }} Config
+          </router-link>
         </div>
 
         <div class="link-grid">
@@ -134,12 +141,18 @@ const configYaml = computed(() => configPayload.value?.yaml || "");
 const worldSpec = computed(() => configPayload.value?.manifest?.spec || null);
 const showConfigYaml = ref(false);
 
-const isRootWorld = computed(() => !world.value.instance_of?.id);
+const baseWorld = computed(() => world.value.instance_of || {});
+const isRootWorld = computed(() => !baseWorld.value.id);
 
 const editWorldPrefillLink = computed(() => ({
   name: "builder_world_edit",
   params: { world_id: route.params.world_id },
   query: { prefill: "world-config" },
+}));
+
+const baseWorldConfigLink = computed(() => ({
+  name: "builder_world_config",
+  params: { world_id: baseWorld.value.id },
 }));
 
 const roomLinkForKey = (key: string) => {

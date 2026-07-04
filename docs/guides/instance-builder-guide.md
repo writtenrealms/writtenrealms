@@ -101,6 +101,9 @@ From the base world:
 7. If the instance has a goal, draft the instance goal manifest alongside the
    spawn plans so the completion cohort is clear.
 
+When editing an instance template, open **World > Config** and use the base
+world config link to jump directly back to the base world's config screen.
+
 The instance template editor should feel like editing a small world, but its
 resource libraries come from the base world.
 
