@@ -621,8 +621,36 @@ def _serialize_spawn_entry(entry: SpawnEntry) -> dict[str, Any]:
         data["source_pool"] = source["pool"]
     else:
         data["source"] = source
-    if entry.placement:
-        data["placement"] = copy.deepcopy(entry.placement)
+    placement = copy.deepcopy(entry.placement or {})
+    if isinstance(placement, dict):
+        cohort = placement.get("cohort") or placement.get("cohort_slug")
+        if cohort:
+            placement.pop("cohort", None)
+            placement.pop("cohort_slug", None)
+            cohort_role = placement.pop("cohort_role", None) or placement.pop("role", None)
+            cohort_policy = placement.pop("cohort_policy", None) or placement.pop("policy", None)
+            if isinstance(cohort, dict):
+                cohort_slug = (
+                    cohort.get("slug")
+                    or cohort.get("name")
+                    or cohort.get("id")
+                )
+                if cohort_slug:
+                    data["cohort"] = copy.deepcopy(cohort_slug)
+                    nested_role = cohort_role or cohort.get("role") or cohort.get("cohort_role")
+                    nested_policy = cohort_policy or cohort.get("policy") or cohort.get("cohort_policy")
+                    if nested_role:
+                        data["cohort_role"] = nested_role
+                    if nested_policy:
+                        data["cohort_policy"] = nested_policy
+            else:
+                data["cohort"] = cohort
+                if cohort_role:
+                    data["cohort_role"] = cohort_role
+                if cohort_policy:
+                    data["cohort_policy"] = cohort_policy
+    if placement:
+        data["placement"] = placement
     if entry.traits:
         data["traits"] = copy.deepcopy(entry.traits)
     if entry.conditions:
@@ -1558,6 +1586,47 @@ def _normalize_spawn_traits(value: Any, *, field_name: str) -> dict[str, Any]:
         raise serializers.ValidationError(str(exc))
 
 
+def _normalize_spawn_cohort(entry_spec: dict[str, Any], *, field_name: str) -> dict[str, Any]:
+    placement = copy.deepcopy(entry_spec.get("placement") or {})
+    if not isinstance(placement, dict):
+        raise serializers.ValidationError(f"{field_name}.placement must be a mapping when provided.")
+
+    raw_cohort = entry_spec.get("cohort", placement.get("cohort"))
+    raw_role = entry_spec.get("cohort_role", placement.get("cohort_role", placement.get("role")))
+    raw_policy = entry_spec.get("cohort_policy", placement.get("cohort_policy", placement.get("policy")))
+    if isinstance(raw_cohort, dict):
+        cohort_slug = _slug_or_error(
+            raw_cohort.get("slug") or raw_cohort.get("name") or raw_cohort.get("id"),
+            f"{field_name}.cohort.slug",
+        )
+        raw_role = raw_role or raw_cohort.get("role") or raw_cohort.get("cohort_role")
+        raw_policy = raw_policy or raw_cohort.get("policy") or raw_cohort.get("cohort_policy")
+    elif raw_cohort not in (None, ""):
+        cohort_slug = _slug_or_error(raw_cohort, f"{field_name}.cohort")
+    else:
+        return placement
+
+    role = str(raw_role or "").strip().lower()
+    if role:
+        role = role.replace("-", "_")
+        if role not in {"leader", "follower", "member"}:
+            raise serializers.ValidationError(
+                f"{field_name}.cohort_role must be leader, follower, or member."
+            )
+
+    policy = str(raw_policy or "refill_missing").strip().lower().replace("-", "_")
+    if policy not in {"refill_missing"}:
+        raise serializers.ValidationError(
+            f"{field_name}.cohort_policy must be refill_missing."
+        )
+
+    placement["cohort"] = cohort_slug
+    if role:
+        placement["cohort_role"] = role
+    placement["cohort_policy"] = policy
+    return placement
+
+
 def _entry_traits_spec(entry_spec: dict[str, Any], *, field_name: str) -> Any:
     has_traits = "traits" in entry_spec and entry_spec.get("traits") not in (None, "")
     has_affixes = "affixes" in entry_spec and entry_spec.get("affixes") not in (None, "")
@@ -2226,7 +2295,7 @@ def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tupl
             "source": source,
             "target": target,
             "count": _normalize_spawn_count(entry_spec.get("count", 1), field_name=f"{entry_field}.count"),
-            "placement": copy.deepcopy(entry_spec.get("placement") or {}),
+            "placement": _normalize_spawn_cohort(entry_spec, field_name=entry_field),
             "traits": _normalize_spawn_traits(
                 _entry_traits_spec(entry_spec, field_name=entry_field),
                 field_name=f"{entry_field}.traits",

@@ -13,12 +13,15 @@ class GameEvent:
     data: dict
     recipients: Sequence[str] = field(default_factory=tuple)
     text: str | None = None
+    group: str | None = None
     connection_id: str | None = None
 
     def to_message(self) -> dict:
         message = {"type": self.type, "data": self.data}
         if self.text:
             message["text"] = self.text
+        if self.group:
+            message["group"] = self.group
         return message
 
 

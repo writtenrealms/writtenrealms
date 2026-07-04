@@ -170,6 +170,76 @@ Current first-pass placement supports fixed room, zone, path, and entry targets.
 Room tag selectors and deeper spacing rules are planned for guided dungeons but
 are not part of the first implementation.
 
+## Cohorts And Patrols
+
+Use a cohort when multiple mobs should spawn and roam as one patrol unit. Give
+each mob entry the same `cohort` value, mark one mob as the `leader`, and have
+the follower entries target the leader entry.
+
+```yaml
+kind: spawnplan
+metadata:
+  slug: harbor-patrols
+  name: Harbor Patrols
+spec:
+  zone: zone@1
+  respawn:
+    mode: fixed
+    seconds: 300
+  entries:
+    - slug: sparabara
+      source: mobdefinition.sparabara
+      target:
+        path: path@4
+      count: 1
+      cohort: west-harbor-patrol
+      cohort_role: leader
+      cohort_policy: refill_missing
+
+    - slug: archer
+      source: mobdefinition.harbor-archer
+      target:
+        entry: sparabara
+      count: 1
+      cohort: west-harbor-patrol
+      cohort_role: follower
+      cohort_policy: refill_missing
+```
+
+The leader's `path` or `zone` target is inherited by follower mobs that target
+the leader entry, so the archer above roams on `path@4` even though its direct
+target is `entry: sparabara`. If the leader targets a fixed room, the cohort
+spawns together but stays static.
+
+`cohort` is the authored patrol name. It is not the runtime group id; each
+generated cohort slot gets its own runtime group id so two copies of the same
+patrol template do not merge.
+
+`cohort_role` can be `leader`, `follower`, or `member`. Mark one mob as
+`leader` for predictable roaming. If no live leader exists, the runtime picks
+the first surviving member as the temporary anchor.
+
+`cohort_policy` currently supports `refill_missing`, which is also the default.
+When a cohort is due to respawn:
+
+- If at least one member is still alive, missing members spawn at the leader's
+  current room, or at another surviving member's room if the leader is dead.
+- If the whole cohort is dead, all members respawn at their original generated
+  placement.
+- Surviving members are not despawned or reset just because another member is
+  missing.
+
+On heartbeat roaming, the cohort rolls once using the leader's roam chance. The
+leader picks the direction, and live non-combat members in the leader's current
+room move with the leader when that destination is valid for their path or zone.
+Members that are in combat or already separated stay where they are; the next
+`refill_missing` respawn can restore dead members to the surviving patrol.
+
+For multiple copies of the same patrol, increase the leader entry's `count`.
+Follower entries targeting the leader are generated once per leader placement.
+For example, a leader count of `3` and one follower entry creates three separate
+two-mob patrols, not one six-mob group.
+
 ## Counts And Density
 
 Use an integer for a fixed count:

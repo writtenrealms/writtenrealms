@@ -1,6 +1,7 @@
 import os
 import math
 import random
+import uuid
 
 from celery import shared_task
 
@@ -33,7 +34,7 @@ from fastapi_app.forge_ws import complete_job, exit_world as notify_exit_world
 WR2_STANDING_REGEN_RATE = adv_config.PLAYER_STARTING_STAMINA_REGEN
 WR2_RESTING_REGEN_MULTIPLIER = 3
 DEFAULT_MOB_ROAM_CHANCE = getattr(adv_config, "DEFAULT_MOB_ROAM_CHANCE", 10)
-HEARTBEAT_REGEN_LOCK_KEY = "heartbeat_regen_lock"
+GAME_HEARTBEAT_LOCK_KEY = "heartbeat_regen_lock"
 
 
 def _notify_world_lifecycle(player: Player, world: World, action: str) -> None:
@@ -186,6 +187,7 @@ def _publish_mob_roam_events(
     origin_room_id: int,
     destination_room_id: int,
     direction: str,
+    event_group: str | None = None,
 ) -> None:
     if getattr(mob, "is_invisible", False):
         return
@@ -209,6 +211,7 @@ def _publish_mob_roam_events(
                 recipients=[f"player.{player_id}" for player_id in origin_recipient_ids],
                 data={"actor": actor_payload, "direction": direction},
                 text=f"{actor_name} leaves {direction}.",
+                group=event_group,
             )
         )
 
@@ -228,6 +231,7 @@ def _publish_mob_roam_events(
                 recipients=[f"player.{player_id}" for player_id in destination_recipient_ids],
                 data={"actor": actor_payload, "direction": reverse_direction},
                 text=f"{actor_name} has arrived from {_arrival_source_text(reverse_direction)}.",
+                group=event_group,
             )
         )
 
@@ -235,7 +239,12 @@ def _publish_mob_roam_events(
         publish_events(events, actor_key=mob.key)
 
 
-def _try_roam_mob(mob: Mob, *, world_default_chance: int) -> bool:
+def _try_roam_mob(
+    mob: Mob,
+    *,
+    world_default_chance: int,
+    event_group: str | None = None,
+) -> bool:
     chance = _mob_roam_chance(mob, world_default_chance=world_default_chance)
     if chance <= 0 or random.randint(1, 100) > chance:
         return False
@@ -253,8 +262,95 @@ def _try_roam_mob(mob: Mob, *, world_default_chance: int) -> bool:
         origin_room_id=origin_room_id,
         destination_room_id=destination.id,
         direction=direction,
+        event_group=event_group,
     )
     return True
+
+
+def _mob_roam_group_id(mob: Mob) -> str:
+    if not mob.group_id:
+        return ""
+    placement = getattr(mob, "spawn_placement", None)
+    state = placement.state if placement and isinstance(placement.state, dict) else {}
+    if not state.get("cohort_slug"):
+        return ""
+    return mob.group_id
+
+
+def _mob_cohort_role(mob: Mob) -> str:
+    placement = getattr(mob, "spawn_placement", None)
+    state = placement.state if placement and isinstance(placement.state, dict) else {}
+    return str(state.get("cohort_role") or "member").strip().lower()
+
+
+def _cohort_roam_leader(members: list[Mob]) -> Mob | None:
+    for member in members:
+        if _mob_cohort_role(member) == "leader":
+            return member
+    return members[0] if members else None
+
+
+def _try_roam_cohort(
+    mob: Mob,
+    *,
+    world_default_chance: int,
+    active_combat_mob_ids: set[int],
+    event_group: str | None = None,
+) -> int:
+    group_id = _mob_roam_group_id(mob)
+    if not group_id:
+        return 1 if _try_roam_mob(
+            mob,
+            world_default_chance=world_default_chance,
+            event_group=event_group,
+        ) else 0
+
+    members = list(
+        Mob.objects.filter(
+            world_id=mob.world_id,
+            group_id=group_id,
+            is_pending_deletion=False,
+            room_id__isnull=False,
+        )
+        .select_related("world", "definition", "template", "spawn_placement")
+        .order_by("id")
+    )
+    leader = _cohort_roam_leader(members)
+    if leader is None or leader.id in active_combat_mob_ids:
+        return 0
+
+    chance = _mob_roam_chance(leader, world_default_chance=world_default_chance)
+    if chance <= 0 or random.randint(1, 100) > chance:
+        return 0
+
+    options = _eligible_mob_roam_options(leader)
+    if not options:
+        return 0
+
+    direction, destination = random.choice(options)
+    origin_room_id = leader.room_id
+    movable_members = [
+        member
+        for member in members
+        if member.room_id == origin_room_id
+        and member.id not in active_combat_mob_ids
+        and member.roams
+        and _roam_target_allows_room(member.roams, destination)
+    ]
+    if not any(member.id == leader.id for member in movable_members):
+        return 0
+
+    for member in movable_members:
+        member.room = destination
+        member.save(update_fields=["room", "modified_ts"])
+        _publish_mob_roam_events(
+            mob=member,
+            origin_room_id=origin_room_id,
+            destination_room_id=destination.id,
+            direction=direction,
+            event_group=event_group,
+        )
+    return len(movable_members)
 
 
 def run_mob_roaming(*, active_combat_mob_ids: set[int] | None = None) -> int:
@@ -288,14 +384,31 @@ def run_mob_roaming(*, active_combat_mob_ids: set[int] | None = None) -> int:
             roams_id__isnull=False,
             world_id__in=worlds_by_id.keys(),
         )
-        .select_related("world", "definition", "template")
+        .select_related("world", "definition", "template", "spawn_placement")
         .order_by("id")
     )
+    heartbeat_event_group = f"heartbeat.mob_roaming.{uuid.uuid4().hex}"
+    processed_group_ids: set[str] = set()
     for mob in mobs_qs.iterator(chunk_size=200):
         if mob.id in active_combat_mob_ids:
             continue
         world_default_chance = default_chance_by_world_id.get(mob.world_id, 0)
-        if _try_roam_mob(mob, world_default_chance=world_default_chance):
+        group_id = _mob_roam_group_id(mob)
+        if group_id:
+            if group_id in processed_group_ids:
+                continue
+            processed_group_ids.add(group_id)
+            roamed_count += _try_roam_cohort(
+                mob,
+                world_default_chance=world_default_chance,
+                active_combat_mob_ids=active_combat_mob_ids,
+                event_group=heartbeat_event_group,
+            )
+        elif _try_roam_mob(
+            mob,
+            world_default_chance=world_default_chance,
+            event_group=heartbeat_event_group,
+        ):
             roamed_count += 1
     return roamed_count
 
@@ -435,7 +548,7 @@ def _regen_mob(mob: Mob, *, in_combat: bool = False) -> bool:
     )
 
 
-def run_heartbeat_regen() -> dict[str, int]:
+def run_game_heartbeat() -> dict[str, int]:
     from spawns.actions.abilities import ability_state_event, decrement_ability_cooldowns
     from spawns.actions.effects import advance_character_effect_durations
 
@@ -556,15 +669,28 @@ def run_heartbeat_regen() -> dict[str, int]:
     }
 
 
-@shared_task(ignore_result=True)
-def heartbeat_regen():
+def run_heartbeat_regen() -> dict[str, int]:
+    return run_game_heartbeat()
+
+
+def _run_game_heartbeat_task() -> dict[str, int] | dict[str, bool]:
     lock_timeout = _heartbeat_lock_timeout_seconds()
-    if not cache.add(HEARTBEAT_REGEN_LOCK_KEY, 1, timeout=lock_timeout):
+    if not cache.add(GAME_HEARTBEAT_LOCK_KEY, 1, timeout=lock_timeout):
         return {"skipped": True}
     try:
-        return run_heartbeat_regen()
+        return run_game_heartbeat()
     finally:
-        cache.delete(HEARTBEAT_REGEN_LOCK_KEY)
+        cache.delete(GAME_HEARTBEAT_LOCK_KEY)
+
+
+@shared_task(name="spawns.tasks.game_heartbeat", ignore_result=True)
+def game_heartbeat():
+    return _run_game_heartbeat_task()
+
+
+@shared_task(name="spawns.tasks.heartbeat_regen", ignore_result=True)
+def heartbeat_regen():
+    return _run_game_heartbeat_task()
 
 
 @shared_task

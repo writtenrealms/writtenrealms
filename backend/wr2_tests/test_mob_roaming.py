@@ -64,6 +64,42 @@ class TestMobRoaming(WorldTestCase):
             )
         )
 
+    def test_roaming_notifications_from_same_heartbeat_share_group(self):
+        destination = self._room(name="East Room", x=1, y=0)
+        self.room.east = destination
+        self.room.save(update_fields=["east"])
+        Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="a patrol",
+            roams=self.zone,
+        )
+        Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="a scout",
+            roams=self.zone,
+        )
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+
+        with capture_game_messages() as messages:
+            roamed = run_mob_roaming()
+
+        self.assertEqual(roamed, 2)
+        movement_messages = [
+            msg["message"]
+            for msg in messages
+            if msg["player_key"] == self.player.key
+            and msg["message"]["type"] == "notification.movement.exit"
+        ]
+        self.assertEqual(len(movement_messages), 2)
+        groups = {message.get("group") for message in movement_messages}
+        self.assertEqual(len(groups), 1)
+        group = groups.pop()
+        self.assertIsNotNone(group)
+        self.assertTrue(group.startswith("heartbeat.mob_roaming."))
+
     def test_room_loaded_mob_without_roams_target_stays_static(self):
         destination = self._room(name="East Room", x=1, y=0)
         self.room.east = destination

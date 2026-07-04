@@ -51,6 +51,8 @@ SOURCE_MODELS = {
 
 INHERITED_INSTANCE_SOURCE_MODELS = {ItemBundle, ItemDefinition, MobDefinition}
 LEGACY_INSTANCE_SOURCE_MODELS = {ItemTemplate, MobTemplate}
+COHORT_RESPAWN_REFILL_MISSING = "refill_missing"
+COHORT_RESPAWN_POLICIES = {COHORT_RESPAWN_REFILL_MISSING}
 
 @dataclass(frozen=True)
 class ResolvedSource:
@@ -364,6 +366,74 @@ def _target_entry_slug(entry: SpawnEntry) -> str:
     return str(raw_target or "").strip()
 
 
+def _entry_placement_mapping(entry: SpawnEntry) -> dict[str, Any]:
+    if isinstance(entry.placement, dict):
+        return entry.placement
+    return {}
+
+
+def _entry_cohort_spec(entry: SpawnEntry, *, parent: SpawnPlacement | None = None) -> dict[str, Any]:
+    placement = _entry_placement_mapping(entry)
+    raw_cohort = placement.get("cohort") or placement.get("cohort_slug")
+    if isinstance(raw_cohort, dict):
+        cohort_slug = str(
+            raw_cohort.get("slug")
+            or raw_cohort.get("name")
+            or raw_cohort.get("id")
+            or ""
+        ).strip()
+        raw_role = raw_cohort.get("role") or raw_cohort.get("cohort_role")
+        raw_policy = raw_cohort.get("policy") or raw_cohort.get("cohort_policy")
+    else:
+        cohort_slug = str(raw_cohort or "").strip()
+        raw_role = placement.get("cohort_role") or placement.get("role")
+        raw_policy = placement.get("cohort_policy") or placement.get("policy")
+    if not cohort_slug:
+        return {}
+
+    role = str(raw_role or ("follower" if parent is not None else "leader")).strip().lower()
+    if role not in {"leader", "follower", "member"}:
+        role = "member"
+    policy = str(raw_policy or COHORT_RESPAWN_REFILL_MISSING).strip().lower()
+    if policy not in COHORT_RESPAWN_POLICIES:
+        policy = COHORT_RESPAWN_REFILL_MISSING
+    return {
+        "cohort_slug": cohort_slug,
+        "cohort_role": role,
+        "cohort_policy": policy,
+    }
+
+
+def _placement_roam_state(placement: SpawnPlacement) -> dict[str, Any]:
+    state = placement.state if isinstance(placement.state, dict) else {}
+    target_type = state.get("roam_target_type") or state.get("target_type")
+    target_id = state.get("roam_target_id") or state.get("target_id")
+    if target_type in {"zone", "path"} and target_id:
+        return {
+            "roam_target_type": target_type,
+            "roam_target_id": target_id,
+        }
+    return {}
+
+
+def _apply_cohort_state(
+    *,
+    entry: SpawnEntry,
+    state: dict[str, Any],
+    slot_index: int,
+    parent: SpawnPlacement | None = None,
+) -> dict[str, Any]:
+    cohort = _entry_cohort_spec(entry, parent=parent)
+    if not cohort:
+        return state
+    cohort_slot_index = parent.slot_index if parent is not None else slot_index
+    state.update({
+        **cohort,
+        "cohort_slot_index": cohort_slot_index,
+    })
+    return state
+
+
 def _entry_conditions_pass(*, spawn_world: World, plan: SpawnPlan, entry: SpawnEntry) -> bool:
     if not entry.conditions:
         return True
@@ -488,6 +558,16 @@ def _generate_placements_for_run(*, run: SpawnPlanRun) -> None:
                         field_name=f"entries.{entry.slug}.source",
                     )
                     traits, modifiers = _generate_traits(entry, rng)
+                    state = _apply_cohort_state(
+                        entry=entry,
+                        parent=parent,
+                        slot_index=len(created),
+                        state={
+                            "target_type": "entry",
+                            "target_id": parent.id,
+                            **_placement_roam_state(parent),
+                        },
+                    )
                     created.append(
                         SpawnPlacement.objects.create(
                             run=run,
@@ -501,7 +581,7 @@ def _generate_placements_for_run(*, run: SpawnPlanRun) -> None:
                             parent_slot_index=parent.slot_index,
                             traits=traits,
                             modifiers=modifiers,
-                            state={"target_type": "entry"},
+                            state=state,
                         )
                     )
         else:
@@ -530,7 +610,11 @@ def _generate_placements_for_run(*, run: SpawnPlanRun) -> None:
                         source_id=source.source_id,
                         traits=traits,
                         modifiers=modifiers,
-                        state=state,
+                        state=_apply_cohort_state(
+                            entry=entry,
+                            state=state,
+                            slot_index=slot_index,
+                        ),
                     )
                 )
         generated_by_entry[entry.slug] = created
@@ -570,6 +654,9 @@ def _apply_spawn_origin_metadata(entity: Any, placement: SpawnPlacement) -> None
         "trait_keys": trait_keys(list(placement.traits or [])),
         "modifiers": dict(placement.modifiers or {}),
     }
+    cohort = _placement_cohort_state(placement)
+    if cohort:
+        metadata["spawn_plan"]["cohort"] = cohort
     entity.roll_metadata = metadata
 
 
@@ -579,13 +666,92 @@ def _apply_spawn_modifiers(entity: Any, placement: SpawnPlacement) -> list[str]:
 
 
 def _placement_roams(placement: SpawnPlacement):
-    target_type = (placement.state or {}).get("target_type")
-    target_id = (placement.state or {}).get("target_id")
+    state = placement.state if isinstance(placement.state, dict) else {}
+    target_type = state.get("roam_target_type") or state.get("target_type")
+    target_id = state.get("roam_target_id") or state.get("target_id")
     if target_type == "zone":
         return Zone.objects.filter(pk=target_id).first()
     if target_type == "path":
         return Path.objects.filter(pk=target_id).first()
     return None
+
+
+def _placement_cohort_state(placement: SpawnPlacement) -> dict[str, Any]:
+    state = placement.state if isinstance(placement.state, dict) else {}
+    cohort_slug = str(state.get("cohort_slug") or "").strip()
+    if not cohort_slug:
+        return {}
+    try:
+        cohort_slot_index = int(state.get("cohort_slot_index", placement.slot_index))
+    except (TypeError, ValueError):
+        cohort_slot_index = placement.slot_index
+    return {
+        "slug": cohort_slug,
+        "role": str(state.get("cohort_role") or "member").strip().lower(),
+        "policy": str(state.get("cohort_policy") or COHORT_RESPAWN_REFILL_MISSING).strip().lower(),
+        "slot_index": cohort_slot_index,
+    }
+
+
+def _placement_group_id(placement: SpawnPlacement) -> str:
+    cohort = _placement_cohort_state(placement)
+    if not cohort:
+        return ""
+    return (
+        f"spawnplan.{placement.run_id}."
+        f"{cohort['slug']}."
+        f"{cohort['slot_index']}"
+    )
+
+
+def _roam_target_allows_room(roams, room: Room) -> bool:
+    if isinstance(roams, Zone):
+        return room.zone_id == roams.id
+    if isinstance(roams, Path):
+        return roams.rooms.filter(pk=room.id).exists()
+    return True
+
+
+def _live_cohort_members(*, placement: SpawnPlacement, spawn_world: World) -> list:
+    group_id = _placement_group_id(placement)
+    if not group_id:
+        return []
+    from spawns.models import Mob
+
+    return list(
+        Mob.objects.filter(
+            world=spawn_world,
+            group_id=group_id,
+            is_pending_deletion=False,
+            room_id__isnull=False,
+        )
+        .select_related("room", "spawn_placement")
+        .order_by("id")
+    )
+
+
+def _preferred_cohort_anchor(members: list):
+    for member in members:
+        placement = getattr(member, "spawn_placement", None)
+        state = placement.state if placement and isinstance(placement.state, dict) else {}
+        if str(state.get("cohort_role") or "").strip().lower() == "leader":
+            return member
+    return members[0] if members else None
+
+
+def _placement_spawn_room(*, placement: SpawnPlacement, spawn_world: World) -> Room:
+    cohort = _placement_cohort_state(placement)
+    if not cohort or cohort["policy"] != COHORT_RESPAWN_REFILL_MISSING:
+        return placement.room
+    anchor = _preferred_cohort_anchor(
+        _live_cohort_members(placement=placement, spawn_world=spawn_world)
+    )
+    if anchor is None or anchor.room_id is None:
+        return placement.room
+    roams = _placement_roams(placement)
+    if roams is not None and not _roam_target_allows_room(roams, anchor.room):
+        return placement.room
+    return anchor.room
 
 
 def _parent_instance(*, placement: SpawnPlacement, spawn_world: World):
@@ -636,15 +802,21 @@ def _materialize_placement(*, placement: SpawnPlacement, spawn_world: World):
     source = _placement_source(placement)
     if source is None:
         return []
+    target = placement.room
     if placement.parent_entry_slug:
-        target = _parent_instance(placement=placement, spawn_world=spawn_world)
-        if target is None:
+        parent_target = _parent_instance(placement=placement, spawn_world=spawn_world)
+        if parent_target is None and not (
+            placement.source_type.startswith("mob")
+            and _live_cohort_members(placement=placement, spawn_world=spawn_world)
+        ):
             return []
+        target = parent_target or placement.room
     else:
         target = placement.room
     if placement.source_type.startswith("mob"):
+        spawn_room = _placement_spawn_room(placement=placement, spawn_world=spawn_world)
         spawn_kwargs = {
-            "target": placement.room,
+            "target": spawn_room,
             "spawn_world": spawn_world,
             "roams": _placement_roams(placement),
             "rule": None,
@@ -653,6 +825,9 @@ def _materialize_placement(*, placement: SpawnPlacement, spawn_world: World):
             spawn_kwargs["rng"] = _rng_for_placement(placement)
         spawned = source.spawn(**spawn_kwargs)
         spawned.spawn_placement = placement
+        group_id = _placement_group_id(placement)
+        if group_id:
+            spawned.group_id = group_id
         _apply_spawn_origin_metadata(spawned, placement)
         placement_trait_instances = trait_instances(
             list(placement.traits or []),
@@ -664,13 +839,16 @@ def _materialize_placement(*, placement: SpawnPlacement, spawn_world: World):
             *placement_trait_instances,
         ]
         modifier_fields = _apply_spawn_modifiers(spawned, placement)
-        spawned.save(update_fields=[
+        update_fields = [
             "spawn_placement",
             "roll_metadata",
             "trait_instances",
             *modifier_fields,
             "modified_ts",
-        ])
+        ]
+        if group_id:
+            update_fields.append("group_id")
+        spawned.save(update_fields=update_fields)
         return [spawned]
     spawn_kwargs = {
         "target": target,
@@ -728,7 +906,7 @@ def reconcile_spawn_plan(*, spawn_world: World, plan: SpawnPlan, initial: bool =
             return {"plan": plan.slug, "placements": run.placements.count(), "spawned": 0, "skipped": True}
         _generate_placements_for_run(run=run)
         spawned_count = 0
-        for placement in run.placements.select_related("room").order_by("entry_slug", "slot_index", "id"):
+        for placement in run.placements.select_related("room").order_by("id"):
             entry = plan.entries.filter(slug=placement.entry_slug, is_active=True).first()
             if entry and not _entry_conditions_pass(spawn_world=spawn_world, plan=plan, entry=entry):
                 continue

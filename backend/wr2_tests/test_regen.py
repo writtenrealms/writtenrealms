@@ -8,7 +8,7 @@ from spawns.models import CombatEncounter, Mob
 from spawns.tasks import (
     WR2_RESTING_REGEN_MULTIPLIER,
     WR2_STANDING_REGEN_RATE,
-    run_heartbeat_regen,
+    run_game_heartbeat,
 )
 from tests.base import WorldTestCase
 from wr2_tests.utils import (
@@ -19,7 +19,7 @@ from wr2_tests.utils import (
 )
 
 
-class TestHeartbeatRegen(WorldTestCase):
+class TestGameHeartbeat(WorldTestCase):
     def setUp(self):
         super().setUp()
         apply_basic_stat_system(self.world)
@@ -57,7 +57,7 @@ class TestHeartbeatRegen(WorldTestCase):
             self.player.stamina + WR2_STANDING_REGEN_RATE,
         )
 
-        run_heartbeat_regen()
+        run_game_heartbeat()
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.health, expected_health)
@@ -92,7 +92,7 @@ class TestHeartbeatRegen(WorldTestCase):
             self.player.stamina + resting_regen_rate,
         )
 
-        run_heartbeat_regen()
+        run_game_heartbeat()
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.health, expected_health)
@@ -109,7 +109,7 @@ class TestHeartbeatRegen(WorldTestCase):
         self.player.save(update_fields=["in_game", "health", "energy", "stamina"])
 
         before = (self.player.health, self.player.energy, self.player.stamina)
-        run_heartbeat_regen()
+        run_game_heartbeat()
 
         self.player.refresh_from_db()
         self.assertEqual((self.player.health, self.player.energy, self.player.stamina), before)
@@ -137,7 +137,7 @@ class TestHeartbeatRegen(WorldTestCase):
         )
 
         with patch("spawns.tasks.publish_events") as publish_mock:
-            result = run_heartbeat_regen()
+            result = run_game_heartbeat()
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.ability_cooldowns, {"power-strike": 1})
@@ -183,7 +183,7 @@ class TestHeartbeatRegen(WorldTestCase):
         self.player.save(update_fields=["in_game", "active_effects"])
 
         with patch("spawns.tasks.publish_events") as publish_mock:
-            result = run_heartbeat_regen()
+            result = run_game_heartbeat()
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.active_effects[0]["remaining_rounds"], 1)
@@ -191,7 +191,7 @@ class TestHeartbeatRegen(WorldTestCase):
         publish_mock.assert_called_once()
 
         with patch("spawns.tasks.publish_events"):
-            run_heartbeat_regen()
+            run_game_heartbeat()
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.active_effects, [])
@@ -228,7 +228,7 @@ class TestHeartbeatRegen(WorldTestCase):
         )
 
         with patch("spawns.tasks.publish_events") as publish_mock:
-            result = run_heartbeat_regen()
+            result = run_game_heartbeat()
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.ability_cooldowns, {"power-strike": 2})
@@ -271,7 +271,7 @@ class TestHeartbeatRegen(WorldTestCase):
             mob=mob,
         )
 
-        run_heartbeat_regen()
+        run_game_heartbeat()
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.health, max(health_max - 10, 0) + 1)
@@ -301,7 +301,7 @@ class TestHeartbeatRegen(WorldTestCase):
             regen_rate=10,
         )
 
-        run_heartbeat_regen()
+        run_game_heartbeat()
 
         mob.refresh_from_db()
         self.assertEqual(mob.health, 113)
@@ -334,7 +334,7 @@ class TestHeartbeatRegen(WorldTestCase):
             mob=mob,
         )
 
-        run_heartbeat_regen()
+        run_game_heartbeat()
 
         mob.refresh_from_db()
         self.assertEqual(mob.health, 101)
@@ -369,7 +369,7 @@ class TestHeartbeatRegen(WorldTestCase):
         player_before = (self.player.health, self.player.energy, self.player.stamina)
         mob_before = (mob.health, mob.energy, mob.stamina)
 
-        run_heartbeat_regen()
+        run_game_heartbeat()
 
         self.player.refresh_from_db()
         mob.refresh_from_db()
@@ -395,7 +395,7 @@ class TestHeartbeatRegen(WorldTestCase):
         expected_stamina = min(stamina_max, self.player.stamina + WR2_STANDING_REGEN_RATE)
 
         with patch("spawns.tasks.publish_to_player") as publish_mock:
-            run_heartbeat_regen()
+            run_game_heartbeat()
 
         publish_mock.assert_called_once()
         player_key, message = publish_mock.call_args.args[:2]
@@ -424,7 +424,7 @@ class TestHeartbeatRegen(WorldTestCase):
         expected_stamina = min(expected_stamina_max, self.player.stamina + WR2_STANDING_REGEN_RATE)
 
         with patch("spawns.tasks.publish_to_player") as publish_mock:
-            run_heartbeat_regen()
+            run_game_heartbeat()
 
         publish_mock.assert_called_once()
         _, message = publish_mock.call_args.args[:2]

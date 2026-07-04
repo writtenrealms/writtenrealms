@@ -6,8 +6,9 @@ from builders.models import MobDefinition, MobTemplate, Path, PathRoom, SpawnEnt
 from config import constants as adv_consts
 from spawns.loading import run_loaders
 from spawns.models import Mob
+from spawns.tasks import run_mob_roaming
 from tests.base import WorldTestCase
-from worlds.models import World, WorldConfig
+from worlds.models import Room, World, WorldConfig
 from worlds.services import WorldSmith
 
 
@@ -142,6 +143,32 @@ spec:
         self.assertEqual(entry.traits["guaranteed"][0]["key"], "resilient")
         self.assertEqual(entry.traits["pool"][0]["key"], "enraged")
         self.assertEqual(entry.traits["pool"][0]["weight"], 2)
+
+    def test_apply_spawn_plan_manifest_accepts_cohort_metadata(self):
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: cohort-patrols
+  name: Cohort Patrols
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: patrol-leader
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+      cohort: west-patrol
+      cohort_role: leader
+      cohort_policy: refill_missing
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        entry = SpawnPlan.objects.get(world=self.world, slug="cohort-patrols").entries.get()
+        self.assertEqual(entry.placement["cohort"], "west-patrol")
+        self.assertEqual(entry.placement["cohort_role"], "leader")
+        self.assertEqual(entry.placement["cohort_policy"], "refill_missing")
 
     def test_spawn_plan_manifest_rejects_traits_and_affixes_together(self):
         manifest = f"""
@@ -609,6 +636,89 @@ class TestSpawnPlanRuntime(WorldTestCase):
         )
         self.assertEqual(SpawnPlacement.objects.filter(run__plan=self.plan).count(), 1)
 
+    def test_spawn_plan_cohort_roams_and_refills_together(self):
+        self.world.config.default_roam_chance = 100
+        self.world.config.save(update_fields=["default_roam_chance"])
+        destination = Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="East Yard",
+            x=1,
+            y=0,
+            z=0,
+        )
+        self.room.east = destination
+        self.room.save(update_fields=["east"])
+        path = Path.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Training Patrol Loop",
+            entry_room=self.room,
+        )
+        PathRoom.objects.create(path=path, room=self.room)
+        PathRoom.objects.create(path=path, room=destination)
+        archer_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="practice-archer",
+            name="a practice archer",
+            mob_type=adv_consts.MOB_TYPE_HUMANOID,
+            base_properties={"health_max": 10},
+        )
+        self.entry.target = {"path": f"path@{path.relative_id}"}
+        self.entry.placement = {
+            "cohort": "west-patrol",
+            "cohort_role": "leader",
+            "cohort_policy": "refill_missing",
+        }
+        self.entry.save(update_fields=["target", "placement"])
+        SpawnEntry.objects.create(
+            plan=self.plan,
+            slug="practice-archer",
+            order=2,
+            source=f"mobdefinition.{archer_definition.slug}",
+            target={"entry": self.entry.slug},
+            count=1,
+            placement={
+                "cohort": "west-patrol",
+                "cohort_role": "follower",
+                "cohort_policy": "refill_missing",
+            },
+        )
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+
+        mobs = list(Mob.objects.filter(world=spawn_world).order_by("id"))
+        self.assertEqual(len(mobs), 2)
+        self.assertEqual({mob.room_id for mob in mobs}, {self.room.id})
+        self.assertEqual(len({mob.group_id for mob in mobs}), 1)
+        self.assertTrue(all(mob.roams == path for mob in mobs))
+
+        roamed = run_mob_roaming()
+
+        mobs = list(Mob.objects.filter(world=spawn_world).order_by("id"))
+        self.assertEqual(roamed, 2)
+        self.assertEqual({mob.room_id for mob in mobs}, {destination.id})
+        group_id = mobs[0].group_id
+        follower = next(mob for mob in mobs if mob.definition_id == archer_definition.id)
+        follower.delete()
+
+        output = run_loaders(world=spawn_world)
+
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 1)
+        mobs = list(Mob.objects.filter(world=spawn_world).order_by("id"))
+        self.assertEqual(len(mobs), 2)
+        self.assertEqual({mob.room_id for mob in mobs}, {destination.id})
+        self.assertEqual({mob.group_id for mob in mobs}, {group_id})
+
+        for mob in mobs:
+            mob.delete()
+        output = run_loaders(world=spawn_world)
+
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 2)
+        mobs = list(Mob.objects.filter(world=spawn_world).order_by("id"))
+        self.assertEqual(len(mobs), 2)
+        self.assertEqual({mob.room_id for mob in mobs}, {self.room.id})
+
 
 class TestSpawnPlanExport(WorldTestCase):
     def setUp(self):
@@ -660,3 +770,23 @@ class TestSpawnPlanExport(WorldTestCase):
             "armored",
         )
         self.assertNotIn("affixes", spawn_doc["spec"]["entries"][0])
+
+    def test_world_export_includes_spawn_plan_cohort_fields(self):
+        entry = self.plan.entries.get()
+        entry.placement = {
+            "cohort": "west-patrol",
+            "cohort_role": "leader",
+            "cohort_policy": "refill_missing",
+        }
+        entry.save(update_fields=["placement"])
+
+        resp = self.client.get(self.export_ep)
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        docs = [doc for doc in yaml.safe_load_all(resp.data["yaml"]) if doc is not None]
+        spawn_doc = next(doc for doc in docs if doc["kind"] == "spawnplan")
+        entry_doc = spawn_doc["spec"]["entries"][0]
+        self.assertEqual(entry_doc["cohort"], "west-patrol")
+        self.assertEqual(entry_doc["cohort_role"], "leader")
+        self.assertEqual(entry_doc["cohort_policy"], "refill_missing")
+        self.assertNotIn("placement", entry_doc)

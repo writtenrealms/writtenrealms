@@ -113,6 +113,10 @@ For ability progression, see
 `kind: world` manifests. Use `is_narrative: true` for the current manifest path
 when a world should be non-combat.
 
+For cohort patrols, `default_roam_chance` is rolled once for the cohort leader
+on each heartbeat. Followers move with the leader when they are present and not
+in combat.
+
 For combat formulas and encounter pacing, see
 [combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md).
 

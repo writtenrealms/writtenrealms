@@ -36,8 +36,8 @@ def _loader_interval_seconds() -> float:
 
 
 app.conf.beat_schedule = {
-    'heartbeat-regen': {
-        'task': 'spawns.tasks.heartbeat_regen',
+    'game-heartbeat': {
+        'task': 'spawns.tasks.game_heartbeat',
         'schedule': _heartbeat_interval_seconds(),
     },
     'run-world-loaders': {

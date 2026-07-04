@@ -7,7 +7,7 @@ from config import constants as api_consts
 from config import game_settings as adv_config
 from core.computations import compute_stats
 from spawns.models import Player
-from spawns.tasks import WR2_STANDING_REGEN_RATE, run_heartbeat_regen
+from spawns.tasks import WR2_STANDING_REGEN_RATE, run_game_heartbeat
 from worlds.models import World
 
 
@@ -59,7 +59,7 @@ class TestBlankWorldDefaults(TestCase):
         player.save(update_fields=["in_game", "stamina"])
 
         with patch("spawns.tasks.publish_to_player"):
-            result = run_heartbeat_regen()
+            result = run_game_heartbeat()
 
         player.refresh_from_db()
         self.assertEqual(result["players"], 1)

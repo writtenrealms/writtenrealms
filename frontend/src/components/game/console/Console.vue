@@ -220,9 +220,12 @@ const onScroll = _.debounce(updateScroll, 250);
       &.notification\.cmd\.chat\.success,
       &.notification\.tell,
       &.notification\.cmd\.emote\.success,
-      &.notification\.movement\.enter,
-      &.notification\.movement\.exit,
       &.notification\.decay {
+        margin-top: 1rem;
+      }
+
+      &.notification\.movement\.enter:not(.grouped),
+      &.notification\.movement\.exit:not(.grouped) {
         margin-top: 1rem;
       }
 
