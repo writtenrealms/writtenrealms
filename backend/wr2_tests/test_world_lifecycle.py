@@ -4,6 +4,7 @@ from django.utils import timezone
 
 from builders.models import Loader, MobTemplate, Rule
 from config import constants as api_consts
+from config.exceptions import ServiceError
 from spawns.models import Item, Mob
 from spawns.tasks import enter_world, exit_current_world
 from spawns.services import WorldGate
@@ -77,6 +78,22 @@ class TestStartWorld(WorldTestCase):
         self.assertEqual(
             Mob.objects.filter(world=spawn_world, rule=rule).count(),
             2,
+        )
+
+    @patch('spawns.loading.run_loaders')
+    def test_start_failure_recovers_to_stopped(self, mock_run_loaders):
+        mock_run_loaders.side_effect = serializers.ValidationError(
+            "broken loader")
+        spawn_world = self.world.create_spawn_world()
+
+        with self.assertRaises(ServiceError) as error:
+            WorldSmith(spawn_world).start()
+
+        self.assertIn("broken loader", str(error.exception))
+        spawn_world.refresh_from_db()
+        self.assertEqual(
+            spawn_world.lifecycle,
+            api_consts.WORLD_LIFECYCLE_STOPPED,
         )
 
     def test_stop_world(self):

@@ -54,6 +54,14 @@
               <div class="actions">
                 <button class="btn btn-small start" :disabled="disableStart(spawn_world)" @click="onStart(spawn_world)">START</button>
                 <button class="btn btn-small stop ml-2" :disabled="disableStop(spawn_world)" @click="onStop(spawn_world)">STOP</button>
+                <button
+                  v-if="canRecover(spawn_world)"
+                  class="btn btn-small ml-2"
+                  :disabled="action_submitted[spawn_world.id]"
+                  @click="onRecover(spawn_world)"
+                >
+                  RECOVER
+                </button>
               </div>
             </div>
           </div>
@@ -87,6 +95,14 @@
               <div class="actions">
                 <button class="btn btn-small start" :disabled="disableStart(run.spawned_world)" @click="onStart(run.spawned_world)">START</button>
                 <button class="btn btn-small stop ml-2" :disabled="disableStop(run.spawned_world)" @click="onStop(run.spawned_world)">STOP</button>
+                <button
+                  v-if="canRecover(run.spawned_world)"
+                  class="btn btn-small ml-2"
+                  :disabled="action_submitted[run.spawned_world.id]"
+                  @click="onRecover(run.spawned_world)"
+                >
+                  RECOVER
+                </button>
               </div>
             </div>
           </div>
@@ -128,6 +144,7 @@ const root_world = computed<any>(() => store.state.builder.world);
 const world_admin = computed<any>(() => store.state.builder.worlds.admin.world_admin);
 const spawnedWorlds = computed<any[]>(() => world_admin.value?.spawned_worlds || []);
 const instanceRuns = computed<any[]>(() => world_admin.value?.instance_runs || []);
+const recoverableLifecycles = ['starting', 'stopping', 'restarting', 'queued', 'stored'];
 
 onMounted(async () => {
   maintenance_msg.value = root_world.value.maintenance_msg || '';
@@ -174,6 +191,12 @@ const disableStop = (instance: any) => {
   return true;
 };
 
+const canRecover = (instance: any) => {
+  if (!instance) return false;
+  if (instance.recovery_actions?.recover_to_stopped) return true;
+  return recoverableLifecycles.includes(instance.lifecycle);
+};
+
 const onStart = async (instance: any) => {
   action_submitted.value[instance.id] = true;
   store.commit('ui/notification_set', {
@@ -202,6 +225,31 @@ const onStop = async (instance: any) => {
     'world_id': instance.id,
   });
   action_submitted.value[instance.id] = false;
+};
+
+const onRecover = async (instance: any) => {
+  const confirmed = confirm(
+    `Recover world ${instance.id}? This will move it to stopped and clean transient runtime state.`
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  action_submitted.value[instance.id] = true;
+  store.commit('ui/notification_set', {
+    text: "Recovering world...",
+    expires: false
+  });
+
+  try {
+    await store.dispatch('builder/worlds/admin/world_admin_instance_recover', {
+      world_id: route.params.world_id,
+      instance_id: instance.id,
+    });
+    store.commit('ui/notification_set', 'World recovered.', { root: true });
+  } finally {
+    action_submitted.value[instance.id] = false;
+  }
 };
 const onSliderChange = async (newValue: boolean) => {
   await store.dispatch(

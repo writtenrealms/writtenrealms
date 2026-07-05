@@ -103,6 +103,7 @@ from worlds.models import (
     RoomDetail,
     Door,
     WorldLocks)
+from worlds.services import is_recoverable_lifecycle
 
 
 def _coerce_attribute_map(value):
@@ -640,11 +641,13 @@ class WorldAdminSpawnWorldSerializer(serializers.ModelSerializer):
 
     live_data = serializers.SerializerMethodField()
     forge_data = serializers.SerializerMethodField()
+    recovery_actions = serializers.SerializerMethodField()
 
     class Meta:
         model = World
         fields = [
-            'id', 'name', 'lifecycle', 'lifecycle_change_ts', 'live_data', 'forge_data',
+            'id', 'name', 'lifecycle', 'lifecycle_change_ts', 'live_data',
+            'forge_data', 'recovery_actions',
         ]
 
     def get_forge_data(self, world):
@@ -662,6 +665,11 @@ class WorldAdminSpawnWorldSerializer(serializers.ModelSerializer):
             'num_items': 0,
             'num_mobs': 0,
             'ref': '',
+        }
+
+    def get_recovery_actions(self, world):
+        return {
+            'recover_to_stopped': is_recoverable_lifecycle(world.lifecycle),
         }
 
 
@@ -706,6 +714,10 @@ class WorldAdminInstanceRunSerializer(serializers.ModelSerializer):
             'name': run.spawned_world.name,
             'lifecycle': run.spawned_world.lifecycle,
             'is_multiplayer': run.spawned_world.is_multiplayer,
+            'recovery_actions': {
+                'recover_to_stopped': is_recoverable_lifecycle(
+                    run.spawned_world.lifecycle),
+            },
         }
 
     def get_leader(self, run):
@@ -764,6 +776,7 @@ class WorldAdminInstanceSerializer(serializers.ModelSerializer):
     loader_details = serializers.SerializerMethodField()
     counts = serializers.SerializerMethodField()
     active_players = serializers.SerializerMethodField()
+    recovery_actions = serializers.SerializerMethodField()
 
     class Meta:
         model = World
@@ -782,6 +795,7 @@ class WorldAdminInstanceSerializer(serializers.ModelSerializer):
             'loader_details',
             'counts',
             'active_players',
+            'recovery_actions',
         ]
 
     def _content_type_id(self, model_cls):
@@ -933,6 +947,11 @@ class WorldAdminInstanceSerializer(serializers.ModelSerializer):
             'id',
         )
         return WorldAdminInstancePlayerSerializer(players, many=True).data
+
+    def get_recovery_actions(self, spawn_world):
+        return {
+            'recover_to_stopped': is_recoverable_lifecycle(spawn_world.lifecycle),
+        }
 
 
 class WorldStatsSerializer(serializers.ModelSerializer):

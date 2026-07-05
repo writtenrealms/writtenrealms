@@ -93,6 +93,12 @@ Notes:
 
 - Any enter preflight/startup failure is returned as Forge `job_complete` with `status=error`.
 - In that case, user remains in lobby and sees the returned message.
+- If startup fails after the spawn world enters `starting`, the backend recovers
+  that spawn to `stopped` and cleans transient runtime state so the builder can
+  fix the content issue and retry.
+- The builder Admin world screen exposes a recovery action for transient spawn
+  lifecycle states such as `starting`, `stopping`, `restarting`, or `queued`,
+  plus the legacy `stored` state produced by stuck-world monitoring.
 - If game WebSocket auth/connect fails, transition to `/game` does not complete.
 
 ## Related variants

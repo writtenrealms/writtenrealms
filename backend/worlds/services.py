@@ -10,6 +10,35 @@ from worlds.models import World, WorldLocks
 
 logger = logging.getLogger('lifecycle')
 
+RECOVERABLE_LIFECYCLES = frozenset([
+    api_consts.WORLD_LIFECYCLE_STARTING,
+    api_consts.WORLD_LIFECYCLE_STOPPING,
+    api_consts.WORLD_STATE_RESTARTING,
+    api_consts.WORLD_STATE_QUEUED,
+    api_consts.WORLD_STATE_STORED,
+])
+
+
+def is_recoverable_lifecycle(lifecycle):
+    return lifecycle in RECOVERABLE_LIFECYCLES
+
+
+def _exception_message(exc):
+    detail = getattr(exc, 'detail', None)
+    if isinstance(detail, list):
+        return " ".join(str(item) for item in detail)
+    if isinstance(detail, dict):
+        messages = []
+        for field, errors in detail.items():
+            if isinstance(errors, list):
+                messages.append("%s: %s" % (
+                    field,
+                    " ".join(str(error) for error in errors)))
+            else:
+                messages.append("%s: %s" % (field, errors))
+        return " ".join(messages)
+    return str(exc)
+
 
 class WorldSmith:
 
@@ -51,10 +80,42 @@ class WorldSmith:
     def start(self, staff_request=False):
         self.start_preflight(staff_request=staff_request)
         self.world.set_lifecycle(api_consts.WORLD_LIFECYCLE_STARTING)
-        from spawns.loading import run_loaders
-        run_loaders(world=self.world, initial=True)
+        try:
+            from spawns.loading import run_loaders
+            run_loaders(world=self.world, initial=True)
+        except Exception as exc:
+            logger.exception(
+                "Error starting world %s (%s); recovering to stopped.",
+                self.world.key,
+                self.world.id,
+            )
+            self._recover_failed_start()
+            raise ServiceError(
+                "Unable to start world: %s" % _exception_message(exc)
+            ) from exc
         self.world.set_lifecycle(api_consts.WORLD_LIFECYCLE_RUNNING)
         # Update the admin page
+        self.world.update_builder_admin()
+        return self.world
+
+    def _recover_failed_start(self):
+        try:
+            self.recover_to_stopped()
+        except Exception:
+            logger.exception(
+                "Unable to recover failed start for world %s (%s).",
+                self.world.key,
+                self.world.id,
+            )
+
+    def recover_to_stopped(self):
+        if not is_recoverable_lifecycle(self.world.lifecycle):
+            raise serializers.ValidationError(
+                "Can only recover worlds in starting, stopping, restarting, "
+                "queued, or stored states.")
+
+        self.world.set_lifecycle(api_consts.WORLD_LIFECYCLE_STOPPED)
+        self.world.cleanup()
         self.world.update_builder_admin()
         return self.world
 

@@ -164,6 +164,7 @@ api_v1_urls = [
     path('builder/worlds/<pk>/admin/', builder_views.world_admin, name='builder-world-admin'),
     path('builder/worlds/<world_pk>/admin/instance/<pk>/', builder_views.world_admin_instance, name='builder-world-admin-instance'),
     path('builder/worlds/<world_pk>/admin/instance/<pk>/reset/', builder_views.world_admin_instance_reset, name='builder-world-admin-instance-reset'),
+    path('builder/worlds/<world_pk>/admin/instance/<pk>/recover/', builder_views.world_admin_instance_recover, name='builder-world-admin-instance-recover'),
 
 
     # Zones

@@ -30,6 +30,14 @@
         >
           {{ isResetting ? "RESETTING..." : "RESET WORLD" }}
         </button>
+        <button
+          v-if="canRecoverWorld"
+          class="btn btn-small"
+          :disabled="isRecovering"
+          @click="onRecoverWorld"
+        >
+          {{ isRecovering ? "RECOVERING..." : "RECOVER" }}
+        </button>
       </div>
     </div>
 
@@ -220,6 +228,7 @@ import { useRoute } from 'vue-router';
 const store = useStore();
 const route = useRoute();
 const isResetting = ref(false);
+const isRecovering = ref(false);
 const isRefreshing = ref(false);
 let refreshTimer: number | null = null;
 
@@ -244,7 +253,7 @@ watch(
 
 const shouldAutoRefresh = computed(() => {
   const lifecycle = instance.value?.lifecycle_details?.current;
-  return ['running', 'starting', 'stopping'].includes(lifecycle);
+  return ['running', 'starting', 'stopping', 'restarting', 'queued', 'stored'].includes(lifecycle);
 });
 
 const worldModeLabel = computed(() => {
@@ -256,6 +265,10 @@ const worldModeLabel = computed(() => {
 
 const canResetWorld = computed(() => {
   return instance.value?.lifecycle_details?.current === 'stopped';
+});
+
+const canRecoverWorld = computed(() => {
+  return Boolean(instance.value?.recovery_actions?.recover_to_stopped);
 });
 
 const stateEntries = computed(() => {
@@ -322,7 +335,7 @@ const playerLink = (player: any) => {
 };
 
 const refreshInstance = async () => {
-  if (isRefreshing.value || isResetting.value) {
+  if (isRefreshing.value || isResetting.value || isRecovering.value) {
     return;
   }
 
@@ -361,7 +374,7 @@ onBeforeUnmount(() => {
 });
 
 const onResetWorld = async () => {
-  if (!instance.value || !canResetWorld.value || isResetting.value) {
+  if (!instance.value || !canResetWorld.value || isResetting.value || isRecovering.value) {
     return;
   }
 
@@ -386,6 +399,35 @@ const onResetWorld = async () => {
     store.commit('ui/notification_set', 'World reset.', { root: true });
   } finally {
     isResetting.value = false;
+  }
+};
+
+const onRecoverWorld = async () => {
+  if (!instance.value || !canRecoverWorld.value || isRecovering.value || isResetting.value) {
+    return;
+  }
+
+  const confirmed = confirm(
+    `Recover world ${instance.value.id}? This will move it to stopped and clean transient runtime state.`
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  isRecovering.value = true;
+  store.commit('ui/notification_set', {
+    text: 'Recovering world...',
+    expires: false,
+  });
+
+  try {
+    await store.dispatch('builder/worlds/admin/world_admin_instance_recover', {
+      world_id: route.params.world_id,
+      instance_id: route.params.instance_id,
+    });
+    store.commit('ui/notification_set', 'World recovered.', { root: true });
+  } finally {
+    isRecovering.value = false;
   }
 };
 

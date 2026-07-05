@@ -55,6 +55,12 @@ export default {
       commit("world_admin_instance_set", resp.data);
       await dispatch("world_admin_fetch", world_id);
     },
+
+    world_admin_instance_recover: async ({ commit, dispatch }, { world_id, instance_id }) => {
+      const resp = await axios.post(`/builder/worlds/${world_id}/admin/instance/${instance_id}/recover/`);
+      commit("world_admin_instance_set", resp.data);
+      await dispatch("world_admin_fetch", world_id);
+    },
   },
   mutations: {
     reset: state => {

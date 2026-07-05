@@ -487,6 +487,20 @@ class WorldAdminInstanceReset(BaseWorldBuilderView):
 
 world_admin_instance_reset = WorldAdminInstanceReset.as_view()
 
+
+class WorldAdminInstanceRecover(BaseWorldBuilderView):
+    def post(self, request, world_pk, pk):
+        spawn_world = _get_builder_admin_spawn_world(self.world, pk)
+        WorldSmith(spawn_world).recover_to_stopped()
+        spawn_world.refresh_from_db()
+        return Response(
+            builder_serializers.WorldAdminInstanceSerializer(spawn_world).data
+        )
+
+
+world_admin_instance_recover = WorldAdminInstanceRecover.as_view()
+
+
 class WorldMapView(WorldValidatorMixin, APIView):
     permission_classes = (
         builder_permissions.IsWorldBuilder,
