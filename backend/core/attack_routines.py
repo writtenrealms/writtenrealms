@@ -16,6 +16,7 @@ class CombatStrike:
     damage_multiplier: float = 1.0
     attack: str = "attack"
     label: str = "Attack"
+    target: str = "target"
 
 
 def _positive_int(value: Any) -> int:
@@ -146,6 +147,7 @@ def _strike_from_routine(
         source=source,
         attack=_slug(strike.get("attack"), default=source or default_attack),
         label=label,
+        target=_slug(strike.get("target"), default="target"),
         weapon_slot=weapon_slot,
         damage_multiplier=_number(
             strike.get("damage_multiplier"),

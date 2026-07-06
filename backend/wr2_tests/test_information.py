@@ -297,6 +297,31 @@ class TestScanCommand(WorldTestCase):
         )
         self.assertEqual(priest["target"]["name"], "Target")
 
+    def test_scan_ignores_stale_combat_when_participants_are_split(self):
+        target = self.create_player("Target", room=self.room)
+        target.in_game = True
+        target.save(update_fields=["in_game"])
+        CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.exit_room,
+            player=target,
+            mob=self.priest,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "scan east")
+
+        message = self._message_by_type(messages, "cmd.scan.success")
+        self.assertIsNotNone(message)
+        self.assertIn("A priest is here.", message["text"])
+        self.assertNotIn("fighting Target", message["text"])
+        priest = next(
+            char for char in message["data"]["chars"]
+            if char["key"] == self.priest.key
+        )
+        self.assertIsNone(priest["target"])
+
 
 class TestWhoCommand(WorldTestCase):
     def _message_by_type(self, messages, message_type):

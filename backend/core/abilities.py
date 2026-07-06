@@ -62,6 +62,7 @@ EFFECT_PROC_PHASES = ("after_damage",)
 EFFECT_STACKING_POLICIES = ("refresh", "independent")
 COMBAT_MODIFIER_PHASES = ("outgoing_damage", "attack_routine")
 ATTACK_ROUTINE_WEAPON_SLOTS = ("weapon", "offhand")
+ATTACK_ROUTINE_STRIKE_TARGETS = ("target", "room.secondary_hostile")
 DAMAGE_ABSORB_CALCS = ("fixed", "percent_max")
 DAMAGE_ABSORB_SCALING_SOURCES = (
     "health_max",
@@ -856,7 +857,13 @@ def _normalize_attack_routine_modifier(value: Any, *, field_name: str) -> dict[s
         if not isinstance(strike, dict):
             raise AbilityValidationError(f"{field_name}.strike must be a mapping.")
         unknown_strike = sorted(
-            set(strike.keys()) - {"source", "weapon_slot", "damage_multiplier", "label"}
+            set(strike.keys()) - {
+                "source",
+                "target",
+                "weapon_slot",
+                "damage_multiplier",
+                "label",
+            }
         )
         if unknown_strike:
             raise AbilityValidationError(
@@ -867,6 +874,12 @@ def _normalize_attack_routine_modifier(value: Any, *, field_name: str) -> dict[s
             normalized_strike["source"] = _coerce_slug(
                 strike.get("source"),
                 field_name=f"{field_name}.strike.source",
+            )
+        if "target" in strike:
+            normalized_strike["target"] = _coerce_choice(
+                strike.get("target", "target"),
+                choices=ATTACK_ROUTINE_STRIKE_TARGETS,
+                field_name=f"{field_name}.strike.target",
             )
         if "weapon_slot" in strike:
             normalized_strike["weapon_slot"] = _coerce_choice(

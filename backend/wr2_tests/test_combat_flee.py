@@ -217,6 +217,70 @@ class TestCombatFlee(WorldTestCase):
         self.assertEqual(flee_message["text"], "You flee east.")
         self.assertEqual(flee_message["data"]["round_id"], f"encounter:{encounter.id}:3")
 
+    def test_flee_finishes_all_active_origin_room_encounters(self):
+        self.world.config.combat_resolution_interval = -1
+        self.world.config.save(update_fields=["combat_resolution_interval"])
+        self.escape_room.type = adv_consts.ROOM_TYPE_ROAD
+        self.escape_room.save(update_fields=["type"])
+        sparabara = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="a sparabara",
+            keywords="sparabara",
+            health=self.stats["attack_power"] * 10,
+            health_max=self.stats["attack_power"] * 10,
+            target_priority=10,
+            fights_back=False,
+        )
+        archer = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="a persian archer",
+            keywords="archer",
+            health=self.stats["attack_power"] * 10,
+            health_max=self.stats["attack_power"] * 10,
+            fights_back=False,
+        )
+        primary_encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=sparabara,
+            status=CombatEncounter.STATUS_ACTIVE,
+            resolution_interval=-1,
+        )
+        secondary_encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=archer,
+            status=CombatEncounter.STATUS_ACTIVE,
+            resolution_interval=-1,
+        )
+
+        dispatch_text_command(self.player.id, "flee")
+        dispatch_text_command(self.player.id, "flee")
+
+        primary_encounter.refresh_from_db()
+        secondary_encounter.refresh_from_db()
+        self.player.refresh_from_db()
+        self.assertEqual(primary_encounter.status, CombatEncounter.STATUS_FINISHED)
+        self.assertEqual(secondary_encounter.status, CombatEncounter.STATUS_FINISHED)
+        self.assertEqual(self.player.room_id, self.escape_room.id)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "scan west")
+
+        scan_messages = self._messages_by_type(messages, "cmd.scan.success")
+        self.assertTrue(scan_messages, messages)
+        scan_message = scan_messages[0]
+        self.assertIn("A sparabara is here.", scan_message["text"])
+        self.assertIn("A persian archer is here.", scan_message["text"])
+        self.assertNotIn("fighting", scan_message["text"])
+        self.assertTrue(
+            all(char.get("target") is None for char in scan_message["data"]["chars"])
+        )
+
     def test_flee_requires_active_combat_and_an_exit(self):
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "flee")

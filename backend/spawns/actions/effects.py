@@ -170,6 +170,17 @@ def refresh_or_add_character_effect(target: Player, effect: dict[str, Any]) -> s
     return "refreshed" if refreshed else "applied"
 
 
+def _effect_has_attack_routine_modifier(effect: dict[str, Any]) -> bool:
+    for primitive in effect.get("primitives") or []:
+        if not isinstance(primitive, dict):
+            continue
+        if primitive.get("type") != "combat_modifier":
+            continue
+        if primitive.get("phase") == "attack_routine":
+            return True
+    return False
+
+
 def advance_character_effect_durations(
     actor: Any,
     *,
@@ -184,7 +195,11 @@ def advance_character_effect_durations(
     changed = not isinstance(original, list) or len(original) != len(effects)
 
     for effect in effects:
-        if current_round_id and effect.get("started_round_id") == current_round_id:
+        if (
+            current_round_id
+            and effect.get("started_round_id") == current_round_id
+            and not _effect_has_attack_routine_modifier(effect)
+        ):
             kept.append(effect)
             continue
 

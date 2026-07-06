@@ -316,7 +316,9 @@ def _try_roam_cohort(
         .order_by("id")
     )
     leader = _cohort_roam_leader(members)
-    if leader is None or leader.id in active_combat_mob_ids:
+    if leader is None:
+        return 0
+    if any(member.id in active_combat_mob_ids for member in members):
         return 0
 
     chance = _mob_roam_chance(leader, world_default_chance=world_default_chance)
@@ -333,7 +335,6 @@ def _try_roam_cohort(
         member
         for member in members
         if member.room_id == origin_room_id
-        and member.id not in active_combat_mob_ids
         and member.roams
         and _roam_target_allows_room(member.roams, destination)
     ]

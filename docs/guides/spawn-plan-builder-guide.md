@@ -236,11 +236,12 @@ When a cohort is due to respawn:
 - Surviving members are not despawned or reset just because another member is
   missing.
 
-On heartbeat roaming, the cohort rolls once using the leader's roam chance. The
-leader picks the direction, and live non-combat members in the leader's current
-room move with the leader when that destination is valid for their path or zone.
-Members that are in combat or already separated stay where they are; the next
-`refill_missing` respawn can restore dead members to the surviving patrol.
+On heartbeat roaming, the cohort rolls once using the leader's roam chance. If
+any live cohort member is in active combat, the whole cohort stays put for that
+heartbeat. Otherwise, the leader picks the direction, and live members in the
+leader's current room move with the leader when that destination is valid for
+their path or zone. Members that are already separated stay where they are; the
+next `refill_missing` respawn can restore dead members to the surviving patrol.
 
 For multiple copies of the same patrol, increase the leader entry's `count`.
 Follower entries targeting the leader are generated once per leader placement.

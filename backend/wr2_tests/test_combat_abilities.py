@@ -166,6 +166,42 @@ class TestCombatAbilities(WorldTestCase):
             ],
         )
 
+    def _cleave_ability(self, *, duration_rounds=1):
+        return self._ability(
+            slug="cleave",
+            name="Cleave",
+            verbs=["cleave"],
+            consumes_primary_action=False,
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "cleave",
+                    "category": "buff",
+                    "target": "self",
+                    "stack_key": "cleave",
+                    "stacking": "refresh",
+                    "duration": {"rounds": duration_rounds},
+                    "primitives": [
+                        {
+                            "type": "combat_modifier",
+                            "phase": "attack_routine",
+                            "attack_routine": {
+                                "extra_mainhand_strikes": 1,
+                                "strike": {
+                                    "source": "cleave",
+                                    "target": "room.secondary_hostile",
+                                    "weapon_slot": "weapon",
+                                    "damage_multiplier": 1,
+                                    "label": "Cleave",
+                                },
+                            },
+                        }
+                    ],
+                    "text": {"label": "Cleave"},
+                }
+            ],
+        )
+
     def _messages_by_type(self, messages, message_type):
         return [
             msg["message"]
@@ -1437,6 +1473,162 @@ class TestCombatAbilities(WorldTestCase):
         dispatch_text_command(self.player.id, "kill rat")
         mob.refresh_from_db()
         self.assertEqual(mob.health, self.stats["attack_power"] * 3)
+
+    def test_cleave_effect_adds_secondary_strike_without_hitting_main_twice(self):
+        self._cleave_ability()
+        self.player.known_abilities = ["cleave"]
+        self.player.save(update_fields=["known_abilities"])
+        main = self._mob(health=self.stats["attack_power"] * 5)
+        secondary = self._mob(health=self.stats["attack_power"] * 5)
+        secondary.name = "Bat"
+        secondary.keywords = "bat"
+        secondary.save(update_fields=["name", "keywords"])
+        CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=main,
+            resolution_interval=-1,
+            initiative_order=self._player_first_initiative(main),
+        )
+        CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=secondary,
+            resolution_interval=-1,
+            initiative_order=self._player_first_initiative(secondary),
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "cleave rat")
+
+        main.refresh_from_db()
+        secondary.refresh_from_db()
+        self.player.refresh_from_db()
+        self.assertEqual(main.health, self.stats["attack_power"] * 4)
+        self.assertEqual(secondary.health, self.stats["attack_power"] * 4)
+        self.assertEqual(self.player.active_effects, [])
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        cleave_attacks = [
+            attack for attack in attacks if attack["data"]["attack"] == "cleave"
+        ]
+        basic_attacks = [
+            attack for attack in attacks if attack["data"]["attack"] == "attack"
+        ]
+        self.assertEqual(cleave_attacks[0]["data"]["target"]["key"], secondary.key)
+        self.assertEqual(cleave_attacks[0]["data"]["damage_taken"], self.stats["attack_power"])
+        self.assertEqual(basic_attacks[0]["data"]["target"]["key"], main.key)
+        self.assertEqual(len(cleave_attacks), 1)
+        self.assertEqual(len(basic_attacks), 1)
+
+    def test_cleave_effect_does_not_add_strike_without_secondary_target(self):
+        self._cleave_ability()
+        self.player.known_abilities = ["cleave"]
+        self.player.save(update_fields=["known_abilities"])
+        main = self._mob(health=self.stats["attack_power"] * 5)
+        CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=main,
+            resolution_interval=-1,
+            initiative_order=self._player_first_initiative(main),
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "cleave rat")
+
+        main.refresh_from_db()
+        self.assertEqual(main.health, self.stats["attack_power"] * 4)
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertEqual(
+            [attack["data"]["attack"] for attack in attacks],
+            ["attack"],
+        )
+
+    def test_cleave_effect_duration_can_span_additional_rounds(self):
+        self._cleave_ability(duration_rounds=2)
+        self.player.known_abilities = ["cleave"]
+        self.player.save(update_fields=["known_abilities"])
+        main = self._mob(health=self.stats["attack_power"] * 6)
+        secondary = self._mob(health=self.stats["attack_power"] * 6)
+        secondary.name = "Bat"
+        secondary.keywords = "bat"
+        secondary.save(update_fields=["name", "keywords"])
+        CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=main,
+            resolution_interval=-1,
+            initiative_order=self._player_first_initiative(main),
+        )
+        CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=secondary,
+            resolution_interval=-1,
+            initiative_order=self._player_first_initiative(secondary),
+        )
+
+        dispatch_text_command(self.player.id, "cleave rat")
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.active_effects[0]["remaining_rounds"], 1)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "kill rat")
+
+        main.refresh_from_db()
+        secondary.refresh_from_db()
+        self.player.refresh_from_db()
+        self.assertEqual(main.health, self.stats["attack_power"] * 4)
+        self.assertEqual(secondary.health, self.stats["attack_power"] * 4)
+        self.assertEqual(self.player.active_effects, [])
+        cleave_attacks = [
+            attack
+            for attack in self._messages_by_type(messages, "notification.combat.attack")
+            if attack["data"]["attack"] == "cleave"
+        ]
+        self.assertEqual(cleave_attacks[0]["data"]["target"]["key"], secondary.key)
+
+    def test_cleave_effect_can_defeat_secondary_target(self):
+        self._cleave_ability()
+        self.player.known_abilities = ["cleave"]
+        self.player.save(update_fields=["known_abilities"])
+        main = self._mob(health=self.stats["attack_power"] * 5)
+        secondary = self._mob(health=self.stats["attack_power"], fights_back=False)
+        secondary.name = "Bat"
+        secondary.keywords = "bat"
+        secondary.save(update_fields=["name", "keywords"])
+        CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=main,
+            resolution_interval=-1,
+            initiative_order=self._player_first_initiative(main),
+        )
+        secondary_encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=secondary,
+            resolution_interval=-1,
+            initiative_order=self._player_first_initiative(secondary),
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "cleave rat")
+
+        self.assertFalse(Mob.objects.filter(pk=secondary.pk).exists())
+        self.assertEqual(
+            CombatEncounter.objects.get(pk=secondary_encounter.pk).status,
+            CombatEncounter.STATUS_FINISHED,
+        )
+        deaths = self._messages_by_type(messages, "notification.death")
+        self.assertEqual(deaths[0]["data"]["deceased"]["key"], secondary.key)
 
     def test_resource_change_effect_ticks_energy_during_following_rounds(self):
         self._ability(

@@ -1015,6 +1015,38 @@ def _finish_encounter(encounter: CombatEncounter) -> None:
         encounter.save(update_fields=update_fields)
 
 
+def _clear_pending_encounter_actions(encounter: CombatEncounter) -> None:
+    if encounter._state.adding:
+        encounter.pending_flee = {}
+        encounter.pending_player_ability = {}
+        encounter.pending_mob_ability = {}
+        return
+
+    update_fields: list[str] = []
+    if encounter.pending_flee:
+        encounter.pending_flee = {}
+        update_fields.append("pending_flee")
+    if encounter.pending_player_ability:
+        encounter.pending_player_ability = {}
+        update_fields.append("pending_player_ability")
+    if encounter.pending_mob_ability:
+        encounter.pending_mob_ability = {}
+        update_fields.append("pending_mob_ability")
+    if update_fields:
+        encounter.save(update_fields=update_fields)
+
+
+def _finish_player_encounters_in_room(*, player: Player, room_id: int) -> None:
+    active_encounters = CombatEncounter.objects.select_for_update().filter(
+        player=player,
+        room_id=room_id,
+        status=CombatEncounter.STATUS_ACTIVE,
+    )
+    for active_encounter in active_encounters:
+        _clear_pending_encounter_actions(active_encounter)
+        _finish_encounter(active_encounter)
+
+
 def _schedule_encounter_resolution(encounter_id: int, delay_seconds: float) -> None:
     if delay_seconds <= 0:
         return
@@ -1209,7 +1241,10 @@ def _complete_flee(
 
     encounter.pending_flee = {}
     encounter.pending_player_ability = {}
-    _finish_encounter(encounter)
+    encounter.pending_mob_ability = {}
+    _finish_player_encounters_in_room(player=player, room_id=origin_room_id)
+    encounter.status = CombatEncounter.STATUS_FINISHED
+    encounter.next_resolution_ts = None
 
     return CombatStepResult(
         actor_key=player.key,
@@ -1249,19 +1284,32 @@ def _advance_flee_preparation(
     ]
 
 
-def _handle_mob_defeated(
+def _append_mob_defeat_events(
     *,
-    encounter: CombatEncounter,
+    encounter: CombatEncounter | None = None,
     player: Player,
     target_mob: Mob,
     room: Room,
     events: list[GameEvent],
-) -> CombatStepResult:
+) -> None:
     corpse_id = _ensure_corpse(target_mob)
     deceased_payload = serialize_char_from_mob(target_mob).model_dump()
     exp_reward = int(target_mob.exp_worth or 0)
     gold_reward = int(target_mob.gold or 0)
-    _finish_encounter(encounter)
+    finished_encounter_ids: set[int] = set()
+    if encounter is not None:
+        _finish_encounter(encounter)
+        if encounter.id:
+            finished_encounter_ids.add(encounter.id)
+    active_encounters = CombatEncounter.objects.select_for_update().filter(
+        mob=target_mob,
+        status=CombatEncounter.STATUS_ACTIVE,
+    )
+    if finished_encounter_ids:
+        active_encounters = active_encounters.exclude(pk__in=finished_encounter_ids)
+    for active_encounter in active_encounters:
+        _finish_encounter(active_encounter)
+
     from spawns.merchants import deactivate_merchant_runtime
 
     deactivate_merchant_runtime(target_mob)
@@ -1364,6 +1412,23 @@ def _handle_mob_defeated(
                 "levels_gained": leveling.levels_gained if leveling else 0,
             },
         )
+    )
+
+
+def _handle_mob_defeated(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    target_mob: Mob,
+    room: Room,
+    events: list[GameEvent],
+) -> CombatStepResult:
+    _append_mob_defeat_events(
+        encounter=encounter,
+        player=player,
+        target_mob=target_mob,
+        room=room,
+        events=events,
     )
     return CombatStepResult(
         actor_key=player.key,
@@ -2599,6 +2664,59 @@ def _execute_output_component(
     return events, result.outcome != "dodged" and result.damage_taken > 0
 
 
+def _secondary_hostile_target(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    target_mob: Mob,
+    room: Room,
+) -> Mob | None:
+    encounters = sorted(
+        _active_faceoff_encounter_queryset(player, room=room, lock=True).exclude(
+            pk=encounter.pk,
+            mob_id=target_mob.id,
+        ),
+        key=_encounter_target_priority_sort_key,
+    )
+    for secondary_encounter in encounters:
+        mob = (
+            Mob.objects.select_for_update()
+            .filter(
+                pk=secondary_encounter.mob_id,
+                room=room,
+                is_pending_deletion=False,
+                health__gt=0,
+            )
+            .first()
+        )
+        if mob and getattr(mob, "attackable", True):
+            return mob
+    return None
+
+
+def _combat_strike_target(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    target_mob: Mob,
+    room: Room,
+    actor: Player | Mob,
+    strike: CombatStrike,
+    default_target: Player | Mob,
+) -> Player | Mob | None:
+    selector = str(getattr(strike, "target", "target") or "target").strip().lower()
+    if selector == "room.secondary_hostile":
+        if not isinstance(actor, Player):
+            return None
+        return _secondary_hostile_target(
+            encounter=encounter,
+            player=player,
+            target_mob=target_mob,
+            room=room,
+        )
+    return default_target
+
+
 def _resolve_periodic_effects(
     *,
     encounter: CombatEncounter,
@@ -3197,19 +3315,45 @@ def _apply_player_primary_turn(
         return PlayerTurnOutcome(events=events, cooldown_exclude=cooldown_exclude)
 
     for strike in resolve_attack_routine(actor=player, target=target_mob, world=player.world):
+        strike_target = _combat_strike_target(
+            encounter=encounter,
+            player=player,
+            target_mob=target_mob,
+            room=room,
+            actor=player,
+            strike=strike,
+            default_target=target_mob,
+        )
+        if strike_target is None:
+            continue
+        is_primary_target = (
+            isinstance(strike_target, Mob)
+            and strike_target.pk == target_mob.pk
+        )
         strike_outcome = _apply_combat_strike(
             encounter=encounter,
             player=player,
             target_mob=target_mob,
             room=room,
             actor=player,
-            target=target_mob,
+            target=strike_target,
             strike=strike,
             round_id=round_id,
         )
         events.extend(strike_outcome.events)
-        if strike_outcome.target_defeated:
+        if is_primary_target and strike_outcome.target_defeated:
             break
+        if (
+            not is_primary_target
+            and isinstance(strike_target, Mob)
+            and strike_outcome.target_defeated
+        ):
+            _append_mob_defeat_events(
+                player=player,
+                target_mob=strike_target,
+                room=room,
+                events=events,
+            )
 
     return PlayerTurnOutcome(
         events=events,
@@ -3306,13 +3450,24 @@ def _apply_mob_primary_turn(
         return MobTurnOutcome(events=events, cooldown_exclude=cooldown_exclude)
 
     for strike in resolve_attack_routine(actor=target_mob, target=player, world=player.world):
+        strike_target = _combat_strike_target(
+            encounter=encounter,
+            player=player,
+            target_mob=target_mob,
+            room=room,
+            actor=target_mob,
+            strike=strike,
+            default_target=player,
+        )
+        if strike_target is None:
+            continue
         strike_outcome = _apply_combat_strike(
             encounter=encounter,
             player=player,
             target_mob=target_mob,
             room=room,
             actor=target_mob,
-            target=player,
+            target=strike_target,
             strike=strike,
             round_id=round_id,
         )

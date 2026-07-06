@@ -114,8 +114,9 @@ For ability progression, see
 when a world should be non-combat.
 
 For cohort patrols, `default_roam_chance` is rolled once for the cohort leader
-on each heartbeat. Followers move with the leader when they are present and not
-in combat.
+on each heartbeat. If any live cohort member is in active combat, the cohort
+does not roam on that heartbeat; otherwise, present followers move with the
+leader when the destination is valid for their roaming target.
 
 For combat formulas and encounter pacing, see
 [combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md).

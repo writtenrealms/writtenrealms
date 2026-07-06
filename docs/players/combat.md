@@ -61,6 +61,8 @@ the next hostile takes over after that target dies. Unset priority is `0`, so
 positive values stand ahead of default mobs and negative values stand behind
 them. Explicit opener abilities such as Charge can temporarily override that
 priority by making the chosen opener target your current faceoff target.
+Some supplemental abilities can also strike a secondary active hostile in the
+same room while your normal primary attack continues against the faceoff target.
 
 ## Leaving Combat
 
@@ -68,3 +70,7 @@ Combat movement and flee behavior is still evolving. The current design goal is
 that ordinary hostile contact starts a fight without granting either side a free
 opener, while explicit opener actions such as charge commit you to combat and
 grant their first-action priority.
+
+When `flee` succeeds, you leave the room and all active hostile encounters from
+that room end for you. Mobs that remain in the room are no longer shown as
+fighting you on nearby scans unless they later reach and engage you again.

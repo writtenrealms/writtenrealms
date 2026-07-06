@@ -1,4 +1,4 @@
-from builders.models import Path, PathRoom
+from builders.models import Path, PathRoom, SpawnPlan, SpawnPlanRun, SpawnPlacement
 from config import constants as api_consts
 from spawns.models import CombatEncounter, Mob
 from spawns.tasks import run_mob_roaming
@@ -198,3 +198,79 @@ class TestMobRoaming(WorldTestCase):
         mob.refresh_from_db()
         self.assertEqual(roamed, 0)
         self.assertEqual(mob.room_id, self.room.id)
+
+    def test_cohort_roaming_skips_whole_cohort_when_follower_is_in_active_combat(self):
+        destination = self._room(name="East Room", x=1, y=0)
+        self.room.east = destination
+        self.room.save(update_fields=["east"])
+        plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug="sparring-patrols",
+            name="Sparring Patrols",
+        )
+        run = SpawnPlanRun.objects.create(
+            spawn_world=self.spawn_world,
+            plan=plan,
+            seed="test",
+        )
+        leader_placement = SpawnPlacement.objects.create(
+            run=run,
+            entry_slug="sparabaras",
+            slot_index=0,
+            room=self.room,
+            source_type="mobdefinition",
+            source_slug="sparabara",
+            state={
+                "cohort_slug": "sparring-path-patrol",
+                "cohort_role": "leader",
+            },
+        )
+        follower_placement = SpawnPlacement.objects.create(
+            run=run,
+            entry_slug="archers",
+            slot_index=0,
+            room=self.room,
+            source_type="mobdefinition",
+            source_slug="persian-archer",
+            parent_entry_slug="sparabaras",
+            parent_slot_index=0,
+            state={
+                "cohort_slug": "sparring-path-patrol",
+                "cohort_role": "follower",
+            },
+        )
+        group_id = "cohort:sparring-path-patrol:0"
+        leader = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="a sparabara",
+            keywords="sparabara",
+            roams=self.zone,
+            group_id=group_id,
+            spawn_placement=leader_placement,
+        )
+        follower = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="a persian archer",
+            keywords="archer",
+            roams=self.zone,
+            group_id=group_id,
+            spawn_placement=follower_placement,
+        )
+        CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=follower,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+
+        roamed = run_mob_roaming(active_combat_mob_ids={follower.id})
+
+        leader.refresh_from_db()
+        follower.refresh_from_db()
+        self.assertEqual(roamed, 0)
+        self.assertEqual(leader.room_id, self.room.id)
+        self.assertEqual(follower.room_id, self.room.id)

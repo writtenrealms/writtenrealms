@@ -310,6 +310,11 @@ class ScanAction:
             CombatEncounter.objects.filter(
                 room=exit_room,
                 status=CombatEncounter.STATUS_ACTIVE,
+                player__room=exit_room,
+                player__in_game=True,
+                mob__room=exit_room,
+                mob__is_pending_deletion=False,
+                mob__health__gt=0,
             )
             .select_related("player", "mob")
             .order_by("id")

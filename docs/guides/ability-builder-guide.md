@@ -220,6 +220,56 @@ spec:
         multiplier: 1.5
 ```
 
+## Attack Routine Targets
+
+Attack-routine modifiers can add strikes during a character's normal attack.
+Use `strike.target: room.secondary_hostile` when a temporary effect should make
+the caster's attacks also hit another active hostile mob in the same room. The
+base attack still resolves against the main faceoff target, and the extra strike
+only happens when a secondary active hostile exists:
+
+```yaml
+kind: ability
+metadata:
+  slug: cleave
+  name: Cleave
+spec:
+  command:
+    verbs: [cleave]
+  action_type: primary
+  consumes_primary_action: false
+  target:
+    type: hostile
+    default: current_target
+  cooldown:
+    rounds: 6
+  components:
+    - type: effect
+      effect: cleave
+      category: buff
+      target: self
+      stack_key: cleave
+      stacking: refresh
+      duration:
+        rounds: 1
+      primitives:
+        - type: combat_modifier
+          phase: attack_routine
+          attack_routine:
+            extra_mainhand_strikes: 1
+            strike:
+              source: cleave
+              target: room.secondary_hostile
+              weapon_slot: weapon
+              damage_multiplier: 1
+              label: Cleave
+```
+
+Attack-routine duration counts the round in which the effect is applied. A
+1-round Cleave applies to the current round's attack when the ability does not
+consume the primary action; a 2-round Cleave applies to the current round and
+the next combat round.
+
 ## Costs
 
 `spec.cost.resource` supports `health`, `energy`, and `stamina`.

@@ -486,6 +486,7 @@ spec:
             extra_mainhand_strikes: 1
             strike:
               source: battle-trance
+              target: room.secondary_hostile
               weapon_slot: weapon
               damage_multiplier: 1
 """
@@ -502,6 +503,7 @@ spec:
                     "extra_mainhand_strikes": 1,
                     "strike": {
                         "source": "battle-trance",
+                        "target": "room.secondary_hostile",
                         "weapon_slot": "weapon",
                         "damage_multiplier": 1.0,
                     },
