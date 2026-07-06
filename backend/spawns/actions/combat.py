@@ -5,7 +5,7 @@ from datetime import timedelta
 import logging
 import math
 import random
-from typing import Any
+from typing import Any, Iterable
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
@@ -3875,7 +3875,11 @@ class ScanRoomAggroAction:
         _schedule_encounter_resolution(encounter.id, interval)
         return ActionResult(events=events)
 
-    def execute(self, player_id: int) -> ActionResult:
+    def execute(self, player_id: int, mob_ids: Iterable[int] | None = None) -> ActionResult:
+        limited_mob_ids = set(mob_ids) if mob_ids is not None else None
+        if limited_mob_ids is not None and not limited_mob_ids:
+            return ActionResult()
+
         with transaction.atomic():
             player = (
                 Player.objects.select_for_update()
@@ -3899,6 +3903,7 @@ class ScanRoomAggroAction:
             active_mob_ids = set(
                 CombatEncounter.objects.select_for_update()
                 .filter(
+                    world=player.world,
                     room=room,
                     status=CombatEncounter.STATUS_ACTIVE,
                     mob_id__isnull=False,
@@ -3911,9 +3916,11 @@ class ScanRoomAggroAction:
                     "faction_assignments__faction",
                     "template__faction_assignments__faction",
                 )
-                .filter(room=room, is_pending_deletion=False)
+                .filter(world=player.world, room=room, is_pending_deletion=False)
                 .order_by("id")
             )
+            if limited_mob_ids is not None:
+                mobs = mobs.filter(id__in=limited_mob_ids)
             aggro_mobs: list[Mob] = []
             for mob in mobs:
                 if mob.id in active_mob_ids or not self._can_aggro(mob):

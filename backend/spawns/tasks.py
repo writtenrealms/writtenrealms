@@ -239,11 +239,53 @@ def _publish_mob_roam_events(
         publish_events(events, actor_key=mob.key)
 
 
+def _record_roaming_aggro_target(
+    aggro_mob_ids_by_world_room: dict[tuple[int, int], set[int]] | None,
+    *,
+    world_id: int,
+    room_id: int,
+    mob_id: int,
+) -> None:
+    if aggro_mob_ids_by_world_room is None:
+        return
+    aggro_mob_ids_by_world_room.setdefault((world_id, room_id), set()).add(mob_id)
+
+
+def _publish_roaming_aggro(
+    aggro_mob_ids_by_world_room: dict[tuple[int, int], set[int]]
+) -> None:
+    if not aggro_mob_ids_by_world_room:
+        return
+
+    from spawns.actions.combat import ScanRoomAggroAction
+
+    world_ids = {world_id for world_id, _ in aggro_mob_ids_by_world_room.keys()}
+    room_ids = {room_id for _, room_id in aggro_mob_ids_by_world_room.keys()}
+    aggro_action = ScanRoomAggroAction()
+    players = (
+        Player.objects.filter(
+            world_id__in=world_ids,
+            room_id__in=room_ids,
+            in_game=True,
+        )
+        .only("id", "world_id", "room_id")
+        .order_by("id")
+    )
+    for player in players:
+        mob_ids = aggro_mob_ids_by_world_room.get((player.world_id, player.room_id))
+        if not mob_ids:
+            continue
+        result = aggro_action.execute(player.id, mob_ids=mob_ids)
+        if result.events:
+            publish_events(result.events, actor_key=player.key)
+
+
 def _try_roam_mob(
     mob: Mob,
     *,
     world_default_chance: int,
     event_group: str | None = None,
+    aggro_mob_ids_by_world_room: dict[tuple[int, int], set[int]] | None = None,
 ) -> bool:
     chance = _mob_roam_chance(mob, world_default_chance=world_default_chance)
     if chance <= 0 or random.randint(1, 100) > chance:
@@ -263,6 +305,12 @@ def _try_roam_mob(
         destination_room_id=destination.id,
         direction=direction,
         event_group=event_group,
+    )
+    _record_roaming_aggro_target(
+        aggro_mob_ids_by_world_room,
+        world_id=mob.world_id,
+        room_id=destination.id,
+        mob_id=mob.id,
     )
     return True
 
@@ -296,6 +344,7 @@ def _try_roam_cohort(
     world_default_chance: int,
     active_combat_mob_ids: set[int],
     event_group: str | None = None,
+    aggro_mob_ids_by_world_room: dict[tuple[int, int], set[int]] | None = None,
 ) -> int:
     group_id = _mob_roam_group_id(mob)
     if not group_id:
@@ -303,6 +352,7 @@ def _try_roam_cohort(
             mob,
             world_default_chance=world_default_chance,
             event_group=event_group,
+            aggro_mob_ids_by_world_room=aggro_mob_ids_by_world_room,
         ) else 0
 
     members = list(
@@ -351,6 +401,12 @@ def _try_roam_cohort(
             direction=direction,
             event_group=event_group,
         )
+        _record_roaming_aggro_target(
+            aggro_mob_ids_by_world_room,
+            world_id=member.world_id,
+            room_id=destination.id,
+            mob_id=member.id,
+        )
     return len(movable_members)
 
 
@@ -390,6 +446,7 @@ def run_mob_roaming(*, active_combat_mob_ids: set[int] | None = None) -> int:
     )
     heartbeat_event_group = f"heartbeat.mob_roaming.{uuid.uuid4().hex}"
     processed_group_ids: set[str] = set()
+    aggro_mob_ids_by_world_room: dict[tuple[int, int], set[int]] = {}
     for mob in mobs_qs.iterator(chunk_size=200):
         if mob.id in active_combat_mob_ids:
             continue
@@ -404,13 +461,16 @@ def run_mob_roaming(*, active_combat_mob_ids: set[int] | None = None) -> int:
                 world_default_chance=world_default_chance,
                 active_combat_mob_ids=active_combat_mob_ids,
                 event_group=heartbeat_event_group,
+                aggro_mob_ids_by_world_room=aggro_mob_ids_by_world_room,
             )
         elif _try_roam_mob(
             mob,
             world_default_chance=world_default_chance,
             event_group=heartbeat_event_group,
+            aggro_mob_ids_by_world_room=aggro_mob_ids_by_world_room,
         ):
             roamed_count += 1
+    _publish_roaming_aggro(aggro_mob_ids_by_world_room)
     return roamed_count
 
 

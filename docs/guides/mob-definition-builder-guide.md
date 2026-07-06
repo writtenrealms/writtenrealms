@@ -74,7 +74,9 @@ values sit behind default-priority mobs. This is useful for encounters such as a
 Use `roam_chance` to override the world's default ambient roam chance for that
 mob. A value of `0` means "use the world default". Mobs only roam when the
 loader or spawn plan gives them a zone or path target; mobs loaded into a fixed
-room stay static.
+room stay static. If a roaming mob enters a room with an eligible player, its
+normal `aggression` rules are checked just as they are when the player enters
+the mob's room.
 
 ## Factions
 

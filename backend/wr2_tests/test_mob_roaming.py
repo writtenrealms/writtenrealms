@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from builders.models import Path, PathRoom, SpawnPlan, SpawnPlanRun, SpawnPlacement
 from config import constants as api_consts
 from spawns.models import CombatEncounter, Mob
@@ -99,6 +101,77 @@ class TestMobRoaming(WorldTestCase):
         group = groups.pop()
         self.assertIsNotNone(group)
         self.assertTrue(group.startswith("heartbeat.mob_roaming."))
+
+    def test_roaming_hostile_mobs_aggro_players_in_destination_room(self):
+        self.world.config.combat_resolution_interval = 1.5
+        self.world.config.save(update_fields=["combat_resolution_interval"])
+        destination = self._room(name="East Room", x=1, y=0)
+        self.room.east = destination
+        self.room.save(update_fields=["east"])
+        self.player.room = destination
+        self.player.in_game = True
+        self.player.health = 30
+        self.player.save(update_fields=["room", "in_game", "health"])
+        archer = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="a persian archer",
+            keywords="persian archer",
+            health=20,
+            health_max=20,
+            attack_power=4,
+            aggression=api_consts.MOB_AGGRESSION_ALL,
+            target_priority=-1,
+            roams=self.zone,
+        )
+        sparabara = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="a sparabara",
+            keywords="sparabara",
+            health=20,
+            health_max=20,
+            attack_power=4,
+            aggression=api_consts.MOB_AGGRESSION_ALL,
+            target_priority=1,
+            roams=self.zone,
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async") as schedule_mock:
+            with self.captureOnCommitCallbacks(execute=True):
+                with capture_game_messages() as messages:
+                    roamed = run_mob_roaming()
+
+        archer.refresh_from_db()
+        sparabara.refresh_from_db()
+        self.assertEqual(roamed, 2)
+        self.assertEqual(archer.room_id, destination.id)
+        self.assertEqual(sparabara.room_id, destination.id)
+        active_encounters = CombatEncounter.objects.filter(
+            player=self.player,
+            mob__in=[archer, sparabara],
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        self.assertEqual(active_encounters.count(), 2)
+        self.assertEqual(schedule_mock.call_count, 2)
+
+        engage_messages = [
+            msg["message"]
+            for msg in messages
+            if msg["player_key"] == self.player.key
+            and msg["message"].get("type") == "cmd.kill.success"
+        ]
+        self.assertEqual(len(engage_messages), 2)
+        self.assertEqual(
+            {message["data"]["target"]["key"] for message in engage_messages},
+            {archer.key, sparabara.key},
+        )
+        self.assertTrue(
+            all(
+                message["data"]["actor"]["target"]["key"] == sparabara.key
+                for message in engage_messages
+            )
+        )
 
     def test_room_loaded_mob_without_roams_target_stays_static(self):
         destination = self._room(name="East Room", x=1, y=0)
