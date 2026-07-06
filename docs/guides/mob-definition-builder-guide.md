@@ -132,6 +132,83 @@ For weighted spawn-plan traits and compatibility notes for the older draft name
 `affixes`, see
 [mob-trait-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-trait-builder-guide.md).
 
+## Loot
+
+Use `loot` when every spawned copy of a mob definition should be able to drop
+the same items. Loot rolls when the mob dies, and successful drops are placed
+inside the corpse.
+
+Each `loot.entries` row is an independent roll. Use multiple entries when the
+mob should drop one item from one group and one item from another group.
+
+```yaml
+kind: mobdefinition
+metadata:
+  slug: road-bandit
+  name: a road bandit
+spec:
+  type: humanoid
+  health_max: 42
+  loot:
+    entries:
+      - slug: weapon-drop
+        probability: 100
+        source_pool:
+          - ref: itemdefinition.rusty-sword
+            weight: 3
+          - ref: itemdefinition.chipped-axe
+            weight: 2
+          - ref: itemdefinition.hunting-knife
+            weight: 2
+          - ref: itemdefinition.war-club
+            weight: 1
+          - ref: itemdefinition.short-spear
+            weight: 1
+
+      - slug: charm-drop
+        probability: 100
+        source_pool:
+          - ref: itemdefinition.bone-charm
+            weight: 3
+          - ref: itemdefinition.river-stone
+            weight: 1
+```
+
+The example above drops one item from the weapon pool and one item from the
+charm pool. `probability` is a percent chance for that entry to roll at all.
+`weight` only chooses between options inside a pool.
+
+A loot entry can also point at a fixed item definition or an item bundle:
+
+```yaml
+loot:
+  entries:
+    - slug: rat-tail
+      source: itemdefinition.rat-tail
+      probability: 75
+      quantity:
+        min: 1
+        max: 2
+    - slug: scrap-drop
+      source: itembundle.cave-rat-scraps
+      probability: 25
+```
+
+Use `conditions` for state-aware drops. Conditions use the shared WR2 condition
+system.
+
+```yaml
+loot:
+  entries:
+    - slug: tide-pearl
+      source: itemdefinition.tide-pearl
+      probability: 20
+      conditions:
+        eq:
+          - state.world.tide
+          - high
+```
+
 ## Fixed Attribute Mobs
 
 Use `attributes` for world-defined attributes such as `strength`,

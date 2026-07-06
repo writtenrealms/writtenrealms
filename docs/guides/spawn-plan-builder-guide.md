@@ -76,6 +76,49 @@ source_pool:
 Weights are relative. A weight of `70` is not a percent by itself; it means
 that entry is 70 parts of the total pool weight.
 
+## Spawn-Specific Loot
+
+Mob definitions can define loot that applies to every copy of that mob. A
+spawn-plan mob entry can add or replace loot for mobs produced by that
+particular entry.
+
+```yaml
+kind: spawnplan
+metadata:
+  slug: sewer-population
+  name: Sewer Population
+spec:
+  zone: zone@1
+  entries:
+    - slug: sewer-rats
+      source: mobdefinition.cave-rat
+      target:
+        path: path@2
+      count: 6
+      loot:
+        inherit_definition: true
+        entries:
+          - slug: sewer-key
+            source: itemdefinition.rusty-sewer-key
+            probability: 5
+```
+
+`inherit_definition` defaults to `true`, so the mob keeps its definition loot
+and also gets the spawn-entry loot. Set it to `false` when this spawn-plan
+version should use only the entry loot:
+
+```yaml
+loot:
+  inherit_definition: false
+  entries:
+    - slug: event-token
+      source: itemdefinition.event-token
+      probability: 100
+```
+
+Spawn-entry loot uses the same `entries`, `source`, `source_pool`,
+`probability`, `quantity`, and `conditions` fields as mob-definition loot.
+
 ## Targets
 
 A target says where the spawned copy should appear.

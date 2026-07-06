@@ -2,7 +2,7 @@ import yaml
 
 from django.urls import reverse
 
-from builders.models import MobDefinition, MobTemplate, Path, PathRoom, SpawnEntry, SpawnPlan, SpawnPlacement, SpawnPlanRun
+from builders.models import ItemDefinition, MobDefinition, MobTemplate, Path, PathRoom, SpawnEntry, SpawnPlan, SpawnPlacement, SpawnPlanRun
 from config import constants as adv_consts
 from spawns.loading import run_loaders
 from spawns.models import Mob
@@ -720,6 +720,50 @@ class TestSpawnPlanRuntime(WorldTestCase):
         self.assertEqual(placement.entry_slug, self.entry.slug)
         self.assertEqual(placement.room, self.room)
         self.assertEqual([trait["key"] for trait in placement.traits], ["sturdy", "armored"])
+
+    def test_world_start_merges_definition_and_spawn_entry_loot(self):
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="training-token",
+            name="a training token",
+        )
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="patrol-badge",
+            name="a patrol badge",
+        )
+        self.mob_definition.loot = {
+            "entries": [
+                {
+                    "slug": "definition-token",
+                    "probability": 100,
+                    "quantity": 1,
+                    "source": "itemdefinition.training-token",
+                }
+            ]
+        }
+        self.mob_definition.save(update_fields=["loot"])
+        self.entry.loot = {
+            "inherit_definition": True,
+            "entries": [
+                {
+                    "slug": "entry-badge",
+                    "probability": 100,
+                    "quantity": 1,
+                    "source": "itemdefinition.patrol-badge",
+                }
+            ],
+        }
+        self.entry.save(update_fields=["loot"])
+        spawn_world = self.world.create_spawn_world()
+
+        WorldSmith(spawn_world).start()
+
+        mob = Mob.objects.get(world=spawn_world, definition=self.mob_definition)
+        self.assertEqual(
+            [entry["slug"] for entry in mob.loot["entries"]],
+            ["definition-token", "entry-badge"],
+        )
 
     def test_world_start_resolves_path_ref_targets(self):
         path = Path.objects.create(

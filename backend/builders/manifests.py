@@ -19,6 +19,7 @@ from builders.item_definitions import (
     normalize_attribute_map,
     normalize_item_randomization,
 )
+from builders.loot_tables import normalize_loot_table
 from builders.mob_definitions import mob_definition_property_fields
 from builders.models import (
     AbilityDefinition,
@@ -334,6 +335,7 @@ _MOB_DEFINITION_SPEC_FIELDS = (
     "attributes",
     "randomization",
     "traits",
+    "loot",
     "combat",
     "factions",
     "merchant",
@@ -1276,6 +1278,8 @@ def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[st
     spec["randomization"] = mob_definition.randomization or {}
     if mob_definition.traits:
         spec["traits"] = mob_definition.traits or []
+    if mob_definition.loot:
+        spec["loot"] = mob_definition.loot or {}
     factions = faction_assignments_to_manifest_spec(mob_definition)
     if factions:
         spec["factions"] = factions
@@ -1328,6 +1332,7 @@ def serialize_mob_definition_payload(mob_definition: MobDefinition) -> dict[str,
         "base_properties": mob_definition.base_properties or {},
         "attributes": mob_definition.attributes or {},
         "randomization": mob_definition.randomization or {},
+        "loot": mob_definition.loot or {},
         "factions": faction_assignments_to_manifest_spec(mob_definition),
         "combat_abilities": mob_definition.combat_abilities or [],
         "attackable": bool(mob_definition.attackable),
@@ -3209,6 +3214,16 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
     except ValueError as exc:
         raise serializers.ValidationError(str(exc))
 
+    loot = (
+        normalize_loot_table(
+            spec_patch.get("loot"),
+            world=world,
+            field_name="spec.loot",
+        )
+        if "loot" in spec_patch
+        else dict(existing.loot or {}) if existing else {}
+    )
+
     return {
         "description": _coerce_text(
             spec_patch.get(
@@ -3243,6 +3258,7 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         "attributes": attributes,
         "randomization": randomization,
         "traits": traits,
+        "loot": loot,
         "combat_abilities": combat_abilities,
         "attackable": attackable,
         "merchant_profile": merchant_profile,

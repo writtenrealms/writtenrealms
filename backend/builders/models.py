@@ -441,6 +441,7 @@ class MobDefinition(AdventBaseModel):
     attributes = models.JSONField(default=dict, blank=True)
     randomization = models.JSONField(default=dict, blank=True)
     traits = models.JSONField(default=list, blank=True)
+    loot = models.JSONField(default=dict, blank=True)
     combat_abilities = models.JSONField(default=list, blank=True)
     attackable = models.BooleanField(default=True)
     merchant_profile = models.ForeignKey(
@@ -924,6 +925,7 @@ class SpawnEntry(AdventBaseModel):
     count = models.JSONField(default=dict, blank=True)
     placement = models.JSONField(default=dict, blank=True)
     traits = models.JSONField(default=dict, blank=True)
+    loot = models.JSONField(default=dict, blank=True)
     conditions = models.JSONField(default=dict, blank=True)
 
     class Meta(AdventBaseModel.Meta):

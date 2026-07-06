@@ -30,6 +30,7 @@ from builders.models import (
     SpawnPlan,
     Trigger,
 )
+from builders.loot_tables import normalize_loot_table
 from config import constants as adv_consts
 from core.condition_dsl import validate_condition_payload
 from core.mob_traits import normalize_trait_table
@@ -653,6 +654,8 @@ def _serialize_spawn_entry(entry: SpawnEntry) -> dict[str, Any]:
         data["placement"] = placement
     if entry.traits:
         data["traits"] = copy.deepcopy(entry.traits)
+    if entry.loot:
+        data["loot"] = copy.deepcopy(entry.loot)
     if entry.conditions:
         data["conditions"] = copy.deepcopy(entry.conditions)
     return data
@@ -2371,6 +2374,12 @@ def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tupl
                 _entry_traits_spec(entry_spec, field_name=entry_field),
                 field_name=f"{entry_field}.traits",
             ),
+            "loot": normalize_loot_table(
+                entry_spec.get("loot", {}),
+                world=world,
+                field_name=f"{entry_field}.loot",
+                allow_inherit_definition=True,
+            ),
             "conditions": entry_conditions,
         })
 
@@ -2407,6 +2416,7 @@ def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tupl
                 "count",
                 "placement",
                 "traits",
+                "loot",
                 "conditions",
             ):
                 setattr(entry, field_name, normalized[field_name])

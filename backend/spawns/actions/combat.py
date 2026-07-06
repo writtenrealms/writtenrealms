@@ -20,6 +20,7 @@ from core.condition_dsl import ConditionContext, evaluate_condition, resolve_pat
 from core.factions import faction_is_core
 from core.leveling import ExperienceGrant, apply_experience
 from core.world_config import inherited_system_config
+from builders.loot_tables import roll_mob_loot
 from builders.models import AbilityDefinition
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.effects import advance_character_effect_durations, component_targets_character_effect
@@ -1440,6 +1441,13 @@ def _append_mob_defeat_events(
     from spawns.merchants import deactivate_merchant_runtime
 
     deactivate_merchant_runtime(target_mob)
+    corpse = Item.objects.get(pk=corpse_id)
+    roll_mob_loot(
+        mob=target_mob,
+        corpse=corpse,
+        killer=player,
+        room=room,
+    )
     target_mob.delete()
 
     reward_update_fields: list[str] = []

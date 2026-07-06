@@ -4,7 +4,7 @@ import yaml
 from django.contrib.contenttypes.models import ContentType
 from rest_framework.reverse import reverse
 
-from builders.models import AbilityDefinition, Loader, MobDefinition, Rule
+from builders.models import AbilityDefinition, ItemDefinition, Loader, MobDefinition, Rule
 from config import constants as adv_consts
 from spawns.loading import LoaderRun
 from spawns.models import Mob
@@ -257,6 +257,77 @@ spec:
                 "exploder": "mob_definition",
             },
         )
+
+    def test_apply_mob_definition_manifest_accepts_loot_source_pools(self):
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="rusty-sword",
+            name="a rusty sword",
+        )
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="chipped-axe",
+            name="a chipped axe",
+        )
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="bone-charm",
+            name="a bone charm",
+        )
+        manifest = f"""
+kind: mobdefinition
+metadata:
+  world: world.{self.world.id}
+  slug: scavenger
+  name: a scavenger
+spec:
+  type: humanoid
+  health_max: 10
+  loot:
+    entries:
+      - slug: weapon-drop
+        probability: 100
+        source_pool:
+          - ref: itemdefinition.rusty-sword
+            weight: 5
+          - ref: itemdefinition.chipped-axe
+            weight: 1
+      - slug: charm-drop
+        source: itemdefinition.bone-charm
+        quantity:
+          min: 1
+          max: 1
+        conditions:
+          always: true
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        definition = MobDefinition.objects.get(world=self.world, slug="scavenger")
+        self.assertEqual(
+            definition.loot,
+            {
+                "entries": [
+                    {
+                        "slug": "weapon-drop",
+                        "probability": 100,
+                        "quantity": 1,
+                        "source_pool": [
+                            {"ref": "itemdefinition.rusty-sword", "weight": 5},
+                            {"ref": "itemdefinition.chipped-axe", "weight": 1},
+                        ],
+                    },
+                    {
+                        "slug": "charm-drop",
+                        "probability": 100,
+                        "quantity": {"min": 1, "max": 1},
+                        "conditions": {"always": True},
+                        "source": "itemdefinition.bone-charm",
+                    },
+                ],
+            },
+        )
+        self.assertEqual(resp.data["mob_definition"]["manifest"]["spec"]["loot"], definition.loot)
 
     def test_apply_mob_definition_manifest_normalizes_aggressive_alias(self):
         manifest = f"""

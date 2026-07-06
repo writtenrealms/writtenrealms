@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from django.db.models import NOT_PROVIDED
@@ -220,6 +221,7 @@ def spawn_mob_from_definition(
         definition=definition,
         definition_slug_snapshot=definition.slug,
         roll_metadata=roll_metadata,
+        loot=copy.deepcopy(definition.loot or {}),
         attackable=definition.attackable,
         health=mob_fields.get("health_max") or 1,
         stamina=mob_fields.get("stamina_max") or 0,

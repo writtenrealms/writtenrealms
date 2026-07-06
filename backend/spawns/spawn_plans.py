@@ -24,6 +24,7 @@ from builders.models import (
     SpawnPlan,
     SpawnPlanRun,
 )
+from builders.loot_tables import merge_loot_tables
 from config import constants as adv_consts
 from core.condition_dsl import ConditionContext, evaluate_condition
 from core.mob_traits import (
@@ -77,6 +78,7 @@ def _plan_spec_hash(plan: SpawnPlan) -> str:
             "count": entry.count,
             "placement": entry.placement,
             "traits": entry.traits,
+            "loot": entry.loot,
             "conditions": entry.conditions,
         }
         for entry in plan.entries.all().order_by("order", "created_ts", "id")
@@ -802,6 +804,7 @@ def _materialize_placement(*, placement: SpawnPlacement, spawn_world: World):
     source = _placement_source(placement)
     if source is None:
         return []
+    entry = placement.run.plan.entries.filter(slug=placement.entry_slug).first()
     target = placement.room
     if placement.parent_entry_slug:
         parent_target = _parent_instance(placement=placement, spawn_world=spawn_world)
@@ -828,6 +831,11 @@ def _materialize_placement(*, placement: SpawnPlacement, spawn_world: World):
         group_id = _placement_group_id(placement)
         if group_id:
             spawned.group_id = group_id
+        if entry is not None:
+            spawned.loot = merge_loot_tables(
+                spawned.loot if isinstance(spawned.loot, dict) else {},
+                entry.loot if isinstance(entry.loot, dict) else {},
+            )
         _apply_spawn_origin_metadata(spawned, placement)
         placement_trait_instances = trait_instances(
             list(placement.traits or []),
@@ -842,6 +850,7 @@ def _materialize_placement(*, placement: SpawnPlacement, spawn_world: World):
         update_fields = [
             "spawn_placement",
             "roll_metadata",
+            "loot",
             "trait_instances",
             *modifier_fields,
             "modified_ts",

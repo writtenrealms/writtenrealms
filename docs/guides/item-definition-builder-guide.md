@@ -290,6 +290,10 @@ spec:
 `weight` controls which entry is chosen relative to the other entries.
 `probability` controls whether that entry is eligible at all.
 
+Item bundles can be used anywhere a loot source accepts `itembundle.<slug>`.
+Use bundles when several mobs or spawn plans should reuse the same weighted item
+choice.
+
 ## Loading And Granting Item Definitions
 
 After applying an item definition manifest, builders can test it with `/load`:
