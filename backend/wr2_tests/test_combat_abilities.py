@@ -1310,6 +1310,138 @@ class TestCombatAbilities(WorldTestCase):
         effect_messages = self._messages_by_type(messages, "notification.combat.effect")
         self.assertTrue(any("stunned" in msg["text"] for msg in effect_messages))
 
+    def test_dot_application_reports_actor_target_and_room_text(self):
+        self._ability(
+            slug="wound",
+            name="Wound",
+            verbs=["wound"],
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "dot",
+                    "duration": {"rounds": 2},
+                    "tick": {
+                        "every_rounds": 1,
+                        "component": {
+                            "type": "damage",
+                            "profile": "basic_physical",
+                            "overrides": {"multiplier": 1},
+                            "text": {"label": "Wound"},
+                        },
+                    },
+                    "apply": "on_resolve",
+                    "text": {"label": "Wound"},
+                }
+            ],
+        )
+        self.player.known_abilities = ["wound"]
+        self.player.save(update_fields=["known_abilities"])
+        watcher = self.create_player(
+            "Watcher",
+            user=self.create_user("watcher@example.com"),
+            room=self.room,
+        )
+        watcher.in_game = True
+        watcher.save(update_fields=["in_game"])
+        mob = self._mob()
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "wound rat")
+
+        actor_effects = self._messages_by_type(messages, "notification.combat.effect")
+        actor_effect = next(msg for msg in actor_effects if msg["data"]["label"] == "Wound")
+        watcher_effect = next(
+            msg["message"]
+            for msg in messages
+            if msg["player_key"] == watcher.key
+            and msg["message"].get("type") == "notification.combat.effect"
+            and msg["message"]["data"].get("label") == "Wound"
+        )
+        self.assertEqual(actor_effect["text"], "You apply Wound on Rat.")
+        self.assertEqual(watcher_effect["text"], "Joe applies Wound on Rat.")
+        self.assertEqual(actor_effect["data"]["actor"]["key"], self.player.key)
+        self.assertEqual(actor_effect["data"]["target"]["key"], mob.key)
+        self.assertEqual(actor_effect["data"]["effect"], "dot")
+
+    def test_mob_dot_application_reports_target_and_room_text(self):
+        self._ability(
+            slug="wound",
+            name="Wound",
+            verbs=["wound"],
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "dot",
+                    "duration": {"rounds": 2},
+                    "tick": {
+                        "every_rounds": 1,
+                        "component": {
+                            "type": "damage",
+                            "profile": "basic_physical",
+                            "overrides": {"multiplier": 1},
+                            "text": {"label": "Wound"},
+                        },
+                    },
+                    "apply": "on_resolve",
+                    "text": {"label": "Wound"},
+                }
+            ],
+        )
+        watcher = self.create_player(
+            "Watcher",
+            user=self.create_user("watcher@example.com"),
+            room=self.room,
+        )
+        watcher.in_game = True
+        watcher.save(update_fields=["in_game"])
+        mob_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="cave-shaman",
+            name="a cave shaman",
+            keywords="cave shaman",
+            base_properties={
+                "level": 1,
+                "health_max": 200,
+                "attack_power": 7,
+                "weapon_damage": 0,
+                "fights_back": True,
+            },
+            combat_abilities=[
+                {
+                    "ability": "wound",
+                    "weight": 1,
+                }
+            ],
+        )
+        mob = mob_definition.spawn(self.room, self.spawn_world)
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            initiative_order=self._player_first_initiative(mob),
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with patch("spawns.actions.combat.random.randint", return_value=1):
+                with capture_game_messages() as messages:
+                    resolve_combat_encounter(encounter.id)
+
+        target_effects = self._messages_by_type(messages, "notification.combat.effect")
+        target_effect = next(msg for msg in target_effects if msg["data"]["label"] == "Wound")
+        watcher_effect = next(
+            msg["message"]
+            for msg in messages
+            if msg["player_key"] == watcher.key
+            and msg["message"].get("type") == "notification.combat.effect"
+            and msg["message"]["data"].get("label") == "Wound"
+        )
+        self.assertEqual(target_effect["text"], "A cave shaman applies Wound on you.")
+        self.assertEqual(watcher_effect["text"], "A cave shaman applies Wound on Joe.")
+        self.assertEqual(target_effect["data"]["actor"]["key"], mob.key)
+        self.assertEqual(target_effect["data"]["target"]["key"], self.player.key)
+        self.assertEqual(target_effect["data"]["effect"], "dot")
+
     def test_dot_ticks_during_following_encounter_rounds(self):
         self._ability(
             slug="bleeding-cut",

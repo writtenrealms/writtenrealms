@@ -641,9 +641,12 @@ spec:
 DOT ticks should resolve during encounter rounds, not as separate wall-clock
 timers. DOT application consumes the primary action by default; set
 `consumes_primary_action: false` when the DOT is meant to be supplemental
-damage alongside the caster's normal attack. Tick damage is presented as
-passive harm from the effect, such as `A guard suffers 12 damage from your
-Bleed.`, rather than as a fresh direct hit.
+damage alongside the caster's normal attack. Application messages use the
+effect label, such as `You apply Bleed on a guard.` for the caster,
+`A guard applies Bleed on you.` for the target, and `Mira applies Bleed on a
+guard.` for observers. Tick damage is presented as passive harm from the
+effect, such as `A guard suffers 12 damage from your Bleed.`, rather than as a
+fresh direct hit.
 
 ## Heal-Over-Time
 

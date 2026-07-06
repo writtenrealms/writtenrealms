@@ -292,6 +292,13 @@ def _combat_recipients(player: Player, room: Room) -> list[str]:
     ]
 
 
+def _combat_room_recipients(room: Room, *, exclude_player_ids: set[int]) -> list[str]:
+    queryset = Player.objects.filter(room_id=room.id, in_game=True)
+    if exclude_player_ids:
+        queryset = queryset.exclude(pk__in=exclude_player_ids)
+    return [f"player.{pid}" for pid in queryset.values_list("id", flat=True)]
+
+
 def _mob_target_priority(mob: Mob | None) -> int:
     if mob is None:
         return 0
@@ -619,6 +626,24 @@ def _periodic_damage_room_text(
     if result.outcome == "dodged":
         return f"{target_name} avoids {source_text}."
     return f"{target_name} suffers {result.damage_taken} damage from {source_text}."
+
+
+def _effect_application_text(
+    *,
+    viewer: Player | None,
+    actor: Player | Mob,
+    target: Player | Mob,
+    label: str,
+) -> str:
+    actor_name = safe_capitalize(_combat_name(actor))
+    target_name = _combat_name(target)
+    if viewer is not None and isinstance(actor, Player) and actor.pk == viewer.pk:
+        if isinstance(target, Player) and target.pk == viewer.pk:
+            return f"You apply {label} on yourself."
+        return f"You apply {label} on {target_name}."
+    if viewer is not None and isinstance(target, Player) and target.pk == viewer.pk:
+        return f"{actor_name} applies {label} on you."
+    return f"{actor_name} applies {label} on {target_name}."
 
 
 def _mob_death_text(mob_name: str | None) -> str:
@@ -993,6 +1018,108 @@ def _combat_attack_events(
                 recipients=recipients,
                 data=data,
                 text=room_text,
+            )
+        )
+    return events
+
+
+def _combat_effect_application_events(
+    *,
+    viewer: Player,
+    room: Room,
+    actor: Player | Mob,
+    target: Player | Mob,
+    ability: AbilityDefinition,
+    effect: str,
+    label: str,
+    duration_rounds: int,
+    round_id: str,
+) -> list[GameEvent]:
+    actor_payload = _combat_state_payload(
+        _combat_actor_payload(actor),
+        target_payload=_combat_actor_payload(target),
+    )
+    target_payload = _combat_state_payload(
+        _combat_actor_payload(target),
+        target_payload=_combat_actor_payload(actor),
+    )
+    data = {
+        "ability": ability.slug,
+        "actor": actor_payload,
+        "target": target_payload,
+        "effect": effect,
+        "label": label,
+        "duration_rounds": duration_rounds,
+        "round_id": round_id,
+    }
+
+    events: list[GameEvent] = []
+    direct_player_ids: set[int] = set()
+    if isinstance(actor, Player):
+        direct_player_ids.add(actor.id)
+        events.append(
+            GameEvent(
+                type="notification.combat.effect",
+                recipients=[actor.key],
+                data=data,
+                text=_effect_application_text(
+                    viewer=actor,
+                    actor=actor,
+                    target=target,
+                    label=label,
+                ),
+            )
+        )
+    if isinstance(target, Player) and not (
+        isinstance(actor, Player) and actor.pk == target.pk
+    ):
+        direct_player_ids.add(target.id)
+        events.append(
+            GameEvent(
+                type="notification.combat.effect",
+                recipients=[target.key],
+                data=data,
+                text=_effect_application_text(
+                    viewer=target,
+                    actor=actor,
+                    target=target,
+                    label=label,
+                ),
+            )
+        )
+
+    if viewer.id not in direct_player_ids and viewer.room_id == room.id:
+        direct_player_ids.add(viewer.id)
+        events.append(
+            GameEvent(
+                type="notification.combat.effect",
+                recipients=[viewer.key],
+                data=data,
+                text=_effect_application_text(
+                    viewer=None,
+                    actor=actor,
+                    target=target,
+                    label=label,
+                ),
+            )
+        )
+
+    if viewer.is_invisible:
+        return events
+
+    recipients = _combat_room_recipients(room, exclude_player_ids=direct_player_ids)
+    if recipients:
+        events.append(
+            GameEvent(
+                type="notification.combat.effect",
+                recipients=recipients,
+                data=data,
+                text=_effect_application_text(
+                    viewer=None,
+                    actor=actor,
+                    target=target,
+                    label=label,
+                ),
             )
         )
     return events
@@ -3015,17 +3142,17 @@ def _execute_pending_player_ability(
             ),
             tick=component.get("tick") or {},
         )
-        events.append(
-            GameEvent(
-                type="notification.combat.effect",
-                recipients=[player.key],
-                data={
-                    "ability": ability.slug,
-                    "effect": effect_type,
-                    "duration_rounds": duration,
-                    "round_id": round_id,
-                },
-                text=f"{ability.name} applies {effect_type}.",
+        events.extend(
+            _combat_effect_application_events(
+                viewer=player,
+                room=room,
+                actor=player,
+                target=effect_target,
+                ability=ability,
+                effect=effect_type,
+                label=_component_label(component, ability),
+                duration_rounds=duration,
+                round_id=round_id,
             )
         )
 
@@ -3172,18 +3299,17 @@ def _execute_pending_mob_ability(
             ),
             tick=component.get("tick") or {},
         )
-        events.append(
-            GameEvent(
-                type="notification.combat.effect",
-                recipients=[player.key],
-                data={
-                    "ability": ability.slug,
-                    "actor": serialize_char_from_mob(target_mob).model_dump(),
-                    "effect": effect_type,
-                    "duration_rounds": duration,
-                    "round_id": round_id,
-                },
-                text=f"{safe_capitalize(target_mob.name or 'Something')} uses {ability.name}.",
+        events.extend(
+            _combat_effect_application_events(
+                viewer=player,
+                room=room,
+                actor=target_mob,
+                target=effect_target,
+                ability=ability,
+                effect=effect_type,
+                label=_component_label(component, ability),
+                duration_rounds=duration,
+                round_id=round_id,
             )
         )
 
