@@ -57,6 +57,8 @@ Current required mappings:
 - WR1 `Loader` / `Rule` rows export as `kind: spawnplan` entries. WR2 no longer
   imports or stores loader/rule rows, and runtime item/mob rows no longer keep
   `rule_id` or source-template FKs.
+- WR1 `Zone.is_warzone` does not export. WR2 zones no longer have an
+  `is_warzone` model field or zone manifest key.
 - Runtime spawn reconciliation is now named spawn-plan processing in WR2:
   Celery schedules `worlds.tasks.run_world_spawn_plans`, the world timestamp is
   `last_spawn_plan_run_ts`, and the removed system endpoint
@@ -140,6 +142,9 @@ Room **Spawn Plans** is a read-only view of spawn plans targeting that room.
 - The list is backed by `SpawnPlan`, not legacy `Loader` rows.
 - Zone API responses expose both `relative_id` and `manifest_ref`; manifests
   should use the `manifest_ref` value, such as `zone@1`.
+- Zone detail screens expose copy actions for the zone apply YAML and delete
+  YAML. Use the apply YAML to edit fields such as `metadata.name`, then paste
+  it into **World > Edit World**.
 - Path API responses also expose `relative_id` and `manifest_ref`; spawn-plan
   path targets should use `path@<relative_id>`, not path names.
 
@@ -170,6 +175,10 @@ A new world-level **Edit World** view accepts a YAML manifest textarea.
   - **create** (no `metadata.id` / `metadata.key`)
   - **update** (include `metadata.id` or `metadata.key`)
   - **delete** (`operation: delete` with `metadata.id` or `metadata.key`)
+- Zone manifests support **apply** for create/update and **delete**
+  (`operation: delete` with `metadata.ref`). Zone manifests no longer include
+  legacy `spec.is_warzone`; use `spec.pvp_zone` only for authored PvP zone
+  behavior.
 
 Zone manifests exported by the system include `metadata.ref` in the portable
 form `zone@<relative_id>`. Path manifests use `metadata.ref` in the portable
@@ -605,6 +614,7 @@ Permission checks are applied when editing via manifest:
 - Manifest apply endpoint:
   - `POST /api/v1/builder/worlds/<world_pk>/manifests/apply/`
   - trigger returns `operation: created`, `operation: updated`, or `operation: deleted`
+  - zone returns `operation: created`, `operation: updated`, or `operation: deleted`
   - world config returns `operation: updated`
 
 ## How To Edit World Config

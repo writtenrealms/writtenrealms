@@ -392,6 +392,8 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
                 self.harbor_zone.name: f"zone@{self.harbor_zone.relative_id}",
             },
         )
+        for zone_doc in zone_docs:
+            self.assertNotIn("is_warzone", zone_doc["spec"])
         room_doc = next(
             doc for doc in exported_docs
             if doc["kind"] == "room" and doc["metadata"]["ref"] == f"room@{self.harbor_room.x},{self.harbor_room.y},{self.harbor_room.z}"
@@ -462,3 +464,69 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             tracker_conditions[1]["in"][1],
             [expected_start_ref, expected_harbor_ref],
         )
+
+    def test_zone_detail_returns_apply_and_delete_yaml(self):
+        detail_ep = reverse(
+            "builder-zone-detail",
+            args=[self.world.pk, self.harbor_zone.pk],
+        )
+
+        resp = self.client.get(detail_ep)
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        manifest = yaml.safe_load(resp.data["yaml"])
+        self.assertEqual(manifest["kind"], "zone")
+        self.assertEqual(manifest["metadata"]["ref"], f"zone@{self.harbor_zone.relative_id}")
+        self.assertEqual(manifest["metadata"]["name"], "Harbor District")
+        self.assertNotIn("is_warzone", manifest["spec"])
+
+        delete_manifest = yaml.safe_load(resp.data["delete_yaml"])
+        self.assertEqual(delete_manifest["kind"], "zone")
+        self.assertEqual(delete_manifest["operation"], "delete")
+        self.assertEqual(delete_manifest["metadata"]["ref"], f"zone@{self.harbor_zone.relative_id}")
+
+    def test_copied_zone_yaml_updates_existing_zone_by_ref(self):
+        detail_ep = reverse(
+            "builder-zone-detail",
+            args=[self.world.pk, self.harbor_zone.pk],
+        )
+        detail_resp = self.client.get(detail_ep)
+        self.assertEqual(detail_resp.status_code, 200, detail_resp.data)
+        manifest = yaml.safe_load(detail_resp.data["yaml"])
+        manifest["metadata"]["name"] = "Renamed Harbor"
+
+        apply_resp = self.client.post(
+            self.apply_ep,
+            {"manifest": yaml.safe_dump(manifest, sort_keys=False)},
+            format="json",
+        )
+
+        self.assertEqual(apply_resp.status_code, 200, apply_resp.data)
+        self.assertEqual(apply_resp.data["kind"], "zone")
+        self.assertEqual(apply_resp.data["operation"], "updated")
+        self.harbor_zone.refresh_from_db()
+        self.assertEqual(self.harbor_zone.name, "Renamed Harbor")
+
+    def test_zone_delete_manifest_removes_empty_zone(self):
+        empty_zone = Zone.objects.create(
+            world=self.world,
+            name="Empty District",
+        )
+        detail_ep = reverse(
+            "builder-zone-detail",
+            args=[self.world.pk, empty_zone.pk],
+        )
+        detail_resp = self.client.get(detail_ep)
+        self.assertEqual(detail_resp.status_code, 200, detail_resp.data)
+
+        apply_resp = self.client.post(
+            self.apply_ep,
+            {"manifest": detail_resp.data["delete_yaml"]},
+            format="json",
+        )
+
+        self.assertEqual(apply_resp.status_code, 200, apply_resp.data)
+        self.assertEqual(apply_resp.data["kind"], "zone")
+        self.assertEqual(apply_resp.data["operation"], "deleted")
+        self.assertEqual(apply_resp.data["zone"]["manifest_ref"], f"zone@{empty_zone.relative_id}")
+        self.assertFalse(Zone.objects.filter(pk=empty_zone.pk).exists())

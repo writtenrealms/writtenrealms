@@ -346,13 +346,56 @@ def _serialize_zone_manifest(zone: Zone) -> dict[str, Any]:
         "spec": {
             "description": zone.description or "",
             "notes": zone.notes or "",
-            "is_warzone": bool(zone.is_warzone),
             "state": get_state_snapshot(STATE_SCOPE_ZONE, zone),
             "respawn_wait": int(zone.respawn_wait),
             "pvp_zone": bool(zone.pvp_zone),
             "center": _room_ref(zone.center),
         },
     }
+
+
+def _serialize_zone_delete_manifest(zone: Zone) -> dict[str, Any]:
+    return {
+        "kind": ZONE_MANIFEST_KIND,
+        "operation": builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE,
+        "metadata": {
+            "ref": _zone_ref(zone),
+            "name": zone.name or "",
+        },
+    }
+
+
+def serialize_zone_manifest_payload(zone: Zone) -> dict[str, Any]:
+    manifest = _serialize_zone_manifest(zone)
+    delete_manifest = _serialize_zone_delete_manifest(zone)
+    return {
+        "manifest": manifest,
+        "yaml": _manifest_to_yaml(manifest),
+        "delete_manifest": delete_manifest,
+        "delete_yaml": _manifest_to_yaml(delete_manifest),
+    }
+
+
+def serialize_zone_payload(
+    zone: Zone,
+    *,
+    include_yaml: bool = True,
+) -> dict[str, Any]:
+    payload = {
+        "id": zone.id,
+        "key": zone.key,
+        "relative_id": zone.relative_id,
+        "manifest_ref": _zone_ref(zone),
+        "name": zone.name,
+        "description": zone.description or "",
+        "notes": zone.notes or "",
+        "respawn_wait": int(zone.respawn_wait),
+        "pvp_zone": bool(zone.pvp_zone),
+        "center": _room_ref(zone.center),
+    }
+    if include_yaml:
+        payload.update(serialize_zone_manifest_payload(zone))
+    return payload
 
 
 def _serialize_room_manifest(room: Room) -> dict[str, Any]:
@@ -1038,7 +1081,7 @@ def _find_placeholder_zone(world: World) -> Zone | None:
         return None
     if zone.description or zone.notes:
         return None
-    if zone.is_warzone or zone.pvp_zone:
+    if zone.pvp_zone:
         return None
     if int(zone.respawn_wait) != 300:
         return None
@@ -1586,8 +1629,6 @@ def apply_zone_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Zone
             zone.description = str(spec.get("description", zone.description or ""))
         if "notes" in spec or created:
             zone.notes = str(spec.get("notes", zone.notes or ""))
-        if "is_warzone" in spec or created:
-            zone.is_warzone = bool(spec.get("is_warzone", zone.is_warzone if existing else False))
         if "respawn_wait" in spec or created:
             zone.respawn_wait = int(spec.get("respawn_wait", zone.respawn_wait if existing else 300))
         if "pvp_zone" in spec or created:
@@ -1615,6 +1656,26 @@ def apply_zone_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Zone
             zone.save(update_fields=["center"])
 
     return zone, created
+
+
+def delete_zone_manifest(*, world: World, manifest: dict[str, Any]) -> Zone:
+    if parse_document_kind(manifest) != ZONE_MANIFEST_KIND:
+        raise serializers.ValidationError("Unsupported manifest kind. Expected 'zone'.")
+    if builder_manifests.parse_manifest_operation(manifest) != builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+        raise serializers.ValidationError("Zone delete manifests require operation 'delete'.")
+    metadata = _manifest_metadata(manifest)
+    zone_ref = str(metadata.get("ref") or "").strip()
+    if not zone_ref:
+        raise serializers.ValidationError("metadata.ref is required.")
+    relative_id = _parse_zone_ref(zone_ref, field_name="metadata.ref")
+    zone = Zone.objects.filter(world=world, relative_id=relative_id).first()
+    if zone is None:
+        raise serializers.ValidationError("Zone delete manifest does not resolve to an existing zone.")
+    if zone.rooms.exists():
+        raise serializers.ValidationError("Cannot delete a zone with rooms assigned to it.")
+    zone._deleted_payload = serialize_zone_payload(zone, include_yaml=False)
+    zone.delete()
+    return zone
 
 
 def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room, bool]:

@@ -1020,6 +1020,8 @@ class ZoneBuilderSerializer(serializers.ModelSerializer):
     zone_data = serializers.SerializerMethodField()
     has_assignment = serializers.SerializerMethodField()
     manifest_ref = serializers.SerializerMethodField()
+    yaml = serializers.SerializerMethodField()
+    delete_yaml = serializers.SerializerMethodField()
 
     class Meta:
         model = Zone
@@ -1035,9 +1037,11 @@ class ZoneBuilderSerializer(serializers.ModelSerializer):
             'zone_data',
             'respawn_wait',
             'pvp_zone',
-            'has_assignment'
+            'has_assignment',
+            'yaml',
+            'delete_yaml',
         )
-        read_only_fields = ('relative_id', 'manifest_ref')
+        read_only_fields = ('relative_id', 'manifest_ref', 'yaml', 'delete_yaml')
 
     def get_num_rooms(self, zone):
         return zone.rooms.count()
@@ -1055,6 +1059,21 @@ class ZoneBuilderSerializer(serializers.ModelSerializer):
 
     def get_manifest_ref(self, zone):
         return f"zone@{zone.relative_id or zone.id}"
+
+    def _include_manifest_yaml(self):
+        return self.context.get('include_manifest_yaml', False)
+
+    def get_yaml(self, zone):
+        if not self._include_manifest_yaml():
+            return ""
+        from builders import world_export as builder_world_export
+        return builder_world_export.serialize_zone_manifest_payload(zone)["yaml"]
+
+    def get_delete_yaml(self, zone):
+        if not self._include_manifest_yaml():
+            return ""
+        from builders import world_export as builder_world_export
+        return builder_world_export.serialize_zone_manifest_payload(zone)["delete_yaml"]
 
     def get_has_assignment(self, zone):
         try:

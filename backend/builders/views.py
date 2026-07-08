@@ -632,6 +632,16 @@ class ZoneBuilderViewSet(WorldCreationMixin,
                          BaseWorldBuilderViewSet):
     serializer_class = builder_serializers.ZoneBuilderSerializer
 
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['include_manifest_yaml'] = self.action in [
+            'create',
+            'retrieve',
+            'update',
+            'partial_update',
+        ]
+        return context
+
     def get_queryset(self):
         order_by = self.request.query_params.get(
             'sort_by',
@@ -1733,8 +1743,23 @@ class WorldManifestApplyView(BaseWorldBuilderView):
 
     def _assert_can_edit_zone_manifest(self, manifest):
         metadata = manifest.get("metadata") or {}
-        zone_name = str(metadata.get("name") or "").strip()
-        zone = Zone.objects.filter(world=self.world, name=zone_name).first() if zone_name else None
+        zone_ref = str(metadata.get("ref") or "").strip()
+        zone = None
+        if zone_ref:
+            try:
+                relative_id = builder_world_export._parse_zone_ref(
+                    zone_ref,
+                    field_name="metadata.ref",
+                )
+            except serializers.ValidationError:
+                return
+            zone = Zone.objects.filter(
+                world=self.world,
+                relative_id=relative_id,
+            ).first()
+        else:
+            zone_name = str(metadata.get("name") or "").strip()
+            zone = Zone.objects.filter(world=self.world, name=zone_name).first() if zone_name else None
         if zone is None:
             if self._builder_rank >= 3:
                 return
@@ -2305,6 +2330,27 @@ class WorldManifestApplyView(BaseWorldBuilderView):
 
     def _apply_zone_manifest(self, manifest):
         self._assert_can_edit_zone_manifest(manifest)
+        operation = builder_manifests.parse_manifest_operation(manifest)
+        if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+            zone = builder_world_export.delete_zone_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            zone_payload = getattr(zone, "_deleted_payload", None)
+            if zone_payload is None:
+                zone_payload = builder_world_export.serialize_zone_payload(
+                    zone,
+                    include_yaml=False,
+                )
+            return Response(
+                {
+                    "kind": builder_world_export.ZONE_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "zone": zone_payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+
         zone, is_create = builder_world_export.apply_zone_manifest(
             world=self.world,
             manifest=manifest,
@@ -2313,11 +2359,7 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             {
                 "kind": builder_world_export.ZONE_MANIFEST_KIND,
                 "operation": "created" if is_create else "updated",
-                "zone": {
-                    "id": zone.id,
-                    "key": zone.key,
-                    "name": zone.name,
-                },
+                "zone": builder_world_export.serialize_zone_payload(zone),
             },
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
         )

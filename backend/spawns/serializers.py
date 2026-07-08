@@ -439,7 +439,7 @@ class AnimateZoneSerializer(serializers.ModelSerializer):
     zone_data = serializers.SerializerMethodField()
     class Meta:
         model = Zone
-        fields = ['id', 'key', 'name', 'is_warzone', 'zone_data']
+        fields = ['id', 'key', 'name', 'zone_data']
     def get_zone_data(self, zone):
         return get_state_snapshot(STATE_SCOPE_ZONE, zone)
 

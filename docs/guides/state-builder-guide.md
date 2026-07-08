@@ -267,12 +267,16 @@ Example:
 ```yaml
 kind: zone
 metadata:
+  ref: zone@1
   name: Harbor District
 spec:
   state:
     fog_level: 2
     harbor_weather: windy
 ```
+
+The zone detail screen has copy actions for the full zone apply YAML and delete
+YAML. Zone manifests do not include the removed legacy `is_warzone` field.
 
 `spec.zone_data` is accepted as a legacy import alias, but new authored content
 should use `spec.state`.

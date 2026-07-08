@@ -1068,7 +1068,7 @@ class Zone(AdventWorldBaseModel):
                               related_name='zones')
 
     center = models.ForeignKey('worlds.Room',
-                               on_delete=models.CASCADE,
+                               on_delete=models.SET_NULL,
                                related_name='centers_for',
                                **optional)
 
@@ -1076,7 +1076,6 @@ class Zone(AdventWorldBaseModel):
     description = models.TextField(blank=True)
     notes = models.TextField(**optional)
 
-    is_warzone = models.BooleanField(default=False)
     zone_data = models.TextField(default="{}", blank=True)
 
     respawn_wait = models.IntegerField(default=300)

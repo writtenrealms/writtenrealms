@@ -1,12 +1,15 @@
 <template>
   <div id="zone-details" v-if="zone">
-    <h2 class="zone-name entity-title">{{ zone.name }}</h2>
-    <div class="zone-meta color-text-60 mb-4">
-      <span>Database ID {{ zone.id }}</span>
-      <span>Relative ID {{ zone.relative_id }}</span>
-      <span>Manifest Ref <code>{{ zone.manifest_ref }}</code></span>
-      <button class="btn-thin" :disabled="!zone.manifest_ref" @click="copyManifestRef">
-        COPY REF
+    <h2 class="zone-name">{{ zone.name }}</h2>
+    <div class="zone-meta color-text-60">
+      {{ zone.id }} - {{ zone.manifest_ref }}
+    </div>
+    <div class="zone-actions mb-4">
+      <button class="btn-small" :disabled="!zoneYaml" @click="copyZoneYaml">
+        COPY YAML
+      </button>
+      <button class="btn-thin" :disabled="!zoneDeleteYaml" @click="copyZoneDeleteYaml">
+        COPY DELETE YAML
       </button>
     </div>
 
@@ -127,6 +130,8 @@ const isReady = computed(() => {
 });
 const center_key = computed(() => store.state.builder.room.key);
 const map = computed(() => store.state.builder.map);
+const zoneYaml = computed(() => zone.value?.yaml || buildZoneYaml(zone.value));
+const zoneDeleteYaml = computed(() => zone.value?.delete_yaml || buildZoneDeleteYaml(zone.value));
 
 
 const onClickRoom = async (room) => {
@@ -227,13 +232,123 @@ const deleteZone = async () => {
   );
 };
 
-const copyManifestRef = async () => {
+const copyZoneYaml = async () => {
   try {
-    await navigator.clipboard.writeText(zone.value.manifest_ref || "");
-    store.commit("ui/notification_set", "Zone manifest ref copied.");
+    await copyText(zoneYaml.value);
+    store.commit("ui/notification_set", "Zone YAML copied.");
   } catch {
-    store.commit("ui/notification_set_error", "Unable to copy zone manifest ref.");
+    store.commit("ui/notification_set_error", "Unable to copy zone YAML to clipboard.");
   }
+};
+
+const copyZoneDeleteYaml = async () => {
+  try {
+    await copyText(zoneDeleteYaml.value);
+    store.commit("ui/notification_set", "Zone delete YAML copied.");
+  } catch {
+    store.commit("ui/notification_set_error", "Unable to copy zone delete YAML to clipboard.");
+  }
+};
+
+const copyText = async (value: string) => {
+  if (!value.trim()) throw new Error("Nothing to copy.");
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Fall back for browsers/extensions that reject clipboard writes.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.top = "-1000px";
+  textarea.style.left = "-1000px";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  const didCopy = document.execCommand("copy");
+  document.body.removeChild(textarea);
+  if (!didCopy) throw new Error("Copy failed.");
+};
+
+const roomRef = (room: any) => {
+  if (!room || room.x === undefined || room.y === undefined || room.z === undefined) return "";
+  return `room@${room.x},${room.y},${room.z}`;
+};
+
+const yamlScalar = (value: any): string => {
+  if (value === null || value === undefined) return "''";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "0";
+  const text = String(value);
+  if (!text) return "''";
+  if (/^[A-Za-z0-9_@./-]+(?: [A-Za-z0-9_@./-]+)*$/.test(text)) return text;
+  return JSON.stringify(text);
+};
+
+const yamlBlock = (value: any, indent = 0): string[] => {
+  const prefix = " ".repeat(indent);
+  if (!value || typeof value !== "object") return [`${prefix}${yamlScalar(value)}`];
+  if (Array.isArray(value)) {
+    if (!value.length) return [`${prefix}[]`];
+    return value.flatMap((item) => {
+      if (item && typeof item === "object") {
+        const [first, ...rest] = yamlBlock(item, indent + 2);
+        return [`${prefix}- ${first.trimStart()}`, ...rest];
+      }
+      return [`${prefix}- ${yamlScalar(item)}`];
+    });
+  }
+  const entries = Object.entries(value);
+  if (!entries.length) return [`${prefix}{}`];
+  return entries.flatMap(([key, item]) => {
+    if (item && typeof item === "object") {
+      return [`${prefix}${key}:`, ...yamlBlock(item, indent + 2)];
+    }
+    return [`${prefix}${key}: ${yamlScalar(item)}`];
+  });
+};
+
+const buildZoneYaml = (zoneValue: any): string => {
+  if (!zoneValue?.manifest_ref || !zoneValue?.name) return "";
+  const spec: Record<string, any> = {};
+  if (zoneValue.zone_data && Object.keys(zoneValue.zone_data).length) {
+    spec.state = zoneValue.zone_data;
+  }
+  if (zoneValue.respawn_wait !== undefined && zoneValue.respawn_wait !== null) {
+    spec.respawn_wait = Number(zoneValue.respawn_wait);
+  }
+  if (zoneValue.pvp_zone !== undefined && zoneValue.pvp_zone !== null) {
+    spec.pvp_zone = Boolean(zoneValue.pvp_zone);
+  }
+  const centerRef = roomRef(zoneValue.center);
+  if (centerRef) spec.center = centerRef;
+
+  return [
+    "kind: zone",
+    "metadata:",
+    `  ref: ${yamlScalar(zoneValue.manifest_ref)}`,
+    `  name: ${yamlScalar(zoneValue.name)}`,
+    "spec:",
+    ...yamlBlock(spec, 2),
+    "",
+  ].join("\n");
+};
+
+const buildZoneDeleteYaml = (zoneValue: any): string => {
+  if (!zoneValue?.manifest_ref || !zoneValue?.name) return "";
+  return [
+    "kind: zone",
+    "operation: delete",
+    "metadata:",
+    `  ref: ${yamlScalar(zoneValue.manifest_ref)}`,
+    `  name: ${yamlScalar(zoneValue.name)}`,
+    "",
+  ].join("\n");
 };
 
 const onChangeRespawns = (event: Event) => {
@@ -270,15 +385,21 @@ const editRespawns = () => {
 #zone-details {
   width: 100%;
 
+  .zone-name {
+    margin-bottom: 0.35rem;
+  }
+
   .zone-meta {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .zone-actions {
     align-items: center;
     display: flex;
     flex-wrap: wrap;
-    gap: 0.5rem 1rem;
-
-    code {
-      color: $color-text;
-    }
+    gap: 0.5rem;
+    margin-top: 0.75rem;
   }
 
   .zone-map-and-data {
