@@ -94,14 +94,6 @@
           >Paths</router-link>
 
           <router-link
-            :to="{name: 'builder_zone_loader_list', params: { world_id: $route.params.world_id, zone_id: route.params.zone_id}}" :class="{ 'router-link-active': isZoneLoadsRoute }"
-          >Loads</router-link>
-
-          <router-link
-            :to="{name: 'builder_zone_quest_list', params: { world_id: $route.params.world_id, zone_id: route.params.zone_id}}" :class="{ 'router-link-active': isZoneQuestsRoute }"
-          >Quests</router-link>
-
-          <router-link
             :to="{name: 'builder_zone_config', params: { world_id: $route.params.world_id, zone_id: route.params.zone_id}}" :class="{ 'router-link-active': isZoneConfigRoute }"
           >Config</router-link>
         </template>
@@ -109,10 +101,10 @@
         <!-- Room nav -->
         <template v-else-if="viewType === 'room'">
           <router-link
-            :to="{name: 'builder_room_load_list', params: { world_id: $route.params.world_id, room_id: route.params.room_id}}"
+            :to="{name: 'builder_room_spawn_plan_list', params: { world_id: $route.params.world_id, room_id: route.params.room_id}}"
           >
-            Loads
-            <span v-if="room && room.num_loads">({{ room.num_loads}})</span>
+            Spawn Plans
+            <span v-if="room && room.num_spawn_plan_entries">({{ room.num_spawn_plan_entries}})</span>
           </router-link>
 
           <router-link
@@ -254,8 +246,6 @@ const isWorldItemsRoute = computed(() => {
   const routes = [
     'builder_item_definition_list',
     'builder_item_definition_details',
-    'builder_item_template_list',
-    'builder_item_template_details',
   ];
   return routes.includes(route.name as string);
 });
@@ -263,8 +253,6 @@ const isWorldMobsRoute = computed(() => {
   const routes = [
     'builder_mob_definition_list',
     'builder_mob_definition_details',
-    'builder_mob_template_list',
-    'builder_mob_template_details',
   ];
   return routes.includes(route.name as string);
 });
@@ -289,7 +277,6 @@ const isWorldConfigRoute = computed(() => {
     'builder_item_bundle_details',
     'builder_merchant_profile_list',
     'builder_merchant_profile_details',
-    'builder_world_starting_eq_list',
     'builder_world_social_list',
     'builder_world_currency_list',
     'builder_world_instance_list',
@@ -307,12 +294,6 @@ const isWorldBuilderRoute = computed(() => {
 // Zone
 const isZonePathRoute = computed(() => {
   return ['builder_zone_path_list', 'builder_zone_path_details'].includes(route.name as string);
-});
-const isZoneLoadsRoute = computed(() => {
-  return ['builder_zone_loader_list', 'builder_zone_loader_details'].includes(route.name as string);
-});
-const isZoneQuestsRoute = computed(() => {
-  return ['builder_zone_quest_list', 'builder_zone_quest_details'].includes(route.name as string);
 });
 const isZoneConfigRoute = computed(() => {
   return [

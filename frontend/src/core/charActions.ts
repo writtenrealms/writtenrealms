@@ -1,9 +1,3 @@
-const OBSOLETE_CHAR_ACTIONS = new Set([
-  "complete",
-  "completion_action",
-  "enquire",
-]);
-
 const getCoreFaction = (entity) => {
   if (!entity) return "";
   const coreFaction = entity.core_faction || entity.factions?.core;
@@ -42,8 +36,6 @@ export const shouldShowTalkAction = (player, char, world) => {
 export const buildCharActions = (char, player, world) => {
   const actions = {
     talk: false,
-    craft: false,
-    upgrade: false,
     follow: false,
     unfollow: false,
     group: false,
@@ -55,12 +47,11 @@ export const buildCharActions = (char, player, world) => {
   const sourceActions = char && char.actions;
   if (Array.isArray(sourceActions)) {
     for (const action of sourceActions) {
-      if (!action || OBSOLETE_CHAR_ACTIONS.has(action)) continue;
+      if (!action) continue;
       actions[action] = true;
     }
   } else if (sourceActions && typeof sourceActions === "object") {
     for (const [action, value] of Object.entries(sourceActions)) {
-      if (OBSOLETE_CHAR_ACTIONS.has(action)) continue;
       actions[action] = value as any;
     }
   }
@@ -69,8 +60,6 @@ export const buildCharActions = (char, player, world) => {
     actions.list = true;
     actions.offer = true;
   }
-  if (char && char.is_crafter) actions.craft = true;
-  if (char && char.is_upgrader) actions.upgrade = true;
   if (shouldShowTalkAction(player, char, world)) actions.talk = true;
 
   return actions;

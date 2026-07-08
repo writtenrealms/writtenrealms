@@ -74,7 +74,7 @@ class World(AdventBaseModel):
     # being spun up again.
     no_start = models.BooleanField(default=False)
 
-    last_loader_run_ts = models.DateTimeField(**optional)
+    last_spawn_plan_run_ts = models.DateTimeField(**optional)
     last_extraction_ts = models.DateTimeField(**optional)
     last_entered_ts = models.DateTimeField(**optional)
 
@@ -254,7 +254,7 @@ class World(AdventBaseModel):
     def cleanup(self, spw=False):
         """
         Rid a world of all of its mobs, and all of its items on the ground.
-        This is meant to be done before an initial loader run in a multiplayer
+        This is meant to be done before an initial spawn-plan run in a multiplayer
         world.
         """
 
@@ -440,7 +440,7 @@ class World(AdventBaseModel):
         destructive action and works a lot like a reset.
 
         We remove all items which are on the ground, and all mobs. Then we
-        run the loaders in initial mode.
+        run spawn plans in initial mode.
 
         For multiplayer worlds, the initial animation should only occur right after initialization, and then it should be partial animations.
         """
@@ -473,9 +473,8 @@ class World(AdventBaseModel):
 
         self.set_state(api_consts.WORLD_STATE_STARTING)
 
-        # Run the loaders
-        from spawns.loading import run_loaders
-        run_loaders(world=self, initial=True)
+        from spawns.loading import run_spawn_plans_for_world
+        run_spawn_plans_for_world(world=self, initial=True)
 
         # Mark the world as running
         self.set_state(api_consts.WORLD_STATE_RUNNING)
@@ -520,9 +519,9 @@ class World(AdventBaseModel):
                       % stale_items_qs.count())
                 stale_items_qs.update(is_pending_deletion=True)
 
-        if not self.last_loader_run_ts:
-            from spawns.loading import run_loaders
-            run_loaders(world=self, initial=True)
+        if not self.last_spawn_plan_run_ts:
+            from spawns.loading import run_spawn_plans_for_world
+            run_spawn_plans_for_world(world=self, initial=True)
 
         # Mark the world as running
         self.set_state(api_consts.WORLD_STATE_RUNNING)
@@ -697,10 +696,10 @@ class World(AdventBaseModel):
             read_only=read_only)
         return world_builder
 
-    def create_item_template(self, **kwargs):
-        from builders.models import ItemTemplate
+    def create_item_definition(self, **kwargs):
+        from builders.models import ItemDefinition
         kwargs.pop('world', None)
-        return ItemTemplate.objects.create(world=self, **kwargs)
+        return ItemDefinition.objects.create(world=self, **kwargs)
 
     # Optimize world map getter
     def get_map(self, rooms_qs=None):
@@ -971,21 +970,6 @@ class WorldState(BaseModel):
         ordering = ['world_id']
 
 
-class StartingEq(models.Model):
-    worldconfig = models.ForeignKey('WorldConfig',
-                                    on_delete=models.CASCADE)
-    itemtemplate = models.ForeignKey('builders.Itemtemplate',
-                                     on_delete=models.CASCADE)
-    archetype = models.TextField(
-        choices=list_to_choice(adv_consts.ARCHETYPES),
-        **optional)
-    num = models.PositiveIntegerField(default=1)
-
-    class Meta:
-        db_table = 'worlds_worldconfig_starting_eq'
-        unique_together = (('worldconfig', 'itemtemplate'),)
-
-
 class WorldConfig(BaseModel):
 
     # Fields not exposed to builders
@@ -1057,6 +1041,7 @@ class WorldConfig(BaseModel):
     built_by = models.TextField(**optional)
     name_exclusions = models.TextField(**optional)
     starting_gold = models.PositiveIntegerField(default=0)
+    starting_equipment = models.JSONField(default=list, blank=True)
     starting_level = models.PositiveIntegerField(default=1)
     leveling_curve = models.JSONField(default=default_leveling_curve)
     max_level = models.PositiveIntegerField(default=20)
@@ -1071,12 +1056,6 @@ class WorldConfig(BaseModel):
     decay_glory = models.BooleanField(default=False)
 
     cross_race_cooldown = models.PositiveIntegerField(default=0)
-
-    # M2M
-    starting_eq = models.ManyToManyField(
-        'builders.ItemTemplate',
-        related_name='starter_for',
-        through='StartingEq')
 
     def __str__(self):
         return "WorldConfig %s" % self.pk
@@ -1383,7 +1362,7 @@ class Door(AdventBaseModel):
                                 on_delete=models.CASCADE,
                                 related_name='doors_to')
     name = models.TextField(default='door')
-    key = models.ForeignKey('builders.ItemTemplate',
+    key = models.ForeignKey('builders.ItemDefinition',
                             on_delete=models.CASCADE,
                             related_name='key_doors',
                             **optional)

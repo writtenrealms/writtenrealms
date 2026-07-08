@@ -304,7 +304,7 @@ def _find_stock_entry(runtime: MerchantRuntime, selector: str | None) -> Merchan
         for entry in runtime.stock_entries.filter(
             status=MerchantStockEntry.STATUS_AVAILABLE,
             item__is_pending_deletion=False,
-        ).select_related("item", "item__definition", "item__template")
+        ).select_related("item", "item__definition")
         if item_matches_selector(entry.item, normalized)
     ]
     if not matches:
@@ -344,7 +344,7 @@ def _find_player_inventory_item(player: Player, selector: str | None) -> Item:
         raise ActionError("Sell what?", code="missing_item")
     items = list(
         player.inventory.filter(is_pending_deletion=False)
-        .select_related("definition", "template", "currency")
+        .select_related("definition", "currency")
         .order_by("id")
     )
     for item in items:
@@ -452,7 +452,7 @@ def _find_buyback_entry(runtime: MerchantRuntime, player: Player, selector: str 
             player=player,
             status=MerchantBuybackEntry.STATUS_ACTIVE,
             item__is_pending_deletion=False,
-        ).select_related("item", "item__definition", "item__template")
+        ).select_related("item", "item__definition")
         if item_matches_selector(entry.item, normalized)
     ]
     if not matches:

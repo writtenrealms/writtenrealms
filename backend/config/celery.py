@@ -26,8 +26,8 @@ def _heartbeat_interval_seconds() -> float:
     return max(interval, 1.0)
 
 
-def _loader_interval_seconds() -> float:
-    raw_interval = getattr(adv_config, "GAME_LOADER_INTERVAL_SECONDS", 15)
+def _spawn_plan_interval_seconds() -> float:
+    raw_interval = getattr(adv_config, "GAME_SPAWN_PLAN_INTERVAL_SECONDS", 15)
     try:
         interval = float(raw_interval)
     except (TypeError, ValueError):
@@ -40,9 +40,9 @@ app.conf.beat_schedule = {
         'task': 'spawns.tasks.game_heartbeat',
         'schedule': _heartbeat_interval_seconds(),
     },
-    'run-world-loaders': {
-        'task': 'worlds.tasks.run_world_loaders',
-        'schedule': _loader_interval_seconds(),
+    'run-world-spawn-plans': {
+        'task': 'worlds.tasks.run_world_spawn_plans',
+        'schedule': _spawn_plan_interval_seconds(),
     },
     'cleanup-stale-connections': {
         'task': 'users.tasks.cleanup_stale_connections',

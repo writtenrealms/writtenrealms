@@ -2,7 +2,7 @@ import yaml
 
 from rest_framework.reverse import reverse
 
-from builders.models import ItemTemplate, MobTemplate, WorldBuilder
+from builders.models import ItemDefinition, MobDefinition, WorldBuilder
 from quests.models import QuestArcTemplate, QuestTemplate
 from tests.base import WorldTestCase
 
@@ -45,11 +45,11 @@ class TestQuestManifests(AuthenticatedBuilderWorldTestCase):
         self.assertNotIn("lead", template["yaml"])
         self.assertNotIn("stakes", template["yaml"])
 
-    def test_item_and_mob_templates_generate_unique_world_slugs(self):
-        mob_one = MobTemplate.objects.create(world=self.world, name="Quartermaster")
-        mob_two = MobTemplate.objects.create(world=self.world, name="Quartermaster")
-        item_one = ItemTemplate.objects.create(world=self.world, name="Wolf Pelt")
-        item_two = ItemTemplate.objects.create(world=self.world, name="Wolf Pelt")
+    def test_item_and_mob_definitions_generate_unique_world_slugs(self):
+        mob_one = MobDefinition.objects.create(world=self.world, name="Quartermaster")
+        mob_two = MobDefinition.objects.create(world=self.world, name="Quartermaster")
+        item_one = ItemDefinition.objects.create(world=self.world, name="Wolf Pelt")
+        item_two = ItemDefinition.objects.create(world=self.world, name="Wolf Pelt")
 
         self.assertEqual(mob_one.slug, "quartermaster")
         self.assertEqual(mob_two.slug, "quartermaster-2")
@@ -57,6 +57,11 @@ class TestQuestManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(item_two.slug, "wolf-pelt-2")
 
     def test_apply_quest_manifest_can_create_quest_template(self):
+        quartermaster = MobDefinition.objects.create(
+            world=self.world,
+            name="Quartermaster",
+        )
+
         manifest = f"""
 kind: quest
 metadata:
@@ -73,7 +78,7 @@ spec:
   discovery:
     sources:
       - type: npc_dialogue
-        mob_template: mobtemplate.12
+        mob_definition: mobdefinition.{quartermaster.slug}
     salience: 80
   slots: {{}}
   steps:
@@ -110,12 +115,12 @@ spec:
         self.assertEqual(quest.status, "active")
         self.assertEqual(quest.graph["steps"][0]["id"], "offer")
 
-    def test_apply_quest_manifest_accepts_mob_and_item_template_slugs(self):
-        quartermaster = MobTemplate.objects.create(
+    def test_apply_quest_manifest_accepts_mob_and_item_definition_slugs(self):
+        quartermaster = MobDefinition.objects.create(
             world=self.world,
             name="Quartermaster",
         )
-        wolf_pelt = ItemTemplate.objects.create(
+        wolf_pelt = ItemDefinition.objects.create(
             world=self.world,
             name="Wolf Pelt",
         )
@@ -137,7 +142,7 @@ spec:
   discovery:
     sources:
       - type: npc_dialogue
-        mob_template: {quartermaster.slug}
+        mob_definition: {quartermaster.slug}
     salience: 80
   slots: {{}}
   steps:
@@ -146,7 +151,7 @@ spec:
       recap: Deliver supplies.
       effects:
         - type: grant_item
-          item_template: {wolf_pelt.slug}
+          item_definition: {wolf_pelt.slug}
       objectives:
         - id: deliver_pelt
           text: Deliver the pelt.
@@ -154,8 +159,8 @@ spec:
             event: quest.item.delivered
             where:
               all:
-                - eq: [event.target.template_id, mobtemplate.{quartermaster.slug}]
-                - eq: [event.item.template_id, {wolf_pelt.slug}]
+                - eq: [event.target.definition_id, mobdefinition.{quartermaster.slug}]
+                - eq: [event.item.definition_id, {wolf_pelt.slug}]
           progress:
             mode: count
             target: 1
@@ -169,7 +174,7 @@ spec:
   rewards:
     complete:
       - type: mob_command
-        mob_template: {quartermaster.slug}
+        mob_definition: {quartermaster.slug}
         command: say Good.
     compromised: []
     failed_forward: []
@@ -184,20 +189,20 @@ spec:
 
         quest = QuestTemplate.objects.get(slug="supply_delivery")
         self.assertEqual(
-            quest.discovery_policy["sources"][0]["mob_template"],
+            quest.discovery_policy["sources"][0]["mob_definition"],
             quartermaster.slug,
         )
         objective_where = quest.graph["steps"][0]["objectives"][0]["tracker"]["where"]["all"]
         self.assertEqual(
             objective_where[0]["eq"][1],
-            f"mobtemplate.{quartermaster.slug}",
+            f"mobdefinition.{quartermaster.slug}",
         )
         self.assertEqual(
             objective_where[1]["eq"][1],
             wolf_pelt.slug,
         )
         self.assertEqual(
-            quest.graph["steps"][0]["effects"][0]["item_template"],
+            quest.graph["steps"][0]["effects"][0]["item_definition"],
             wolf_pelt.slug,
         )
 
@@ -254,11 +259,11 @@ spec:
         )
 
     def test_apply_quest_manifest_accepts_step_room_items(self):
-        quest_item = ItemTemplate.objects.create(
+        quest_item = ItemDefinition.objects.create(
             world=self.world,
             name="Saloon Keg",
             slug="saloon_keg",
-            type="quest",
+            item_type="quest",
         )
 
         manifest = f"""
@@ -289,7 +294,7 @@ spec:
       room_items:
         - id: saloon_keg
           room: room.{self.room.id}
-          item_template: {quest_item.slug}
+          item_definition: {quest_item.slug}
           ground_description: A full saloon keg rests here.
     - id: resolved
       kind: resolution
@@ -310,15 +315,15 @@ spec:
         quest = QuestTemplate.objects.get(slug="saloon_keg_run")
         room_item = quest.graph["steps"][0]["room_items"][0]
         self.assertEqual(room_item["id"], "saloon_keg")
-        self.assertEqual(room_item["item_template"], quest_item.slug)
+        self.assertEqual(room_item["item_definition"], quest_item.slug)
         self.assertEqual(room_item["room"], f"room.{self.room.id}")
 
-    def test_apply_quest_manifest_rejects_non_quest_step_room_item_templates(self):
-        inert_item = ItemTemplate.objects.create(
+    def test_apply_quest_manifest_rejects_non_quest_step_room_item_definitions(self):
+        inert_item = ItemDefinition.objects.create(
             world=self.world,
             name="Lantern",
             slug="lantern",
-            type="inert",
+            item_type="inert",
         )
 
         manifest = f"""
@@ -349,7 +354,7 @@ spec:
       room_items:
         - id: lantern
           room: room.{self.room.id}
-          item_template: {inert_item.slug}
+          item_definition: {inert_item.slug}
     - id: resolved
       kind: resolution
       recap: Done.
@@ -651,7 +656,7 @@ spec:
             scope="player",
             status="draft",
             discovery_policy={
-                "sources": [{"type": "npc_dialogue", "mob_template": "mobtemplate.12"}],
+                "sources": [{"type": "npc_dialogue", "mob_definition": "mobdefinition.12"}],
                 "visible_if": {},
                 "accept_if": {},
                 "salience": 10,

@@ -23,8 +23,8 @@ IS_CLUSTER = pick({
 MOVEMENT_COST = 2
 # Shared cadence for heartbeat/tick-like async behavior across WR2 systems.
 GAME_HEARTBEAT_INTERVAL_SECONDS = 2
-# Loader cadence for periodic world respawn processing.
-GAME_LOADER_INTERVAL_SECONDS = 15
+# Spawn-plan cadence for periodic world respawn processing.
+GAME_SPAWN_PLAN_INTERVAL_SECONDS = 15
 # Default percent chance that a roaming mob moves on each heartbeat.
 DEFAULT_MOB_ROAM_CHANCE = 10
 
@@ -77,9 +77,6 @@ MOB_EXP = {
 
 ELITE_BOOST_DEFAULT = 4
 ELITE_BOOST = {'armor': 1, 'resilience': 1, 'health_max': 6}
-
-CRAFTER_MULTIPLIER = 3
-MERCHANT_PROFITS = 2
 
 PLAYER_STARTING_MAX_STAMINA = 100
 PLAYER_STARTING_STAMINA_REGEN = 2

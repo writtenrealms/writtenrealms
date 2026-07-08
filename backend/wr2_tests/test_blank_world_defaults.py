@@ -50,7 +50,7 @@ class TestBlankWorldDefaults(TestCase):
             user=self.user,
             world=spawn_world,
             room=world.config.starting_room,
-        ).initialize(starting_eq=False)
+        ).initialize(include_starting_equipment=False)
 
         self.assertEqual(player.stamina, adv_config.PLAYER_STARTING_MAX_STAMINA)
 

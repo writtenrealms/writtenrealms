@@ -817,7 +817,7 @@ def _actor_type(actor: Any) -> str:
     class_name = actor.__class__.__name__.lower()
     if class_name == "player" or hasattr(actor, "user_id"):
         return "player"
-    if class_name == "mob" or hasattr(actor, "template_id"):
+    if class_name == "mob" or hasattr(actor, "definition_id"):
         return "mob"
     return class_name or "actor"
 
@@ -836,8 +836,6 @@ def _item_stat(item: Any, field_name: str) -> float:
     if item is None:
         return 0.0
     value = getattr(item, field_name, None)
-    if value is None and getattr(item, "template", None) is not None:
-        value = getattr(item.template, field_name, 0)
     if value is None:
         return 0.0
     try:

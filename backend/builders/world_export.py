@@ -11,19 +11,14 @@ from django.utils.text import slugify
 from rest_framework import serializers
 
 from builders import manifests as builder_manifests
-from builders import serializers as builder_serializers
 from builders.models import (
     AbilityDefinition,
     Currency,
     Faction,
     ItemBundle,
     ItemDefinition,
-    ItemTemplate,
-    ItemTemplateInventory,
     MerchantProfile,
     MobDefinition,
-    MobTemplate,
-    MobTemplateInventory,
     Path,
     PathRoom,
     SpawnEntry,
@@ -46,7 +41,6 @@ CURRENCY_MANIFEST_KIND = "currency"
 ZONE_MANIFEST_KIND = "zone"
 ROOM_MANIFEST_KIND = "room"
 PATH_MANIFEST_KIND = "path"
-MOB_TEMPLATE_MANIFEST_KIND = "mobtemplate"
 SPAWN_PLAN_MANIFEST_KIND = "spawnplan"
 
 _WORLD_KIND_ALIASES = {"world"}
@@ -54,12 +48,10 @@ _ZONE_KIND_ALIASES = {"zone"}
 _ROOM_KIND_ALIASES = {"room"}
 _PATH_KIND_ALIASES = {"path"}
 _CURRENCY_KIND_ALIASES = {"currency"}
-_ITEM_TEMPLATE_KIND_ALIASES = {"itemtemplate", "item-template", "item_template"}
 _ITEM_DEFINITION_KIND_ALIASES = {"itemdefinition", "item-definition", "item_definition"}
 _ITEM_BUNDLE_KIND_ALIASES = {"itembundle", "item-bundle", "item_bundle"}
 _MERCHANT_PROFILE_KIND_ALIASES = {"merchantprofile", "merchant-profile", "merchant_profile"}
 _FACTION_KIND_ALIASES = {"faction"}
-_MOB_TEMPLATE_KIND_ALIASES = {"mobtemplate", "mob-template", "mob_template"}
 _MOB_DEFINITION_KIND_ALIASES = {"mobdefinition", "mob-definition", "mob_definition"}
 _SPAWN_PLAN_KIND_ALIASES = {"spawnplan", "spawn-plan", "spawn_plan"}
 _QUEST_KIND_ALIASES = {quest_manifests.QUEST_MANIFEST_KIND}
@@ -75,69 +67,13 @@ _ABILITIES_KIND_ALIASES = {builder_manifests.ABILITIES_MANIFEST_KIND}
 _ROOM_REF_PREFIX = "room@"
 _ZONE_REF_PREFIX = "zone@"
 _PATH_REF_PREFIX = "path@"
-_ITEM_REF_PREFIX = "itemtemplate."
 _ITEM_DEFINITION_REF_PREFIX = "itemdefinition."
 _ITEM_BUNDLE_REF_PREFIX = "itembundle."
 _MERCHANT_PROFILE_REF_PREFIX = "merchantprofile."
-_MOB_REF_PREFIX = "mobtemplate."
 _MOB_DEFINITION_REF_PREFIX = "mobdefinition."
 
 _ZONE_SORT_KEY = lambda zone: ((zone.name or "").lower(), zone.id)
 _ROOM_SORT_KEY = lambda room: (room.z, room.y, room.x, room.id)
-
-_MOB_TEMPLATE_SPEC_FIELDS = (
-    "level",
-    "description",
-    "room_description",
-    "keywords",
-    "notes",
-    "gold",
-    "type",
-    "archetype",
-    "gender",
-    "exp_worth",
-    "roaming_type",
-    "alignment",
-    "aggression",
-    "use_abilities",
-    "roam_chance",
-    "hit_msg_first",
-    "hit_msg_third",
-    "health_max",
-    "health_regen",
-    "energy_max",
-    "energy_regen",
-    "stamina_max",
-    "stamina_regen",
-    "regen_rate",
-    "attack_power",
-    "ability_power",
-    "crit",
-    "resilience",
-    "dodge",
-    "armor",
-    "drops_random_items",
-    "num_items",
-    "is_crafter",
-    "load_specification",
-    "chance_imbued",
-    "chance_enchanted",
-    "default_stats",
-    "is_elite",
-    "is_invisible",
-    "fights_back",
-    "craft_multiplier",
-    "craft_enchanted",
-    "combat_script",
-    "traits",
-    "is_upgrader",
-    "upgrade_cost_multiplier",
-    "upgrade_success_chance",
-    "upgrade_success_cmd",
-    "upgrade_failure_cmd",
-    "merchant_profit",
-)
-
 
 class _WorldExportDumper(yaml.SafeDumper):
     pass
@@ -184,8 +120,6 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
         return ROOM_MANIFEST_KIND
     if raw_kind in _PATH_KIND_ALIASES:
         return PATH_MANIFEST_KIND
-    if raw_kind in _ITEM_TEMPLATE_KIND_ALIASES:
-        return builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND
     if raw_kind in _ITEM_DEFINITION_KIND_ALIASES:
         return builder_manifests.ITEM_DEFINITION_MANIFEST_KIND
     if raw_kind in _ITEM_BUNDLE_KIND_ALIASES:
@@ -194,8 +128,6 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
         return builder_manifests.MERCHANT_PROFILE_MANIFEST_KIND
     if raw_kind in _FACTION_KIND_ALIASES:
         return builder_manifests.FACTION_MANIFEST_KIND
-    if raw_kind in _MOB_TEMPLATE_KIND_ALIASES:
-        return MOB_TEMPLATE_MANIFEST_KIND
     if raw_kind in _MOB_DEFINITION_KIND_ALIASES:
         return builder_manifests.MOB_DEFINITION_MANIFEST_KIND
     if raw_kind in _SPAWN_PLAN_KIND_ALIASES:
@@ -212,7 +144,7 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
         return builder_manifests.ABILITIES_MANIFEST_KIND
     raise serializers.ValidationError(
         "Unsupported manifest kind. Supported kinds: "
-        "world, currency, zone, room, path, itemtemplate, itemdefinition, itembundle, merchantprofile, faction, mobtemplate, mobdefinition, spawnplan, questarc, quest, trigger, ability, abilities."
+        "world, currency, zone, room, path, itemdefinition, itembundle, merchantprofile, faction, mobdefinition, spawnplan, questarc, quest, trigger, ability, abilities."
     )
 
 
@@ -304,12 +236,6 @@ def _parse_path_ref(value: Any, *, field_name: str = "path") -> int:
     return relative_id
 
 
-def _item_ref(item_template: ItemTemplate | None) -> str:
-    if item_template is None or not item_template.slug:
-        return ""
-    return f"{_ITEM_REF_PREFIX}{item_template.slug}"
-
-
 def _item_definition_ref(item_definition: ItemDefinition | None) -> str:
     if item_definition is None or not item_definition.slug:
         return ""
@@ -320,12 +246,6 @@ def _item_bundle_ref(item_bundle: ItemBundle | None) -> str:
     if item_bundle is None or not item_bundle.slug:
         return ""
     return f"{_ITEM_BUNDLE_REF_PREFIX}{item_bundle.slug}"
-
-
-def _mob_ref(mob_template: MobTemplate | None) -> str:
-    if mob_template is None or not mob_template.slug:
-        return ""
-    return f"{_MOB_REF_PREFIX}{mob_template.slug}"
 
 
 def _mob_definition_ref(mob_definition: MobDefinition | None) -> str:
@@ -467,7 +387,7 @@ def _serialize_room_manifest(room: Room) -> dict[str, Any]:
                     "direction": door.direction,
                     "name": door.name or "",
                     "to_room": _room_ref(door.to_room),
-                    "key": _item_ref(door.key),
+                    "key": _item_definition_ref(door.key),
                     "destroy_key": bool(door.destroy_key),
                     "default_state": door.default_state,
                 }
@@ -498,45 +418,12 @@ def _serialize_path_manifest(path: Path) -> dict[str, Any]:
     }
 
 
-def _serialize_item_template_manifest(item_template: ItemTemplate) -> dict[str, Any]:
-    manifest = builder_manifests.item_template_to_manifest(item_template)
-    spec = copy.deepcopy(manifest["spec"])
-    spec["inventory"] = [
-        _serialize_template_inventory_entry(inventory)
-        for inventory in item_template.template_inventories.select_related("item_template").all().order_by(
-            "item_template__slug", "id"
-        )
-    ]
-    return {
-        "kind": builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND,
-        "metadata": {
-            "slug": item_template.slug,
-            "name": item_template.name or "",
-        },
-        "spec": spec,
-    }
-
-
 def _serialize_item_definition_manifest(item_definition: ItemDefinition) -> dict[str, Any]:
     manifest = builder_manifests.item_definition_to_manifest(item_definition)
     manifest["metadata"].pop("world", None)
     manifest["metadata"].pop("id", None)
     manifest["metadata"].pop("key", None)
     return manifest
-
-
-def _serialize_template_inventory_entry(inventory) -> dict[str, Any]:
-    entry = {
-        "probability": int(inventory.probability),
-        "num_copies": int(inventory.num_copies),
-    }
-    if getattr(inventory, "item_template_id", None):
-        entry["item_template"] = _item_ref(inventory.item_template)
-    elif getattr(inventory, "item_definition_id", None):
-        entry["item_definition"] = _item_definition_ref(inventory.item_definition)
-    elif getattr(inventory, "item_bundle_id", None):
-        entry["item_bundle"] = _item_bundle_ref(inventory.item_bundle)
-    return entry
 
 
 def _serialize_item_bundle_manifest(item_bundle: ItemBundle) -> dict[str, Any]:
@@ -571,31 +458,6 @@ def _serialize_faction_manifest(faction: Faction) -> dict[str, Any]:
     manifest["metadata"].pop("id", None)
     manifest["metadata"].pop("key", None)
     return manifest
-
-
-def _serialize_mob_template_manifest(mob_template: MobTemplate) -> dict[str, Any]:
-    spec: dict[str, Any] = {}
-    for field_name in _MOB_TEMPLATE_SPEC_FIELDS:
-        value = getattr(mob_template, field_name)
-        spec[field_name] = "" if value is None else value
-    spec["inventory"] = [
-        _serialize_template_inventory_entry(inventory)
-        for inventory in mob_template.template_inventories.select_related(
-            "item_template",
-            "item_definition",
-            "item_bundle",
-        ).all().order_by(
-            "item_template__slug", "id"
-        )
-    ]
-    return {
-        "kind": MOB_TEMPLATE_MANIFEST_KIND,
-        "metadata": {
-            "slug": mob_template.slug,
-            "name": mob_template.name or "",
-        },
-        "spec": spec,
-    }
 
 
 def _serialize_mob_definition_manifest(mob_definition: MobDefinition) -> dict[str, Any]:
@@ -742,7 +604,7 @@ def _serialize_ability_manifest(ability: AbilityDefinition) -> dict[str, Any]:
     return manifest
 
 
-def _canonicalize_template_ref(
+def _canonicalize_entity_ref(
     value: Any,
     *,
     world: World,
@@ -753,19 +615,19 @@ def _canonicalize_template_ref(
     if quest_entity_refs.is_dynamic_reference(value):
         return value
 
-    template_id = quest_entity_refs.resolve_template_ref_id(
+    entity_id = quest_entity_refs.resolve_entity_ref_id(
         world=world,
         value=value,
         expected_type=expected_type,
     )
-    if template_id is None:
+    if entity_id is None:
         return value
 
-    model_cls = ItemTemplate if expected_type == "itemtemplate" else MobTemplate
-    template = model_cls.objects.filter(world=world, pk=template_id).first()
-    if not template or not template.slug:
+    model_cls = ItemDefinition if expected_type == "itemdefinition" else MobDefinition
+    entity = model_cls.objects.filter(world=world, pk=entity_id).first()
+    if not entity or not entity.slug:
         return value
-    return f"{expected_type}.{template.slug}"
+    return f"{expected_type}.{entity.slug}"
 
 
 def _canonicalize_room_ref(value: Any, *, world: World) -> Any:
@@ -867,24 +729,24 @@ def _canonicalize_condition_refs(
                 ]
             continue
 
-        expected_type = quest_manifests._condition_expected_template_type(left_path, right_value)
+        expected_type = quest_manifests._condition_expected_entity_type(left_path, right_value)
         if expected_type is None:
-            expected_type = quest_manifests._condition_expected_template_type(left_path)
+            expected_type = quest_manifests._condition_expected_entity_type(left_path)
         if not expected_type:
             continue
 
         if operator == "in" and isinstance(right_value, list):
             canonical[operator] = [
                 left_path,
-                [
-                    _canonicalize_template_ref(candidate, world=world, expected_type=expected_type)
+                    [
+                    _canonicalize_entity_ref(candidate, world=world, expected_type=expected_type)
                     for candidate in right_value
                 ],
             ]
         else:
             canonical[operator] = [
                 left_path,
-                _canonicalize_template_ref(right_value, world=world, expected_type=expected_type),
+                _canonicalize_entity_ref(right_value, world=world, expected_type=expected_type),
             ]
 
     return canonical
@@ -904,30 +766,30 @@ def _canonicalize_quest_node(node: Any, *, world: World) -> Any:
     for key, value in node.items():
         if key in {"room", "room_id"} and (
             str(node.get("type") or "").strip().lower() == "room_prompt"
-            or "item_template" in node
-            or "item_template_id" in node
+            or "item_definition" in node
+            or "item_definition_id" in node
         ):
             canonical["room"] = _canonicalize_room_ref(value, world=world)
             continue
-        if key in {"mob_template", "mob_template_id"}:
-            canonical["mob_template"] = _canonicalize_template_ref(
+        if key in {"mob_definition", "mob_definition_id"}:
+            canonical["mob_definition"] = _canonicalize_entity_ref(
                 value,
                 world=world,
-                expected_type="mobtemplate",
+                expected_type="mobdefinition",
             )
             continue
-        if key in {"item_template", "item_template_id"}:
-            canonical["item_template"] = _canonicalize_template_ref(
+        if key in {"item_definition", "item_definition_id"}:
+            canonical["item_definition"] = _canonicalize_entity_ref(
                 value,
                 world=world,
-                expected_type="itemtemplate",
+                expected_type="itemdefinition",
             )
             continue
         if key in {"entity", "value"} and isinstance(value, str):
             prefix, sep, _ = value.strip().partition(".")
-            expected_type = quest_entity_refs.canonical_template_type(prefix) if sep == "." else None
+            expected_type = quest_entity_refs.canonical_entity_type(prefix) if sep == "." else None
             if expected_type:
-                canonical[key] = _canonicalize_template_ref(
+                canonical[key] = _canonicalize_entity_ref(
                     value,
                     world=world,
                     expected_type=expected_type,
@@ -974,8 +836,10 @@ def _serialize_trigger_target(trigger: Trigger) -> dict[str, Any]:
         return {"type": "zone", "ref": trigger.target.name if trigger.target else ""}
     if target_model == World:
         return {"type": "world", "ref": "world"}
-    if target_model == MobTemplate:
-        return {"type": "mobtemplate", "ref": _mob_ref(trigger.target)}
+    if target_model == MobDefinition:
+        return {"type": "mobdefinition", "ref": _mob_definition_ref(trigger.target)}
+    if target_model == ItemDefinition:
+        return {"type": "itemdefinition", "ref": _item_definition_ref(trigger.target)}
     return {"type": trigger.target_type.model, "ref": ""}
 
 
@@ -1020,12 +884,6 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
         *[
             _serialize_currency_manifest(currency)
             for currency in world.currencies.all().order_by("code", "id")
-        ],
-        *[
-            _serialize_item_template_manifest(item_template)
-            for item_template in world.item_templates.prefetch_related(
-                "template_inventories__item_template",
-            ).order_by("slug", "id")
         ],
         *[
             _serialize_item_definition_manifest(item_definition)
@@ -1079,14 +937,6 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             )
         ],
         *[
-            _serialize_mob_template_manifest(mob_template)
-            for mob_template in world.mob_templates.prefetch_related(
-                "template_inventories__item_template",
-                "template_inventories__item_definition",
-                "template_inventories__item_bundle",
-            ).order_by("slug", "id")
-        ],
-        *[
             _serialize_mob_definition_manifest(mob_definition)
             for mob_definition in world.mob_definitions.all().order_by("slug", "id")
         ],
@@ -1125,12 +975,10 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
         "zones": 0,
         "rooms": 0,
         "paths": 0,
-        "item_templates": 0,
         "item_definitions": 0,
         "item_bundles": 0,
         "merchant_profiles": 0,
         "factions": 0,
-        "mob_templates": 0,
         "mob_definitions": 0,
         "spawn_plans": 0,
         "abilities": 0,
@@ -1148,8 +996,6 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
             counts["rooms"] += 1
         elif kind == PATH_MANIFEST_KIND:
             counts["paths"] += 1
-        elif kind == builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND:
-            counts["item_templates"] += 1
         elif kind == builder_manifests.ITEM_DEFINITION_MANIFEST_KIND:
             counts["item_definitions"] += 1
         elif kind == builder_manifests.ITEM_BUNDLE_MANIFEST_KIND:
@@ -1158,8 +1004,6 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
             counts["merchant_profiles"] += 1
         elif kind == builder_manifests.FACTION_MANIFEST_KIND:
             counts["factions"] += 1
-        elif kind == MOB_TEMPLATE_MANIFEST_KIND:
-            counts["mob_templates"] += 1
         elif kind == builder_manifests.MOB_DEFINITION_MANIFEST_KIND:
             counts["mob_definitions"] += 1
         elif kind == SPAWN_PLAN_MANIFEST_KIND:
@@ -1290,48 +1134,6 @@ def _get_or_create_room(*, world: World, room_ref: Any, zone: Zone | None = None
     )
 
 
-def _get_or_create_item_template(*, world: World, value: Any, field_name: str) -> ItemTemplate:
-    template_id = quest_entity_refs.resolve_template_ref_id(
-        world=world,
-        value=value,
-        expected_type="itemtemplate",
-    )
-    if template_id is not None:
-        item_template = ItemTemplate.objects.filter(world=world, pk=template_id).first()
-        if item_template:
-            return item_template
-
-    text = str(value or "").strip()
-    if not text:
-        raise serializers.ValidationError(f"{field_name} is required.")
-    if text.isdigit():
-        raise serializers.ValidationError(f"{field_name} references an unknown item template.")
-
-    prefix, sep, raw = text.partition(".")
-    if sep == ".":
-        if prefix not in {"itemtemplate", "item_template"}:
-            raise serializers.ValidationError(
-                f"{field_name} must reference an item template slug."
-            )
-        text = raw
-
-    slug = _slug_or_error(text, field_name)
-    item_template = ItemTemplate.objects.filter(world=world, slug=slug).first()
-    if item_template:
-        return item_template
-
-    manifest = {
-        "kind": builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND,
-        "metadata": {
-            "slug": slug,
-            "name": slug.replace("-", " ").title(),
-        },
-        "spec": {},
-    }
-    parsed = builder_manifests.parse_item_template_manifest(world=world, manifest=manifest)
-    return builder_manifests.apply_item_template_manifest(parsed)
-
-
 def _get_item_definition(*, world: World, value: Any, field_name: str) -> ItemDefinition:
     text = str(value or "").strip()
     if not text:
@@ -1357,6 +1159,31 @@ def _get_item_definition(*, world: World, value: Any, field_name: str) -> ItemDe
     raise serializers.ValidationError(f"{field_name} references an unknown item definition.")
 
 
+def _get_mob_definition(*, world: World, value: Any, field_name: str) -> MobDefinition:
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(f"{field_name} is required.")
+    if text.isdigit():
+        mob_definition = MobDefinition.objects.filter(world=world, pk=int(text)).first()
+        if mob_definition:
+            return mob_definition
+        raise serializers.ValidationError(f"{field_name} references an unknown mob definition.")
+
+    prefix, sep, raw = text.partition(".")
+    if sep == ".":
+        if prefix not in {"mobdefinition", "mob_definition"}:
+            raise serializers.ValidationError(
+                f"{field_name} must reference a mob definition slug."
+            )
+        text = raw
+
+    slug = _slug_or_error(text, field_name)
+    mob_definition = MobDefinition.objects.filter(world=world, slug=slug).first()
+    if mob_definition:
+        return mob_definition
+    raise serializers.ValidationError(f"{field_name} references an unknown mob definition.")
+
+
 def _get_item_bundle(*, world: World, value: Any, field_name: str) -> ItemBundle:
     text = str(value or "").strip()
     if not text:
@@ -1380,47 +1207,6 @@ def _get_item_bundle(*, world: World, value: Any, field_name: str) -> ItemBundle
     if item_bundle:
         return item_bundle
     raise serializers.ValidationError(f"{field_name} references an unknown item bundle.")
-
-
-def _get_or_create_mob_template(*, world: World, value: Any, field_name: str) -> MobTemplate:
-    template_id = quest_entity_refs.resolve_template_ref_id(
-        world=world,
-        value=value,
-        expected_type="mobtemplate",
-    )
-    if template_id is not None:
-        mob_template = MobTemplate.objects.filter(world=world, pk=template_id).first()
-        if mob_template:
-            return mob_template
-
-    text = str(value or "").strip()
-    if not text:
-        raise serializers.ValidationError(f"{field_name} is required.")
-    if text.isdigit():
-        raise serializers.ValidationError(f"{field_name} references an unknown mob template.")
-
-    prefix, sep, raw = text.partition(".")
-    if sep == ".":
-        if prefix not in {"mobtemplate", "mob_template"}:
-            raise serializers.ValidationError(
-                f"{field_name} must reference a mob template slug."
-            )
-        text = raw
-
-    slug = _slug_or_error(text, field_name)
-    mob_template = MobTemplate.objects.filter(world=world, slug=slug).first()
-    if mob_template:
-        return mob_template
-
-    serializer = builder_serializers.MobTemplateSerializer(
-        data={
-            "slug": slug,
-            "name": slug.replace("-", " ").title(),
-        },
-        context={"world": world},
-    )
-    serializer.is_valid(raise_exception=True)
-    return serializer.save(world=world)
 
 
 def _resolve_spawn_plan_zone(*, world: World, value: Any, field_name: str) -> Zone:
@@ -1950,7 +1736,7 @@ def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room
                     to_room=_get_or_create_room(world=world, room_ref=to_room_ref),
                     name=str(door.get("name") or "door"),
                     key=(
-                        _get_or_create_item_template(
+                        _get_item_definition(
                             world=world,
                             value=key_ref,
                             field_name="spec.doors.key",
@@ -2075,47 +1861,6 @@ def delete_path_manifest(*, world: World, manifest: dict[str, Any]) -> Path:
     return path
 
 
-def _apply_item_template_inventory(*, world: World, container: ItemTemplate, inventory: list[Any]) -> None:
-    if not isinstance(inventory, list):
-        raise serializers.ValidationError("spec.inventory must be a list.")
-    ItemTemplateInventory.objects.filter(container=container).delete()
-    for entry in inventory:
-        if not isinstance(entry, dict):
-            raise serializers.ValidationError("spec.inventory entries must be mappings.")
-        item_template = _get_or_create_item_template(
-            world=world,
-            value=entry.get("item_template"),
-            field_name="spec.inventory.item_template",
-        )
-        ItemTemplateInventory.objects.create(
-            container=container,
-            item_template=item_template,
-            probability=int(entry.get("probability", 100)),
-            num_copies=int(entry.get("num_copies", 1)),
-        )
-
-
-def apply_item_template_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[ItemTemplate, bool]:
-    if parse_document_kind(manifest) != builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND:
-        raise serializers.ValidationError("Unsupported manifest kind. Expected 'itemtemplate'.")
-
-    normalized = copy.deepcopy(manifest)
-    spec = _manifest_spec(normalized)
-    inventory = spec.pop("inventory", None)
-
-    with transaction.atomic():
-        parsed = builder_manifests.parse_item_template_manifest(world=world, manifest=normalized)
-        created = parsed.item_template is None
-        item_template = builder_manifests.apply_item_template_manifest(parsed)
-        if inventory is not None:
-            _apply_item_template_inventory(
-                world=world,
-                container=item_template,
-                inventory=inventory,
-            )
-    return item_template, created
-
-
 def apply_item_definition_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[ItemDefinition, bool]:
     if parse_document_kind(manifest) != builder_manifests.ITEM_DEFINITION_MANIFEST_KIND:
         raise serializers.ValidationError("Unsupported manifest kind. Expected 'itemdefinition'.")
@@ -2203,108 +1948,6 @@ def delete_faction_manifest(*, world: World, manifest: dict[str, Any]) -> Factio
     faction._deleted_payload = builder_manifests.serialize_faction_payload(faction)
     faction.delete()
     return faction
-
-
-def _apply_mob_template_inventory(*, world: World, container: MobTemplate, inventory: list[Any]) -> None:
-    if not isinstance(inventory, list):
-        raise serializers.ValidationError("spec.inventory must be a list.")
-    MobTemplateInventory.objects.filter(container=container).delete()
-    for entry in inventory:
-        if not isinstance(entry, dict):
-            raise serializers.ValidationError("spec.inventory entries must be mappings.")
-        source_fields = [
-            key
-            for key in ("item_template", "item_definition", "item_bundle")
-            if entry.get(key)
-        ]
-        if len(source_fields) != 1:
-            raise serializers.ValidationError(
-                "spec.inventory entries must specify exactly one of item_template, "
-                "item_definition, or item_bundle."
-            )
-        create_kwargs = {
-            "container": container,
-            "probability": int(entry.get("probability", 100)),
-            "num_copies": int(entry.get("num_copies", 1)),
-        }
-        if source_fields[0] == "item_template":
-            create_kwargs["item_template"] = _get_or_create_item_template(
-                world=world,
-                value=entry.get("item_template"),
-                field_name="spec.inventory.item_template",
-            )
-        elif source_fields[0] == "item_definition":
-            create_kwargs["item_definition"] = _get_item_definition(
-                world=world,
-                value=entry.get("item_definition"),
-                field_name="spec.inventory.item_definition",
-            )
-        else:
-            create_kwargs["item_bundle"] = _get_item_bundle(
-                world=world,
-                value=entry.get("item_bundle"),
-                field_name="spec.inventory.item_bundle",
-            )
-        MobTemplateInventory.objects.create(
-            **create_kwargs,
-        )
-
-
-def apply_mob_template_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[MobTemplate, bool]:
-    if parse_document_kind(manifest) != MOB_TEMPLATE_MANIFEST_KIND:
-        raise serializers.ValidationError("Unsupported manifest kind. Expected 'mobtemplate'.")
-    if builder_manifests.parse_manifest_operation(manifest) != builder_manifests.TRIGGER_MANIFEST_OPERATION_APPLY:
-        raise serializers.ValidationError("Mob template manifests only support operation 'apply'.")
-
-    metadata = _manifest_metadata(manifest)
-    spec = copy.deepcopy(_manifest_spec(manifest))
-    inventory = spec.pop("inventory", None)
-
-    slug_source = metadata.get("slug") or metadata.get("name")
-    slug = _slug_or_error(slug_source, "metadata.slug")
-    name = str(metadata.get("name") or slug.replace("-", " ").title()).strip()
-    if not name:
-        raise serializers.ValidationError("metadata.name cannot be empty.")
-
-    mob_template = MobTemplate.objects.filter(world=world, slug=slug).first()
-    created = mob_template is None
-
-    serializer_data: dict[str, Any] = {
-        "slug": slug,
-        "name": name,
-    }
-    for field_name in _MOB_TEMPLATE_SPEC_FIELDS:
-        if field_name in spec:
-            serializer_data[field_name] = spec.get(field_name)
-
-    serializer = builder_serializers.MobTemplateSerializer(
-        instance=mob_template,
-        data=serializer_data,
-        context={"world": world},
-    )
-    serializer.is_valid(raise_exception=True)
-
-    with transaction.atomic():
-        saved_mob = serializer.save(world=world) if mob_template is None else serializer.save()
-
-        explicit_updates = {
-            field_name: spec.get(field_name)
-            for field_name in _MOB_TEMPLATE_SPEC_FIELDS
-            if field_name in spec
-        }
-        if explicit_updates:
-            for field_name, value in explicit_updates.items():
-                setattr(saved_mob, field_name, value)
-            saved_mob.save(update_fields=list(explicit_updates.keys()))
-
-        if inventory is not None:
-            _apply_mob_template_inventory(
-                world=world,
-                container=saved_mob,
-                inventory=inventory,
-            )
-
-    return saved_mob, created
 
 
 def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[SpawnPlan, bool]:
@@ -2520,9 +2163,13 @@ def _resolve_trigger_target(
             return ContentType.objects.get_for_model(World), builder_manifests._parse_entity_ref(
                 target_key, "world", "spec.target.key"
             )
-        if target_type in {"mobtemplate", "mob_template"}:
-            return ContentType.objects.get_for_model(MobTemplate), builder_manifests._parse_entity_ref(
-                target_key, "mobtemplate", "spec.target.key"
+        if target_type in {"mobdefinition", "mob_definition"}:
+            return ContentType.objects.get_for_model(MobDefinition), builder_manifests._parse_entity_ref(
+                target_key, "mobdefinition", "spec.target.key"
+            )
+        if target_type in {"itemdefinition", "item_definition"}:
+            return ContentType.objects.get_for_model(ItemDefinition), builder_manifests._parse_entity_ref(
+                target_key, "itemdefinition", "spec.target.key"
             )
 
     if target_type == "world":
@@ -2537,8 +2184,14 @@ def _resolve_trigger_target(
         if zone is None:
             raise serializers.ValidationError("spec.target.ref is required for zone targets.")
         return ContentType.objects.get_for_model(Zone), zone.id
-    if target_type in {"mobtemplate", "mob_template"}:
-        return ContentType.objects.get_for_model(MobTemplate), _get_or_create_mob_template(
+    if target_type in {"mobdefinition", "mob_definition"}:
+        return ContentType.objects.get_for_model(MobDefinition), _get_mob_definition(
+            world=world,
+            value=target_ref,
+            field_name="spec.target.ref",
+        ).id
+    if target_type in {"itemdefinition", "item_definition"}:
+        return ContentType.objects.get_for_model(ItemDefinition), _get_item_definition(
             world=world,
             value=target_ref,
             field_name="spec.target.ref",

@@ -2,7 +2,7 @@
   <div id="edit-world-manifest">
     <h2>{{ world.name.toUpperCase() }} EDIT WORLD</h2>
     <div class="color-text-60 mb-6">
-      Paste one or more YAML manifests. Each YAML document is applied in order. Supported kinds: world, currency, faction, zone, room, path, itemtemplate, itemdefinition, itembundle, merchantprofile, mobtemplate, mobdefinition, spawnplan, ability, abilities, quest, questarc, and trigger.
+      Paste one or more YAML manifests. Each YAML document is applied in order. Supported kinds: world, currency, faction, zone, room, path, itemdefinition, itembundle, merchantprofile, mobdefinition, spawnplan, ability, abilities, quest, questarc, and trigger.
     </div>
 
     <template v-if="!hasApplyResult">
@@ -99,10 +99,8 @@ const payloadKeyByKind: Record<string, string> = {
   faction: "faction",
   itembundle: "item_bundle",
   itemdefinition: "item_definition",
-  itemtemplate: "item_template",
   merchantprofile: "merchant_profile",
   mobdefinition: "mob_definition",
-  mobtemplate: "mob_template",
   path: "path",
   quest: "quest",
   questarc: "quest_arc",
@@ -119,10 +117,8 @@ const kindLabels: Record<string, string> = {
   faction: "Faction",
   itembundle: "Item bundle",
   itemdefinition: "Item",
-  itemtemplate: "Item template",
   merchantprofile: "Merchant profile",
   mobdefinition: "Mob",
-  mobtemplate: "Mob template",
   path: "Path",
   quest: "Quest template",
   questarc: "Quest arc",
@@ -229,12 +225,6 @@ const routeForEntity = (
       params: { world_id: worldId, zone_id: payload.zone.id, path_id: id },
     };
   }
-  if (kind === "itemtemplate" && id) {
-    return {
-      name: "builder_item_template_details",
-      params: { world_id: worldId, item_template_id: id },
-    };
-  }
   if (kind === "itemdefinition" && id) {
     return {
       name: "builder_item_definition_details",
@@ -245,12 +235,6 @@ const routeForEntity = (
     return {
       name: "builder_item_bundle_details",
       params: { world_id: worldId, item_bundle_id: id },
-    };
-  }
-  if (kind === "mobtemplate" && id) {
-    return {
-      name: "builder_mob_template_details",
-      params: { world_id: worldId, mob_template_id: id },
     };
   }
   if (kind === "mobdefinition" && id) {
@@ -272,10 +256,7 @@ const routeForEntity = (
     };
   }
   if (kind === "spawnplan" && id && payload?.zone?.id) {
-    return {
-      name: "builder_zone_loader_details",
-      params: { world_id: worldId, zone_id: payload.zone.id, loader_id: id },
-    };
+    return { name: "builder_world_edit", params: { world_id: worldId } };
   }
 
   return undefined;

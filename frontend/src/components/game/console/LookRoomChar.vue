@@ -69,8 +69,8 @@ const handleClick = () => {
 }
 
 const quest_indicator = computed(() => {
-  if (props.char.quest_data.complete) return '?';
-  else if (props.char.quest_data.enquire) return '!';
+  if (props.char.quest_indicator?.ready) return '?';
+  else if (props.char.quest_indicator?.available) return '!';
   return null;
 });
 </script>

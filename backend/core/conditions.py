@@ -181,7 +181,7 @@ def _serialize_item(item):
         'key': getattr(item, 'key', ''),
         'name': getattr(item, 'name', ''),
         'keywords': getattr(item, 'keywords', ''),
-        'template_id': str(getattr(item, 'template_id', '') or ''),
+        'definition_id': str(getattr(item, 'definition_id', '') or ''),
         'equipment_type': getattr(item, 'equipment_type', '') or '',
         'weapon_type': getattr(item, 'weapon_type', '') or '',
     }
@@ -270,14 +270,14 @@ def _build_room_data(room):
     for player in room_players:
         data['chars'].append({
             'key': player.key,
-            'template_id': None,
+            'definition_id': None,
         })
 
     room_mobs = room.mobs.filter(is_pending_deletion=False)
     for mob in room_mobs:
         data['chars'].append({
             'key': mob.key,
-            'template_id': mob.template_id,
+            'definition_id': mob.definition_id,
         })
 
     return data
@@ -303,8 +303,8 @@ def evaluate_conditions(
     with 'and', 'or', 'not', or parentheses.
 
     The vast majority of the time, this is called from the game side, where 'actor' is a
-    Player game model. However in order to support loader conditions, we also support
-    'actor' being a spawned world object.
+    Player game model. Spawn-world conditions can also pass the spawned world
+    as the actor.
 
     returns {
         'result': True|False,
@@ -668,23 +668,23 @@ def evaluate_condition(world_data, actor_data, room_data, text):
 
     # Equipped
     if (condition_name == 'item_in_eq'):
-        template_id = str(tokens[1])
+        definition_id = str(tokens[1])
         for item_data in actor_data['equipment'].values() or []:
-            if item_data and item_data['template_id'] == template_id:
+            if item_data and item_data['definition_id'] == definition_id:
                 return return_true()
         return return_false("Item not equipped.")
 
     # Item in room
     if (condition_name == 'item_in_room'):
-        template_id = int(tokens[1])
+        definition_id = int(tokens[1])
         try:
             desired_item_count = int(tokens[2])
         except IndexError:
             desired_item_count = 1
         items_found = 0
         for item_data in room_data['inventory']:
-            if (item_data.get('template_id', 0)
-                and int(item_data.get('template_id', 0)) == template_id):
+            if (item_data.get('definition_id', 0)
+                and int(item_data.get('definition_id', 0)) == definition_id):
                 items_found += 1
         if items_found >= desired_item_count:
             return return_true()
@@ -692,15 +692,15 @@ def evaluate_condition(world_data, actor_data, room_data, text):
 
     # Item in inv
     if (condition_name == 'item_in_inv'):
-        template_id = int(tokens[1])
+        definition_id = int(tokens[1])
         try:
             desired_item_count = int(tokens[2])
         except IndexError:
             desired_item_count = 1
         items_found = 0
         for item_data in actor_data['inventory']:
-            if (item_data.get('template_id', 0)
-                and int(item_data.get('template_id', 0) or 0) == template_id):
+            if (item_data.get('definition_id', 0)
+                and int(item_data.get('definition_id', 0) or 0) == definition_id):
                 items_found += 1
         if items_found >= desired_item_count:
             return return_true()
@@ -764,14 +764,14 @@ def evaluate_condition(world_data, actor_data, room_data, text):
 
     # Mob in room
     if (condition_name == 'mob_in_room'):
-        template_id = int(tokens[1])
+        definition_id = int(tokens[1])
         try:
             desired_mob_count = int(tokens[2])
         except IndexError:
             desired_mob_count = 1
         mob_count = 0
         for char_data in room_data['chars']:
-            if (int(char_data.get('template_id', 0) or 0) == template_id):
+            if (int(char_data.get('definition_id', 0) or 0) == definition_id):
                 mob_count += 1
         if mob_count >= desired_mob_count:
             return return_true()

@@ -1,16 +1,12 @@
 import random
 import yaml
 
-from django.contrib.contenttypes.models import ContentType
 from rest_framework.reverse import reverse
 
-from builders.models import AbilityDefinition, ItemDefinition, Loader, MobDefinition, Rule
+from builders.models import AbilityDefinition, ItemDefinition, MobDefinition
 from config import constants as adv_consts
-from spawns.loading import LoaderRun
-from spawns.models import Mob
-from spawns.serializers import LoadTemplateSerializer
+from spawns.serializers import LoadDefinitionSerializer
 from tests.base import WorldTestCase
-from worlds.models import Room
 from wr2_tests.utils import apply_basic_stat_system
 
 
@@ -52,7 +48,6 @@ class TestMobDefinitions(WorldTestCase):
         )
 
         self.assertEqual(mob.definition, definition)
-        self.assertIsNone(mob.template)
         self.assertEqual(mob.name, "a bandit")
         self.assertEqual(mob.type, adv_consts.MOB_TYPE_HUMANOID)
         self.assertEqual(mob.level, 4)
@@ -100,56 +95,26 @@ class TestMobDefinitions(WorldTestCase):
         self.assertEqual(mob.attributes, {"brawn": 4})
         self.assertEqual(mob.roll_metadata["randomized"], False)
 
-    def test_loader_rule_can_spawn_mob_definition(self):
-        definition = MobDefinition.objects.create(
-            world=self.world,
-            slug="wild-boar",
-            name="a wild boar",
-            mob_type=adv_consts.MOB_TYPE_BEAST,
-            base_properties={"health_max": 18},
-        )
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False,
-        )
-        rule = Rule.objects.create(
-            loader=loader,
-            template_type=ContentType.objects.get_for_model(MobDefinition),
-            template_id=definition.id,
-            target_type=ContentType.objects.get_for_model(Room),
-            target_id=self.room.id,
-            num_copies=1,
-        )
-
-        output = LoaderRun(loader, self.spawn_world, check=False).execute(force=True)
-
-        spawned = output[rule.id][0]
-        self.assertIsInstance(spawned, Mob)
-        self.assertEqual(spawned.definition, definition)
-        self.assertIsNone(spawned.template)
-        self.assertEqual(spawned.rule, rule)
-
-    def test_load_template_serializer_resolves_mob_definition(self):
+    def test_load_definition_serializer_resolves_mob_definition(self):
         definition = MobDefinition.objects.create(
             world=self.world,
             slug="shade",
             name="a shade",
         )
 
-        serializer = LoadTemplateSerializer(
+        serializer = LoadDefinitionSerializer(
             data={
                 "world_id": self.spawn_world.id,
                 "actor_type": "player",
                 "actor_id": self.player.id,
-                "template_type": "mob",
-                "template_id": "shade",
+                "definition_type": "mob",
+                "definition_id": "shade",
                 "room": self.room.id,
             }
         )
 
         self.assertTrue(serializer.is_valid(), serializer.errors)
-        self.assertEqual(serializer.validated_data["template"], definition)
+        self.assertEqual(serializer.validated_data["definition"], definition)
 
 
 class TestMobDefinitionManifests(WorldTestCase):

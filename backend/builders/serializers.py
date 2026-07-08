@@ -53,15 +53,8 @@ from builders.models import (
     LastViewedRoom,
     ItemBundle,
     ItemDefinition,
-    ItemTemplate,
-    ItemTemplateInventory,
-    ItemAction,
     MobDefinition,
     MerchantProfile,
-    Loader,
-    MobTemplate,
-    MobTemplateInventory,
-    MerchantInventory,
     TransformationTemplate,
     FACTION_TYPE_CORE,
     FACTION_TYPE_REPUTATION,
@@ -69,10 +62,6 @@ from builders.models import (
     FactionAssignment,
     FactionRank,
     FactSchedule,
-    Quest,
-    Reward,
-    Objective,
-    Rule,
     RandomItemProfile,
     RoomCheck,
     RoomAction,
@@ -223,7 +212,6 @@ def _clone_world_config_for_instance(base_config):
         values[field.name] = copy.deepcopy(getattr(base_config, field.name))
 
     config = WorldConfig.objects.create(**values)
-    config.starting_eq.set(base_config.starting_eq.all())
     return config
 
 
@@ -435,6 +423,7 @@ class WorldConfigSerializer(serializers.ModelSerializer):
         model = WorldConfig
         fields = [
             'starting_gold',
+            'starting_equipment',
             'starting_level',
             'leveling_curve',
             'max_level',
@@ -600,8 +589,8 @@ class WorldAdminSerializer(serializers.ModelSerializer):
 
     def get_stats(self, world):
         return {
-            'num_item_templates': world.item_templates.count(),
-            'num_mob_templates': world.mob_templates.count(),
+            'num_item_definitions': world.item_definitions.count(),
+            'num_mob_definitions': world.mob_definitions.count(),
             'num_rooms': world.rooms.count(),
         }
 
@@ -773,7 +762,7 @@ class WorldAdminInstanceSerializer(serializers.ModelSerializer):
     instance_run = serializers.SerializerMethodField()
     world_state = serializers.SerializerMethodField()
     lifecycle_details = serializers.SerializerMethodField()
-    loader_details = serializers.SerializerMethodField()
+    spawn_plan_details = serializers.SerializerMethodField()
     counts = serializers.SerializerMethodField()
     active_players = serializers.SerializerMethodField()
     recovery_actions = serializers.SerializerMethodField()
@@ -792,7 +781,7 @@ class WorldAdminInstanceSerializer(serializers.ModelSerializer):
             'instance_run',
             'world_state',
             'lifecycle_details',
-            'loader_details',
+            'spawn_plan_details',
             'counts',
             'active_players',
             'recovery_actions',
@@ -866,22 +855,22 @@ class WorldAdminInstanceSerializer(serializers.ModelSerializer):
             'current': spawn_world.lifecycle,
             'changed_at': spawn_world.lifecycle_change_ts,
             'cleanup_started_ts': cleanup_started_ts,
-            'last_loader_run_ts': spawn_world.last_loader_run_ts,
+            'last_spawn_plan_run_ts': spawn_world.last_spawn_plan_run_ts,
             'last_extraction_ts': spawn_world.last_extraction_ts,
             'last_entered_ts': spawn_world.last_entered_ts,
             'last_played_ts': spawn_world.last_played_ts,
         }
 
-    def get_loader_details(self, spawn_world):
+    def get_spawn_plan_details(self, spawn_world):
         context_world = spawn_world.context
         return {
-            'last_run_ts': spawn_world.last_loader_run_ts,
-            'configured_loader_count': Loader.objects.filter(
-                world=context_world
-            ).count(),
-            'configured_rule_count': Rule.objects.filter(
-                loader__world=context_world
-            ).count(),
+            'last_run_ts': spawn_world.last_spawn_plan_run_ts,
+            'configured_spawn_plan_count': context_world.spawn_plans.count()
+            if context_world else 0,
+            'configured_spawn_entry_count': sum(
+                plan.entries.count()
+                for plan in context_world.spawn_plans.all()
+            ) if context_world else 0,
         }
 
     def get_counts(self, spawn_world):
@@ -1179,7 +1168,7 @@ class RoomBuilderSerializer(serializers.ModelSerializer):
     down = ReferenceField(required=False, allow_null=True)
 
     num_room_checks = serializers.SerializerMethodField()
-    num_loads = serializers.SerializerMethodField()
+    num_spawn_plan_entries = serializers.SerializerMethodField()
     num_actions = serializers.SerializerMethodField()
     num_triggers = serializers.SerializerMethodField()
     details = serializers.SerializerMethodField()
@@ -1193,7 +1182,7 @@ class RoomBuilderSerializer(serializers.ModelSerializer):
             'type', 'description', 'note', 'color',
             'x', 'y', 'z',
             'zone',
-            'num_room_checks', 'num_actions', 'num_triggers', 'num_loads', 'details', 'doors',
+            'num_room_checks', 'num_actions', 'num_triggers', 'num_spawn_plan_entries', 'details', 'doors',
             'has_assignment',
         ] + list(adv_consts.DIRECTIONS)
 
@@ -1226,17 +1215,26 @@ class RoomBuilderSerializer(serializers.ModelSerializer):
             target_id=room.id,
         ).count()
 
-    def get_num_loads(self, room):
-        room_rules_qs = Rule.objects.filter(
-            target_type=ContentType.objects.get_for_model(room),
-            target_id=room.id)
+    def get_num_spawn_plan_entries(self, room):
+        room_entries = 0
+        for plan in room.world.spawn_plans.all():
+            room_entries += sum(
+                1 for entry in plan.entries.all()
+                if isinstance(entry.target, dict)
+                and entry.target.get('room') in {room.key, f'room.{room.id}'}
+            )
         path_ids = PathRoom.objects.filter(
             room=room
         ).values_list('path_id', flat=True)
-        path_rules_qs = Rule.objects.filter(
-            target_type=ContentType.objects.get_for_model(Path),
-            target_id__in=path_ids)
-        return room_rules_qs.count() + path_rules_qs.count()
+        path_refs = {f'path@{path_id}' for path_id in path_ids}
+        path_entries = 0
+        for plan in room.world.spawn_plans.all():
+            path_entries += sum(
+                1 for entry in plan.entries.all()
+                if isinstance(entry.target, dict)
+                and entry.target.get('path') in path_refs
+            )
+        return room_entries + path_entries
 
     def get_fields(self):
         fields = super().get_fields()
@@ -1571,35 +1569,6 @@ class RoomDetailSerializer(serializers.ModelSerializer):
         return keywords.split(' ')[0].lower()
 
 
-class RoomAddLoadSerializer(serializers.Serializer):
-
-    template = ReferenceField()
-
-    def validate_template(self, template):
-        if isinstance(template, ItemTemplate) and template.is_persistent:
-            raise serializers.ValidationError(
-                "Cannot load a persistent item via loader. Use the /load command"
-                "instead.")
-        return template
-
-    def create(self, validated_data):
-
-        template = self.validated_data['template']
-        room = self.context['room']
-
-        loader = Loader.objects.create(
-            world=room.world,
-            zone=room.zone,
-            name="{template} in {room}".format(
-                template=template.name,
-                room=room.name))
-        rule = Rule.objects.create(
-            loader=loader,
-            template=template,
-            target=room)
-        return loader
-
-
 class ActionSerializer(serializers.ModelSerializer):
 
     validate_conditions = validate_conditions
@@ -1646,22 +1615,6 @@ class ActionSerializer(serializers.ModelSerializer):
 class RoomActionSerializer(ActionSerializer):
     class Meta:
         model = RoomAction
-        fields = [
-            'id',
-            'name',
-            'actions',
-            'commands',
-            'conditions',
-            'show_details_on_failure',
-            'failure_message',
-            'display_action_in_room',
-            'gate_delay',
-        ]
-
-
-class ItemActionSerializer(ActionSerializer):
-    class Meta:
-        model = ItemAction
         fields = [
             'id',
             'name',
@@ -1823,231 +1776,6 @@ class RoomClearDoorSerializer(serializers.Serializer):
         return door
 
 
-# Item Templates
-
-class ItemTemplateSerializer(serializers.ModelSerializer):
-
-    budget = serializers.SerializerMethodField()
-    cost_budget = serializers.SerializerMethodField()
-
-    # If keywords are not defined, returned what will be used automatically
-    # instead, for builder UI display purposes.
-    empty_keywords = serializers.SerializerMethodField()
-
-    power = serializers.SerializerMethodField()
-
-    has_assignment = serializers.SerializerMethodField()
-
-    #currency = serializers.SerializerMethodField()
-
-    class Meta:
-        model = ItemTemplate
-        fields = [
-            'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
-            'is_persistent',
-            'level', 'description', 'ground_description', 'notes',
-            'keywords', 'empty_keywords',
-            'type', 'capacity', 'quality', 'power', 'is_boat', 'is_pickable',
-            'cost', 'currency',
-            'equipment_type', 'armor_class',
-            'weapon_type', 'weapon_damage', 'hit_msg_first', 'hit_msg_third',
-            'health_max', 'health_regen', 'energy_max', 'energy_regen',
-            'stamina_max', 'stamina_regen',
-            'attributes',
-            'attack_power', 'ability_power', 'armor', 'resilience', 'dodge', 'crit',
-            'budget', 'cost_budget', 'food_value', 'food_type',
-            'has_assignment',
-            'on_use_cmd', 'on_use_description', 'on_use_equipped',
-        ]
-
-    def validate_slug(self, value):
-        return _normalize_template_slug(
-            self,
-            value,
-            model_cls=ItemTemplate,
-            field_label="Item template",
-        )
-
-    def create(self, validated_data):
-        # Null out equipment type if the item is not of type equipment
-        if (validated_data.get('type') != adv_consts.ITEM_TYPE_EQUIPPABLE
-            and validated_data.get('equipment_type')):
-            validated_data['equipment_type'] = None
-        if (validated_data.get('type') == adv_consts.ITEM_TYPE_FOOD
-            and not validated_data.get('food_type')):
-            validated_data['food_type'] = adv_consts.ITEM_FOOD_TYPE_STAMINA
-
-        if 'currency' not in validated_data:
-            default_currency = Currency.objects.filter(
-                world=self.context['world'],
-                is_default=True).first()
-            validated_data['currency'] = default_currency
-
-        return super().create(validated_data)
-
-    def update(self, instance, validated_data):
-        # Null out eq type if the item is not currently of type equipment
-        # or augment and is not being made of type equipment as part of the
-        # save.
-        if validated_data.get('equipment_type'):
-            if (instance.type != adv_consts.ITEM_TYPE_EQUIPPABLE and
-                validated_data.get('type') != adv_consts.ITEM_TYPE_EQUIPPABLE
-                and instance.type != adv_consts.ITEM_TYPE_AUGMENT and
-                validated_data.get('type') != adv_consts.ITEM_TYPE_AUGMENT):
-                validated_data['equipment_type'] = None
-
-            # if adv_consts.ITEM_TYPE_EQUIPPABLE not in (
-            #     instance.type, validated_data.get('type')):
-            #     validated_data['equipment_type'] = None
-
-        if validated_data.get('type'):
-            if (instance.type == adv_consts.ITEM_TYPE_CONTAINER and
-                validated_data['type'] != instance.type and
-                ItemTemplateInventory.objects.filter(
-                    container=instance).exists()):
-                raise serializers.ValidationError(
-                    'Container has inventory.')
-
-        # Do the actual update
-        updated_instance = super().update(instance, validated_data)
-
-        boost_fields = {
-            'attributes',
-            'attack_power',
-            'ability_power',
-            'armor',
-            'crit',
-            'dodge',
-            'resilience',
-            'health_max',
-            'health_regen',
-            'energy_max',
-            'energy_regen',
-            'stamina_max',
-            'stamina_regen',
-        }
-        if boost_fields & set(validated_data.keys()):
-            budget_spent = updated_instance.budget_spent
-            budget = updated_instance.budget
-            try:
-                budget_ratio = budget_spent / budget
-            except ZeroDivisionError:
-                budget_ratio = 0
-            if budget_ratio == 0:
-                updated_instance.quality = adv_consts.ITEM_QUALITY_NORMAL
-            elif budget_ratio >= 1.2:
-                updated_instance.quality = adv_consts.ITEM_QUALITY_ENCHANTED
-            else:
-                updated_instance.quality = adv_consts.ITEM_QUALITY_IMBUED
-            updated_instance.save()
-
-        return updated_instance
-
-    def validate_attributes(self, value):
-        return _coerce_attribute_map(value)
-
-    def validate_armor_class(self, value):
-        world = self.context.get("world") or getattr(self.instance, "world", None)
-        try:
-            return validate_armor_class_reference(
-                world=world,
-                armor_class=value,
-                field_name="armor_class",
-            ) or None
-        except EquipmentSystemValidationError as exc:
-            raise serializers.ValidationError(str(exc))
-
-    def get_budget(self, item_template):
-        "Return budget utilization"
-        spent = item_template.budget_spent
-        max = item_template.budget_max
-        if max:
-            perc = '%s%%' % int(spent / max * 100)
-        else:
-            perc = 'n/a'
-        return "{spent} / {max} ({perc})".format(
-            perc=perc, spent=spent, max=max)
-
-    def get_cost_budget(self, item_template):
-        from builders.random_items import price_item
-        cost = item_template.cost
-        budget = price_item(
-            level=item_template.level,
-            quality=item_template.quality)
-        perc = '%s%%' % int(cost / budget * 100)
-        return "{spent} / {max} ({perc})".format(
-            perc=perc, spent=cost, max=budget)
-
-    def get_empty_keywords(self, item_template):
-        # Exclude name tokens, normalize to lowercase
-        return ' '.join(list(reversed([
-            token.lower() for token in item_template.name.split(' ')
-            if token not in adv_consts.EXCLUDE_NAME_TOKENS
-        ])))
-
-    def validate_is_persistent(self, value):
-        if self.instance and value:
-            if Rule.objects.filter(
-                template_type=ContentType.objects.get_for_model(self.instance),
-                template_id=self.instance.id).exists():
-                raise serializers.ValidationError(
-                    "Cannot set templates that are loaded by rules to be "
-                    "persistent.")
-        return value
-
-    def validate_food_type(self, value):
-        if (self.instance
-            and self.instance.type == adv_consts.ITEM_TYPE_FOOD
-            and not value):
-            raise serializers.ValidationError("Food items require a food type")
-        return value
-
-    def validate(self, data):
-        def throw_error():
-            raise serializers.ValidationError(
-                "Cannot set persistent item to be pickable.")
-
-        if data.get('is_persistent') and data.get('is_pickable'):
-            throw_error()
-
-        return data
-
-    def get_power(self, item_template):
-        try:
-            return item_template.budget_spent / item_template.budget
-        except ZeroDivisionError:
-            return 0
-
-    def get_has_assignment(self, item_template):
-        try:
-            if self.context['request'].user == item_template.world.author:
-                return True
-        except KeyError:
-            return False
-
-        builder = WorldBuilder.objects.filter(
-            world=item_template.world,
-            user=self.context['request'].user).first()
-
-        if not builder:
-            return False
-
-        if builder.builder_rank >= 3:
-            return True
-
-        if BuilderAssignment.objects.filter(
-                builder=builder,
-                assignment_id=item_template.id,
-                assignment_type=ContentType.objects.get_for_model(ItemTemplate)
-            ).exists():
-            return True
-
-        return False
-
-    def get_currency(self, item_template):
-        return item_template.currency.code
-
-
 class ItemDefinitionSerializer(serializers.ModelSerializer):
     type = serializers.CharField(source='item_type', read_only=True)
     attributes = serializers.JSONField(read_only=True)
@@ -2079,203 +1807,6 @@ class ItemBundleSerializer(serializers.ModelSerializer):
 
     def get_entry_count(self, item_bundle):
         return item_bundle.entries.count()
-
-
-class ItemTemplateInventorySerializer(serializers.ModelSerializer):
-    container = ReferenceField(required=False, allow_null=False)
-    item_template = ReferenceField(required=True, allow_null=False)
-    class Meta:
-        model = ItemTemplateInventory
-        fields = [
-            'key', 'id', 'container', 'item_template',
-            'probability', 'num_copies'
-        ]
-
-    def validate_num_copies(self, num_copies):
-        if int(num_copies) > api_consts.MAX_RULE_SPAWNS:
-            raise serializers.ValidationError(
-                "{} copies max".format(
-                    api_consts.MAX_RULE_SPAWNS))
-        return num_copies
-
-class AddItemTemplateInventorySerializer(serializers.Serializer):
-
-    item_template = ReferenceField()
-    probability = serializers.IntegerField(required=False)
-    num_copies = serializers.IntegerField(required=False)
-
-    def __init__(self, container, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.container = container
-
-    def create(self, validated_data):
-        return ItemTemplateInventory.objects.create(
-            container=self.container,
-            **validated_data)
-
-    def validate_num_copies(self, num_copies):
-        if int(num_copies) > api_consts.MAX_RULE_SPAWNS:
-            raise serializers.ValidationError(
-                "{} copies max".format(
-                    api_consts.MAX_RULE_SPAWNS))
-        return num_copies
-
-    def validate(self, *args, **kwargs):
-        if self.container.type != adv_consts.ITEM_TYPE_CONTAINER:
-            raise serializers.ValidationError("Item is not a container.")
-        return super().validate(*args, **kwargs)
-
-
-# Mob Templates
-
-class MobTemplateSerializer(serializers.ModelSerializer):
-
-    empty_keywords = serializers.SerializerMethodField()
-    core_faction = serializers.SerializerMethodField()
-    has_assignment = serializers.SerializerMethodField()
-
-    class Meta:
-        model = MobTemplate
-        fields = [
-            'id', 'key', 'slug', 'name', 'model_type',
-            'modified_ts',
-            'level', 'description', 'room_description',
-            'keywords', 'empty_keywords',
-            'notes', 'gold',
-            'type', 'archetype', 'gender', 'exp_worth',
-            'roaming_type', 'alignment', 'aggression', 'use_abilities',
-            'roam_chance',
-            'hit_msg_first', 'hit_msg_third',
-            'attributes',
-            'health_max', 'health_regen', 'energy_max', 'energy_regen',
-            'stamina_max', 'stamina_regen', 'regen_rate',
-            'attack_power', 'ability_power', 'weapon_damage', 'crit',
-            'resilience', 'dodge', 'armor',
-            'drops_random_items', 'num_items', 'is_crafter',
-            'load_specification',
-            'chance_imbued', 'chance_enchanted',
-            'factions', 'default_stats',
-            'is_elite', 'is_invisible', 'fights_back',
-            'core_faction',
-            'craft_multiplier', 'craft_enchanted',
-            'combat_script', 'use_abilities',
-            'has_assignment', 'traits',
-            'is_upgrader', 'upgrade_cost_multiplier',
-            'upgrade_success_chance',
-            'upgrade_success_cmd', 'upgrade_failure_cmd',
-            'merchant_profit',
-        ]
-
-    def validate_attributes(self, value):
-        return _coerce_attribute_map(value)
-
-    def validate_slug(self, value):
-        return _normalize_template_slug(
-            self,
-            value,
-            model_cls=MobTemplate,
-            field_label="Mob template",
-        )
-
-    def get_core_faction(self, mob_template):
-        return mob_template.factions.get('core')
-
-    def create(self, validated_data):
-        from core.utils.mobs import suggest_stats
-
-        # Incorporate suggested stats based on the mob's level
-        level = validated_data.get('level', 1)
-        suggested_stats = suggest_stats(
-            level=validated_data.get('level', level),
-            archetype=validated_data.get('archetype', 'warrior'),
-            is_elite=validated_data.get('is_elite', False))
-
-        for stat, value in suggested_stats.items():
-            if stat not in validated_data:
-                validated_data[stat] = value
-
-        # Give humanoid mobs gold by default
-        mob_type = validated_data.get('type', adv_consts.MOB_TYPE_BEAST)
-        if (mob_type == adv_consts.MOB_TYPE_HUMANOID
-            and not suggested_stats.get('gold', 0)):
-            validated_data['gold'] = round(adv_config.ILF(level))
-
-        validated_data['default_stats'] = True
-
-        return super().create(validated_data)
-
-    def update(self, instance, validated_data):
-        if validated_data.get('default_stats'):
-
-            is_elite = instance.is_elite
-            if 'is_elite' in validated_data:
-                is_elite = validated_data['is_elite']
-
-            level = validated_data.get('level') or instance.level
-            archetype = validated_data.get('archetype') or instance.archetype
-            suggested_stats = suggest_stats(
-                level=level,
-                archetype=archetype,
-                is_elite=is_elite)
-            validated_data.update(suggested_stats)
-
-        if (validated_data.get('is_elite') is not None
-            and instance.default_stats):
-            level = validated_data.get('level') or instance.level
-            archetype = validated_data.get('archetype') or instance.archetype
-            suggested_stats = suggest_stats(
-                level=level,
-                archetype=archetype,
-                is_elite=validated_data['is_elite'])
-            validated_data.update(suggested_stats)
-
-        return super().update(instance, validated_data)
-
-    def get_empty_keywords(self, mob_template):
-        # Exclude name tokens, normalize to lowercase
-        return ' '.join(list(reversed([
-            token.lower() for token in mob_template.name.split(' ')
-            if token not in adv_consts.EXCLUDE_NAME_TOKENS
-        ])))
-
-    def validate_level(self, level):
-        if level > api_consts.LEVEL_CAP:
-            raise serializers.ValidationError(
-                "Max level is %s" % api_consts.LEVEL_CAP)
-        return level
-
-    def validate_num_items(self, num_items):
-        if num_items > api_consts.MAX_RULE_SPAWNS:
-            raise serializers.ValidationError(
-                "{} items max".format(
-                    api_consts.MAX_RULE_SPAWNS))
-        return num_items
-
-    def get_has_assignment(self, mob_template):
-        try:
-            if self.context['request'].user == mob_template.world.author:
-                return True
-        except KeyError:
-            return False
-
-        builder = WorldBuilder.objects.filter(
-            world=mob_template.world,
-            user=self.context['request'].user).first()
-
-        if not builder:
-            return False
-
-        if builder.builder_rank >= 3:
-            return True
-
-        if BuilderAssignment.objects.filter(
-                builder=builder,
-                assignment_id=mob_template.id,
-                assignment_type=ContentType.objects.get_for_model(MobTemplate)
-            ).exists():
-            return True
-
-        return False
 
 
 class MobDefinitionSerializer(serializers.ModelSerializer):
@@ -2321,175 +1852,6 @@ class MerchantProfileSerializer(serializers.ModelSerializer):
         return ''
 
 
-class MobTemplateInventorySerializer(serializers.ModelSerializer):
-
-    container = ReferenceField(required=False, allow_null=False)
-    item_template = ReferenceField(required=False, allow_null=True)
-    item_definition = ReferenceField(required=False, allow_null=True)
-    item_bundle = ReferenceField(required=False, allow_null=True)
-
-    class Meta:
-        model = MobTemplateInventory
-        fields = [
-            'key',
-            'id',
-            'container',
-            'item_template',
-            'item_definition',
-            'item_bundle',
-            'probability',
-            'num_copies'
-        ]
-
-    def validate_num_copies(self, num_copies):
-        if int(num_copies) > api_consts.MAX_RULE_SPAWNS:
-            raise serializers.ValidationError(
-                "{} copies max".format(
-                    api_consts.MAX_RULE_SPAWNS))
-        return num_copies
-
-    def validate(self, data):
-        validated_data = super().validate(data)
-        sources = [
-            validated_data.get('item_template', getattr(self.instance, 'item_template', None)),
-            validated_data.get('item_definition', getattr(self.instance, 'item_definition', None)),
-            validated_data.get('item_bundle', getattr(self.instance, 'item_bundle', None)),
-        ]
-        source_count = sum(1 for source in sources if source)
-        if source_count == 0:
-            raise serializers.ValidationError(
-                "Either an item template, item definition, or item bundle is required."
-            )
-        if source_count > 1:
-            raise serializers.ValidationError(
-                "Specify only one item template, item definition, or item bundle."
-            )
-        return validated_data
-
-
-class AddMobTemplateInventorySerializer(serializers.Serializer):
-
-    item_template = ReferenceField(required=False, allow_null=True)
-    item_definition = ReferenceField(required=False, allow_null=True)
-    item_bundle = ReferenceField(required=False, allow_null=True)
-    probability = serializers.IntegerField(required=False)
-    num_copies = serializers.IntegerField(required=False)
-
-    def __init__(self, container, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.container = container
-
-    def create(self, validated_data):
-        return MobTemplateInventory.objects.create(
-            container=self.container,
-            **validated_data)
-
-    def validate_num_copies(self, num_copies):
-        if int(num_copies) > api_consts.MAX_RULE_SPAWNS:
-            raise serializers.ValidationError(
-                "{} copies max".format(
-                    api_consts.MAX_RULE_SPAWNS))
-        return num_copies
-
-    def validate(self, data):
-        validated_data = super().validate(data)
-        sources = [
-            validated_data.get('item_template'),
-            validated_data.get('item_definition'),
-            validated_data.get('item_bundle'),
-        ]
-        source_count = sum(1 for source in sources if source)
-        if source_count == 0:
-            raise serializers.ValidationError(
-                "Either an item template, item definition, or item bundle is required."
-            )
-        if source_count > 1:
-            raise serializers.ValidationError(
-                "Specify only one item template, item definition, or item bundle."
-            )
-        return validated_data
-
-
-class MobTemplateMerchantInventorySerializer(serializers.ModelSerializer):
-
-    item_template = ReferenceField(required=False, allow_null=True)
-    item_definition = ReferenceField(required=False, allow_null=True)
-    item_bundle = ReferenceField(required=False, allow_null=True)
-    random_item_profile = ReferenceField(required=False, allow_null=True)
-    name = serializers.SerializerMethodField()
-
-    def get_name(self, foo): return 'name'
-
-    class Meta:
-        model = MerchantInventory
-        fields = [
-            'id', 'num', 'name',
-            'item_template', 'item_definition', 'item_bundle',
-            'random_item_profile',
-        ]
-
-    def validate(self, data):
-        validated_data = super().validate(data)
-
-        sources = [
-            validated_data.get('item_template', getattr(self.instance, 'item_template', None)),
-            validated_data.get('item_definition', getattr(self.instance, 'item_definition', None)),
-            validated_data.get('item_bundle', getattr(self.instance, 'item_bundle', None)),
-            validated_data.get('random_item_profile', getattr(self.instance, 'random_item_profile', None)),
-        ]
-        source_count = sum(1 for source in sources if source)
-        if source_count == 0:
-            raise serializers.ValidationError(
-                "Either an item template, item definition, item bundle, "
-                "or random profile is required."
-            )
-        if source_count > 1:
-            raise serializers.ValidationError(
-                "Specify only one item template, item definition, item bundle, "
-                "or random profile (not both)."
-            )
-
-        return validated_data
-
-    def validate_num(self, num_copies):
-        if int(num_copies) > api_consts.MAX_RULE_SPAWNS:
-            raise serializers.ValidationError(
-                "{} copies max".format(
-                    api_consts.MAX_RULE_SPAWNS))
-        return num_copies
-
-
-class MobFactionAssignmentSerializer(serializers.ModelSerializer):
-
-    faction = ReferenceField(required=True, allow_null=False)
-
-    class Meta:
-        model = FactionAssignment
-        fields = [
-            'id',
-            'faction',
-            'value',
-        ]
-
-    def validate(self, validated_data):
-        faction = validated_data['faction']
-
-        if faction.is_core and FactionAssignment.objects.filter(
-            member_type=ContentType.objects.get_for_model(MobTemplate),
-            member_id=self.context['mob_template'].id,
-            faction__is_core=True).exists():
-            raise serializers.ValidationError(
-                'Template already has a core faction association')
-
-        return super().validate(validated_data)
-
-
-    def create(self, validated_data):
-        return FactionAssignment.objects.create(
-            member=self.context['mob_template'],
-            **validated_data)
-
-
 def validate_reaction(self, validated_data):
     event = validated_data.get('event')
     if event is None and getattr(self, 'instance', None) is not None:
@@ -2533,7 +1895,7 @@ def validate_reaction(self, validated_data):
 
 class MobReactionSerializer(serializers.ModelSerializer):
 
-    template = serializers.SerializerMethodField()
+    definition = serializers.SerializerMethodField()
     match = serializers.CharField(required=False, allow_blank=True)
     reaction = serializers.CharField(source='script')
 
@@ -2541,13 +1903,13 @@ class MobReactionSerializer(serializers.ModelSerializer):
         model = Trigger
         fields = [
             'key', 'id',
-            'template', 'event', 'match', 'reaction', 'conditions'
+            'definition', 'event', 'match', 'reaction', 'conditions'
         ]
 
-    def get_template(self, trigger):
+    def get_definition(self, trigger):
         if not trigger.target_type_id:
             return None
-        if trigger.target_type.model_class() != MobTemplate:
+        if trigger.target_type.model_class() != MobDefinition:
             return None
         if not trigger.target:
             return None
@@ -2563,17 +1925,17 @@ class AddMobReactionSerializer(serializers.Serializer):
     conditions = serializers.CharField(required=False, allow_blank=True)
     reaction = serializers.CharField()
 
-    def __init__(self, template, *args, **kwargs):
+    def __init__(self, definition, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.template = template
+        self.definition = definition
 
     def create(self, validated_data):
         return Trigger.objects.create(
-            world=self.template.world,
+            world=self.definition.world,
             scope=adv_consts.TRIGGER_SCOPE_WORLD,
             kind=adv_consts.TRIGGER_KIND_EVENT,
-            target_type=ContentType.objects.get_for_model(MobTemplate),
-            target_id=self.template.id,
+            target_type=ContentType.objects.get_for_model(MobDefinition),
+            target_id=self.definition.id,
             event=validated_data['event'],
             match=validated_data.get('match', ''),
             script=validated_data['reaction'],
@@ -2582,148 +1944,6 @@ class AddMobReactionSerializer(serializers.Serializer):
         )
 
     validate = validate_reaction
-
-
-# Loaders
-
-class LoaderSerializer(serializers.ModelSerializer):
-    key = serializers.ReadOnlyField()
-    num_rules = serializers.SerializerMethodField()
-    zone = ReferenceField(required=False, allow_null=True)
-    world = ReferenceField(read_only=True)
-    zone_wait = serializers.IntegerField(source='zone.respawn_wait',
-                                         read_only=True)
-
-    class Meta:
-        model = Loader
-        fields = [
-            'id', 'key', 'world', 'zone', 'modified_ts',
-            'name', 'description', 'respawn_wait', 'num_rules',
-            'loader_condition', 'conditions', 'inherit_zone_wait',
-            'zone_wait',
-        ]
-
-    def get_num_rules(self, loader):
-        return loader.rules.count()
-
-    def create(self, validated_data):
-        # Give Loaders created by the API a 5 min wait by default
-        if 'respawn_wait' not in validated_data:
-            validated_data['respawn_wait'] = 300
-        return super().create(validated_data)
-
-
-class RuleSerializer(serializers.ModelSerializer):
-
-    template = ReferenceField()
-    target = ReferenceField(required=False, allow_null=True)
-    name = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Rule
-        fields = [
-            'id', 'key', 'model_type', 'name',
-            #'loader',
-            'template', 'target', 'order', 'num_copies', 'options',
-        ]
-
-    def get_name(self, rule):
-        return "Rule #%s" % rule.order
-
-    def get_target(self, rule):
-        target = rule.target
-        if target:
-            return KeyNameSerializer(target).data
-        return None
-
-    def validate_template(self, template):
-        loader = self.context['view'].loader
-        template_world_id = getattr(template, 'world_id', None)
-        instance_root_id = getattr(loader.world, 'instance_of_id', None)
-
-        if (template_world_id is not None
-            and template_world_id not in (loader.world_id, instance_root_id)):
-            raise serializers.ValidationError(
-                "Template does not belong to loader's world.")
-
-        if isinstance(template, ItemTemplate) and template.is_persistent:
-            raise serializers.ValidationError(
-                "Rule cannot load persistent items.")
-        return template
-
-    def validate_target(self, target):
-        loader = self.context['view'].loader
-        if isinstance(target, Room) and loader.zone != target.zone:
-            raise serializers.ValidationError(
-                "Room does not belong to loader's zone.")
-
-        if isinstance(target, Rule) and target.loader != loader:
-            raise serializers.ValidationError(
-                "Rule target does not belong to loader.")
-
-        if (self.instance
-            and isinstance(target, Rule)
-            and self.instance == target):
-            raise serializers.ValidationError(
-                "A rule may not target itself.")
-
-        if (self.instance
-            and isinstance(target, Rule)
-            and target.order >= self.instance.order):
-            raise serializers.ValidationError(
-                "Rule target must reference an earlier rule.")
-
-        return target
-
-    def validate_num_copies(self, num_copies):
-        if int(num_copies) > api_consts.MAX_RULE_SPAWNS:
-            raise serializers.ValidationError(
-                "A rule cannot spawn more than {} copies.".format(
-                    api_consts.MAX_RULE_SPAWNS))
-        return num_copies
-
-    def validate(self, data):
-        "Make sure that no quest mob can be loaded twice."
-
-        template = data.get('template') or self.instance.template
-        if self.instance:
-            target = data.get('target', self.instance.target)
-        else:
-            target = data.get('target')
-
-        if (data.get('template')
-            and isinstance(template, MobTemplate)
-            and template.template_quests.count()):
-            # See whether any rule already targets this mob template
-            existing_qs = Rule.objects.filter(
-                template_type=ContentType.objects.get_for_model(template),
-                template_id=template.id
-            )
-            if (self.instance):
-                existing_qs = existing_qs.exclude(template_id=template.id)
-            if existing_qs.exists():
-                raise serializers.ValidationError(
-                    "Quest template already loaded by rule %s" % existing_qs.get().id)
-
-        if (data.get('template')
-            and isinstance(template, TransformationTemplate)
-            and not isinstance(target, Rule)):
-            raise serializers.ValidationError(
-                "Transformation Templates can only target rules.")
-
-        if (data.get('num_copies')
-            and int(data['num_copies']) > 1
-            and isinstance(template, MobTemplate)
-            and template.template_quests.count()):
-            raise serializers.ValidationError(
-                "Can only load 1 copy of a quest template.")
-
-        if (isinstance(template, MobTemplate)
-            and isinstance(target, Rule)):
-            raise serializers.ValidationError(
-                "Mob template rule cannot target the output of another rule.")
-
-        return data
 
 
 class SuggestMobSerializer(serializers.Serializer):
@@ -2774,183 +1994,6 @@ class RandomItemProfileSerializer(serializers.ModelSerializer):
             'name', 'level',
             'chance_imbued', 'chance_enchanted',
             'restriction'
-        ]
-
-
-# Quests
-
-
-# class AddObjectiveSerializer(serializers.Serializer):
-
-#     type = serializers.ChoiceField(choices=adv_consts.OBJECTIVE_TYPES)
-#     template = ReferenceField()
-#     qty = serializers.IntegerField(default=1)
-
-
-class ObjectiveSerializer(serializers.ModelSerializer):
-
-    template = ReferenceField(required=False, allow_null=True)
-
-    class Meta:
-        model = Objective
-        fields = [
-            'id',
-            'type',
-            'qty',
-            'template',
-            'currency',
-        ]
-
-    def get_template(self, obj):
-        if isinstance(obj.template, MobTemplate):
-            return MobTemplateSerializer(obj.template).data
-        elif isinstance(obj.template, ItemTemplate):
-            return ItemTemplateSerializer(obj.template).data
-        return None
-
-    def create(self, validated_data, quest):
-        return Objective.objects.create(quest=quest, **validated_data)
-
-    def validate(self, data):
-        vd = super().validate(data)
-
-        if (vd.get('type')):
-            if (vd['type'] == adv_consts.OBJECTIVE_TYPE_ITEM and
-                not vd.get('template')):
-                raise serializers.ValidationError('Template is required.')
-        return vd
-
-
-class RewardSerializer(serializers.ModelSerializer):
-
-    profile = ReferenceField(required=False, allow_null=True)
-
-    class Meta:
-        model = Reward
-        fields = [
-            'id',
-            'type',
-            'qty',
-            'profile',
-            'currency',
-        ]
-
-    def create(self, validated_data, quest):
-        return Reward.objects.create(quest=quest, **validated_data)
-
-    def get_profile(self, obj):
-        if isinstance(obj.profile, ItemTemplate):
-            return ItemTemplateSerializer(obj.profile).data
-        elif isinstance(obj.profile, RandomItemProfile):
-            return RandomItemProfileSerializer(obj.profile).data
-        return None
-
-    def validate(self, data):
-        vd = super().validate(data)
-
-        if (vd.get('type')):
-            if vd['type'] == adv_consts.REWARD_TYPE_FACTION:
-                if not vd.get('profile'):
-                    raise serializers.ValidationError('Faction is required.')
-                elif vd['profile'].is_core:
-                    raise serializers.ValidationError(
-                        'Can only reward non-core factions.')
-
-            if (vd['type'] == adv_consts.REWARD_TYPE_FACTION and
-                not vd.get('profile')):
-                raise serializers.ValidationError(
-                    'Faction is required.')
-
-            if (vd['type'] == adv_consts.REWARD_TYPE_ITEM and
-                not vd.get('profile')):
-                raise serializers.ValidationError(
-                    'Item template or random profile is required.')
-
-        return vd
-
-
-class QuestSerializer(serializers.ModelSerializer):
-
-    rewards = RewardSerializer(many=True, read_only=True)
-    objectives = ObjectiveSerializer(many=True, read_only=True)
-    #mob_template = MobTemplateSerializer(required=False)
-    mob_template = ReferenceField(required=False)
-    #requires_quest_id = serializers.SerializerMethodField()
-    zone = ReferenceField(required=False)
-    requires_quest = ReferenceField(required=False, allow_null=True)
-    required_by = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Quest
-        fields = [
-            'id', 'key', 'name', 'modified_ts', 'notes', 'level', 'summary',
-            'zone',
-            'rewards', 'objectives',
-            'is_hidden', 'is_setup', 'is_logged',
-            'mob_template',
-            'repeatable_after',
-            'wait_until_cmds',
-            'enquire_cmd_available',
-            'enquire_cmds',
-            'enquire_keywords',
-            'completion_cmd_available',
-            'completion_cmds',
-            'completion_keywords',
-            'completion_despawn',
-            'completion_action',
-            'complete_silently',
-            'repeat_completion_entrance_cmds_after',
-            'entrance_cmds',
-            'completion_entrance_cmds',
-            'repeat_entrance_cmd_after',
-            'requires_quest_id',
-            'requires_quest',
-            'requires_level',
-            'required_by',
-            'max_level',
-            'conditions',
-            'completion_conditions',
-        ]
-
-    def validate_mob_template(self, mob):
-        # See if the quest mob is loaded more than once
-        rules_qs = Rule.objects.filter(
-            template_type=ContentType.objects.get_for_model(mob),
-            template_id=mob.id)
-        if (rules_qs.count() > 1 or
-            rules_qs.count() == 1 and rules_qs.first().num_copies > 1):
-            raise serializers.ValidationError(
-                "Cannot assign quest to mob loaded multiple times.")
-        return mob
-
-    def validate_requires_quest(self, quest):
-        if self.instance and self.instance == quest:
-            raise serializers.ValidationError(
-                "Cannot have a quest be its own requirement.")
-        return quest
-
-    def create(self, validated_data):
-        if 'zone' in validated_data:
-            world = validated_data['zone'].world
-        elif 'zone' in self.context:
-            world = self.context['zone'].world
-        else:
-            raise ValueError("Zone is required for quest creation.")
-
-        return Quest.objects.create(
-            world=world,
-            **validated_data)
-
-    def get_requires_quest_id(self, quest):
-        if not quest.requires_quest:
-            return None
-        else:
-            return quest.requires_quest.relative_id
-
-    def get_required_by(self, quest):
-        return [
-            ReferenceField().to_representation(pre_quest)
-            for pre_quest in quest.prereq_quests.all()
         ]
 
 
@@ -3286,9 +2329,7 @@ class PlayerDetailSerializer(serializers.ModelSerializer):
     viewed_rooms = serializers.SerializerMethodField()
     inventory = serializers.SerializerMethodField()
     equipment = serializers.SerializerMethodField()
-    quests = serializers.SerializerMethodField()
     room = serializers.SerializerMethodField()
-    trophy = serializers.SerializerMethodField()
     animation_data = serializers.SerializerMethodField()
     marks = serializers.SerializerMethodField()
     world = WorldSerializer(required=False, allow_null=False)
@@ -3300,10 +2341,8 @@ class PlayerDetailSerializer(serializers.ModelSerializer):
             'experience',
             'viewed_rooms',
             'inventory',
-            'quests',
             'room',
             'equipment',
-            'trophy',
             'factions',
             'animation_data',
             'is_builder',
@@ -3336,33 +2375,8 @@ class PlayerDetailSerializer(serializers.ModelSerializer):
                 slots[eq_slot] = item_data
         return slots
 
-    def get_quests(self, player):
-        return [
-            ReferenceField().to_representation(player_quest.quest)
-            for player_quest in player.player_quests.all()
-        ]
-
     def get_room(self, player):
         return spawn_serializers.AnimateRoomSerializer(player.room).data
-
-    def get_trophy(self, player):
-        from collections import Counter
-
-        entries = player.trophy_entries.all()
-        # Get the ID of all the mobs killed
-        mob_ids = player.trophy_entries.values_list(
-            'mob_template_id', flat=True)
-
-        mob_counts = dict(Counter(mob_ids))
-
-        mobs = MobTemplate.objects.filter(pk__in=set(mob_ids))
-        for mob in mobs:
-            mob_counts[mob.id] = {
-                'mob_template': ReferenceField().to_representation(mob),
-                'count': mob_counts[mob.id],
-            }
-
-        return mob_counts
 
     def get_marks(self, player):
         return [

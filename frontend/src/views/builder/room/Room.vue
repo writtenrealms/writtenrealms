@@ -91,10 +91,10 @@ const isMapReady = computed(() => Boolean(store.state.builder.room && store.stat
 
 const key_link = (key: any) => {
   return {
-    name: 'builder_item_template_details',
+    name: 'builder_item_definition_details',
     params: {
       world_id: route.params.world_id,
-      item_template_id: key.id
+      item_definition_id: key.id
     }
   };
 };

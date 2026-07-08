@@ -62,8 +62,8 @@
           <span>{{ formatTimestamp(instance.lifecycle_details.changed_at) }}</span>
         </div>
         <div class="detail-row">
-          <span class="color-text-50">Last loaders run</span>
-          <span>{{ formatTimestamp(instance.lifecycle_details.last_loader_run_ts) }}</span>
+          <span class="color-text-50">Last spawn-plan run</span>
+          <span>{{ formatTimestamp(instance.lifecycle_details.last_spawn_plan_run_ts) }}</span>
         </div>
         <div class="detail-row">
           <span class="color-text-50">Last extraction</span>
@@ -116,12 +116,12 @@
           <span>{{ formatNumber(instance.counts.player_records) }}</span>
         </div>
         <div class="detail-row">
-          <span class="color-text-50">Configured loaders</span>
-          <span>{{ formatNumber(instance.loader_details.configured_loader_count) }}</span>
+          <span class="color-text-50">Configured spawn plans</span>
+          <span>{{ formatNumber(instance.spawn_plan_details.configured_spawn_plan_count) }}</span>
         </div>
         <div class="detail-row">
-          <span class="color-text-50">Configured rules</span>
-          <span>{{ formatNumber(instance.loader_details.configured_rule_count) }}</span>
+          <span class="color-text-50">Configured spawn entries</span>
+          <span>{{ formatNumber(instance.spawn_plan_details.configured_spawn_entry_count) }}</span>
         </div>
       </section>
 
@@ -312,9 +312,9 @@ const summaryCards = computed(() => {
       note: `${formatNumber(instance.value.counts.player_records)} player records in world`,
     },
     {
-      label: 'Last loader run',
-      value: formatRelativeTime(instance.value.loader_details.last_run_ts),
-      note: formatTimestamp(instance.value.loader_details.last_run_ts),
+      label: 'Last spawn-plan run',
+      value: formatRelativeTime(instance.value.spawn_plan_details.last_run_ts),
+      note: formatTimestamp(instance.value.spawn_plan_details.last_run_ts),
     },
     {
       label: 'Assignments',

@@ -15,9 +15,7 @@ from rest_framework import serializers
 from builders.models import (
     ItemBundle,
     ItemDefinition,
-    ItemTemplate,
     MobDefinition,
-    MobTemplate,
     Path,
     SpawnEntry,
     SpawnPlacement,
@@ -42,16 +40,11 @@ SOURCE_MODELS = {
     "item_bundle": ItemBundle,
     "itemdefinition": ItemDefinition,
     "item_definition": ItemDefinition,
-    "itemtemplate": ItemTemplate,
-    "item_template": ItemTemplate,
     "mobdefinition": MobDefinition,
     "mob_definition": MobDefinition,
-    "mobtemplate": MobTemplate,
-    "mob_template": MobTemplate,
 }
 
 INHERITED_INSTANCE_SOURCE_MODELS = {ItemBundle, ItemDefinition, MobDefinition}
-LEGACY_INSTANCE_SOURCE_MODELS = {ItemTemplate, MobTemplate}
 COHORT_RESPAWN_REFILL_MISSING = "refill_missing"
 COHORT_RESPAWN_POLICIES = {COHORT_RESPAWN_REFILL_MISSING}
 
@@ -235,13 +228,6 @@ def _source_resolution_scope(*, world: World, model_cls: type) -> str:
     return "this world"
 
 
-def _reject_legacy_instance_source(*, world: World, model_cls: type, field_name: str) -> None:
-    if world.instance_of_id and model_cls in LEGACY_INSTANCE_SOURCE_MODELS:
-        raise serializers.ValidationError(
-            f"{field_name} must use mobdefinition, itemdefinition, or itembundle in an instance template."
-        )
-
-
 def resolve_source(*, world: World, source_spec: Any, field_name: str = "source") -> ResolvedSource:
     source_ref = _source_ref_from_value(source_spec)
     prefix, ref_value = _parse_key_ref(source_ref)
@@ -250,7 +236,6 @@ def resolve_source(*, world: World, source_spec: Any, field_name: str = "source"
             f"{field_name} must use a supported ref such as mobdefinition.slug or itemdefinition.slug."
         )
     model_cls = SOURCE_MODELS[prefix]
-    _reject_legacy_instance_source(world=world, model_cls=model_cls, field_name=field_name)
     lookup_world = _source_lookup_world(world=world, model_cls=model_cls)
     queryset = model_cls.objects.filter(world=lookup_world)
     if ref_value.isdigit():
@@ -264,9 +249,7 @@ def resolve_source(*, world: World, source_spec: Any, field_name: str = "source"
     canonical_type = {
         ItemBundle: "itembundle",
         ItemDefinition: "itemdefinition",
-        ItemTemplate: "itemtemplate",
         MobDefinition: "mobdefinition",
-        MobTemplate: "mobtemplate",
     }[model_cls]
     return ResolvedSource(
         source_type=canonical_type,

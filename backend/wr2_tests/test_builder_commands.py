@@ -5,8 +5,7 @@ from django.contrib.contenttypes.models import ContentType
 from builders.models import (
     AbilityDefinition,
     ItemDefinition,
-    ItemTemplate,
-    MobTemplate,
+    MobDefinition,
     Trigger,
 )
 from config import constants as api_consts
@@ -25,6 +24,23 @@ from wr2_tests.utils import (
     dispatch_text_command,
     dispatch_text_command_as_mob,
 )
+
+
+def create_definition_item(world, spawn_world, container, name, **item_fields):
+    definition = ItemDefinition.objects.create(
+        world=world,
+        name=name,
+        keywords=item_fields.pop("keywords", ""),
+    )
+    return Item.objects.create(
+        world=spawn_world,
+        container=container,
+        definition=definition,
+        definition_slug_snapshot=definition.slug,
+        name=definition.name,
+        keywords=definition.keywords,
+        **item_fields,
+    )
 
 
 class TestBuilderCommandPermissions(WorldTestCase):
@@ -207,12 +223,14 @@ class TestBuilderInvisible(BuilderCommandTestCase):
 class TestBuilderLoad(BuilderCommandTestCase):
     def setUp(self):
         super().setUp()
-        self.item_template = ItemTemplate.objects.create(
+        self.item_definition = ItemDefinition.objects.create(
             world=self.world,
+            slug="test-item",
             name="Test Item",
         )
-        self.mob_template = MobTemplate.objects.create(
+        self.mob_definition = MobDefinition.objects.create(
             world=self.world,
+            slug="test-mob",
             name="Test Mob",
         )
 
@@ -224,60 +242,60 @@ class TestBuilderLoad(BuilderCommandTestCase):
 
     def test_load_item_adds_inventory(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, f"/lo item {self.item_template.id}")
+            dispatch_text_command(self.player.id, f"/lo item {self.item_definition.id}")
 
-        loaded_item = self.player.inventory.get(template=self.item_template)
+        loaded_item = self.player.inventory.get(definition=self.item_definition)
         self.assertTrue(
             self.player.inventory.filter(
-                template=self.item_template,
+                definition=self.item_definition,
             ).exists()
         )
-        self.assertEqual(loaded_item.name, self.item_template.name)
+        self.assertEqual(loaded_item.name, self.item_definition.name)
         message = self._message_by_type(messages, "cmd./load.success")
         self.assertIsNotNone(message)
         self.assertEqual(
             message.get("data", {}).get("loaded", {}).get("name"),
-            self.item_template.name,
+            self.item_definition.name,
         )
         self.assertTrue(message.get("text"))
 
     def test_load_mob_adds_room_mob(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, f"/lo mob {self.mob_template.id}")
+            dispatch_text_command(self.player.id, f"/lo mob {self.mob_definition.id}")
 
         loaded_mob = Mob.objects.get(
-            template=self.mob_template,
+            definition=self.mob_definition,
             room=self.room,
             world=self.spawn_world,
         )
-        self.assertEqual(loaded_mob.name, self.mob_template.name)
+        self.assertEqual(loaded_mob.name, self.mob_definition.name)
         message = self._message_by_type(messages, "cmd./load.success")
         self.assertIsNotNone(message)
         self.assertEqual(
             message.get("data", {}).get("loaded", {}).get("name"),
-            self.mob_template.name,
+            self.mob_definition.name,
         )
         self.assertTrue(message.get("text"))
 
-    def test_load_accepts_unambiguous_template_type_prefix(self):
+    def test_load_accepts_unambiguous_definition_type_prefix(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, f"/load i {self.item_template.id}")
+            dispatch_text_command(self.player.id, f"/load i {self.item_definition.id}")
 
-        loaded_item = self.player.inventory.get(template=self.item_template)
-        self.assertEqual(loaded_item.name, self.item_template.name)
+        loaded_item = self.player.inventory.get(definition=self.item_definition)
+        self.assertEqual(loaded_item.name, self.item_definition.name)
         message = self._message_by_type(messages, "cmd./load.success")
         self.assertIsNotNone(message)
-        self.assertEqual(message.get("data", {}).get("loaded", {}).get("name"), self.item_template.name)
+        self.assertEqual(message.get("data", {}).get("loaded", {}).get("name"), self.item_definition.name)
 
-    def test_load_item_accepts_template_slug(self):
+    def test_load_item_accepts_definition_slug(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, f"/load item {self.item_template.slug}")
+            dispatch_text_command(self.player.id, f"/load item {self.item_definition.slug}")
 
-        loaded_item = self.player.inventory.get(template=self.item_template)
-        self.assertEqual(loaded_item.name, self.item_template.name)
+        loaded_item = self.player.inventory.get(definition=self.item_definition)
+        self.assertEqual(loaded_item.name, self.item_definition.name)
         message = self._message_by_type(messages, "cmd./load.success")
         self.assertIsNotNone(message)
-        self.assertEqual(message.get("data", {}).get("loaded", {}).get("name"), self.item_template.name)
+        self.assertEqual(message.get("data", {}).get("loaded", {}).get("name"), self.item_definition.name)
 
     def test_load_item_accepts_item_definition_slug(self):
         item_definition = ItemDefinition.objects.create(
@@ -415,21 +433,21 @@ class TestBuilderLoad(BuilderCommandTestCase):
         self.assertIsNotNone(message)
         self.assertIn("permission", message.get("text", "").lower())
 
-    def test_load_mob_accepts_template_slug(self):
+    def test_load_mob_accepts_definition_slug(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, f"/load mob {self.mob_template.slug}")
+            dispatch_text_command(self.player.id, f"/load mob {self.mob_definition.slug}")
 
         loaded_mob = Mob.objects.get(
-            template=self.mob_template,
+            definition=self.mob_definition,
             room=self.room,
             world=self.spawn_world,
         )
-        self.assertEqual(loaded_mob.name, self.mob_template.name)
+        self.assertEqual(loaded_mob.name, self.mob_definition.name)
         message = self._message_by_type(messages, "cmd./load.success")
         self.assertIsNotNone(message)
         self.assertEqual(
             message.get("data", {}).get("loaded", {}).get("name"),
-            self.mob_template.name,
+            self.mob_definition.name,
         )
 
     def test_load_requires_builder(self):
@@ -437,11 +455,11 @@ class TestBuilderLoad(BuilderCommandTestCase):
         other_player = self.create_player("Other", user=other_user)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(other_player.id, f"/lo item {self.item_template.id}")
+            dispatch_text_command(other_player.id, f"/lo item {self.item_definition.id}")
 
         self.assertFalse(
             other_player.inventory.filter(
-                template=self.item_template,
+                definition=self.item_definition,
             ).exists()
         )
         message = self._message_by_type(messages, "cmd./load.error")
@@ -672,7 +690,7 @@ class TestBuilderGrantItem(BuilderCommandTestCase):
         self.assertFalse(target.inventory.filter(definition=helm, world=self.spawn_world).exists())
         message = self._message_by_type(messages, "cmd./grantitem.error")
         self.assertIsNotNone(message)
-        self.assertEqual(message["text"], "Template does not belong to this world")
+        self.assertEqual(message["text"], "Item definition does not belong to this world")
         self.assertEqual(message["data"]["item"], "missing-batch-item")
 
     def test_cmd_room_grantitem_adds_multiple_player_items(self):
@@ -1011,13 +1029,7 @@ class TestBuilderPurge(BuilderCommandTestCase):
         return None
 
     def test_purge_all_removes_room_items_and_mobs(self):
-        item_template = ItemTemplate.objects.create(world=self.world, name="Trash")
-        item = Item.objects.create(
-            world=self.spawn_world,
-            container=self.room,
-            template=item_template,
-            name=item_template.name,
-        )
+        item = create_definition_item(self.world, self.spawn_world, self.room, "Trash")
         mob = Mob.objects.create(
             world=self.spawn_world,
             room=self.room,
@@ -1038,13 +1050,7 @@ class TestBuilderPurge(BuilderCommandTestCase):
         self.assertEqual(message["data"]["room"]["chars"], [])
 
     def test_purge_items_only_keeps_mobs(self):
-        item_template = ItemTemplate.objects.create(world=self.world, name="Pebble")
-        item = Item.objects.create(
-            world=self.spawn_world,
-            container=self.room,
-            template=item_template,
-            name=item_template.name,
-        )
+        item = create_definition_item(self.world, self.spawn_world, self.room, "Pebble")
         mob = Mob.objects.create(
             world=self.spawn_world,
             room=self.room,
@@ -1082,12 +1088,11 @@ class TestBuilderPurge(BuilderCommandTestCase):
         )
 
     def test_purge_target_can_remove_inventory_item(self):
-        item_template = ItemTemplate.objects.create(world=self.world, name="Relic")
-        item = Item.objects.create(
-            world=self.spawn_world,
-            container=self.player,
-            template=item_template,
-            name=item_template.name,
+        item = create_definition_item(
+            self.world,
+            self.spawn_world,
+            self.player,
+            "Relic",
             keywords="relic",
         )
 
@@ -1103,13 +1108,7 @@ class TestBuilderPurge(BuilderCommandTestCase):
         other_user = self.create_user("other-builder@example.com")
         other_player = self.create_player("Other", user=other_user)
 
-        item_template = ItemTemplate.objects.create(world=self.world, name="Crate")
-        item = Item.objects.create(
-            world=self.spawn_world,
-            container=other_player.room,
-            template=item_template,
-            name=item_template.name,
-        )
+        item = create_definition_item(self.world, self.spawn_world, other_player.room, "Crate")
 
         with capture_game_messages() as messages:
             dispatch_text_command(other_player.id, "/purge")
@@ -1849,195 +1848,6 @@ class TestBuilderStatsAndSet(BuilderCommandTestCase):
         message = self._message_by_type(messages, "cmd./set.error")
         self.assertIsNotNone(message)
         self.assertIn("computed", message.get("text", "").lower())
-
-
-class TestBuilderResync(BuilderCommandTestCase):
-    def _message_by_type(self, messages, message_type):
-        for msg in messages:
-            if msg["message"].get("type") == message_type:
-                return msg["message"]
-        return None
-
-    def test_resync_item_template_updates_existing_instances(self):
-        template = ItemTemplate.objects.create(
-            world=self.world,
-            name="a sword",
-            description="A plain blade.",
-            keywords="sword",
-        )
-
-        with capture_game_messages():
-            dispatch_text_command(self.player.id, f"/load item {template.id}")
-
-        spawned_item = self.player.inventory.get(template=template)
-        template.name = "a magic sword"
-        template.description = "A blade humming with magic."
-        template.keywords = "magic sword"
-        template.save(update_fields=["name", "description", "keywords"])
-
-        with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, f"/resync item {template.id}")
-
-        spawned_item.refresh_from_db()
-        self.assertEqual(spawned_item.name, "a magic sword")
-        self.assertEqual(spawned_item.description, "A blade humming with magic.")
-        self.assertEqual(spawned_item.keywords, "magic sword")
-
-        message = self._message_by_type(messages, "cmd./resync.success")
-        self.assertIsNotNone(message)
-        self.assertEqual(message["data"]["target_type"], "item")
-        self.assertEqual(message["data"]["template"]["id"], template.id)
-        self.assertEqual(message["data"]["updated"], 1)
-
-    def test_resync_accepts_unambiguous_template_type_prefix(self):
-        template = ItemTemplate.objects.create(
-            world=self.world,
-            name="a sword",
-            description="A plain blade.",
-            keywords="sword",
-        )
-
-        with capture_game_messages():
-            dispatch_text_command(self.player.id, f"/load item {template.id}")
-
-        spawned_item = self.player.inventory.get(template=template)
-        template.name = "a magic sword"
-        template.save(update_fields=["name"])
-
-        with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, f"/resync i {template.id}")
-
-        spawned_item.refresh_from_db()
-        self.assertEqual(spawned_item.name, "a magic sword")
-        message = self._message_by_type(messages, "cmd./resync.success")
-        self.assertIsNotNone(message)
-        self.assertEqual(message["data"]["target_type"], "item")
-
-    def test_resync_mob_template_updates_existing_instances(self):
-        template = MobTemplate.objects.create(
-            world=self.world,
-            name="a soldier",
-            room_description="A soldier stands guard here.",
-            keywords="soldier",
-        )
-
-        with capture_game_messages():
-            dispatch_text_command(self.player.id, f"/load mob {template.id}")
-
-        spawned_mob = Mob.objects.get(
-            world=self.spawn_world,
-            room=self.room,
-            template=template,
-        )
-
-        template.name = "a knight"
-        template.room_description = "A knight stands guard here."
-        template.keywords = "knight"
-        template.save(update_fields=["name", "room_description", "keywords"])
-
-        with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, f"/resync mob {template.id}")
-
-        spawned_mob.refresh_from_db()
-        self.assertEqual(spawned_mob.name, "a knight")
-        self.assertEqual(spawned_mob.room_description, "A knight stands guard here.")
-        self.assertEqual(spawned_mob.keywords, "knight")
-
-        message = self._message_by_type(messages, "cmd./resync.success")
-        self.assertIsNotNone(message)
-        self.assertEqual(message["data"]["target_type"], "mob")
-        self.assertEqual(message["data"]["template"]["id"], template.id)
-        self.assertEqual(message["data"]["updated"], 1)
-
-    def test_resync_all_templates_updates_multiple_items(self):
-        first_template = ItemTemplate.objects.create(world=self.world, name="a sword")
-        second_template = ItemTemplate.objects.create(world=self.world, name="a shield")
-
-        first_item = Item.objects.create(
-            world=self.spawn_world,
-            container=self.player,
-            template=first_template,
-            name="old sword",
-        )
-        second_item = Item.objects.create(
-            world=self.spawn_world,
-            container=self.player,
-            template=second_template,
-            name="old shield",
-        )
-
-        first_template.name = "a runed sword"
-        first_template.save(update_fields=["name"])
-        second_template.name = "a tower shield"
-        second_template.save(update_fields=["name"])
-
-        with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "/resync item all")
-
-        first_item.refresh_from_db()
-        second_item.refresh_from_db()
-        self.assertEqual(first_item.name, "a runed sword")
-        self.assertEqual(second_item.name, "a tower shield")
-
-        message = self._message_by_type(messages, "cmd./resync.success")
-        self.assertIsNotNone(message)
-        self.assertGreaterEqual(message["data"]["updated"], 2)
-
-    def test_resync_all_mob_templates_updates_multiple_mobs(self):
-        first_template = MobTemplate.objects.create(world=self.world, name="a soldier")
-        second_template = MobTemplate.objects.create(world=self.world, name="a guard")
-
-        first_mob = Mob.objects.create(
-            world=self.spawn_world,
-            room=self.room,
-            template=first_template,
-            name="old soldier",
-            description="old desc",
-        )
-        second_mob = Mob.objects.create(
-            world=self.spawn_world,
-            room=self.room,
-            template=second_template,
-            name="old guard",
-            description="old desc",
-        )
-
-        first_template.name = "a veteran soldier"
-        first_template.save(update_fields=["name"])
-        second_template.name = "a royal guard"
-        second_template.save(update_fields=["name"])
-
-        with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "/resync mob all")
-
-        first_mob.refresh_from_db()
-        second_mob.refresh_from_db()
-        self.assertEqual(first_mob.name, "a veteran soldier")
-        self.assertEqual(second_mob.name, "a royal guard")
-
-        message = self._message_by_type(messages, "cmd./resync.success")
-        self.assertIsNotNone(message)
-        self.assertEqual(message["data"]["target_type"], "mob")
-        self.assertGreaterEqual(message["data"]["updated"], 2)
-
-    def test_resync_requires_builder_permissions(self):
-        other_user = self.create_user("other-resync@example.com")
-        other_player = self.create_player("Other", user=other_user)
-
-        with capture_game_messages() as messages:
-            dispatch_text_command(other_player.id, "/resync item all")
-
-        message = self._message_by_type(messages, "cmd./resync.error")
-        self.assertIsNotNone(message)
-        self.assertIn("permission", message.get("text", "").lower())
-
-    def test_resync_rejects_invalid_template(self):
-        with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "/resync item 999999")
-
-        message = self._message_by_type(messages, "cmd./resync.error")
-        self.assertIsNotNone(message)
-        self.assertIn("template does not belong", message.get("text", "").lower())
 
 
 class TestBuilderEcho(BuilderCommandTestCase):

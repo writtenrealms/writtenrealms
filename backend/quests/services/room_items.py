@@ -4,9 +4,9 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from builders.models import ItemTemplate
+from builders.models import ItemDefinition
 from config import constants as adv_consts
-from quests.entity_refs import resolve_room_ref_id, resolve_template_ref_id
+from quests.entity_refs import resolve_entity_ref_id, resolve_room_ref_id
 from quests.models import QuestInstance
 from quests.services.engine import active_instances_qs, get_step
 from spawns.models import Item
@@ -23,8 +23,8 @@ class QuestRoomItemProjection:
     step_id: str
     spec_id: str
     room_id: int
-    item_template_id: int
-    item_template_slug: str
+    item_definition_id: int
+    item_definition_slug: str
     name: str
     description: str
     ground_description: str
@@ -52,10 +52,11 @@ class QuestRoomItemProjection:
             "type": adv_consts.ITEM_TYPE_QUEST,
             "description": self.description,
             "ground_description": self.ground_description,
-            "template": self.item_template_slug,
+            "definition": self.item_definition_slug,
             # Keep step-authored quest pickups unstacked even when several
-            # specs point at the same item template.
-            "template_id": None,
+            # specs point at the same item definition.
+            "definition_id": None,
+            "definition_slug": self.item_definition_slug,
             "is_pickable": True,
             "keywords": self.keywords,
             "keyword": self.keyword,
@@ -155,15 +156,15 @@ def _room_item_projection(
     step_id: str,
     spec_id: str,
     room_id: int,
-    template: ItemTemplate,
+    definition: ItemDefinition,
     claim_item_ids: list[int],
     ground_description: str | None = None,
 ) -> QuestRoomItemProjection:
-    name = str(template.name or template.slug or "Quest item").strip()
-    keywords = str(template.keywords or name.lower()).strip()
+    name = str(definition.name or definition.slug or "Quest item").strip()
+    keywords = str(definition.keywords or name.lower()).strip()
     rendered_ground_description = str(
         ground_description
-        or template.ground_description
+        or definition.ground_description
         or f"{_capfirst(name)} lies here."
     ).strip()
     return QuestRoomItemProjection(
@@ -171,10 +172,10 @@ def _room_item_projection(
         step_id=step_id,
         spec_id=spec_id,
         room_id=room_id,
-        item_template_id=template.id,
-        item_template_slug=template.slug,
+        item_definition_id=definition.id,
+        item_definition_slug=definition.slug,
         name=name,
-        description=str(template.description or "").strip(),
+        description=str(definition.description or "").strip(),
         ground_description=rendered_ground_description,
         keywords=keywords,
         keyword=_first_keyword(keywords, name),
@@ -202,19 +203,19 @@ def _projection_from_spec(
         world=quest_instance.template.world,
         value=room_item_spec.get("room") or room_item_spec.get("room_id"),
     )
-    item_template_id = resolve_template_ref_id(
+    item_definition_id = resolve_entity_ref_id(
         world=quest_instance.template.world,
-        value=room_item_spec.get("item_template") or room_item_spec.get("item_template_id"),
-        expected_type="itemtemplate",
+        value=room_item_spec.get("item_definition") or room_item_spec.get("item_definition_id"),
+        expected_type="itemdefinition",
     )
-    if not room_id or not item_template_id:
+    if not room_id or not item_definition_id:
         return None
 
-    template = ItemTemplate.objects.filter(
-        pk=item_template_id,
-        type=adv_consts.ITEM_TYPE_QUEST,
+    definition = ItemDefinition.objects.filter(
+        pk=item_definition_id,
+        item_type=adv_consts.ITEM_TYPE_QUEST,
     ).first()
-    if not template:
+    if not definition:
         return None
 
     claims = _normalize_claim_map(
@@ -229,7 +230,7 @@ def _projection_from_spec(
         step_id=step_id,
         spec_id=spec_id,
         room_id=room_id,
-        template=template,
+        definition=definition,
         claim_item_ids=claim_item_ids,
         ground_description=room_item_spec.get("ground_description"),
     )
@@ -336,16 +337,16 @@ def claim_quest_room_item(player, projection: QuestRoomItemProjection) -> Item |
     if room_id != projection.room_id:
         return None
 
-    item_template_id = resolve_template_ref_id(
+    item_definition_id = resolve_entity_ref_id(
         world=quest_instance.template.world,
-        value=matching_spec.get("item_template") or matching_spec.get("item_template_id"),
-        expected_type="itemtemplate",
+        value=matching_spec.get("item_definition") or matching_spec.get("item_definition_id"),
+        expected_type="itemdefinition",
     )
-    item_template = ItemTemplate.objects.filter(
-        pk=item_template_id,
-        type=adv_consts.ITEM_TYPE_QUEST,
+    item_definition = ItemDefinition.objects.filter(
+        pk=item_definition_id,
+        item_type=adv_consts.ITEM_TYPE_QUEST,
     ).first()
-    if not item_template:
+    if not item_definition:
         return None
 
     local_state = dict(quest_instance.local_state or {})
@@ -354,7 +355,7 @@ def claim_quest_room_item(player, projection: QuestRoomItemProjection) -> Item |
     if set(claims.get(claim_key, [])) & _player_owned_item_ids(player):
         return None
 
-    spawned_item = item_template.spawn(player, player.world)
+    spawned_item = item_definition.spawn(player, player.world)
     _record_granted_item_ids(local_state, _collect_item_tree_ids([spawned_item]))
 
     updated_claim_ids = set(claims.get(claim_key, []))

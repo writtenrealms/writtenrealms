@@ -34,11 +34,9 @@ from builders.models import (
     ItemBundle,
     ItemBundleEntry,
     ItemDefinition,
-    ItemTemplate,
     MerchantProfile,
     MerchantStockSlot,
     MobDefinition,
-    MobTemplate,
     Trigger,
 )
 from config import constants as adv_consts
@@ -94,7 +92,6 @@ TRIGGER_MANIFEST_KIND = "trigger"
 WORLD_MANIFEST_KIND = "world"
 QUEST_MANIFEST_KIND = "quest"
 QUEST_ARC_MANIFEST_KIND = "questarc"
-ITEM_TEMPLATE_MANIFEST_KIND = "itemtemplate"
 ITEM_DEFINITION_MANIFEST_KIND = "itemdefinition"
 ITEM_BUNDLE_MANIFEST_KIND = "itembundle"
 MERCHANT_PROFILE_MANIFEST_KIND = "merchantprofile"
@@ -112,11 +109,6 @@ _QUEST_ARC_MANIFEST_KIND_ALIASES = {
     QUEST_ARC_MANIFEST_KIND,
     "quest-arc",
     "quest_arc",
-}
-_ITEM_TEMPLATE_MANIFEST_KIND_ALIASES = {
-    ITEM_TEMPLATE_MANIFEST_KIND,
-    "item-template",
-    "item_template",
 }
 _ITEM_DEFINITION_MANIFEST_KIND_ALIASES = {
     ITEM_DEFINITION_MANIFEST_KIND,
@@ -204,6 +196,7 @@ _WORLD_CONFIG_EQUIPMENT_FIELD = "equipment"
 _WORLD_CONFIG_LEVELING_FIELD = "leveling_curve"
 _WORLD_CONFIG_ABILITY_PROGRESS_FIELD = "ability_progression"
 _WORLD_CONFIG_PLAYER_CREATION_FIELD = "player_creation"
+_WORLD_CONFIG_STARTING_EQUIPMENT_FIELD = "starting_equipment"
 _WORLD_FIELDS_PROPAGATED_TO_SPAWNS = {
     "name",
     "short_description",
@@ -270,49 +263,27 @@ _SCOPE_TO_TARGET_TYPE = {
 }
 
 _EVENT_TARGET_TYPES = {
-    "mobtemplate": ("builders", "mobtemplate"),
-    "mob_template": ("builders", "mobtemplate"),
+    "mobdefinition": MobDefinition,
+    "mob_definition": MobDefinition,
 }
 
-_ITEM_TEMPLATE_SPEC_FIELDS = (
-    "level",
-    "description",
-    "ground_description",
-    "notes",
-    "keywords",
-    "type",
-    "is_persistent",
-    "capacity",
-    "quality",
-    "is_boat",
-    "is_pickable",
-    "cost",
-    "currency",
-    "food_value",
-    "food_type",
-    "equipment_type",
-    "armor_class",
-    "weapon_grip",
-    "weapon_type",
-    "weapon_damage",
-    "hit_msg_first",
-    "hit_msg_third",
-    "on_use_cmd",
-    "on_use_description",
-    "on_use_equipped",
-    "health_max",
-    "health_regen",
-    "energy_max",
-    "energy_regen",
-    "stamina_max",
-    "stamina_regen",
-    "attributes",
-    "attack_power",
-    "ability_power",
-    "resilience",
-    "dodge",
-    "crit",
-)
+_COMMAND_ENTITY_TARGET_TYPES = {
+    "itemdefinition": ItemDefinition,
+    "item_definition": ItemDefinition,
+    "mobdefinition": MobDefinition,
+    "mob_definition": MobDefinition,
+}
+
+_CANONICAL_TRIGGER_ENTITY_TARGET_TYPES = {
+    "item_definition": "itemdefinition",
+    "mob_definition": "mobdefinition",
+}
+
+
+def _canonical_trigger_entity_target_type(value: Any) -> str:
+    target_type = str(value or "").strip().lower()
+    return _CANONICAL_TRIGGER_ENTITY_TARGET_TYPES.get(target_type, target_type)
+
 _ITEM_DEFINITION_BASE_PROPERTY_FIELDS = item_definition_property_fields()
 _ITEM_DEFINITION_SPEC_FIELDS = (
     "description",
@@ -391,23 +362,6 @@ class ParsedWorldConfigManifest:
     world: World
     world_updates: dict[str, Any]
     config_updates: dict[str, Any]
-
-
-@dataclass
-class ParsedItemTemplateManifest:
-    world: World
-    item_template: ItemTemplate | None
-    item_template_id: int | None
-    slug: str
-    name: str
-    serializer_data: dict[str, Any]
-
-
-@dataclass
-class ParsedItemTemplateDeleteManifest:
-    world: World
-    item_template: ItemTemplate
-    item_template_id: int
 
 
 @dataclass
@@ -617,8 +571,6 @@ def parse_manifest_kind(manifest: dict[str, Any]) -> str:
         return TRIGGER_MANIFEST_KIND
     if manifest_kind == WORLD_MANIFEST_KIND:
         return WORLD_MANIFEST_KIND
-    if manifest_kind in _ITEM_TEMPLATE_MANIFEST_KIND_ALIASES:
-        return ITEM_TEMPLATE_MANIFEST_KIND
     if manifest_kind in _ITEM_DEFINITION_MANIFEST_KIND_ALIASES:
         return ITEM_DEFINITION_MANIFEST_KIND
     if manifest_kind in _ITEM_BUNDLE_MANIFEST_KIND_ALIASES:
@@ -639,7 +591,7 @@ def parse_manifest_kind(manifest: dict[str, Any]) -> str:
         return QUEST_ARC_MANIFEST_KIND
     raise serializers.ValidationError(
         f"Unsupported manifest kind '{manifest_kind}'. "
-        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_MANIFEST_KIND}, {ITEM_TEMPLATE_MANIFEST_KIND}, {ITEM_DEFINITION_MANIFEST_KIND}, {ITEM_BUNDLE_MANIFEST_KIND}, {MERCHANT_PROFILE_MANIFEST_KIND}, {FACTION_MANIFEST_KIND}, {MOB_DEFINITION_MANIFEST_KIND}, {ABILITY_MANIFEST_KIND}, {ABILITIES_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
+        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_MANIFEST_KIND}, {ITEM_DEFINITION_MANIFEST_KIND}, {ITEM_BUNDLE_MANIFEST_KIND}, {MERCHANT_PROFILE_MANIFEST_KIND}, {FACTION_MANIFEST_KIND}, {MOB_DEFINITION_MANIFEST_KIND}, {ABILITY_MANIFEST_KIND}, {ABILITIES_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
     )
 
 
@@ -777,6 +729,123 @@ def _serialize_world_room_reference(*, room: Room | None, mode: str) -> str:
     raise ValueError(f"Unsupported world room reference mode '{mode}'.")
 
 
+def _lookup_item_definition_for_ref(*, world: World, value: Any) -> ItemDefinition | None:
+    if value in (None, "") or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return ItemDefinition.objects.filter(world=world, pk=value).first()
+
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return ItemDefinition.objects.filter(world=world, pk=int(text)).first()
+
+    prefix, sep, raw = text.partition(".")
+    if sep == ".":
+        if prefix not in {"itemdefinition", "item_definition"}:
+            return None
+        text = raw.strip()
+        if text.isdigit():
+            return ItemDefinition.objects.filter(world=world, pk=int(text)).first()
+
+    if not text:
+        return None
+    return ItemDefinition.objects.filter(world=world, slug=slugify(text)).first()
+
+
+def _starting_equipment_ref(definition: ItemDefinition) -> str:
+    return f"itemdefinition.{definition.slug}"
+
+
+def _serialize_starting_equipment_entries(
+    *,
+    world: World,
+    entries: Any,
+) -> list[dict[str, Any]]:
+    if not isinstance(entries, list):
+        return []
+
+    serialized: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+
+        raw_ref = entry.get("item_definition")
+        if raw_ref in (None, ""):
+            raw_ref = entry.get("item_definition_id")
+        definition = _lookup_item_definition_for_ref(world=world, value=raw_ref)
+        if not definition:
+            continue
+
+        raw_count = entry.get("count", entry.get("num", 1))
+        try:
+            count = int(raw_count or 1)
+        except (TypeError, ValueError):
+            count = 1
+        if count < 1:
+            continue
+
+        normalized = {
+            "item_definition": _starting_equipment_ref(definition),
+            "count": count,
+        }
+        archetype = str(entry.get("archetype") or "").strip()
+        if archetype:
+            normalized["archetype"] = archetype
+        serialized.append(normalized)
+
+    return serialized
+
+
+def _normalize_starting_equipment_entries(
+    *,
+    world: World,
+    entries: Any,
+) -> list[dict[str, Any]]:
+    if entries in (None, ""):
+        return []
+    if not isinstance(entries, list):
+        raise serializers.ValidationError("spec.starting_equipment must be a list.")
+
+    normalized_entries: list[dict[str, Any]] = []
+    for index, entry in enumerate(entries):
+        field_name = f"spec.starting_equipment[{index}]"
+        if not isinstance(entry, dict):
+            raise serializers.ValidationError(f"{field_name} must be a mapping.")
+
+        raw_ref = entry.get("item_definition")
+        ref_field_name = f"{field_name}.item_definition"
+        if raw_ref in (None, ""):
+            raw_ref = entry.get("item_definition_id")
+            ref_field_name = f"{field_name}.item_definition_id"
+        if raw_ref in (None, ""):
+            raise serializers.ValidationError(
+                f"{field_name}.item_definition is required."
+            )
+        definition = _resolve_bundle_entry_definition(
+            world=world,
+            value=raw_ref,
+            field_name=ref_field_name,
+        )
+
+        raw_count = entry.get("count", entry.get("num", 1))
+        count = _coerce_int(raw_count, f"{field_name}.count")
+        if count < 1:
+            raise serializers.ValidationError(f"{field_name}.count must be >= 1.")
+
+        normalized = {
+            "item_definition": _starting_equipment_ref(definition),
+            "count": count,
+        }
+        archetype = str(entry.get("archetype") or "").strip()
+        if archetype:
+            normalized["archetype"] = archetype
+        normalized_entries.append(normalized)
+
+    return normalized_entries
+
+
 def world_config_to_manifest(
     *,
     world: World,
@@ -816,6 +885,10 @@ def world_config_to_manifest(
         spec.update(
             {
                 "starting_gold": int(config.starting_gold),
+                _WORLD_CONFIG_STARTING_EQUIPMENT_FIELD: _serialize_starting_equipment_entries(
+                    world=world,
+                    entries=config.starting_equipment,
+                ),
                 "starting_level": int(config.starting_level),
                 _WORLD_CONFIG_LEVELING_FIELD: normalize_leveling_curve(
                     config.leveling_curve
@@ -906,6 +979,10 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
         config_payload.update(
             {
                 "starting_gold": int(config.starting_gold),
+                _WORLD_CONFIG_STARTING_EQUIPMENT_FIELD: _serialize_starting_equipment_entries(
+                    world=world,
+                    entries=config.starting_equipment,
+                ),
                 "starting_level": int(config.starting_level),
                 _WORLD_CONFIG_LEVELING_FIELD: normalize_leveling_curve(
                     config.leveling_curve
@@ -955,82 +1032,6 @@ def _serialize_currency_reference(currency: Currency | None) -> str:
     if currency is None:
         return ""
     return currency.code or ""
-
-
-def _item_template_spec_from_instance(item_template: ItemTemplate) -> dict[str, Any]:
-    spec: dict[str, Any] = {}
-    for field_name in _ITEM_TEMPLATE_SPEC_FIELDS:
-        if field_name == "currency":
-            spec[field_name] = _serialize_currency_reference(item_template.currency)
-            continue
-
-        value = getattr(item_template, field_name, "")
-        if value is None:
-            spec[field_name] = ""
-        else:
-            spec[field_name] = value
-    return spec
-
-
-def _new_item_template_defaults(*, world: World) -> ItemTemplate:
-    item_template = ItemTemplate(world=world)
-    item_template.currency = Currency.objects.filter(
-        world=world,
-        is_default=True,
-    ).first()
-    return item_template
-
-
-def item_template_manifest_template(*, world: World) -> dict[str, Any]:
-    item_template = _new_item_template_defaults(world=world)
-    return {
-        "kind": ITEM_TEMPLATE_MANIFEST_KIND,
-        "metadata": {
-            "world": _entity_key(_WORLD_KEY_PREFIX, world.id),
-            "slug": "new-item-template",
-            "name": "New Item Template",
-        },
-        "spec": _item_template_spec_from_instance(item_template),
-    }
-
-
-def item_template_to_manifest(item_template: ItemTemplate) -> dict[str, Any]:
-    return {
-        "kind": ITEM_TEMPLATE_MANIFEST_KIND,
-        "metadata": {
-            "world": _entity_key(_WORLD_KEY_PREFIX, item_template.world_id),
-            "id": item_template.id,
-            "key": item_template.key,
-            "slug": item_template.slug,
-            "name": item_template.name or "",
-        },
-        "spec": _item_template_spec_from_instance(item_template),
-    }
-
-
-def item_template_delete_manifest(item_template: ItemTemplate) -> dict[str, Any]:
-    return {
-        "kind": ITEM_TEMPLATE_MANIFEST_KIND,
-        "operation": TRIGGER_MANIFEST_OPERATION_DELETE,
-        "metadata": {
-            "world": _entity_key(_WORLD_KEY_PREFIX, item_template.world_id),
-            "id": item_template.id,
-            "key": item_template.key,
-            "slug": item_template.slug,
-            "name": item_template.name or "",
-        },
-    }
-
-
-def serialize_item_template_payload(item_template: ItemTemplate) -> dict[str, Any]:
-    payload = builder_serializers.ItemTemplateSerializer(item_template).data
-    manifest = item_template_to_manifest(item_template)
-    delete_manifest = item_template_delete_manifest(item_template)
-    payload["manifest"] = manifest
-    payload["yaml"] = manifest_to_yaml(manifest)
-    payload["delete_manifest"] = delete_manifest
-    payload["delete_yaml"] = manifest_to_yaml(delete_manifest)
-    return payload
 
 
 def _item_definition_spec_from_instance(item_definition: ItemDefinition) -> dict[str, Any]:
@@ -1716,21 +1717,21 @@ def serialize_room_trigger_template(*, world: World, room: Room) -> dict[str, An
     }
 
 
-def mob_trigger_template_manifest(*, world: World, mob_template: MobTemplate) -> dict[str, Any]:
-    template_name = mob_template.name or f"Mob {mob_template.id}"
+def mob_trigger_template_manifest(*, world: World, mob_definition: MobDefinition) -> dict[str, Any]:
+    definition_name = mob_definition.name or f"Mob {mob_definition.id}"
     return {
         "kind": TRIGGER_MANIFEST_KIND,
         "metadata": {
             "world": _entity_key(_WORLD_KEY_PREFIX, world.id),
-            "name": f"{template_name} Reaction",
+            "name": f"{definition_name} Reaction",
         },
         "spec": {
             "scope": adv_consts.TRIGGER_SCOPE_WORLD,
             "kind": adv_consts.TRIGGER_KIND_EVENT,
             "target": {
-                "type": "mobtemplate",
-                "key": _entity_key("mobtemplate", mob_template.id),
-                "name": template_name,
+                "type": "mobdefinition",
+                "key": _entity_key("mobdefinition", mob_definition.id),
+                "name": definition_name,
             },
             "event": adv_consts.MOB_REACTION_EVENT_SAYING,
             "match": "hello and (traveler or friend)",
@@ -1746,8 +1747,8 @@ def mob_trigger_template_manifest(*, world: World, mob_template: MobTemplate) ->
     }
 
 
-def serialize_mob_trigger_template(*, world: World, mob_template: MobTemplate) -> dict[str, Any]:
-    manifest = mob_trigger_template_manifest(world=world, mob_template=mob_template)
+def serialize_mob_trigger_template(*, world: World, mob_definition: MobDefinition) -> dict[str, Any]:
+    manifest = mob_trigger_template_manifest(world=world, mob_definition=mob_definition)
     return {
         "manifest": manifest,
         "yaml": manifest_to_yaml(manifest),
@@ -1849,15 +1850,14 @@ def _resolve_event_target(
         if not trigger or not trigger.target_type_id or not trigger.target_id:
             raise serializers.ValidationError("spec.target is required.")
 
-        model_name = trigger.target_type.model
-        if model_name not in _EVENT_TARGET_TYPES:
+        model_cls = trigger.target_type.model_class()
+        if model_cls not in set(_EVENT_TARGET_TYPES.values()):
             raise serializers.ValidationError(
                 "Event triggers must target one of: "
                 + ", ".join(sorted(_EVENT_TARGET_TYPES.keys()))
                 + "."
             )
 
-        model_cls = trigger.target_type.model_class()
         if not model_cls:
             raise serializers.ValidationError("Existing trigger target type is invalid.")
 
@@ -1869,7 +1869,7 @@ def _resolve_event_target(
     if not isinstance(target_data, dict):
         raise serializers.ValidationError("spec.target must be a mapping.")
 
-    target_type = str(target_data.get("type") or "").strip().lower()
+    target_type = _canonical_trigger_entity_target_type(target_data.get("type"))
     if target_type not in _EVENT_TARGET_TYPES:
         raise serializers.ValidationError(
             "spec.target.type must be one of: "
@@ -1887,20 +1887,53 @@ def _resolve_event_target(
         field_name="spec.target.key",
     )
 
-    app_label, model_name = _EVENT_TARGET_TYPES[target_type]
-    try:
-        target_ct = ContentType.objects.get(app_label=app_label, model=model_name)
-    except ContentType.DoesNotExist:
-        raise serializers.ValidationError("spec.target.type is not available.")
-
-    model_cls = target_ct.model_class()
-    if not model_cls:
-        raise serializers.ValidationError("spec.target.type could not be resolved.")
+    model_cls = _EVENT_TARGET_TYPES[target_type]
+    target_ct = ContentType.objects.get_for_model(model_cls)
 
     target_obj = model_cls.objects.filter(world=world, pk=target_id).first()
     if not target_obj:
         raise serializers.ValidationError("Trigger target does not exist in this world.")
     return target_ct, target_obj.id
+
+
+def _resolve_command_entity_target(
+    *,
+    world: World,
+    target_data: Any,
+    trigger: Trigger | None,
+) -> tuple[ContentType, int] | None:
+    if target_data is None:
+        if not trigger or not trigger.target_type_id or not trigger.target_id:
+            return None
+        model_cls = trigger.target_type.model_class()
+        if model_cls not in set(_COMMAND_ENTITY_TARGET_TYPES.values()):
+            return None
+        exists = model_cls.objects.filter(world=world, pk=trigger.target_id).exists()
+        if not exists:
+            raise serializers.ValidationError("Existing trigger target does not exist in this world.")
+        return trigger.target_type, trigger.target_id
+
+    if not isinstance(target_data, dict):
+        return None
+
+    target_type = _canonical_trigger_entity_target_type(target_data.get("type"))
+    if target_type not in _COMMAND_ENTITY_TARGET_TYPES:
+        return None
+
+    target_ref = target_data.get("key", target_data.get("id"))
+    if target_ref is None:
+        raise serializers.ValidationError("spec.target.key is required.")
+
+    target_id = _parse_entity_ref(
+        target_ref,
+        expected_type=target_type,
+        field_name="spec.target.key",
+    )
+    model_cls = _COMMAND_ENTITY_TARGET_TYPES[target_type]
+    target_obj = model_cls.objects.filter(world=world, pk=target_id).first()
+    if not target_obj:
+        raise serializers.ValidationError("Trigger target does not exist in this world.")
+    return ContentType.objects.get_for_model(model_cls), target_obj.id
 
 
 def _resolve_trigger_reference(*, world: World, metadata: dict[str, Any]) -> tuple[Trigger | None, int | None]:
@@ -2022,6 +2055,21 @@ def parse_trigger_manifest(
             target_data=spec.get("target"),
             trigger=trigger,
         )
+    elif kind == adv_consts.TRIGGER_KIND_COMMAND:
+        command_entity_target = _resolve_command_entity_target(
+            world=world,
+            target_data=spec.get("target"),
+            trigger=trigger,
+        )
+        if command_entity_target is not None:
+            target_type, target_id = command_entity_target
+        else:
+            target_type, target_id = _resolve_target(
+                world=world,
+                scope=scope,
+                target_data=spec.get("target"),
+                trigger=trigger,
+            )
     else:
         target_type, target_id = _resolve_target(
             world=world,
@@ -2158,77 +2206,6 @@ def parse_trigger_delete_manifest(
         trigger=trigger,
         trigger_id=trigger_id,
     )
-
-
-def _parse_item_template_reference(value: Any, field_name: str) -> int:
-    if isinstance(value, bool):
-        raise serializers.ValidationError(
-            f"{field_name} must be an integer id or an item template key."
-        )
-    if isinstance(value, int):
-        return value
-
-    text = str(value or "").strip()
-    if not text:
-        raise serializers.ValidationError(
-            f"{field_name} must be an integer id or an item template key."
-        )
-    if text.isdigit():
-        return int(text)
-
-    entity_type, sep, raw_id = text.partition(".")
-    if sep != "." or not raw_id.isdigit():
-        raise serializers.ValidationError(
-            f"{field_name} must be an integer id or an item template key."
-        )
-    if entity_type not in {"itemtemplate", "item_template"}:
-        raise serializers.ValidationError(
-            f"{field_name} must be an integer id or an item template key."
-        )
-    return int(raw_id)
-
-
-def _resolve_item_template_reference(
-    *,
-    world: World,
-    metadata: dict[str, Any],
-) -> tuple[ItemTemplate | None, int | None]:
-    template_id = metadata.get("id")
-    template_key = metadata.get("key")
-    template_slug = str(metadata.get("slug") or "").strip()
-
-    resolved_by_id = None
-    if template_id is not None:
-        parsed_id = _parse_item_template_reference(template_id, "metadata.id")
-        resolved_by_id = ItemTemplate.objects.filter(world=world, pk=parsed_id).first()
-        if not resolved_by_id:
-            raise serializers.ValidationError(
-                "Item template referenced by metadata.id was not found."
-            )
-
-    resolved_by_key = None
-    if template_key not in (None, ""):
-        parsed_key_id = _parse_item_template_reference(template_key, "metadata.key")
-        resolved_by_key = ItemTemplate.objects.filter(world=world, pk=parsed_key_id).first()
-        if not resolved_by_key:
-            raise serializers.ValidationError(
-                "Item template referenced by metadata.key was not found."
-            )
-
-    resolved_by_slug = None
-    if template_slug:
-        resolved_by_slug = ItemTemplate.objects.filter(world=world, slug=template_slug).first()
-
-    resolved = [item for item in (resolved_by_id, resolved_by_key, resolved_by_slug) if item]
-    if len({item.pk for item in resolved}) > 1:
-        raise serializers.ValidationError(
-            "metadata.id, metadata.key, and metadata.slug refer to different item templates."
-        )
-
-    item_template = resolved_by_id or resolved_by_key or resolved_by_slug
-    if item_template is None:
-        return None, None
-    return item_template, item_template.id
 
 
 def _parse_item_definition_reference(value: Any, field_name: str) -> int:
@@ -2656,164 +2633,6 @@ def _resolve_currency_reference(*, world: World, value: Any, field_name: str) ->
     if currency:
         return currency
     raise serializers.ValidationError(f"{field_name} references an unknown currency.")
-
-
-def parse_item_template_manifest(
-    *,
-    world: World,
-    manifest: dict[str, Any],
-) -> ParsedItemTemplateManifest:
-    manifest_kind = parse_manifest_kind(manifest)
-    if manifest_kind != ITEM_TEMPLATE_MANIFEST_KIND:
-        raise serializers.ValidationError(
-            f"Unsupported manifest kind '{manifest_kind}'. Expected '{ITEM_TEMPLATE_MANIFEST_KIND}'."
-        )
-
-    operation = parse_manifest_operation(manifest)
-    if operation != TRIGGER_MANIFEST_OPERATION_APPLY:
-        raise serializers.ValidationError(
-            f"Item template manifests only support operation '{TRIGGER_MANIFEST_OPERATION_APPLY}' in this parser."
-        )
-
-    metadata = manifest.get("metadata") or {}
-    if not isinstance(metadata, dict):
-        raise serializers.ValidationError("metadata must be a mapping.")
-
-    world_ref = metadata.get("world")
-    if world_ref is not None:
-        manifest_world_id = _parse_entity_ref(
-            world_ref,
-            expected_type=_WORLD_KEY_PREFIX,
-            field_name="metadata.world",
-        )
-        if manifest_world_id != world.id:
-            raise serializers.ValidationError("Manifest world does not match the selected world.")
-
-    item_template, item_template_id = _resolve_item_template_reference(
-        world=world,
-        metadata=metadata,
-    )
-
-    spec_patch = manifest.get("spec") or {}
-    if not isinstance(spec_patch, dict):
-        raise serializers.ValidationError("spec must be a mapping.")
-    if item_template is None and not spec_patch:
-        raise serializers.ValidationError("spec is required when creating an item template.")
-
-    base_spec = item_template_manifest_template(world=world)["spec"]
-    if item_template is not None:
-        base_spec = item_template_to_manifest(item_template)["spec"]
-    merged_spec = _deep_merge(base_spec, spec_patch)
-
-    unknown_fields = sorted(set(merged_spec.keys()) - set(_ITEM_TEMPLATE_SPEC_FIELDS))
-    if unknown_fields:
-        raise serializers.ValidationError(
-            f"Unsupported spec field(s): {', '.join(unknown_fields)}."
-        )
-
-    slug_source = metadata.get("slug")
-    if slug_source is None:
-        slug_source = item_template.slug if item_template else metadata.get("name")
-    slug = _slug_or_error(str(slug_source or ""), "metadata.slug")
-    if ItemTemplate.objects.filter(world=world, slug=slug).exclude(pk=item_template_id).exists():
-        raise serializers.ValidationError(
-            "metadata.slug is already used by another item template."
-        )
-
-    default_name = item_template.name if item_template else slug.replace("-", " ").title()
-    name = _coerce_text(metadata.get("name", default_name))
-    if not name.strip():
-        raise serializers.ValidationError("metadata.name cannot be empty.")
-
-    serializer_data: dict[str, Any] = {
-        "name": name,
-        "slug": slug,
-    }
-
-    for field_name in _ITEM_TEMPLATE_SPEC_FIELDS:
-        if field_name not in merged_spec:
-            continue
-        value = merged_spec.get(field_name)
-        if field_name == "currency":
-            if value == "":
-                if item_template is not None:
-                    serializer_data[field_name] = None
-                continue
-            serializer_data[field_name] = (
-                _resolve_currency_reference(
-                    world=world,
-                    value=value,
-                    field_name="spec.currency",
-                ).id
-                if value is not None else None
-            )
-            continue
-        serializer_data[field_name] = value
-
-    serializer = builder_serializers.ItemTemplateSerializer(
-        instance=item_template,
-        data=serializer_data,
-        context={"world": world},
-    )
-    serializer.is_valid(raise_exception=True)
-
-    return ParsedItemTemplateManifest(
-        world=world,
-        item_template=item_template,
-        item_template_id=item_template_id,
-        slug=slug,
-        name=name,
-        serializer_data=serializer_data,
-    )
-
-
-def parse_item_template_delete_manifest(
-    *,
-    world: World,
-    manifest: dict[str, Any],
-) -> ParsedItemTemplateDeleteManifest:
-    manifest_kind = parse_manifest_kind(manifest)
-    if manifest_kind != ITEM_TEMPLATE_MANIFEST_KIND:
-        raise serializers.ValidationError(
-            f"Unsupported manifest kind '{manifest_kind}'. Expected '{ITEM_TEMPLATE_MANIFEST_KIND}'."
-        )
-
-    operation = parse_manifest_operation(manifest)
-    if operation != TRIGGER_MANIFEST_OPERATION_DELETE:
-        raise serializers.ValidationError("Delete parser requires operation: delete.")
-
-    metadata = manifest.get("metadata") or {}
-    if not isinstance(metadata, dict):
-        raise serializers.ValidationError("metadata must be a mapping.")
-
-    world_ref = metadata.get("world")
-    if world_ref is not None:
-        manifest_world_id = _parse_entity_ref(
-            world_ref,
-            expected_type=_WORLD_KEY_PREFIX,
-            field_name="metadata.world",
-        )
-        if manifest_world_id != world.id:
-            raise serializers.ValidationError("Manifest world does not match the selected world.")
-
-    item_template, item_template_id = _resolve_item_template_reference(
-        world=world,
-        metadata=metadata,
-    )
-    if item_template is None or item_template_id is None:
-        raise serializers.ValidationError(
-            "metadata.id, metadata.key, or metadata.slug is required for operation: delete."
-        )
-
-    spec = manifest.get("spec")
-    if spec not in (None, {}):
-        raise serializers.ValidationError("spec is not allowed for operation: delete.")
-
-    return ParsedItemTemplateDeleteManifest(
-        world=world,
-        item_template=item_template,
-        item_template_id=item_template_id,
-    )
 
 
 def _coerce_item_definition_fields(*, world: World, spec_patch: dict[str, Any], existing: ItemDefinition | None) -> dict[str, Any]:
@@ -4780,6 +4599,7 @@ def parse_world_config_manifest(
     allowed_fields.add(_WORLD_CONFIG_LEVELING_FIELD)
     allowed_fields.add(_WORLD_CONFIG_ABILITY_PROGRESS_FIELD)
     allowed_fields.add(_WORLD_CONFIG_PLAYER_CREATION_FIELD)
+    allowed_fields.add(_WORLD_CONFIG_STARTING_EQUIPMENT_FIELD)
 
     unknown_fields = sorted(set(spec.keys()) - allowed_fields)
     if unknown_fields:
@@ -4858,6 +4678,14 @@ def parse_world_config_manifest(
                     f"spec.{field_name} must be -1 or >= 0."
                 )
             config_updates[field_name] = value
+
+    if _WORLD_CONFIG_STARTING_EQUIPMENT_FIELD in spec:
+        config_updates[_WORLD_CONFIG_STARTING_EQUIPMENT_FIELD] = (
+            _normalize_starting_equipment_entries(
+                world=world,
+                entries=spec.get(_WORLD_CONFIG_STARTING_EQUIPMENT_FIELD),
+            )
+        )
 
     for field_name, choices in _WORLD_CONFIG_CONFIG_CHOICE_FIELDS.items():
         if field_name in spec:
@@ -5000,18 +4828,6 @@ def apply_world_config_manifest(parsed: ParsedWorldConfigManifest):
             config.save(update_fields=list(config_updates.keys()))
 
     return config
-
-
-def apply_item_template_manifest(parsed: ParsedItemTemplateManifest) -> ItemTemplate:
-    serializer = builder_serializers.ItemTemplateSerializer(
-        instance=parsed.item_template,
-        data=parsed.serializer_data,
-        context={"world": parsed.world},
-    )
-    serializer.is_valid(raise_exception=True)
-    if parsed.item_template is None:
-        return serializer.save(world=parsed.world)
-    return serializer.save()
 
 
 def apply_item_definition_manifest(parsed: ParsedItemDefinitionManifest) -> ItemDefinition:

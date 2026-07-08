@@ -2,8 +2,10 @@ import yaml
 
 from rest_framework.reverse import reverse
 
-from builders.models import WorldBuilder
+from builders.models import ItemDefinition, WorldBuilder
+from config import constants as adv_consts
 from config import game_settings as adv_config
+from spawns.models import Player
 from tests.base import WorldTestCase
 from worlds.models import Room, World, WorldConfig
 
@@ -298,6 +300,83 @@ spec:
             entry["key"] for entry in config.stat_system["attributes"]
         ]
         self.assertIn("insight", primary_keys)
+
+    def test_apply_world_config_manifest_accepts_starting_equipment(self):
+        compass = ItemDefinition.objects.create(
+            world=self.world,
+            slug="simple-compass",
+            name="a simple compass",
+            item_type=adv_consts.ITEM_TYPE_INERT,
+        )
+        assassin_token = ItemDefinition.objects.create(
+            world=self.world,
+            slug="assassin-token",
+            name="an assassin token",
+            item_type=adv_consts.ITEM_TYPE_INERT,
+        )
+
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{self.world.id}
+spec:
+  starting_equipment:
+    - item_definition: itemdefinition.{compass.slug}
+      count: 1
+    - item_definition: {assassin_token.slug}
+      count: 2
+      archetype: assassin
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.world.config.refresh_from_db()
+        self.assertEqual(
+            self.world.config.starting_equipment,
+            [
+                {
+                    "item_definition": f"itemdefinition.{compass.slug}",
+                    "count": 1,
+                },
+                {
+                    "item_definition": f"itemdefinition.{assassin_token.slug}",
+                    "count": 2,
+                    "archetype": adv_consts.ARCHETYPE_ASSASSIN,
+                },
+            ],
+        )
+        spawn_world = self.world.spawned_worlds.first()
+        player = Player.objects.create(
+            world=spawn_world,
+            room=self.room,
+            user=self.user,
+            name="Warrior",
+            archetype=adv_consts.ARCHETYPE_WARRIOR,
+        )
+        player.initialize()
+        self.assertEqual(player.inventory.filter(definition=compass).count(), 1)
+        self.assertEqual(player.inventory.filter(definition=assassin_token).count(), 0)
+
+        assassin = Player.objects.create(
+            world=spawn_world,
+            room=self.room,
+            user=self.user,
+            name="Assassin",
+            archetype=adv_consts.ARCHETYPE_ASSASSIN,
+        )
+        assassin.initialize()
+        self.assertEqual(assassin.inventory.filter(definition=compass).count(), 1)
+        self.assertEqual(assassin.inventory.filter(definition=assassin_token).count(), 2)
+
+        config_resp = self.client.get(self.config_ep)
+        self.assertEqual(config_resp.status_code, 200)
+        self.assertEqual(
+            config_resp.data["manifest"]["spec"]["starting_equipment"],
+            self.world.config.starting_equipment,
+        )
 
     def test_apply_world_config_manifest_accepts_destroy_all_death_mode(self):
         manifest = f"""

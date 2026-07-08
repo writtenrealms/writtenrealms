@@ -136,10 +136,15 @@
         </div>
         <div class="cmds">
           <div class="cmd" @click="cmdHelp('label')">label</div>
-          <div class="cmd" @click="cmdHelp('upgrade')">upgrade</div>
-          <div class="cmd" @click="cmdHelp('craft')">craft</div>
           <div class="cmd" @click="cmdHelp('compare')">compare</div>
           <div class="cmd" @click="cmdHelp('eat')">eat</div>
+        </div>
+      </div>
+
+      <div class="cmd-group quest-commands">
+        <div class="group-title">Quest Commands</div>
+        <div class="cmds">
+          <div class="cmd" @click="cmdHelp('quest')">quest</div>
         </div>
       </div>
 
@@ -150,8 +155,6 @@
           <div class="cmd" @click="cmdHelp('offer')">offer</div>
           <div class="cmd" @click="cmdHelp('buy')">buy</div>
           <div class="cmd" @click="cmdHelp('sell')">sell</div>
-          <div class="cmd" @click="cmdHelp('enquire')">enquire</div>
-          <div class="cmd" @click="cmdHelp('complete')">complete</div>
           <div class="cmd" @click="cmdHelp('order')">order</div>
 
         </div>

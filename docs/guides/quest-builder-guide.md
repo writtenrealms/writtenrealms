@@ -188,12 +188,12 @@ Supported discovery source shapes:
 | -------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `auto_start`   | none                                | Starts automatically on `cmd.state.sync.success`, `cmd.look.success`, or `cmd.move.success`.                                  |
 | `room_prompt`  | `room` or `room_id`, plus `callout`     | Shows as an opportunity when the player is in that room. The room reference can be an integer id, `room.<id>`, or portable `room@x,y,z`. The room view shows the authored callout line with `[ ! ]` and the player can use `inspect` to see the quest pitch. |
-| `npc_dialogue` | `mob_template` or `mob_template_id` | Shows through NPC dialogue and room UI markers. Mob refs can be ids, `mobtemplate.<id>`, `mobtemplate.<slug>`, or bare slugs. |
+| `npc_dialogue` | `mob_definition` or `mob_definition_id` | Shows through NPC dialogue and room UI markers. Mob refs can be ids, `mobdefinition.<id>`, `mobdefinition.<slug>`, or bare slugs. |
 
-Quest discovery and step room-item bindings are still legacy-template-backed
-surfaces during the WR2 transition. Use `itemdefinition` and `mobdefinition`
-for new general item and mob authoring, but use the documented template refs in
-quest fields until those quest surfaces are migrated.
+Quest item and mob references use WR2 definitions. Do not author new quest
+content against legacy item or mob templates. WR1 export tooling must convert
+old item and mob template references into `itemdefinition` and `mobdefinition`
+refs before importing into WR2.
 
 ### Condition DSL
 
@@ -255,9 +255,9 @@ Notes:
 - Effect values still use path references in brace form, for example
   `value: "{state.world.weather}"`.
 
-Template-id comparisons in conditions can use integer ids, typed keys like
-`mobtemplate.42`, typed slug refs like `mobtemplate.saloon_bartender`, or bare
-slugs where the runtime can infer the template type.
+Definition-id comparisons in conditions can use integer ids, typed keys like
+`mobdefinition.42`, typed slug refs like `mobdefinition.saloon_bartender`, or
+bare slugs where the runtime can infer the definition type.
 
 ### `spec.slots`
 
@@ -365,7 +365,7 @@ Use canonical effect `type` values when authoring new manifests:
 | `grant_gold`  | `amount`                                    | Adds gold to the player immediately.                |
 | `grant_xp`    | `amount`                                    | Adds experience and applies world leveling immediately. |
 | `adjust_reputation` | `faction`, `amount`                   | Adds or subtracts player standing with a reputation faction. |
-| `mob_command` | `mob_template` and `command` or `commands`  | Runs a constrained mob speech/emote/echo command.   |
+| `mob_command` | `mob_definition` and `command` or `commands` | Runs a constrained mob speech/emote/echo command.   |
 
 
 Allowed `mob_command` verbs today:
@@ -442,7 +442,7 @@ spec:
   discovery:
     sources:
       - type: npc_dialogue
-        mob_template: saloon_bartender
+        mob_definition: saloon_bartender
     visible_if: {}
     accept_if: {}
     salience: 25
@@ -459,7 +459,7 @@ spec:
       room_items:
         - id: saloon_keg
           room: room@1,0,0
-          item_template: saloon_keg
+          item_definition: saloon_keg
           ground_description: A full saloon keg rests here.
       objectives:
         - id: deliver_keg
@@ -468,8 +468,8 @@ spec:
             event: quest.item.delivered
             where:
               all:
-                - eq: [event.target.template_id, saloon_bartender]
-                - eq: [event.item.template_id, saloon_keg]
+                - eq: [event.target.definition_id, saloon_bartender]
+                - eq: [event.item.definition_id, saloon_keg]
           progress:
             mode: count
             target: 1
@@ -487,7 +487,7 @@ spec:
       - type: grant_xp
         amount: 50
       - type: mob_command
-        mob_template: saloon_bartender
+        mob_definition: saloon_bartender
         command: say Much obliged. Drinks keep flowing now.
     compromised: []
     failed_forward: []
@@ -496,11 +496,11 @@ spec:
 
 Notes:
 
-- `saloon_bartender` is a mob template slug reference.
-- `saloon_keg` is an item template slug reference.
+- `saloon_bartender` is a mob definition slug reference.
+- `saloon_keg` is an item definition slug reference.
 - `room_items` belongs on the active step, not in discovery. It makes the keg
 visible in the back room with `[ * ]` and lets the player use normal `get keg`.
-- Step room items only accept item templates of type `quest`.
+- Step room items only accept item definitions of type `quest`.
 - The quest pitch text lives in the first step’s `text.body`.
 - The player still accepts explicitly with `quest accept saloon_keg_run`.
 - Turn-in happens with `give keg bartender`, not with `quest complete`.
@@ -580,16 +580,15 @@ The authoring pattern is:
 ## Builder Rules Of Thumb
 
 - If the player should notice a quest by talking to an NPC, use
-`discovery.sources: [{type: npc_dialogue, mob_template: <slug>}]`.
+`discovery.sources: [{type: npc_dialogue, mob_definition: <slug>}]`.
 - If the player should commit to the quest, keep acceptance explicit with
 `quest accept <slug>`.
 - Put the NPC’s actual ask in the first step’s `text.body`.
 - Put the memory aid and immediate player-facing summary in `recap`.
 - For item turn-ins, progress from `quest.item.delivered`.
 - For report-back steps, progress from `cmd.talk.success`.
-- Where quest fields still require legacy mob or item template references, use
-slugs whenever possible. The runtime accepts ids too, but slugs are much easier
-to read.
+- Use definition slugs whenever possible. The runtime accepts ids too, but
+slugs are much easier to read and survive export/import better.
 
 ## Testing Your Quest
 

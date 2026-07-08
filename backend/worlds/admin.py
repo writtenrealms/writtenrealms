@@ -9,7 +9,6 @@ from worlds.models import (
     Room,
     RoomFlag,
     RoomDetail,
-    StartingEq,
     World,
     WorldConfig,
     WorldURL,
@@ -64,7 +63,6 @@ root_world.short_description = 'Root World'
 class WorldConfigAdmin(BaseAdmin):
     list_display = ['id', num_worlds, root_world]
     raw_id_fields = ['starting_room', 'death_room', 'exits_to']
-    exclude = ['starting_eq']
     display_as_choicefield = ['death_mode']
     search_fields = ['configured_worlds__name']
 
@@ -110,11 +108,6 @@ class RoomDetailAdmin(BaseAdmin):
     raw_id_fields = ['room']
 
 
-class StartingEqAdmin(BaseAdmin):
-    list_display = ['id', 'worldconfig', 'itemtemplate']
-    raw_id_fields = ['worldconfig', 'itemtemplate']
-
-
 class DoorAdmin(BaseAdmin):
     list_display = [
         'id', 'from_room', 'to_room', 'default_state'
@@ -158,7 +151,6 @@ admin.site.register(Zone, ZoneAdmin)
 admin.site.register(Room, RoomAdmin)
 admin.site.register(RoomFlag, RoomFlagAdmin)
 admin.site.register(RoomDetail, RoomDetailAdmin)
-admin.site.register(StartingEq, StartingEqAdmin)
 admin.site.register(Door, DoorAdmin)
 admin.site.register(WorldURL, WorldURLAdmin)
 admin.site.register(InstanceAssignment, InstanceAssignmentAdmin)

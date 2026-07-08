@@ -93,7 +93,7 @@ Implemented so far:
   - `room_items` on the active step
   - viewer-specific room rendering with `[ * ]`
   - normal `get <item>` claim flow
-- room mob quest discoverability now feeds frontend `quest_data`:
+- room mob quest discoverability now feeds frontend `quest_indicator`:
   - `[ ! ]` for available `npc_dialogue` opportunities
   - `[ ? ]` for ready report-back / hand-in NPCs
 - `talk <mob>` now emits quest guidance when appropriate:
@@ -119,6 +119,8 @@ Implemented so far:
   - `docs/dev/quest-runtime-playground.md`
 - builder interaction guide:
   - `docs/guides/quest-builder-guide.md`
+- sidebar/mobile quest log integration:
+  - uses the WR2 active/resolved quest instance endpoints
 - automated tests:
   - `backend/wr2_tests/test_quest_manifests.py`
   - `backend/wr2_tests/test_quest_runtime.py`
@@ -133,14 +135,14 @@ Deliberate Phase 1 deviation from the ideal end-state:
 
 Deliberate Phase 2 deviation from the ideal end-state:
 
-- runtime resolved quests currently live at `GET /game/quests/resolved/`
-  instead of taking over the legacy completed route yet
-- `npc_dialogue` discovery currently means "matching mob template is present in
-  the room" rather than full dialogue-tree acceptance
+- runtime resolved quests live at `GET /game/quests/resolved/`
+- `npc_dialogue` discovery currently means "a spawned mob with the matching
+  mob definition is present in the room" rather than full dialogue-tree acceptance
 - quest acceptance still happens through `quest accept <slug>` after dialogue
   discoverability; NPC talk currently surfaces the authored pitch and the
   accept hint, but does not directly commit the quest
-- no dedicated frontend runtime quest UI shipped yet
+- frontend runtime quest UI is currently limited to the console quest messages
+  and a sidebar/mobile quest log
 - `kill` is currently a minimal quest-enabling defeat command, not a finished
   combat system
 - completion-time command execution is currently limited to a constrained
@@ -159,19 +161,16 @@ Immediate next work:
   - move schema classes into `backend/quests/schemas.py` if we still want the
     module split as follow-up cleanup
 - Phase 2 polish:
-  - frontend runtime quest UI
+  - richer frontend runtime quest UI
   - decide whether `quest accept` should gain a no-arg or
     conversation-aware shortcut for single visible NPC offers
   - decide whether room UI should expose action affordances for `Accept`,
     `Give`, or `Talk` when `!` / `?` is present
   - decide whether the `look` fallback should remain an auto-start qualifying
     event long-term once `state.sync` and room-entry coverage feel sufficient
-  - decide when `/game/quests/resolved/` should become canonical
-    `/game/quests/completed/`
   - replace the temporary minimal `kill` command once real combat lands
-- Phase 3 cutover:
-  - retire legacy quest log surfaces
-  - stop reading old quest runtime models
+- Phase 3 cutover is complete for legacy quest models, runtime state, and the
+  old quest log surface.
 
 ## Current Codebase Fit
 
@@ -190,14 +189,14 @@ codebase-specific adjustments.
 - Named step graphs, fail-forward, and separating discovery from the quest log
   all address real weaknesses in the current quest stack.
 
-### What must change for this repo
+### What changed for this repo
 
-- The current quest system is too legacy-shaped to extend:
-  - `builders.Quest` is tied to `mob_template`, zone ownership, old script
-    fields, and `fetch` / `deliver` quest types only.
-  - `builders.Objective` and `builders.Reward` are enum-limited tables for old
+- The old quest system was too legacy-shaped to extend:
+  - `builders.Quest` tied quests to one authored NPC, zone ownership, old
+    script fields, and `fetch` / `deliver` quest types only.
+  - `builders.Objective` and `builders.Reward` were enum-limited tables for old
     quest patterns.
-  - `spawns.PlayerQuest` and `spawns.PlayerEnquire` only capture timestamped
+  - `spawns.PlayerQuest` and `spawns.PlayerEnquire` only captured timestamped
     interaction state.
 - The existing condition DSL in `backend/core/conditions.py` is not a good
   authoring target for new quest content:
@@ -210,9 +209,9 @@ codebase-specific adjustments.
 - Ambient issuer support is still transitional in the current trigger path, so
   the new quest runtime should advance from canonical game events and typed
   quest effects, not by leaning on trigger-script execution.
-- The current builder UI is zone-scoped for quests. The new system needs to be
-  world-scoped because contracts, world events, and arc membership are not
-  fundamentally zone-local.
+- The old builder UI was zone-scoped for quests. The new system is world-scoped
+  because contracts, world events, and arc membership are not fundamentally
+  zone-local.
 
 ## Hard Boundaries
 
@@ -339,7 +338,7 @@ Current supported pattern:
 - the pickup is not a real ground `Item` row yet
 - `get <item>` claims the pickup and spawns a real `Item` into the player's
   inventory
-- the claimed item must use `ItemTemplate.type == quest`
+- the claimed item must use a WR2 item definition whose item type is `quest`
 - claimed quest items are treated as bound:
   - they cannot be dropped into the room
   - they cannot be stashed in room containers
@@ -530,7 +529,7 @@ The player runtime surface should be explicit and service-backed.
 
 - `POST /api/v1/game/quests/opportunities/<slug>/accept/`
 - `GET /api/v1/game/quests/active/`
-- `GET /api/v1/game/quests/completed/`
+- `GET /api/v1/game/quests/resolved/`
 - `GET /api/v1/game/quests/arcs/`
 - `POST /api/v1/game/quests/instances/<instance_id>/abandon/`
 - `GET /api/v1/game/quests/instances/<instance_id>/info/`
@@ -620,13 +619,13 @@ Current implemented behavior:
   - delete quests through manifest apply
 - quest arcs still fall back to raw manifest editing
 
-Do not keep investing in the current:
+Removed legacy screens included:
 
 - `frontend/src/views/builder/zone/QuestList.vue`
 - `frontend/src/views/builder/zone/QuestDetails.vue`
 - old quest objective/reward form components
 
-Those screens mirror the legacy model too closely.
+Those screens mirrored the legacy model too closely.
 
 Current status:
 
@@ -636,21 +635,20 @@ Current status:
 
 ## Tiered Implementation Plan
 
-### Phase 0: Freeze Legacy Quest Work
+### Phase 0: Remove Legacy Quest Work
 
-Goal: stop adding more debt while the new system is built.
+Goal: stop carrying the old quest authoring/runtime stack once the WR2 system is
+usable.
 
 Tasks:
 
-- treat legacy quest code as feature-frozen
+- remove legacy quest code paths
 - add this design documentation
-- create a short internal checklist for "new quest work must go into WR2 quests"
-- if needed, add a temporary setting or world-level flag for enabling the new
-  quest runtime in development worlds only
+- keep new quest work in `backend/quests/` and WR2 manifests
 
 Validation:
 
-- no new builder or runtime work lands in `builders.Quest`
+- no builder or runtime work lands in `builders.Quest`
 
 Status:
 
@@ -767,7 +765,7 @@ Minimum supported features:
   - `abandoned`
 - fixed slots only
 - journal entries with recap
-- active/completed/opportunities endpoints
+- active/resolved/opportunities endpoints
 - `quest info` command
 
 Status:
@@ -934,20 +932,19 @@ COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec bac
 
 Goal: stop paying the old-system tax once the new vertical slice is proven.
 
-Tasks:
+Completed tasks:
 
 - remove legacy builder quest CRUD usage from the UI
 - replace old quest log endpoints with new quest services
-- remove `quest_data: {enquire, complete}` as the canonical quest runtime
-  signal
-- stop referencing `mob_template.template_quests` for runtime surfacing
+- replace the removed room NPC quest marker with
+  `quest_indicator.available` / `quest_indicator.ready`
+- stop referencing legacy mob quest bindings for runtime surfacing
 - delete legacy models and code paths:
   - `builders.Quest`
   - `builders.Objective`
   - `builders.Reward`
   - `spawns.PlayerQuest`
   - `spawns.PlayerEnquire`
-- drop old migrations/tables through normal Django schema deletion migrations
 - remove old zone quest routes and Vue components
 
 Validation:
@@ -1093,9 +1090,9 @@ Runtime integration:
 
 Frontend:
 
-- replace legacy zone quest screens with world-scoped quest views
-- update runtime quest log screens to use opportunities / active / completed
-  endpoints from the new service
+- world-scoped quest views live under `frontend/src/views/builder/world/`
+- runtime quest log screens use active / resolved endpoints from the new
+  service
 
 Tests:
 

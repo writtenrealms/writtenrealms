@@ -150,7 +150,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
 
         spawned_instance.refresh_from_db()
         self.assertEqual(spawned_instance.lifecycle, adv_consts.WORLD_LIFECYCLE_RUNNING)
-        self.assertIsNotNone(spawned_instance.last_loader_run_ts)
+        self.assertIsNotNone(spawned_instance.last_spawn_plan_run_ts)
         mob = Mob.objects.get(world=spawned_instance, definition=mob_definition)
         self.assertEqual(mob.room, self.instance_room)
 
@@ -332,7 +332,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         for item in (bag, pouch, gem, sword):
             item.refresh_from_db()
             self.assertEqual(item.world, spawned_instance)
-            self.assertIsNone(item.template_id)
+            self.assertIsNotNone(item.definition_id)
 
         World.leave_instance(player=self.player)
         self.player.refresh_from_db()
@@ -342,7 +342,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         for item in (bag, pouch, gem, sword):
             item.refresh_from_db()
             self.assertEqual(item.world, self.spawn_world)
-            self.assertIsNone(item.template_id)
+            self.assertIsNotNone(item.definition_id)
 
     def test_leave_instance_marks_participant_exited_without_deleting_run(self):
         spawned_instance = self._enter()

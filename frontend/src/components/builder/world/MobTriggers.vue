@@ -2,7 +2,7 @@
   <div class="mob-triggers">
     <h3>MOB TRIGGERS</h3>
     <div class="color-text-60 mb-6">
-      Triggers are authored event handlers scoped to this mob template. Edit them via YAML in World Edit.
+      Triggers are authored event handlers scoped to this mob definition. Edit them via YAML in World Edit.
     </div>
 
     <div v-if="newTriggerTemplate" class="trigger-card template-card">
@@ -24,7 +24,7 @@
 
     <div v-if="isLoading" class="color-text-60">Loading triggers...</div>
     <div v-else-if="triggers.length === 0" class="color-text-60">
-      No triggers found for this mob template.
+      No triggers found for this mob definition.
     </div>
 
     <div v-for="trigger in triggers" :key="trigger.id" class="trigger-card">
@@ -58,7 +58,7 @@ const triggers = ref<any[]>([]);
 const newTriggerTemplate = ref<any | null>(null);
 const isTemplateExpanded = ref(false);
 
-const endpoint = `/builder/worlds/${route.params.world_id}/mobtemplates/${route.params.mob_template_id}/reactions/`;
+const endpoint = `/builder/worlds/${route.params.world_id}/mobdefinitions/${route.params.mob_definition_id}/reactions/`;
 
 const fetchTriggers = async () => {
   isLoading.value = true;

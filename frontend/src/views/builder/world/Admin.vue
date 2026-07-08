@@ -115,8 +115,8 @@
         <div v-if="world_admin && world_admin.stats" class="mt-8">
           <h3 class="mb-2">STATS</h3>
           <div>Rooms: {{ world_admin.stats.num_rooms }}</div>
-          <div>Mob Templates: {{ world_admin.stats.num_mob_templates }}</div>
-          <div>Item Templates: {{ world_admin.stats.num_item_templates }}</div>
+          <div>Mobs: {{ world_admin.stats.num_mob_definitions }}</div>
+          <div>Items: {{ world_admin.stats.num_item_definitions }}</div>
         </div>
     </div>
   </div>

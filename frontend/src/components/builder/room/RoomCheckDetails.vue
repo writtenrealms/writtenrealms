@@ -63,20 +63,20 @@ defineProps<{
 
 const mob_link = (mob_id: number) => {
   return {
-    name: 'builder_mob_template_details',
+    name: 'builder_mob_definition_details',
     params: {
       world_id: route.params.world_id,
-      mob_template_id: mob_id
+      mob_definition_id: mob_id
     }
   };
 };
 
 const item_link = (item_id: number) => {
   return {
-    name: 'builder_item_template_details',
+    name: 'builder_item_definition_details',
     params: {
       world_id: route.params.world_id,
-      item_template_id: item_id
+      item_definition_id: item_id
     }
   };
 };

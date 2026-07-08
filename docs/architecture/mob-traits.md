@@ -44,7 +44,7 @@ are always authored as explosive, linked, or tracking.
 - Do not make traits arbitrary Python, formula, or script execution.
 - Do not make a second condition/predicate format for trait compatibility or
   activation.
-- Do not invest in legacy `Loader` / `Rule` as the rich trait-rolling path.
+- Do not add a second population path outside WR2 spawn plans.
 - Do not depend on runtime JSON as the only source of truth for authored traits.
 - Do not require a `kind: mobtrait` manifest in the first implementation.
 
@@ -285,11 +285,11 @@ Example resolved mob trait snapshot:
 runtime systems should eventually read the resolved `trait_instances` field or
 runtime cache instead of parsing spawn-plan metadata.
 
-## Loader And Spawn-Plan Integration
+## Spawn-Plan Integration
 
-Spawn plans are the correct target path for random traits. Legacy loaders can
-inherit intrinsic mob-definition traits, but they should not receive the richer
-trait rolling architecture.
+Spawn plans are the target path for random traits. Intrinsic mob-definition
+traits are always available, and spawn placements can add richer rolled traits
+without introducing a separate population system.
 
 Generation flow:
 
@@ -302,7 +302,7 @@ Generation flow:
 
 Materialization flow for mobs:
 
-1. Spawn the base mob from `MobDefinition` or legacy `MobTemplate`.
+1. Spawn the base mob from `MobDefinition`.
 2. Build resolved trait instances from intrinsic definition traits and placement
    traits.
 3. Apply validated numeric modifiers to base stats.

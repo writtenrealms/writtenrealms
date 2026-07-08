@@ -172,7 +172,7 @@ instance, WR2 reports that they are not in an instance.
 Builders inside an instance can type `/reset` to rebuild that active run in
 place. The Instance ID and active participants are kept, player inventory and
 equipment are preserved, active participants are moved to the instance starting
-room, and the instance reruns its initial loaders and spawn plans. Room and
+room, and the instance reruns its initial spawn plans. Room and
 zone scoped state reset when no other active run shares the same instance
 template; otherwise WR2 leaves that shared template-scoped state untouched.
 
@@ -558,8 +558,8 @@ Use spawn plans on the instance template to place base-world mob and item
 definitions into instance rooms.
 
 When a player enters an instance, WR2 starts the spawned instance world and runs
-its initial loaders and spawn plans before placing the player inside. After that,
-the normal loader scheduler can process the instance while its spawned world is
+its initial spawn plans before placing the player inside. After that,
+the normal spawn-plan scheduler can process the instance while its spawned world is
 running.
 
 The source side inherits from the base world:

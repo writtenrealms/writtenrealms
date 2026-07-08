@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 
-from builders.models import ItemDefinition, ItemTemplate, MobTemplate
+from builders.models import ItemDefinition
 from config import constants as adv_consts
 from core.leveling import (
     LevelingConfigError,
@@ -12,7 +12,6 @@ from core.leveling import (
     progress_for_experience,
     set_player_level,
 )
-from core.model_mixins import CharMixin, ItemMixin, MobMixin
 from core.scoped_state import (
     STATE_SCOPE_CHARACTER,
     clear_state_value,
@@ -46,7 +45,7 @@ from spawns.handlers.registry import (
     resolve_text_handler,
 )
 from spawns.models import CombatEncounter, Equipment, Item, Mob, Player
-from spawns.serializers import LoadTemplateSerializer
+from spawns.serializers import LoadDefinitionSerializer
 from spawns.state_payloads import (
     door_state_lookup,
     get_player_with_related,
@@ -166,8 +165,6 @@ def _entity_tokens(entity: Item | Mob) -> set[str]:
     keywords = getattr(entity, "keywords", "") or ""
     if not keywords and getattr(entity, "definition", None):
         keywords = entity.definition.keywords or ""
-    if not keywords and getattr(entity, "template", None):
-        keywords = entity.template.keywords or ""
     if not keywords:
         keywords = getattr(entity, "name", "") or ""
     tokens = set(_tokenize_keywords(keywords))
@@ -188,9 +185,9 @@ def _entity_name(entity: Item | Mob) -> str:
     name = getattr(entity, "name", "") or ""
     if name:
         return name
-    template = getattr(entity, "template", None)
-    if template and template.name:
-        return template.name
+    definition = getattr(entity, "definition", None)
+    if definition and definition.name:
+        return definition.name
     return "target"
 
 
@@ -226,12 +223,12 @@ def _collect_purge_targets(player: Player, selector: str) -> list[Item | Mob]:
         item = room.inventory.filter(pk=item_id, is_pending_deletion=False).first()
         return [item] if item else []
 
-    room_mobs = list(room.mobs.select_related("definition", "template"))
+    room_mobs = list(room.mobs.select_related("definition"))
     room_items = list(
-        room.inventory.filter(is_pending_deletion=False).select_related("definition", "template", "currency")
+        room.inventory.filter(is_pending_deletion=False).select_related("definition", "currency")
     )
     inventory_items = list(
-        player.inventory.filter(is_pending_deletion=False).select_related("definition", "template", "currency")
+        player.inventory.filter(is_pending_deletion=False).select_related("definition", "currency")
     )
 
     targets: list[Item | Mob] = [mob for mob in room_mobs if _entity_matches(mob, selector)]
@@ -302,7 +299,7 @@ def _collect_room_mob_targets(room: Room, selector: str, *, world: World | None 
     if not normalized:
         return []
 
-    room_mobs_qs = room.mobs.select_related("definition", "template")
+    room_mobs_qs = room.mobs.select_related("definition")
     if world is not None:
         room_mobs_qs = room_mobs_qs.filter(world=world)
 
@@ -625,7 +622,7 @@ def _resolve_world_character_key(
             .first()
         )
     return (
-        Mob.objects.select_related("world", "room", "definition", "template", "equipment")
+        Mob.objects.select_related("world", "room", "definition", "equipment")
         .filter(pk=actor_id, world=world)
         .first()
     )
@@ -695,7 +692,7 @@ def _serialize_builder_stats_target(target: Player | Mob) -> tuple[dict[str, obj
         return serialize_actor(updated_target, updated_target.room).model_dump(), "player"
 
     updated_target = (
-        Mob.objects.select_related("world", "room", "definition", "template", "equipment")
+        Mob.objects.select_related("world", "room", "definition", "equipment")
         .get(pk=target.id)
     )
     return _serialize_mob_stats_target(updated_target), "mob"
@@ -998,68 +995,19 @@ def _set_character_stat_value(
     return previous_value, new_value, normalized_field
 
 
-def _item_template_field_names() -> list[str]:
-    names: list[str] = []
-    for field in ItemMixin._meta.fields:
-        if field.name == "id":
-            continue
-        names.append(field.name)
-    return names
-
-
-def _mob_template_field_names() -> list[str]:
-    names: dict[str, bool] = {}
-    for field in CharMixin._meta.fields:
-        if field.name in ("id", "health", "energy", "stamina", "group_id"):
-            continue
-        names[field.name] = True
-    for field in MobMixin._meta.fields:
-        if field.name == "id":
-            continue
-        names[field.name] = True
-    return list(names.keys())
-
-
-def _template_update_values(template, field_names: list[str]) -> dict[str, object]:
-    values: dict[str, object] = {}
-    for field_name in field_names:
-        values[field_name] = getattr(template, field_name)
-    return values
-
-
-def _normalize_values_for_model(model_class, values: dict[str, object]) -> dict[str, object]:
-    normalized = dict(values)
-    for field_name, value in normalized.items():
-        model_field = model_class._meta.get_field(field_name)
-        if value is None and not model_field.null:
-            if model_field.empty_strings_allowed:
-                normalized[field_name] = ""
-            elif model_field.has_default():
-                normalized[field_name] = model_field.get_default()
-    return normalized
-
-
-def _mob_template_update_values(template: MobTemplate, field_names: list[str]) -> dict[str, object]:
-    values = _template_update_values(template, field_names)
-    values["health"] = template.health_max
-    values["energy"] = template.energy_max
-    values["stamina"] = template.stamina_max
-    return _normalize_values_for_model(Mob, values)
-
-
-class LoadTemplateAction:
+class LoadDefinitionAction:
     def execute(
         self,
         *,
         actor: Player | Mob | Room,
         runtime_world: World | None = None,
-        template_type: str,
-        template_id: int | str,
+        definition_type: str,
+        definition_id: int | str,
         cmd: str | None = None,
     ) -> ActionResult:
         actor_type = _actor_kind(actor)
         if actor_type not in ("player", "mob", "room"):
-            raise ActionError("Only players, mobs, and rooms can load templates.", code="unsupported_actor")
+            raise ActionError("Only players, mobs, and rooms can load definitions.", code="unsupported_actor")
 
         load_actor: Player | Mob | Room
         room: Room | None
@@ -1078,14 +1026,14 @@ class LoadTemplateAction:
             spawn_world = _actor_world(actor, runtime_world=runtime_world)
 
         if not room:
-            raise ActionError("You are nowhere. Cannot load templates.", code="no_room")
+            raise ActionError("You are nowhere. Cannot load definitions.", code="no_room")
         if not spawn_world:
-            raise ActionError("No runtime world is available for loading templates.", code="no_world")
+            raise ActionError("No runtime world is available for loading definitions.", code="no_world")
 
         payload = {
             "world_id": spawn_world.id,
-            "template_type": template_type,
-            "template_id": template_id,
+            "definition_type": definition_type,
+            "definition_id": definition_id,
             "actor_type": actor_type,
             "actor_id": load_actor.id,
             "room": room.id,
@@ -1093,34 +1041,33 @@ class LoadTemplateAction:
         if cmd:
             payload["cmd"] = cmd
 
-        serializer = LoadTemplateSerializer(data=payload)
+        serializer = LoadDefinitionSerializer(data=payload)
         try:
             serializer.is_valid(raise_exception=True)
         except drf_serializers.ValidationError as exc:
-            message = _first_error_message(exc.detail) or "Unable to load template."
+            message = _first_error_message(exc.detail) or "Unable to load definition."
             raise ActionError(message, code="invalid_load")
 
         vd = serializer.validated_data
         loaded_key = None
         loaded_name = None
-        loaded_type = vd["template_type"]
+        loaded_type = vd["definition_type"]
 
-        # Spawn the template
-        if vd["template_type"] == "item":
-            item = vd["template"].spawn(vd["actor"], vd["spawn_world"])
+        if vd["definition_type"] == "item":
+            item = vd["definition"].spawn(vd["actor"], vd["spawn_world"])
             loaded_key = item.key
-            loaded_name = item.name or (item.template.name if item.template else "item")
-        elif vd["template_type"] == "mob":
+            loaded_name = item.name or (item.definition.name if item.definition else "item")
+        elif vd["definition_type"] == "mob":
             room = vd["room"] if vd["actor_type"] == "room" else vd["actor"].room
-            mob = vd["template"].spawn(room, vd["spawn_world"])
+            mob = vd["definition"].spawn(room, vd["spawn_world"])
             loaded_key = mob.key
             loaded_name = (
                 mob.name
                 or (mob.definition.name if mob.definition else "")
-                or (mob.template.name if mob.template else "mob")
+                or "mob"
             )
         else:
-            raise ActionError("Unknown template type.", code="invalid_type")
+            raise ActionError("Unknown definition type.", code="invalid_type")
 
         if isinstance(load_actor, Player):
             updated_actor = get_player_with_related(load_actor.id)
@@ -1161,19 +1108,19 @@ class GrantItemAction:
             updated_target = get_player_with_related(target.id)
             return serialize_actor(updated_target, updated_target.room).model_dump(), updated_target.key
 
-        updated_target = Mob.objects.select_related("definition", "template", "room", "world").get(pk=target.id)
+        updated_target = Mob.objects.select_related("definition", "room", "world").get(pk=target.id)
         return serialize_char_from_mob(updated_target).model_dump(), updated_target.key
 
     def _context_world(self, spawn_world: World) -> World:
         context = spawn_world.context
         return context.instance_of or context
 
-    def _resolve_item_templates(
+    def _resolve_item_definitions(
         self,
         *,
         context: World,
         item_refs: list[str],
-    ) -> list[ItemTemplate | ItemDefinition]:
+    ) -> list[ItemDefinition]:
         normalized_refs = [str(item_ref).strip() for item_ref in item_refs if str(item_ref).strip()]
         numeric_ids = {
             int(item_ref)
@@ -1182,14 +1129,6 @@ class GrantItemAction:
         }
         ref_values = set(normalized_refs)
 
-        item_templates_by_id = {
-            item_template.id: item_template
-            for item_template in ItemTemplate.objects.filter(world=context, pk__in=numeric_ids)
-        }
-        item_templates_by_slug = {
-            item_template.slug: item_template
-            for item_template in ItemTemplate.objects.filter(world=context, slug__in=ref_values)
-        }
         item_definitions_by_id = {
             item_definition.id: item_definition
             for item_definition in ItemDefinition.objects.filter(world=context, pk__in=numeric_ids)
@@ -1199,26 +1138,22 @@ class GrantItemAction:
             for item_definition in ItemDefinition.objects.filter(world=context, slug__in=ref_values)
         }
 
-        templates: list[ItemTemplate | ItemDefinition] = []
+        definitions: list[ItemDefinition] = []
         for item_ref in normalized_refs:
-            template = None
+            definition = None
             if item_ref.isdigit():
-                template = item_templates_by_id.get(int(item_ref))
-            if template is None:
-                template = item_templates_by_slug.get(item_ref)
-            if template is None and item_ref.isdigit():
-                template = item_definitions_by_id.get(int(item_ref))
-            if template is None:
-                template = item_definitions_by_slug.get(item_ref)
-            if template is None:
+                definition = item_definitions_by_id.get(int(item_ref))
+            if definition is None:
+                definition = item_definitions_by_slug.get(item_ref)
+            if definition is None:
                 raise ActionError(
-                    "Template does not belong to this world",
+                    "Item definition does not belong to this world",
                     code="invalid_grant",
                     data={"item": item_ref},
                 )
-            templates.append(template)
+            definitions.append(definition)
 
-        return templates
+        return definitions
 
     def _loaded_item_name(self, item: Item) -> str:
         name = getattr(item, "name", "") or ""
@@ -1227,9 +1162,6 @@ class GrantItemAction:
         definition = getattr(item, "definition", None)
         if definition and definition.name:
             return definition.name
-        template = getattr(item, "template", None)
-        if template and template.name:
-            return template.name
         return "item"
 
     def _loaded_item_payload(self, item: Item, target: Player | Mob) -> dict[str, object]:
@@ -1275,7 +1207,7 @@ class GrantItemAction:
             if str(item_id).strip()
         ]
         if not normalized_item_ids:
-            raise ActionError("Usage: /grantitem <target> <item_template_id|item_slug>", code="invalid_args")
+            raise ActionError("Usage: /grantitem <target> <item_definition_id|item_slug>", code="invalid_args")
 
         with transaction.atomic():
             target = _resolve_room_character_target(
@@ -1287,13 +1219,13 @@ class GrantItemAction:
             if not spawn_world:
                 raise ActionError("No runtime world is available for granting items.", code="no_world")
 
-            templates = self._resolve_item_templates(
+            definitions = self._resolve_item_definitions(
                 context=self._context_world(spawn_world),
                 item_refs=normalized_item_ids,
             )
             spawned_items = [
-                template.spawn(target, spawn_world)
-                for template in templates
+                definition.spawn(target, spawn_world)
+                for definition in definitions
             ]
             loaded_items = [
                 self._loaded_item_payload(item, target)
@@ -2492,154 +2424,6 @@ class InvisibleAction:
                         ).model_dump(),
                         "is_invisible": updated_player.is_invisible,
                     },
-                    text=text,
-                )
-            ]
-        )
-
-
-class ResyncItemTemplatesAction:
-    def execute(
-        self,
-        *,
-        player_id: int,
-        template_id: int | None = None,
-    ) -> ActionResult:
-        player = Player.objects.get(pk=player_id)
-        if not player.room_id:
-            raise ActionError("You are nowhere. Cannot resync templates.", code="no_room")
-
-        world = player.world
-        context = world.context.instance_of or world.context
-        template_field_names = _item_template_field_names()
-        base_qs = Item.objects.filter(
-            world=world,
-            template__isnull=False,
-            is_pending_deletion=False,
-        )
-
-        template = None
-        updated = 0
-        if template_id is not None:
-            template = ItemTemplate.objects.filter(pk=template_id, world=context).first()
-            if not template:
-                raise ActionError("Template does not belong to this world.", code="invalid_template")
-            updated = base_qs.filter(template=template).update(
-                **_template_update_values(template, template_field_names)
-            )
-        else:
-            template_ids = list(base_qs.values_list("template_id", flat=True).distinct())
-            templates = ItemTemplate.objects.filter(pk__in=template_ids)
-            for item_template in templates.iterator(chunk_size=200):
-                updated += base_qs.filter(template_id=item_template.id).update(
-                    **_template_update_values(item_template, template_field_names)
-                )
-
-        updated_player = get_player_with_related(player_id)
-        actor_payload = serialize_actor(updated_player, updated_player.room)
-        room_payload = _get_single_room_payload(updated_player)
-
-        data = {
-            "actor": actor_payload.model_dump(),
-            "room": room_payload.model_dump(),
-            "target_type": "item",
-            "updated": updated,
-            "template_id": template_id if template_id is not None else "all",
-        }
-        if template:
-            data["template"] = {"id": template.id, "name": template.name}
-
-        if template:
-            if updated:
-                text = (
-                    f"Resynced {updated} item{'s' if updated != 1 else ''} "
-                    f"from template {template.name}."
-                )
-            else:
-                text = f"No spawned items for template {template.name} were found."
-        else:
-            text = f"Resynced {updated} templated item{'s' if updated != 1 else ''}."
-
-        return ActionResult(
-            events=[
-                GameEvent(
-                    type="cmd./resync.success",
-                    recipients=[updated_player.key],
-                    data=data,
-                    text=text,
-                )
-            ]
-        )
-
-
-class ResyncMobTemplatesAction:
-    def execute(
-        self,
-        *,
-        player_id: int,
-        template_id: int | None = None,
-    ) -> ActionResult:
-        player = Player.objects.get(pk=player_id)
-        if not player.room_id:
-            raise ActionError("You are nowhere. Cannot resync templates.", code="no_room")
-
-        world = player.world
-        context = world.context.instance_of or world.context
-        template_field_names = _mob_template_field_names()
-        base_qs = Mob.objects.filter(
-            world=world,
-            template__isnull=False,
-            is_pending_deletion=False,
-        )
-
-        template = None
-        updated = 0
-        if template_id is not None:
-            template = MobTemplate.objects.filter(pk=template_id, world=context).first()
-            if not template:
-                raise ActionError("Template does not belong to this world.", code="invalid_template")
-            updated = base_qs.filter(template=template).update(
-                **_mob_template_update_values(template, template_field_names)
-            )
-        else:
-            template_ids = list(base_qs.values_list("template_id", flat=True).distinct())
-            templates = MobTemplate.objects.filter(pk__in=template_ids)
-            for mob_template in templates.iterator(chunk_size=200):
-                updated += base_qs.filter(template_id=mob_template.id).update(
-                    **_mob_template_update_values(mob_template, template_field_names)
-                )
-
-        updated_player = get_player_with_related(player_id)
-        actor_payload = serialize_actor(updated_player, updated_player.room)
-        room_payload = _get_single_room_payload(updated_player)
-
-        data = {
-            "actor": actor_payload.model_dump(),
-            "room": room_payload.model_dump(),
-            "target_type": "mob",
-            "updated": updated,
-            "template_id": template_id if template_id is not None else "all",
-        }
-        if template:
-            data["template"] = {"id": template.id, "name": template.name}
-
-        if template:
-            if updated:
-                text = (
-                    f"Resynced {updated} mob{'s' if updated != 1 else ''} "
-                    f"from template {template.name}."
-                )
-            else:
-                text = f"No spawned mobs for template {template.name} were found."
-        else:
-            text = f"Resynced {updated} templated mob{'s' if updated != 1 else ''}."
-
-        return ActionResult(
-            events=[
-                GameEvent(
-                    type="cmd./resync.success",
-                    recipients=[updated_player.key],
-                    data=data,
                     text=text,
                 )
             ]

@@ -6,7 +6,7 @@
     </div>
 
     <div v-if="summary" class="color-text-60 mb-4">
-      {{ summary.documents }} documents: {{ summary.currencies }} currencies, {{ summary.zones }} zones, {{ summary.rooms }} rooms, {{ summary.paths }} paths, {{ summary.item_templates }} item templates, {{ summary.item_definitions }} items, {{ summary.item_bundles }} item bundles, {{ summary.mob_templates }} mob templates, {{ summary.mob_definitions }} mobs, {{ summary.spawn_plans }} spawn plans, {{ summary.quest_arcs }} quest arcs, {{ summary.quests }} quests, and {{ summary.triggers }} triggers.
+      {{ summary.documents }} documents: {{ summary.currencies }} currencies, {{ summary.zones }} zones, {{ summary.rooms }} rooms, {{ summary.paths }} paths, {{ summary.item_definitions }} items, {{ summary.item_bundles }} item bundles, {{ summary.mob_definitions }} mobs, {{ summary.spawn_plans }} spawn plans, {{ summary.quest_arcs }} quest arcs, {{ summary.quests }} quests, and {{ summary.triggers }} triggers.
     </div>
 
     <div class="manifest-actions mb-4">

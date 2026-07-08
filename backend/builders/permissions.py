@@ -1,6 +1,6 @@
 from rest_framework import permissions
 
-from builders.models import WorldBuilder, Loader, Rule, MobTemplate, ItemTemplate
+from builders.models import WorldBuilder
 from worlds.models import World
 
 class IsWorldBuilder(permissions.BasePermission):

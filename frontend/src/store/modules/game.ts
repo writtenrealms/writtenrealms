@@ -434,7 +434,6 @@ const receiveMessage = async ({
       message_data.type === "cmd.put.success" ||
       message_data.type === "cmd.drop.success" ||
       message_data.type === "cmd./purge.success" ||
-      message_data.type === "cmd./resync.success" ||
       message_data.type === "cmd./regen.success" ||
       message_data.type === "cmd./set.success" ||
       message_data.type === "cmd./setclass.success") &&

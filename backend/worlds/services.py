@@ -81,8 +81,8 @@ class WorldSmith:
         self.start_preflight(staff_request=staff_request)
         self.world.set_lifecycle(api_consts.WORLD_LIFECYCLE_STARTING)
         try:
-            from spawns.loading import run_loaders
-            run_loaders(world=self.world, initial=True)
+            from spawns.loading import run_spawn_plans_for_world
+            run_spawn_plans_for_world(world=self.world, initial=True)
         except Exception as exc:
             logger.exception(
                 "Error starting world %s (%s); recovering to stopped.",

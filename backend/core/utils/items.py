@@ -81,7 +81,7 @@ def calculate_power(item, archetype):
     return total_value
 
 
-def price_item(level, quality, eq_type=None, upgrade_count=0):
+def price_item(level, quality, eq_type=None):
     # Base cost
     ilf_cost = config.ILF(level)
 
@@ -94,8 +94,5 @@ def price_item(level, quality, eq_type=None, upgrade_count=0):
     # Factor in slot constant
     if eq_type:
         ilf_cost *= constants.get_slot_constant(eq_type)
-
-    # Factor in upgrades
-    ilf_cost = ilf_cost + ilf_cost * upgrade_count * 0.25
 
     return round(ilf_cost)

@@ -2,38 +2,38 @@ from django.contrib.contenttypes.models import ContentType
 
 from rest_framework.reverse import reverse
 
-from builders.models import MobTemplate, Trigger
+from builders.models import MobDefinition, Trigger
 from config import constants as adv_consts
 from tests.base import WorldTestCase
 
 
-class TestMobTemplateTriggerEndpoints(WorldTestCase):
+class TestMobDefinitionTriggerEndpoints(WorldTestCase):
 
     def setUp(self):
         super().setUp()
         self.client.force_authenticate(self.user)
-        self.mob_template = MobTemplate.objects.create(world=self.world)
+        self.mob_definition = MobDefinition.objects.create(world=self.world)
         self.endpoint = reverse(
-            "builder-mob-template-reactions",
-            args=[self.world.pk, self.mob_template.key],
+            "builder-mob-definition-reactions",
+            args=[self.world.pk, self.mob_definition.key],
         )
 
-    def _event_triggers_for_template(self):
+    def _event_triggers_for_definition(self):
         return Trigger.objects.filter(
             world=self.world,
             kind=adv_consts.TRIGGER_KIND_EVENT,
-            target_type=ContentType.objects.get_for_model(MobTemplate),
-            target_id=self.mob_template.id,
+            target_type=ContentType.objects.get_for_model(MobDefinition),
+            target_id=self.mob_definition.id,
         ).order_by("id")
 
-    def test_trigger_list_includes_yaml_and_template(self):
-        self._event_triggers_for_template().delete()
+    def test_trigger_list_includes_yaml_and_definition(self):
+        self._event_triggers_for_definition().delete()
         Trigger.objects.create(
             world=self.world,
             scope=adv_consts.TRIGGER_SCOPE_WORLD,
             kind=adv_consts.TRIGGER_KIND_EVENT,
-            target_type=ContentType.objects.get_for_model(MobTemplate),
-            target_id=self.mob_template.id,
+            target_type=ContentType.objects.get_for_model(MobDefinition),
+            target_id=self.mob_definition.id,
             event=adv_consts.MOB_REACTION_EVENT_SAYING,
             match="hello",
             script="say Greetings.",
@@ -52,7 +52,7 @@ class TestMobTemplateTriggerEndpoints(WorldTestCase):
         self.assertIn("match:", resp.data["triggers"][0]["yaml"])
         self.assertEqual(resp.data["data"][0]["match"], "hello")
 
-    def test_add_mob_template_trigger(self):
+    def test_add_mob_definition_trigger(self):
         resp = self.client.post(
             self.endpoint,
             {
@@ -62,8 +62,8 @@ class TestMobTemplateTriggerEndpoints(WorldTestCase):
             format="json",
         )
         self.assertEqual(resp.status_code, 201)
-        self.assertEqual(self._event_triggers_for_template().count(), 1)
-        trigger = self._event_triggers_for_template().first()
+        self.assertEqual(self._event_triggers_for_definition().count(), 1)
+        trigger = self._event_triggers_for_definition().first()
         self.assertEqual(trigger.kind, adv_consts.TRIGGER_KIND_EVENT)
         self.assertEqual(trigger.event, adv_consts.MOB_REACTION_EVENT_ENTERING)
         self.assertEqual(trigger.script, "say hi!")
@@ -79,9 +79,9 @@ class TestMobTemplateTriggerEndpoints(WorldTestCase):
             format="json",
         )
         self.assertEqual(resp.status_code, 201)
-        self.assertEqual(self._event_triggers_for_template().count(), 2)
+        self.assertEqual(self._event_triggers_for_definition().count(), 2)
 
-    def test_add_mob_template_trigger_with_condition(self):
+    def test_add_mob_definition_trigger_with_condition(self):
         resp = self.client.post(
             self.endpoint,
             {
@@ -92,7 +92,7 @@ class TestMobTemplateTriggerEndpoints(WorldTestCase):
             format="json",
         )
         self.assertEqual(resp.status_code, 201)
-        self.assertEqual(self._event_triggers_for_template().first().conditions, "is_mob")
+        self.assertEqual(self._event_triggers_for_definition().first().conditions, "is_mob")
 
     def test_match_is_required_for_say_event(self):
         resp = self.client.post(

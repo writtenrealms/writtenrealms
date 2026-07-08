@@ -1,6 +1,5 @@
 import json
 import logging
-import math
 import re
 
 from django.contrib.contenttypes.fields import (
@@ -32,7 +31,6 @@ from core.leveling import (
     get_world_leveling_config,
 )
 from core.model_mixins import CharMixin, ItemMixin, MobMixin
-from worlds.models import StartingEq
 
 
 lifecycle_logger = logging.getLogger('lifecycle')
@@ -281,7 +279,7 @@ class Player(CharMixin, AdventBaseModel):
         "Lookup something in the game by its key."
         raise NotImplementedError("Old game lookup is no longer supported.")
 
-    def initialize(self, reset=False, level=None, starting_eq=True):
+    def initialize(self, reset=False, level=None, include_starting_equipment=True):
         from builders.models import FactionAssignment
         from worlds.models import Door
 
@@ -302,14 +300,8 @@ class Player(CharMixin, AdventBaseModel):
                 faction__is_core=False,
                 member_type__model='player',
                 member_id=self.id).delete()
-            # Delete trophy
-            self.trophy_entries.all().delete()
             # Delete aliases
             self.aliases.all().delete()
-            # Delete player quests
-            self.player_quests.all().delete()
-            # Delete enquired quests
-            self.player_enquires.all().delete()
             # Delete visited rooms
             self.viewed_rooms.clear()
             # Delete equipment
@@ -347,25 +339,54 @@ class Player(CharMixin, AdventBaseModel):
         if grant_starting_abilities(self):
             self.save(update_fields=["known_abilities", "ability_hotkeys"])
 
-        if starting_eq:
-            char_eqs = StartingEq.objects.filter(
-                worldconfig=self.world.config,
-            ).filter(
-                models.Q(archetype=self.archetype)
-                | models.Q(archetype__isnull=True))
-            for starting_eq in char_eqs:
-                for i in range(0, starting_eq.num):
-                    item_template = starting_eq.itemtemplate
-                    item = item_template.spawn(self, self.world)
+        if include_starting_equipment:
+            from builders.models import ItemDefinition
+            from core.world_config import inherited_system_world
 
-                    if item_template.equipment_type:
+            definition_world = inherited_system_world(self.world) or self.world
+
+            for starting_item in self.world.config.starting_equipment or []:
+                if not isinstance(starting_item, dict):
+                    continue
+                archetype = starting_item.get("archetype")
+                if archetype and archetype != self.archetype:
+                    continue
+                raw_definition = starting_item.get("item_definition")
+                if raw_definition in (None, ""):
+                    raw_definition = starting_item.get("item_definition_id")
+                definition = None
+                if isinstance(raw_definition, int) and not isinstance(raw_definition, bool):
+                    definition = ItemDefinition.objects.filter(
+                        world=definition_world,
+                        pk=raw_definition,
+                    ).first()
+                else:
+                    definition_slug = str(raw_definition or "").strip()
+                    prefix, sep, raw = definition_slug.partition(".")
+                    if sep == "." and prefix in {"itemdefinition", "item_definition"}:
+                        definition_slug = raw
+                    if definition_slug:
+                        definition = ItemDefinition.objects.filter(
+                            world=definition_world,
+                            slug=definition_slug,
+                        ).first()
+                if not definition:
+                    continue
+                try:
+                    count = int(starting_item.get("count", starting_item.get("num", 1)) or 1)
+                except (TypeError, ValueError):
+                    count = 1
+                for i in range(0, max(0, count)):
+                    item = definition.spawn(self, self.world)
+
+                    if item.equipment_type:
                         if (self.archetype == adv_consts.ARCHETYPE_ASSASSIN
-                            and (item_template.equipment_type
+                            and (item.equipment_type
                                     == adv_consts.EQUIPMENT_TYPE_WEAPON_2H)):
                             continue
 
                         slot = type_to_slot(
-                            eq_type=item_template.equipment_type,
+                            eq_type=item.equipment_type,
                             archetype=self.archetype,
                             has_weapon=bool(self.equipment.weapon))
                         self.equipment.equip(item, slot)
@@ -594,15 +615,6 @@ class PlayerData(BaseModel):
                 return chunk
 
 
-class PlayerTrophy(BaseModel):
-    player = models.ForeignKey('spawns.Player',
-                               related_name='trophy_entries',
-                               on_delete=models.CASCADE)
-    mob_template = models.ForeignKey('builders.MobTemplate',
-                                     related_name='trophy_entries',
-                                     on_delete=models.CASCADE)
-
-
 models.signals.post_save.connect(Player.post_char_save, Player)
 models.signals.post_delete.connect(Player.post_char_delete, Player)
 
@@ -640,10 +652,6 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
     room = models.ForeignKey('worlds.Room',
                              on_delete=models.CASCADE,
                              related_name='mobs')
-    template = models.ForeignKey('builders.MobTemplate',
-                                 on_delete=models.SET_NULL,
-                                 related_name='template_mobs',
-                                 **optional)
     definition = models.ForeignKey('builders.MobDefinition',
                                    on_delete=models.SET_NULL,
                                    related_name='spawned_mobs',
@@ -663,10 +671,6 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
         content_type_field='container_type',
         object_id_field='container_id')
 
-    rule = models.ForeignKey('builders.Rule',
-                             related_name='rules',
-                             on_delete=models.SET_NULL,
-                             **optional)
     spawn_placement = models.ForeignKey('builders.SpawnPlacement',
                                         related_name='mobs',
                                         on_delete=models.SET_NULL,
@@ -691,9 +695,7 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
         ]
 
     def create_corpse(self):
-        if self.template:
-            name = self.template.name
-        elif self.definition:
+        if self.definition:
             name = self.definition.name
         else:
             name = self.name
@@ -836,21 +838,12 @@ class MerchantBuybackEntry(AdventBaseModel):
 
 
 class Item(ItemMixin, AdventBaseModel):
-    """
-    There are two kinds of items. Templated items and procedural items.
-    """
+    """Runtime item spawned from a WR2 item definition, bundle, or procedure."""
 
     world = models.ForeignKey('worlds.World',
                               on_delete=models.CASCADE,
                               related_name='items')
 
-    # For templated items
-    template = models.ForeignKey('builders.ItemTemplate',
-                                 on_delete=models.SET_NULL,
-                                 related_name='template_items',
-                                 **optional)
-
-    # For clean WR2 authored item definitions.
     definition = models.ForeignKey('builders.ItemDefinition',
                                    on_delete=models.SET_NULL,
                                    related_name='spawned_items',
@@ -874,10 +867,6 @@ class Item(ItemMixin, AdventBaseModel):
         content_type_field='container_type',
         object_id_field='container_id')
 
-    rule = models.ForeignKey('builders.Rule',
-                             related_name='item_rules',
-                             on_delete=models.SET_NULL,
-                             **optional)
     spawn_placement = models.ForeignKey('builders.SpawnPlacement',
                                         related_name='items',
                                         on_delete=models.SET_NULL,
@@ -892,7 +881,6 @@ class Item(ItemMixin, AdventBaseModel):
 
     label = models.TextField(**optional)
 
-    upgrade_count = models.PositiveIntegerField(default=0)
     augment = models.ForeignKey('spawns.Item',
                                 related_name='augment_items',
                                 on_delete=models.SET_NULL,
@@ -908,13 +896,6 @@ class Item(ItemMixin, AdventBaseModel):
             models.Index(fields=['created_ts']),
         ]
 
-
-    def get_game_data(self):
-        "Gets the data representation as the game engine expects it"
-        from builders.serializers import ItemTemplateSerializer
-        template_data = ItemTemplateSerializer(self.template).data
-        return template_data
-
     def get_contained_ids(self):
         """
         Returns the ID of items contained in a container, including all
@@ -926,35 +907,6 @@ class Item(ItemMixin, AdventBaseModel):
             if nested_item.type == adv_consts.ITEM_TYPE_CONTAINER:
                 ids.extend(nested_item.get_contained_ids())
         return ids
-
-    def boost(self, amount=20):
-        "Boost the stats on an item by a percentage amount."
-        attributes = dict(self.attributes or {})
-        for key, value in attributes.items():
-            if isinstance(value, (int, float)) and not isinstance(value, bool) and value:
-                attributes[key] = math.ceil(value * 120 / 100)
-        self.attributes = attributes
-        for attr in [
-            adv_consts.ATTR_AP,
-            adv_consts.ATTR_ABILITY_POWER,
-            adv_consts.ATTR_CRIT,
-            adv_consts.ATTR_DODGE,
-            adv_consts.ATTR_RESILIENCE,
-            adv_consts.ATTR_MAX_HEALTH,
-            adv_consts.ATTR_MAX_ENERGY,
-            adv_consts.ATTR_MAX_STAMINA,
-            adv_consts.ATTR_REGEN_HEALTH,
-            adv_consts.ATTR_REGEN_ENERGY,
-            adv_consts.ATTR_REGEN_STAMINA,
-            adv_consts.ATTR_WEAPON_DAMAGE,
-        ]:
-            value = getattr(self, attr, None)
-            if value:
-                value = math.ceil(value * 120 / 100)
-            setattr(self, attr, value)
-        self.upgrade_count += 1
-        self.save()
-        return self
 
     @property
     def budget_spent(self):
@@ -990,27 +942,6 @@ class RoomCommandCheckState(BaseModel):
                                   on_delete=models.CASCADE,
                                   related_name='room_cmd_check_states')
     passed_ts = models.DateTimeField(**optional)
-
-
-class PlayerEnquire(AdventBaseModel):
-    player = models.ForeignKey('spawns.Player',
-                               on_delete=models.CASCADE,
-                               related_name='player_enquires')
-    quest = models.ForeignKey('builders.Quest',
-                              on_delete=models.CASCADE,
-                              related_name='played_enquires')
-    enquire_ts = models.DateTimeField(**optional)
-
-
-class PlayerQuest(AdventBaseModel):
-
-    player = models.ForeignKey('spawns.Player',
-                               on_delete=models.CASCADE,
-                               related_name='player_quests')
-    quest = models.ForeignKey('builders.Quest',
-                              on_delete=models.CASCADE,
-                              related_name='player_quests')
-    completion_ts = models.DateTimeField(**optional)
 
 
 class Alias(BaseModel):

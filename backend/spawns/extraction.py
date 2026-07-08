@@ -10,7 +10,7 @@ from django.utils import timezone
 
 from config import constants as api_consts
 from builders.models import (
-    RoomCommandCheck, Quest, Faction, FactionAssignment)
+    RoomCommandCheck, Faction, FactionAssignment)
 from core.scoped_state import (
     STATE_SCOPE_CHARACTER,
     STATE_SCOPE_WORLD,
@@ -23,8 +23,6 @@ from spawns.models import (
     Mob,
     Equipment,
     RoomCommandCheckState,
-    PlayerQuest,
-    PlayerTrophy,
     Alias)
 from worlds.models import World, Room, Door
 
@@ -66,7 +64,6 @@ class APIExtractor:
         self.save_viewed_rooms(player)
         self.save_factions(player)
         self.save_aliases(player)
-        self.save_trophy(player)
         self.save_marks(player)
         self.save_items(player)
         # It's important for equipment to be after items because all items
@@ -98,7 +95,6 @@ class APIExtractor:
         self.save_viewed_rooms(player)
         self.save_factions(player)
         self.save_aliases(player)
-        self.save_trophy(player)
         self.save_marks(player)
         self.save_items(self.world)
         self.save_mobs()
@@ -238,14 +234,6 @@ class APIExtractor:
             existing_item_ids.update(
                 player.equipment.inventory.values_list('id', flat=True))
 
-            # If any of the player's items still have a rule attached to them,
-            # clear that attachement.
-            items_from_rules = Item.objects.filter(
-                pk__in=existing_item_ids,
-                rule_id__isnull=False)
-            if items_from_rules.exists():
-                items_from_rules.update(rule_id=None)
-
         elif isinstance(reference, World):
             existing_item_ids.update(
                 reference.items.values_list('id', flat=True))
@@ -259,7 +247,7 @@ class APIExtractor:
         ])
 
         # If any items were marked as pending deletion, but are now seen in
-        # the extracted data (for example if a loader ran right before
+        # the extracted data (for example if a spawn-plan run happened right before
         # extraction and the items hadn't made it yet), mark them as no longer
         # pending deletion.
         Item.objects.filter(
@@ -346,7 +334,7 @@ class APIExtractor:
         ])
 
         # If any of the mobs that were in the world were marked for deletion
-        # (for example if a loader ran right before the extraction and the
+        # (for example if a spawn-plan run happened right before the extraction and the
         # mobs hadn't made it to the game yet), mark them as no longer
         # pending deletion.
         self.world.mobs.filter(
@@ -458,17 +446,6 @@ class APIExtractor:
             Alias.objects.filter(
                 player=player
             ).exclude(id__in=seen_ids).delete()
-
-    def save_trophy(self, player):
-        for chunk in self.chunks.get('trophy', []):
-            for mob_template_id, count in chunk['trophy'].items():
-                existing = player.trophy_entries.filter(
-                    mob_template_id=mob_template_id).count()
-                delta = count - existing
-                for i in range(0, delta):
-                    PlayerTrophy.objects.create(
-                        player=player,
-                        mob_template_id=mob_template_id)
 
     def save_marks(self, player):
         for chunk in self.chunks.get('marks', []):

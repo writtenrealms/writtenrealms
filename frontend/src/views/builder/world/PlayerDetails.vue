@@ -70,19 +70,6 @@
           </div>
         </div>
 
-        <div class="quests">
-          <h3>Quests</h3>
-          <div v-for="quest in player.quests" :key="quest.id">{{ quest.name }}</div>
-        </div>
-
-        <div class="trophy">
-          <h3>Trophy</h3>
-          <div
-            v-for="mob_template_id in Object.keys(player.trophy)"
-            :key="mob_template_id"
-          >{{ player.trophy[mob_template_id]['mob_template']['name']}}: {{ player.trophy[mob_template_id]['count']}}</div>
-        </div>
-
         <div class="marks">
           <h3>Character State</h3>
           <div v-for="mark in player.marks" :key="mark.name">{{ mark.name }}: {{ mark.value }}</div>
@@ -137,7 +124,7 @@ onMounted(async () => {
 const editInfo = () => {
   const entity = player.value;
   const modal = {
-    title: `Item Template ${entity.id}`,
+    title: `Player ${entity.id}`,
     data: entity,
     schema: [
       {

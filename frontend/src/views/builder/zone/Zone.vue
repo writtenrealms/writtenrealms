@@ -31,27 +31,18 @@
           </div>
         </div>
 
-        <div class="zone-loads">
-          <div v-if="zone_mobs.length">
-            <h3>MOB LOADS</h3>
-            <div v-for="mob in zone_mobs" :key="mob.id">
-              <router-link
-                :to="mob_link(mob.id)"
-              >{{ mob.level }} - {{ mob.name }}</router-link>
-              <span class='color-text-50 ml-2' v-if="mob.is_elite">[elite]</span>
+        <div class="zone-spawn-plans">
+          <h3>SPAWN PLANS</h3>
+          <div v-if="zone_spawn_plans.length">
+            <div class="spawn-plan-row" v-for="spawnPlan in zone_spawn_plans" :key="spawnPlan.id">
+              <div>{{ spawnPlan.name || spawnPlan.slug }}</div>
+              <div class="color-text-50">
+                {{ spawnPlan.num_entries }} entries
+                <span v-if="spawnPlan.respawn_mode">/ {{ spawnPlan.respawn_mode }}</span>
+              </div>
             </div>
-            <div v-if="!zone_mobs">None.</div>
           </div>
-
-          <div v-if="zone_items.length">
-            <h3>ITEM LOADS</h3>
-            <div v-for="item in zone_items" :key="item.id">
-              <router-link
-                :to="item_link(item.id)"
-              >{{ item.name }}</router-link>
-            </div>
-            <div v-if="!zone_items">None.</div>
-          </div>
+          <div v-else class="color-text-50">No spawn plans.</div>
         </div>
       </div>
 
@@ -122,8 +113,7 @@ import axios from "axios";
 import { FormElement } from "@/core/forms.ts";
 
 const zone_rooms = ref<Room[]>([]);
-const zone_mobs = ref<any[]>([]);
-const zone_items = ref<any[]>([]);
+const zone_spawn_plans = ref<any[]>([]);
 const loaded = ref(false);
 const respawns = computed(() => store.state.builder.zone.respawn_wait >= 0);
 const zone = computed(() => store.state.builder.zone);
@@ -164,8 +154,7 @@ onMounted(async () => {
   const world_id = route.params.world_id;
   const zone_id = route.params.zone_id;
 
-  // build promise to fetch zone's loads
-  const zone_loads_promise = axios.get(`builder/worlds/${world_id}/zones/${zone_id}/loads/`);
+  const zone_spawn_plans_promise = axios.get(`builder/worlds/${world_id}/zones/${zone_id}/spawn-plans/`);
 
   // build promise to fetch zone's rooms
 
@@ -180,17 +169,16 @@ onMounted(async () => {
       });
 
   const [
-    zone_loads_resp,
+    zone_spawn_plans_resp,
     zone_rooms_resp,
     _,
   ] = await Promise.all([
-    zone_loads_promise,
+    zone_spawn_plans_promise,
     zone_rooms_promise,
     zone_details_promise,
   ]);
 
-  zone_mobs.value = zone_loads_resp.data.mobs;
-  zone_items.value = zone_loads_resp.data.items;
+  zone_spawn_plans.value = zone_spawn_plans_resp.data.spawn_plans || [];
   zone_rooms.value = zone_rooms_resp;
   loaded.value = true;
 });
@@ -265,7 +253,7 @@ const editRespawns = () => {
       {
         attr: "respawn_wait",
         label: "Respawn Wait",
-        help: "How long to wait before re-running this loader, in seconds.",
+        help: "How long to wait before re-running spawn plans, in seconds.",
       },
     ],
     action: "builder/zone_save",
@@ -273,41 +261,6 @@ const editRespawns = () => {
   store.commit('ui/modal/open_form', modal);
 };
 
-const mob_link = (mob_id) => {
-  let world_id = store.state.builder.world.id;
-  if (store.state.builder.world.instance_of.id) {
-    world_id = store.state.builder.world.instance_of.id;
-  }
-
-  return {
-    name: 'builder_mob_template_details',
-    params: { world_id: world_id, mob_template_id: mob_id }
-  }
-};
-
-const item_link = (item_id) => {
-  let world_id = store.state.builder.world.id;
-  if (store.state.builder.world.instance_of.id) {
-    world_id = store.state.builder.world.instance_of.id;
-  }
-
-  return {
-    name: 'builder_item_template_details',
-    params: { world_id: world_id, item_template_id: item_id }
-  }
-};
-
-// const mob_link = computed((mob_id) => {
-//   let world_id = store.state.builder.world.id;
-//   if (store.state.builder.world.instance_of.id) {
-//     world_id = store.state.builder.world.instance_of.id;
-//   }
-
-//   return {
-//     name: 'builder_mob_template_details',
-//     params: { world_id: world_id, mob_template_id: mob_id }
-//   }
-// });
 </script>
 
 <style lang='scss' scoped>
@@ -332,28 +285,25 @@ const item_link = (item_id) => {
     display: flex;
     @media ($mobile-site) {
       flex-direction: column;
-      .zone-loads {
+      .zone-spawn-plans {
         margin-top: 15px;
       }
     }
     @media ($desktop-site) {
-      .zone-loads {
+      .zone-spawn-plans {
         margin-left: 25px;
       }
     }
 
-    .zone-loads {
+    .zone-spawn-plans {
       display: flex;
+      flex-direction: column;
       > div {
         &:not(:last-child) {
-          margin-right: 15px;
+          margin-bottom: 10px;
         }
         h3 {
           margin-bottom: 10px;
-        }
-
-        a {
-          color: $color-text;
         }
       }
     }

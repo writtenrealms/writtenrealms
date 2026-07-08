@@ -8,11 +8,11 @@ from rest_framework.test import APITestCase
 from rest_framework.reverse import reverse
 
 from config import constants as api_consts
-from builders.models import ItemTemplate, Faction, FactionAssignment
+from builders.models import Faction, FactionAssignment, ItemDefinition
 from spawns.models import Player
 from tests.base import WorldTestCase
 from users.models import User
-from worlds.models import World, Room, StartingEq
+from worlds.models import World, Room
 
 
 class TestCreatePlayerCharacter(WorldTestCase):
@@ -178,45 +178,61 @@ class TestCreatePlayerCharacter(WorldTestCase):
         self.assertEqual(resp.data[0],
                          "Cannot create a character while in an instance.")
 
-    def test_starting_eq(self):
-        sword_template = self.world.create_item_template(
+    def _starting_item_definition(self, *, slug, name, equipment_type=None):
+        base_properties = {}
+        item_type = adv_consts.ITEM_TYPE_INERT
+        if equipment_type:
+            item_type = adv_consts.ITEM_TYPE_EQUIPPABLE
+            base_properties["equipment_type"] = equipment_type
+        return ItemDefinition.objects.create(
+            world=self.world,
+            slug=slug,
+            name=name,
+            item_type=item_type,
+            base_properties=base_properties,
+        )
+
+    def _set_starting_equipment(self, entries):
+        self.world.config.starting_equipment = entries
+        self.world.config.save(update_fields=["starting_equipment"])
+
+    def test_starting_equipment(self):
+        sword_definition = self._starting_item_definition(
+            slug='sword',
             name='a sword',
             equipment_type=adv_consts.EQUIPMENT_TYPE_WEAPON_1H)
-        helmet_template = self.world.create_item_template(
+        helmet_definition = self._starting_item_definition(
+            slug='helmet',
             name='a helmet',
             equipment_type=adv_consts.EQUIPMENT_TYPE_HEAD)
-        compass_template = self.world.create_item_template(name='a compass')
-
-        StartingEq.objects.create(
-            worldconfig=self.world.config,
-            itemtemplate=sword_template)
-
-        StartingEq.objects.create(
-            worldconfig=self.world.config,
-            itemtemplate=helmet_template)
-
-        StartingEq.objects.create(
-            worldconfig=self.world.config,
-            itemtemplate=compass_template)
+        compass_definition = self._starting_item_definition(
+            slug='compass',
+            name='a compass')
+        self._set_starting_equipment([
+            {'item_definition': f'itemdefinition.{sword_definition.slug}', 'count': 1},
+            {'item_definition': f'itemdefinition.{helmet_definition.slug}', 'count': 1},
+            {'item_definition': f'itemdefinition.{compass_definition.slug}', 'count': 1},
+        ])
 
         resp = self.client.post(self.endpoint, {'name': 'John'})
         john = Player.objects.get(pk=resp.data['id'])
 
-        self.assertEqual(john.equipment.weapon.template, sword_template)
-        self.assertEqual(john.equipment.head.template, helmet_template)
-        self.assertEqual(john.inventory.all().first().template, compass_template)
+        self.assertEqual(john.equipment.weapon.definition, sword_definition)
+        self.assertEqual(john.equipment.head.definition, helmet_definition)
+        self.assertTrue(john.inventory.filter(definition=compass_definition).exists())
 
-    def test_assassin_starting_eq(self):
+    def test_assassin_starting_equipment(self):
         """
         Regression test, makes sure that an assassin doesn't start with a
         2H weapon
         """
-        sword_template = self.world.create_item_template(
+        sword_definition = self._starting_item_definition(
+            slug='greatsword',
             name='a sword',
             equipment_type=adv_consts.EQUIPMENT_TYPE_WEAPON_2H)
-        StartingEq.objects.create(
-            worldconfig=self.world.config,
-            itemtemplate=sword_template)
+        self._set_starting_equipment([
+            {'item_definition': f'itemdefinition.{sword_definition.slug}', 'count': 1},
+        ])
         resp = self.client.post(self.endpoint, {
             'archetype': adv_consts.ARCHETYPE_ASSASSIN,
             'name': 'John'
@@ -230,64 +246,69 @@ class TestCreatePlayerCharacter(WorldTestCase):
         Regression test, makes sure that an assassin doesn't start with a
         2H weapon
         """
-        dagger_template = self.world.create_item_template(
+        dagger_definition = self._starting_item_definition(
+            slug='dagger',
             name='a dagger',
             equipment_type=adv_consts.EQUIPMENT_TYPE_WEAPON_1H)
-        StartingEq.objects.create(
-            worldconfig=self.world.config,
-            itemtemplate=dagger_template,
-            num=2)
+        self._set_starting_equipment([
+            {'item_definition': f'itemdefinition.{dagger_definition.slug}', 'count': 2},
+        ])
         resp = self.client.post(self.endpoint, {
             'archetype': adv_consts.ARCHETYPE_ASSASSIN,
             'name': 'Assassin'
         })
         john = Player.objects.get(pk=resp.data['id'])
         self.assertEqual(john.archetype, adv_consts.ARCHETYPE_ASSASSIN)
-        self.assertEqual(john.equipment.weapon.template, dagger_template)
-        self.assertEqual(john.equipment.offhand.template, dagger_template)
+        self.assertEqual(john.equipment.weapon.definition, dagger_definition)
+        self.assertEqual(john.equipment.offhand.definition, dagger_definition)
 
-    def test_class_specific_starting_eq(self):
+    def test_class_specific_starting_equipment(self):
         # For both
-        helmet_template = self.world.create_item_template(
+        helmet_definition = self._starting_item_definition(
+            slug='class-helmet',
             name='a helmet',
             equipment_type=adv_consts.EQUIPMENT_TYPE_HEAD)
-        StartingEq.objects.create(
-            worldconfig=self.world.config,
-            itemtemplate=helmet_template)
 
         # for warriors
-        sword_template = self.world.create_item_template(
+        sword_definition = self._starting_item_definition(
+            slug='warrior-sword',
             name='a sword',
             equipment_type=adv_consts.EQUIPMENT_TYPE_WEAPON_2H)
-        StartingEq.objects.create(
-            worldconfig=self.world.config,
-            itemtemplate=sword_template,
-            archetype='warrior')
 
         # for assassins
-        dagger_template = self.world.create_item_template(
+        dagger_definition = self._starting_item_definition(
+            slug='assassin-dagger',
             name='a dagger',
             equipment_type=adv_consts.EQUIPMENT_TYPE_WEAPON_1H)
-        StartingEq.objects.create(
-            worldconfig=self.world.config,
-            itemtemplate=dagger_template,
-            archetype='assassin')
+        self._set_starting_equipment([
+            {'item_definition': f'itemdefinition.{helmet_definition.slug}', 'count': 1},
+            {
+                'item_definition': f'itemdefinition.{sword_definition.slug}',
+                'count': 1,
+                'archetype': 'warrior',
+            },
+            {
+                'item_definition': f'itemdefinition.{dagger_definition.slug}',
+                'count': 1,
+                'archetype': 'assassin',
+            },
+        ])
 
         resp = self.client.post(self.endpoint, {
             'archetype': adv_consts.ARCHETYPE_WARRIOR,
             'name': 'Warrior'
         })
         warrior = Player.objects.get(pk=resp.data['id'])
-        self.assertEqual(warrior.equipment.weapon.template, sword_template)
-        self.assertEqual(warrior.equipment.head.template, helmet_template)
+        self.assertEqual(warrior.equipment.weapon.definition, sword_definition)
+        self.assertEqual(warrior.equipment.head.definition, helmet_definition)
 
         resp = self.client.post(self.endpoint, {
             'archetype': adv_consts.ARCHETYPE_ASSASSIN,
             'name': 'Assassin'
         })
         assassin = Player.objects.get(pk=resp.data['id'])
-        self.assertEqual(assassin.equipment.weapon.template, dagger_template)
-        self.assertEqual(assassin.equipment.head.template, helmet_template)
+        self.assertEqual(assassin.equipment.weapon.definition, dagger_definition)
+        self.assertEqual(assassin.equipment.head.definition, helmet_definition)
 
     def test_starting_gold(self):
         self.world.config.starting_gold = 100

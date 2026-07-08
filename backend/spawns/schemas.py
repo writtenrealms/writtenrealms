@@ -36,8 +36,6 @@ class Item(BaseModel):
     quality: str = "normal"  # "normal", "imbued", "enchanted", "epic", "legendary"
     is_magic: bool = False
     equipment_type: Optional[str] = None  # "weapon_1h", "weapon_2h", "head", etc.
-    template: Optional[str] = None
-    template_id: Optional[int] = None
     definition_id: Optional[int] = None
     definition_slug: Optional[str] = None
     is_stackable: bool = False
@@ -73,10 +71,6 @@ class Item(BaseModel):
     keyword: Optional[str] = None  # First keyword
     label: Optional[str] = None
     indicator: Optional[str] = None
-
-    # Upgrades
-    upgrade_cost: int = 0
-    upgrade_count: int = 0
 
     # Weapon-specific
     weapon_type: Optional[str] = None
@@ -115,10 +109,10 @@ class Target(BaseModel):
     keywords: str = ""
 
 
-class QuestData(BaseModel):
-    """Quest availability info for NPCs."""
-    enquire: bool = False
-    complete: bool = False
+class QuestIndicator(BaseModel):
+    """WR2 quest availability info for NPCs."""
+    available: bool = False
+    ready: bool = False
 
 
 class Char(BaseModel):
@@ -129,7 +123,6 @@ class Char(BaseModel):
     id: int
     key: str
     name: str
-    template_id: Optional[int] = None
     definition_id: Optional[int] = None
     definition_slug: Optional[str] = None
     title: Optional[str] = ""
@@ -167,9 +160,7 @@ class Char(BaseModel):
 
     char_type: Literal["player", "mob"] = "mob"
 
-    quest_data: QuestData = Field(default_factory=QuestData)
-    is_upgrader: bool = False
-    upgrade_cost_multiplier: float = 0.0
+    quest_indicator: QuestIndicator = Field(default_factory=QuestIndicator)
 
 
 class Alias(BaseModel):
@@ -257,7 +248,6 @@ class Actor(BaseModel):
     ability_hotkeys: Dict[str, str] = Field(default_factory=dict)
     ability_cooldowns: Dict[str, int] = Field(default_factory=dict)
     active_effects: List[Dict[str, Any]] = Field(default_factory=list)
-    trophy: Dict[int, int] = Field(default_factory=dict)
 
     # Player character type
     char_type: Literal["player"] = "player"
@@ -759,7 +749,7 @@ def build_mock_state_sync(
         id=100,
         key="mob.100",
         name="town guard",
-        template_id=1,
+        definition_id=1,
         title="",
         description="A stern-looking guard in polished armor, vigilantly watching the square.",
         room_description="A town guard stands here, watching the crowd.",
@@ -784,7 +774,7 @@ def build_mock_state_sync(
         id=101,
         key="mob.101",
         name="Gregor",
-        template_id=2,
+        definition_id=2,
         title="the Merchant",
         description="A portly man with a friendly smile, surrounded by various wares.",
         room_description="Gregor the Merchant stands behind his cart, hawking his wares.",
@@ -802,14 +792,14 @@ def build_mock_state_sync(
         display_faction=None,
         char_type="mob",
         actions=["trade", "talk"],
-        quest_data=QuestData(enquire=True, complete=False),
+        quest_indicator=QuestIndicator(available=True, ready=False),
     )
 
     wandering_bard = Char(
         id=102,
         key="mob.102",
         name="Lyria",
-        template_id=3,
+        definition_id=3,
         title="the Bard",
         description="A young woman with a lute slung across her back, her eyes bright with curiosity.",
         room_description="Lyria the Bard sits on the fountain's edge, strumming her lute.",
@@ -1064,7 +1054,6 @@ def build_mock_state_sync(
             "adventurers": 150,
             "merchants": 50,
         },
-        trophy={1: 5, 2: 3, 3: 1},  # mob_template_id -> kill count
         # Player flags
         is_builder=False,
         is_temporary=False,

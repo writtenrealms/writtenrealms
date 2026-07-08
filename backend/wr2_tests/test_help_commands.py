@@ -106,8 +106,8 @@ class TestHelpCommands(WorldTestCase):
         self.assertIn("Commands:", message.get("text", ""))
         self.assertIn("look | look <target>", message.get("text", ""))
         self.assertIn("scan <direction>", message.get("text", ""))
-        self.assertIn("/load <item|mob> <template_id|slug> [cmd]", message.get("text", ""))
-        self.assertIn("/resync <item|mob> <template_id|all>", message.get("text", ""))
+        self.assertIn("/load <item|mob> <definition_id|slug> [cmd]", message.get("text", ""))
+        self.assertNotIn("/resync", message.get("text", ""))
 
         commands = message["data"]["commands"]
         self.assertTrue(any(entry["command"] == "help" for entry in commands))
@@ -169,8 +169,8 @@ class TestHelpCommands(WorldTestCase):
 
         message = self._message_by_type(messages, "cmd.help.success")
         self.assertIsNotNone(message)
-        self.assertNotIn("/load <item|mob> <template_id|slug> [cmd]", message.get("text", ""))
-        self.assertNotIn("/resync <item|mob> <template_id|all>", message.get("text", ""))
+        self.assertNotIn("/load <item|mob> <definition_id|slug> [cmd]", message.get("text", ""))
+        self.assertNotIn("/resync", message.get("text", ""))
 
     def test_help_supports_partial_builder_command_lookup(self):
         with capture_game_messages() as messages:
@@ -179,16 +179,7 @@ class TestHelpCommands(WorldTestCase):
         message = self._message_by_type(messages, "cmd.help.success")
         self.assertIsNotNone(message)
         self.assertEqual(message["data"]["command"]["command"], "/load")
-        self.assertIn("/load <item|mob> <template_id|slug> [cmd]", message.get("text", ""))
-
-    def test_help_supports_resync_builder_command_lookup(self):
-        with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "help /res")
-
-        message = self._message_by_type(messages, "cmd.help.success")
-        self.assertIsNotNone(message)
-        self.assertEqual(message["data"]["command"]["command"], "/resync")
-        self.assertIn("/resync <item|mob> <template_id|all>", message.get("text", ""))
+        self.assertIn("/load <item|mob> <definition_id|slug> [cmd]", message.get("text", ""))
 
     def test_help_known_ability_uses_authored_help_text(self):
         self._ability(

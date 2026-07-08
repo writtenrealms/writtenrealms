@@ -39,7 +39,7 @@ class TestStartingAbilities(WorldTestCase):
         self.world.config.save(update_fields=["ability_progression"])
 
         player = self.create_player("Classless")
-        player.initialize(starting_eq=False)
+        player.initialize(include_starting_equipment=False)
 
         self.assertEqual(player.known_abilities, ["first-aid"])
         self.assertEqual(player.ability_hotkeys, {"1": "first-aid"})
@@ -65,11 +65,11 @@ class TestStartingAbilities(WorldTestCase):
 
         hoplite = self.create_player("Hoplite")
         hoplite.archetype = "hoplite"
-        hoplite.initialize(starting_eq=False)
+        hoplite.initialize(include_starting_equipment=False)
 
         mystic = self.create_player("Mystic")
         mystic.archetype = "mystic"
-        mystic.initialize(starting_eq=False)
+        mystic.initialize(include_starting_equipment=False)
 
         self.assertEqual(hoplite.known_abilities, ["bash"])
         self.assertEqual(hoplite.ability_hotkeys, {"1": "bash"})
@@ -86,7 +86,7 @@ class TestStartingAbilities(WorldTestCase):
         self.world.config.save(update_fields=["ability_progression"])
 
         player = self.create_player("Limited")
-        player.initialize(starting_eq=False)
+        player.initialize(include_starting_equipment=False)
 
         self.assertEqual(player.known_abilities, ["bash"])
         self.assertEqual(player.ability_hotkeys, {"1": "bash"})

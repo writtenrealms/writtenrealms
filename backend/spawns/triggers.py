@@ -6,7 +6,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
 from django.db.models import Q
 
-from builders.models import ItemTemplate, MobTemplate, Trigger
+from builders.models import ItemDefinition, MobDefinition, Trigger
 from config import constants as adv_consts
 from config import game_settings as adv_config
 from core.conditions import evaluate_conditions
@@ -121,9 +121,9 @@ def _scope_content_types() -> dict[type, ContentType]:
     if _scope_content_types_cache is None:
         _scope_content_types_cache = ContentType.objects.get_for_models(
             Item,
-            ItemTemplate,
+            ItemDefinition,
             Mob,
-            MobTemplate,
+            MobDefinition,
             Room,
             World,
             Zone,
@@ -641,7 +641,7 @@ def execute_mob_event_triggers(
 
     mobs = list(
         Mob.objects.filter(room_id=resolved_room.id)
-        .select_related("template")
+        .select_related("definition")
         .order_by("id")
     )
     if not mobs:
@@ -649,13 +649,13 @@ def execute_mob_event_triggers(
 
     cts = _scope_content_types()
     mob_ct = cts[Mob]
-    mob_template_ct = cts[MobTemplate]
+    mob_definition_ct = cts[MobDefinition]
 
     target_filter = Q()
     for mob in mobs:
         target_filter |= Q(target_type=mob_ct, target_id=mob.id)
-        if mob.template_id:
-            target_filter |= Q(target_type=mob_template_ct, target_id=mob.template_id)
+        if mob.definition_id:
+            target_filter |= Q(target_type=mob_definition_ct, target_id=mob.definition_id)
 
     triggers = list(
         Trigger.objects.filter(
@@ -680,9 +680,9 @@ def execute_mob_event_triggers(
     for mob in mobs:
         mob_trigger_list: list[Trigger] = []
         mob_trigger_list.extend(trigger_by_target.get((mob_ct.id, mob.id), []))
-        if mob.template_id:
+        if mob.definition_id:
             mob_trigger_list.extend(
-                trigger_by_target.get((mob_template_ct.id, mob.template_id), [])
+                trigger_by_target.get((mob_definition_ct.id, mob.definition_id), [])
             )
         if not mob_trigger_list:
             continue
@@ -967,8 +967,8 @@ def get_item_action_labels_for_actor(actor: Player | Mob | None, item: Item | No
 
     cts = _scope_content_types()
     target_pairs: list[tuple[ContentType, int]] = [(cts[Item], item.id)]
-    if item.template_id:
-        target_pairs.append((cts[ItemTemplate], item.template_id))
+    if item.definition_id:
+        target_pairs.append((cts[ItemDefinition], item.definition_id))
 
     triggers = _targeted_command_fallback_triggers(
         actor,
@@ -993,8 +993,8 @@ def get_char_action_labels_for_actor(actor: Player | Mob | None, char: Player | 
 
     cts = _scope_content_types()
     target_pairs: list[tuple[ContentType, int]] = [(cts[Mob], char.id)]
-    if char.template_id:
-        target_pairs.append((cts[MobTemplate], char.template_id))
+    if char.definition_id:
+        target_pairs.append((cts[MobDefinition], char.definition_id))
 
     triggers = _targeted_command_fallback_triggers(
         actor,

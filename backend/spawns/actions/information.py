@@ -286,7 +286,7 @@ class ScanAction:
         )
         room_mobs = list(
             exit_room.mobs.filter(is_pending_deletion=False)
-            .select_related("definition", "template", "equipment")
+            .select_related("definition", "equipment")
             .prefetch_related("faction_assignments__faction")
         )
         chars: list[Player | Mob] = [*room_players, *room_mobs]
@@ -342,8 +342,6 @@ class ScanAction:
             keywords = char.keywords or ""
             if not keywords and char.definition:
                 keywords = char.definition.keywords or ""
-            if not keywords and char.template:
-                keywords = char.template.keywords or ""
             if not keywords:
                 keywords = char.name or ""
 

@@ -7,15 +7,11 @@ from builders.models import (
     Currency,
     ItemBundle,
     ItemDefinition,
-    ItemTemplate,
-    MerchantInventory,
-    MobTemplate,
-    MobTemplateInventory,
 )
 from config import constants as adv_consts
-from system.serializers import UpdateMerchantsSerializer
 from tests.base import WorldTestCase
 from wr2_tests.utils import apply_basic_stat_system
+from spawns.models import Item
 from spawns.state_payloads import serialize_item
 
 
@@ -58,7 +54,6 @@ class TestItemDefinitions(WorldTestCase):
         )
 
         self.assertEqual(item.definition, definition)
-        self.assertIsNone(item.template)
         self.assertEqual(item.name, "a bronze sword")
         self.assertEqual(item.type, adv_consts.ITEM_TYPE_EQUIPPABLE)
         self.assertEqual(item.equipment_type, adv_consts.EQUIPMENT_TYPE_WEAPON_1H)
@@ -85,18 +80,11 @@ class TestItemDefinitions(WorldTestCase):
                 ],
             },
         )
-        template = ItemTemplate.objects.create(
-            world=self.world,
-            name="a torch",
-        )
-
         stable_item = stable_definition.spawn(self.player, self.spawn_world)
         random_item = random_definition.spawn(self.player, self.spawn_world)
-        template_item = template.spawn(self.player, self.spawn_world)
 
         stable_payload = serialize_item(stable_item).model_dump()
         random_payload = serialize_item(random_item).model_dump()
-        template_payload = serialize_item(template_item).model_dump()
 
         self.assertEqual(stable_payload["definition_slug"], "ration")
         self.assertTrue(stable_payload["is_stackable"])
@@ -105,9 +93,6 @@ class TestItemDefinitions(WorldTestCase):
         self.assertEqual(random_payload["definition_slug"], "chipped-sword")
         self.assertFalse(random_payload["is_stackable"])
         self.assertIsNone(random_payload["stack_key"])
-
-        self.assertTrue(template_payload["is_stackable"])
-        self.assertEqual(template_payload["stack_key"], f"template:{template.id}")
 
     def test_stable_definition_edits_sync_existing_unmodified_items(self):
         definition = ItemDefinition.objects.create(
@@ -147,7 +132,7 @@ class TestItemDefinitions(WorldTestCase):
             serialize_item(later_item).stack_key,
         )
 
-    def test_upgraded_definition_items_do_not_stack_or_get_resynced(self):
+    def test_augmented_definition_items_do_not_stack_or_get_resynced(self):
         definition = ItemDefinition.objects.create(
             world=self.world,
             slug="heirloom-blade",
@@ -156,149 +141,22 @@ class TestItemDefinitions(WorldTestCase):
             base_properties={"weapon_damage": 2},
         )
         item = definition.spawn(self.player, self.spawn_world)
-        item.boost()
-        boosted_damage = item.weapon_damage
+        augment = Item.objects.create(
+            world=self.spawn_world,
+            container=self.player,
+            name="a sharpening rune",
+            type=adv_consts.ITEM_TYPE_INERT,
+        )
+        item.augment = augment
+        item.save(update_fields=["augment"])
+        original_damage = item.weapon_damage
 
         definition.base_properties = {"weapon_damage": 9}
         definition.save()
 
         item.refresh_from_db()
-        self.assertEqual(item.weapon_damage, boosted_damage)
+        self.assertEqual(item.weapon_damage, original_damage)
         self.assertIsNone(serialize_item(item).stack_key)
-
-    def test_mob_template_inventory_can_spawn_item_definition(self):
-        definition = ItemDefinition.objects.create(
-            world=self.world,
-            slug="bandit-sword",
-            name="a bandit sword",
-        )
-        mob_template = MobTemplate.objects.create(
-            world=self.world,
-            slug="bandit",
-            name="a bandit",
-        )
-        MobTemplateInventory.objects.create(
-            container=mob_template,
-            item_definition=definition,
-            probability=100,
-            num_copies=1,
-        )
-
-        mob = mob_template.spawn(self.room, self.spawn_world)
-
-        spawned_item = mob.inventory.get(definition=definition)
-        self.assertEqual(spawned_item.name, "a bandit sword")
-        self.assertIsNone(spawned_item.template)
-
-    def test_mob_template_inventory_can_spawn_item_bundle(self):
-        definition = ItemDefinition.objects.create(
-            world=self.world,
-            slug="bandit-sword",
-            name="a bandit sword",
-        )
-        bundle = ItemBundle.objects.create(
-            world=self.world,
-            slug="bandit-drop",
-            name="Bandit drop",
-        )
-        bundle.entries.create(item_definition=definition, weight=1)
-        mob_template = MobTemplate.objects.create(
-            world=self.world,
-            slug="bandit",
-            name="a bandit",
-        )
-        MobTemplateInventory.objects.create(
-            container=mob_template,
-            item_bundle=bundle,
-            probability=100,
-            num_copies=1,
-        )
-
-        mob = mob_template.spawn(self.room, self.spawn_world)
-
-        spawned_item = mob.inventory.get(definition=definition)
-        self.assertEqual(spawned_item.roll_metadata["source_bundle_slug"], "bandit-drop")
-        self.assertEqual(spawned_item.roll_metadata["source_bundle_id"], bundle.id)
-
-    def test_merchant_inventory_restocks_item_definition_and_bundle_slots(self):
-        direct_definition = ItemDefinition.objects.create(
-            world=self.world,
-            slug="merchant-ration",
-            name="a merchant ration",
-        )
-        bundle_definition = ItemDefinition.objects.create(
-            world=self.world,
-            slug="merchant-sword",
-            name="a merchant sword",
-        )
-        bundle = ItemBundle.objects.create(
-            world=self.world,
-            slug="merchant-random-stock",
-            name="Merchant random stock",
-        )
-        bundle.entries.create(item_definition=bundle_definition, weight=1)
-        merchant_template = MobTemplate.objects.create(
-            world=self.world,
-            slug="quartermaster",
-            name="a quartermaster",
-        )
-        MerchantInventory.objects.create(
-            mob=merchant_template,
-            item_definition=direct_definition,
-            num=2,
-        )
-        MerchantInventory.objects.create(
-            mob=merchant_template,
-            item_bundle=bundle,
-            num=1,
-        )
-        merchant = merchant_template.spawn(self.room, self.spawn_world)
-        self.spawn_world.lifecycle = adv_consts.WORLD_LIFECYCLE_RUNNING
-        self.spawn_world.save(update_fields=["lifecycle"])
-
-        first_update = UpdateMerchantsSerializer(
-            data={
-                "world_id": self.spawn_world.id,
-                "data": [
-                    {
-                        "id": merchant.id,
-                        "inventory": [],
-                        "player_in_room": False,
-                    }
-                ],
-            }
-        )
-        self.assertTrue(first_update.is_valid(), first_update.errors)
-        first_update.save()
-
-        current_items = list(merchant.inventory.all())
-        self.assertEqual(
-            sum(1 for item in current_items if item.definition_id == direct_definition.id),
-            2,
-        )
-        bundle_items = [
-            item
-            for item in current_items
-            if (item.roll_metadata or {}).get("source_bundle_id") == bundle.id
-        ]
-        self.assertEqual(len(bundle_items), 1)
-
-        second_update = UpdateMerchantsSerializer(
-            data={
-                "world_id": self.spawn_world.id,
-                "data": [
-                    {
-                        "id": merchant.id,
-                        "inventory": [{"id": item.id} for item in merchant.inventory.all()],
-                        "player_in_room": False,
-                    }
-                ],
-            }
-        )
-        self.assertTrue(second_update.is_valid(), second_update.errors)
-        second_update.save()
-
-        self.assertEqual(merchant.inventory.filter(definition__isnull=False).count(), 3)
 
 
 class TestItemDefinitionManifests(WorldTestCase):
@@ -486,68 +344,6 @@ spec:
             bundle_doc["spec"]["entries"][0]["item_definition"],
             "itemdefinition.bronze-sword",
         )
-
-    def test_apply_mob_template_manifest_accepts_item_definition_and_bundle_inventory(self):
-        sword = ItemDefinition.objects.create(
-            world=self.world,
-            slug="bronze-sword",
-            name="a bronze sword",
-        )
-        dagger = ItemDefinition.objects.create(
-            world=self.world,
-            slug="rusty-dagger",
-            name="a rusty dagger",
-        )
-        bundle = ItemBundle.objects.create(
-            world=self.world,
-            slug="bandit-weapon-drop",
-            name="Bandit weapon drop",
-        )
-        bundle.entries.create(item_definition=dagger, weight=1)
-        manifest = f"""
-kind: mobtemplate
-metadata:
-  world: world.{self.world.id}
-  slug: bandit
-  name: a bandit
-spec:
-  inventory:
-    - item_definition: itemdefinition.{sword.slug}
-      probability: 100
-      num_copies: 1
-    - item_bundle: itembundle.{bundle.slug}
-      probability: 50
-      num_copies: 2
-"""
-        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
-        self.assertEqual(resp.status_code, 201, resp.data)
-
-        mob_template = MobTemplate.objects.get(world=self.world, slug="bandit")
-        inventory = list(mob_template.template_inventories.order_by("id"))
-        self.assertEqual(len(inventory), 2)
-        self.assertEqual(inventory[0].item_definition, sword)
-        self.assertIsNone(inventory[0].item_template)
-        self.assertEqual(inventory[1].item_bundle, bundle)
-        self.assertEqual(inventory[1].probability, 50)
-        self.assertEqual(inventory[1].num_copies, 2)
-
-    def test_apply_mob_template_manifest_rejects_unknown_item_definition_inventory(self):
-        manifest = f"""
-kind: mobtemplate
-metadata:
-  world: world.{self.world.id}
-  slug: bandit
-  name: a bandit
-spec:
-  inventory:
-    - item_definition: itemdefinition.missing-sword
-"""
-        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
-        self.assertEqual(resp.status_code, 400, resp.data)
-        self.assertFalse(
-            ItemDefinition.objects.filter(world=self.world, slug="missing-sword").exists()
-        )
-
 
 class TestItemDefinitionBuilderEndpoints(WorldTestCase):
     def setUp(self):

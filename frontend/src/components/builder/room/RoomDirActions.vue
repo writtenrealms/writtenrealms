@@ -253,7 +253,7 @@ const onClickRoomAction = async (direction, action) => {
           attr: "key",
           label: "Door Key",
           widget: "reference",
-          references: "item_template",
+          references: "item_definition",
           context: "key"
         },
         {

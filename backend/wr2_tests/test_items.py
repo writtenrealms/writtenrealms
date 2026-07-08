@@ -1,9 +1,44 @@
 from config import constants as adv_consts
-from builders.models import ItemTemplate
+from builders.models import ItemDefinition
 from spawns.handlers import dispatch_command
 from spawns.models import Item
 from tests.base import WorldTestCase
 from wr2_tests.utils import capture_game_messages, dispatch_text_command
+
+
+def create_test_item(
+    world,
+    spawn_world,
+    container,
+    name,
+    *,
+    item_type=adv_consts.ITEM_TYPE_INERT,
+    set_instance_name=True,
+    **item_fields,
+):
+    definition = ItemDefinition.objects.create(
+        world=world,
+        name=name,
+        item_type=item_type,
+        keywords=item_fields.get("keywords", ""),
+        description=item_fields.get("description", ""),
+        base_properties={
+            key: value
+            for key, value in item_fields.items()
+            if key in {"equipment_type", "armor_class", "weapon_damage"}
+        },
+    )
+    fields = {
+        "world": spawn_world,
+        "container": container,
+        "definition": definition,
+        "definition_slug_snapshot": definition.slug,
+        "type": item_type,
+        **item_fields,
+    }
+    if set_instance_name:
+        fields["name"] = definition.name
+    return Item.objects.create(**fields)
 
 
 class TestInventoryCommand(WorldTestCase):
@@ -14,16 +49,7 @@ class TestInventoryCommand(WorldTestCase):
         return None
 
     def test_inventory_lists_items_and_text(self):
-        template = ItemTemplate.objects.create(
-            world=self.world,
-            name="Apple",
-        )
-        Item.objects.create(
-            world=self.spawn_world,
-            container=self.player,
-            template=template,
-            name=template.name,
-        )
+        create_test_item(self.world, self.spawn_world, self.player, "Apple")
 
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "inv")
@@ -33,15 +59,13 @@ class TestInventoryCommand(WorldTestCase):
         self.assertTrue(message.get("text"))
         self.assertIn("Apple", message["text"])
 
-    def test_inventory_prefers_template_name_when_instance_name_is_default(self):
-        template = ItemTemplate.objects.create(
-            world=self.world,
-            name="Steel Dagger",
-        )
-        Item.objects.create(
-            world=self.spawn_world,
-            container=self.player,
-            template=template,
+    def test_inventory_prefers_definition_name_when_instance_name_is_default(self):
+        create_test_item(
+            self.world,
+            self.spawn_world,
+            self.player,
+            "Steel Dagger",
+            set_instance_name=False,
         )
 
         with capture_game_messages() as messages:
@@ -53,16 +77,7 @@ class TestInventoryCommand(WorldTestCase):
         self.assertNotIn("Unnamed Item", message["text"])
 
     def test_inventory_short_alias_i_resolves_to_inventory_not_inspect(self):
-        template = ItemTemplate.objects.create(
-            world=self.world,
-            name="Apple",
-        )
-        Item.objects.create(
-            world=self.spawn_world,
-            container=self.player,
-            template=template,
-            name=template.name,
-        )
+        create_test_item(self.world, self.spawn_world, self.player, "Apple")
 
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "i")
@@ -88,16 +103,7 @@ class TestDropCommand(WorldTestCase):
         watcher.in_game = True
         watcher.save(update_fields=["in_game"])
 
-        template = ItemTemplate.objects.create(
-            world=self.world,
-            name="Lantern",
-        )
-        item = Item.objects.create(
-            world=self.spawn_world,
-            container=self.player,
-            template=template,
-            name=template.name,
-        )
+        item = create_test_item(self.world, self.spawn_world, self.player, "Lantern")
 
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "drop lantern")
@@ -115,16 +121,7 @@ class TestDropCommand(WorldTestCase):
         self.room.relative_id = self.room.id + 3000
         self.room.save(update_fields=["relative_id"])
 
-        template = ItemTemplate.objects.create(
-            world=self.world,
-            name="Compass",
-        )
-        Item.objects.create(
-            world=self.spawn_world,
-            container=self.player,
-            template=template,
-            name=template.name,
-        )
+        create_test_item(self.world, self.spawn_world, self.player, "Compass")
 
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "drop compass")
@@ -134,15 +131,13 @@ class TestDropCommand(WorldTestCase):
         self.assertEqual(message["data"]["room"]["key"], message["data"]["actor"]["room"]["key"])
         self.assertEqual(message["data"]["room"]["key"], f"room.{self.room.relative_id}")
 
-    def test_drop_matches_template_name_when_instance_name_is_default(self):
-        template = ItemTemplate.objects.create(
-            world=self.world,
-            name="Bronze Ring",
-        )
-        item = Item.objects.create(
-            world=self.spawn_world,
-            container=self.player,
-            template=template,
+    def test_drop_matches_definition_name_when_instance_name_is_default(self):
+        item = create_test_item(
+            self.world,
+            self.spawn_world,
+            self.player,
+            "Bronze Ring",
+            set_instance_name=False,
         )
 
         with capture_game_messages() as messages:
@@ -168,13 +163,7 @@ class TestGetCommand(WorldTestCase):
         watcher.in_game = True
         watcher.save(update_fields=["in_game"])
 
-        template = ItemTemplate.objects.create(world=self.world, name="Lantern")
-        item = Item.objects.create(
-            world=self.spawn_world,
-            container=self.room,
-            template=template,
-            name=template.name,
-        )
+        item = create_test_item(self.world, self.spawn_world, self.room, "Lantern")
 
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "get lantern")
@@ -189,27 +178,16 @@ class TestGetCommand(WorldTestCase):
         self.assertEqual(message["data"]["room"]["key"], message["data"]["actor"]["room"]["key"])
 
     def test_get_from_room_container(self):
-        container_template = ItemTemplate.objects.create(
-            world=self.world,
-            name="Chest",
-            type=adv_consts.ITEM_TYPE_CONTAINER,
-        )
-        chest = Item.objects.create(
-            world=self.spawn_world,
-            container=self.room,
-            template=container_template,
-            name=container_template.name,
-            type=adv_consts.ITEM_TYPE_CONTAINER,
+        chest = create_test_item(
+            self.world,
+            self.spawn_world,
+            self.room,
+            "Chest",
+            item_type=adv_consts.ITEM_TYPE_CONTAINER,
             is_pickable=False,
         )
 
-        item_template = ItemTemplate.objects.create(world=self.world, name="Apple")
-        item = Item.objects.create(
-            world=self.spawn_world,
-            container=chest,
-            template=item_template,
-            name=item_template.name,
-        )
+        item = create_test_item(self.world, self.spawn_world, chest, "Apple")
 
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "get apple chest")
@@ -236,27 +214,16 @@ class TestPutCommand(WorldTestCase):
         watcher.in_game = True
         watcher.save(update_fields=["in_game"])
 
-        bag_template = ItemTemplate.objects.create(
-            world=self.world,
-            name="Bag",
-            type=adv_consts.ITEM_TYPE_CONTAINER,
-        )
-        bag = Item.objects.create(
-            world=self.spawn_world,
-            container=self.room,
-            template=bag_template,
-            name=bag_template.name,
-            type=adv_consts.ITEM_TYPE_CONTAINER,
+        bag = create_test_item(
+            self.world,
+            self.spawn_world,
+            self.room,
+            "Bag",
+            item_type=adv_consts.ITEM_TYPE_CONTAINER,
             is_pickable=False,
         )
 
-        item_template = ItemTemplate.objects.create(world=self.world, name="Coin")
-        coin = Item.objects.create(
-            world=self.spawn_world,
-            container=self.player,
-            template=item_template,
-            name=item_template.name,
-        )
+        coin = create_test_item(self.world, self.spawn_world, self.player, "Coin")
 
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "put coin bag")
@@ -270,13 +237,7 @@ class TestPutCommand(WorldTestCase):
         self.assertIsNotNone(self._message_by_type(messages, "notification.cmd.put.success"))
 
     def test_put_requires_container_argument(self):
-        item_template = ItemTemplate.objects.create(world=self.world, name="Coin")
-        Item.objects.create(
-            world=self.spawn_world,
-            container=self.player,
-            template=item_template,
-            name=item_template.name,
-        )
+        create_test_item(self.world, self.spawn_world, self.player, "Coin")
 
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "put coin")
@@ -302,13 +263,7 @@ class TestGiveCommand(WorldTestCase):
 
         guard = self.create_mob("Quartermaster", keywords="quartermaster guard")
 
-        item_template = ItemTemplate.objects.create(world=self.world, name="Pelt")
-        pelt = Item.objects.create(
-            world=self.spawn_world,
-            container=self.player,
-            template=item_template,
-            name=item_template.name,
-        )
+        pelt = create_test_item(self.world, self.spawn_world, self.player, "Pelt")
 
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "give pelt quartermaster")
@@ -330,19 +285,12 @@ class TestEquipmentCommands(WorldTestCase):
         return None
 
     def _make_equipment_item(self, name, equipment_type, **kwargs):
-        template = ItemTemplate.objects.create(
-            world=self.world,
-            name=name,
-            type=adv_consts.ITEM_TYPE_EQUIPPABLE,
-            equipment_type=equipment_type,
-            armor_class=kwargs.get("armor_class"),
-        )
-        return Item.objects.create(
-            world=self.spawn_world,
-            container=self.player,
-            template=template,
-            name=template.name,
-            type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+        return create_test_item(
+            self.world,
+            self.spawn_world,
+            self.player,
+            name,
+            item_type=adv_consts.ITEM_TYPE_EQUIPPABLE,
             equipment_type=equipment_type,
             armor_class=kwargs.get("armor_class"),
         )

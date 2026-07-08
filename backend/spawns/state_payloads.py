@@ -38,7 +38,7 @@ from spawns.schemas import (
     Equipment as EquipmentSchema,
     Item as ItemSchema,
     MapRoom,
-    QuestData,
+    QuestIndicator,
     Room as RoomSchema,
     StateSyncData,
     WhoListEntry,
@@ -203,7 +203,7 @@ def get_player_with_related(player_id: int) -> Player:
     Reload the player with the relations we need for serialization to keep
     query counts low.
     """
-    inventory_qs = Item.objects.select_related("definition", "template", "currency")
+    inventory_qs = Item.objects.select_related("definition", "currency")
     return (
         Player.objects.select_related(
             "world",
@@ -231,26 +231,18 @@ def get_player_with_related(player_id: int) -> Player:
 
 def resolve_item_name(item: Item) -> str:
     """
-    Prefer authored names for definition/template-backed items when instance name is empty
+    Prefer authored names for definition-backed items when instance name is empty
     or still the legacy default placeholder.
     """
     instance_name = (item.name or "").strip()
     definition_name = (item.definition.name if item.definition else "") or ""
-    template_name = (item.template.name if item.template else "") or ""
     if definition_name and (
         not instance_name
         or instance_name.lower() == "unnamed item"
     ):
         return definition_name
-    if template_name and (
-        not instance_name
-        or instance_name.lower() == "unnamed item"
-    ):
-        return template_name
     if instance_name:
         return instance_name
-    if template_name:
-        return template_name
     return "Unnamed item"
 
 
@@ -262,7 +254,7 @@ def item_stack_key(item: Item, *, item_type: str | None = None) -> str | None:
     )
     if is_container:
         return None
-    if getattr(item, "upgrade_count", 0) or getattr(item, "augment_id", None):
+    if getattr(item, "augment_id", None):
         return None
 
     if item.definition_id:
@@ -279,9 +271,6 @@ def item_stack_key(item: Item, *, item_type: str | None = None) -> str | None:
             return f"definition:{definition_slug or item.definition_id}:{revision}"
         return f"definition:{definition_slug or item.definition_id}"
 
-    if item.template_id:
-        return f"template:{item.template_id}"
-
     return None
 
 
@@ -297,24 +286,18 @@ def serialize_item(
     description = item.description
     if not description and item.definition:
         description = item.definition.description
-    if not description and item.template:
-        description = item.template.description
     armor_value = getattr(item, "armor", None)
-    if armor_value is None and item.template:
-        armor_value = getattr(item.template, "armor", 0)
     if armor_value is None:
         armor_value = 0
     actions = get_item_action_labels_for_actor(viewer, item)
     keywords = item.keywords or ""
     if not keywords and item.definition:
         keywords = item.definition.keywords or ""
-    if not keywords and item.template:
-        keywords = item.template.keywords or ""
     if not keywords:
         keywords = name.lower()
     item_type = item.type or (
         item.definition.item_type if item.definition else None
-    ) or (item.template.type if item.template else None)
+    )
     stack_key = item_stack_key(item, item_type=item_type)
     inventory = []
     if include_inventory and item_type in (
@@ -324,7 +307,7 @@ def serialize_item(
     ):
         inventory = serialize_inventory(
             item.inventory.filter(is_pending_deletion=False)
-            .select_related("definition", "template", "currency")
+            .select_related("definition", "currency")
             .order_by("id"),
             viewer=viewer,
             include_inventory=True,
@@ -340,13 +323,11 @@ def serialize_item(
         ground_description=(
             item.ground_description
             or (item.definition.ground_description if item.definition else None)
-            or (item.template.ground_description if item.template else None)
         ),
         level=item.level,
         quality=item.quality,
         is_magic=getattr(item, "is_magic", False),
         equipment_type=item.equipment_type,
-        template_id=item.template_id,
         definition_id=item.definition_id,
         definition_slug=(
             item.definition.slug
@@ -375,7 +356,6 @@ def serialize_item(
         keywords=keywords,
         keyword=first_keyword(keywords, name),
         label=item.label,
-        upgrade_count=item.upgrade_count,
         weapon_type=item.weapon_type,
         is_container=item_type in (
             adv_consts.ITEM_TYPE_CONTAINER,
@@ -472,29 +452,21 @@ def serialize_char_from_mob(
     name = (
         mob.name
         or (mob.definition.name if mob.definition else "")
-        or (mob.template.name if mob.template else "Unnamed Mob")
+        or "Unnamed Mob"
     )
     keywords = mob.keywords or ""
     if not keywords and mob.definition:
         keywords = mob.definition.keywords or ""
-    if not keywords and mob.template:
-        keywords = mob.template.keywords or ""
     if not keywords:
         keywords = name.lower()
     title = mob.title
-    if not title and mob.template:
-        title = mob.template.title
     description = mob.description
     if not description and mob.definition:
         description = mob.definition.description
-    if not description and mob.template:
-        description = mob.template.description
     room_desc = mob.room_description
     if not room_desc and mob.definition:
         room_desc = mob.definition.room_description
-    if not room_desc and mob.template:
-        room_desc = mob.template.room_description
-    factions = mob.template.factions if mob.template else mob.factions
+    factions = mob.factions
     actions = get_char_action_labels_for_actor(viewer, mob)
     quest_indicator = (quest_indicator_map or {}).get(mob.id, {})
     return Char(
@@ -515,7 +487,6 @@ def serialize_char_from_mob(
         gender=mob.gender or "male",
         keywords=keywords,
         keyword=first_keyword(keywords, name),
-        template_id=mob.template_id,
         definition_id=mob.definition_id,
         definition_slug=(
             mob.definition.slug
@@ -529,9 +500,9 @@ def serialize_char_from_mob(
         attackable=getattr(mob, "attackable", True),
         equipment=serialize_equipment(mob.equipment, viewer=viewer) if include_equipment else None,
         actions=actions,
-        quest_data=QuestData(
-            enquire=bool(quest_indicator.get("enquire")),
-            complete=bool(quest_indicator.get("complete")),
+        quest_indicator=QuestIndicator(
+            available=bool(quest_indicator.get("available")),
+            ready=bool(quest_indicator.get("ready")),
         ),
     )
 
@@ -681,7 +652,7 @@ def serialize_room(
         )
 
     room_inventory = serialize_inventory(
-        room.inventory.filter(is_pending_deletion=False).select_related("definition", "template", "currency"),
+        room.inventory.filter(is_pending_deletion=False).select_related("definition", "currency"),
         viewer=viewer,
     )
     if isinstance(viewer, Player):
@@ -691,7 +662,7 @@ def serialize_room(
         )
 
     room_players = room.players.filter(in_game=True).select_related("user", "equipment")
-    room_mobs = list(room.mobs.select_related("definition", "template"))
+    room_mobs = list(room.mobs.select_related("definition"))
     quest_indicator_map: dict[int, dict[str, bool]] = {}
     quest_callout_data: list[dict] = []
     if isinstance(viewer, Player):

@@ -325,7 +325,7 @@ Supported modes:
 
 - `fixed`: use `seconds`.
 - `inherit_zone`: use the zone respawn time when `seconds` is omitted.
-- `none`: do not refill missing copies during ordinary loader ticks.
+- `none`: do not refill missing copies during ordinary spawn-plan reconciliation.
 
 `seconds: 0` means a missing copy can be replaced on every reconciliation. Use
 that only for content that should always be present.

@@ -13,7 +13,6 @@ WORLD_LIFECYCLES = [
 ]
 
 WORLD_STATE_NEW = 'new'
-#WORLD_STATE_LOADED = 'loaded' # Loaders have been run against this world
 WORLD_STATE_BUILDING = 'building' # Kubernetes nexus is being built
 WORLD_STATE_BUILT = 'built' # Kubernetes nexus has been built
 WORLD_STATE_RUNNING = 'running' # World is up, live, loaded, out of sync
@@ -29,7 +28,7 @@ WORLD_STATE_STORED = 'stored' # World has been extracted and is only in psql
 WORLD_STATE_RESTARTING = 'restarting'
 WORLD_STATE_CLEAN = 'clean'
 # World is marked as being in the process of stopping, which means
-# new connections won't be accepted, loaders / merchants won't run
+# new connections won't be accepted, spawn plans / merchants won't run
 WORLD_STATE_STOPPING = 'stopping'
 WORLD_STATE_STOPPED = 'stopped'
 WORLD_STATE_QUEUED = 'queued'
@@ -49,7 +48,7 @@ new > running > stored
 
 WORLD_STATES = [
     WORLD_STATE_NEW,
-    # Multiplayer worlds only, world has been wiped and loaders have been
+    # Multiplayer worlds only, world has been wiped and spawn plans have
     # run and the world is ready to have its initial animation done
     WORLD_STATE_INITIALIZED,
     WORLD_STATE_RUNNING,
@@ -450,8 +449,6 @@ ROOM_FLAG_PEACEFUL = 'peaceful'
 
 ROOM_FLAG_INTEREST = 'interest'
 
-ROOM_FLAG_WORKSHOP = 'workshop'
-
 ROOM_FLAG_NO_QUIT = 'no_quit'
 
 ROOM_FLAG_NO_LOAD = 'no_load'
@@ -497,7 +494,6 @@ ROOM_FLAGS = [
     ROOM_FLAG_SMOB,
     ROOM_FLAG_ACTION,
     ROOM_FLAG_HERB,
-    ROOM_FLAG_WORKSHOP,
     ROOM_FLAG_NO_QUIT,
 ]
 

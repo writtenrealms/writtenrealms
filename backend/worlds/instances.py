@@ -433,10 +433,10 @@ def reset_instance(*, player) -> InstanceResetResult:
 
     The run/ref and active participants remain, while transient instance
     population, combat, door overrides, and runtime state are reset before
-    initial loaders and spawn plans run again.
+    initial spawn plans run again.
     """
     from core.scoped_state import STATE_SCOPE_WORLD, replace_state_snapshot
-    from spawns.loading import run_loaders
+    from spawns.loading import run_spawn_plans_for_world
     from spawns.models import (
         CombatEncounter,
         DoorState,
@@ -507,10 +507,10 @@ def reset_instance(*, player) -> InstanceResetResult:
         run.save(update_fields=['progress', 'outcome', 'last_active_at', 'modified_ts'])
 
         spawned_world.is_clean = True
-        spawned_world.last_loader_run_ts = None
-        spawned_world.save(update_fields=['is_clean', 'last_loader_run_ts'])
+        spawned_world.last_spawn_plan_run_ts = None
+        spawned_world.save(update_fields=['is_clean', 'last_spawn_plan_run_ts'])
 
-        run_loaders(world=spawned_world, initial=True)
+        run_spawn_plans_for_world(world=spawned_world, initial=True)
 
     return InstanceResetResult(
         run_id=run.id,

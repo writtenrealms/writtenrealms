@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Any
 
-from builders.models import Faction, ItemTemplate
+from builders.models import Faction, ItemDefinition
 from core.factions import faction_type_filter, normalize_faction_code
 from core.scoped_state import (
     STATE_SCOPE_QUEST,
@@ -16,9 +16,9 @@ from core.scoped_state import (
 )
 from core.leveling import apply_experience
 from core.utils import format_actor_msg
-from quests.entity_refs import resolve_template_ref_id
+from quests.entity_refs import resolve_entity_ref_id
 from spawns.actions.base import ActionError
-from spawns.actions.targeting import first_room_mob_with_template, resolve_room_mob_target
+from spawns.actions.targeting import first_room_mob_with_definition, resolve_room_mob_target
 from spawns.models import Item, Mob
 from quests.services.predicates import resolve_value
 
@@ -144,28 +144,28 @@ def _record_granted_item_ids(state: dict[str, Any], item_ids: set[int]) -> bool:
     return True
 
 
-def _resolve_effect_item_template(
+def _resolve_effect_item_definition(
     effect: dict[str, Any],
     *,
     player=None,
     template=None,
     quest_instance=None,
     event_data: dict[str, Any] | None = None,
-) -> ItemTemplate | None:
-    template_id = resolve_template_ref_id(
+) -> ItemDefinition | None:
+    definition_id = resolve_entity_ref_id(
         world=_effect_world(player=player, template=template),
         value=resolve_value(
-            effect.get("item_template", effect.get("item_template_id")),
+            effect.get("item_definition", effect.get("item_definition_id")),
             player=player,
             template=template,
             quest_instance=quest_instance,
             event_data=event_data,
         ),
-        expected_type="itemtemplate",
+        expected_type="itemdefinition",
     )
-    if not template_id:
+    if not definition_id:
         return None
-    return ItemTemplate.objects.filter(pk=template_id).first()
+    return ItemDefinition.objects.filter(pk=definition_id).first()
 
 
 def cleanup_player_owned_granted_items(quest_instance, *, player) -> int:
@@ -248,21 +248,21 @@ def _resolve_effect_mob(
 
     mob_id = _parse_entity_id(effect.get("mob") or effect.get("issuer"), "mob")
     if mob_id:
-        return room.mobs.select_related("template").filter(pk=mob_id).first()
+        return room.mobs.select_related("definition").filter(pk=mob_id).first()
 
-    template_id = resolve_template_ref_id(
+    definition_id = resolve_entity_ref_id(
         world=getattr(template, "world", None) or getattr(getattr(player, "world", None), "context", None) or getattr(player, "world", None),
         value=resolve_value(
-            effect.get("mob_template"),
+            effect.get("mob_definition"),
             player=player,
             template=template,
             quest_instance=quest_instance,
             event_data=event_data,
         ),
-        expected_type="mobtemplate",
+        expected_type="mobdefinition",
     )
-    if template_id:
-        return first_room_mob_with_template(room, template_id)
+    if definition_id:
+        return first_room_mob_with_definition(room, definition_id)
 
     selector = effect.get("selector")
     if selector:
@@ -280,12 +280,12 @@ def _resolve_effect_mob(
     if isinstance(target, dict):
         event_mob_id = _parse_entity_id(target.get("key") or target.get("id"), "mob")
         if event_mob_id:
-            mob = room.mobs.select_related("template").filter(pk=event_mob_id).first()
+            mob = room.mobs.select_related("definition").filter(pk=event_mob_id).first()
             if mob:
                 return mob
-        event_template_id = _coerce_amount(target.get("template_id"))
-        if event_template_id:
-            mob = first_room_mob_with_template(room, event_template_id)
+        event_definition_id = _coerce_amount(target.get("definition_id"))
+        if event_definition_id:
+            mob = first_room_mob_with_definition(room, event_definition_id)
             if mob:
                 return mob
 
@@ -534,14 +534,14 @@ def apply_quest_effects(
             continue
 
         if effect_type in {"grant_item", "spawn_item"}:
-            item_template = _resolve_effect_item_template(
+            item_definition = _resolve_effect_item_definition(
                 effect,
                 player=player,
                 template=template,
                 quest_instance=quest_instance,
                 event_data=event_data,
             )
-            if not item_template or not player:
+            if not item_definition or not player:
                 continue
             count = _coerce_amount(
                 effect.get(
@@ -562,10 +562,10 @@ def apply_quest_effects(
                 continue
             spawned_items: list[Item] = []
             for _ in range(count):
-                spawned_items.append(item_template.spawn(player, player.world))
+                spawned_items.append(item_definition.spawn(player, player.world))
             if _record_granted_item_ids(state, _collect_item_tree_ids(spawned_items)):
                 state_changed = True
-            label = item_template.name or item_template.slug or "item"
+            label = item_definition.name or item_definition.slug or "item"
             result.reward_summaries.append(
                 label if count == 1 else f"{label} x{count}"
             )

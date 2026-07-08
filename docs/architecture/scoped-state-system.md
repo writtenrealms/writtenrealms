@@ -240,7 +240,7 @@ such as:
 - `marked`
 - `set fact`
 - `set mark`
-- raw Python-like `loader_condition` expressions over ad hoc bags
+- raw Python-like WR1 loader condition expressions over ad hoc bags
 
 Those can be adapted internally during migration, but they should not be the
 target authoring model.
@@ -318,7 +318,7 @@ state_service.exists(scope, owner_ref, key)
 state_service.compare(scope, owner_ref, key, op, value)
 ```
 
-This keeps quests, triggers, loaders, and command handlers from each inventing
+This keeps quests, triggers, spawn plans, and command handlers from each inventing
 their own storage rules.
 
 ## Value Types
@@ -549,7 +549,7 @@ Exit criteria:
 
 - quests use typed state predicates and effects
 - triggers use typed state operations where appropriate
-- loader behavior stops depending on legacy fact vocabulary
+- spawn-plan behavior stops depending on legacy fact vocabulary
 
 Exit criteria:
 

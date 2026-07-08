@@ -16,10 +16,6 @@
         @click="doAction(message.data.target, 'offer')">OFFER</button>
       <button
         class="btn-small mr-2"
-        v-if="targetActions.craft"
-        @click="doAction(message.data.target, 'craft')">CRAFT</button>
-      <button
-        class="btn-small mr-2"
         v-if="targetActions.follow"
         @click="doAction(message.data.target, 'follow')">FOLLOW</button>
       <button
@@ -48,7 +44,6 @@ const KNOWN_ACTIONS = new Set([
   "talk",
   "list",
   "offer",
-  "craft",
   "follow",
   "unfollow",
 ]);
@@ -68,7 +63,6 @@ const targetActions = computed(() =>
 const hasAction = computed(() => {
   const hasKnownAction = Boolean(
     targetActions.value.talk ||
-    targetActions.value.craft ||
     targetActions.value.list ||
     targetActions.value.offer ||
     targetActions.value.follow ||
@@ -90,11 +84,7 @@ const doAction = (char, action) => {
     return;
   }
   const target = getTargetInGroup(char, store.state.game.room.chars) || char.keyword || char.name;
-  if (rawAction === 'craft' || rawAction === 'upgrade') {
-    store.dispatch("game/cmd", rawAction);
-  } else {
-    store.dispatch("game/cmd", `${rawAction} ${target}`);
-  }
+  store.dispatch("game/cmd", `${rawAction} ${target}`);
 
   store.commit("game/lookup_clear");
   store.commit("ui/modal_clear");

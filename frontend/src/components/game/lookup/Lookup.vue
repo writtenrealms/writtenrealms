@@ -44,7 +44,6 @@ const ITEM_ACTIONS = [
   "get_all_from",
   "sell",
   "buy",
-  "upgrade",
   "eat",
   "use",
 ];
@@ -182,8 +181,6 @@ const normalizeItemActions = (item: any) => {
     item.is_container === true || item.type === "container" || item.type === "corpse";
 
   const hasMerchant = roomChars.some((char) => char && char.is_merchant);
-  const hasUpgrader = roomChars.some((char) => char && char.is_upgrader);
-
   if (inRoom) {
     if (item.is_pickable !== false) actions.get = true;
     if (isContainer) actions.get_from = true;
@@ -207,16 +204,6 @@ const normalizeItemActions = (item: any) => {
       actions.sell = true;
     }
 
-    if (hasUpgrader) {
-      const quality = (item.quality || "").toLowerCase();
-      const upgradeCount = item.upgrade_count || 0;
-      if (
-        (quality === "imbued" && upgradeCount === 0) ||
-        (quality === "enchanted" && upgradeCount <= 2)
-      ) {
-        actions.upgrade = true;
-      }
-    }
   } else if (inEquipment) {
     actions.remove = true;
     if (item.on_use_cmd) actions.use = true;
@@ -229,10 +216,6 @@ const normalizeItemActions = (item: any) => {
     );
     if (merchant) {
       actions.buy = true;
-      if (!item.buy_price && item.cost) {
-        const profit = merchant.merchant_profit || 2;
-        item.buy_price = Math.round(item.cost * profit);
-      }
     }
   } else if (!inRoom && !inInventory && !inEquipment && hasMerchant && item.cost) {
     actions.buy = true;

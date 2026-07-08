@@ -156,12 +156,10 @@ const determineEndpoint = () => {
   if (props.endpoint) return props.endpoint;
 
   const world_id = store.state.builder.world.id;
-  if (model_type.value === "item_template" || model_type.value === "itemtemplate") {
-    return `builder/worlds/${world_id}/itemtemplates/`;
+  if (model_type.value === "itemdefinition" || model_type.value === "item_definition") {
+    return `builder/worlds/${world_id}/itemdefinitions/`;
   } else if (model_type.value === "mobdefinition" || model_type.value === "mob_definition") {
     return `builder/worlds/${world_id}/mobdefinitions/`;
-  } else if (model_type.value === "mobtemplate" || model_type.value === "mob_template") {
-    return `builder/worlds/${world_id}/mobtemplates/`;
   } else if (model_type.value === "transformationtemplate" || model_type.value === "transformation_template") {
     return `builder/worlds/${world_id}/transformationtemplates/`;
   } else if (model_type.value === "zone") {
@@ -178,9 +176,6 @@ const determineEndpoint = () => {
     return `builder/worlds/${world_id}/randomitemprofiles/`;
   } else if (model_type.value === "quest") {
     return `builder/worlds/${world_id}/quests/`;
-  } else if (model_type.value === "rule") {
-    const loader_id = store.state.builder.zones.loader.id;
-    return `builder/worlds/${world_id}/loaders/${loader_id}/rules/`;
   } else if (model_type.value === "path") {
     const zone_id = store.state.builder.zone.id;
     return `builder/worlds/${world_id}/zones/${zone_id}/paths/`;

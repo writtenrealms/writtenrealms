@@ -5,10 +5,10 @@ from types import SimpleNamespace
 from typing import Any
 
 from core.utils import format_actor_msg
-from quests.entity_refs import resolve_template_ref_id
+from quests.entity_refs import resolve_entity_ref_id
 from quests.services.discovery import (
     available_room_prompt_opportunities_for_room,
-    available_npc_dialogue_opportunities_for_mob_template,
+    available_npc_dialogue_opportunities_for_mob_definition,
     available_npc_dialogue_opportunities_for_room_mobs,
     room_prompt_callouts_for_room,
 )
@@ -30,14 +30,14 @@ def _objective_target(objective_spec: dict[str, Any]) -> int:
     return max(target, 1)
 
 
-def _event_target_template_id(event_data: dict[str, Any] | None) -> int | None:
+def _event_target_definition_id(event_data: dict[str, Any] | None) -> int | None:
     if not isinstance(event_data, dict):
         return None
     target = event_data.get("target")
     if not isinstance(target, dict):
         return None
     try:
-        return int(target.get("template_id") or 0) or None
+        return int(target.get("definition_id") or 0) or None
     except (TypeError, ValueError):
         return None
 
@@ -96,14 +96,14 @@ def _presented_opportunity_events(player, opportunities: list[dict[str, Any]]) -
     ]
 
 
-def _inventory_template_counts(player) -> Counter:
+def _inventory_definition_counts(player) -> Counter:
     counts: Counter = Counter()
     for item in player.inventory.all():
         if getattr(item, "is_pending_deletion", False):
             continue
-        template_id = getattr(item, "template_id", None)
-        if template_id:
-            counts[int(template_id)] += 1
+        definition_id = getattr(item, "definition_id", None)
+        if definition_id:
+            counts[int(definition_id)] += 1
     return counts
 
 
@@ -133,41 +133,41 @@ def _mark_objective_complete(
     state.status = "complete"
 
 
-def _resolve_condition_template_value(
+def _resolve_condition_definition_value(
     quest_instance,
     path: str,
     value: Any,
     *,
     player,
 ) -> Any:
-    if path != "event.target.template_id":
+    if path != "event.target.definition_id":
         return value
-    resolved = resolve_template_ref_id(
+    resolved = resolve_entity_ref_id(
         world=getattr(quest_instance.template, "world", None) or getattr(player, "world", None),
         value=value,
-        expected_type="mobtemplate",
+        expected_type="mobdefinition",
     )
     if resolved is not None:
         return resolved
     return value
 
 
-def _condition_targets_mob_template(
+def _condition_targets_mob_definition(
     condition: Any,
     quest_instance,
     *,
     player,
-    mob_template_id: int,
+    mob_definition_id: int,
 ) -> bool:
     if condition in (None, {}, []):
         return False
     if isinstance(condition, list):
         return any(
-            _condition_targets_mob_template(
+            _condition_targets_mob_definition(
                 item,
                 quest_instance,
                 player=player,
-                mob_template_id=mob_template_id,
+                mob_definition_id=mob_definition_id,
             )
             for item in condition
         )
@@ -175,21 +175,21 @@ def _condition_targets_mob_template(
         return False
     if "all" in condition:
         return any(
-            _condition_targets_mob_template(
+            _condition_targets_mob_definition(
                 item,
                 quest_instance,
                 player=player,
-                mob_template_id=mob_template_id,
+                mob_definition_id=mob_definition_id,
             )
             for item in condition.get("all") or []
         )
     if "any" in condition:
         return any(
-            _condition_targets_mob_template(
+            _condition_targets_mob_definition(
                 item,
                 quest_instance,
                 player=player,
-                mob_template_id=mob_template_id,
+                mob_definition_id=mob_definition_id,
             )
             for item in condition.get("any") or []
         )
@@ -202,25 +202,25 @@ def _condition_targets_mob_template(
         if not isinstance(raw_args, (list, tuple)) or len(raw_args) != 2:
             continue
         path = str(raw_args[0] or "").strip()
-        if path != "event.target.template_id":
+        if path != "event.target.definition_id":
             continue
         raw_value = raw_args[1]
         if operator == "eq":
-            return _resolve_condition_template_value(
+            return _resolve_condition_definition_value(
                 quest_instance,
                 path,
                 raw_value,
                 player=player,
-            ) == mob_template_id
+            ) == mob_definition_id
         if not isinstance(raw_value, (list, tuple, set)):
             return False
         return any(
-            _resolve_condition_template_value(
+            _resolve_condition_definition_value(
                 quest_instance,
                 path,
                 candidate,
                 player=player,
-            ) == mob_template_id
+            ) == mob_definition_id
             for candidate in raw_value
         )
     return False
@@ -253,10 +253,10 @@ def _preview_talk_completion(
     step: dict[str, Any],
     *,
     player,
-    mob_template_id: int,
+    mob_definition_id: int,
 ) -> bool:
     preview_state_map = _preview_state_map(quest_instance)
-    talk_event_data = {"target": {"template_id": mob_template_id}}
+    talk_event_data = {"target": {"definition_id": mob_definition_id}}
     changed = False
 
     for objective_spec in _objective_specs(step):
@@ -295,7 +295,7 @@ def _preview_delivery_completion(
     step: dict[str, Any],
     *,
     player,
-    mob_template_id: int,
+    mob_definition_id: int,
     inventory_counts: Counter,
 ) -> bool:
     preview_state_map = _preview_state_map(quest_instance)
@@ -318,13 +318,13 @@ def _preview_delivery_completion(
         if required_count <= 0:
             continue
 
-        matching_template_id = None
-        for item_template_id, available_count in remaining_inventory.items():
+        matching_definition_id = None
+        for item_definition_id, available_count in remaining_inventory.items():
             if available_count < required_count:
                 continue
             delivery_event_data = {
-                "target": {"template_id": mob_template_id},
-                "item": {"template_id": item_template_id},
+                "target": {"definition_id": mob_definition_id},
+                "item": {"definition_id": item_definition_id},
             }
             if evaluate_condition(
                 tracker.get("where"),
@@ -334,13 +334,13 @@ def _preview_delivery_completion(
                 event_data=delivery_event_data,
                 objective_state_map=preview_state_map,
             ):
-                matching_template_id = item_template_id
+                matching_definition_id = item_definition_id
                 break
 
-        if matching_template_id is None:
+        if matching_definition_id is None:
             continue
 
-        remaining_inventory[matching_template_id] -= required_count
+        remaining_inventory[matching_definition_id] -= required_count
         _mark_objective_complete(preview_state_map, objective_spec)
         changed = True
 
@@ -357,10 +357,10 @@ def _preview_delivery_completion(
 def _active_item_turn_in_hint(
     player,
     *,
-    mob_template_id: int,
+    mob_definition_id: int,
     target_payload: dict[str, Any] | None = None,
 ) -> str | None:
-    inventory_counts = _inventory_template_counts(player)
+    inventory_counts = _inventory_definition_counts(player)
     selector = _mob_selector_from_target(target_payload)
 
     for quest_instance in active_instances_qs(player):
@@ -373,11 +373,11 @@ def _active_item_turn_in_hint(
             tracker = objective_spec.get("tracker") or {}
             if str(tracker.get("event") or "").strip().lower() != "quest.item.delivered":
                 continue
-            if _condition_targets_mob_template(
+            if _condition_targets_mob_definition(
                 tracker.get("where"),
                 quest_instance,
                 player=player,
-                mob_template_id=mob_template_id,
+                mob_definition_id=mob_definition_id,
             ):
                 has_delivery_objective = True
                 break
@@ -418,7 +418,7 @@ def _active_item_turn_in_hint(
             quest_instance,
             step,
             player=player,
-            mob_template_id=mob_template_id,
+            mob_definition_id=mob_definition_id,
             inventory_counts=inventory_counts,
         ):
             if selector:
@@ -435,18 +435,18 @@ def _active_item_turn_in_hint(
 
 
 def room_mob_quest_indicator_map(player, room_mobs) -> dict[int, dict[str, bool]]:
-    room_mobs = [mob for mob in room_mobs if getattr(mob, "template_id", None)]
+    room_mobs = [mob for mob in room_mobs if getattr(mob, "definition_id", None)]
     if not room_mobs:
         return {}
 
-    opportunities_by_template_id = available_npc_dialogue_opportunities_for_room_mobs(player, room_mobs)
-    inventory_counts = _inventory_template_counts(player)
+    opportunities_by_definition_id = available_npc_dialogue_opportunities_for_room_mobs(player, room_mobs)
+    inventory_counts = _inventory_definition_counts(player)
     active_instances = list(active_instances_qs(player))
     indicators: dict[int, dict[str, bool]] = {}
 
     for mob in room_mobs:
-        template_id = int(mob.template_id)
-        complete = False
+        definition_id = int(mob.definition_id)
+        ready = False
         for quest_instance in active_instances:
             step = get_step(quest_instance.template, quest_instance.current_step_id)
             if not step or str(step.get("kind") or "").strip().lower() != "objective":
@@ -455,19 +455,19 @@ def room_mob_quest_indicator_map(player, room_mobs) -> dict[int, dict[str, bool]
                 quest_instance,
                 step,
                 player=player,
-                mob_template_id=template_id,
+                mob_definition_id=definition_id,
             ) or _preview_delivery_completion(
                 quest_instance,
                 step,
                 player=player,
-                mob_template_id=template_id,
+                mob_definition_id=definition_id,
                 inventory_counts=inventory_counts,
             ):
-                complete = True
+                ready = True
                 break
         indicators[mob.id] = {
-            "enquire": bool(opportunities_by_template_id.get(template_id)),
-            "complete": complete,
+            "available": bool(opportunities_by_definition_id.get(definition_id)),
+            "ready": ready,
         }
 
     return indicators
@@ -488,17 +488,17 @@ def build_inspect_guidance_events(player, event_data: dict[str, Any] | None) -> 
 
 def build_talk_guidance_events(player, event_data: dict[str, Any] | None) -> list[GameEvent]:
     target_payload = event_data.get("target") if isinstance(event_data, dict) else None
-    mob_template_id = _event_target_template_id(event_data)
-    if not mob_template_id:
+    mob_definition_id = _event_target_definition_id(event_data)
+    if not mob_definition_id:
         return []
 
-    opportunities = available_npc_dialogue_opportunities_for_mob_template(player, mob_template_id)
+    opportunities = available_npc_dialogue_opportunities_for_mob_definition(player, mob_definition_id)
     if opportunities:
         return _presented_opportunity_events(player, opportunities)
 
     hint_text = _active_item_turn_in_hint(
         player,
-        mob_template_id=mob_template_id,
+        mob_definition_id=mob_definition_id,
         target_payload=target_payload,
     )
     if not hint_text:

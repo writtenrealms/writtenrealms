@@ -304,8 +304,8 @@ Use `/load` when the issuer itself should receive the item, or when a room
 should place the item on the ground.
 
 ```text
-/load item <item_template_id|item_slug>
-/load mob <mob_template_id|mob_slug>
+/load item <item_definition_id|item_slug>
+/load mob <mob_definition_id|mob_slug>
 ```
 
 Issuer behavior:
@@ -325,7 +325,7 @@ Use `/grantitem` when a script should put an item into a target character's
 inventory.
 
 ```text
-/grantitem <target> <item_template_id|item_slug>
+/grantitem <target> <item_definition_id|item_slug>
 /grantitem <target> -- <item_selector> <item_selector> ...
 ```
 
@@ -333,9 +333,8 @@ Targets are resolved in the issuer's current room. The target may be a player
 or a mob, and can be selected by key (`player.123`, `mob.456`) or by an
 unambiguous name/keyword in the room.
 
-For item selectors, `item_slug` can be a legacy item template slug or a WR2 item
-definition slug. Numeric ids are resolved against those same authored item
-sources.
+For item selectors, use the WR2 item definition id or slug. Slugs are preferred
+because they are easier to read and survive export/import better.
 
 Common trigger examples:
 
@@ -608,9 +607,8 @@ metadata:
 
 ## Other Trigger Shapes
 
-The same manifest format also powers mob reaction triggers. Mob reactions are
-still a legacy-template-backed surface during the WR2 transition, so event
-trigger targets currently use `mobtemplate` refs.
+The same manifest format also powers mob reaction triggers. Mob reactions target
+WR2 mob definitions with `mobdefinition` refs.
 
 Example:
 
@@ -623,8 +621,8 @@ spec:
   scope: world
   kind: event
   target:
-    type: mobtemplate
-    key: mobtemplate.22
+    type: mobdefinition
+    key: mobdefinition.22
   event: say
   match: hello and (traveler or friend)
   script: say Welcome to the archive.
@@ -641,7 +639,7 @@ For builder work, the important distinction is:
 - movement gates use `kind: policy`
 - room reactions after movement use `kind: event` with `after_move_enter` or
   `after_move_exit`
-- mob reactions use `kind: event` with `scope: world` and a `mobtemplate`
+- mob reactions use `kind: event` with `scope: world` and a `mobdefinition`
   target
 
 ## Related Docs

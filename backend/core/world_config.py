@@ -21,6 +21,7 @@ INSTANCE_INHERITED_CONFIG_FIELDS = {
     "leveling_curve",
     "max_level",
     "player_creation",
+    "starting_equipment",
     "starting_level",
     "stat_system",
 }
@@ -50,6 +51,7 @@ INSTANCE_INHERITED_MANIFEST_FIELDS = {
     "leveling_curve",
     "max_level",
     "player_creation",
+    "starting_equipment",
     "starting_level",
     "stats",
 }

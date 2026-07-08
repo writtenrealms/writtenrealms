@@ -202,8 +202,6 @@ def _safe_int(value) -> int:
 
 
 def _mob_factions_for_aggro(mob: Mob) -> dict:
-    if getattr(mob, "template_id", None) and getattr(mob, "template", None):
-        return _explicit_assignment_factions(mob.template)
     return _explicit_assignment_factions(mob)
 
 
@@ -404,8 +402,6 @@ def _encounter_mob_name(encounter: CombatEncounter | None) -> str:
         return "them"
     if mob.name:
         return mob.name
-    if getattr(mob, "template", None):
-        return mob.template.name or "them"
     if getattr(mob, "definition", None):
         return mob.definition.name or "them"
     return "them"
@@ -543,7 +539,7 @@ def _ensure_corpse(mob: Mob) -> int:
 
 
 def _serialize_corpse(corpse_id: int, *, viewer: Player | None = None) -> dict:
-    corpse = Item.objects.select_related("template", "currency").get(pk=corpse_id)
+    corpse = Item.objects.select_related("definition", "currency").get(pk=corpse_id)
     return serialize_item(corpse, viewer=viewer, include_inventory=True).model_dump()
 
 
@@ -3922,7 +3918,6 @@ class ScanRoomAggroAction:
                 Mob.objects.select_for_update()
                 .prefetch_related(
                     "faction_assignments__faction",
-                    "template__faction_assignments__faction",
                 )
                 .filter(world=player.world, room=room, is_pending_deletion=False)
                 .order_by("id")

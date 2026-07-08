@@ -3,7 +3,7 @@ from datetime import timedelta
 from django.utils import timezone
 from django.urls import reverse
 
-from builders.models import ItemTemplate, MobTemplate
+from builders.models import ItemDefinition, MobDefinition
 from config import constants as adv_consts
 from core.computations import compute_stats
 from core.scoped_state import (
@@ -647,23 +647,23 @@ class TestPortableRoomRefsQuestRuntime(QuestRuntimeTestCase):
 class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
     def setUp(self):
         super().setUp()
-        self.survey_token_template = ItemTemplate.objects.create(
+        self.survey_token_template = ItemDefinition.objects.create(
             world=self.world,
             name="Survey Token",
             keywords="survey token token",
         )
-        self.satchel_template = ItemTemplate.objects.create(
+        self.satchel_template = ItemDefinition.objects.create(
             world=self.world,
             name="Satchel",
             keywords="satchel",
-            type=adv_consts.ITEM_TYPE_CONTAINER,
+            item_type=adv_consts.ITEM_TYPE_CONTAINER,
         )
-        self.coin_template = ItemTemplate.objects.create(
+        self.coin_template = ItemDefinition.objects.create(
             world=self.world,
             name="Coin",
             keywords="coin",
         )
-        self.guide_template = MobTemplate.objects.create(
+        self.guide_template = MobDefinition.objects.create(
             world=self.world,
             name="Trail Guide",
             keywords="trail guide guide",
@@ -692,7 +692,7 @@ class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
                     "kind": "storylet",
                     "recap": "A survey token is issued for the route ahead.",
                     "effects": [
-                        {"type": "grant_item", "item_template": self.survey_token_template.slug},
+                        {"type": "grant_item", "item_definition": self.survey_token_template.slug},
                     ],
                     "choices": [
                         {"id": "continue", "text": "Continue.", "goto": "resolved"},
@@ -706,7 +706,7 @@ class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
             ],
             reward_policy={
                 "complete": [
-                    {"type": "grant_item", "item_template": self.coin_template.slug},
+                    {"type": "grant_item", "item_definition": self.coin_template.slug},
                 ],
                 "compromised": [],
                 "failed_forward": [],
@@ -717,7 +717,7 @@ class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
             slug="guide_assignment",
             name="Guide Assignment",
             discovery_policy={
-                "sources": [{"type": "npc_dialogue", "mob_template": self.guide_template.slug}],
+                "sources": [{"type": "npc_dialogue", "mob_definition": self.guide_template.slug}],
                 "visible_if": {},
                 "accept_if": {},
                 "salience": 15,
@@ -729,7 +729,7 @@ class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
                     "kind": "storylet",
                     "recap": "The trail guide presses a spare survey token into your hand.",
                     "effects": [
-                        {"type": "grant_item", "item_template": self.survey_token_template.slug},
+                        {"type": "grant_item", "item_definition": self.survey_token_template.slug},
                     ],
                     "choices": [
                         {"id": "continue", "text": "Continue.", "goto": "resolved"},
@@ -748,7 +748,7 @@ class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
             dispatch_text_command(self.player.id, "quest accept survey_route")
 
         self.assertEqual(
-            self.player.inventory.filter(template=self.survey_token_template).count(),
+            self.player.inventory.filter(definition=self.survey_token_template).count(),
             1,
         )
         start_message = self._message_by_type(accept_messages, "quest.instance.started")
@@ -763,7 +763,7 @@ class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
             dispatch_text_command(self.player.id, "quest accept guide_assignment")
 
         self.assertEqual(
-            self.player.inventory.filter(template=self.survey_token_template).count(),
+            self.player.inventory.filter(definition=self.survey_token_template).count(),
             1,
         )
         start_message = self._message_by_type(accept_messages, "quest.instance.started")
@@ -774,21 +774,21 @@ class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
         satchel = Item.objects.create(
             world=self.spawn_world,
             container=self.player,
-            template=self.satchel_template,
+            definition=self.satchel_template,
             name=self.satchel_template.name,
             type=adv_consts.ITEM_TYPE_CONTAINER,
         )
         coin = Item.objects.create(
             world=self.spawn_world,
             container=satchel,
-            template=self.coin_template,
+            definition=self.coin_template,
             name=self.coin_template.name,
         )
 
         with capture_game_messages():
             dispatch_text_command(self.player.id, "quest accept survey_route")
 
-        granted_item = self.player.inventory.get(template=self.survey_token_template)
+        granted_item = self.player.inventory.get(definition=self.survey_token_template)
 
         with capture_game_messages():
             dispatch_text_command(self.player.id, "put token satchel")
@@ -812,7 +812,7 @@ class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
         satchel = Item.objects.create(
             world=self.spawn_world,
             container=self.player,
-            template=self.satchel_template,
+            definition=self.satchel_template,
             name=self.satchel_template.name,
             type=adv_consts.ITEM_TYPE_CONTAINER,
         )
@@ -820,7 +820,7 @@ class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
         with capture_game_messages():
             dispatch_text_command(self.player.id, "quest accept survey_route")
 
-        granted_item = self.player.inventory.get(template=self.survey_token_template)
+        granted_item = self.player.inventory.get(definition=self.survey_token_template)
 
         with capture_game_messages():
             dispatch_text_command(self.player.id, "put token satchel")
@@ -830,7 +830,7 @@ class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
 
         self.assertFalse(Item.objects.filter(pk=granted_item.id).exists())
         self.assertEqual(
-            self.player.inventory.filter(template=self.coin_template).count(),
+            self.player.inventory.filter(definition=self.coin_template).count(),
             1,
         )
         resolved_message = self._message_by_type(resolve_messages, "quest.instance.resolved")
@@ -855,25 +855,25 @@ class TestQuestRoomItemsRuntime(QuestRuntimeTestCase):
         self.back_room.west = self.room
         self.back_room.save(update_fields=["west"])
 
-        self.keg_template = ItemTemplate.objects.create(
+        self.keg_template = ItemDefinition.objects.create(
             world=self.world,
             name="Saloon Keg",
             slug="saloon_keg",
-            type=adv_consts.ITEM_TYPE_QUEST,
+            item_type=adv_consts.ITEM_TYPE_QUEST,
             description="A stout wooden keg stamped with the saloon's brand.",
             keywords="saloon keg keg",
         )
-        self.satchel_template = ItemTemplate.objects.create(
+        self.satchel_template = ItemDefinition.objects.create(
             world=self.world,
             name="Satchel",
             keywords="satchel",
-            type=adv_consts.ITEM_TYPE_CONTAINER,
+            item_type=adv_consts.ITEM_TYPE_CONTAINER,
         )
-        self.chest_template = ItemTemplate.objects.create(
+        self.chest_template = ItemDefinition.objects.create(
             world=self.world,
             name="Chest",
             keywords="chest",
-            type=adv_consts.ITEM_TYPE_CONTAINER,
+            item_type=adv_consts.ITEM_TYPE_CONTAINER,
         )
         self.create_runtime_quest(
             slug="saloon_keg_run",
@@ -900,7 +900,7 @@ class TestQuestRoomItemsRuntime(QuestRuntimeTestCase):
                         {
                             "id": "saloon_keg",
                             "room": f"room.{self.back_room.id}",
-                            "item_template": self.keg_template.slug,
+                            "item_definition": self.keg_template.slug,
                             "ground_description": "A full saloon keg rests here.",
                         }
                     ],
@@ -936,7 +936,7 @@ class TestQuestRoomItemsRuntime(QuestRuntimeTestCase):
             dispatch_text_command(self.player.id, "get keg")
 
         self.assertEqual(
-            self.player.inventory.filter(template=self.keg_template).count(),
+            self.player.inventory.filter(definition=self.keg_template).count(),
             1,
         )
         get_message = self._message_by_type(get_messages, "cmd.get.success")
@@ -975,7 +975,7 @@ class TestQuestRoomItemsRuntime(QuestRuntimeTestCase):
         chest = Item.objects.create(
             world=self.spawn_world,
             container=self.back_room,
-            template=self.chest_template,
+            definition=self.chest_template,
             name=self.chest_template.name,
             type=adv_consts.ITEM_TYPE_CONTAINER,
             is_pickable=False,
@@ -983,7 +983,7 @@ class TestQuestRoomItemsRuntime(QuestRuntimeTestCase):
         satchel = Item.objects.create(
             world=self.spawn_world,
             container=self.player,
-            template=self.satchel_template,
+            definition=self.satchel_template,
             name=self.satchel_template.name,
             type=adv_consts.ITEM_TYPE_CONTAINER,
         )
@@ -1012,7 +1012,7 @@ class TestQuestRoomItemsRuntime(QuestRuntimeTestCase):
 
         put_bag_message = self._message_by_type(put_bag_messages, "cmd.put.success")
         self.assertIsNotNone(put_bag_message)
-        keg_item = Item.objects.get(template=self.keg_template)
+        keg_item = Item.objects.get(definition=self.keg_template)
         self.assertEqual(keg_item.container_id, satchel.id)
 
 
@@ -1150,7 +1150,7 @@ class TestQuestRuntimeEndpoints(QuestRuntimeTestCase):
 class TestNpcDialogueSlugDiscovery(QuestRuntimeTestCase):
     def setUp(self):
         super().setUp()
-        self.quartermaster_template = MobTemplate.objects.create(
+        self.quartermaster_template = MobDefinition.objects.create(
             world=self.world,
             name="Quartermaster",
             keywords="quartermaster",
@@ -1160,7 +1160,7 @@ class TestNpcDialogueSlugDiscovery(QuestRuntimeTestCase):
             slug="quartermaster_request",
             name="Quartermaster Request",
             discovery_policy={
-                "sources": [{"type": "npc_dialogue", "mob_template": self.quartermaster_template.slug}],
+                "sources": [{"type": "npc_dialogue", "mob_definition": self.quartermaster_template.slug}],
                 "visible_if": {},
                 "accept_if": {},
                 "salience": 10,
@@ -1183,7 +1183,7 @@ class TestNpcDialogueSlugDiscovery(QuestRuntimeTestCase):
             ],
         )
 
-    def test_npc_dialogue_discovery_accepts_mob_template_slug_without_room_entry_spam(self):
+    def test_npc_dialogue_discovery_accepts_mob_definition_slug_without_room_entry_spam(self):
         with capture_game_messages() as discovery_messages:
             dispatch_text_command(self.player.id, "look")
 
@@ -1191,20 +1191,20 @@ class TestNpcDialogueSlugDiscovery(QuestRuntimeTestCase):
         look_message = self._message_by_type(discovery_messages, "cmd.look.success")
         quartermaster = self._room_char_by_name(look_message, "Quartermaster")
         self.assertIsNotNone(quartermaster)
-        self.assertTrue(quartermaster["quest_data"]["enquire"])
+        self.assertTrue(quartermaster["quest_indicator"]["available"])
 
 
 class TestTurnInQuestRuntime(QuestRuntimeTestCase):
     def setUp(self):
         super().setUp()
-        self.quartermaster_template = MobTemplate.objects.create(
+        self.quartermaster_template = MobDefinition.objects.create(
             world=self.world,
             name="Quartermaster",
             keywords="quartermaster",
         )
         self.quartermaster_template.spawn(self.room, self.spawn_world)
-        self.pelt_template = ItemTemplate.objects.create(world=self.world, name="Wolf Pelt")
-        self.herb_template = ItemTemplate.objects.create(world=self.world, name="Moonleaf")
+        self.pelt_template = ItemDefinition.objects.create(world=self.world, name="Wolf Pelt")
+        self.herb_template = ItemDefinition.objects.create(world=self.world, name="Moonleaf")
         self.pelt_template.spawn(self.player, self.spawn_world)
         self.pelt_template.spawn(self.player, self.spawn_world)
         self.herb_template.spawn(self.player, self.spawn_world)
@@ -1234,8 +1234,8 @@ class TestTurnInQuestRuntime(QuestRuntimeTestCase):
                                 "event": "quest.item.delivered",
                                 "where": {
                                     "all": [
-                                        {"eq": ["event.target.template_id", self.quartermaster_template.slug]},
-                                        {"eq": ["event.item.template_id", self.pelt_template.slug]},
+                                        {"eq": ["event.target.definition_id", self.quartermaster_template.slug]},
+                                        {"eq": ["event.item.definition_id", self.pelt_template.slug]},
                                     ]
                                 },
                             },
@@ -1248,8 +1248,8 @@ class TestTurnInQuestRuntime(QuestRuntimeTestCase):
                                 "event": "quest.item.delivered",
                                 "where": {
                                     "all": [
-                                        {"eq": ["event.target.template_id", self.quartermaster_template.slug]},
-                                        {"eq": ["event.item.template_id", self.herb_template.slug]},
+                                        {"eq": ["event.target.definition_id", self.quartermaster_template.slug]},
+                                        {"eq": ["event.item.definition_id", self.herb_template.slug]},
                                     ]
                                 },
                             },
@@ -1280,7 +1280,7 @@ class TestTurnInQuestRuntime(QuestRuntimeTestCase):
                     {"type": "grant_xp", "amount": 50},
                     {
                         "type": "mob_command",
-                        "mob_template": self.quartermaster_template.slug,
+                        "mob_definition": self.quartermaster_template.slug,
                         "command": "/echo room Delivery accepted.",
                     },
                 ],
@@ -1313,13 +1313,13 @@ class TestTurnInQuestRuntime(QuestRuntimeTestCase):
 class TestQuestDiscoverability(QuestRuntimeTestCase):
     def setUp(self):
         super().setUp()
-        self.bartender_template = MobTemplate.objects.create(
+        self.bartender_template = MobDefinition.objects.create(
             world=self.world,
             name="Saloon Bartender",
             keywords="saloon bartender bartender",
             slug="saloon_bartender",
         )
-        self.keg_template = ItemTemplate.objects.create(
+        self.keg_template = ItemDefinition.objects.create(
             world=self.world,
             name="Saloon Keg",
             keywords="saloon keg keg",
@@ -1330,7 +1330,7 @@ class TestQuestDiscoverability(QuestRuntimeTestCase):
             slug="saloon_keg_run",
             name="A Keg for the Bar",
             discovery_policy={
-                "sources": [{"type": "npc_dialogue", "mob_template": self.bartender_template.slug}],
+                "sources": [{"type": "npc_dialogue", "mob_definition": self.bartender_template.slug}],
                 "visible_if": {},
                 "accept_if": {},
                 "salience": 25,
@@ -1355,8 +1355,8 @@ class TestQuestDiscoverability(QuestRuntimeTestCase):
                                 "event": "quest.item.delivered",
                                 "where": {
                                     "all": [
-                                        {"eq": ["event.target.template_id", self.bartender_template.slug]},
-                                        {"eq": ["event.item.template_id", self.keg_template.slug]},
+                                        {"eq": ["event.target.definition_id", self.bartender_template.slug]},
+                                        {"eq": ["event.item.definition_id", self.keg_template.slug]},
                                     ]
                                 },
                             },
@@ -1385,8 +1385,8 @@ class TestQuestDiscoverability(QuestRuntimeTestCase):
         look_message = self._message_by_type(messages, "cmd.look.success")
         bartender = self._room_char_by_name(look_message, "Saloon Bartender")
         self.assertIsNotNone(bartender)
-        self.assertTrue(bartender["quest_data"]["enquire"])
-        self.assertFalse(bartender["quest_data"]["complete"])
+        self.assertTrue(bartender["quest_indicator"]["available"])
+        self.assertFalse(bartender["quest_indicator"]["ready"])
 
     def test_talk_to_offer_npc_shows_pitch_and_accept_command(self):
         with capture_game_messages() as messages:
@@ -1409,8 +1409,8 @@ class TestQuestDiscoverability(QuestRuntimeTestCase):
         look_message = self._message_by_type(messages, "cmd.look.success")
         bartender = self._room_char_by_name(look_message, "Saloon Bartender")
         self.assertIsNotNone(bartender)
-        self.assertFalse(bartender["quest_data"]["enquire"])
-        self.assertTrue(bartender["quest_data"]["complete"])
+        self.assertFalse(bartender["quest_indicator"]["available"])
+        self.assertTrue(bartender["quest_indicator"]["ready"])
 
     def test_talk_to_turn_in_npc_without_giving_item_shows_handoff_hint(self):
         with capture_game_messages():
@@ -1436,7 +1436,7 @@ class TestQuestDiscoverability(QuestRuntimeTestCase):
 class TestQuestAcceptCommand(QuestRuntimeTestCase):
     def setUp(self):
         super().setUp()
-        self.bartender_template = MobTemplate.objects.create(
+        self.bartender_template = MobDefinition.objects.create(
             world=self.world,
             name="Saloon Bartender",
             keywords="saloon bartender bartender",
@@ -1446,7 +1446,7 @@ class TestQuestAcceptCommand(QuestRuntimeTestCase):
             slug="first_round",
             name="First Round",
             discovery_policy={
-                "sources": [{"type": "npc_dialogue", "mob_template": self.bartender_template.id}],
+                "sources": [{"type": "npc_dialogue", "mob_definition": self.bartender_template.id}],
                 "visible_if": {},
                 "accept_if": {},
                 "salience": 10,
@@ -1470,7 +1470,7 @@ class TestQuestAcceptCommand(QuestRuntimeTestCase):
             slug="second_round",
             name="Second Round",
             discovery_policy={
-                "sources": [{"type": "npc_dialogue", "mob_template": self.bartender_template.id}],
+                "sources": [{"type": "npc_dialogue", "mob_definition": self.bartender_template.id}],
                 "visible_if": {},
                 "accept_if": {},
                 "salience": 10,
@@ -1508,18 +1508,20 @@ class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
         stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
         self.player.health = stats["health_max"]
         self.player.save(update_fields=["health"])
-        self.captain_template = MobTemplate.objects.create(
+        self.captain_template = MobDefinition.objects.create(
             world=self.world,
             name="Captain Merrow",
             keywords="captain merrow captain",
         )
-        self.rat_template = MobTemplate.objects.create(
+        self.rat_template = MobDefinition.objects.create(
             world=self.world,
             name="Tunnel Rat",
             keywords="rat tunnel rat",
-            health_max=1,
-            attack_power=0,
-            fights_back=False,
+            base_properties={
+                "health_max": 1,
+                "attack_power": 0,
+                "fights_back": False,
+            },
         )
         self.captain_template.spawn(self.room, self.spawn_world)
         self.rat_template.spawn(self.room, self.spawn_world)
@@ -1546,7 +1548,7 @@ class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
                             "text": "Kill 2 tunnel rats.",
                             "tracker": {
                                 "event": "quest.mob.killed",
-                                "where": {"eq": ["event.target.template_id", self.rat_template.id]},
+                                "where": {"eq": ["event.target.definition_id", self.rat_template.id]},
                             },
                             "progress": {"mode": "count", "target": 2},
                         }
@@ -1568,7 +1570,7 @@ class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
                             "text": "Talk to Captain Merrow.",
                             "tracker": {
                                 "event": "cmd.talk.success",
-                                "where": {"eq": ["event.target.template_id", self.captain_template.id]},
+                                "where": {"eq": ["event.target.definition_id", self.captain_template.id]},
                             },
                             "progress": {"mode": "boolean", "target": 1},
                         }
@@ -1632,7 +1634,7 @@ class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
         look_message = self._message_by_type(messages, "cmd.look.success")
         captain = self._room_char_by_name(look_message, "Captain Merrow")
         self.assertIsNotNone(captain)
-        self.assertTrue(captain["quest_data"]["complete"])
+        self.assertTrue(captain["quest_indicator"]["ready"])
 
 
 class TestQuestScopedState(QuestRuntimeTestCase):

@@ -62,7 +62,6 @@ Legend:
 | `/cmd`, `/force`, `/rcmd`, `/zcmd`, `/wcmd` | Direct | Script | Script | Script | Script | Script |
 | `/jump` | Direct | No | No | No | No | No |
 | `/reset` | Direct | No | No | No | No | No |
-| `/resync` | Direct | No | No | No | No | No |
 
 ## Command Details
 
@@ -71,7 +70,7 @@ Legend:
 Format:
 
 ```text
-/load <item|mob> <template_id|definition_id|slug> [cmd]
+/load <item|mob> <definition_id|slug> [cmd]
 ```
 
 Loads an authored item or mob.
@@ -88,8 +87,8 @@ Mob behavior depends on the issuer:
 - mob issuer: mob loads into the issuer mob's current room
 - room issuer: mob loads into that room
 
-Selectors can reference legacy templates or WR2 definitions by numeric id or
-slug. For new content, prefer item definitions and mob definitions.
+Selectors should reference WR2 item definitions or mob definitions by numeric
+id or slug.
 
 Examples:
 
@@ -108,7 +107,7 @@ Use `/grantitem` when the item should go into a target character inventory.
 Format:
 
 ```text
-/grantitem <target> <item_template_id|item_definition_id|item_slug>
+/grantitem <target> <item_definition_id|item_slug>
 /grantitem <target> -- <item_selector> <item_selector> ...
 ```
 
@@ -135,9 +134,8 @@ Use `/grantitem` for pledge rewards, starter equipment, quest rewards, and any
 scripted reward that should not appear on the room floor.
 
 Use the `--` form when granting multiple items. The target is everything before
-`--`; item selectors are whitespace-separated after `--`. Each item selector can
-be an item template id, item definition id, template slug, or definition slug.
-Multi-item grants are
+`--`; item selectors are whitespace-separated after `--`. Each item selector
+should be a WR2 item definition id or slug. Multi-item grants are
 validated before any item is spawned, so a bad selector prevents the whole grant
 instead of creating a partial reward set.
 
@@ -573,7 +571,7 @@ an instance.
 Reset keeps the same active run and Instance ID, moves active participants to
 the instance starting room, clears spawned mobs, ground items, combat, door
 overrides, and instance world state, and then reruns the instance's initial
-loaders and spawn plans. Player inventory and equipment are preserved.
+spawn plans. Player inventory and equipment are preserved.
 
 Room and zone scoped state are cleared when no other active run is using the
 same instance template. If another run is active, WR2 leaves that shared
@@ -586,30 +584,6 @@ Examples:
 ```
 
 This command is direct-builder-only.
-
-### `/resync`
-
-Formats:
-
-```text
-/resync item <template_id|all>
-/resync mob <template_id|all>
-```
-
-Reapplies legacy template fields to spawned item or mob instances in the
-builder player's current world.
-
-Examples:
-
-```text
-/resync item 509
-/resync item all
-/resync mob 456
-/resync mob all
-```
-
-This command is direct-builder-only. WR2 item definition and mob definition
-sync paths are separate from this legacy template resync command.
 
 ## Common Script Patterns
 

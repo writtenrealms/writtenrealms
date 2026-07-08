@@ -229,8 +229,6 @@ def _offhand_weapon(actor: Any) -> Any | None:
     if not offhand:
         return None
     equipment_type = str(getattr(offhand, "equipment_type", "") or "").strip()
-    if not equipment_type and getattr(offhand, "template", None) is not None:
-        equipment_type = str(getattr(offhand.template, "equipment_type", "") or "").strip()
     if equipment_type != constants.EQUIPMENT_TYPE_WEAPON_1H:
         return None
     return offhand

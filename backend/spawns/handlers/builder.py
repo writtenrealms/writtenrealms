@@ -11,11 +11,9 @@ from spawns.actions.builder import (
     GrantItemAction,
     InvisibleAction,
     JumpAction,
-    LoadTemplateAction,
+    LoadDefinitionAction,
     PurgeAction,
     RegenAction,
-    ResyncItemTemplatesAction,
-    ResyncMobTemplatesAction,
     SendAction,
     MOB_SET_FIELD_CHOICES,
     PLAYER_SET_FIELD_CHOICES,
@@ -304,12 +302,12 @@ def _parse_grantitem_args(ctx: CommandContext) -> tuple[str | None, list[str]]:
     items = (
         ctx.payload.get("items")
         or ctx.payload.get("item_ids")
-        or ctx.payload.get("template_ids")
+        or ctx.payload.get("definition_ids")
     )
     item = (
         ctx.payload.get("item")
         or ctx.payload.get("item_id")
-        or ctx.payload.get("template_id")
+        or ctx.payload.get("definition_id")
     )
     if target is not None:
         item_ids = _payload_item_list(items)
@@ -377,9 +375,9 @@ class LoadHandler(CommandHandler):
     supported_actor_types = ("player", "mob", "room")
     help = {
         "name": "Load",
-        "format": "/load <item|mob> <template_id|slug> [cmd]",
+        "format": "/load <item|mob> <definition_id|slug> [cmd]",
         "description": (
-            "Load an item or mob template. Players and mobs load items into inventory; "
+            "Load an item or mob definition. Players and mobs load items into inventory; "
             "rooms load items onto the ground. "
             "An optional trailing command is attached to the loaded entity."
         ),
@@ -397,50 +395,50 @@ class LoadHandler(CommandHandler):
             ctx.publish(builder_permission_error(self.command_type))
             return
 
-        template_type = ctx.payload.get("template_type")
-        template_id = ctx.payload.get("template_id")
+        definition_type = ctx.payload.get("definition_type")
+        definition_id = ctx.payload.get("definition_id")
         cmd = ctx.payload.get("cmd")
 
-        if not template_type or not template_id:
+        if not definition_type or not definition_id:
             args = ctx.payload.get("args", [])
             if len(args) < 2:
                 ctx.publish(
                     {
                         "type": "cmd./load.error",
-                        "text": "Usage: /load <item|mob> <template_id|slug> [cmd]",
+                        "text": "Usage: /load <item|mob> <definition_id|slug> [cmd]",
                         "data": {"error": "Missing arguments.", "code": "invalid_args"},
                     }
                 )
                 return
-            template_type = args[0]
-            template_id = args[1]
+            definition_type = args[0]
+            definition_id = args[1]
             if len(args) > 2:
                 cmd = " ".join(args[2:])
 
         try:
-            template_type = resolve_unambiguous_choice(
-                str(template_type).lower(),
+            definition_type = resolve_unambiguous_choice(
+                str(definition_type).lower(),
                 choices=("item", "mob"),
             )
         except ChoiceResolutionError:
-            template_type = str(template_type).lower()
+            definition_type = str(definition_type).lower()
 
-        if template_type not in ("item", "mob"):
+        if definition_type not in ("item", "mob"):
             ctx.publish(
                 {
                     "type": "cmd./load.error",
-                    "text": "Template type must be item or mob.",
-                    "data": {"error": "Invalid template type.", "code": "invalid_type"},
+                    "text": "Definition type must be item or mob.",
+                    "data": {"error": "Invalid definition type.", "code": "invalid_type"},
                 }
             )
             return
 
         try:
-            result = LoadTemplateAction().execute(
+            result = LoadDefinitionAction().execute(
                 actor=ctx.actor,
                 runtime_world=ctx.world,
-                template_type=template_type,
-                template_id=template_id,
+                definition_type=definition_type,
+                definition_id=definition_id,
                 cmd=cmd,
             )
         except ActionError as err:
@@ -469,9 +467,9 @@ class GrantItemHandler(CommandHandler):
     supported_actor_types = ("player", "mob", "room")
     help = {
         "name": "Grant Item",
-        "format": "/grantitem <target> <item_template_id|item_slug> | /grantitem <target> -- <item_selector>...",
+        "format": "/grantitem <target> <item_definition_id|item_slug> | /grantitem <target> -- <item_selector>...",
         "description": (
-            "Load an item template or definition into a target player or mob inventory. "
+            "Load an item definition into a target player or mob inventory. "
             "The target is resolved in the issuer's current room."
         ),
         "examples": [
@@ -493,7 +491,7 @@ class GrantItemHandler(CommandHandler):
             ctx.publish(
                 {
                     "type": "cmd./grantitem.error",
-                    "text": "Usage: /grantitem <target> <item_template_id|item_slug> or /grantitem <target> -- <item_selector>...",
+                    "text": "Usage: /grantitem <target> <item_definition_id|item_slug> or /grantitem <target> -- <item_selector>...",
                     "data": {"error": "Missing target or item.", "code": "invalid_args"},
                 }
             )
@@ -1292,102 +1290,6 @@ class InvisibleHandler(CommandHandler):
             ctx.publish(
                 {
                     "type": "cmd./invisible.error",
-                    "text": err.message,
-                    "data": {"error": err.message, "code": err.code, **err.data},
-                }
-            )
-            return
-
-        publish_events(
-            result.events,
-            actor_key=ctx.player.key,
-            connection_id=ctx.connection_id,
-        )
-
-
-@register_handler
-class ResyncHandler(CommandHandler):
-    command_type = "/resync"
-    text_commands = ("/resync",)
-    builder_only = True
-    help = {
-        "name": "Resync",
-        "format": "/resync <item|mob> <template_id|all>",
-        "description": (
-            "Reapply template fields to spawned item or mob instances in your current world."
-        ),
-        "examples": [
-            "/resync item 509",
-            "/resync item all",
-            "/resync mob 456",
-            "/resync mob all",
-        ],
-    }
-
-    def handle(self, ctx: CommandContext) -> None:
-        if not can_execute_builder_command(ctx, self):
-            ctx.publish(builder_permission_error(self.command_type))
-            return
-
-        args = ctx.payload.get("args", [])
-        if len(args) < 2:
-            ctx.publish(
-                {
-                    "type": "cmd./resync.error",
-                    "text": "Usage: /resync <item|mob> <template_id|all>",
-                    "data": {"error": "Missing arguments.", "code": "invalid_args"},
-                }
-            )
-            return
-
-        target_type = str(args[0]).lower()
-        target_selector = str(args[1]).lower()
-        try:
-            target_type = resolve_unambiguous_choice(
-                target_type,
-                choices=("item", "mob"),
-            )
-        except ChoiceResolutionError:
-            pass
-        if target_type not in ("item", "mob"):
-            ctx.publish(
-                {
-                    "type": "cmd./resync.error",
-                    "text": "Template type must be item or mob.",
-                    "data": {"error": "Unsupported resync type.", "code": "invalid_type"},
-                }
-            )
-            return
-
-        template_id = None
-        if target_selector != "all":
-            try:
-                template_id = int(target_selector)
-            except (TypeError, ValueError):
-                ctx.publish(
-                    {
-                        "type": "cmd./resync.error",
-                        "text": "Template ID must be a number or 'all'.",
-                        "data": {"error": "Invalid template ID.", "code": "invalid_id"},
-                    }
-                )
-                return
-
-        try:
-            if target_type == "item":
-                result = ResyncItemTemplatesAction().execute(
-                    player_id=ctx.player.id,
-                    template_id=template_id,
-                )
-            else:
-                result = ResyncMobTemplatesAction().execute(
-                    player_id=ctx.player.id,
-                    template_id=template_id,
-                )
-        except ActionError as err:
-            ctx.publish(
-                {
-                    "type": "cmd./resync.error",
                     "text": err.message,
                     "data": {"error": err.message, "code": err.code, **err.data},
                 }

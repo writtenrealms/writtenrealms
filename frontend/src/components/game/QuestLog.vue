@@ -5,104 +5,152 @@
     </div>
 
     <div class="my-4">
-      <h1 class='mb-4'>Quest Log</h1>
+      <h1 class="mb-4">Quest Log</h1>
 
       <div class="tabs-view">
         <div class="tabs">
           <div
             class="tab-item"
-            :class="{ activeTab: selectedTab == 'open'}"
-            @click="clickTab('open')">Open Quests</div>
+            :class="{ activeTab: selectedTab == 'active' }"
+            @click="clickTab('active')">Active Quests</div>
           <div
             class="tab-item"
-            :class="{ activeTab: selectedTab == 'repeatable'}"
-            @click="clickTab('repeatable')">Repeatable Quests</div>
-          <div
-            class="tab-item"
-            :class="{ activeTab: selectedTab == 'completed'}"
-            @click="clickTab('completed')">Completed Quests</div>
+            :class="{ activeTab: selectedTab == 'resolved' }"
+            @click="clickTab('resolved')">Resolved Quests</div>
         </div>
       </div>
 
-      <template v-if="log_entries.length">
-        <div v-for="log_entry in log_entries" :key="log_entry.id" class="mt-4">
-          <h2 @click="onClickName(log_entry)" class="mb-2">
-            <span class="interactive">{{ log_entry.quest_name }}</span>
-            <span class='ml-2 color-text-50' v-if="store.state.game.player.is_builder">[ {{ log_entry.id }} ]</span>
+      <template v-if="quests.length">
+        <div v-for="quest in quests" :key="quest.id" class="quest-entry mt-4">
+          <h2 @click="onClickName(quest)" class="mb-2">
+            <span class="interactive">{{ quest.template.name }}</span>
+            <span class="ml-2 color-text-50" v-if="store.state.game.player.is_builder">[ {{ quest.id }} ]</span>
           </h2>
-          <template v-if="expanded == log_entry.id">
-            <div
-              v-if="log_entry.level > 1"
-              class="color-text-50"
-            >Suggested level: {{ log_entry.level }}</div>
-            <div class="my-2 color-text-50">Quest given by {{ log_entry.quest_giver }}</div>
-
-            <div v-if="log_entry.summary">
-              <div v-for="(line, index) in log_entry.summary.split('\n')" :key="index">{{ line }}</div>
+          <template v-if="expanded == quest.id">
+            <div class="quest-meta color-text-50">
+              {{ quest.status }}
+              <template v-if="quest.resolution"> - {{ quest.resolution }}</template>
+              <template v-if="quest.template.slug"> - {{ quest.template.slug }}</template>
             </div>
-            <div v-else v-for="(line, index) in log_entry.enquire_cmds" :key="index">{{ line }}</div>
+
+            <div v-if="quest.current_step.recap" class="my-2">
+              {{ quest.current_step.recap }}
+            </div>
+            <div v-if="quest.current_step.text.body" class="my-2">
+              {{ quest.current_step.text.body }}
+            </div>
+
+            <div v-if="visibleObjectives(quest).length" class="quest-objectives my-2">
+              <div class="quest-section-label">Objectives</div>
+              <div
+                v-for="objective in visibleObjectives(quest)"
+                :key="objective.id"
+                class="quest-objective"
+              >
+                <span>{{ objective.text || objective.id }}</span>
+                <span class="quest-progress color-text-50">{{ objectiveProgress(objective) }}</span>
+              </div>
+            </div>
+
+            <div v-if="quest.latest_journal_entry?.recap" class="my-2 color-text-50">
+              Last change: {{ quest.latest_journal_entry.recap }}
+            </div>
+
+            <button
+              v-if="quest.status == 'active'"
+              class="btn-small mt-2"
+              @click="showQuestInfo(quest)"
+            >
+              INFO
+            </button>
           </template>
         </div>
       </template>
       <template v-else>
-        <div class="mt-6" v-if="selectedTab == 'repeatable'">No repeatable quests.</div>
-        <div class="mt-6" v-else-if="selectedTab == 'completed'">No completed quests.</div>
-        <div class="mt-6" v-else>No enquired quests.</div>
-
+        <div class="mt-6" v-if="selectedTab == 'resolved'">No resolved quests.</div>
+        <div class="mt-6" v-else>No active quests.</div>
       </template>
     </div>
   </div>
 </template>
 
-<script lang='ts' setup>
+<script lang="ts" setup>
 import { ref, onMounted } from "vue";
 import { useStore } from "vuex";
 import axios from "axios";
 
 const store = useStore();
 
-interface QuestLogEntry {
-  id: number;
-  quest: number;
-  level: number;
-  summary: string;
-  enquire_cmds: string;
-  quest_name: string;
-  quest_giver: string;
+interface QuestObjective {
+  id: string;
+  text: string;
+  status: string;
+  progress_current: number;
+  progress_target: number;
 }
 
-const log_entries = ref<QuestLogEntry[]>([]);
-const expanded = ref<number>(0);
+interface QuestInstance {
+  id: number;
+  status: string;
+  resolution: string | null;
+  template: {
+    slug: string;
+    name: string;
+    quest_type: string;
+  };
+  current_step: {
+    recap: string;
+    text: {
+      body?: string;
+    };
+    objectives: QuestObjective[];
+  };
+  latest_journal_entry?: {
+    recap?: string;
+  } | null;
+}
+
+const quests = ref<QuestInstance[]>([]);
+const expanded = ref<number | null>(null);
 const fetched = ref<boolean>(false);
-const selectedTab = ref<string>("open"); // Could also be "completed" or "repeatable"
+const selectedTab = ref<"active" | "resolved">("active");
 
-
-const get_quests = async () => {
-  let endpoint = "/game/quests/open/";
-  if (selectedTab.value == 'completed') {
-    endpoint = "/game/quests/completed/";
-  } else if (selectedTab.value == 'repeatable') {
-    endpoint = "/game/quests/repeatable/";
-  }
+const getQuests = async () => {
+  const endpoint = selectedTab.value == "resolved"
+    ? "/game/quests/resolved/"
+    : "/game/quests/active/";
 
   const resp = await axios.get(endpoint, {
-    headers: { "X-PLAYER-ID": store.state.game.player.id }
+    headers: { "X-PLAYER-ID": store.state.game.player.id },
   });
-  log_entries.value = resp.data;
+  quests.value = resp.data.quests || [];
   fetched.value = true;
-
-  if (log_entries.value.length) {
-    expanded.value = log_entries.value[0].id;
-  }
+  expanded.value = quests.value.length ? quests.value[0].id : null;
 };
 
-const clickTab = async (tab: string) => {
+const clickTab = async (tab: "active" | "resolved") => {
   selectedTab.value = tab;
-  await get_quests();
+  await getQuests();
 };
 
-const onClickName = (log_entry: QuestLogEntry) => {
-  expanded.value = log_entry.id;
+const onClickName = (quest: QuestInstance) => {
+  expanded.value = expanded.value == quest.id ? null : quest.id;
+};
+
+const visibleObjectives = (quest: QuestInstance) => {
+  return (quest.current_step.objectives || []).filter((objective) => objective.status !== "hidden");
+};
+
+const objectiveProgress = (objective: QuestObjective) => {
+  const current = Number(objective.progress_current || 0);
+  const target = Number(objective.progress_target || 0);
+  return target > 0 ? `${current}/${target}` : `${current}`;
+};
+
+const showQuestInfo = (quest: QuestInstance) => {
+  if (!quest.template.slug) return;
+  store.dispatch("game/cmd", `quest info ${quest.template.slug}`);
+  closeQuestLog();
 };
 
 const closeQuestLog = () => {
@@ -110,12 +158,13 @@ const closeQuestLog = () => {
 };
 
 onMounted(async () => {
-  await get_quests();
+  await getQuests();
 });
 </script>
 
 <style lang="scss" scoped>
 @import "@/styles/colors.scss";
+
 #quest_log {
   padding: 15px;
   position: relative;
@@ -129,6 +178,23 @@ onMounted(async () => {
 
   h2 {
     margin: 0;
+  }
+
+  .quest-meta,
+  .quest-section-label {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+  }
+
+  .quest-objective {
+    align-items: baseline;
+    display: flex;
+    gap: 0.75rem;
+    justify-content: space-between;
+  }
+
+  .quest-progress {
+    white-space: nowrap;
   }
 }
 </style>

@@ -5,7 +5,7 @@ YAML in **World > Edit**. The **World > Items** screen lists item definitions an
 can copy or prefill the YAML for a definition.
 
 Use `kind: itemdefinition` for one authored item. Use `kind: itembundle` when a
-mob, merchant, or loader should choose from a weighted set of item definitions.
+mob, merchant, or spawn plan should choose from a weighted set of item definitions.
 
 ## Plain Stackable Items
 
@@ -28,14 +28,14 @@ spec:
 This is the right shape for coins, rations, keys, ammunition, simple quest
 objects, and any other item where every copy should be identical.
 
-Containers, corpses, trash containers, upgraded items, augmented items, and
-randomized items do not stack.
+Containers, corpses, trash containers, augmented items, and randomized items do
+not stack.
 
 ## Fixed Stat Items
 
 Fixed stats are still stable. If there is no `randomization` block, two copies
-from the same definition should stack as long as neither copy has been upgraded
-or augmented.
+from the same definition should stack as long as neither copy has been
+augmented.
 
 ```yaml
 kind: itemdefinition
@@ -303,8 +303,8 @@ After applying an item definition manifest, builders can test it with `/load`:
 ```
 
 When a builder player runs that command directly, the spawned item is added to
-the builder's inventory. The selector can be an item template id, an item
-template slug, an item definition id, or an item definition slug.
+the builder's inventory. The selector can be an item definition id or an
+item definition slug.
 
 Trigger scripts usually should not use direct `/load` when the item is meant
 for the triggering player. Use `/grantitem` instead:

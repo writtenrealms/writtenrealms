@@ -14,12 +14,9 @@ from core.utils import is_ascii
 
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist
-from django.utils import timezone
 
 from rest_framework import serializers
 from rest_framework.fields import Field
-
-from core.utils import capfirst, format_actor_msg, has_number
 
 from config import constants as api_consts
 from config import game_settings as adv_config
@@ -28,26 +25,17 @@ from builders.models import (
     RoomCommandCheck,
     RoomGetTrigger,
     RoomCheck,
-    Quest,
-    Objective,
-    Reward,
     ItemDefinition,
-    ItemTemplate,
     MobDefinition,
-    MobTemplate,
-    TransformationTemplate,
-    MerchantInventory,
     Faction,
     FactionAssignment,
     FactionRelationship,
     RoomAction,
     Trigger,
     Path,
-    Procession,
-    Rule)
+    Procession)
 from core.serializers import (
     KeyField,
-    InstanceOrTemplateValueField,
     ContainerTypeField,
     ReferenceField)
 from core.equipment_system import get_world_equipment_payload
@@ -63,10 +51,7 @@ from spawns.models import (
     Item,
     Mob,
     Equipment,
-    PlayerEnquire,
-    PlayerQuest,
     Alias,
-    PlayerEvent,
     PlayerConfig,
     Mark)
 from system.models import SiteControl
@@ -221,13 +206,10 @@ class PlayerSerializer(serializers.ModelSerializer):
 
 
 class ItemSerializer(serializers.ModelSerializer):
-    """
-    Serizlier that takes an item and makes it itself + its template so that
-    the data will look like how the Game engine expects it.
-    """
+    """Serialize a runtime item for game-facing APIs."""
 
-    name = serializers.ReadOnlyField(source='template.name')
-    description = serializers.ReadOnlyField(source='template.description')
+    name = serializers.ReadOnlyField()
+    description = serializers.ReadOnlyField()
 
     class Meta:
         model = Item
@@ -543,16 +525,16 @@ class AnimateItemSerializer(serializers.ModelSerializer):
         model = Item
         fields = [
             'id', 'key', 'chunk_type',
-            'template_id', 'profile_id', 'in_container', 'rule_id',
-            'ground_description', 'keywords', 'cost', 'label', 'upgrade_count',
+            'definition_id', 'definition_slug_snapshot', 'profile_id',
+            'in_container',
+            'ground_description', 'keywords', 'cost', 'label',
             'augment', 'currency',
         ]
 
     def get_fields(self):
         fields = super().get_fields()
 
-        # Add in the template fields
-        template_fields = [
+        authored_fields = [
             'name', 'level', 'description',
             'type', 'is_persistent', 'quality', 'cost', #'currency',
             'food_value', 'food_type',
@@ -568,9 +550,8 @@ class AnimateItemSerializer(serializers.ModelSerializer):
             'on_use_cmd', 'on_use_description', 'on_use_equipped',
         ]
 
-        for template_field_name in template_fields:
-            _field = InstanceOrTemplateValueField()
-            fields[template_field_name]  = _field
+        for field_name in authored_fields:
+            fields[field_name] = serializers.ReadOnlyField()
 
         return fields
 
@@ -586,15 +567,12 @@ class AnimateItemSerializer(serializers.ModelSerializer):
         return container.key
 
     def get_ground_description(self, item):
-        if item.template and item.template.ground_description:
-            return item.template.ground_description
-        elif item.ground_description:
+        if item.ground_description:
             return item.ground_description
 
-        name = item.template.name if item.template else item.name
+        name = item.name
         verb = 'lies'
-        if ((item.template and not item.template.is_pickable)
-            or not item.is_pickable):
+        if not item.is_pickable:
             verb = 'is'
 
         return "{name} {verb} here.".format(
@@ -605,9 +583,6 @@ class AnimateItemSerializer(serializers.ModelSerializer):
 
         # If actual keywords were defined, we simply take those
         keywords = item.keywords
-        if not keywords and item.template:
-            keywords = item.template.keywords
-
         if keywords:
             # Exclude name tokens, normalize to lowercase
             tokens = [
@@ -615,10 +590,9 @@ class AnimateItemSerializer(serializers.ModelSerializer):
                 if token not in adv_consts.EXCLUDE_NAME_TOKENS
             ]
 
-        # If neither item or template has keywords defined, we take the
-        # name of the item or template, and then break it down
+        # If no keywords were defined, derive them from the item name.
         if not keywords:
-            name = item.template.name if item.template else item.name
+            name = item.name
             keywords = name or ''
 
             # Exclude name tokens, normalize to lowercase
@@ -639,7 +613,7 @@ class AnimateItemSerializer(serializers.ModelSerializer):
         tokens.extend(plural_tokens)
 
         # Add quality
-        quality = item.template.quality if item.template else item.quality
+        quality = item.quality
         if quality:
             tokens.append(quality)
 
@@ -647,7 +621,7 @@ class AnimateItemSerializer(serializers.ModelSerializer):
         tokens.append('item')
 
         # Add shield / weapon / armor tokens
-        eq_type = item.template.equipment_type if item.template else item.equipment_type
+        eq_type = item.equipment_type
         if not eq_type : pass
         elif eq_type == adv_consts.EQUIPMENT_TYPE_SHIELD:
             tokens.append('shield')
@@ -657,7 +631,7 @@ class AnimateItemSerializer(serializers.ModelSerializer):
             tokens.append('armor')
 
         # Add container token
-        item_type = item.template.type if item.template else item.type
+        item_type = item.type
         if item_type == adv_consts.ITEM_TYPE_CONTAINER:
             tokens.append('container')
 
@@ -666,9 +640,6 @@ class AnimateItemSerializer(serializers.ModelSerializer):
         return ' '.join(tokens)
 
     def get_currency(self, item):
-        if item.template:
-            currency = item.template.currency
-            return currency.code if currency else 'gold'
         if item.currency:
             return item.currency.code
         currency = Currency.objects.filter(
@@ -713,7 +684,6 @@ class AnimateItemActionSerializer(serializers.ModelSerializer):
 
 class AnimateMobSerializer(serializers.ModelSerializer):
     room = KeyField()
-    has_quest = serializers.SerializerMethodField()
     room_description = serializers.SerializerMethodField()
     keywords = serializers.SerializerMethodField()
     factions = serializers.SerializerMethodField()
@@ -725,9 +695,9 @@ class AnimateMobSerializer(serializers.ModelSerializer):
     class Meta:
         model = Mob
         fields = [
-            'id', 'key', 'room', 'template_id', 'rule_id',
+            'id', 'key', 'room', 'definition_id', 'definition_slug_snapshot',
             'health', 'energy', 'stamina',
-            'has_quest', 'group_id',
+            'group_id',
             'room_description', 'keywords',
             'factions',
             'is_merchant', 'gold',
@@ -738,7 +708,7 @@ class AnimateMobSerializer(serializers.ModelSerializer):
     def get_fields(self):
         fields = super().get_fields()
 
-        template_fields = [
+        authored_fields = [
             'level', 'name', 'description',
             'type', 'archetype', 'gender', 'exp_worth', 'roaming_type',
             'alignment', 'aggression',
@@ -753,57 +723,28 @@ class AnimateMobSerializer(serializers.ModelSerializer):
             'fights_back', 'use_abilities', 'combat_script',
             'roam_chance',
             'control_flag', 'flags',
-            'is_elite', 'is_invisible', 'is_crafter', 'craft_multiplier',
-            'merchant_profit',
+            'is_elite', 'is_invisible',
             'traits',
-            'is_upgrader', 'upgrade_cost_multiplier',
 
             #'drops_random_items', 'num_items',
             #'chance_normal', 'chance_imbued', 'chance_enchanted',
         ]
-        for template_field_name in template_fields:
-            _field = serializers.ReadOnlyField(
-                source='template.%s' % template_field_name)
-            fields[template_field_name]  = _field
+        for field_name in authored_fields:
+            fields[field_name] = serializers.ReadOnlyField()
 
         return fields
 
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-
-        # Apply transformations
-        mob = instance
-        # process any future transformations, in order
-        if mob.rule_id:
-            trans_rules_qs = Rule.objects.filter(
-                target_type=ContentType.objects.get_for_model(Rule),
-                target_id=mob.rule_id,
-                template_type=ContentType.objects.get_for_model(
-                    TransformationTemplate))
-
-            for trans_rule in trans_rules_qs:
-                transformations = trans_rule.template.apply(mob)
-                for attr, value in transformations.items():
-                    data[attr] = value
-
-        return data
-
     # Getters
 
-    def get_has_quest(self, mob):
-        return mob.template.template_quests.exists()
-
     def get_is_merchant(self, mob):
-        return mob.template.merchant_inv.exists()
+        return bool(mob.definition and mob.definition.merchant_profile_id)
 
     def get_room_description(self, mob):
-        if mob.template and mob.template.room_description:
-            return mob.template.room_description
-        elif mob.room_description:
+        if mob.room_description:
             return mob.room_description
 
-        name = mob.template.name if mob.template else mob.name
-        title = mob.template.title if mob.template else mob.title
+        name = mob.name
+        title = mob.title
         if title:
             title = ' ' + title
         return "{name}{title} is here.".format(
@@ -813,13 +754,9 @@ class AnimateMobSerializer(serializers.ModelSerializer):
     def get_keywords(self, mob):
 
         keywords = mob.keywords
-        if not keywords and mob.template:
-            keywords = mob.template.keywords
-
-        # If neither mob or template has keywords defined, we take the
-        # name of the mob or template, and then break it down
+        # If no keywords were defined, derive them from the mob name.
         if not keywords:
-            name = mob.template.name if mob.template else mob.name
+            name = mob.name
             keywords = ' '.join(list(reversed([
                 token.lower() for token in re.split('\W+', name)
                 if token not in adv_consts.EXCLUDE_NAME_TOKENS
@@ -831,14 +768,14 @@ class AnimateMobSerializer(serializers.ModelSerializer):
         tokens.append('mob')
 
         # Add the mob's gender
-        gender = mob.template.gender if mob.template else mob.gender
+        gender = mob.gender
         tokens.append(gender)
 
         # Add the mob's key
         tokens.append(mob.key)
 
         # Add the mob's faction codes
-        factions = mob.template.factions if mob.template else mob.factions
+        factions = mob.factions
         core_faction = factions.pop('core', None)
         if core_faction:
             tokens.append(core_faction)
@@ -861,9 +798,9 @@ class AnimateMobSerializer(serializers.ModelSerializer):
         no explicit assignment we want to return nothing.
         """
 
-        mob_type = mob.template.type if mob.template else mob.type
+        mob_type = mob.type
 
-        faction_source = mob.template or mob.definition or mob
+        faction_source = mob.definition or mob
         fa_qs = faction_source.faction_assignments.all()
 
         core_assignment = fa_qs.filter(faction__type='core').first()
@@ -890,34 +827,18 @@ class AnimateMobSerializer(serializers.ModelSerializer):
         return factions
 
     def get_gold(self, mob):
-        if mob.template:
-            return mob.template.gold or 0
-
         return mob.gold or 0
 
-        if mob.template:
-            if mob.template.type != adv_consts.MOB_TYPE_HUMANOID:
-                return 0
-            gold = mob.template.gold
-            #level = mob.template.level
-        else:
-            if mob.type != adv_consts.MOB_TYPE_HUMANOID:
-                return 0
-            gold = mob.gold
-            #level = mob.level
-        return gold
-        #return gold if gold else adv_config.ILF(level)
-
     def get_reactions(self, mob):
-        if not mob.template_id:
+        if not mob.definition_id:
             return []
-        mob_template_ct = ContentType.objects.get_for_model(MobTemplate)
+        mob_definition_ct = ContentType.objects.get_for_model(MobDefinition)
         return AnimateMobReactionSerializer(
             Trigger.objects.filter(
-                world_id=mob.template.world_id,
+                world_id=mob.definition.world_id,
                 kind=adv_consts.TRIGGER_KIND_EVENT,
-                target_type=mob_template_ct,
-                target_id=mob.template_id,
+                target_type=mob_definition_ct,
+                target_id=mob.definition_id,
                 is_active=True,
             ).order_by('order', 'created_ts', 'id'),
             many=True).data
@@ -956,7 +877,6 @@ class AnimatePlayerSerializer(serializers.ModelSerializer):
     aliases = serializers.SerializerMethodField()
     autoflee = serializers.SerializerMethodField()
     keywords = serializers.SerializerMethodField()
-    trophy = serializers.SerializerMethodField()
     user_name = serializers.SerializerMethodField()
     config = serializers.SerializerMethodField()
     effects = serializers.SerializerMethodField()
@@ -980,7 +900,7 @@ class AnimatePlayerSerializer(serializers.ModelSerializer):
             'health', 'stamina', 'energy',
             'state',
             'room_description',
-            'trophy', 'config', 'effects', 'marks',
+            'config', 'effects', 'marks',
             'user_name', 'is_staff', 'is_confirmed', 'link_id',
             'player_housing', 'name_recognition',
             'home',
@@ -1013,14 +933,6 @@ class AnimatePlayerSerializer(serializers.ModelSerializer):
         # If the player's world mandates an autoflee, use that. In practice,
         # this will only happen in the intro world.
         return player.world.config.autoflee or 0
-
-    def get_trophy(self, player):
-        trophy = {}
-        for entry in player.trophy_entries.all():
-            if entry.mob_template_id not in trophy:
-                trophy[entry.mob_template_id] = 0
-            trophy[entry.mob_template_id] += 1
-        return trophy
 
     def get_effects(self, player): return {}
 
@@ -1225,119 +1137,6 @@ class AnimateRoomGetTriggerSerializer(serializers.ModelSerializer):
         ]
 
 
-class AnimateQuestSerializer(serializers.ModelSerializer):
-
-    chunk_type = serializers.SerializerMethodField()
-    mob = serializers.SerializerMethodField()
-    objectives = serializers.SerializerMethodField()
-    rewards = serializers.SerializerMethodField()
-    requires_quest_id = serializers.SerializerMethodField()
-    suggested_level = serializers.CharField(source='level', read_only=True)
-
-    class Meta:
-        model = Quest
-        fields = [
-            'id', 'key', 'chunk_type', 'mob', 'suggested_level',
-            'name',
-            'entrance_cmds',
-            'repeat_entrance_cmd_after',
-            'enquire_cmds',
-            'enquire_keywords',
-            'enquire_cmd_available',
-            'is_hidden',
-            'completion_action',
-            'completion_cmds',
-            'completion_keywords',
-            'completion_cmd_available',
-            'completion_entrance_cmds',
-            'repeat_completion_entrance_cmds_after',
-            'completion_despawn',
-            'complete_silently',
-            'incomplete_msg',
-            'repeatable_after',
-            'objectives', 'rewards',
-            'requires_quest_id',
-            'requires_level',
-            'max_level',
-            'conditions',
-            'completion_conditions',
-        ]
-
-    def get_chunk_type(self, quest):
-        return "quest"
-
-    def get_mob(self, quest):
-        return self.context['mob'].key
-
-    def get_objectives(self, quest):
-        return AnimateObjectiveSerializer(
-            quest.objectives.all(), many=True).data
-
-    def get_rewards(self, quest):
-        return AnimateRewardSerializer(
-            quest.rewards.all(), many=True).data
-
-    def get_requires_quest_id(self, quest):
-        if not quest.requires_quest:
-            return None
-        else:
-            return quest.requires_quest.id
-
-
-class AnimateObjectiveSerializer(serializers.ModelSerializer):
-
-    currency = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Objective
-        fields = [
-            'id', 'key', 'type', 'qty', 'template_id', 'currency'
-        ]
-
-    def get_currency(self, objective):
-        if objective.currency:
-            return objective.currency.code
-        return None
-
-
-class AnimateRewardSerializer(serializers.ModelSerializer):
-
-    option = serializers.SerializerMethodField()
-    currency = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Reward
-        fields = ['id', 'key', 'type', 'qty', 'option', 'currency']
-
-    def get_option(self, reward):
-        if reward.type == adv_consts.REWARD_TYPE_FACTION:
-            return reward.profile.code
-        if reward.type == adv_consts.REWARD_TYPE_ITEM:
-            return reward.profile.id
-        return ""
-
-    def get_currency(self, reward):
-        if reward.currency:
-            return reward.currency.code
-        return None
-
-
-class AnimatePlayerQuestSerializer(serializers.ModelSerializer):
-    player = serializers.CharField(source='player.key')
-    quest = serializers.SerializerMethodField()
-    chunk_type = serializers.SerializerMethodField()
-
-    class Meta:
-        model = PlayerQuest
-        fields = ['id', 'key', 'player', 'quest', 'completion_ts', 'chunk_type']
-
-    def get_quest(self, player_quest):
-        return player_quest.quest.get_game_key(self.context.get('world'))
-
-    def get_chunk_type(self, player_quest):
-        return "player_quest"
-
-
 class AnimateAliasSerializer(serializers.ModelSerializer):
     class Meta:
         model = Alias
@@ -1487,11 +1286,11 @@ class SpawnRewardsSerializer(serializers.Serializer):
     #     return data
 
 
-class LoadTemplateSerializer(serializers.Serializer):
+class LoadDefinitionSerializer(serializers.Serializer):
 
     world_id = serializers.IntegerField()
-    template_type = serializers.ChoiceField(choices=['item', 'mob'])
-    template_id = serializers.CharField()
+    definition_type = serializers.ChoiceField(choices=['item', 'mob'])
+    definition_id = serializers.CharField()
     actor_type = serializers.ChoiceField(choices=['player', 'mob', 'room'])
     actor_id = serializers.IntegerField()
     room = serializers.IntegerField()
@@ -1519,50 +1318,39 @@ class LoadTemplateSerializer(serializers.Serializer):
 
         data['spawn_world'] = world
 
-        # Determine the template
+        # Determine the authored definition.
         if world.context.instance_of:
             context = world.context.instance_of
         else:
             context = world.context
-        template_ref = str(data['template_id']).strip()
-        template_model = ItemTemplate if data['template_type'] == 'item' else MobTemplate
-        template = None
-        if template_ref.isdigit():
-            template = template_model.objects.filter(
-                pk=int(template_ref),
-                world=context,
-            ).first()
-        if template is None:
-            template = template_model.objects.filter(
-                slug=template_ref,
-                world=context,
-            ).first()
-        if template is None and data['template_type'] == 'item':
-            if template_ref.isdigit():
-                template = ItemDefinition.objects.filter(
-                    pk=int(template_ref),
+        definition_ref = str(data['definition_id']).strip()
+        definition = None
+        if data['definition_type'] == 'item':
+            if definition_ref.isdigit():
+                definition = ItemDefinition.objects.filter(
+                    pk=int(definition_ref),
                     world=context,
                 ).first()
-            if template is None:
-                template = ItemDefinition.objects.filter(
-                    slug=template_ref,
+            if definition is None:
+                definition = ItemDefinition.objects.filter(
+                    slug=definition_ref,
                     world=context,
                 ).first()
-        if template is None and data['template_type'] == 'mob':
-            if template_ref.isdigit():
-                template = MobDefinition.objects.filter(
-                    pk=int(template_ref),
+        if definition is None and data['definition_type'] == 'mob':
+            if definition_ref.isdigit():
+                definition = MobDefinition.objects.filter(
+                    pk=int(definition_ref),
                     world=context,
                 ).first()
-            if template is None:
-                template = MobDefinition.objects.filter(
-                    slug=template_ref,
+            if definition is None:
+                definition = MobDefinition.objects.filter(
+                    slug=definition_ref,
                     world=context,
                 ).first()
-        if template is None:
+        if definition is None:
             raise serializers.ValidationError(
-                "Template does not belong to this world")
-        data['template'] = template
+                "Definition does not belong to this world")
+        data['definition'] = definition
 
         return data
 
@@ -1622,104 +1410,6 @@ class WorldCompletionSerializer(serializers.Serializer):
             return Player.objects.get(pk=player_id)
         except Player.DoesNotExist:
             raise serializers.ValidationError("Invalid player id")
-
-
-class QuestSerializerBase(serializers.Serializer):
-
-    player = serializers.IntegerField()
-    quest = serializers.IntegerField()
-
-    def validate_player(self, player_id):
-        try:
-            return Player.objects.get(pk=player_id)
-        except Player.DoesNotExist:
-            raise serializers.ValidationError("Invalid player id")
-
-    def validate_quest(self, quest_id):
-        try:
-            return Quest.objects.get(pk=quest_id)
-        except Quest.DoesNotExist:
-            raise serializers.ValidationError("Invalid quest id")
-
-
-class QuestCompletionSerializer(QuestSerializerBase):
-
-    def create(self, validated_data):
-        player = validated_data['player']
-        quest = validated_data['quest']
-        player_quest, created = PlayerQuest.objects.get_or_create(
-            player=player,
-            quest=quest)
-        player_quest.completion_ts = timezone.now()
-        player_quest.save()
-        return player_quest
-
-
-class QuestEnquireSerializer(QuestSerializerBase):
-    "Serializer to create the enquire record"
-
-    def create(self, validated_data):
-        player = validated_data['player']
-        quest = validated_data['quest']
-        player_enquire, created = PlayerEnquire.objects.get_or_create(
-            player=player,
-            quest=quest)
-        player_enquire.enquire_ts = timezone.now()
-        player_enquire.save()
-        return player_enquire
-
-
-class EnquiredQuestSerializer(serializers.ModelSerializer):
-
-    enquire_cmds = serializers.SerializerMethodField()
-    quest_giver = serializers.CharField(source='mob_template.name')
-    quest_name = serializers.CharField(source='name')
-
-    class Meta:
-        model = Quest
-        fields = [
-            'id',
-            'quest_name',
-            'enquire_cmds',
-            'quest_giver',
-            'level',
-            'summary',
-        ]
-
-    def get_enquire_cmds(self, quest):
-        enquire_cmds = []
-
-        quest_mob_name = capfirst(quest.mob_template.name)
-
-        if quest.type == adv_consts.QUEST_TYPE_DELIVER:
-            questlines = (quest.completion_cmds or "").splitlines()
-        else:
-            questlines = (quest.enquire_cmds or "").splitlines()
-
-        for line in questlines:
-            formatted_line = line
-            line_tokens = line.split(' ')
-            message = format_actor_msg(
-                ' '.join(line_tokens[1:]),
-                self.context['actor'])
-
-            if (line_tokens[0] == 'say'):
-                formatted_line = "%s says '%s'" % (
-                    quest_mob_name, message)
-            elif (line_tokens[0] == 'emote'):
-                formatted_line = '%s %s' % (
-                    quest_mob_name, message)
-            elif (line_tokens[0] == 'echo'):
-                formatted_line  = message
-            else:
-                continue
-            #elif (line_tokens[0] == 'pass'):
-            #    continue
-            enquire_cmds.append(formatted_line)
-        return enquire_cmds
-
-    def get_quest_giver(self, enquire_quest):
-        return enquire_quest.quest.mob_template.name
 
 
 class EnterInstanceSerializer(serializers.Serializer):

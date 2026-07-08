@@ -18,6 +18,12 @@ spec:
   starting_room: room@0,0,0
   death_room: room@0,0,0
   starting_gold: 0
+  starting_equipment:
+    - item_definition: itemdefinition.training_sword
+      count: 1
+    - item_definition: itemdefinition.lockpick
+      count: 2
+      archetype: assassin
   starting_level: 1
   max_level: 20
   leveling_curve: [0, 30, 100]
@@ -78,6 +84,7 @@ currently authored through `kind: world` manifests.
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `starting_gold` | integer >= 0 | `0` | Gold granted to new players. |
+| `starting_equipment` | list | `[]` | Item definitions granted to new players, with optional `count` and `archetype`. |
 | `starting_level` | integer >= 1 | `1` | Initial player level. |
 | `max_level` | integer >= 1 | `20` | Maximum automatic level. |
 | `leveling_curve` | list | WR2 default curve | Cumulative XP thresholds; first entry must be `0`. |
@@ -96,6 +103,11 @@ For faction selection policy, see
 
 For ability progression, see
 [ability-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/ability-builder-guide.md).
+
+Starting equipment entries use WR2 item definitions, not legacy item templates.
+Use `itemdefinition.<slug>` or a bare item definition slug. `count` defaults to
+`1`. If `archetype` is present, the item is only granted to players whose
+selected archetype/class id exactly matches that value.
 
 ### Combat, Roaming, And Runtime Rules
 

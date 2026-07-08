@@ -14,25 +14,13 @@ from rest_framework.reverse import reverse
 from config import constants as api_consts
 from backend.config.exceptions import ServiceError
 from builders.models import (
-    ItemTemplate,
-    ItemTemplateInventory,
-    MobTemplate,
-    MobTemplateInventory,
-    TransformationTemplate,
-    Loader,
-    Quest,
-    Objective,
-    Reward,
-    Rule,
+    MobDefinition,
     RoomCommandCheck,
-    Path,
-    PathRoom,
     Faction,
     FactionAssignment,
     Procession)
 from spawns import serializers as spawns_serializers
 from spawns.extraction import APIExtractor
-from spawns.loading import LoaderRun
 from spawns.models import (
     Alias,
     Player,
@@ -40,8 +28,6 @@ from spawns.models import (
     Equipment,
     Mob,
     RoomCommandCheckState,
-    PlayerQuest,
-    PlayerTrophy,
     PlayerConfig)
 from spawns.services import WorldGate
 from system.models import IntroConfig
@@ -62,10 +48,8 @@ Animation notes:
         - room checks
 
 
-* loaders:
+* spawn plans:
     - mobs
-        - quests
-        - mob eq
     - items
 * players
     - items
@@ -418,34 +402,6 @@ class APIExtractionPlayerTests(APIExtractionTests):
                 faction__code='illuminati').value,
             -2)
 
-    def test_trophy_extraction(self):
-        # A soldier which had been previously killed once
-        soldier_template = MobTemplate.objects.create(
-            name='a soldier',
-            world=self.world)
-        PlayerTrophy.objects.create(
-            player=self.player,
-            mob_template=soldier_template)
-        # A sergeant which not previously been killed
-        sergeant_template = MobTemplate.objects.create(
-            name='a sergeant',
-            world=self.world)
-
-        trophy = {}
-        trophy[soldier_template.id] = 2
-        api_extractor = APIExtractor(
-            self.spawn_world,
-            [{
-                'model': 'trophy',
-                'player_id': self.player.id,
-                'trophy': trophy,
-            }])
-        api_extractor.save_trophy(self.player)
-        self.assertEqual(
-            self.player.trophy_entries.filter(
-                mob_template=soldier_template).count(),
-            2)
-
     def test_aliases_extraction(self):
         # Create one new alias and update another
 
@@ -491,7 +447,7 @@ class APIExtractionSinglePlayerWorldTests(APIExtractionTests):
             room=self.room,
             allow_commands='cmd.get',
             check=adv_consts.ROOM_CHECK_IN_INV,
-            argument='item_template.1',
+            argument='item_definition.1',
             failure_msg="You can't do anything until you get the thing!",
             track_state=True)
         # Null, will be set to passed
@@ -499,7 +455,7 @@ class APIExtractionSinglePlayerWorldTests(APIExtractionTests):
             room=self.room,
             allow_commands='cmd.get',
             check=adv_consts.ROOM_CHECK_IN_INV,
-            argument='item_template.2',
+            argument='item_definition.2',
             failure_msg="You can't do anything until you get the thing!",
             track_state=True)
         # Passed, won't change
@@ -507,7 +463,7 @@ class APIExtractionSinglePlayerWorldTests(APIExtractionTests):
             room=self.room,
             allow_commands='cmd.get',
             check=adv_consts.ROOM_CHECK_IN_INV,
-            argument='item_template.3',
+            argument='item_definition.3',
             failure_msg="You can't do anything until you get the thing!",
             track_state=True)
         RoomCommandCheckState.objects.create(
@@ -519,7 +475,7 @@ class APIExtractionSinglePlayerWorldTests(APIExtractionTests):
             room=self.room,
             allow_commands='cmd.get',
             check=adv_consts.ROOM_CHECK_IN_INV,
-            argument='item_template.4',
+            argument='item_definition.4',
             failure_msg="You can't do anything until you get the thing!",
             track_state=True)
         RoomCommandCheckState.objects.create(
@@ -600,692 +556,6 @@ class APIExtractionSinglePlayerWorldTests(APIExtractionTests):
         self.assertEqual(mob2.room, new_room)
 
 
-class TestLoaders(WorldTestCase):
-
-    def setUp(self):
-        super().setUp()
-        self.spawn_world = self.world.create_spawn_world()
-
-    def test_basic_usage(self):
-        item_template = ItemTemplate.objects.create(
-            world=self.world,
-            name='a rock')
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False)
-
-        loader_run = LoaderRun(
-            loader=loader,
-            world=self.spawn_world,
-            check=False)
-
-        output = loader_run.execute()
-        self.assertFalse(loader_run.executed)
-
-        rule = Rule.objects.create(
-            loader=loader,
-            template=item_template,
-            target=self.room)
-
-        output = loader_run.execute()
-        self.assertTrue(loader_run.executed)
-        self.assertEqual(len(output.keys()), 1)
-        self.assertEqual(len(output[rule.id]), 1)
-
-        # Trying to re-run an executed loader raises an error
-        with self.assertRaises(RuntimeError):
-            loader_run.execute()
-
-    def test_inherit_zone_wait(self):
-        item_template = ItemTemplate.objects.create(
-            world=self.world,
-            name='a rock')
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=True)
-
-        loader_run = LoaderRun(
-            loader=loader,
-            world=self.spawn_world,
-            check=False,
-            should_zone_reset=True)
-
-        output = loader_run.execute()
-        self.assertFalse(loader_run.executed)
-
-        rule = Rule.objects.create(
-            loader=loader,
-            template=item_template,
-            target=self.room)
-
-        output = loader_run.execute()
-        self.assertTrue(loader_run.executed)
-        self.assertEqual(len(output.keys()), 1)
-        self.assertEqual(len(output[rule.id]), 1)
-
-    def test_load_item(self):
-        item_template = ItemTemplate.objects.create(
-            world=self.world,
-            name='a rock')
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False)
-        rule = Rule.objects.create(
-            loader=loader,
-            template=item_template,
-            target=self.room)
-
-        # Not checking to not trigger Game World lookups
-        spawns = loader.run(self.spawn_world, check=False)
-
-        self.assertEqual(len(spawns), 1) # only one rule
-        rule_spawns = spawns[rule.id]
-        self.assertEqual(len(rule_spawns), 1) # only 1 spawn
-        item = rule_spawns[0]
-        self.assertEqual(item.template, item_template)
-
-    def test_load_mob_in_room(self):
-        HEALTH_MAX = 10
-        mob_template = MobTemplate.objects.create(
-            world=self.world,
-            health_max=HEALTH_MAX)
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False)
-        rule = Rule.objects.create(
-            loader=loader,
-            template=mob_template,
-            target=self.room)
-
-        # Not checking to not trigger Game World lookups
-        spawns = loader.run(self.spawn_world, check=False)
-
-        self.assertEqual(len(spawns), 1) # only one rule
-        rule_spawns = spawns[rule.id]
-        self.assertEqual(len(rule_spawns), 1) # only 1 spawn
-        mob = rule_spawns[0]
-        self.assertEqual(mob.template, mob_template)
-        self.assertEqual(mob.world, self.spawn_world)
-        self.assertEqual(mob.health, HEALTH_MAX)
-        # Check that we're tracking the rule
-        self.assertEqual(mob.rule, rule)
-        # And since we're loading to a room, roams is None
-        self.assertIsNone(mob.roams)
-
-    def test_load_mob_in_zone(self):
-        "Tests that loading into a zone sets roaming to zone"
-        mob_template = MobTemplate.objects.create(world=self.world)
-
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False,
-            respawn_wait=0)
-        rule = Rule.objects.create(
-            loader=loader,
-            template=mob_template,
-            target=self.zone)
-
-        spawns = loader.run(self.spawn_world, check=False)
-        mob = spawns[rule.id][0]
-        # Mobs that load in a zone are set to roam that zone.
-        self.assertEqual(mob.roams, self.zone)
-
-    def test_load_mob_in_path(self):
-        mob_template = MobTemplate.objects.create(world=self.world)
-
-        path = Path.objects.create(name='path', world=self.world)
-
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False,
-            respawn_wait=0)
-        rule = Rule.objects.create(
-            loader=loader,
-            template=mob_template,
-            target=path)
-
-        # If no room is in the path, no loading happens
-        self.assertEqual(path.rooms.count(), 0)
-        spawns = loader.run(self.spawn_world, check=False)
-        self.assertEqual(len(spawns[rule.id]), 0)
-
-        # Add a room so we have an actual path
-        PathRoom.objects.create(room=self.room, path=path)
-
-        spawns = loader.run(self.spawn_world, check=False)
-        mob = spawns[rule.id][0]
-        # Mobs that load in a zone are set to roam that zone.
-        self.assertEqual(mob.roams, path)
-
-    def test_reload_to_room(self):
-        mob_template = MobTemplate.objects.create(world=self.world)
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False,
-            respawn_wait=0)
-        rule = Rule.objects.create(
-            loader=loader,
-            template=mob_template,
-            target=self.room,
-            num_copies=2)
-
-        output = loader.run(self.spawn_world, check=False)
-        self.assertEqual(len(output[rule.id]), 2)
-
-        # One mob is already loaded and one is missing, so one more run should
-        # only load one.
-        loader_run = LoaderRun(
-            loader=loader,
-            world=self.spawn_world,
-            check=True)
-
-        output = loader_run.execute()
-        self.assertEqual(len(output[rule.id]), 1)
-
-    def test_reload_to_zone(self):
-        mob_template = MobTemplate.objects.create(world=self.world)
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False,
-            respawn_wait=0)
-        rule = Rule.objects.create(
-            loader=loader,
-            template=mob_template,
-            target=self.zone,
-            num_copies=2)
-
-        output = loader.run(self.spawn_world, check=False)
-        self.assertEqual(len(output[rule.id]), 2)
-
-        # One mob is already loaded and one is missing, so one more run should
-        # only load one.
-        loader_run = LoaderRun(
-            loader=loader,
-            world=self.spawn_world,
-            check=True)
-
-        output = loader_run.execute()
-        self.assertEqual(len(output[rule.id]), 1)
-
-    def test_reload_mob_in_zone(self):
-        mob_template = MobTemplate.objects.create(world=self.world)
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False,
-            respawn_wait=0)
-        rule = Rule.objects.create(
-            loader=loader,
-            template=mob_template,
-            target=self.zone,
-            num_copies=2)
-
-        output = loader.run(self.spawn_world, check=False)
-        self.assertEqual(len(output[rule.id]), 2)
-
-        # One mob is already loaded and one is missing, so one more run should
-        # only load one.
-        loader_run = LoaderRun(
-            loader=loader,
-            world=self.spawn_world,
-            check=True)
-
-        output = loader_run.execute()
-        self.assertEqual(len(output[rule.id]), 1)
-
-    def test_load_mob_with_inventory_item(self):
-        mob_template = MobTemplate.objects.create(world=self.world)
-        item_template = ItemTemplate.objects.create(world=self.world)
-        MobTemplateInventory.objects.create(
-            item_template=item_template,
-            container=mob_template,
-            num_copies=2)
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False)
-        rule = Rule.objects.create(
-            loader=loader,
-            template=mob_template,
-            target=self.room)
-
-        spawns = loader.load(self.spawn_world, check=False)
-        self.assertEqual(len(spawns), 1)
-        rule_spawns = spawns[rule.id]
-        mob = rule_spawns[0]
-        self.assertEqual(mob.inventory.count(), 3)
-        mob_inventory = mob.inventory.all()
-        self.assertEqual(mob_inventory[0].template, item_template)
-        self.assertEqual(mob_inventory[1].template, item_template)
-        self.assertEqual(mob_inventory[2].template, None)
-
-    def test_nested_loads(self):
-        mob_template = MobTemplate.objects.create(world=self.world)
-        bag_template = ItemTemplate.objects.create(
-            world=self.world,
-            name='a bag',
-            type=adv_consts.ITEM_TYPE_CONTAINER)
-        apple_template = ItemTemplate.objects.create(
-            world=self.world,
-            name='an apple',
-            type=adv_consts.ITEM_TYPE_CONSUMABLE)
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False)
-
-        rule1 = Rule.objects.create(
-            loader=loader,
-            template=mob_template,
-            target=self.room,
-            num_copies=2)
-        rule2 = Rule.objects.create(
-            loader=loader,
-            template=bag_template,
-            target=rule1)
-        rule3 = Rule.objects.create(
-            loader=loader,
-            template=apple_template,
-            target=rule2,
-            num_copies=3)
-
-        # Not checking to not trigger Game World lookups
-        output = loader.run(self.spawn_world, check=False)
-
-        mobs = output[rule1.pk]
-        self.assertEqual(len(mobs), 2)
-        self.assertEqual(mobs[0].template, mob_template)
-
-        mob_inventory = mobs[1].inventory.all()
-        self.assertEqual(len(mob_inventory), 2) # 1 corpse, 1 bag
-        self.assertEqual(mob_inventory[1].template, bag_template)
-
-        bag_inventory = mob_inventory[1].inventory.all()
-        self.assertEqual(len(bag_inventory), 3)
-        self.assertEqual(bag_inventory[2].template, apple_template)
-
-    def test_nested_rule_target_missing_output_is_ignored(self):
-        rock_template = ItemTemplate.objects.create(
-            world=self.world,
-            name='a rock')
-        bag_template = ItemTemplate.objects.create(
-            world=self.world,
-            name='a bag',
-            type=adv_consts.ITEM_TYPE_CONTAINER)
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False)
-
-        parent_rule = Rule.objects.create(
-            loader=loader,
-            template=bag_template,
-            target=self.room)
-        nested_rule = Rule.objects.create(
-            loader=loader,
-            template=rock_template,
-            target=parent_rule)
-
-        # Simulate bad historical data where a nested item rule runs before
-        # its target rule has produced output.
-        nested_rule.order = 0
-        nested_rule.save(update_fields=['order'])
-
-        output = loader.run(self.spawn_world, check=False)
-        self.assertEqual(output[nested_rule.id], [])
-        self.assertEqual(len(output[parent_rule.id]), 1)
-
-    def test_nested_items(self):
-        """
-        Tests loaders with items nested both via rule and via template
-        inventory.
-        """
-        # Load a bag that always loads with an apple
-        bag_template = ItemTemplate.objects.create(
-            world=self.world,
-            name='a bag',
-            type=adv_consts.ITEM_TYPE_CONTAINER)
-        apple_template = ItemTemplate.objects.create(
-            world=self.world,
-            name='an apple',
-            type=adv_consts.ITEM_TYPE_CONSUMABLE)
-        ItemTemplateInventory.objects.create(
-            item_template=apple_template,
-            container=bag_template)
-
-         # Add a rock to the load
-        rock_template = ItemTemplate.objects.create(
-            world=self.world,
-            name='an apple',
-            type=adv_consts.ITEM_TYPE_CONSUMABLE)
-
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False)
-
-        rule1 = Rule.objects.create(
-            loader=loader,
-            template=bag_template,
-            target=self.room,
-            num_copies=1)
-        rule2 = Rule.objects.create(
-            loader=loader,
-            template=rock_template,
-            target=rule1)
-
-         # Loader returning 2 things, the bag and the rock (but not the apple)
-        output = loader.run(self.spawn_world, check=False)
-        self.assertEqual(len(output), 2)
-        self.assertEqual(len(output[rule1.pk]), 1)
-        bag = output[rule1.pk][0]
-        self.assertEqual(bag.template, bag_template)
-        self.assertEqual(len(output[rule2.pk]), 1)
-        rock = output[rule2.pk][0]
-        self.assertEqual(rock.template, rock_template)
-        self.assertEqual(bag.inventory.first().template, apple_template)
-        self.assertEqual(bag.inventory.last().template, rock_template)
-
-    def test_reloading_item(self):
-        """
-        Tests running a loader for two items in a room where there is one of
-        them.
-        """
-        item_template = ItemTemplate.objects.create(
-            world=self.world, name='a rock')
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False)
-        rule = Rule.objects.create(
-            loader=loader,
-            template=item_template,
-            target=self.room,
-            num_copies=2)
-
-        # runner = LoaderRun(loader, self.spawn_world, check=True)
-        # if not isinstance(runner.rdb, TestDB):
-        #     raise RuntimeError("Non-test DB being used in a test")
-
-        # Get one item in
-        item = item_template.spawn(self.room, self.spawn_world, rule=rule)
-        self.assertEqual(Item.objects.count(), 1)
-
-        # For the actual run, check against persisted world state.
-        runner = LoaderRun(
-            loader=loader,
-            world=self.spawn_world,
-            check=True)
-
-        # One more added got added, since 1 was already there.
-        output = runner.execute()
-        self.assertEqual(Item.objects.count(), 2)
-        spawns = output[1]
-        self.assertEqual(len(spawns), 1)
-        self.assertEqual(spawns[0].template, item_template)
-
-    def test_reloading_item_in_room(self):
-        """
-        Tests a room that's supposed to have two items, has one removed and
-        the loader is rerun.
-        """
-        item_template = ItemTemplate.objects.create(
-            world=self.world, name='a rock')
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False,
-            respawn_wait=0)
-        rule = Rule.objects.create(
-            loader=loader,
-            template=item_template,
-            target=self.room,
-            num_copies=2)
-
-        output = LoaderRun(loader, self.spawn_world, check=False).execute()
-        self.assertEqual(len(output[rule.pk]), 2)
-        self.assertEqual(len(self.room.inventory.all()), 2)
-
-        self.room.inventory.all()[1].delete()
-
-        runner = LoaderRun(
-            loader,
-            self.spawn_world,
-            check=True)
-        output = runner.execute()
-        self.assertEqual(len(output[rule.pk]), 1)
-        self.assertEqual(len(self.room.inventory.all()), 2)
-
-    def test_respawn_wait_and_forcing(self):
-        item_template = ItemTemplate.objects.create(
-            world=self.world,
-            name='a rock')
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False,
-            respawn_wait=60)
-        rule = Rule.objects.create(
-            loader=loader,
-            template=item_template,
-            target=self.room)
-
-        # First run loads an item
-        runner = LoaderRun(loader, self.spawn_world, check=False)
-        output = runner.execute()
-        self.assertEqual(len(output), 1)
-        self.assertEqual(Item.objects.count(), 1)
-
-        # Second immediate run does not
-        runner = LoaderRun(loader, self.spawn_world, check=False)
-        output = runner.execute()
-        self.assertEqual(len(output), 0)
-        self.assertEqual(Item.objects.count(), 1)
-
-        # Third run does because we force
-        runner = LoaderRun(loader, self.spawn_world, check=False)
-        output = runner.execute(force=True)
-        self.assertEqual(len(output), 1)
-        self.assertEqual(Item.objects.count(), 2)
-
-        # If set set the last processing ts in the past, we get another item
-        loader.last_processing_ts = (
-            loader.last_processing_ts - timedelta(days=1))
-        loader.save()
-        runner = LoaderRun(loader, self.spawn_world, check=False)
-        output = runner.execute()
-        self.assertEqual(len(output), 1)
-        self.assertEqual(Item.objects.count(), 3)
-
-    @mock.patch('spawns.loading.LoaderRun.get_num_from_templates_in_room')
-    def test_max_target_all_count(self, mock_get_num):
-        spawn_world = self.world.create_spawn_world()
-
-        item_template = ItemTemplate.objects.create(world=self.world)
-        # Make sure the loader is worldwide
-        loader = Loader.objects.create(world=self.world,
-                                       zone=self.zone,
-                                       respawn_wait=0,
-                                       inherit_zone_wait=False)
-        # Make sure the room targets nothing (hence the world)
-        rule = Rule.objects.create(
-            loader=loader,
-            template=item_template,
-            num_copies=1)
-
-        # Make sure there is already one item in the room
-        item_template.spawn(self.room, spawn_world)
-        self.assertEqual(self.room.inventory.count(), 1)
-
-        mock_get_num.return_value = 1
-
-        # running the loader doesn't cause the count to increase
-        loader.run(spawn_world)
-        self.assertEqual(self.room.inventory.count(), 1)
-
-    def test_load_mob_template_with_inventory(self):
-        mob_template = MobTemplate.objects.create(world=self.world)
-        item_template = ItemTemplate.objects.create(world=self.world)
-        MobTemplateInventory.objects.create(
-            container=mob_template,
-            item_template=item_template)
-
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False)
-        rule = Rule.objects.create(
-            loader=loader,
-            template=mob_template,
-            target=self.room)
-
-        # Not checking to not trigger Game World lookups
-        spawns = loader.load(self.spawn_world, check=False)
-
-        self.assertEqual(len(spawns), 1)
-        mob = spawns[rule.pk][0] # Get the first spawn
-        self.assertEqual(mob.template, mob_template)
-        self.assertEqual(mob.inventory.all()[0].template, item_template)
-        # Second is the corpse
-
-    def test_loader_condition(self):
-        item_template = ItemTemplate.objects.create(
-            world=self.world,
-            name='a rock')
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False,
-            conditions='fact_check foo bar')
-        rule = Rule.objects.create(
-            loader=loader,
-            template=item_template,
-            target=self.room)
-
-        loader_run = LoaderRun(
-            loader=loader,
-            world=self.spawn_world,
-            check=False)
-        output = loader_run.execute()
-        # Loader was executed but no items were loaded because the
-        # condition was false.
-        self.assertTrue(loader_run.executed)
-        self.assertEqual(len(output.keys()), 0)
-
-        self.spawn_world.facts = json.dumps({'foo': 'bar'})
-        self.spawn_world.save()
-        loader_run = LoaderRun(
-            loader=loader,
-            world=self.spawn_world,
-            check=False)
-        output = loader_run.execute()
-        self.assertTrue(loader_run.executed)
-        self.assertEqual(len(output.keys()), 1)
-
-    def test_loader_condition_invalid_expression_marks_run_executed(self):
-        self.zone.is_warzone = True
-        self.zone.zone_data = json.dumps({
-            'north_control': 'orc',
-        })
-        self.zone.save()
-
-        item_template = ItemTemplate.objects.create(
-            world=self.world,
-            name='a rock')
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False,
-            loader_condition="this is not valid python ???")
-        Rule.objects.create(
-            loader=loader,
-            template=item_template,
-            target=self.room)
-
-        loader_run = LoaderRun(
-            loader=loader,
-            world=self.spawn_world,
-            check=False)
-        output = loader_run.execute()
-        self.assertTrue(loader_run.executed)
-        self.assertEqual(len(output.keys()), 0)
-
-    # Instance tests
-
-    def test_load_item_in_instance(self):
-        instance_context = self.create_instance()
-        instance = World.enter_instance(
-            player=self.player,
-            transfer_to_id=self.instance_room.id,
-            transfer_from_id=self.room.id)
-
-        item_template = ItemTemplate.objects.create(
-            world=self.world,
-            name='a rock')
-        loader = Loader.objects.create(
-            world=instance_context,
-            zone=self.zone,
-            inherit_zone_wait=False)
-        rule = Rule.objects.create(
-            loader=loader,
-            template=item_template,
-            target=self.room)
-
-        # Not checking to not trigger Game World lookups
-        spawns = loader.run(self.spawn_world, check=False)
-
-        self.assertEqual(len(spawns), 1) # only one rule
-        rule_spawns = spawns[rule.id]
-        self.assertEqual(len(rule_spawns), 1) # only 1 spawn
-        item = rule_spawns[0]
-        self.assertEqual(item.template, item_template)
-
-
-class SpawnRewardTests(WorldTestCase):
-
-    def test_spawn_item_reward(self):
-        spawn_world = self.world.create_spawn_world()
-
-        mob_template = MobTemplate.objects.create(world=self.world)
-        sword_template = ItemTemplate.objects.create(world=self.world,
-                                                     name='a sword')
-        quest = Quest.objects.create(world=self.world,
-                                     mob_template=mob_template)
-        from django.contrib.contenttypes.models import ContentType
-        reward = Reward.objects.create(
-            quest=quest,
-            type=adv_consts.REWARD_TYPE_ITEM,
-            profile_type=ContentType.objects.get(model='itemtemplate'),
-            profile_id=sword_template.id)
-        mob = mob_template.spawn(target=self.room, spawn_world=spawn_world)
-
-        self.make_system_user()
-        self.client.force_authenticate(self.user)
-        player = Player.objects.create(
-            world=spawn_world,
-            room=self.room,
-            user=self.user,
-            name='John',
-            in_game=True)
-
-        ep = reverse('spawn-rewards', args=[reward.pk])
-        resp = self.client.post(ep, {'player_id': player.id})
-        self.assertEqual(resp.status_code, 201)
-        self.assertEqual(len(resp.data['animation_data']), 1)
-        data = resp.data['animation_data'][0]
-
-        item = Item.objects.get(pk=data['id'])
-        self.assertEqual(item.template, sword_template)
-
-
 class TestDeletions(WorldTestCase):
 
     def setUp(self):
@@ -1359,18 +629,14 @@ class TestDeletions(WorldTestCase):
         that have died, items being synced during players extraction
         sometimes run into reference errors on the API side.
         """
-        mob_template = MobTemplate.objects.create(
+        mob_definition = MobDefinition.objects.create(
             world=self.world,
             name='a soldier')
-        item_template = ItemTemplate.objects.create(
-            world=self.world,
+        mob = mob_definition.spawn(self.room, self.spawn_world)
+        Item.objects.create(
+            world=self.spawn_world,
+            container=mob,
             name='an apple')
-        MobTemplateInventory.objects.create(
-            container=mob_template,
-            item_template=item_template)
-
-        mob = mob_template.spawn(target=self.room,
-                                 spawn_world=self.spawn_world)
 
         corpse = mob.inventory.filter(
             type=adv_consts.ITEM_TYPE_CORPSE)
@@ -1383,19 +649,15 @@ class TestDeletions(WorldTestCase):
 
     def test_delete_mob_with_equipment(self):
         "Equipment flavor of the above test"
-        mob_template = MobTemplate.objects.create(
+        mob_definition = MobDefinition.objects.create(
             world=self.world,
             name='a soldier')
+        mob = mob_definition.spawn(self.room, self.spawn_world)
 
-        mob = mob_template.spawn(target=self.room,
-                                 spawn_world=self.spawn_world)
-
-        item_template = ItemTemplate.objects.create(
-            world=self.world,
+        helmet = Item.objects.create(
+            world=self.spawn_world,
+            container=mob,
             name='a helmet')
-        helmet = item_template.spawn(
-            target=mob,
-            spawn_world=self.spawn_world)
 
         mob.equipment.equip(helmet, 'head')
 
@@ -1488,10 +750,10 @@ class TestGameLookup(WorldTestCase):
         self.player.in_game = True
         self.player.save()
 
-        mob_template = MobTemplate.objects.create(
-            world=self.world,
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
             name='a soldier')
-        mob = mob_template.spawn(self.room, self.spawn_world)
 
         data = self.player.game_lookup(mob.key)
         self.assertEqual(data['name'], 'a soldier')
@@ -1522,171 +784,6 @@ class TestGameLookup(WorldTestCase):
         endpoint = reverse('game-lookup', args=['item.dne'])
         resp = self.client.get(endpoint, HTTP_X_PLAYER_ID=self.player.id)
         self.assertEqual(resp.status_code, 404)
-
-
-class TestLoadTemplate(WorldTestCase):
-
-    def setUp(self):
-        super().setUp()
-        self.make_system_user()
-        self.client.force_authenticate(self.user)
-        # self.spawn_world = self.world.create_spawn_world()
-        # self.player = Player.objects.create(
-        #     name='John', level=1, experience=1,
-        #     room=self.room, world=self.spawn_world, user=self.user)
-
-    def test_load_item(self):
-        rock_template = ItemTemplate.objects.create(
-            world=self.world,
-            name='a rock')
-
-        resp = self.client.post(reverse('load-template'), {
-            'world_id': self.spawn_world.id,
-            'template_type': 'item',
-            'template_id': rock_template.id,
-            'actor_type': 'player',
-            'actor_id': self.user.id,
-            'player': self.player.id,
-            'room': self.player.room.id,
-        })
-        self.assertEqual(resp.status_code, 201)
-
-        # An item got created
-        item = Item.objects.first()
-
-        # Make sure the animation data return is good
-        data = resp.data
-        #self.assertEqual(data[0]['key'], self.spawn_world.key)
-        #self.assertEqual(data[1]['key'], item.key)
-        self.assertEqual(data['key'], item.key)
-
-    def test_load_item_by_slug(self):
-        rock_template = ItemTemplate.objects.create(
-            world=self.world,
-            name='a rock')
-
-        resp = self.client.post(reverse('load-template'), {
-            'world_id': self.spawn_world.id,
-            'template_type': 'item',
-            'template_id': rock_template.slug,
-            'actor_type': 'player',
-            'actor_id': self.user.id,
-            'player': self.player.id,
-            'room': self.player.room.id,
-        })
-        self.assertEqual(resp.status_code, 201)
-        self.assertEqual(resp.data['name'], rock_template.name)
-
-    def test_load_mob(self):
-        wolf_template = MobTemplate.objects.create(
-            world=self.world, name='a wolf')
-
-        resp = self.client.post(reverse('load-template'), {
-            'world_id': self.spawn_world.id,
-            'template_type': 'mob',
-            'template_id': wolf_template.id,
-            'actor_type': 'player',
-            'actor_id': self.user.id,
-            'player': self.player.id,
-            'room': self.player.room.id,
-        })
-        self.assertEqual(resp.status_code, 201)
-
-        # a mob got created
-        mob = Mob.objects.first()
-        self.assertEqual(mob.key, mob.key)
-
-    def test_load_mob_by_slug(self):
-        wolf_template = MobTemplate.objects.create(
-            world=self.world, name='a wolf')
-
-        resp = self.client.post(reverse('load-template'), {
-            'world_id': self.spawn_world.id,
-            'template_type': 'mob',
-            'template_id': wolf_template.slug,
-            'actor_type': 'player',
-            'actor_id': self.user.id,
-            'player': self.player.id,
-            'room': self.player.room.id,
-        })
-        self.assertEqual(resp.status_code, 201)
-        self.assertEqual(resp.data['name'], wolf_template.name)
-
-    # Failure tests
-
-    def test_load_from_wrong_world(self):
-        new_world = World.objects.create()
-        rock_template = ItemTemplate.objects.create(
-            world=new_world, name='a rock')
-
-        resp = self.client.post(reverse('load-template'), {
-            'world_id': new_world.id,
-            'template_type': 'item',
-            'template_id': rock_template.id,
-            'actor_type': 'player',
-            'actor_id': self.user.id,
-            'player': self.player.id,
-            'room': self.player.room.id,
-        })
-        self.assertEqual(resp.status_code, 400)
-        self.assertEqual(resp.data['non_field_errors'][0],
-                         'Template does not belong to this world')
-
-    # Instance tests
-
-    def test_load_item_in_instance(self):
-        self.create_instance()
-        instance = World.enter_instance(
-            player=self.player,
-            transfer_to_id=self.instance_room.id,
-            transfer_from_id=self.room.id)
-
-        rock_template = ItemTemplate.objects.create(
-            world=self.world,
-            name='a rock')
-
-        resp = self.client.post(reverse('load-template'), {
-            'world_id': instance.id,
-            'template_type': 'item',
-            'template_id': rock_template.id,
-            'actor_type': 'player',
-            'actor_id': self.user.id,
-            'player': self.player.id,
-            'room': self.player.room.id,
-        })
-        self.assertEqual(resp.status_code, 201)
-
-        # An item got created
-        item = Item.objects.first()
-
-        # Make sure the animation data return is good
-        data = resp.data
-        self.assertEqual(data['key'], item.key)
-
-    def test_load_mob_in_instance(self):
-        self.create_instance()
-        instance = World.enter_instance(
-            player=self.player,
-            transfer_to_id=self.instance_room.id,
-            transfer_from_id=self.room.id)
-
-        wolf_template = MobTemplate.objects.create(
-            world=self.world, name='a wolf')
-
-        resp = self.client.post(reverse('load-template'), {
-            'world_id': instance.id,
-            'template_type': 'mob',
-            'template_id': wolf_template.id,
-            'actor_type': 'player',
-            'actor_id': self.user.id,
-            'player': self.player.id,
-            'room': self.player.room.id,
-        })
-        self.assertEqual(resp.status_code, 201)
-
-        # a mob got created
-        mob = Mob.objects.first()
-        self.assertEqual(mob.key, mob.key)
 
 
 class TestRandomDrops(WorldTestCase):
@@ -1740,56 +837,6 @@ class TestRandomDrops(WorldTestCase):
         self.assertIsNone(data[1]['in_container'])
         self.assertEqual(data[1]['quality'], adv_consts.ITEM_QUALITY_IMBUED)
         self.assertEqual(data[1]['type'], adv_consts.ITEM_TYPE_EQUIPPABLE)
-
-
-class TestTemplateTransformation(WorldTestCase):
-
-    def setUp(self):
-        super().setUp()
-        self.spawn_world = self.world.create_spawn_world()
-
-    def test_transformed_mob_animation(self):
-        loader = Loader.objects.create(
-            world=self.world,
-            zone=self.zone,
-            inherit_zone_wait=False)
-        mob_template = MobTemplate.objects.create(
-            world=self.world,
-            regen_rate=4)
-        transformation_template = TransformationTemplate.objects.create(
-            transformation_type=api_consts.TRANSFORMATION_TYPE_ATTR,
-            arg1='regen_rate',
-            arg2='1')
-
-        rule1 = Rule.objects.create(
-            loader=loader,
-            template=mob_template,
-            target=self.room)
-
-        rule2 = Rule.objects.create(
-            loader=loader,
-            template=transformation_template,
-            target=rule1)
-
-        output = loader.run(world=self.spawn_world, check=False)
-        mob = output[rule1.pk][0]
-
-        mob_data = spawns_serializers.AnimateMobSerializer(mob).data
-        self.assertEqual(mob_data['regen_rate'], '1')
-
-
-class TestItemBoost(WorldTestCase):
-
-    def setUp(self):
-        super().setUp()
-        self.spawn_world = self.world.create_spawn_world()
-
-    def test_item_boost(self):
-        item = Item.objects.create(
-            world=self.spawn_world,
-            health_max=100)
-        item.boost()
-        self.assertEqual(item.health_max, 120)
 
 
 class TestPlayerConfig(WorldTestCase):

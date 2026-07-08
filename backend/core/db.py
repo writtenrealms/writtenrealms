@@ -40,9 +40,6 @@ class AdventBaseModel(BaseModel):
     def __str__(self):
         cls_name = self.get_class_name()
         try:
-            if cls_name in ('item', 'mob'):
-                if self.template:
-                    return "%s - %s" % (self.id, self.template.name)
             return "%s - %s" % (self.id, self.name)
         except AttributeError:
             return str(self.id)

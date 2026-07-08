@@ -22,7 +22,6 @@ from core.utils import expiration_ts
 
 from config import constants as api_consts
 from builders.models import (
-    Reward,
     FactionRank,
     FactionAssignment,
     WorldReview)
@@ -52,15 +51,6 @@ class SystemView(APIView):
     )
 
 
-class RunLoaders(SystemView):
-
-    def post(self, request, format=None):
-        serializer = system_serializers.RunLoadersSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.save()
-        return Response(data, status=status.HTTP_201_CREATED)
-
-
 class GenerateDrops(SystemView):
 
     def post(self, request, format=None):
@@ -70,52 +60,6 @@ class GenerateDrops(SystemView):
         item = serializer.save()
 
         return Response([], status=status.HTTP_201_CREATED)
-
-
-class UpdateMerchants(SystemView):
-
-    def post(self, request, format=None):
-        serializer = system_serializers.UpdateMerchantsSerializer(
-            data=request.data)
-        serializer.is_valid(raise_exception=True)
-        animation_data = serializer.save()
-        return Response({
-            'animation_data': animation_data,
-        }, status=status.HTTP_201_CREATED)
-
-
-class SpawnRewards(SystemView):
-
-    def post(self, request, reward_pk, format=None):
-        try:
-            reward = Reward.objects.get(pk=reward_pk)
-        except Reward.DoesNotExist:
-            raise serializers.ValidationError("Reward does not exist.")
-
-        serializer = spawn_serializers.SpawnRewardsSerializer(
-            data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        animation_data = []
-        for i in range(0, reward.qty):
-
-            if reward.profile_type.model == 'itemtemplate':
-                item = reward.profile.spawn(
-                    target=serializer.player,
-                    spawn_world=serializer.player.world)
-            elif reward.profile_type.model == 'randomitemprofile':
-                print('spawning reward for archetype')
-                item = reward.profile.generate(
-                    char=serializer.player,
-                    default_level=reward.quest.mob_template.level,
-                    for_archetype=True)
-                print('spawned %s' % item.name)
-            else:
-                continue
-
-        return Response({
-            'animation_data': [],
-        }, status=status.HTTP_201_CREATED)
 
 
 class LabelItem(SystemView):
@@ -141,15 +85,15 @@ class LabelItem(SystemView):
 label_item = LabelItem.as_view()
 
 
-class LoadTemplate(SystemView):
+class LoadDefinition(SystemView):
 
     def post(self, request, format=None):
-        serializer = spawn_serializers.LoadTemplateSerializer(
+        serializer = spawn_serializers.LoadDefinitionSerializer(
             data=request.data)
         serializer.is_valid(raise_exception=True)
 
         vd = serializer.validated_data
-        template = vd['template']
+        definition = vd['definition']
         actor = vd['actor']
 
         # Update the actor's room if it's out of sync, given that we're
@@ -158,15 +102,15 @@ class LoadTemplate(SystemView):
             actor.room = vd['room']
             actor.save()
 
-        if vd['template_type'] == 'item':
-            item = template.spawn(actor, vd['spawn_world'])
+        if vd['definition_type'] == 'item':
+            item = definition.spawn(actor, vd['spawn_world'])
 
             data = spawn_serializers.AnimateItemSerializer(item).data
             if vd.get('cmd'):
                 data['cmd'] = vd['cmd']
             return Response(data, status=status.HTTP_201_CREATED)
 
-        elif vd['template_type'] == 'mob':
+        elif vd['definition_type'] == 'mob':
             if isinstance(vd['actor'], Room):
                 try:
                     room = vd['room']
@@ -174,7 +118,7 @@ class LoadTemplate(SystemView):
                     room = vd['actor']
             else:
                 room = actor.room
-            mob = template.spawn(room, vd['spawn_world'])
+            mob = definition.spawn(room, vd['spawn_world'])
 
             data = spawn_serializers.AnimateMobSerializer(mob).data
             if vd.get('cmd'):
@@ -182,6 +126,7 @@ class LoadTemplate(SystemView):
             return Response(data, status=status.HTTP_201_CREATED)
 
         return Response({})
+
 
 
 # class Extract(SystemView):
@@ -213,30 +158,6 @@ class Complete(SystemView):
         spawn_world.save(update_fields=['lifecycle'])
 
         return Response({}, status=status.HTTP_201_CREATED)
-
-
-class EnquireQuest(SystemView):
-
-    def post(self, request, format=None):
-        serializer = spawn_serializers.QuestEnquireSerializer(
-            data=request.data)
-        serializer.is_valid(raise_exception=True)
-        player_enquire = serializer.save()
-        return Response({
-            'player_quest_key': player_enquire.quest.key,
-        }, status=status.HTTP_201_CREATED)
-
-
-class CompleteQuest(SystemView):
-
-    def post(self, request, format=None):
-        serializer = spawn_serializers.QuestCompletionSerializer(
-            data=request.data)
-        serializer.is_valid(raise_exception=True)
-        player_quest = serializer.save()
-        return Response({
-            'player_quest_key': player_quest.key,
-        }, status=status.HTTP_201_CREATED)
 
 
 class Quit(SystemView):
@@ -473,28 +394,6 @@ class SignLease(SystemView):
         return Response(return_data)
 
 lease_sign = SignLease.as_view()
-
-
-class UpgradeItem(SystemView):
-
-    def post(self, request, format=None):
-        serializer = system_serializers.UpgradeSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        return_data = serializer.save()
-        return Response(return_data, status=status.HTTP_201_CREATED)
-
-upgrade_item = UpgradeItem.as_view()
-
-
-class CraftItem(SystemView):
-
-    def post(self, request, format=None):
-        serializer = system_serializers.CraftItemSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        item = serializer.save()
-        return Response({'item_key': item.key}, status=status.HTTP_201_CREATED)
-
-craft_item = CraftItem.as_view()
 
 
 class ToggleRoom(SystemView):

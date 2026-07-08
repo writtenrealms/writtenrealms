@@ -1,5 +1,11 @@
 # WR2 Guided Random Item Definitions
 
+Status as of 2026-07-06: WR2 now uses `ItemDefinition` as the only item
+authoring model. The legacy `ItemTemplate` model, manifest kind, runtime FK,
+and `/load` fallback path have been removed. Historical references below
+describe the transition period that led to the current definition-backed
+implementation.
+
 ## Purpose
 
 WR2 needs a builder-manageable way to define items whose stable identity comes
@@ -37,7 +43,8 @@ The feature should support:
 - silent runtime tolerance when an authored attribute becomes stale
 - builder warnings and audit tools for stale definitions
 - unique frontend inventory and room lines for randomized spawned items
-- random bundles that can be assigned to merchants, mobs, rewards, or loaders
+- random bundles that can be assigned to merchants, mobs, rewards, or spawn
+  plans
 
 The design goal is not a fully procedural loot engine. It is controlled
 randomness that builders can understand.
@@ -62,42 +69,29 @@ Reference docs:
 
 The repository now has the first guided-random implementation slice:
 
-- `ItemTemplate` has a world-scoped `slug` and spawns concrete `Item` rows.
-- `ItemDefinition` is the new transitional authored item model for this path.
+- `ItemDefinition` has a world-scoped `slug` and spawns concrete `Item` rows.
 - `ItemBundle` and `ItemBundleEntry` provide weighted authored choices among
   item definitions.
-- `ItemTemplate` and `spawns.Item` have JSON-backed
-  `attributes`.
+- `ItemDefinition` and `spawns.Item` have JSON-backed `attributes`.
 - `spawns.Item` has nullable `definition`, `definition_slug_snapshot`, and
   `roll_metadata` fields for definition-backed generated items.
 - State payloads expose item `attributes`, `definition_slug`,
   `is_stackable`, `stack_key`, and canonical item combat fields such as
   `weapon_damage`, `attack_power`, `ability_power`, `armor`, `crit`, `dodge`,
   and `resilience`.
-- The frontend stacks by backend-provided `stack_key`, with a legacy
-  `template_id` fallback for older item payloads.
+- The frontend stacks by backend-provided `stack_key` and definition identity.
 - Stable definition-backed items resync unmodified spawned copies when the
   definition changes. Randomized items keep their rolled attributes, and
-  upgraded or augmented items are treated as modified instances.
-- `/load item <slug-or-id>` can spawn either the old `ItemTemplate` path or the
-  new `ItemDefinition` path, preferring `ItemTemplate` when both match.
-- `MobTemplateInventory` and `MerchantInventory` can reference either old
-  templates, new direct definitions, or item bundles.
-- Mob template manifests can assign inventory via `item_template`,
-  `item_definition`, or `item_bundle`.
-
-The `MerchantInventory` point above describes current transitional plumbing,
-not the target merchant architecture. New merchant work should use the clean
-`MerchantProfile` model described in
-[merchant-system.md](/Users/teebes/code/writtenrealms/docs/architecture/merchant-system.md).
+  augmented items are treated as modified instances.
+- `/load item <slug-or-id>` spawns `ItemDefinition` rows.
+- Merchant stock uses `MerchantProfile` stock slots with item definitions or
+  item bundles, as described in
+  [merchant-system.md](/Users/teebes/code/writtenrealms/docs/architecture/merchant-system.md).
 
 Remaining gaps before this is builder-complete:
 
 - no structured item definition editor yet
 - no stale-randomization audit endpoint or management command yet
-- no structured merchant or mob-drop assignment UI for item definitions or
-  bundles yet
-- no long-term rename from `ItemDefinition` back to `ItemTemplate` yet
 
 There is also a WR1-era `RandomItemProfile` path. That system procedurally
 generates equipment from broad categories such as weapon, shield, or armor. It
@@ -111,25 +105,15 @@ mental model: broad procedural generation with hard-coded legacy stat names.
 Create a clean WR2 item definition layer and keep the old random item system out
 of the new path.
 
-Transitional names used in this document:
+Current terms used in this document:
 
-- `ItemDefinition`: the clean authored item model while the current
-  `ItemTemplate` model still exists
+- `ItemDefinition`: the WR2 authored item model
 - `ItemInstance`: a documentation term for a concrete spawned item with
   persisted rolled values; in code this is `spawns.Item`
 - `ItemBundle`: authored weighted bundle/table of item definitions
 
-The implementation may bridge through current `ItemTemplate` and `spawns.Item`
-plumbing where that keeps the first pass smaller, but the legacy table shapes
-should not define the feature. New authored guided-random definitions should
-live in the new model, not in `RandomItemProfile` or the old random-drop fields.
-
-The long-term target is not to keep `ItemTemplate` and `ItemDefinition` as
-parallel builder concepts. There should be one authored item concept. During
-the transition, `ItemDefinition` is a useful name because it distinguishes the
-new clean model from the existing `ItemTemplate` table. Once the old
-`ItemTemplate` implementation is gone, the new authored model can take the
-`ItemTemplate` name again if that is the clearest builder-facing vocabulary.
+New authored guided-random definitions live in `ItemDefinition`, not in
+`RandomItemProfile` or the old random-drop fields.
 
 This keeps the mental model simple:
 
@@ -146,10 +130,7 @@ drops, rewards, and bundles.
 
 ### Authored Item
 
-Create a new authored model for WR2 item content. The document calls it
-`ItemDefinition` because the current codebase already has `ItemTemplate`. That
-name is transitional; the important design point is the clean shape, not the
-permanent class name.
+WR2 authored item content lives in `ItemDefinition`.
 
 ```python
 class ItemDefinition(models.Model):
@@ -371,12 +352,10 @@ with stale random definitions should still boot.
 ## Frontend Stacking
 
 Current state payloads already include item `attributes` and
-`template_id`, `definition_slug`, `is_stackable`, and `stack_key`.
+`definition_id`, `definition_slug`, `is_stackable`, and `stack_key`.
 
-The frontend should stop deciding stackability from `template_id` alone. In the
-WR2 target payload, the corresponding field should be `definition_id` or
-`definition_slug`; `template_id` can remain as transitional compatibility data
-while old payload consumers are updated.
+The frontend should decide stackability from backend-provided `stack_key`, not
+from raw item ids or definition ids.
 
 WR1 had two clear categories:
 
@@ -414,7 +393,7 @@ For stable non-container definition-backed items:
 ```
 
 The frontend stacking helper should group by `stack_key`, not by
-`definition_slug` or `template_id`. If `stack_key` is empty, the item is always
+`definition_slug` or `definition_id`. If `stack_key` is empty, the item is always
 rendered as a unique line using its item `key`.
 
 The stack key is intentionally opaque to builders. The backend includes the
@@ -425,7 +404,7 @@ The backend should own this policy because it has the full context:
 
 - randomized definition or not
 - container or not
-- upgraded or augmented instance or not
+- augmented instance or not
 - persistent/special item rules
 - future item-instance metadata
 
@@ -501,13 +480,12 @@ Merchant-specific authoring and restock behavior is specified in
 New merchant work should target `MerchantProfile` stock slots, not WR1-era
 merchant inventory tables.
 
-Suggested progression:
+Current progression:
 
 1. Direct `ItemDefinition` assignment spawns stable or guided-random items.
-2. Existing direct `ItemTemplate` assignment can continue during the transition
-   until the new authored model replaces it.
-3. Add `ItemBundle` assignment to merchant inventory and mob drops.
-4. Bundle entries spawn their selected `ItemDefinition` through the same item
+2. `ItemBundle` assignment supports merchant stock, mob drops, and manifest
+   authored reward/content choices.
+3. Bundle entries spawn their selected `ItemDefinition` through the same item
    spawn path.
 
 This prevents merchant/drop code from learning two different roll mechanisms.
@@ -536,13 +514,10 @@ deterministic when the initial state and random seed are the same.
 
 ## Manifest Shape
 
-World manifests should support separate documents for authored items and item
+World manifests support separate documents for authored items and item
 bundles, following the existing multi-document manifest flow used by
-`kind: itemtemplate`, `kind: world`, `kind: quest`, and other WR2 entities.
-
-During the transition, this document uses `kind: itemdefinition` for the new
-authored item shape. Once the existing `itemtemplate` path is retired, the final
-builder-facing kind can be renamed or collapsed back to `kind: itemtemplate`.
+`kind: itemdefinition`, `kind: itembundle`, `kind: world`, `kind: quest`, and
+other WR2 entities.
 
 ```yaml
 kind: itemdefinition
@@ -651,9 +626,8 @@ This phase adds discrete random choice without expanding the stat roll language.
 - Keep WR1-era `RandomItemProfile` outside the new execution path. If content
   conversion is needed, do it as a one-way manifest/import conversion into
   `ItemDefinition` and `ItemBundle`, not as a runtime adapter.
-- Remove the old `ItemTemplate` implementation once the new authored model
-  covers the required builder/runtime surfaces, then decide whether to keep the
-  `ItemDefinition` name or rename the clean model back to `ItemTemplate`.
+- Done: remove the old item-template implementation from builder/runtime
+  surfaces.
 - Remove any remaining fixed primary-stat assumptions from item generation and
   presentation.
 

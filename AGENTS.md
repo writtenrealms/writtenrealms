@@ -14,7 +14,8 @@
 - The WR2 target architecture keeps real-time game logic in `backend/` with async jobs (Celery/RabbitMQ style), aiming for near-real-time behavior.
 - Legacy WR1 engine code is now maintained out of tree as migration reference material.
 - See `.codex/skills/wr-transition/wr1-architecture.md` and `.codex/skills/wr-transition/wr2-architecture.md` for architecture references.
-- For current Trigger/YAML editing behavior, see `docs/yaml-manifest-system.md`.
+- For current Trigger/YAML editing behavior, see `docs/architecture/yaml-manifest-system.md`.
+- When removing or replacing legacy WR1 data structures, update the WR1 export migration notes in `docs/architecture/yaml-manifest-system.md` in the same change so WR1 export scripts can be kept aligned with the current WR2 manifest contracts.
 - For ambient issuer command context direction, see `docs/architecture/ambient-command-issuers-plan.md`.
 - Any feature that needs conditional logic must use the existing WR2 condition framework (`backend/core/condition_dsl.py`) rather than inventing a new predicate/condition format.
 

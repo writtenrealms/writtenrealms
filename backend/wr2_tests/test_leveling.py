@@ -11,7 +11,7 @@ class TestLevelingConfig(WorldTestCase):
         )
 
         player = self.create_player("Starter")
-        player.initialize(starting_eq=False)
+        player.initialize(include_starting_equipment=False)
 
         self.assertEqual(player.level, 3)
         self.assertEqual(player.experience, 30)

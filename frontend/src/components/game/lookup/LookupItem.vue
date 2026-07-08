@@ -35,7 +35,6 @@ const props = defineProps({
 const item = computed(() => props.entity);
 const KNOWN_ACTIONS = [
   "eat",
-  "upgrade",
   "buy",
   "sell",
   "wield",
@@ -74,10 +73,6 @@ const actions = computed(() => {
       {
         action: "eat",
         label: "EAT"
-      },
-      {
-        action: "upgrade",
-        label: "UPGRADE"
       },
       {
         action: "buy",

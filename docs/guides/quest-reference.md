@@ -319,7 +319,7 @@ spec:
           "Courier needed. Take the sealed packet and deliver it to the shrine keeper."
       effects:
         - type: grant_item
-          item_template: sealed_packet
+          item_definition: sealed_packet
       objectives:
         - id: hand_in_packet
           text: Deliver the sealed packet to the shrine keeper.
@@ -327,8 +327,8 @@ spec:
             event: quest.item.delivered
             where:
               all:
-                - eq: [event.target.template_id, shrine_keeper]
-                - eq: [event.item.template_id, sealed_packet]
+                - eq: [event.target.definition_id, shrine_keeper]
+                - eq: [event.item.definition_id, sealed_packet]
           progress:
             mode: count
             target: 1
@@ -341,7 +341,7 @@ spec:
       recap: The shrine keeper accepts the packet and breaks the wax seal.
       effects:
         - type: mob_command
-          mob_template: shrine_keeper
+          mob_definition: shrine_keeper
           command: say Good. I have been waiting for this packet.
   rewards:
     complete:
@@ -404,7 +404,7 @@ spec:
   discovery:
     sources:
       - type: npc_dialogue
-        mob_template: camp_captain
+        mob_definition: camp_captain
     visible_if: {}
     accept_if: {}
     salience: 20
@@ -424,7 +424,7 @@ spec:
           tracker:
             event: quest.mob.killed
             where:
-              eq: [event.target.template_id, tunnel_rat]
+              eq: [event.target.definition_id, tunnel_rat]
           progress:
             mode: count
             target: 2
@@ -441,7 +441,7 @@ spec:
           tracker:
             event: cmd.talk.success
             where:
-              eq: [event.target.template_id, camp_captain]
+              eq: [event.target.definition_id, camp_captain]
           progress:
             mode: boolean
             target: 1
@@ -454,7 +454,7 @@ spec:
       recap: Captain Merrow confirms the camp is safe for now.
       effects:
         - type: mob_command
-          mob_template: camp_captain
+          mob_definition: camp_captain
           command: say Good work. The stores might last the week now.
   rewards:
     complete:
@@ -549,7 +549,7 @@ spec:
   discovery:
     sources:
       - type: npc_dialogue
-        mob_template: town_clerk
+        mob_definition: town_clerk
     visible_if: {}
     accept_if: {}
     salience: 15
@@ -595,7 +595,7 @@ spec:
   discovery:
     sources:
       - type: npc_dialogue
-        mob_template: town_clerk
+        mob_definition: town_clerk
     visible_if: {}
     accept_if: {}
     salience: 10
@@ -784,7 +784,7 @@ spec:
   discovery:
     sources:
       - type: npc_dialogue
-        mob_template: guildmaster
+        mob_definition: guildmaster
     visible_if: {}
     accept_if: {}
     salience: 15
@@ -812,7 +812,7 @@ spec:
         - type: grant_gold
           amount: 20
         - type: mob_command
-          mob_template: guildmaster
+          mob_definition: guildmaster
           command: say Spend it before you lose your nerve.
     - id: lesson_reward
       kind: resolution
@@ -821,7 +821,7 @@ spec:
         - type: grant_xp
           amount: 40
         - type: mob_command
-          mob_template: guildmaster
+          mob_definition: guildmaster
           command: say Experience will outlast coin, if you let it.
   rewards:
     complete: []

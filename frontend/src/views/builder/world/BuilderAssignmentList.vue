@@ -94,8 +94,6 @@ const assignment_type_schema = {
   options: [
     { value: "zone", label: "Zone" },
     { value: "room", label: "Room" },
-    { value: "item_template", label: "Item Template" },
-    { value: "mob_template", label: "Mob Template" },
   ],
 };
 
@@ -111,18 +109,6 @@ const assignment_schema = computed(() => {
       attr: "room",
       label: "Room",
       references: "room",
-      widget: "reference",
-    },
-    item_template: {
-      attr: "item_template",
-      label: "Item Template",
-      references: "item_template",
-      widget: "reference",
-    },
-    mob_template: {
-      attr: "mob_template",
-      label: "Mob Template",
-      references: "mob_template",
       widget: "reference",
     },
   }[assignment_type.value];
@@ -165,22 +151,6 @@ const assignment_link = (assignment) => {
         room_id: assignment.id
       }
     } as RouteLocationRaw;
-  } else if (assignment.model_type === 'itemtemplate') {
-    return {
-      name: 'builder_item_template_details',
-      params: {
-        world_id: route.params.world_id,
-        item_template_id: assignment.id
-      }
-    } as RouteLocationRaw;
-  } else if (assignment.model_type === 'mobtemplate') {
-    return {
-      name: 'builder_mob_template_details',
-      params: {
-        world_id: route.params.world_id,
-        mob_template_id: assignment.id
-      }
-    } as RouteLocationRaw;
   }
   // Assume it's a zone
   return {
@@ -197,11 +167,8 @@ const assignment_type_name = (assignment) => {
     return "Zone";
   } else if (assignment.model_type === 'room') {
     return "Room";
-  } else if (assignment.model_type === 'itemtemplate') {
-    return "Item Template";
-  } else if (assignment.model_type === 'mobtemplate') {
-    return "Mob Template";
   }
+  return "Unknown";
 }
 
 // Add a watcher so that if the assignment type changes, null out the assignment data

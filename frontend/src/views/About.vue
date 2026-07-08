@@ -79,7 +79,7 @@
 
     <h3>Wanted: Builders</h3>
 
-    <p>Written Realms comes with a web-based world editor that can be used to create single and multi-player worlds. With it, you can create rooms, items, mobs, loaders and quests to create immersive narratives, puzzles and interactions.</p>
+    <p>Written Realms comes with a web-based world editor that can be used to create single and multi-player worlds. With it, you can create rooms, items, mobs, spawn plans and quests to create immersive narratives, puzzles and interactions.</p>
 
     <p>If you would like to build your own world or help us create our featured multi-player realm, The Unbroken World, please contact us on Discord.</p>
 

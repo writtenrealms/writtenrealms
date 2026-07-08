@@ -27,8 +27,69 @@ Implemented manifest kinds currently include the current WR2 authoring path:
 - `quest`
 - `questarc`
 
-The legacy `itemtemplate` and `mobtemplate` kinds are still supported during the
-transition for old content and legacy-only builder surfaces.
+## WR1 Export Migration Notes
+
+WR1-to-WR2 export scripts should target the current WR2 manifest contracts, not
+the temporary compatibility models. As WR2 legacy concepts are removed, update
+this section in the same change so the WR1 exporter can be kept in sync.
+
+Current required mappings:
+
+- Trigger mob reactions target `kind: trigger` with `target.type:
+  mobdefinition`, not `mobtemplate`.
+- Quest NPC dialogue sources use `mob_definition` / `mob_definition_id`, not
+  `mob_template`.
+- Quest room pickups and item grant/spawn effects use `item_definition` /
+  `item_definition_id`, not `item_template`.
+- WR1 `Quest`, `Objective`, and `Reward` rows should export into `kind: quest`
+  manifests when they can be represented by the WR2 graph/effect model; WR2 no
+  longer has legacy quest CRUD models, serializers, views, or frontend screens.
+- WR1 `PlayerQuest` / `PlayerEnquire` runtime rows do not export. WR2 quest
+  runtime state is `QuestInstance` / `QuestObjectiveState` / `QuestJournalEntry`
+  and room NPC markers use `quest_indicator.available` / `quest_indicator.ready`.
+- WR1 `StartingEq` rows export into the `kind: world`
+  `spec.starting_equipment` list using WR2 `itemdefinition.<slug>` refs,
+  `count`, and optional `archetype`; WR2 no longer has a `StartingEq` model.
+- WR1 `ItemTemplate` rows export as `kind: itemdefinition`; WR2 no longer has an
+  `ItemTemplate` model, manifest kind, API endpoint, or runtime item FK.
+- WR1 `MobTemplate` rows export as `kind: mobdefinition`; WR2 no longer has a
+  `MobTemplate` model, manifest kind, API endpoint, or runtime mob FK.
+- WR1 `Loader` / `Rule` rows export as `kind: spawnplan` entries. WR2 no longer
+  imports or stores loader/rule rows, and runtime item/mob rows no longer keep
+  `rule_id` or source-template FKs.
+- Runtime spawn reconciliation is now named spawn-plan processing in WR2:
+  Celery schedules `worlds.tasks.run_world_spawn_plans`, the world timestamp is
+  `last_spawn_plan_run_ts`, and the removed system endpoint
+  `/game/system/run_loaders/` has no WR2 replacement.
+- Builder read-only spawn-plan inspection APIs are `/zones/<id>/spawn-plans/`
+  and `/rooms/<id>/spawn-plans/`; do not export/import or call the removed
+  `/loads/` endpoints.
+- WR1 door keys export as WR2 `itemdefinition.<slug>` refs; `Door.key` now points
+  to `ItemDefinition`.
+- WR1 room or loader-authored room inventory exports as `kind: spawnplan`
+  entries targeting WR2 room refs and `itemdefinition` / `itembundle` refs.
+- WR1 item template inventory rows do not export as `itemtemplate`
+  `spec.inventory`; WR2 no longer has `ItemTemplateInventory`. Nested/container
+  contents should target WR2 item definition manifests once a definition-backed
+  container inventory contract exists.
+- WR1 mob template inventory rows do not export as `mobtemplate`
+  `spec.inventory`; WR2 no longer has `MobTemplateInventory`. Carried, equipped,
+  loot, and merchant-stock semantics should be split into WR2 mob definition,
+  loot/item bundle, equipment, and merchant profile manifests rather than
+  recreated as template inventory.
+- WR1 merchant mob-template settings and inventory export into `kind:
+  merchantprofile` plus `MobDefinition.merchant_profile`; WR2 no longer has
+  `MerchantInventory`, mob `merchant_profit`, or the
+  `/game/system/update_merchants/` endpoint.
+- WR1 crafter/upgrader mob-template flags and item `upgrade_count` do not
+  export. WR2 no longer has mob crafter/upgrader fields, craft/upgrade system
+  endpoints, workshop room flags, or item upgrade counters; any future crafting
+  or upgrading should be rebuilt on WR2 item definitions/manifests.
+- Quest tracker conditions compare `event.target.definition_id` and
+  `event.item.definition_id` to `mobdefinition` / `itemdefinition` refs.
+- The shared condition DSL resolves typed refs such as
+  `mobdefinition.guard_captain` and `itemdefinition.saloon_keg` for
+  `.definition_id` paths.
 
 Builder-facing authoring guidance lives in:
 
@@ -71,17 +132,12 @@ item definition as YAML.
 - Recommended workflow: copy the YAML, edit it, then ingest it in
   **World > Edit World**.
 
-The legacy **Item Templates** screens still expose `kind: itemtemplate` YAML for
-old content and legacy-only surfaces.
+### 4. Spawn Plan Screens
 
-### 4. Zone Loads Screen
-
-In zone navigation, **Loads** lists manifest-backed spawn plans for that zone.
+Spawn plans are authored through `kind: spawnplan` YAML in **World > Edit World**.
+Room **Spawn Plans** is a read-only view of spawn plans targeting that room.
 
 - The list is backed by `SpawnPlan`, not legacy `Loader` rows.
-- Each spawn plan opens a YAML edit screen at
-  `/build/worlds/<world_id>/zones/<zone_id>/loaders/<spawn_plan_id>`.
-- The **Add** action opens a new spawn-plan YAML template for the current zone.
 - Zone API responses expose both `relative_id` and `manifest_ref`; manifests
   should use the `manifest_ref` value, such as `zone@1`.
 - Path API responses also expose `relative_id` and `manifest_ref`; spawn-plan
@@ -109,8 +165,6 @@ A new world-level **Edit World** view accepts a YAML manifest textarea.
   - `kind: quest`
   - `kind: questarc`
   - `kind: trigger`
-  - `kind: itemtemplate` for legacy item-template content
-  - `kind: mobtemplate` for legacy mob-template content
   - `kind` is case-insensitive (`trigger`, `Trigger`, `TRIGGER` all work).
 - Trigger manifests now support both:
   - **create** (no `metadata.id` / `metadata.key`)
@@ -212,8 +266,8 @@ spec:
   scope: world
   kind: event
   target:
-    type: mobtemplate
-    key: mobtemplate.22
+    type: mobdefinition
+    key: mobdefinition.22
   event: say
   match: hello and (traveler or friend)
   script: say Welcome to the archive.
@@ -349,6 +403,9 @@ spec:
   motd: Questions? Join Discord.
   is_public: true
   starting_gold: 0
+  starting_equipment:
+    - item_definition: itemdefinition.training_sword
+      count: 1
   starting_level: 1
   max_level: 5
   leveling_curve:
@@ -500,7 +557,7 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 
 ## Validation Rules (Current)
 
-- `kind` must resolve to `trigger`, `world`, `currency`, `zone`, `room`, `path`, `itemdefinition`, `itembundle`, `merchantprofile`, `faction`, `mobdefinition`, `spawnplan`, `ability`, `abilities`, `quest`, or `questarc`. The legacy `itemtemplate` and `mobtemplate` kinds are also accepted during the transition.
+- `kind` must resolve to `trigger`, `world`, `currency`, `zone`, `room`, `path`, `itemdefinition`, `itembundle`, `merchantprofile`, `faction`, `mobdefinition`, `spawnplan`, `ability`, `abilities`, `quest`, or `questarc`.
 - For update: `metadata.id` or `metadata.key` must reference an existing trigger in the selected world.
 - For create: omit both `metadata.id` and `metadata.key`.
 - For delete: set `operation: delete` and include `metadata.id` or `metadata.key`.
@@ -513,7 +570,7 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   - `spec.target` is required for room/zone scope.
 - For `spec.kind: event`:
   - `spec.event` is required.
-  - mob reaction events such as `say` use `scope: world` and a `mobtemplate`
+  - mob reaction events such as `say` use `scope: world` and a `mobdefinition`
     target.
   - room events such as `after_move_enter`, `after_move_exit`, and
     `after_death_room_enter` use `scope: room` and a `room` target.

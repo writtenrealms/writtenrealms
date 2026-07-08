@@ -51,8 +51,8 @@ def _candidate_keywords(item: Item | QuestRoomItemProjection) -> str:
     keywords = str(getattr(item, "keywords", "") or "").strip()
     if keywords:
         return keywords
-    if isinstance(item, Item) and item.template:
-        keywords = str(item.template.keywords or "").strip()
+    if isinstance(item, Item) and item.definition:
+        keywords = str(item.definition.keywords or "").strip()
         if keywords:
             return keywords
     return _candidate_name(item)
@@ -60,13 +60,13 @@ def _candidate_keywords(item: Item | QuestRoomItemProjection) -> str:
 
 def _candidate_type(item: Item | QuestRoomItemProjection) -> str:
     if isinstance(item, Item):
-        return item.type or (item.template.type if item.template else "")
+        return item.type or (item.definition.item_type if item.definition else "")
     return str(item.type or "").strip()
 
 
 def _candidate_equipment_type(item: Item | QuestRoomItemProjection) -> str:
     if isinstance(item, Item):
-        return item.equipment_type or (item.template.equipment_type if item.template else "")
+        return item.equipment_type
     return ""
 
 
@@ -158,7 +158,7 @@ def _select_items(
 def _select_inventory_items(player: Player, selector: str) -> list[Item]:
     inventory_qs = (
         player.inventory.filter(is_pending_deletion=False)
-        .select_related("template", "currency")
+        .select_related("definition", "currency")
         .order_by("id")
     )
     items = [
@@ -240,7 +240,7 @@ def _select_equipped_items(player: Player, selector: str) -> list[Item]:
 def _container_items(container) -> list[Item]:
     return list(
         container.inventory.filter(is_pending_deletion=False)
-        .select_related("template", "currency")
+        .select_related("definition", "currency")
         .order_by("id")
     )
 
@@ -248,7 +248,7 @@ def _container_items(container) -> list[Item]:
 def _room_items(room: Room) -> list[Item]:
     return list(
         room.inventory.filter(is_pending_deletion=False)
-        .select_related("template", "currency")
+        .select_related("definition", "currency")
         .order_by("id")
     )
 
@@ -982,7 +982,7 @@ class GiveAction:
                 item.save(update_fields=["container_type", "container_id"])
 
         updated_player = get_player_with_related(player_id)
-        refreshed_target_mob = Mob.objects.select_related("template").get(pk=target_mob.id)
+        refreshed_target_mob = Mob.objects.select_related("definition").get(pk=target_mob.id)
         actor_payload = serialize_actor(updated_player, updated_player.room)
         room_payload = serialize_room(
             room,

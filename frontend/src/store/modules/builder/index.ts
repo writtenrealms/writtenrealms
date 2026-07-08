@@ -21,13 +21,10 @@ interface BuilderState {
   rooms?: Room[];
   room?: Room | null;
   map?: any;
-  showing?: "world" | "zone" | "room" | "mob_templates" | "item_templates";
-  //mob_template?: any;
-  //item_template?: any;
+  showing?: "world" | "zone" | "room";
   zone?: any;
   zone_rooms?: Room[];
   map_index?: any;
-  loader: any;
   path: any;
   quest: any;
   world_factions: {}[];
@@ -44,7 +41,6 @@ const initial_state = (): BuilderState => {
     rooms: [],
     map: null,
     map_index: null,
-    loader: null,
     path: null,
     quest: null,
     showing: "world",

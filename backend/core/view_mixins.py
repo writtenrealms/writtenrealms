@@ -4,7 +4,6 @@ from django.http import Http404
 
 from rest_framework.generics import get_object_or_404
 
-from builders.models import Quest
 from worlds.models import World, Room, Zone, WorldURL
 
 # Registration for the models that will have relative ID access
@@ -111,4 +110,3 @@ class RequestDataMixin:
         if settings.DEBUG and _request.data:
             print("Request data: %s" % _request.data)
         return _request
-

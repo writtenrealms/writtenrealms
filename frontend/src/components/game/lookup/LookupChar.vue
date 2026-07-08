@@ -43,12 +43,8 @@ const doAction = (char: any, action: string) => {
     store.commit("ui/modal/close");
     return;
   }
-  if (rawAction === 'craft' || rawAction === 'upgrade') {
-    store.dispatch('game/cmd', rawAction);
-  } else {
-    const target = getTargetInGroup(char, store.state.game.room.chars) || char.keyword || char.name;
-    store.dispatch("game/cmd", `${rawAction} ${target}`);
-  }
+  const target = getTargetInGroup(char, store.state.game.room.chars) || char.keyword || char.name;
+  store.dispatch("game/cmd", `${rawAction} ${target}`);
   store.commit("game/lookup_clear");
   store.commit("ui/modal/close");
 };
@@ -63,8 +59,6 @@ const actionsData = computed(() => {
     actionsPriority = [
       // higher the better
       { action: "talk", label: "TALK" },
-      { action: "craft", label: "CRAFT" },
-      { action: "upgrade", label: "UPGRADE"},
       { action: "follow", label: "FOLLOW" },
       { action: "unfollow", label: "UNFOLLOW" },
       { action: "group", label: "GROUP" },

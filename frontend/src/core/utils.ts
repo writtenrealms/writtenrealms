@@ -101,10 +101,10 @@ export const stackedInventory = function(inv) {
   var t_items = {}; // stackable items cache
 
   for (let item of inv) {
-    var tid = item.template_id;
+    var definitionId = item.definition_id;
     var stackKey = item.stack_key;
-    if (stackKey === undefined && tid && !item.is_container) {
-      stackKey = `template:${tid}`;
+    if (stackKey === undefined && definitionId && !item.is_container) {
+      stackKey = `definition:${definitionId}`;
     }
 
     // Stackable item

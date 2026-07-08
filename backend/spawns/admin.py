@@ -9,9 +9,6 @@ from spawns.models import (
     Mob,
     Equipment,
     RoomCommandCheckState,
-    PlayerEnquire,
-    PlayerQuest,
-    PlayerTrophy,
     Alias,
     PlayerEvent,
     PlayerConfig,
@@ -30,16 +27,11 @@ class PlayerAdmin(BaseAdmin):
     raw_id_fields = ['world', 'room', 'equipment', 'user', 'config']
 
 
-class PlayerTrophyAdmin(BaseAdmin):
-    list_display = ('id', 'player', 'mob_template', 'created_ts')
-    raw_id_fields = ['player', 'mob_template']
-
-
 def eq_for(eq):
     try:
         return eq.player.name
     except AttributeError:
-        return eq.mob.name or eq.mob.template.name
+        return eq.mob.name
 eq_for.short_description = 'For'
 
 
@@ -61,25 +53,25 @@ class EquipmentAdmin(BaseAdmin):
 
 
 def name(item):
-    if item.template:
-        return item.template.name
+    if item.definition:
+        return item.definition.name
     else:
         return item.name
 class ItemAdmin(BaseAdmin):
-    list_display = ('id', name, 'world', 'container', 'template')
+    list_display = ('id', name, 'world', 'container', 'definition')
     #list_filter = [ContextRootWorldFilter]
-    raw_id_fields = ['world', 'template', 'rule', 'profile', 'augment']
+    raw_id_fields = ['world', 'definition', 'profile', 'augment']
     display_as_choicefield = [
         'type', 'quality', 'armor_class', 'equipment_type'
     ]
 
 
 class MobAdmin(BaseAdmin):
-    list_display = ('id', 'world', 'room', 'template')
+    list_display = ('id', 'world', 'room', 'definition')
     #list_filter = [ContextRootWorldFilter]
     # Detail
     exclude = ['equipment']
-    raw_id_fields = ['world', 'room', 'template', 'rule']
+    raw_id_fields = ['world', 'room', 'definition']
 
 
 class RoomCommandCheckStateAdmin(BaseAdmin):
@@ -90,16 +82,6 @@ class RoomCommandCheckStateAdmin(BaseAdmin):
 class AliasAdmin(BaseAdmin):
     list_display = ('id', 'player', 'match', 'replacement')
     raw_id_fields = ('player',)
-
-
-class PlayerQuestAdmin(BaseAdmin):
-    list_display = ('id', 'player', 'quest', 'completion_ts')
-    raw_id_fields = ('player', 'quest')
-
-
-class PlayerEnquireAdmin(BaseAdmin):
-    list_display = ('id', 'player', 'quest', 'enquire_ts')
-    raw_id_fields = ('player', 'quest')
 
 
 def user(player_event):
@@ -142,9 +124,6 @@ admin.site.register(Item, ItemAdmin)
 admin.site.register(Mob, MobAdmin)
 admin.site.register(RoomCommandCheckState, RoomCommandCheckStateAdmin)
 admin.site.register(Alias, AliasAdmin)
-admin.site.register(PlayerEnquire, PlayerEnquireAdmin)
-admin.site.register(PlayerQuest, PlayerQuestAdmin)
-admin.site.register(PlayerTrophy, PlayerTrophyAdmin)
 admin.site.register(PlayerEvent, PlayerEventAdmin)
 admin.site.register(PlayerConfig, PlayerConfigAdmin)
 admin.site.register(Mark, MarkAdmin)

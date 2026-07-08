@@ -1,4 +1,4 @@
-from builders.models import Faction, ItemTemplate
+from builders.models import Faction, ItemDefinition
 from config import constants as adv_consts
 from core.computations import compute_stats
 from spawns.handlers import dispatch_command
@@ -76,8 +76,9 @@ class TestLookCommandText(WorldTestCase):
         self.assertIn("watchful scout", message["text"].lower())
 
     def test_look_target_room_item_returns_item_payload(self):
-        template = ItemTemplate.objects.create(
+        definition = ItemDefinition.objects.create(
             world=self.world,
+            slug="lantern",
             name="Lantern",
             description="A brass lantern with a warm flame.",
             keywords="lantern",
@@ -85,9 +86,10 @@ class TestLookCommandText(WorldTestCase):
         item = Item.objects.create(
             world=self.spawn_world,
             container=self.room,
-            template=template,
-            name=template.name,
-            description=template.description,
+            definition=definition,
+            definition_slug_snapshot=definition.slug,
+            name=definition.name,
+            description=definition.description,
         )
 
         with capture_game_messages() as messages:
@@ -104,29 +106,33 @@ class TestLookCommandText(WorldTestCase):
         self.assertIn("Lantern", message["text"])
 
     def test_look_target_inventory_container_includes_contents(self):
-        bag_template = ItemTemplate.objects.create(
+        bag_definition = ItemDefinition.objects.create(
             world=self.world,
+            slug="bag",
             name="Bag",
-            type=adv_consts.ITEM_TYPE_CONTAINER,
+            item_type=adv_consts.ITEM_TYPE_CONTAINER,
             keywords="bag",
         )
         bag = Item.objects.create(
             world=self.spawn_world,
             container=self.player,
-            template=bag_template,
-            name=bag_template.name,
+            definition=bag_definition,
+            definition_slug_snapshot=bag_definition.slug,
+            name=bag_definition.name,
             type=adv_consts.ITEM_TYPE_CONTAINER,
         )
-        apple_template = ItemTemplate.objects.create(
+        apple_definition = ItemDefinition.objects.create(
             world=self.world,
+            slug="apple",
             name="Apple",
             keywords="apple",
         )
         apple = Item.objects.create(
             world=self.spawn_world,
             container=bag,
-            template=apple_template,
-            name=apple_template.name,
+            definition=apple_definition,
+            definition_slug_snapshot=apple_definition.slug,
+            name=apple_definition.name,
         )
 
         with capture_game_messages() as messages:

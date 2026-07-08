@@ -7,7 +7,7 @@ from django.core.cache import cache
 
 from rest_framework.reverse import reverse
 
-from builders.models import BuilderAssignment, MobTemplate, Trigger, WorldBuilder
+from builders.models import BuilderAssignment, MobDefinition, Trigger, WorldBuilder
 from config import constants as adv_consts
 from core.trigger_policy_cache import (
     TRIGGER_POLICY_CACHE_VERSION_FLOOR,
@@ -171,7 +171,7 @@ class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(resp.data["results"][0]["name"], "Inactive Room Trigger")
 
     def test_world_trigger_list_includes_yaml_manifest(self):
-        mob_template = MobTemplate.objects.create(
+        mob_definition = MobDefinition.objects.create(
             world=self.world,
             name="Lorekeeper",
         )
@@ -179,8 +179,8 @@ class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
             world=self.world,
             scope=adv_consts.TRIGGER_SCOPE_WORLD,
             kind=adv_consts.TRIGGER_KIND_EVENT,
-            target_type=ContentType.objects.get_for_model(MobTemplate),
-            target_id=mob_template.id,
+            target_type=ContentType.objects.get_for_model(MobDefinition),
+            target_id=mob_definition.id,
             name="Lorekeeper Reaction",
             event=adv_consts.MOB_REACTION_EVENT_SAYING,
             match="hello",
@@ -203,7 +203,7 @@ class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(mob_trigger_data["key"], mob_trigger.key)
         self.assertEqual(mob_trigger_data["scope"], adv_consts.TRIGGER_SCOPE_WORLD)
         self.assertEqual(mob_trigger_data["kind"], adv_consts.TRIGGER_KIND_EVENT)
-        self.assertEqual(mob_trigger_data["target"]["type"], "mobtemplate")
+        self.assertEqual(mob_trigger_data["target"]["type"], "mobdefinition")
         self.assertEqual(mob_trigger_data["target"]["name"], "Lorekeeper")
         self.assertFalse(mob_trigger_data["is_active"])
         self.assertIn("kind: trigger", mob_trigger_data["yaml"])
@@ -224,8 +224,8 @@ class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
             world=self.world,
             scope=adv_consts.TRIGGER_SCOPE_WORLD,
             kind=adv_consts.TRIGGER_KIND_EVENT,
-            target_type=ContentType.objects.get_for_model(MobTemplate),
-            target_id=MobTemplate.objects.create(world=self.world, name="Lorekeeper").id,
+            target_type=ContentType.objects.get_for_model(MobDefinition),
+            target_id=MobDefinition.objects.create(world=self.world, name="Lorekeeper").id,
             name="Lorekeeper Reaction",
             event=adv_consts.MOB_REACTION_EVENT_SAYING,
             match="hello",
@@ -488,7 +488,7 @@ metadata:
         self.assertFalse(Trigger.objects.filter(pk=self.trigger.id).exists())
 
     def test_apply_trigger_manifest_can_create_mob_event_trigger(self):
-        mob_template = MobTemplate.objects.create(
+        mob_definition = MobDefinition.objects.create(
             world=self.world,
             name="Lorekeeper",
         )
@@ -502,8 +502,8 @@ spec:
   scope: world
   kind: event
   target:
-    type: mobtemplate
-    key: mobtemplate.{mob_template.id}
+    type: mobdefinition
+    key: mobdefinition.{mob_definition.id}
   event: say
   match: hello and (traveler or friend)
   script: say Welcome, seeker.
@@ -523,8 +523,8 @@ spec:
         created_trigger = Trigger.objects.get(pk=resp.data["trigger"]["id"])
         self.assertEqual(created_trigger.kind, adv_consts.TRIGGER_KIND_EVENT)
         self.assertEqual(created_trigger.scope, adv_consts.TRIGGER_SCOPE_WORLD)
-        self.assertEqual(created_trigger.target_type, ContentType.objects.get_for_model(MobTemplate))
-        self.assertEqual(created_trigger.target_id, mob_template.id)
+        self.assertEqual(created_trigger.target_type, ContentType.objects.get_for_model(MobDefinition))
+        self.assertEqual(created_trigger.target_id, mob_definition.id)
         self.assertEqual(created_trigger.event, adv_consts.MOB_REACTION_EVENT_SAYING)
         self.assertEqual(created_trigger.match, "hello and (traveler or friend)")
 

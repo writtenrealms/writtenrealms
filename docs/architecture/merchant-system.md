@@ -265,7 +265,7 @@ Behavior:
 - `kill garron` is legal because Garron is attackable.
 - When Garron dies, his merchant runtime is deactivated.
 - Shop stock does not drop unless the builder authors drops explicitly.
-- If a loader later respawns Garron, the new live NPC can open a new merchant
+- If a spawn plan later respawns Garron, the new live NPC can open a new merchant
   runtime from the same profile.
 
 ## Runtime Model
@@ -475,9 +475,9 @@ Rules:
 - On death, live merchant runtime becomes inactive.
 - Merchant stock does not become corpse inventory.
 - Explicit `on_death.drops` or triggers can create loot.
-- Respawn behavior follows normal loader/spawn rules.
+- Respawn behavior follows normal spawn-plan rules.
 - A newly spawned shopkeeper may create or resume a merchant runtime according
-  to the profile and loader policy.
+  to the profile and spawn-plan policy.
 
 This gives builders the story flexibility of killable shopkeepers without
 making every shopkeeper an accidental loot container.
@@ -490,7 +490,7 @@ inventory concepts.
 Do not build new runtime behavior around:
 
 - `MerchantInventory`
-- `MobTemplate.merchant_inv`
+- WR1 `MobTemplate.merchant_inv`
 - `merchant_profit`
 - `RandomItemProfile`
 - ordinary mob inventory as shop stock

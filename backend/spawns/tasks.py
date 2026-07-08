@@ -362,7 +362,7 @@ def _try_roam_cohort(
             is_pending_deletion=False,
             room_id__isnull=False,
         )
-        .select_related("world", "definition", "template", "spawn_placement")
+        .select_related("world", "definition", "spawn_placement")
         .order_by("id")
     )
     leader = _cohort_roam_leader(members)
@@ -441,7 +441,7 @@ def run_mob_roaming(*, active_combat_mob_ids: set[int] | None = None) -> int:
             roams_id__isnull=False,
             world_id__in=worlds_by_id.keys(),
         )
-        .select_related("world", "definition", "template", "spawn_placement")
+        .select_related("world", "definition", "spawn_placement")
         .order_by("id")
     )
     heartbeat_event_group = f"heartbeat.mob_roaming.{uuid.uuid4().hex}"

@@ -418,7 +418,7 @@ spec:
   discovery:
     sources:
       - type: npc_dialogue
-        mob_template: mobtemplate.12
+        mob_definition: mobdefinition.12
     visible_if: {}
     accept_if: {}
     salience: 80

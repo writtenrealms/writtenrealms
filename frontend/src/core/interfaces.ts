@@ -39,15 +39,6 @@ export interface Room {
   down: Room;
 }
 
-export interface Rule {
-  id: number;
-  key: string;
-  order: number;
-  num_copies: number;
-  template: Entity;
-  target: Entity;
-}
-
 export interface Map {
   rooms: Room[];
   center: Room;
@@ -75,11 +66,6 @@ export interface ElementListFilterGroup {
   label: string;
   attr: string;
   filter_options: Array<ElementListFilterItem>;
-}
-
-export interface MobTemplate {
-  id: number;
-  name: string;
 }
 
 export interface FormElement {

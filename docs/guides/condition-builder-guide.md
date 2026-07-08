@@ -199,8 +199,8 @@ Tracker `where` conditions receive `event.*` data:
 ```yaml
 where:
   all:
-    - eq: [event.target.template_id, mobtemplate.saloon_bartender]
-    - eq: [event.item.template_id, itemtemplate.saloon_keg]
+    - eq: [event.target.definition_id, mobdefinition.saloon_bartender]
+    - eq: [event.item.definition_id, itemdefinition.saloon_keg]
 ```
 
 Step transitions can check objective status:
@@ -263,7 +263,7 @@ Use paths and values that are explicit and stable:
 
 - prefer `state.*` for world-specific switches and progress flags
 - prefer bare slugs for quest refs when possible
-- use typed refs such as `mobtemplate.guard_captain` when comparing event
-  template ids
+- use typed refs such as `mobdefinition.guard_captain` when comparing event
+  definition ids
 - keep large logic trees small by splitting content into multiple triggers,
   quests, or abilities when that reads better

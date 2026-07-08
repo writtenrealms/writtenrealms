@@ -1,17 +1,13 @@
-from datetime import timedelta
 import logging
 import uuid
 
 from config import constants as adv_consts
 
 from django.contrib.auth import get_user_model
-from django.utils import timezone
 
 from rest_framework import (
     status,
-    serializers,
-    viewsets)
-from rest_framework.exceptions import PermissionDenied
+    serializers)
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -19,16 +15,13 @@ from rest_framework.response import Response
 from users.tokens import build_token_response
 
 from backend.config.exceptions import ServiceError
-from builders.models import Quest
 from core import throttles as api_throttles
 from core.permissions import IsPlayerInGame
-from core.db import qs_by_pks
 from core.ip import get_ip
-from core.view_mixins import RequestDataMixin
 from spawns import serializers as spawn_serializers, tasks as spawn_tasks
-from spawns.loading import run_loaders
+from spawns.loading import run_spawn_plans_for_world
 from spawns.models import (
-    Player, PlayerEvent, PlayerEnquire, PlayerQuest, PlayerConfig)
+    Player, PlayerConfig)
 from system.models import IntroConfig, SiteControl, IPBan
 from users.models import User
 from users.serializers import UserSerializer
@@ -116,7 +109,7 @@ class PlayGame(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save(user=user, world=spawn_world)
 
-        run_loaders(world=spawn_world, initial=True)
+        run_spawn_plans_for_world(world=spawn_world, initial=True)
 
         # Issue auth tokens for this temporary user
         token_data = build_token_response(user)
@@ -142,213 +135,6 @@ class Lookup(GameView):
         # request.player is set by the permission
         lookup_data = request.player.game_lookup(key)
         return Response(lookup_data)
-
-
-class QuestLogView(GameView):
-
-    def get_player(self, request):
-        # Fetch player based on header
-        player_id = request.META.get('HTTP_X_PLAYER_ID', None)
-        player = Player.objects.get(pk=player_id)
-        return player
-
-    def get_enquired_quests(self, request):
-        pass
-
-    def get_quest_data(self, player, quest_ids):
-        quests = qs_by_pks(Quest, quest_ids)
-
-        data = spawn_serializers.EnquiredQuestSerializer(
-            quests, many=True,
-            context={
-                'actor': player,
-            }).data
-
-        return data
-
-
-class EnquiredQuests(GameView):
-    "Deprecated. Keeping around for reference."
-
-    def get(self, request, format=None):
-
-        # Fetch player based on header
-        player_id = request.META.get('HTTP_X_PLAYER_ID', None)
-        player = Player.objects.get(pk=player_id)
-
-        completed_quests_ids = set(player.player_quests.filter(
-            completion_ts__isnull=False,
-            quest__repeatable_after=-1,
-        ).values_list('quest_id', flat=True))
-
-        # Map to keep track of when each player has interacted with a quest,
-        # either based on the created ts of the PlayerQuest record of the
-        # enquired quest, or on the created ts of the completed quest in the
-        # case of delivery quests.
-        quest_interaction_map = {}
-
-        # All the quests for which the 'enquire' command was run
-        enquired_quests = player.player_enquires.exclude(
-            quest_id__in=completed_quests_ids
-        ).order_by('-created_ts')
-        enquired_quest_ids = enquired_quests.values_list(
-            'quest_id', flat=True)
-        quest_interaction_map.update(
-            dict(enquired_quests.values_list('quest_id', 'created_ts')))
-
-        # Get all of the deliver quests that the player has completed
-
-        # Get all of the quests that were completed with a deliver type,
-        # meaning they could be the effective enquire directive for a yet
-        # uncompleted second quest.
-        potential_deliveries = PlayerQuest.objects.filter(
-            player=player,
-            #quest__type=adv_consts.QUEST_TYPE_DELIVER,
-            quest__is_setup=True,
-            completion_ts__isnull=False)
-        potential_delivery_quest_ids = potential_deliveries.values_list(
-            'quest_id', flat=True)
-        quest_interaction_map.update(
-            dict(potential_deliveries.values_list('quest_id', 'created_ts')))
-
-        # Fetch all the quests that were the next step of a completed
-        # initial delivery quest and were themselves completed.
-        completed_deliveries = PlayerQuest.objects.filter(
-            player=player,
-            quest__requires_quest__id__in=potential_delivery_quest_ids,
-            completion_ts__isnull=False
-        )
-        completed_delivery_quest_ids = completed_deliveries.values_list(
-           'quest__requires_quest__id', flat=True)
-
-        quest_ids = set(potential_delivery_quest_ids)
-        quest_ids = quest_ids.difference(set(completed_delivery_quest_ids))
-        quest_ids = quest_ids.union(enquired_quest_ids)
-
-        qs = Quest.objects.filter(id__in=quest_ids)
-
-        quests = reversed(
-            sorted(
-                qs,
-                key=lambda q: quest_interaction_map[q.id]))
-
-        data = spawn_serializers.EnquiredQuestSerializer(
-            quests, many=True,
-            context={
-                'actor': player,
-            }).data
-
-        return Response(data)
-
-
-class RepeatableQuests(QuestLogView):
-    "Completed and repeatable but not setup."
-
-    def get(self, request, format=None):
-        player = self.get_player(request)
-
-        completed_repeatable_quests_ids = player.player_quests.filter(
-                completion_ts__isnull=False,
-                quest__is_logged=True,
-            ).exclude(
-                quest__repeatable_after=-1,
-            ).exclude(
-                quest__is_setup=True,
-            ).order_by('-created_ts').values_list('quest_id', flat=True)
-
-        return Response(self.get_quest_data(
-            player=player, quest_ids=completed_repeatable_quests_ids))
-
-
-class OpenQuests(QuestLogView):
-
-    def get(self, request, format=None):
-
-        player = self.get_player(request)
-
-        # Non-repeatable completed quests
-        completed_quests_ids = set(player.player_quests.filter(
-            completion_ts__isnull=False,
-            quest__repeatable_after=-1,
-        ).values_list('quest_id', flat=True))
-
-        # Map to keep track of when each player has interacted with a quest,
-        # either based on the created ts of the PlayerQuest record of the
-        # enquired quest, or on the created ts of the completed quest in the
-        # case of delivery quests.
-        quest_interaction_map = {}
-
-        # All the quests for which the 'enquire' command was run
-        enquired_quests = player.player_enquires.exclude(
-            quest_id__in=completed_quests_ids
-        ).order_by('-created_ts')
-        enquired_quest_ids = enquired_quests.values_list(
-            'quest_id', flat=True)
-        quest_interaction_map.update(
-            dict(enquired_quests.values_list('quest_id', 'created_ts')))
-
-        # Get all of the deliver quests that the player has completed
-
-        # Get all of the quests that were completed with a deliver type,
-        # meaning they could be the effective enquire directive for a yet
-        # uncompleted second quest.
-        potential_deliveries = PlayerQuest.objects.filter(
-            player=player,
-            quest__is_setup=True,
-            completion_ts__isnull=False)
-        potential_delivery_quest_ids = potential_deliveries.values_list(
-            'quest_id', flat=True)
-        quest_interaction_map.update(
-            dict(potential_deliveries.values_list('quest_id', 'created_ts')))
-
-        # Fetch all the quests that were the next step of a completed
-        # initial delivery quest and were themselves completed.
-        completed_deliveries = PlayerQuest.objects.filter(
-            player=player,
-            quest__requires_quest__id__in=potential_delivery_quest_ids,
-            completion_ts__isnull=False
-        )
-        completed_delivery_quest_ids = completed_deliveries.values_list(
-           'quest__requires_quest__id', flat=True)
-
-        # Fetch all completed repeatable non setup quests to exclude them
-        completed_repeatable_quests_ids = player.player_quests.filter(
-                completion_ts__isnull=False,
-                quest__is_setup=False,
-            ).exclude(
-                quest__repeatable_after=-1
-            ).order_by('-created_ts').values_list('quest_id', flat=True)
-
-        quest_ids = set(potential_delivery_quest_ids)
-        quest_ids = quest_ids.difference(set(completed_delivery_quest_ids))
-        quest_ids = quest_ids.union(enquired_quest_ids)
-        quest_ids = quest_ids.difference(set(completed_repeatable_quests_ids))
-
-        qs = Quest.objects.filter(id__in=quest_ids, is_logged=True)
-
-        quests = reversed(
-            sorted(
-                qs,
-                key=lambda q: quest_interaction_map[q.id]))
-
-        return Response(self.get_quest_data(
-            player=player, quest_ids=[q.id for q in quests]))
-
-
-class CompletedQuests(QuestLogView):
-    "Completed and not repeatable"
-
-    def get(self, request, format=None):
-        player = self.get_player(request)
-
-        completed_non_repeatable_quests_ids = player.player_quests.filter(
-                completion_ts__isnull=False,
-                quest__repeatable_after=-1,
-                quest__is_logged=True,
-            ).order_by('-created_ts').values_list('quest_id', flat=True)
-
-        return Response(self.get_quest_data(
-            player=player, quest_ids=completed_non_repeatable_quests_ids))
 
 
 class PlayerConfigView(GameView):

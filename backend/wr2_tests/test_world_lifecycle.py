@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 from django.utils import timezone
 
-from builders.models import Loader, MobTemplate, Rule
+from builders.models import MobDefinition, SpawnEntry, SpawnPlan, SpawnPlanRun
 from config import constants as api_consts
 from config.exceptions import ServiceError
 from spawns.models import Item, Mob
@@ -11,7 +11,7 @@ from spawns.services import WorldGate
 from tests.base import WorldTestCase
 from wr2_tests.utils import capture_game_messages
 from worlds.services import WorldSmith
-from worlds.tasks import monitor_worlds, run_world_loaders
+from worlds.tasks import monitor_worlds, run_world_spawn_plans
 from rest_framework import serializers
 
 
@@ -24,72 +24,76 @@ class TestStartWorld(WorldTestCase):
         service.start()
         self.assertEqual(spawn_world.lifecycle, api_consts.WORLD_LIFECYCLE_RUNNING)
 
-    def test_start_world_runs_initial_loaders(self):
-        mob_template = MobTemplate.objects.create(
+    def test_start_world_runs_initial_spawn_plans(self):
+        mob_definition = MobDefinition.objects.create(
             world=self.world,
+            slug="sentinel",
             name="a sentinel",
         )
-        loader = Loader.objects.create(
+        plan = SpawnPlan.objects.create(
             world=self.world,
             zone=self.zone,
-            inherit_zone_wait=False,
+            slug="sentinels",
+            respawn_policy={"mode": "none"},
         )
-        rule = Rule.objects.create(
-            loader=loader,
-            template=mob_template,
-            target=self.room,
-            num_copies=2,
+        SpawnEntry.objects.create(
+            plan=plan,
+            slug="sentinel",
+            source="mobdefinition.sentinel",
+            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            count=2,
         )
         spawn_world = self.world.create_spawn_world()
 
         WorldSmith(spawn_world).start()
 
         self.assertEqual(
-            Mob.objects.filter(world=spawn_world, rule=rule).count(),
+            Mob.objects.filter(world=spawn_world, definition=mob_definition).count(),
             2,
         )
         spawn_world.refresh_from_db()
-        loader.refresh_from_db()
-        self.assertIsNotNone(spawn_world.last_loader_run_ts)
-        self.assertIsNotNone(loader.last_processing_ts)
+        self.assertIsNotNone(spawn_world.last_spawn_plan_run_ts)
+        self.assertTrue(SpawnPlanRun.objects.filter(spawn_world=spawn_world, plan=plan).exists())
 
-    def test_loader_task_after_start_does_not_duplicate_initial_load(self):
-        mob_template = MobTemplate.objects.create(
+    def test_spawn_plan_task_after_start_does_not_duplicate_initial_load(self):
+        mob_definition = MobDefinition.objects.create(
             world=self.world,
+            slug="sentinel",
             name="a sentinel",
         )
-        loader = Loader.objects.create(
+        plan = SpawnPlan.objects.create(
             world=self.world,
             zone=self.zone,
-            inherit_zone_wait=False,
-            respawn_wait=0,
+            slug="sentinels",
+            respawn_policy={"mode": "fixed", "seconds": 0},
         )
-        rule = Rule.objects.create(
-            loader=loader,
-            template=mob_template,
-            target=self.room,
-            num_copies=2,
+        SpawnEntry.objects.create(
+            plan=plan,
+            slug="sentinel",
+            source="mobdefinition.sentinel",
+            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            count=2,
         )
         spawn_world = self.world.create_spawn_world()
 
         WorldSmith(spawn_world).start()
-        run_world_loaders()
+        run_world_spawn_plans()
 
         self.assertEqual(
-            Mob.objects.filter(world=spawn_world, rule=rule).count(),
+            Mob.objects.filter(world=spawn_world, definition=mob_definition).count(),
             2,
         )
 
-    @patch('spawns.loading.run_loaders')
-    def test_start_failure_recovers_to_stopped(self, mock_run_loaders):
-        mock_run_loaders.side_effect = serializers.ValidationError(
-            "broken loader")
+    @patch('spawns.loading.run_spawn_plans_for_world')
+    def test_start_failure_recovers_to_stopped(self, mock_run_spawn_plans):
+        mock_run_spawn_plans.side_effect = serializers.ValidationError(
+            "broken spawn plan")
         spawn_world = self.world.create_spawn_world()
 
         with self.assertRaises(ServiceError) as error:
             WorldSmith(spawn_world).start()
 
-        self.assertIn("broken loader", str(error.exception))
+        self.assertIn("broken spawn plan", str(error.exception))
         spawn_world.refresh_from_db()
         self.assertEqual(
             spawn_world.lifecycle,

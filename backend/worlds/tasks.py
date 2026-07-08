@@ -10,7 +10,7 @@ from config import constants as api_consts, constants
 from config import game_settings as adv_config
 from fastapi_app.forge_ws import complete_job, exit_world as notify_exit_world
 from spawns.models import Player
-from spawns.loading import run_loaders
+from spawns.loading import run_spawn_plans_for_world
 from spawns.services import WorldGate
 from users.models import User
 from worlds.models import InstanceRun, World
@@ -18,12 +18,12 @@ from worlds.services import WorldSmith
 
 
 logger = logging.getLogger('lifecycle')
-LOADERS_TASK_LOCK_KEY = 'run_world_loaders_lock'
+SPAWN_PLANS_TASK_LOCK_KEY = 'run_world_spawn_plans_lock'
 MAX_WORLD_IDLE_SECONDS = 5 * 60
 
 
-def _loader_interval_seconds() -> float:
-    raw_interval = getattr(adv_config, 'GAME_LOADER_INTERVAL_SECONDS', 15)
+def _spawn_plan_interval_seconds() -> float:
+    raw_interval = getattr(adv_config, 'GAME_SPAWN_PLAN_INTERVAL_SECONDS', 15)
     try:
         interval = float(raw_interval)
     except (TypeError, ValueError):
@@ -31,8 +31,8 @@ def _loader_interval_seconds() -> float:
     return max(interval, 1.0)
 
 
-def _loader_lock_timeout_seconds() -> int:
-    return max(int(_loader_interval_seconds() * 4), 30)
+def _spawn_plan_lock_timeout_seconds() -> int:
+    return max(int(_spawn_plan_interval_seconds() * 4), 30)
 
 
 def _player_idle_timeout_seconds(player) -> int:
@@ -285,9 +285,9 @@ def monitor_worlds():
 
 
 @shared_task(ignore_result=True)
-def run_world_loaders():
-    lock_timeout = _loader_lock_timeout_seconds()
-    if not cache.add(LOADERS_TASK_LOCK_KEY, 1, timeout=lock_timeout):
+def run_world_spawn_plans():
+    lock_timeout = _spawn_plan_lock_timeout_seconds()
+    if not cache.add(SPAWN_PLANS_TASK_LOCK_KEY, 1, timeout=lock_timeout):
         return {'skipped': True}
 
     try:
@@ -302,15 +302,15 @@ def run_world_loaders():
                 continue
 
             try:
-                run_loaders(world=spawn_world)
+                run_spawn_plans_for_world(world=spawn_world)
                 processed += 1
             except Exception:
                 logger.exception(
-                    "Error running loaders for world %s (%s)",
+                    "Error running spawn plans for world %s (%s)",
                     spawn_world.key,
                     spawn_world.id,
                 )
 
         return {'processed': processed}
     finally:
-        cache.delete(LOADERS_TASK_LOCK_KEY)
+        cache.delete(SPAWN_PLANS_TASK_LOCK_KEY)

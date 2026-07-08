@@ -10,10 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from rest_framework import serializers
 
 from quests.entity_refs import (
-    canonical_template_type,
+    canonical_entity_type,
     is_dynamic_reference,
+    resolve_entity_ref_id,
     resolve_room_ref_id,
-    resolve_template_ref_id,
 )
 from quests.models import (
     QUEST_REPEATABILITY_MODES,
@@ -23,7 +23,7 @@ from quests.models import (
     QuestArcTemplate,
     QuestTemplate,
 )
-from builders.models import ItemTemplate
+from builders.models import ItemDefinition
 from worlds.models import World
 
 
@@ -195,19 +195,19 @@ def _manifest_spec_for_quest_type(quest_type: str) -> dict[str, Any]:
     return {"type": canonical_type} if canonical_type != "quest" else {}
 
 
-def _template_ref_error(expected_type: str, field_name: str) -> str:
+def _entity_ref_error(expected_type: str, field_name: str) -> str:
     return (
         f"{field_name} must be an integer id, a '{expected_type}.<id>' key, "
         f"a '{expected_type}.<slug>' key, or a bare slug."
     )
 
 
-def _validate_template_ref(world: World, value: Any, expected_type: str, field_name: str) -> None:
-    expected = canonical_template_type(expected_type)
+def _validate_entity_ref(world: World, value: Any, expected_type: str, field_name: str) -> None:
+    expected = canonical_entity_type(expected_type)
     if not expected or value in (None, ""):
         return
     if isinstance(value, bool):
-        raise serializers.ValidationError(_template_ref_error(expected, field_name))
+        raise serializers.ValidationError(_entity_ref_error(expected, field_name))
     if isinstance(value, int) or is_dynamic_reference(value):
         return
 
@@ -217,13 +217,13 @@ def _validate_template_ref(world: World, value: Any, expected_type: str, field_n
 
     prefix, sep, raw = text.partition(".")
     if sep == ".":
-        canonical_prefix = canonical_template_type(prefix)
+        canonical_prefix = canonical_entity_type(prefix)
         if not canonical_prefix or canonical_prefix != expected:
-            raise serializers.ValidationError(_template_ref_error(expected, field_name))
+            raise serializers.ValidationError(_entity_ref_error(expected, field_name))
         if raw.isdigit():
             return
 
-    resolved_id = resolve_template_ref_id(
+    resolved_id = resolve_entity_ref_id(
         world=world,
         value=value,
         expected_type=expected,
@@ -252,20 +252,20 @@ def _validate_room_ref(world: World, value: Any, field_name: str) -> None:
         raise serializers.ValidationError(f"{field_name} references an unknown room.")
 
 
-def _condition_expected_template_type(left_path: Any, right_value: Any = None) -> str | None:
+def _condition_expected_entity_type(left_path: Any, right_value: Any = None) -> str | None:
     if isinstance(right_value, str):
         prefix, sep, _ = right_value.strip().partition(".")
         if sep == ".":
-            explicit_type = canonical_template_type(prefix)
+            explicit_type = canonical_entity_type(prefix)
             if explicit_type:
                 return explicit_type
 
     path = str(left_path or "").strip()
-    if not path.endswith(".template_id"):
+    if not path.endswith(".definition_id"):
         return None
-    if ".item.template_id" in path:
-        return "itemtemplate"
-    return "mobtemplate"
+    if ".item.definition_id" in path:
+        return "itemdefinition"
+    return "mobdefinition"
 
 
 def _condition_sets_event_target_room(condition: Any) -> bool:
@@ -320,33 +320,33 @@ def _condition_uses_room_ref(
     return path.endswith(".id") or path.endswith("_id") or path == "event.target.id"
 
 
-def _validate_condition_template_refs(world: World, condition: Any, field_name: str) -> None:
+def _validate_condition_entity_refs(world: World, condition: Any, field_name: str) -> None:
     if condition in (None, {}, []):
         return
     if isinstance(condition, list):
         for index, item in enumerate(condition):
-            _validate_condition_template_refs(world, item, f"{field_name}[{index}]")
+            _validate_condition_entity_refs(world, item, f"{field_name}[{index}]")
         return
     if not isinstance(condition, dict):
         return
 
     if "all" in condition:
-        _validate_condition_template_refs(world, condition.get("all"), f"{field_name}.all")
+        _validate_condition_entity_refs(world, condition.get("all"), f"{field_name}.all")
     if "any" in condition:
-        _validate_condition_template_refs(world, condition.get("any"), f"{field_name}.any")
+        _validate_condition_entity_refs(world, condition.get("any"), f"{field_name}.any")
     if "not" in condition:
-        _validate_condition_template_refs(world, condition.get("not"), f"{field_name}.not")
+        _validate_condition_entity_refs(world, condition.get("not"), f"{field_name}.not")
     if "quest_completed" in condition:
         quest_ref = condition.get("quest_completed")
         if quest_ref in (None, ""):
             raise serializers.ValidationError(
-                _template_ref_error("questtemplate", f"{field_name}.quest_completed")
+                _entity_ref_error("questtemplate", f"{field_name}.quest_completed")
             )
         if isinstance(quest_ref, (list, tuple, set, dict)):
             raise serializers.ValidationError(
                 f"{field_name}.quest_completed must be a single quest ref; use all/any for multiple quest prerequisites."
             )
-        _validate_template_ref(
+        _validate_entity_ref(
             world,
             quest_ref,
             "questtemplate",
@@ -360,13 +360,13 @@ def _validate_condition_template_refs(world: World, condition: Any, field_name: 
 
         left_path = raw_args[0]
         right_value = raw_args[1]
-        base_expected_type = _condition_expected_template_type(left_path)
+        base_expected_type = _condition_expected_entity_type(left_path)
 
         if operator == "in" and isinstance(right_value, (list, tuple, set)):
             for index, candidate in enumerate(right_value):
-                expected_type = _condition_expected_template_type(left_path, candidate) or base_expected_type
+                expected_type = _condition_expected_entity_type(left_path, candidate) or base_expected_type
                 if expected_type:
-                    _validate_template_ref(
+                    _validate_entity_ref(
                         world,
                         candidate,
                         expected_type,
@@ -374,9 +374,9 @@ def _validate_condition_template_refs(world: World, condition: Any, field_name: 
                     )
             continue
 
-        expected_type = _condition_expected_template_type(left_path, right_value) or base_expected_type
+        expected_type = _condition_expected_entity_type(left_path, right_value) or base_expected_type
         if expected_type:
-            _validate_template_ref(
+            _validate_entity_ref(
                 world,
                 right_value,
                 expected_type,
@@ -465,25 +465,25 @@ def _validate_condition_room_refs(
         _validate_room_ref(world, right_value, f"{field_name}.{operator}[1]")
 
 
-def _validate_effect_template_refs(world: World, effects: list[dict[str, Any]] | None, field_name: str) -> None:
+def _validate_effect_entity_refs(world: World, effects: list[dict[str, Any]] | None, field_name: str) -> None:
     if not effects:
         return
     for index, effect in enumerate(effects):
         if not isinstance(effect, dict):
             continue
-        if "mob_template" in effect:
-            _validate_template_ref(
+        if "mob_definition" in effect:
+            _validate_entity_ref(
                 world,
-                effect.get("mob_template"),
-                "mobtemplate",
-                f"{field_name}[{index}].mob_template",
+                effect.get("mob_definition"),
+                "mobdefinition",
+                f"{field_name}[{index}].mob_definition",
             )
-        if "item_template" in effect or "item_template_id" in effect:
-            _validate_template_ref(
+        if "item_definition" in effect or "item_definition_id" in effect:
+            _validate_entity_ref(
                 world,
-                effect.get("item_template", effect.get("item_template_id")),
-                "itemtemplate",
-                f"{field_name}[{index}].item_template",
+                effect.get("item_definition", effect.get("item_definition_id")),
+                "itemdefinition",
+                f"{field_name}[{index}].item_definition",
             )
 
 
@@ -498,28 +498,28 @@ def _validate_step_room_items(world: World, room_items: list[dict[str, Any]] | N
             room_item.get("room") or room_item.get("room_id"),
             f"{field_name}[{index}].room",
         )
-        item_template_ref = room_item.get("item_template") or room_item.get("item_template_id")
-        _validate_template_ref(
+        item_definition_ref = room_item.get("item_definition") or room_item.get("item_definition_id")
+        _validate_entity_ref(
             world,
-            item_template_ref,
-            "itemtemplate",
-            f"{field_name}[{index}].item_template",
+            item_definition_ref,
+            "itemdefinition",
+            f"{field_name}[{index}].item_definition",
         )
-        item_template_id = resolve_template_ref_id(
+        item_definition_id = resolve_entity_ref_id(
             world=world,
-            value=item_template_ref,
-            expected_type="itemtemplate",
+            value=item_definition_ref,
+            expected_type="itemdefinition",
         )
-        if not item_template_id:
+        if not item_definition_id:
             continue
-        item_template = ItemTemplate.objects.filter(pk=item_template_id).only("type").first()
-        if item_template and item_template.type != "quest":
+        item_definition = ItemDefinition.objects.filter(pk=item_definition_id).only("item_type").first()
+        if item_definition and item_definition.item_type != "quest":
             raise serializers.ValidationError(
-                f"{field_name}[{index}].item_template must reference an item template of type 'quest'."
+                f"{field_name}[{index}].item_definition must reference an item definition of type 'quest'."
             )
 
 
-def _validate_slot_schema_template_refs(world: World, slot_schema: dict[str, Any]) -> None:
+def _validate_slot_schema_entity_refs(world: World, slot_schema: dict[str, Any]) -> None:
     for slot_name, slot_spec in (slot_schema or {}).items():
         if not isinstance(slot_spec, dict):
             continue
@@ -532,9 +532,9 @@ def _validate_slot_schema_template_refs(world: World, slot_schema: dict[str, Any
         if not isinstance(raw_value, str):
             continue
         prefix, sep, _ = raw_value.strip().partition(".")
-        expected_type = canonical_template_type(prefix) if sep == "." else None
+        expected_type = canonical_entity_type(prefix) if sep == "." else None
         if expected_type:
-            _validate_template_ref(
+            _validate_entity_ref(
                 world,
                 raw_value,
                 expected_type,
@@ -566,18 +566,23 @@ def _validate_quest_template_refs(
                     f"spec.discovery.sources[{index}].callout is required for room_prompt sources."
                 )
         if source_type == "npc_dialogue":
-            _validate_template_ref(
+            source_ref = source.get("mob_definition") or source.get("mob_definition_id")
+            _validate_entity_ref(
                 world,
-                source.get("mob_template") or source.get("mob_template_id"),
-                "mobtemplate",
-                f"spec.discovery.sources[{index}].mob_template",
+                source_ref,
+                "mobdefinition",
+                f"spec.discovery.sources[{index}].mob_definition",
             )
+            if source_ref in (None, ""):
+                raise serializers.ValidationError(
+                    f"spec.discovery.sources[{index}].mob_definition is required for npc_dialogue sources."
+                )
 
-    _validate_condition_template_refs(world, discovery_policy.get("visible_if"), "spec.discovery.visible_if")
+    _validate_condition_entity_refs(world, discovery_policy.get("visible_if"), "spec.discovery.visible_if")
     _validate_condition_room_refs(world, discovery_policy.get("visible_if"), "spec.discovery.visible_if")
-    _validate_condition_template_refs(world, discovery_policy.get("accept_if"), "spec.discovery.accept_if")
+    _validate_condition_entity_refs(world, discovery_policy.get("accept_if"), "spec.discovery.accept_if")
     _validate_condition_room_refs(world, discovery_policy.get("accept_if"), "spec.discovery.accept_if")
-    _validate_slot_schema_template_refs(world, slot_schema)
+    _validate_slot_schema_entity_refs(world, slot_schema)
 
     for step_index, step in enumerate(steps):
         if not isinstance(step, dict):
@@ -587,12 +592,12 @@ def _validate_quest_template_refs(
             step.get("room_items"),
             f"spec.steps[{step_index}].room_items",
         )
-        _validate_effect_template_refs(world, step.get("effects"), f"spec.steps[{step_index}].effects")
+        _validate_effect_entity_refs(world, step.get("effects"), f"spec.steps[{step_index}].effects")
         for objective_index, objective in enumerate(step.get("objectives") or []):
             if not isinstance(objective, dict):
                 continue
             tracker = objective.get("tracker") or {}
-            _validate_condition_template_refs(
+            _validate_condition_entity_refs(
                 world,
                 tracker.get("where"),
                 f"spec.steps[{step_index}].objectives[{objective_index}].tracker.where",
@@ -605,7 +610,7 @@ def _validate_quest_template_refs(
         for choice_index, choice in enumerate(step.get("choices") or []):
             if not isinstance(choice, dict):
                 continue
-            _validate_condition_template_refs(
+            _validate_condition_entity_refs(
                 world,
                 choice.get("if"),
                 f"spec.steps[{step_index}].choices[{choice_index}].if",
@@ -615,7 +620,7 @@ def _validate_quest_template_refs(
                 choice.get("if"),
                 f"spec.steps[{step_index}].choices[{choice_index}].if",
             )
-            _validate_effect_template_refs(
+            _validate_effect_entity_refs(
                 world,
                 choice.get("effects"),
                 f"spec.steps[{step_index}].choices[{choice_index}].effects",
@@ -623,7 +628,7 @@ def _validate_quest_template_refs(
         for transition_index, transition in enumerate(step.get("transitions") or []):
             if not isinstance(transition, dict):
                 continue
-            _validate_condition_template_refs(
+            _validate_condition_entity_refs(
                 world,
                 transition.get("when"),
                 f"spec.steps[{step_index}].transitions[{transition_index}].when",
@@ -633,14 +638,14 @@ def _validate_quest_template_refs(
                 transition.get("when"),
                 f"spec.steps[{step_index}].transitions[{transition_index}].when",
             )
-            _validate_effect_template_refs(
+            _validate_effect_entity_refs(
                 world,
                 transition.get("effects"),
                 f"spec.steps[{step_index}].transitions[{transition_index}].effects",
             )
 
     for resolution_key, effects in (reward_policy or {}).items():
-        _validate_effect_template_refs(
+        _validate_effect_entity_refs(
             world,
             effects,
             f"spec.rewards.{resolution_key}",
@@ -686,7 +691,7 @@ class QuestRoomItemSpec(BaseModel):
     model_config = ConfigDict(extra="allow")
     id: str
     room: Any
-    item_template: Any
+    item_definition: Any
     ground_description: str = ""
 
     @model_validator(mode="after")

@@ -75,7 +75,7 @@ export const generate_crud_actions = (
   { create_callback, delete_callback }
 ) => {
   /*
-    Takes a name (for example mob_template or item_template) and returns a set of
+    Takes a name (for example mob_definition or item_definition) and returns a set of
     actions that can be used to fetch, create, save, and delete that resource.
 
     This is currently used in

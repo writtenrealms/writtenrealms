@@ -6,7 +6,7 @@ from typing import Iterable
 
 from django.utils import timezone
 
-from quests.entity_refs import resolve_room_ref_id, resolve_template_ref_id
+from quests.entity_refs import resolve_entity_ref_id, resolve_room_ref_id
 from spawns.events import GameEvent
 from quests.models import QuestOfferState, QuestTemplate
 from quests.services.engine import (
@@ -54,13 +54,13 @@ def _room_prompt_source_callout(source: dict) -> str | None:
     return callout_text or None
 
 
-def _npc_dialogue_source_mob_template_id(template: QuestTemplate, source: dict) -> int | None:
+def _npc_dialogue_source_mob_definition_id(template: QuestTemplate, source: dict) -> int | None:
     if _source_type(source) != "npc_dialogue":
         return None
-    return resolve_template_ref_id(
+    return resolve_entity_ref_id(
         world=template.world,
-        value=source.get("mob_template") or source.get("mob_template_id"),
-        expected_type="mobtemplate",
+        value=source.get("mob_definition") or source.get("mob_definition_id"),
+        expected_type="mobdefinition",
     )
 
 
@@ -69,7 +69,7 @@ def _source_matches_player(
     template: QuestTemplate,
     source: dict,
     *,
-    room_mob_template_ids: set[int] | None = None,
+    room_mob_definition_ids: set[int] | None = None,
 ) -> bool:
     source_type = _source_type(source)
     if source_type == "auto_start":
@@ -83,12 +83,12 @@ def _source_matches_player(
         )
 
     if source_type == "npc_dialogue":
-        mob_template_id = _npc_dialogue_source_mob_template_id(template, source)
-        if not mob_template_id or not player.room_id:
+        mob_definition_id = _npc_dialogue_source_mob_definition_id(template, source)
+        if not mob_definition_id or not player.room_id:
             return False
-        if room_mob_template_ids is not None:
-            return mob_template_id in room_mob_template_ids
-        return player.room.mobs.filter(template_id=mob_template_id).exists()
+        if room_mob_definition_ids is not None:
+            return mob_definition_id in room_mob_definition_ids
+        return player.room.mobs.filter(definition_id=mob_definition_id).exists()
 
     return False
 
@@ -131,7 +131,7 @@ def _matching_sources_for_template(
     player,
     template: QuestTemplate,
     *,
-    room_mob_template_ids: set[int] | None = None,
+    room_mob_definition_ids: set[int] | None = None,
 ) -> list[dict]:
     if not _template_available(player, template):
         return []
@@ -144,7 +144,7 @@ def _matching_sources_for_template(
                 player,
                 template,
                 source,
-                room_mob_template_ids=room_mob_template_ids,
+                room_mob_definition_ids=room_mob_definition_ids,
             )
         )
     ]
@@ -236,49 +236,49 @@ def room_prompt_callouts_for_room(
 
 
 def available_npc_dialogue_opportunities_for_room_mobs(player, room_mobs: Iterable) -> dict[int, list[dict]]:
-    room_mob_template_ids = {
-        int(mob.template_id)
+    room_mob_definition_ids = {
+        int(mob.definition_id)
         for mob in room_mobs
-        if getattr(mob, "template_id", None)
+        if getattr(mob, "definition_id", None)
     }
-    opportunities_by_template_id: dict[int, list[dict]] = {}
-    if not room_mob_template_ids:
-        return opportunities_by_template_id
+    opportunities_by_definition_id: dict[int, list[dict]] = {}
+    if not room_mob_definition_ids:
+        return opportunities_by_definition_id
 
     templates = list(runtime_templates_qs(player))
     for template in templates:
         matched_sources = _matching_sources_for_template(
             player,
             template,
-            room_mob_template_ids=room_mob_template_ids,
+            room_mob_definition_ids=room_mob_definition_ids,
         )
         if not matched_sources:
             continue
         opportunity_payload = serialize_opportunity(template, player=player)
         for source in matched_sources:
-            mob_template_id = _npc_dialogue_source_mob_template_id(template, source)
-            if not mob_template_id:
+            mob_definition_id = _npc_dialogue_source_mob_definition_id(template, source)
+            if not mob_definition_id:
                 continue
-            opportunities_by_template_id.setdefault(mob_template_id, []).append(opportunity_payload)
+            opportunities_by_definition_id.setdefault(mob_definition_id, []).append(opportunity_payload)
 
-    for template_id in list(opportunities_by_template_id.keys()):
-        opportunities_by_template_id[template_id].sort(
+    for definition_id in list(opportunities_by_definition_id.keys()):
+        opportunities_by_definition_id[definition_id].sort(
             key=lambda opportunity: (opportunity.get("name") or "").lower()
         )
-    return opportunities_by_template_id
+    return opportunities_by_definition_id
 
 
-def available_npc_dialogue_opportunities_for_mob_template(
+def available_npc_dialogue_opportunities_for_mob_definition(
     player,
-    mob_template_id: int | None,
+    mob_definition_id: int | None,
 ) -> list[dict]:
-    if not mob_template_id:
+    if not mob_definition_id:
         return []
     return list(
         available_npc_dialogue_opportunities_for_room_mobs(
             player,
-            [SimpleNamespace(template_id=mob_template_id)],
-        ).get(int(mob_template_id), [])
+            [SimpleNamespace(definition_id=mob_definition_id)],
+        ).get(int(mob_definition_id), [])
     )
 
 

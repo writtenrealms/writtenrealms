@@ -7,16 +7,11 @@ from builders.models import (
     BuilderAssignment,
     ItemBundle,
     ItemDefinition,
-    ItemTemplate,
     MobDefinition,
-    MobTemplate,
     TransformationTemplate,
-    Loader,
-    Rule,
     Path,
     Faction,
     RandomItemProfile,
-    Quest,
     WorldBuilder)
 from spawns.models import Mob, Player, Item
 from users.models import User
@@ -91,20 +86,12 @@ class ReferenceField(Field):
                 #world=context,
                 pk=rid)
         else:
-            if rtype == 'mob_template':
-                return MobTemplate.objects.get(pk=rid)
-            elif rtype == 'mob_definition':
+            if rtype == 'mob_definition':
                 return MobDefinition.objects.get(pk=rid)
             elif rtype == 'item_definition':
                 return ItemDefinition.objects.get(pk=rid)
             elif rtype == 'item_bundle':
                 return ItemBundle.objects.get(pk=rid)
-            elif rtype == 'item_template':
-                return ItemTemplate.objects.get(pk=rid)
-            elif rtype == 'loader':
-                return Loader.objects.get(pk=rid)
-            elif rtype == 'rule':
-                return Rule.objects.get(pk=rid)
             elif rtype == 'transformation_template':
                 return TransformationTemplate.objects.get(pk=rid)
             elif rtype == 'faction':
@@ -113,8 +100,6 @@ class ReferenceField(Field):
                 return RandomItemProfile.objects.get(pk=rid)
             elif rtype == 'user':
                 return User.objects.get(pk=rid)
-            elif rtype == 'quest':
-                return Quest.objects.get(pk=rid)
             elif rtype == 'builder_assignment':
                 return BuilderAssignment.objects.get(pk=rid)
             elif rtype == 'world_builder':
@@ -129,18 +114,6 @@ def ref_field(obj):
 class KeyField(Field):
     def to_representation(self, value):
         return value.key
-
-
-class InstanceOrTemplateValueField(serializers.ReadOnlyField):
-    """
-    Field meant to take either the instance's value or the template value
-    depending on whether the instance has a template.
-    """
-
-    def get_attribute(self, instance):
-        if instance.template:
-            return super().get_attribute(instance.template)
-        return super().get_attribute(instance)
 
 
 class AuthorField(serializers.ReadOnlyField):

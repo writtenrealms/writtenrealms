@@ -320,7 +320,6 @@ def spawn_item_from_definition(
         definition=definition,
         definition_slug_snapshot=definition.slug,
         roll_metadata=roll_metadata,
-        rule=rule,
         **item_fields,
     )
 
@@ -340,7 +339,7 @@ def sync_spawned_items_from_definition(definition) -> int:
     )
     queryset = (
         Item.objects
-        .filter(definition=definition, upgrade_count=0, augment__isnull=True)
+        .filter(definition=definition, augment__isnull=True)
         .select_related("currency")
     )
     for item in queryset:

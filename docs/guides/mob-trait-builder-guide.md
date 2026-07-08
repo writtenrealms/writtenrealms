@@ -44,7 +44,7 @@ health when the mob is created.
 
 ## Rolled Spawn-Plan Traits
 
-Put `traits` on a spawn-plan entry when the loader should choose traits for each
+Put `traits` on a spawn-plan entry when the spawn plan should choose traits for each
 generated placement.
 
 ```yaml

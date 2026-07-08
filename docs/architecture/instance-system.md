@@ -14,7 +14,7 @@ defines the target shape those pieces should move toward.
 ## Related Docs
 
 - `.codex/skills/wr-transition/wr2-architecture.md`
-- [spawn-plan-loader-transition.md](/Users/teebes/code/writtenrealms/docs/architecture/spawn-plan-loader-transition.md)
+- [spawn-plan-system.md](/Users/teebes/code/writtenrealms/docs/architecture/spawn-plan-system.md)
 - [scoped-state-system.md](/Users/teebes/code/writtenrealms/docs/architecture/scoped-state-system.md)
 - [quest-system-endstate.md](/Users/teebes/code/writtenrealms/docs/architecture/quest-system-endstate.md)
 - [condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md)
@@ -55,8 +55,8 @@ defines the target shape those pieces should move toward.
   should be explicit, visible, and limited.
 - Do not destroy a run just because everyone left. Cleanup is lifecycle policy,
   not a side effect of `leave`.
-- Do not make spawn plans reroll completion-relevant population every loader
-  pass.
+- Do not make spawn plans reroll completion-relevant population during
+  reconciliation.
 
 ## Core Mental Model
 
@@ -183,7 +183,7 @@ Good initial override candidates:
 | `death_gold_penalty` | Needed if the instance uses gold-loss death. |
 | `death_route` | Needed if faction or route-specific death behavior should differ. |
 | `allow_pvp` / `pvp_mode` | Instances often need stricter PvP policy than the base world. |
-| `never_reload` or spawn reload policy | Completion-sensitive instances may need loader reconciliation disabled or constrained. |
+| `never_reload` or spawn reload policy | Completion-sensitive instances may need spawn-plan reconciliation disabled or constrained. |
 | presentation fields | Instance lobby/entry art and text can differ from the base world. |
 | cleanup policy | Run lifetime is inherently instance-specific. |
 
@@ -585,9 +585,9 @@ Recommended rule:
 - Completion happens when every cohort member is dead or otherwise removed by a
   completion-counting outcome.
 
-This avoids ambiguity from respawn reconciliation. A loader pass should not
-make "all mobs" impossible by recreating the population after the group clears
-it.
+This avoids ambiguity from respawn reconciliation. Spawn-plan reconciliation
+should not make "all mobs" impossible by recreating the population after the
+group clears it.
 
 Spawn plan additions:
 

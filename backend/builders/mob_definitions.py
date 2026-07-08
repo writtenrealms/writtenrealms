@@ -142,9 +142,7 @@ def _mob_fields_from_definition(definition, attributes: dict[str, float]) -> dic
     return fields
 
 
-def _runtime_group_id(definition, rule):
-    if rule and rule.loader.is_group:
-        return rule.loader.key
+def _runtime_group_id(definition):
     if definition.assists:
         return definition.key
     return None
@@ -226,9 +224,8 @@ def spawn_mob_from_definition(
         health=mob_fields.get("health_max") or 1,
         stamina=mob_fields.get("stamina_max") or 0,
         energy=mob_fields.get("energy_max") or 0,
-        group_id=_runtime_group_id(definition, rule),
+        group_id=_runtime_group_id(definition),
         roams=roams,
-        rule=rule,
         **mob_fields,
     )
     definition_trait_instances = trait_instances(

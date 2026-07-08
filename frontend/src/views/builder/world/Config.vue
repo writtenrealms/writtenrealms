@@ -191,7 +191,7 @@ const configLinks = computed(() => [
   },
   {
     title: "Random Item Profiles",
-    description: "Reusable item roll profiles for rewards, merchants, and loads.",
+    description: "Reusable item roll profiles for rewards, merchants, and spawn plans.",
     rootOnly: true,
     to: {
       name: "builder_world_random_profile_list",
@@ -200,7 +200,7 @@ const configLinks = computed(() => [
   },
   {
     title: "Item Bundles",
-    description: "Weighted item definition bundles for random drops, loads, and merchant stock.",
+    description: "Weighted item definition bundles for random drops, spawn plans, and merchant stock.",
     rootOnly: true,
     to: {
       name: "builder_item_bundle_list",
@@ -218,7 +218,7 @@ const configLinks = computed(() => [
   },
   {
     title: "Transformations",
-    description: "One-off template changes applied through loader rules.",
+    description: "One-off template changes applied through spawn-plan entries.",
     rootOnly: true,
     to: {
       name: "builder_world_transformation_template_list",
@@ -249,15 +249,6 @@ const configLinks = computed(() => [
     rootOnly: true,
     to: {
       name: "builder_world_faction_list",
-      params: { world_id: route.params.world_id },
-    },
-  },
-  {
-    title: "Starting EQ",
-    description: "Items granted to new players when they enter the world.",
-    rootOnly: true,
-    to: {
-      name: "builder_world_starting_eq_list",
       params: { world_id: route.params.world_id },
     },
   },
@@ -507,22 +498,6 @@ const assignment_link = (assignment) => {
       params: {
         world_id: route.params.world_id,
         room_id: assignment.id,
-      },
-    } as RouteLocationRaw;
-  } else if (assignment.model_type === "itemtemplate") {
-    return {
-      name: "builder_item_template_details",
-      params: {
-        world_id: route.params.world_id,
-        item_template_id: assignment.id,
-      },
-    } as RouteLocationRaw;
-  } else if (assignment.model_type === "mobtemplate") {
-    return {
-      name: "builder_mob_template_details",
-      params: {
-        world_id: route.params.world_id,
-        mob_template_id: assignment.id,
       },
     } as RouteLocationRaw;
   }

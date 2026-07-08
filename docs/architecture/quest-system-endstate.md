@@ -16,8 +16,8 @@ stack built around:
 
 The new system should fit WR2's event-driven direction, align with the existing
 YAML manifest workflow, and avoid carrying forward WR1-era assumptions like
-"every quest belongs to one mob template" or "quest state is just enquire vs
-complete timestamps."
+"every quest belongs to one mob template" or "quest state is just a pair of
+interaction timestamps."
 
 ## Design Summary
 
@@ -39,7 +39,7 @@ That means:
 - No WR1 data migration strategy.
 - No compatibility layer that keeps the old quest authoring model alive.
 - No new quest content authored in legacy `conditions` strings plus imperative
-  `enquire_cmds` / `completion_cmds`.
+  dialogue/completion command scripts.
 - No inline code inside quest manifests.
 
 ## Core Concepts
@@ -240,7 +240,7 @@ spec:
   discovery:
     sources:
       - type: npc_dialogue
-        mob_template: mobtemplate.12
+        mob_definition: mobdefinition.12
     visible_if: {}
     accept_if: {}
     salience: 80
@@ -335,9 +335,9 @@ Opportunities may be surfaced through:
 - viewer-specific room item payloads
 - explicit commands like `rumors`
 
-The important rule is that the canonical source is the quest service, not the
-old `quest_data: {enquire, complete}` booleans currently attached to room/NPC
-payloads.
+The important rule is that the canonical source is the quest service. Room/NPC
+payloads may expose a small `quest_indicator` projection, but it should stay a
+derived presentation hint rather than a separate quest runtime.
 
 ## Content Types
 
@@ -450,7 +450,7 @@ spec:
   discovery:
     sources:
       - type: npc_dialogue
-        mob_template: mobtemplate.12
+        mob_definition: mobdefinition.12
     visible_if:
       all:
         - fact:
@@ -469,7 +469,7 @@ spec:
     suspect:
       resolve:
         type: fixed
-        entity: mobtemplate.44
+        entity: mobdefinition.44
 
   steps:
     - id: offer
@@ -581,7 +581,7 @@ spec:
       - type: bulletin_board
         room: room.88
       - type: npc_dialogue
-        mob_template: mobtemplate.201
+        mob_definition: mobdefinition.201
     visible_if:
       all:
         - fact:
@@ -600,7 +600,7 @@ spec:
     client:
       resolve:
         type: fixed
-        entity: mobtemplate.201
+        entity: mobdefinition.201
     witness:
       resolve:
         type: entity_query

@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from django.contrib.contenttypes.models import ContentType
 
-from builders.models import ItemDefinition, MobTemplate, Trigger
+from builders.models import ItemDefinition, MobDefinition, Trigger
 from config import constants as adv_consts
 from core.scoped_state import (
     STATE_SCOPE_CHARACTER,
@@ -372,20 +372,20 @@ class TestCommandFallbackTriggers(WorldTestCase):
         self.player.in_game = True
         self.player.save(update_fields=["in_game"])
 
-        mob_template = MobTemplate.objects.create(
+        mob_definition = MobDefinition.objects.create(
             world=self.world,
             name="Sage",
         )
         mob = self.create_mob(
             "Sage",
-            template=mob_template,
+            definition=mob_definition,
         )
         Trigger.objects.create(
             world=self.world,
             kind=adv_consts.TRIGGER_KIND_EVENT,
             scope=adv_consts.TRIGGER_SCOPE_WORLD,
-            target_type=ContentType.objects.get_for_model(MobTemplate),
-            target_id=mob_template.id,
+            target_type=ContentType.objects.get_for_model(MobDefinition),
+            target_id=mob_definition.id,
             event=adv_consts.MOB_REACTION_EVENT_SAYING,
             match="hello and (traveler or friend)",
             script="say Greetings, traveler.",
@@ -420,7 +420,7 @@ class TestCommandFallbackTriggers(WorldTestCase):
         next_room.south = self.room
         next_room.save(update_fields=["south"])
 
-        mob_template = MobTemplate.objects.create(
+        mob_definition = MobDefinition.objects.create(
             world=self.world,
             name="Watcher",
         )
@@ -428,14 +428,14 @@ class TestCommandFallbackTriggers(WorldTestCase):
             name="Watcher",
             world=self.world,
             room=next_room,
-            template=mob_template,
+            definition=mob_definition,
         )
         Trigger.objects.create(
             world=self.world,
             kind=adv_consts.TRIGGER_KIND_EVENT,
             scope=adv_consts.TRIGGER_SCOPE_WORLD,
-            target_type=ContentType.objects.get_for_model(MobTemplate),
-            target_id=mob_template.id,
+            target_type=ContentType.objects.get_for_model(MobDefinition),
+            target_id=mob_definition.id,
             event=adv_consts.MOB_REACTION_EVENT_ENTERING,
             script="say You are expected.",
             display_action_in_room=False,
@@ -455,20 +455,20 @@ class TestCommandFallbackTriggers(WorldTestCase):
         self.player.in_game = True
         self.player.save(update_fields=["in_game"])
 
-        mob_template = MobTemplate.objects.create(
+        mob_definition = MobDefinition.objects.create(
             world=self.world,
             name="Archivist",
         )
         mob = self.create_mob(
             "Archivist",
-            template=mob_template,
+            definition=mob_definition,
         )
         Trigger.objects.create(
             world=self.world,
             kind=adv_consts.TRIGGER_KIND_EVENT,
             scope=adv_consts.TRIGGER_SCOPE_WORLD,
-            target_type=ContentType.objects.get_for_model(MobTemplate),
-            target_id=mob_template.id,
+            target_type=ContentType.objects.get_for_model(MobDefinition),
+            target_id=mob_definition.id,
             event=adv_consts.MOB_REACTION_EVENT_SAYING,
             match="archive or ledger",
             script="say Records are eternal.",

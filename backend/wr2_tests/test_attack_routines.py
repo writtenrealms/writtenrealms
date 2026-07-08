@@ -1,6 +1,6 @@
 from copy import deepcopy
 
-from builders.models import ItemTemplate
+from builders.models import ItemDefinition
 from config import constants as adv_consts
 from core.attack_routines import resolve_attack_routine
 from core.combat_formulas import normalize_combat_system, resolve_attack
@@ -55,18 +55,22 @@ class TestAttackRoutines(WorldTestCase):
         ]
 
     def _weapon(self, name, *, weapon_damage=5, container=None):
-        template = ItemTemplate.objects.create(
+        definition = ItemDefinition.objects.create(
             world=self.world,
+            slug=name.lower().replace(" ", "-"),
             name=name,
-            type=adv_consts.ITEM_TYPE_EQUIPPABLE,
-            equipment_type=adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
-            weapon_damage=weapon_damage,
+            item_type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            base_properties={
+                "equipment_type": adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
+                "weapon_damage": weapon_damage,
+            },
         )
         return Item.objects.create(
             world=self.spawn_world,
             container=container or self.player,
-            template=template,
-            name=template.name,
+            definition=definition,
+            definition_slug_snapshot=definition.slug,
+            name=definition.name,
             type=adv_consts.ITEM_TYPE_EQUIPPABLE,
             equipment_type=adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
             weapon_damage=weapon_damage,

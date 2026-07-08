@@ -2,8 +2,8 @@
   <div>
     <div class="name" :class="[item.quality]">
       {{ capfirst(item.name) }}
-      <span class='ml-2 color-text-50 font-text-light' v-if="item.template_id && player.is_builder">
-        [ {{ item.template_id }} ]
+      <span class='ml-2 color-text-50 font-text-light' v-if="item.definition_id && player.is_builder">
+        [ {{ item.definition_id }} ]
       </span>
     </div>
     <div class="summary">{{ summary }}</div>
@@ -50,10 +50,6 @@
         </ul>
       </div>
 
-      <div
-        class="upgrade_count color-text-50"
-        v-if="item.upgrade_count > 0"
-      >Upgrade count: {{item.upgrade_count}}</div>
     </template>
 
     <template v-else-if="item.type === 'container' || item.type === 'corpse'">
@@ -99,10 +95,6 @@
     <div v-if="item.cost" class="color-secondary mt-2">
       Sells for {{ item.cost }} {{ currencies[item.currency] }}.
 
-      <template v-if="isUpgradable">
-        <br />
-         Upgrade can be attempted for {{ upgrade_cost(item) }} gold.
-      </template>
     </div>
   </div>
 </template>
@@ -336,32 +328,6 @@ const summary = computed(() => {
   if (!itemType) return "Item";
   return capfirst(itemType);
 });
-
-const upgrader = computed(() => {
-  const roomChars = (store.state.game.room && store.state.game.room.chars) || [];
-  for (const char of roomChars) {
-    if (char.is_upgrader) {
-      return char;
-    }
-  }
-  return null;
-});
-
-const isUpgradable = computed(() => {
-  if (!upgrader.value) return false;
-
-  // Only show upgrade option in workshop rooms
-  // if (store.state.game.room.flags.indexOf("workshop") == -1) return false;
-
-  // Show upgrade price based on whether they can be upgraded
-  if (props.item.quality == "enchanted" && props.item.upgrade_count <= 2) return true;
-  else if (props.item.quality == "imbued" && props.item.upgrade_count == 0) return true;
-  return false;
-});
-
-const upgrade_cost = (item) => {
-  return Math.ceil(item.upgrade_cost * upgrader.value.upgrade_cost_multiplier);
-};
 
 const lines = computed(() => {
   const description = props.item.description || `It is ${props.item.name}.`;

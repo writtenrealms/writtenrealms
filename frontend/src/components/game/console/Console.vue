@@ -53,7 +53,6 @@ import OfferInventory from "@/components/game/console/OfferInventory.vue";
 import QuestMessage from "@/components/game/console/QuestMessage.vue";
 import ScrollTool from "@/components/game/console/ScrollTool.vue";
 import Stats from "@/components/game/console/Stats.vue";
-import Upgrade from "@/components/game/console/Upgrade.vue";
 import Who from "@/components/game/console/Who.vue";
 import Whois from "@/components/game/console/Whois.vue";
 
@@ -118,8 +117,6 @@ const consoleMessage = (message) => {
 
   if (type === "notification.combat.attack" ||
       type === "notification.combat.healing") return CombatMessage;
-
-  if (type === "cmd.upgrade.success" && message.data.items) return Upgrade;
 
   return Message;
 }

@@ -2,7 +2,7 @@ from copy import deepcopy
 import math
 from unittest.mock import patch
 
-from builders.models import AbilityDefinition, ItemTemplate, MobDefinition
+from builders.models import AbilityDefinition, ItemDefinition, MobDefinition
 from config import constants as adv_consts
 from core.combat_formulas import CombatAttackResult, normalize_combat_system, resolve_attack
 from core.computations import compute_stats
@@ -301,17 +301,21 @@ class TestCombatAbilities(WorldTestCase):
         self.world.config.stat_system = stat_system
         self.world.config.save(update_fields=["stat_system"])
 
-        template = ItemTemplate.objects.create(
+        definition = ItemDefinition.objects.create(
             world=self.world,
+            slug="focus-ring",
             name="Focus Ring",
-            type=adv_consts.ITEM_TYPE_EQUIPPABLE,
-            equipment_type=adv_consts.EQUIPMENT_TYPE_ACCESSORY,
+            item_type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            base_properties={
+                "equipment_type": adv_consts.EQUIPMENT_TYPE_ACCESSORY,
+            },
         )
         ring = Item.objects.create(
             world=self.spawn_world,
             container=self.player,
-            template=template,
-            name=template.name,
+            definition=definition,
+            definition_slug_snapshot=definition.slug,
+            name=definition.name,
             type=adv_consts.ITEM_TYPE_EQUIPPABLE,
             equipment_type=adv_consts.EQUIPMENT_TYPE_ACCESSORY,
             energy_max=100,
@@ -347,17 +351,21 @@ class TestCombatAbilities(WorldTestCase):
         self.world.config.stat_system = stat_system
         self.world.config.save(update_fields=["stat_system"])
 
-        template = ItemTemplate.objects.create(
+        definition = ItemDefinition.objects.create(
             world=self.world,
+            slug="vital-ring",
             name="Vital Ring",
-            type=adv_consts.ITEM_TYPE_EQUIPPABLE,
-            equipment_type=adv_consts.EQUIPMENT_TYPE_ACCESSORY,
+            item_type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            base_properties={
+                "equipment_type": adv_consts.EQUIPMENT_TYPE_ACCESSORY,
+            },
         )
         ring = Item.objects.create(
             world=self.spawn_world,
             container=self.player,
-            template=template,
-            name=template.name,
+            definition=definition,
+            definition_slug_snapshot=definition.slug,
+            name=definition.name,
             type=adv_consts.ITEM_TYPE_EQUIPPABLE,
             equipment_type=adv_consts.EQUIPMENT_TYPE_ACCESSORY,
             health_max=100,

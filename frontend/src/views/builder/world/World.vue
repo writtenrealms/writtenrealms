@@ -122,22 +122,6 @@ const assignment_link = (assignment) => {
         room_id: assignment.id
       }
     } as RouteLocationRaw;
-  } else if (assignment.model_type === 'itemtemplate') {
-    return {
-      name: 'builder_item_template_details',
-      params: {
-        world_id: route.params.world_id,
-        item_template_id: assignment.id
-      }
-    } as RouteLocationRaw;
-  } else if (assignment.model_type === 'mobtemplate') {
-    return {
-      name: 'builder_mob_template_details',
-      params: {
-        world_id: route.params.world_id,
-        mob_template_id: assignment.id
-      }
-    } as RouteLocationRaw;
   }
   // Assume it's a zone
   return {

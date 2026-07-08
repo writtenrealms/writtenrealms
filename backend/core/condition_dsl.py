@@ -242,24 +242,24 @@ def resolve_value(value: Any, context: ConditionContext) -> Any:
     return value
 
 
-def _template_ref_type_for_path(path: str, value: Any = None) -> str | None:
+def _definition_ref_type_for_path(path: str, value: Any = None) -> str | None:
     if isinstance(value, str):
         prefix, sep, _ = value.strip().partition(".")
         if sep == ".":
             try:
-                from quests.entity_refs import canonical_template_type
+                from quests.entity_refs import canonical_entity_type
             except Exception:
-                canonical_template_type = None
-            explicit_type = canonical_template_type(prefix) if canonical_template_type else None
+                canonical_entity_type = None
+            explicit_type = canonical_entity_type(prefix) if canonical_entity_type else None
             if explicit_type:
                 return explicit_type
 
     normalized = str(path or "").strip()
-    if not normalized.endswith(".template_id"):
+    if not normalized.endswith(".definition_id"):
         return None
-    if ".item.template_id" in normalized or ".inventory." in normalized:
-        return "itemtemplate"
-    return "mobtemplate"
+    if ".item.definition_id" in normalized or ".inventory." in normalized:
+        return "itemdefinition"
+    return "mobdefinition"
 
 
 def _path_uses_room_ref(
@@ -292,14 +292,14 @@ def _path_uses_room_ref(
 
 def _resolve_comparison_value(path: str, value: Any, context: ConditionContext) -> Any:
     world = _condition_ref_world(context)
-    expected_type = _template_ref_type_for_path(path, value)
+    expected_type = _definition_ref_type_for_path(path, value)
     if expected_type and world:
         try:
-            from quests.entity_refs import resolve_template_ref_id
+            from quests.entity_refs import resolve_entity_ref_id
         except Exception:
-            resolve_template_ref_id = None
-        if resolve_template_ref_id:
-            resolved_id = resolve_template_ref_id(
+            resolve_entity_ref_id = None
+        if resolve_entity_ref_id:
+            resolved_id = resolve_entity_ref_id(
                 world=world,
                 value=value,
                 expected_type=expected_type,
@@ -324,12 +324,12 @@ def _player_completed_quest_template(value: Any, context: ConditionContext) -> b
         return False
 
     try:
-        from quests.entity_refs import resolve_template_ref_id
+        from quests.entity_refs import resolve_entity_ref_id
         from quests.models import QuestInstance
     except Exception:
         return False
 
-    template_id = resolve_template_ref_id(
+    template_id = resolve_entity_ref_id(
         world=_condition_ref_world(context),
         value=resolve_value(value, context),
         expected_type="questtemplate",

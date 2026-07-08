@@ -1,112 +1,13 @@
-import mock
-
-from django.test import TestCase
 from rest_framework.reverse import reverse
 
 from config import constants as adv_consts
 
-from builders.models import HousingBlock, Quest, MobTemplate
-from spawns.models import Player, Item, PlayerEnquire, Clan, ClanMembership, Mob
+from builders.models import HousingBlock
+from spawns.models import Player, Clan, ClanMembership
 from tests.base import WorldTestCase
-from system.serializers import RunLoadersSerializer
-from worlds.models import World, Zone
 
 
 # Create your tests here.
-class UpgradeItemTests(WorldTestCase):
-
-    def setUp(self):
-        super().setUp()
-        self.make_system_user()
-        self.client.force_authenticate(self.user)
-
-        self.spawn_world = self.world.create_spawn_world()
-
-        self.player = Player.objects.create(
-            world=self.spawn_world,
-            room=self.room,
-            user=self.user,
-            name='John',
-            in_game=True)
-
-        self.item = Item.objects.create(
-            world=self.spawn_world,
-            name='a sword',
-            quality=adv_consts.ITEM_QUALITY_IMBUED,
-            attributes={'brawn': 100})
-
-        self.mob_template = MobTemplate.objects.create(
-            world=self.world,
-            name='an upgrader',
-            is_upgrader=True)
-        self.mob = Mob.objects.create(
-            world=self.spawn_world,
-            room=self.room,
-            template=self.mob_template)
-
-        self.ep = reverse('game-upgrade-item')
-
-    def test_upgrade_item_failure(self):
-        self.mob_template.upgrade_success_chance = 0
-        self.mob_template.save()
-
-        resp = self.client.post(self.ep, {
-            "player": self.player.id,
-            "item": self.item.id,
-            "mob": self.mob.id,
-        })
-        self.assertEqual(resp.status_code, 201)
-        self.assertEqual(resp.data['outcome'], 'failure')
-        self.assertIsNone(resp.data['item'])
-        with self.assertRaises(Item.DoesNotExist):
-            self.item.refresh_from_db()
-
-    def test_upgrade_item_success(self):
-        self.mob_template.upgrade_success_chance = 100
-        self.mob_template.save()
-
-        resp = self.client.post(self.ep, {
-            "player": self.player.id,
-            "item": self.item.id,
-            "mob": self.mob.id,
-        })
-        self.assertEqual(resp.status_code, 201)
-        self.assertEqual(resp.data['outcome'], 'success')
-
-        self.item.refresh_from_db()
-        self.assertEqual(self.item.attributes['brawn'], 120)
-
-    def test_item_must_be_magical(self):
-        self.item.quality = adv_consts.ITEM_QUALITY_NORMAL
-        self.item.save()
-        resp = self.client.post(self.ep, {
-            "player": self.player.id,
-            "item": self.item.id,
-            "mob": self.mob.id,
-        })
-        self.assertEqual(resp.status_code, 400)
-
-    def test_upgrade_imbued_limit(self):
-        self.mob_template.upgrade_success_chance = 100
-        self.mob_template.save()
-
-        self.item.upgrade_count = 1
-        self.item.save()
-        resp = self.client.post(self.ep, {
-            "player": self.player.id,
-            "item": self.item.id,
-            "mob": self.mob.id,
-        })
-        self.assertEqual(resp.status_code, 400)
-
-        self.item.quality = adv_consts.ITEM_QUALITY_ENCHANTED
-        self.item.save()
-        resp = self.client.post(self.ep, {
-            "player": self.player.id,
-            "item": self.item.id,
-            "mob": self.mob.id,
-        })
-        self.assertEqual(resp.status_code, 201)
 
 
 class ToggleTests(WorldTestCase):
@@ -143,39 +44,6 @@ class ToggleTests(WorldTestCase):
             adv_consts.ROOM_OWNERSHIP_TYPE_PUBLIC)
 
 
-class EnquireTests(WorldTestCase):
-
-    def setUp(self):
-        super().setUp()
-        self.make_system_user()
-        self.client.force_authenticate(self.user)
-        self.spawn_world = self.world.create_spawn_world()
-        self.player = Player.objects.create(
-            world=self.spawn_world,
-            room=self.room,
-            user=self.user,
-            name='John',
-            in_game=True)
-
-        self.mob_template = MobTemplate.objects.create(
-            world=self.world, name='a priest')
-
-        self.quest = Quest.objects.create(
-            world=self.world,
-            mob_template=self.mob_template)
-
-    def test_track_enquire(self):
-        ep = reverse('enquire-quest')
-        resp = self.client.post(ep, {
-            'player': self.player.id,
-            'quest': self.quest.id,
-        })
-        self.assertEqual(resp.status_code, 201)
-        enquire_record = PlayerEnquire.objects.get()
-        self.assertEqual(enquire_record.quest, self.quest)
-        self.assertEqual(enquire_record.player, self.player)
-
-
 class SystemTestCase(WorldTestCase):
 
     def setUp(self):
@@ -183,31 +51,6 @@ class SystemTestCase(WorldTestCase):
         self.make_system_user()
         self.client.force_authenticate(self.user)
 
-
-class RunLoadersValidationTests(SystemTestCase):
-
-    def setUp(self):
-        super().setUp()
-        self.spawn_world = self.world.create_spawn_world()
-        self.spawn_world.lifecycle = 'running'
-        self.spawn_world.save(update_fields=['lifecycle'])
-
-    def test_zone_must_belong_to_spawn_world_context(self):
-        other_world = World.objects.new_world(
-            name='Other World',
-            author=self.user)
-        other_zone = Zone.objects.create(
-            world=other_world,
-            name='Other Zone')
-
-        serializer = RunLoadersSerializer(data={
-            'world_id': self.spawn_world.id,
-            'zone_id': other_zone.id,
-        })
-        self.assertFalse(serializer.is_valid())
-        self.assertEqual(
-            serializer.errors['zone_id'][0],
-            "Zone does not belong to this world's context.")
 
 class ClanTests(SystemTestCase):
 

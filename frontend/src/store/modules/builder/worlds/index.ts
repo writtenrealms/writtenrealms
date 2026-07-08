@@ -1,12 +1,4 @@
 import axios from "axios";
-import {
-  mob_template_actions,
-  mob_template_mutations
-} from "./mob_templates";
-import {
-  item_template_actions,
-  item_template_mutations
-} from "./item_templates";
 import admin from "./admin";
 
 const initial_state = () => {
@@ -16,14 +8,6 @@ const initial_state = () => {
 
     // Used for the World Config screen
     config: null,
-
-    mob_template: null,
-    mob_template_loads: [],
-    mob_template_quests: [],
-
-    item_template: null,
-    item_template_quests: [],
-    item_template_loads: [],
 
     instances: [],
   };
@@ -152,9 +136,6 @@ export default {
       }
       return resp.data;
     },
-
-    ...mob_template_actions,
-    ...item_template_actions
   },
   mutations: {
     reset: state => {
@@ -183,9 +164,6 @@ export default {
     instance_add: (state, instance) => {
       state.instances.unshift(instance);
     },
-
-    ...mob_template_mutations,
-    ...item_template_mutations
   },
   modules: {
     admin,

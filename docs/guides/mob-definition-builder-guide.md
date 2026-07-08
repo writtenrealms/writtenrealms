@@ -4,9 +4,8 @@ Mob definitions are the WR2 mob authoring path. Builders create them with YAML
 in **World > Edit**. The **World > Mobs** screen lists mob definitions and can
 copy or prefill the YAML for a definition.
 
-Use `kind: mobdefinition` for one authored mob. The legacy `MobTemplate` editor
-still exists at `/mobtemplates` for old content and specialized legacy surfaces,
-but new mob authoring should start here.
+Use `kind: mobdefinition` for one authored mob. WR2 no longer exposes the legacy
+`MobTemplate` editor or manifest kind.
 
 ## Add Mob Suggestions
 
@@ -73,7 +72,7 @@ values sit behind default-priority mobs. This is useful for encounters such as a
 
 Use `roam_chance` to override the world's default ambient roam chance for that
 mob. A value of `0` means "use the world default". Mobs only roam when the
-loader or spawn plan gives them a zone or path target; mobs loaded into a fixed
+spawn plan gives them a zone or path target; mobs loaded into a fixed
 room stay static. If a roaming mob enters a room with an eligible player, its
 normal `aggression` rules are checked just as they are when the player enters
 the mob's room.
@@ -323,9 +322,9 @@ definition changes.
 
 ## Loading Mobs
 
-The loader rule UI can load mob definitions directly. The reference key shape is
-`mob_definition.<id>`, and mob definitions can also be resolved by slug in the
-builder load path.
+Spawn plans load mob definitions directly through `kind: spawnplan` manifests.
+The reference key shape is `mobdefinition.<slug>` or `mobdefinition.<id>`, and
+mob definitions can also be resolved by slug in the builder load path.
 
 For direct builder testing, use `/load mob`:
 
@@ -334,8 +333,8 @@ For direct builder testing, use `/load mob`:
 ```
 
 When a builder player runs that command directly, the mob is spawned in the
-builder's current room. The selector can be a mob template id, a mob template
-slug, a mob definition id, or a mob definition slug.
+builder's current room. The selector can be a mob definition id or mob
+definition slug.
 
 Room and mob scripts can also use `/load mob` through `/cmd`:
 
@@ -451,12 +450,6 @@ mob actors until mob runtime state is expanded.
 
 ## Transition Notes
 
-`MobDefinition` is a transition name while WR2 still has the older
-`MobTemplate` model. The long-term direction is to remove the old template path
-and let the clean definition model become the normal authored mob concept.
-
-For now, legacy mob-template-only surfaces such as reactions, quest NPC
-bindings, equipment profiles, merchant setup, and template inventory still live
-under `/mobtemplates`. Use mob definitions for new plain, fixed-stat, and
-randomized mobs; use the legacy URL-only template editor only when you need one
-of those older surfaces.
+Mob reactions, quest NPC bindings, and spawn plans target `MobDefinition`. WR2
+no longer has `MobTemplate`, legacy loader rules, or mob-template-only builder
+surfaces.

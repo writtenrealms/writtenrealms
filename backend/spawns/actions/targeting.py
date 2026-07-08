@@ -25,8 +25,6 @@ def _mob_tokens(mob: Mob) -> set[str]:
     keywords = mob.keywords or ""
     if not keywords and mob.definition:
         keywords = mob.definition.keywords or ""
-    if not keywords and mob.template:
-        keywords = mob.template.keywords or ""
     if not keywords:
         keywords = mob.name or ""
     tokens = set(_tokenize_keywords(keywords))
@@ -96,7 +94,7 @@ def find_room_char_target(
         .select_related("user", "equipment")
         .order_by("id")
     )
-    room_mobs = list(room.mobs.select_related("definition", "template", "equipment").order_by("id"))
+    room_mobs = list(room.mobs.select_related("definition", "equipment").order_by("id"))
     chars: list[Player | Mob] = [*room_players, *room_mobs]
 
     if normalized.startswith("player.") or normalized.startswith("mob."):
@@ -118,17 +116,12 @@ def find_room_char_target(
 def _resolve_item_name(item: Item) -> str:
     instance_name = (item.name or "").strip()
     definition_name = (item.definition.name if item.definition else "") or ""
-    template_name = (item.template.name if item.template else "") or ""
     if definition_name and (not instance_name or instance_name.lower() == "unnamed item"):
         return definition_name
-    if template_name and (not instance_name or instance_name.lower() == "unnamed item"):
-        return template_name
     if instance_name:
         return instance_name
     if definition_name:
         return definition_name
-    if template_name:
-        return template_name
     return "Unnamed item"
 
 
@@ -136,8 +129,6 @@ def _item_tokens(item: Item) -> set[str]:
     keywords = item.keywords or ""
     if not keywords and item.definition:
         keywords = item.definition.keywords or ""
-    if not keywords and item.template:
-        keywords = item.template.keywords or ""
     if not keywords:
         keywords = _resolve_item_name(item)
     tokens = set(_tokenize_keywords(keywords))
@@ -145,7 +136,7 @@ def _item_tokens(item: Item) -> set[str]:
 
     item_type = item.type or (
         item.definition.item_type if item.definition else ""
-    ) or (item.template.type if item.template else "")
+    )
     if item_type == adv_consts.ITEM_TYPE_CONTAINER:
         tokens.add("container")
     elif item_type == adv_consts.ITEM_TYPE_CORPSE:
@@ -176,19 +167,19 @@ def find_accessible_item_target(
 
     room_items = list(
         room.inventory.filter(is_pending_deletion=False)
-        .select_related("definition", "template", "currency")
+        .select_related("definition", "currency")
         .order_by("id")
     )
     carried_items = list(
         player.inventory.filter(is_pending_deletion=False)
-        .select_related("definition", "template", "currency")
+        .select_related("definition", "currency")
         .order_by("id")
     )
     equipped_items = []
     if getattr(player, "equipment", None):
         equipped_items = list(
             player.equipment.inventory.filter(is_pending_deletion=False)
-            .select_related("definition", "template", "currency")
+            .select_related("definition", "currency")
             .order_by("id")
         )
 
@@ -221,7 +212,7 @@ def resolve_room_mob_target(
     empty_candidate_filter: Callable[[Mob], bool] | None = None,
 ) -> Mob:
     normalized = _normalize_selector(selector)
-    room_mobs = list(room.mobs.select_related("definition", "template").order_by("id"))
+    room_mobs = list(room.mobs.select_related("definition").order_by("id"))
     if not normalized:
         if allow_single_match_when_empty:
             candidates = room_mobs
@@ -238,7 +229,7 @@ def resolve_room_mob_target(
             mob_id = int(normalized.split(".", 1)[1])
         except (TypeError, ValueError):
             raise ActionError(not_found_error, code="target_not_found")
-        mob = room.mobs.select_related("definition", "template").filter(pk=mob_id).first()
+        mob = room.mobs.select_related("definition").filter(pk=mob_id).first()
         if not mob:
             raise ActionError(not_found_error, code="target_not_found")
         return mob
@@ -249,7 +240,7 @@ def resolve_room_mob_target(
     raise ActionError(not_found_error, code="target_not_found")
 
 
-def first_room_mob_with_template(room: Room, template_id: int | None) -> Mob | None:
-    if not template_id:
+def first_room_mob_with_definition(room: Room, definition_id: int | None) -> Mob | None:
+    if not definition_id:
         return None
-    return room.mobs.select_related("template").filter(template_id=template_id).first()
+    return room.mobs.select_related("definition").filter(definition_id=definition_id).first()

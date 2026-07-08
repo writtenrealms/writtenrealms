@@ -58,22 +58,11 @@ from builders.models import (
     LastViewedRoom,
     ItemBundle,
     ItemDefinition,
-    ItemTemplate,
-    ItemTemplateInventory,
-    ItemAction,
     MobDefinition,
-    MobTemplate,
-    MobTemplateInventory,
     MerchantProfile,
-    MerchantInventory,
     SpawnPlan,
     TransformationTemplate,
-    Loader,
-    Rule,
-    Quest,
-    Objective,
     RandomItemProfile,
-    Reward,
     RoomCheck,
     RoomAction,
     Trigger,
@@ -90,9 +79,8 @@ from builders.models import (
 from spawns.models import Player
 from spawns import serializers as spawn_serializers
 from users.models import User
-from worlds import serializers as world_serializers
 from worlds.models import (
-    World, Room, Zone, RoomFlag, RoomDetail, Door, StartingEq)
+    World, Room, Zone, RoomFlag, RoomDetail, Door)
 from worlds.services import WorldSmith
 from worlds import tasks as world_tasks
 
@@ -182,49 +170,6 @@ def _has_room_assignment(*, user, room):
         assignment_id=room.id,
         assignment_type=ContentType.objects.get_for_model(Room),
     ).exists()
-
-
-def _has_item_template_assignment(*, user, item_template):
-    return BuilderAssignment.objects.filter(
-        builder__user=user,
-        assignment_id=item_template.id,
-        assignment_type=ContentType.objects.get_for_model(ItemTemplate),
-    ).exists()
-
-
-def _has_mob_template_assignment(*, user, mob_template):
-    return BuilderAssignment.objects.filter(
-        builder__user=user,
-        assignment_id=mob_template.id,
-        assignment_type=ContentType.objects.get_for_model(MobTemplate),
-    ).exists()
-
-
-def _delete_item_template_or_error(instance):
-    if instance.template_items.count():
-        raise serializers.ValidationError(
-            "Cannot delete a template that has loaded items."
-        )
-    if Reward.objects.filter(
-        profile_type=ContentType.objects.get_for_model(instance),
-        profile_id=instance.id,
-    ).count():
-        raise serializers.ValidationError(
-            "Cannot delete a template used for a quest reward."
-        )
-    if Objective.objects.filter(
-        template_type=ContentType.objects.get_for_model(instance),
-        template_id=instance.id,
-        qty__gte=1,
-    ).count():
-        raise serializers.ValidationError(
-            "Cannot delete a template used for a quest objective."
-        )
-    BuilderAssignment.objects.filter(
-        assignment_id=instance.id,
-        assignment_type=ContentType.objects.get_for_model(ItemTemplate),
-    ).delete()
-    instance.delete()
 
 
 def _has_room_or_zone_assignment(*, user, room):
@@ -597,11 +542,6 @@ class FactionViewSet(BaseWorldBuilderViewSet):
         return self.world
 
     def perform_destroy(self, instance):
-        if Reward.objects.filter(
-            profile_type=ContentType.objects.get_for_model(Faction),
-            profile_id=instance.id).exists():
-            raise drf_exceptions.ValidationError(
-                'Cannot delete a faction used for a quest reward.')
         if FactionAssignment.objects.filter(
             faction=instance,
             faction__is_core=True).exists():
@@ -728,8 +668,6 @@ class ZoneBuilderViewSet(WorldCreationMixin,
             'rooms',
             'paths',
             'map',
-            'loaders',
-            'loader_detail',
             'quest_list']:
             return obj
 
@@ -821,42 +759,6 @@ class ZoneBuilderViewSet(WorldCreationMixin,
         })
 
     @action(detail=False)
-    def loaders(self, request, world_pk, pk):
-        zone = self.get_object()
-        qs = zone.spawn_plans.all().select_related('zone').order_by('-created_ts')
-
-        query = self.request.query_params.get('query')
-        if query:
-            try:
-                query = int(query)
-                qs = qs.filter(pk=query)
-            except ValueError:
-                qs = qs.filter(Q(name__icontains=query) | Q(slug__icontains=query))
-        sorting = self.request.query_params.get('sort_by')
-        if sorting is not None:
-            qs = qs.order_by(sorting)
-        page = self.paginate_queryset(qs)
-        data = [
-            builder_world_export.serialize_spawn_plan_payload(
-                spawn_plan,
-                include_yaml=False,
-            )
-            for spawn_plan in page
-        ]
-        return self.get_paginated_response(data)
-
-    @action(detail=False)
-    def loader_detail(self, request, world_pk, pk, loader_pk):
-        zone = self.get_object()
-        spawn_plan = get_object_or_404(
-            zone.spawn_plans.select_related('zone'),
-            pk=loader_pk,
-        )
-        return Response(
-            builder_world_export.serialize_spawn_plan_payload(spawn_plan)
-        )
-
-    @action(detail=False)
     def create_path(self, request, world_pk, pk):
         zone = self.get_object()
         serializer = builder_serializers.PathDetailsSerializer(
@@ -867,65 +769,20 @@ class ZoneBuilderViewSet(WorldCreationMixin,
         path.update_live_instances()
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-    @action(detail=False)
-    def quest_list(self, request, world_pk, pk):
-        zone = self.get_object()
-        qs = zone.zone_quests.all().order_by('-level', '-created_ts')
-
-        # Filter down further if this is a rank 1 builder
-        if self._builder_rank <= 1:
-            zone_ids = BuilderAssignment.objects.filter(
-                builder__user=self.request.user,
-                assignment_type=ContentType.objects.get_for_model(Zone),
-            ).values_list('assignment_id', flat=True)
-            qs = qs.filter(zone_id__in=zone_ids)
-
-        sorting = self.request.query_params.get('sort_by')
-        if sorting is not None:
-            qs = qs.order_by(sorting)
-        page = self.paginate_queryset(qs)
-        serializer = builder_serializers.QuestSerializer(page, many=True)
-        return self.get_paginated_response(serializer.data)
-
-    @action(detail=False)
-    def create_quest(self, request, world_pk, pk):
-        zone = self.get_object()
-        serializer = builder_serializers.QuestSerializer(
-            data=request.data,
-            context={'zone': zone})
-        serializer.is_valid(raise_exception=True)
-        quest = serializer.save()
-        quest_data = builder_serializers.QuestSerializer(quest).data
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
     @action(detail=True)
-    def loads(self, request, world_pk, pk):
-
-        # Get loaded mobs
-        mob_template_ids = Rule.objects.filter(
-            template_type=ContentType.objects.get_for_model(MobTemplate),
-            loader__zone_id=pk,
-        ).values_list('template_id', flat=True)
-        mobs = builder_serializers.MobTemplateSerializer(
-            MobTemplate.objects.filter(id__in=mob_template_ids),
-            context={'request': request},
-            many=True
-        ).data
-
-        # Get loaded items
-        item_template_ids = Rule.objects.filter(
-            template_type=ContentType.objects.get_for_model(ItemTemplate),
-            loader__zone_id=pk,
-        ).values_list('template_id', flat=True)
-        items = builder_serializers.ItemTemplateSerializer(
-            ItemTemplate.objects.filter(id__in=item_template_ids),
-            context={'request': request},
-            many=True
-        ).data
-
+    def spawn_plans(self, request, world_pk, pk):
+        zone = self.get_object()
+        spawn_plans = [
+            builder_world_export.serialize_spawn_plan_payload(
+                spawn_plan,
+                include_yaml=False,
+            )
+            for spawn_plan in zone.spawn_plans.prefetch_related('entries').order_by(
+                'order', 'created_ts', 'id'
+            )
+        ]
         return Response({
-            'mobs': mobs,
-            'items': items,
+            'spawn_plans': spawn_plans,
         })
 
     @action(detail=False)
@@ -985,18 +842,8 @@ zone_path_list = ZoneBuilderViewSet.as_view({
 zone_map = ZoneBuilderViewSet.as_view({
     'get': 'map'
 })
-zone_loaders = ZoneBuilderViewSet.as_view({
-    'get': 'loaders',
-})
-zone_loader_detail = ZoneBuilderViewSet.as_view({
-    'get': 'loader_detail',
-})
-zone_quest_list = ZoneBuilderViewSet.as_view({
-    'get': 'quest_list',
-    'post': 'create_quest',
-})
-zone_loads = ZoneBuilderViewSet.as_view({
-    'get': 'loads',
+zone_spawn_plans = ZoneBuilderViewSet.as_view({
+    'get': 'spawn_plans',
 })
 zone_move = ZoneBuilderViewSet.as_view({
     'post': 'move',
@@ -1260,26 +1107,9 @@ class RoomDirActionView(WorldValidatorMixin, APIView):
 room_dir_action = RoomDirActionView.as_view()
 
 
-class RoomLoadsView(BaseWorldBuilderView):
+class RoomSpawnPlansView(BaseWorldBuilderView):
 
     def get(self, request, world_pk, room_pk, format=None):
-        """
-        Return format:
-        {
-            [loader_id]: {
-                'rooms': {
-                    'mobs': [],
-                    'items': [],
-                },
-                'paths': {
-                    'mobs': [],
-                    'items': [],
-                },
-            },
-        }
-        """
-
-
         if '.' in room_pk:
             room = Room.objects.get(
                 world_id=world_pk,
@@ -1287,111 +1117,49 @@ class RoomLoadsView(BaseWorldBuilderView):
         else:
             room = Room.objects.get(pk=room_pk)
 
-
-        # Get the qs for all rules targetting this room
-        room_rules_qs = Rule.objects.filter(
-            target_type=ContentType.objects.get_for_model(room),
-            target_id=room.id)
-
-        # Get the qs for all rules targetting a path that this room belongs to
-        path_ids = PathRoom.objects.filter(
-            room=room
-        ).values_list('path_id', flat=True)
-        path_rules_qs = Rule.objects.filter(
-            target_type=ContentType.objects.get_for_model(Path),
-            target_id__in=path_ids)
-
-        loaders = {}
-        def init_loader(id):
-            if id not in loaders:
-                loaders[id] = {
-                    'loader': builder_serializers.LoaderSerializer(
-                        Loader.objects.get(pk=id)).data,
-                    'room': {
-                        'items': [],
-                        'mobs': [],
-                    },
-                    'path': {
-                        'items': [],
-                        'mobs': [],
-                    }
-                }
-
-        mob_template_ct = ContentType.objects.get_for_model(MobTemplate)
-        item_template_ct = ContentType.objects.get_for_model(ItemTemplate)
-
-        # Process room loads
-        for rule in room_rules_qs:
-            if rule.template_type == mob_template_ct:
-                init_loader(rule.loader_id)
-                loaders[rule.loader_id]['room']['mobs'].append(
-                    builder_serializers.MobTemplateSerializer(
-                        rule.template).data)
-            elif rule.template_type == item_template_ct:
-                init_loader(rule.loader_id)
-                loaders[rule.loader_id]['room']['items'].append(
-                    builder_serializers.ItemTemplateSerializer(
-                        rule.template).data)
-
-        # Proess path loads
-        for rule in path_rules_qs:
-            if rule.template_type == mob_template_ct:
-                init_loader(rule.loader_id)
-                loaders[rule.loader_id]['path']['mobs'].append(
-                    builder_serializers.MobTemplateSerializer(
-                        rule.template).data)
-            elif rule.template_type == item_template_ct:
-                init_loader(rule.loader_id)
-                loaders[rule.loader_id]['path']['items'].append(
-                    builder_serializers.ItemTemplateSerializer(
-                        rule.template).data)
-
-        loaders = sorted(loaders.values(), key=lambda x: x['loader']['id'])
-
-        # Legacy
-        mob_template_ids = room_rules_qs.filter(
-            template_type=ContentType.objects.get_for_model(MobTemplate),
-        ).values_list('template_id', flat=True)
-
-        mobs_data = builder_serializers.MobTemplateSerializer(
-            MobTemplate.objects.filter(pk__in=mob_template_ids),
-            many=True,
-        ).data
+        path_ids = set(
+            PathRoom.objects.filter(room=room).values_list('path_id', flat=True)
+        )
+        room_refs = {
+            room.key,
+            f"room.{room.id}",
+            f"room@{room.x},{room.y},{room.z}",
+            room.name,
+        }
+        zone_refs = {
+            room.zone.key,
+            f"zone.{room.zone.id}",
+            f"zone@{room.zone.relative_id}",
+            room.zone.name,
+        } if room.zone_id else set()
+        path_refs = {f"path@{path_id}" for path_id in path_ids}
+        spawn_plan_payloads = []
+        for spawn_plan in room.world.spawn_plans.prefetch_related('entries').order_by(
+            'order', 'created_ts', 'id'
+        ):
+            matching_entries = []
+            for entry in spawn_plan.entries.all():
+                target = entry.target if isinstance(entry.target, dict) else {}
+                if (
+                    target.get('room') in room_refs
+                    or target.get('room_ref') in room_refs
+                    or target.get('zone') in zone_refs
+                    or target.get('path') in path_refs
+                ):
+                    matching_entries.append(entry.slug)
+            if matching_entries:
+                payload = builder_world_export.serialize_spawn_plan_payload(
+                    spawn_plan,
+                    include_yaml=False,
+                )
+                payload['matching_entries'] = matching_entries
+                spawn_plan_payloads.append(payload)
 
         return Response({
-            'mobs': mobs_data,
-            'loaders': loaders,
+            'spawn_plans': spawn_plan_payloads,
         })
 
-    def post(self, request, world_pk, room_pk, format=None):
-        room = generics.get_object_or_404(
-            Room.objects.filter(world=self.world),
-            pk=room_pk)
-
-        if self._builder_rank <=2:
-            if not BuilderAssignment.objects.filter(
-                builder__user=self.request.user,
-                assignment_id=room.zone.id,
-                assignment_type=ContentType.objects.get_for_model(Zone),
-            ).exists():
-                if not BuilderAssignment.objects.filter(
-                    builder__user=self.request.user,
-                    assignment_id=room.id,
-                    assignment_type=ContentType.objects.get_for_model(Room),
-                ).exists():
-                    raise drf_exceptions.PermissionDenied(
-                        "You do not have permission to alter this room.")
-
-        serializer = builder_serializers.RoomAddLoadSerializer(
-            data=request.data,
-            context={'room': room})
-        serializer.is_valid(raise_exception=True)
-        loader = serializer.save()
-        return Response(
-            builder_serializers.LoaderSerializer(loader).data,
-            status=status.HTTP_201_CREATED)
-
-room_loads = RoomLoadsView.as_view()
+room_spawn_plans = RoomSpawnPlansView.as_view()
 
 
 class RoomCheckViewSet(BaseWorldBuilderViewSet):
@@ -1949,20 +1717,6 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             "You do not have permission to alter abilities."
         )
 
-    def _assert_can_edit_item_template(self, item_template=None):
-        if item_template is None:
-            return
-        if self._builder_rank >= 3:
-            return
-        if _has_item_template_assignment(
-            user=self.request.user,
-            item_template=item_template,
-        ):
-            return
-        raise drf_exceptions.PermissionDenied(
-            "You do not have permission to alter this item template."
-        )
-
     def _assert_can_edit_item_definitions(self):
         if self._builder_rank >= 3:
             return
@@ -1975,20 +1729,6 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             return
         raise drf_exceptions.PermissionDenied(
             "You do not have permission to alter mob definitions."
-        )
-
-    def _assert_can_edit_mob_template(self, mob_template=None):
-        if mob_template is None:
-            return
-        if self._builder_rank >= 3:
-            return
-        if _has_mob_template_assignment(
-            user=self.request.user,
-            mob_template=mob_template,
-        ):
-            return
-        raise drf_exceptions.PermissionDenied(
-            "You do not have permission to alter this mob."
         )
 
     def _assert_can_edit_zone_manifest(self, manifest):
@@ -2237,68 +1977,6 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                 "kind": quest_manifests.QUEST_MANIFEST_KIND,
                 "operation": "created" if is_create else "updated",
                 "quest": quest_manifests.serialize_quest_template_payload(quest),
-            },
-            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
-        )
-
-    def _apply_item_template_manifest(self, manifest):
-        operation = builder_manifests.parse_manifest_operation(manifest)
-        if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
-            parsed_delete = builder_manifests.parse_item_template_delete_manifest(
-                world=self.world,
-                manifest=manifest,
-            )
-            item_template = parsed_delete.item_template
-            self._assert_can_edit_item_template(item_template)
-            item_template_payload = {
-                "id": item_template.id,
-                "key": item_template.key,
-                "slug": item_template.slug,
-                "name": item_template.name,
-            }
-            _delete_item_template_or_error(item_template)
-            return Response(
-                {
-                    "kind": builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND,
-                    "operation": "deleted",
-                    "item_template": item_template_payload,
-                },
-                status=status.HTTP_200_OK,
-            )
-
-        normalized_manifest = copy.deepcopy(manifest)
-        normalized_spec = normalized_manifest.get("spec") or {}
-        if isinstance(normalized_spec, dict):
-            normalized_spec = copy.deepcopy(normalized_spec)
-            normalized_spec.pop("inventory", None)
-            normalized_manifest["spec"] = normalized_spec
-
-        parsed_item_template = builder_manifests.parse_item_template_manifest(
-            world=self.world,
-            manifest=normalized_manifest,
-        )
-        self._assert_can_edit_item_template(parsed_item_template.item_template)
-        item_template, is_create = builder_world_export.apply_item_template_manifest(
-            world=self.world,
-            manifest=manifest,
-        )
-
-        if is_create and self._builder_rank <= 2:
-            builder = WorldBuilder.objects.get(
-                user=self.request.user,
-                world=self.world,
-            )
-            BuilderAssignment.objects.get_or_create(
-                builder=builder,
-                assignment_type=ContentType.objects.get_for_model(ItemTemplate),
-                assignment_id=item_template.id,
-            )
-
-        return Response(
-            {
-                "kind": builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND,
-                "operation": "created" if is_create else "updated",
-                "item_template": builder_manifests.serialize_item_template_payload(item_template),
             },
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
         )
@@ -2712,42 +2390,6 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
         )
 
-    def _apply_mob_template_manifest(self, manifest):
-        metadata = manifest.get("metadata") or {}
-        slug = str(metadata.get("slug") or "").strip()
-        mob_template = MobTemplate.objects.filter(world=self.world, slug=slug).first() if slug else None
-        self._assert_can_edit_mob_template(mob_template)
-
-        mob_template, is_create = builder_world_export.apply_mob_template_manifest(
-            world=self.world,
-            manifest=manifest,
-        )
-
-        if is_create and self._builder_rank <= 2:
-            builder = WorldBuilder.objects.get(
-                user=self.request.user,
-                world=self.world,
-            )
-            BuilderAssignment.objects.get_or_create(
-                builder=builder,
-                assignment_type=ContentType.objects.get_for_model(MobTemplate),
-                assignment_id=mob_template.id,
-            )
-
-        return Response(
-            {
-                "kind": builder_world_export.MOB_TEMPLATE_MANIFEST_KIND,
-                "operation": "created" if is_create else "updated",
-                "mob_template": {
-                    "id": mob_template.id,
-                    "key": mob_template.key,
-                    "slug": mob_template.slug,
-                    "name": mob_template.name,
-                },
-            },
-            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
-        )
-
     def _apply_spawn_plan_manifest(self, manifest):
         self._assert_can_edit_spawn_plan_manifest(manifest)
         operation = builder_manifests.parse_manifest_operation(manifest)
@@ -2801,8 +2443,6 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             return self._apply_path_manifest(manifest)
         if manifest_kind == builder_manifests.TRIGGER_MANIFEST_KIND:
             return self._apply_trigger_manifest(manifest)
-        if manifest_kind == builder_manifests.ITEM_TEMPLATE_MANIFEST_KIND:
-            return self._apply_item_template_manifest(manifest)
         if manifest_kind == builder_manifests.ITEM_DEFINITION_MANIFEST_KIND:
             return self._apply_item_definition_manifest(manifest)
         if manifest_kind == builder_manifests.ITEM_BUNDLE_MANIFEST_KIND:
@@ -2817,8 +2457,6 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             return self._apply_ability_manifest(manifest)
         if manifest_kind == builder_manifests.ABILITIES_MANIFEST_KIND:
             return self._apply_abilities_manifest(manifest)
-        if manifest_kind == builder_world_export.MOB_TEMPLATE_MANIFEST_KIND:
-            return self._apply_mob_template_manifest(manifest)
         if manifest_kind == builder_world_export.SPAWN_PLAN_MANIFEST_KIND:
             return self._apply_spawn_plan_manifest(manifest)
         if manifest_kind == quest_manifests.QUEST_MANIFEST_KIND:
@@ -2993,10 +2631,6 @@ class RoomFlagsViewBase(BaseWorldBuilderView):
     @staticmethod
     def get_flags():
         return [
-            # {
-            #     'code': adv_consts.ROOM_FLAG_WORKSHOP,
-            #     'label': 'Workshop',
-            # },
             {
                 'code': adv_consts.ROOM_FLAG_NO_ROAM,
                 'label': 'No Roam',
@@ -3163,258 +2797,6 @@ class RoomClearDoor(WorldValidatorMixin, APIView):
 room_clear_door = RoomClearDoor.as_view()
 
 
-# Item Template
-
-class ItemTemplateViewSet(BaseWorldBuilderViewSet):
-    serializer_class = builder_serializers.ItemTemplateSerializer
-
-    def _serialize_item_template_response(self, item_template):
-        return builder_manifests.serialize_item_template_payload(item_template)
-
-    def get_queryset(self):
-        context = self.world
-        if context.instance_of:
-            context = context.instance_of
-
-        qs = ItemTemplate.objects.filter(
-            world=context
-        ).prefetch_related('currency')
-
-        # Filter down further if this is a rank 1 builder
-        if self.action == 'list' == self._builder_rank <= 1:
-            item_template_ids = BuilderAssignment.objects.filter(
-                builder__user=self.request.user,
-                assignment_type=ContentType.objects.get_for_model(ItemTemplate),
-            ).values_list('assignment_id', flat=True)
-            qs = qs.filter(pk__in=item_template_ids)
-
-        # The 'item_type' parameter doesn't correspond to any single field on
-        # the backend, but rather a combination of type and equipment_type,
-        # to make things easier on the frontend.
-        item_type = self.request.query_params.get('item_type', None)
-        if item_type in adv_consts.EQUIPMENT_TYPES:
-            qs = qs.filter(equipment_type=item_type)
-        elif item_type in adv_consts.ITEM_TYPES:
-            qs = qs.filter(type=item_type)
-
-        query = self.request.query_params.get('query')
-        if query:
-            try:
-                query = int(query)
-                qs = qs.filter(pk=query)
-            except ValueError:
-                qs = qs.filter(name__icontains=query)
-
-        context = self.request.query_params.get('context')
-        if (context == 'key'):
-            qs = qs.filter(type='key')
-
-        qs = qs.order_by('-modified_ts')
-
-        # Sorting
-        sorting = self.request.query_params.get('sort_by')
-        if sorting is not None:
-            qs = qs.order_by(sorting)
-
-        return qs
-
-    def get_object(self):
-        obj = super().get_object()
-
-        if self._builder_rank >= 3:
-            return obj
-
-        if (self._builder_rank >= 2
-            and self.action in ('retrieve', 'quests', 'inventory')):
-            return obj
-
-        has_assignment = BuilderAssignment.objects.filter(
-            builder__user=self.request.user,
-            assignment_id=obj.id,
-            assignment_type=ContentType.objects.get_for_model(ItemTemplate),
-        ).exists()
-
-        if not has_assignment:
-            raise drf_exceptions.PermissionDenied(
-                "You do not have permission to this item.")
-
-
-        return obj
-
-    def get_serializer_context(self):
-        context = super().get_serializer_context()
-        context['world'] = self.world  # Add world to the context
-        return context
-
-    def retrieve(self, request, *args, **kwargs):
-        item_template = self.get_object()
-        return Response(self._serialize_item_template_response(item_template))
-
-    def create(self, request, *args, **kwargs):
-        response = super().create(request, *args, **kwargs)
-        item_template = ItemTemplate.objects.get(pk=response.data["id"])
-        response.data = self._serialize_item_template_response(item_template)
-        return response
-
-    def update(self, request, *args, **kwargs):
-        response = super().update(request, *args, **kwargs)
-        item_template = ItemTemplate.objects.get(pk=response.data["id"])
-        response.data = self._serialize_item_template_response(item_template)
-        return response
-
-    def partial_update(self, request, *args, **kwargs):
-        response = super().partial_update(request, *args, **kwargs)
-        item_template = ItemTemplate.objects.get(pk=response.data["id"])
-        response.data = self._serialize_item_template_response(item_template)
-        return response
-
-    def perform_create(self, serializer):
-        item_template = serializer.save(world=self.world)
-
-        # Create a builder assignment if the user is rank 2 or lower
-        if self._builder_rank <= 2:
-            builder = WorldBuilder.objects.get(user=self.request.user,
-                                               world=self.world)
-            BuilderAssignment.objects.create(
-                builder=builder,
-                assignment=item_template)
-
-    def perform_destroy(self, instance):
-        _delete_item_template_or_error(instance)
-
-    @action(detail=False)
-    def inventory(self, request, pk, world_pk):
-        serializer = builder_serializers.ItemTemplateInventorySerializer(
-            ItemTemplateInventory.objects.filter(
-                container=self.get_object()),
-            many=True)
-        return Response({'data': serializer.data})
-
-    def add_to_inventory(self, request, pk, world_pk):
-        item_template = self.get_object()
-
-        # Filter down further if this is a rank 1 builder
-        if self._builder_rank <= 2:
-            if not BuilderAssignment.objects.filter(
-                builder__user=self.request.user,
-                assignment_type=ContentType.objects.get_for_model(ItemTemplate),
-                assignment_id=item_template.id).exists():
-                raise drf_exceptions.PermissionDenied(
-                    "You do not have permission to edit this item.")
-
-        serializer = builder_serializers.AddItemTemplateInventorySerializer(
-            container=item_template,
-            data=request.data)
-        serializer.is_valid(raise_exception=True)
-        iti = serializer.create(serializer.validated_data)
-        serializer = builder_serializers.MobTemplateInventorySerializer(iti)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-    @action(detail=False)
-    def quests(self, request, world_pk, pk):
-        item_template = self.get_object()
-        item_template_ct = ContentType.objects.get_for_model(item_template)
-
-        # Get all the objectives that reference this item template
-        quest_ids_via_objectives = set(Objective.objects.filter(
-            template_type=item_template_ct,
-            template_id=item_template.id
-        ).values_list('quest_id', flat=True))
-
-        quest_ids_via_rewards = set(Reward.objects.filter(
-            profile_type=item_template_ct,
-            profile_id=item_template.id
-        ).values_list('quest_id', flat=True))
-
-        quest_qs = Quest.objects.filter(
-            pk__in=quest_ids_via_objectives | quest_ids_via_rewards)
-
-        serializer = builder_serializers.QuestSerializer(quest_qs, many=True)
-        return Response({'quests': serializer.data})
-
-
-item_template_list = ItemTemplateViewSet.as_view({
-    'get': 'list',
-    'post': 'create'})
-item_template_detail = ItemTemplateViewSet.as_view({
-    'get': 'retrieve',
-    'patch': 'partial_update',
-    'put': 'update',
-    'delete': 'destroy',
-})
-item_template_inventory = ItemTemplateViewSet.as_view({
-    'get': 'inventory',
-    'post': 'add_to_inventory',
-})
-item_template_quests = ItemTemplateViewSet.as_view({'get': 'quests'})
-
-class ItemTemplateInventoryViewSet(BaseWorldBuilderViewSet):
-    serializer_class = builder_serializers.ItemTemplateInventorySerializer
-
-    def get_queryset(self):
-        return ItemTemplateInventory.objects.all()
-
-item_template_inventory_detail = ItemTemplateInventoryViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'update',
-    'delete': 'destroy'})
-
-
-class ItemTemplateLoadsinView(BaseWorldBuilderView):
-
-    def get(self, request, world_pk, item_template_pk, format=None):
-        if '.' in item_template_pk:
-            item_template_pk = item_template_pk.split('.')[1]
-
-        data = {}
-
-        # Find loaders that load the item
-        item_template_ct = ContentType.objects.get_for_model(ItemTemplate)
-        rules_qs = Rule.objects.filter(
-            loader__world_id=world_pk,
-            template_type=item_template_ct,
-            template_id=item_template_pk)
-        loader_ids = rules_qs.order_by('loader_id')\
-                             .distinct('loader_id')\
-                             .values_list('loader_id', flat=True)
-        loaders = [
-            builder_serializers.LoaderSerializer(loader).data
-            for loader in Loader.objects.filter(id__in=loader_ids)
-        ]
-
-        # Find mobs that load the item via mob inventory or merchant inventory
-        mob_template_ids = list(MobTemplateInventory.objects.filter(
-            item_template_id=item_template_pk
-        ).values_list('container_id', flat=True))
-        merchant_template_ids = list(MerchantInventory.objects.filter(
-            item_template_id=item_template_pk
-        ).values_list('mob_id', flat=True))
-        mob_templates = MobTemplate.objects.filter(
-            pk__in=mob_template_ids + merchant_template_ids)
-        mob_templates_data = [
-            builder_serializers.MobTemplateSerializer(mob_template).data
-            for mob_template in mob_templates
-        ]
-
-        # Find items that load the item
-        item_template_ids = ItemTemplateInventory.objects.filter(
-            item_template_id=item_template_pk
-        ).values_list('container_id', flat=True)
-        item_templates = ItemTemplate.objects.filter(pk__in=item_template_ids)
-        item_templates_data = [
-            builder_serializers.ItemTemplateSerializer(item_template).data
-            for item_template in item_templates
-        ]
-
-        return Response({
-            'loaders': loaders,
-            'mob_templates': mob_templates_data,
-            'item_templates': item_templates_data,
-        })
-
-item_template_loadsin = ItemTemplateLoadsinView.as_view()
-
-
 class ItemDefinitionViewSet(BaseWorldBuilderViewSet):
     serializer_class = builder_serializers.ItemDefinitionSerializer
     http_method_names = ['get', 'head', 'options']
@@ -3495,347 +2877,9 @@ item_bundle_detail = ItemBundleViewSet.as_view({
 })
 
 
-class ItemActionViewSet(BaseWorldBuilderViewSet):
-
-    serializer_class = builder_serializers.ItemActionSerializer
-    pagination_class = None
-    queryset = ItemAction.objects.all()
-
-    def get_queryset(self):
-        qs = ItemAction.objects.filter(item_template_id=self.kwargs['item_template_pk'])
-        return qs
-
-    def perform_create(self, serializer):
-        item_template = ItemTemplate.objects.get(
-            pk=self.kwargs['item_template_pk'])
-
-        if self._builder_rank <= 2:
-            if not BuilderAssignment.objects.filter(
-                builder__user=self.request.user,
-                assignment_id=item_template.id,
-                assignment_type=ContentType.objects.get_for_model(ItemTemplate),
-            ).exists():
-                raise drf_exceptions.PermissionDenied(
-                    "You do not have permission to alter this item.")
-
-        action = serializer.save(item_template=item_template)
-        return action.item_template
-
-    def perform_update(self, serializer):
-        action = serializer.save()
-        return action.item_template
-
-
-item_action_list = ItemActionViewSet.as_view({
-    'get': 'list',
-    'post': 'create',
-})
-item_action_detail = ItemActionViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'update',
-    'delete': 'destroy',
-})
-
-class CloneItemAction(BaseWorldBuilderView):
-
-    def post(self, request, world_pk, item_template_pk, pk, format=None):
-        action = generics.get_object_or_404(
-            ItemAction.objects.all(),
-            id=pk)
-
-        new_action = action
-        new_action.pk = None
-        new_action.save()
-
-        return Response(
-            builder_serializers.ItemActionSerializer(new_action).data)
-
-item_action_clone = CloneItemAction.as_view()
-
-# Mob Template
-
-class MobTemplateViewSet(BaseWorldBuilderViewSet):
-    serializer_class = builder_serializers.MobTemplateSerializer
-
-    def get_queryset(self):
-        context = self.world
-        if context.instance_of:
-            context = context.instance_of
-
-        mobs_qs = MobTemplate.objects.filter(world=context)
-
-        # Filter down further if this is a rank 1 builder
-        if self.action == 'list' and self._builder_rank <=1:
-            mob_template_ids = BuilderAssignment.objects.filter(
-                builder__user=self.request.user,
-                assignment_type=ContentType.objects.get_for_model(MobTemplate),
-            ).values_list('assignment_id', flat=True)
-            mobs_qs = mobs_qs.filter(pk__in=mob_template_ids)
-
-        mobs_qs = mobs_qs.order_by('-modified_ts')
-
-        # Filter by mob type (humanoid, beast, plant)
-        mob_type = self.request.query_params.get('type', None)
-        if mob_type:
-            mobs_qs = mobs_qs.filter(type=mob_type)
-
-        mobs_qs = self.char_filters(mobs_qs)
-        mobs_qs = self.search_queryset(mobs_qs)
-
-        # Filter by special
-        special = self.request.query_params.get('special')
-        if special:
-            if special == 'is_merchant':
-                mobs_qs = mobs_qs.annotate(
-                    merchant_inv_count=Count('merchant_inv')
-                ).filter(merchant_inv_count__gt=0)
-            elif special == 'has_quest':
-                mobs_qs = mobs_qs.annotate(
-                    quest_count=Count('template_quests')
-                ).filter(quest_count__gt=0)
-            elif special == 'is_elite':
-                mobs_qs = mobs_qs.filter(is_elite=True)
-
-        # Sorting
-        sorting = self.request.query_params.get('sort_by')
-        if sorting is not None:
-            mobs_qs = mobs_qs.order_by(sorting)
-
-        return mobs_qs
-
-    def get_object(self):
-        obj = super().get_object()
-
-        if self._builder_rank >= 3:
-            return obj
-
-        if (self._builder_rank >= 2 and
-            self.action in (
-                'retrieve', 'inventory', 'reactions', 'factions', 'quests')):
-            return obj
-
-        has_assignment = BuilderAssignment.objects.filter(
-            builder__user=self.request.user,
-            assignment_id=obj.id,
-            assignment_type=ContentType.objects.get_for_model(MobTemplate),
-        ).exists()
-
-        if not has_assignment:
-            raise drf_exceptions.PermissionDenied(
-                "You do not have permission to this mob.")
-
-        return obj
-
-    def perform_create(self, serializer):
-
-        core_faction = serializer.initial_data.get('core_faction')
-
-        if core_faction:
-            try:
-                core_faction = Faction.objects.get(
-                    world=self.world,
-                    code=core_faction,
-                    is_core=True)
-            except Faction.DoesNotExist:
-                raise serializers.ValidationError("Invalid core faction.")
-
-        mob_template = serializer.save(world=self.world)
-
-        if core_faction:
-            FactionAssignment.objects.create(
-                faction=core_faction,
-                member=mob_template,
-                value=1)
-
-        # Create a builder assignment if the user is rank 2 or lower
-        if self._builder_rank <= 2:
-            builder = WorldBuilder.objects.get(user=self.request.user,
-                                               world=self.world)
-            BuilderAssignment.objects.create(
-                builder=builder,
-                assignment=mob_template)
-
-    def perform_update(self, serializer):
-        core_faction_field_passed_in = 'core_faction' in self.request.data
-
-        mob_template = serializer.save(world=self.world)
-
-        existing_core_faction_assignments = FactionAssignment.objects.filter(
-            member_id=mob_template.id,
-            member_type=ContentType.objects.get_for_model(mob_template),
-            faction__is_core=True,
-        ).order_by('-modified_ts', '-created_ts', '-id')
-        existing_core_faction_assignment = existing_core_faction_assignments.first()
-        if existing_core_faction_assignment:
-            existing_core_faction_assignments.exclude(
-                id=existing_core_faction_assignment.id).delete()
-
-        if core_faction_field_passed_in:
-            core_faction = self.request.data.get('core_faction')
-            if core_faction:
-                try:
-                    faction = Faction.objects.get(
-                        world=self.world,
-                        code=core_faction,
-                        is_core=True)
-                except Faction.DoesNotExist:
-                    raise serializers.ValidationError("Invalid core faction.")
-                # - there was no existing core faction => create
-                # - there was a different existing core
-                #   faction => delete & create
-                # - there was already the same core faction => do nothing
-                if (not existing_core_faction_assignment or
-                    existing_core_faction_assignment.faction != faction):
-                    if existing_core_faction_assignment:
-                        existing_core_faction_assignment.delete()
-                    FactionAssignment.objects.create(
-                        faction=faction,
-                        member=mob_template,
-                        value = 1)
-            elif existing_core_faction_assignment:
-                existing_core_faction_assignment.delete()
-
-    def perform_destroy(self, instance):
-        if instance.template_mobs.count():
-            raise serializers.ValidationError(
-                "Cannot delete a template that has loaded mobs.")
-        if Quest.objects.filter(
-            mob_template=instance).count():
-            raise serializers.ValidationError(
-                "Cannot delete a template used for a quest.")
-        if Objective.objects.filter(
-            template_type=ContentType.objects.get_for_model(instance),
-            template_id=instance.id,
-            qty__gte=1).count():
-            raise serializers.ValidationError(
-                "Cannot delete a template used for a quest objective.")
-        BuilderAssignment.objects.filter(
-            assignment_id=instance.id,
-            assignment_type=ContentType.objects.get_for_model(MobTemplate)
-        ).delete()
-        instance.delete()
-
-    @action(detail=False)
-    def inventory(self, request, pk, world_pk):
-        serializer = builder_serializers.MobTemplateInventorySerializer(
-            MobTemplateInventory.objects.filter(
-                container=self.get_object()),
-            many=True)
-        return Response({'data': serializer.data})
-
-    def add_to_inventory(self, request, pk, world_pk):
-        mob_template = self.get_object()
-        serializer = builder_serializers.AddMobTemplateInventorySerializer(
-            container=mob_template,
-            data=request.data)
-        serializer.is_valid(raise_exception=True)
-        mti = serializer.create(serializer.validated_data)
-        serializer = builder_serializers.MobTemplateInventorySerializer(mti)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-    @action(detail=False)
-    def reactions(self, request, pk, world_pk):
-        mob_template = self.get_object()
-        mob_template_ct = ContentType.objects.get_for_model(MobTemplate)
-        reaction_triggers = Trigger.objects.filter(
-            world=self.world,
-            kind=adv_consts.TRIGGER_KIND_EVENT,
-            target_type=mob_template_ct,
-            target_id=mob_template.id,
-        ).order_by('order', 'created_ts', 'id')
-        serializer = builder_serializers.MobReactionSerializer(
-            reaction_triggers,
-            many=True)
-        return Response(
-            {
-                'data': serializer.data,
-                'new_trigger_template': builder_manifests.serialize_mob_trigger_template(
-                    world=self.world,
-                    mob_template=mob_template,
-                ),
-                'triggers': [
-                    builder_manifests.serialize_trigger_manifest(trigger)
-                    for trigger in reaction_triggers
-                ],
-            }
-        )
-
-    def add_reaction(self, request, world_pk, pk):
-        mob_template = self.get_object()
-        serializer = builder_serializers.AddMobReactionSerializer(
-            template=mob_template,
-            data=request.data)
-        serializer.is_valid(raise_exception=True)
-        reaction = serializer.create(serializer.validated_data)
-        serializer = builder_serializers.MobReactionSerializer(reaction)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-    @action(detail=False)
-    def factions(self, request, world_pk, pk):
-        mob_template = self.get_object()
-        factions_qs = FactionAssignment.objects.filter(
-            member_type=ContentType.objects.get_for_model(mob_template),
-            member_id=mob_template.id)
-
-        is_core = self.request.query_params.get('is_core', None)
-        if is_core is not None:
-            if is_core.lower() == 'true':
-                factions_qs = factions_qs.filter(faction__is_core=True)
-            elif is_core.lower() == 'false':
-                factions_qs = factions_qs.filter(faction__is_core=False)
-
-        serializer = builder_serializers.MobFactionAssignmentSerializer(
-            factions_qs, many=True)
-        return Response({'data': serializer.data})
-
-    def add_faction(self, request, world_pk, pk):
-        mob_template = self.get_object()
-
-        # if FactionAssignment.objects.filter(
-        #         member_type=ContentType.objects.get_for_model(mob_template),
-        #         member_id=mob_template.id,
-        #         faction__is_core=True).exists():
-        #     raise serializers.ValidationError(
-        #         'Template already has a core faction association')
-
-        serializer = builder_serializers.MobFactionAssignmentSerializer(
-            data=request.data,
-            context={'mob_template': mob_template})
-        serializer.is_valid(raise_exception=True)
-        faction_assignment = serializer.save()
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-    @action(detail=False)
-    def quests(self, request, world_pk, pk):
-        mob_template = self.get_object()
-        serializer = builder_serializers.QuestSerializer(
-            mob_template.template_quests.all(), many=True)
-        return Response({'quests': serializer.data})
-
-mob_template_list = MobTemplateViewSet.as_view({
-    'get': 'list',
-    'post': 'create'})
-mob_template_detail = MobTemplateViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'update',
-    'delete': 'destroy'})
-mob_template_inventory = MobTemplateViewSet.as_view({
-    'get': 'inventory',
-    'post': 'add_to_inventory'})
-mob_template_reactions = MobTemplateViewSet.as_view({
-    'get': 'reactions',
-    'post': 'add_reaction',
-})
-mob_template_factions = MobTemplateViewSet.as_view({
-    'get': 'factions',
-    'post': 'add_faction',
-})
-mob_template_quests = MobTemplateViewSet.as_view({'get': 'quests'})
-
-
 class MobDefinitionViewSet(BaseWorldBuilderViewSet):
     serializer_class = builder_serializers.MobDefinitionSerializer
-    http_method_names = ['get', 'head', 'options']
+    http_method_names = ['get', 'post', 'head', 'options']
 
     def _serialize_mob_definition_response(self, mob_definition):
         payload = builder_manifests.serialize_mob_definition_payload(mob_definition)
@@ -3872,6 +2916,43 @@ class MobDefinitionViewSet(BaseWorldBuilderViewSet):
         mob_definition = self.get_object()
         return Response(analyze_mob_definition_power(self.world, mob_definition))
 
+    @action(methods=['get', 'post'], detail=True)
+    def reactions(self, request, pk, world_pk):
+        mob_definition = self.get_object()
+        mob_definition_ct = ContentType.objects.get_for_model(MobDefinition)
+        if request.method.lower() == 'post':
+            serializer = builder_serializers.AddMobReactionSerializer(
+                definition=mob_definition,
+                data=request.data,
+            )
+            serializer.is_valid(raise_exception=True)
+            reaction = serializer.create(serializer.validated_data)
+            serializer = builder_serializers.MobReactionSerializer(reaction)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        reaction_triggers = Trigger.objects.filter(
+            world=self.world,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=mob_definition_ct,
+            target_id=mob_definition.id,
+        ).order_by('order', 'created_ts', 'id')
+        serializer = builder_serializers.MobReactionSerializer(
+            reaction_triggers,
+            many=True)
+        return Response(
+            {
+                'data': serializer.data,
+                'new_trigger_template': builder_manifests.serialize_mob_trigger_template(
+                    world=self.world,
+                    mob_definition=mob_definition,
+                ),
+                'triggers': [
+                    builder_manifests.serialize_trigger_manifest(trigger)
+                    for trigger in reaction_triggers
+                ],
+            }
+        )
+
 
 mob_definition_list = MobDefinitionViewSet.as_view({
     'get': 'list',
@@ -3881,6 +2962,10 @@ mob_definition_detail = MobDefinitionViewSet.as_view({
 })
 mob_definition_power = MobDefinitionViewSet.as_view({
     'get': 'power',
+})
+mob_definition_reactions = MobDefinitionViewSet.as_view({
+    'get': 'reactions',
+    'post': 'reactions',
 })
 
 
@@ -3933,481 +3018,22 @@ merchant_profile_detail = MerchantProfileViewSet.as_view({
 })
 
 
-class MobTemplateFactionViewSet(BaseWorldBuilderViewSet):
-    serializer_class = builder_serializers.MobFactionAssignmentSerializer
-
-    def get_queryset(self):
-        return FactionAssignment.objects.filter(faction__world=self.world)
-
-mob_template_faction_detail = MobTemplateFactionViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'update',
-    'delete': 'destroy'})
-
-class MobTemplateReactionViewSet(BaseWorldBuilderViewSet):
+class MobDefinitionReactionViewSet(BaseWorldBuilderViewSet):
     serializer_class = builder_serializers.MobReactionSerializer
 
     def get_queryset(self):
         return Trigger.objects.filter(
             world=self.world,
             kind=adv_consts.TRIGGER_KIND_EVENT,
-            target_type=ContentType.objects.get_for_model(MobTemplate),
+            target_type=ContentType.objects.get_for_model(MobDefinition),
+            target_id=self.kwargs['mob_definition_pk'],
         )
 
-mob_template_reaction_detail = MobTemplateReactionViewSet.as_view({
+
+mob_definition_reaction_detail = MobDefinitionReactionViewSet.as_view({
     'get': 'retrieve',
     'put': 'update',
     'delete': 'destroy'})
-
-class MobTemplateInventoryViewSet(BaseWorldBuilderViewSet):
-    serializer_class = builder_serializers.MobTemplateInventorySerializer
-
-    def get_queryset(self):
-        return MobTemplateInventory.objects.all()
-
-mob_template_inventory_detail = MobTemplateInventoryViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'update',
-    'delete': 'destroy'})
-
-
-class MobTemplateMerchantInventoryViewSet(BaseWorldBuilderViewSet):
-
-    serializer_class = builder_serializers.MobTemplateMerchantInventorySerializer
-    pagination_class = None
-    queryset = MerchantInventory.objects.all()
-
-    def get_queryset(self):
-        qs = MerchantInventory.objects.filter(
-            mob_id=self.kwargs['mob_template_pk'])
-        return qs
-
-    def perform_create(self, serializer):
-        mob = MobTemplate.objects.get(pk=self.kwargs['mob_template_pk'])
-
-        if self._builder_rank <= 2:
-            if not BuilderAssignment.objects.filter(
-                builder__user=self.request.user,
-                assignment_id=mob.id,
-                assignment_type=ContentType.objects.get_for_model(MobTemplate),
-            ).exists():
-                raise drf_exceptions.PermissionDenied(
-                    "You do not have permission to alter this mob.")
-
-        serializer.save(mob=mob)
-
-mob_template_merchant_inventory_list = MobTemplateMerchantInventoryViewSet.as_view({
-    'get': 'list',
-    'post': 'create',
-})
-mob_template_merchant_inventory_detail = MobTemplateMerchantInventoryViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'update',
-    'delete': 'destroy',
-})
-
-class MobTemplateLoadsinView(BaseWorldBuilderView):
-    """
-    Given a mob template, return all of the loader information relative
-    to it: which rooms, zones and paths it loads in.
-    """
-
-    def get(self, request, world_pk, mob_template_pk, format=None):
-        """
-        Want to return:
-        {
-            'rooms': [],
-            'zones': [],
-            'paths': [],
-            'loaders': [],
-        }
-
-        {
-            'rooms': {
-                'room_key': {
-                    'num_copies': 1,
-                    'room_data': <room_data>,
-                }, ...
-            }
-        }
-        """
-
-        # Since mob_template_pk could also be key
-        if '.' in mob_template_pk:
-            mob_template_pk = mob_template_pk.split('.')[1]
-
-        data = {}
-
-        mob_template_ct = ContentType.objects.get_for_model(MobTemplate)
-        room_ct = ContentType.objects.get_for_model(Room)
-        zone_ct = ContentType.objects.get_for_model(Zone)
-        path_ct = ContentType.objects.get_for_model(Path)
-
-        # Find all rules that load the mob template
-        rules_qs = Rule.objects.filter(
-            loader__world_id=world_pk,
-            template_type=mob_template_ct,
-            template_id=mob_template_pk)
-
-        # Find all the rules that load this mob into a room, and get the
-        # room IDs (since they are the target), as well as how many copies
-        # are loaded by that rule.
-        rules_data = rules_qs.filter(
-            target_type=room_ct,
-        ).values_list('target_id', 'num_copies')
-
-        # We do a pass through the rules data to extract two things:
-        # 1) the list of room PKs
-        # 2) the cumulative count for each room
-        room_pks = []
-        room_counts = collections.defaultdict(int)
-        for room_pk, num_copies in rules_data:
-            room_pks.append(room_pk)
-            room_counts[room_pk] += num_copies
-
-        # Now all the serialized room data before augmenting it with the
-        # room counts
-        rooms_data = builder_serializers.MapRoomSerializer(
-            Room.objects.filter(pk__in=room_pks),
-            context={'request': request},
-            many=True
-        ).data
-
-        rooms_data_with_counts = {}
-        for room_data in rooms_data:
-            rooms_data_with_counts[room_data['key']] = {
-                'num_copies': room_counts[room_data['id']],
-                'room_data': room_data,
-            }
-
-        # Find zone rules
-        zones_data = rules_qs.filter(
-            target_type=zone_ct,
-        ).values_list('target_id', 'num_copies')
-
-        zone_pks = []
-        zone_counts = collections.defaultdict(int)
-        for zone_pk, num_copies in zones_data:
-            zone_pks.append(zone_pk)
-            zone_counts[zone_pk] += num_copies
-
-        zones_data = builder_serializers.ZoneBuilderSerializer(
-            Zone.objects.filter(pk__in=zone_pks),
-            context={'request': request},
-            many=True
-        ).data
-
-        zones_data_with_couts = {}
-        for zone_data in zones_data:
-            zones_data_with_couts[zone_data['key']] = {
-                'num_copies': zone_counts[zone_data['id']],
-                'zone_data': zone_data,
-            }
-
-        # Find path rules
-        paths_data = rules_qs.filter(
-            target_type=path_ct,
-        ).values_list('target_id', 'num_copies')
-
-        path_pks = []
-        path_counts = collections.defaultdict(int)
-        for path_pk, num_copies in paths_data:
-            path_pks.append(path_pk)
-            path_counts[path_pk] += num_copies
-
-        paths_data = builder_serializers.PathListSerializer(
-            Path.objects.filter(pk__in=path_pks),
-            many=True
-        ).data
-
-        paths_data_with_couts = {}
-        for path_data in paths_data:
-            paths_data_with_couts[path_data['key']] = {
-                'num_copies': path_counts[path_data['id']],
-                'path_data': path_data,
-            }
-
-        # Get all loaders that load the template
-        loader_ids = rules_qs.order_by('loader_id')\
-                             .distinct('loader_id')\
-                             .values_list('loader_id', flat=True)
-        loaders = [
-            builder_serializers.LoaderSerializer(loader).data
-            for loader in Loader.objects.filter(id__in=loader_ids)
-        ]
-
-        return Response({
-            'rooms': rooms_data_with_counts,
-            'zones': zones_data_with_couts,
-            'paths': paths_data_with_couts,
-            'loaders': loaders,
-        })
-
-mob_template_loadsin = MobTemplateLoadsinView.as_view()
-
-
-# Loader
-
-class LoaderViewSet(BaseWorldBuilderViewSet):
-    serializer_class = builder_serializers.LoaderSerializer
-
-    def get_queryset(self):
-        qs = Loader.objects.filter(world=self.world)
-        qs = apply_zone_filter(qs, self.request)
-        sorting = self.request.query_params.get('sort_by')
-        if sorting is not None:
-            return qs.order_by(sorting)
-        return qs.order_by('-created_ts')
-
-    def get_object(self):
-        obj = super().get_object()
-
-        if self._builder_rank >= 3: return obj
-        if self._builder_rank >= 2 and self.action == 'retrieve': return obj
-
-        if not BuilderAssignment.objects.filter(
-            builder__user=self.request.user,
-            assignment_id=obj.zone.id,
-            assignment_type=ContentType.objects.get_for_model(Zone),
-        ).exists():
-            raise drf_exceptions.PermissionDenied(
-                "You do not have permission to this loader.")
-
-        return obj
-
-    def perform_create(self, serializer):
-        serializer.save(world=self.world)
-
-loader_list = LoaderViewSet.as_view({
-    'get': 'list',
-    'post': 'create'})
-loader_detail = LoaderViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'update',
-    'delete': 'destroy'})
-
-
-# Rule
-
-class RuleViewSet(BaseWorldBuilderViewSet):
-    serializer_class = builder_serializers.RuleSerializer
-
-    def get_queryset(self):
-        rules_qs = Rule.objects.filter(loader=self.loader)
-
-        if self._builder_rank < 2:
-            zone_ids = BuilderAssignment.objects.filter(
-                builder__user=self.request.user,
-                assignment_type=ContentType.objects.get_for_model(Zone),
-            ).values_list('assignment_id', flat=True)
-            rules_qs = rules_qs.filter(loader__zone_id__in=zone_ids)
-
-        return rules_qs.order_by('order')
-
-    def get_object(self):
-        obj = super().get_object()
-
-        if self._builder_rank >= 3: return obj
-        if self._builder_rank >= 2 and self.action == 'retrieve': return obj
-
-        if not BuilderAssignment.objects.filter(
-            builder__user=self.request.user,
-            assignment_id=obj.loader.zone.id,
-            assignment_type=ContentType.objects.get_for_model(Zone),
-        ).exists():
-            raise drf_exceptions.PermissionDenied(
-                "You do not have permission to this loader.")
-
-        return obj
-
-    def perform_create(self, serializer):
-        if self._builder_rank < 3:
-            if not BuilderAssignment.objects.filter(
-                builder__user=self.request.user,
-                assignment_id=self.loader.zone.id,
-                assignment_type=ContentType.objects.get_for_model(Zone),
-            ).exists():
-                raise drf_exceptions.PermissionDenied(
-                    "You do not have permission to this loader.")
-
-        serializer.save(loader=self.loader)
-
-    def initialize_request(self, *args, **kwargs):
-        request = super().initialize_request(*args, **kwargs)
-
-        loader_pk = self.kwargs['loader_pk']
-        try:
-            loader_pk = loader_pk.split('.')[1]
-        except (ValueError, IndexError): pass
-
-        self.loader = generics.get_object_or_404(
-            Loader.objects.filter(world=self.world),
-            pk=loader_pk)
-
-        return request
-
-
-rule_list = RuleViewSet.as_view({
-    'get': 'list',
-    'post': 'create'})
-rule_detail = RuleViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'partial_update',
-    'delete': 'destroy'})
-
-
-# Quest
-
-class QuestViewSet(BaseWorldBuilderViewSet):
-
-    serializer_class = builder_serializers.QuestSerializer
-
-    def get_queryset(self):
-        qs = Quest.objects.filter(world=self.world).order_by(
-            '-level',
-            '-created_ts')
-        qs = self.search_queryset(qs)
-        return qs
-
-    def get_object(self):
-        obj = super().get_object()
-
-        if self._builder_rank >= 3: return obj
-        if self._builder_rank >= 2 and self.action == 'retrieve': return obj
-
-        if not BuilderAssignment.objects.filter(
-            builder__user=self.request.user,
-            assignment_id=obj.zone.id,
-            assignment_type=ContentType.objects.get_for_model(Zone),
-        ).exists():
-            raise drf_exceptions.PermissionDenied(
-                "You do not have permission to edit this quest.")
-
-        return obj
-
-    def add_objective(self, request, pk, world_pk):
-        quest = self.get_object()
-        serializer = builder_serializers.ObjectiveSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        objective = serializer.create(
-            validated_data=serializer.validated_data,
-            quest=quest)
-        serializer = builder_serializers.ObjectiveSerializer(objective)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-    def add_reward(self, request, pk, world_pk):
-        quest = self.get_object()
-
-        if self._builder_rank < 3:
-            if not BuilderAssignment.objects.filter(
-                builder__user=self.request.user,
-                assignment_id=quest.zone.id,
-                assignment_type=ContentType.objects.get_for_model(Zone),
-            ).exists():
-                raise drf_exceptions.PermissionDenied(
-                    "You do not have permission to this quest.")
-
-        serializer = builder_serializers.RewardSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        objective = serializer.create(
-            validated_data=serializer.validated_data,
-            quest=quest)
-        serializer = builder_serializers.RewardSerializer(objective)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-    def perform_create(self, serializer):
-
-        if self._builder_rank < 3:
-            if not BuilderAssignment.objects.filter(
-                builder__user=self.request.user,
-                assignment_id=serializer.validated_data['zone'].id,
-                assignment_type=ContentType.objects.get_for_model(Zone),
-            ).exists():
-                raise drf_exceptions.PermissionDenied(
-                    "You do not have permission to edit this zone.")
-
-        serializer.save()
-
-    def perform_update(self, serializer):
-        quest = serializer.save()
-        quest.update_live_instances()
-        return quest
-
-
-quest_list = QuestViewSet.as_view({'get': 'list', 'post': 'create'})
-quest_detail = QuestViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'update',
-    'delete': 'destroy',
-})
-objective_list = QuestViewSet.as_view({
-    'post': 'add_objective',
-})
-reward_list = QuestViewSet.as_view({
-    'post': 'add_reward',
-})
-
-class QuestObjectiveViewSet(BaseWorldBuilderViewSet):
-    serializer_class = builder_serializers.ObjectiveSerializer
-    queryset = Objective.objects.all()
-
-    def get_object(self):
-        obj = super().get_object()
-
-        if self._builder_rank >= 3: return obj
-        if self._builder_rank >= 2 and self.action == 'retrieve': return obj
-
-        if not BuilderAssignment.objects.filter(
-            builder__user=self.request.user,
-            assignment_id=obj.quest.zone.id,
-            assignment_type=ContentType.objects.get_for_model(Zone),
-        ).exists():
-            raise drf_exceptions.PermissionDenied(
-                "You do not have permission to this objective.")
-
-        return obj
-
-    def perform_update(self, serializer):
-        objective = serializer.save()
-        objective.quest.update_live_instances()
-        return objective
-
-objective_detail = QuestObjectiveViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'update',
-    'delete': 'destroy',
-})
-
-class RewardObjectiveViewSet(BaseWorldBuilderViewSet):
-    serializer_class = builder_serializers.RewardSerializer
-    queryset = Reward.objects.all()
-
-    def get_object(self):
-        obj = super().get_object()
-
-        if self._builder_rank >= 3: return obj
-        if self._builder_rank >= 2 and self.action == 'retrieve': return obj
-
-        if not BuilderAssignment.objects.filter(
-            builder__user=self.request.user,
-            assignment_id=obj.quest.zone.id,
-            assignment_type=ContentType.objects.get_for_model(Zone),
-        ).exists():
-            raise drf_exceptions.PermissionDenied(
-                "You do not have permission to this reward.")
-
-        return obj
-
-    def perform_update(self, serializer):
-        reward = serializer.save()
-        reward.quest.update_live_instances()
-        return reward
-
-reward_detail = RewardObjectiveViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'update',
-    'delete': 'destroy',
-})
 
 # Path
 
@@ -4437,11 +3063,6 @@ class PathViewSet(BaseWorldBuilderViewSet):
             status=status.HTTP_201_CREATED)
 
     def perform_destroy(self, instance):
-        if Rule.objects.filter(
-            target_type=ContentType.objects.get_for_model(Path),
-            target_id=instance.id).count():
-            raise serializers.ValidationError(
-                "Cannot delete a path that has rules loading it.")
         PathRoom.objects.filter(path=instance).delete()
         instance.delete()
 
@@ -4498,14 +3119,6 @@ class RandomItemProfileViewSet(BaseWorldBuilderViewSet):
     def perform_create(self, serializer):
         serializer.save(world=self.world)
 
-    def perform_destroy(self, instance):
-        if Reward.objects.filter(
-            profile_type=ContentType.objects.get_for_model(instance),
-            profile_id=instance.id).count():
-            raise serializers.ValidationError(
-                "Cannot delete a profile used for a quest reward.")
-        instance.delete()
-
 
 random_item_profile_list = RandomItemProfileViewSet.as_view({
     'get': 'list',
@@ -4536,31 +3149,6 @@ transformation_template_list = TransformationTemplateViewSet.as_view({
     'post': 'create',
 })
 transformation_template_detail = TransformationTemplateViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'update',
-    'delete': 'destroy',
-})
-
-
-class StartingEqViewSet(BaseWorldBuilderViewSet):
-
-    serializer_class = world_serializers.StartingEqSerializer
-    pagination_class = None
-    queryset = StartingEq.objects.all()
-
-    def perform_create(self, serializer):
-        serializer.save(worldconfig=self.world.config)
-
-    def get_queryset(self):
-        return StartingEq.objects.filter(worldconfig=self.world.config)
-
-
-
-starting_eq_list = StartingEqViewSet.as_view({
-    'get': 'list',
-    'post': 'create',
-})
-starting_eq_detail = StartingEqViewSet.as_view({
     'get': 'retrieve',
     'put': 'update',
     'delete': 'destroy',
@@ -4630,12 +3218,13 @@ class RefLookup(APIView):
 
         resource_to_model = {
             'zone': Zone,
-            'item_template': ItemTemplate,
-            'mob_template': MobTemplate,
+            'item_definition': ItemDefinition,
+            'item_bundle': ItemBundle,
+            'mob_definition': MobDefinition,
             'transformation_template': TransformationTemplate,
             'room': Room,
-            'rule': Rule,
             'path': Path,
+            'spawn_plan': SpawnPlan,
         }
 
         qs = None
@@ -4661,26 +3250,11 @@ class RefLookup(APIView):
                 keyword, value = context.split('.')
                 if keyword == 'zone':
                     kwargs['zone__relative_id'] = value
-                elif keyword == 'loader':
-                    if resource == 'room':
-                        loader = Loader.objects.get(pk=value)
-
-                        # Only show rooms that are in the loader's zone
-                        if loader.zone:
-                            kwargs['zone_id'] = loader.zone.id
-
-                        # If there is a query, query by room name
-                        if query:
-                            kwargs['name__icontains'] = query
-                    elif resource == 'path':
-                        pass
-                    else:
-                        kwargs['loader__id'] = value
 
             elif query:
                 kwargs['name__icontains'] = query
 
-            if resource not in ('rule', 'transformation_template'):
+            if resource != 'transformation_template':
                 kwargs['world_id'] = world_id
 
             qs = resource_to_model[resource].objects.filter(**kwargs)
@@ -5068,16 +3642,16 @@ class PlayerRestore(BaseWorldBuilderView):
         deleted_eq_qs = player.equipment.inventory.filter(
             is_pending_deletion=True
         ).prefetch_related(
-            'template',
+            'definition',
         ).order_by(
             '-pending_deletion_ts')
         equipment = []
         for eq in deleted_eq_qs:
             equipment_data = {
                 'id': eq.id,
-                'name': eq.template.name if eq.template else eq.name,
-                'type': eq.template.type if eq.template else eq.type,
-                'template_id': eq.template_id,
+                'name': eq.definition.name if eq.definition else eq.name,
+                'type': eq.definition.item_type if eq.definition else eq.type,
+                'definition_id': eq.definition_id,
                 'pending_deletion_ts': eq.pending_deletion_ts,
                 'contains': [],
             }
@@ -5085,16 +3659,16 @@ class PlayerRestore(BaseWorldBuilderView):
                 {
                     'id': contained_item.id,
                     'name': (
-                        contained_item.template.name
-                        if contained_item.template
+                        contained_item.definition.name
+                        if contained_item.definition
                         else contained_item.name),
                     'type': (
-                        contained_item.type if contained_item.template
+                        contained_item.definition.item_type if contained_item.definition
                         else contained_item.type),
-                    'template_id': contained_item.template_id,
+                    'definition_id': contained_item.definition_id,
                 }
                 for contained_item
-                in eq.inventory.prefetch_related('template')
+                in eq.inventory.prefetch_related('definition')
             ]
             equipment.append(equipment_data)
 
@@ -5102,18 +3676,18 @@ class PlayerRestore(BaseWorldBuilderView):
         deleted_items_qs = player.inventory.filter(
             is_pending_deletion=True
         ).prefetch_related(
-            'template',
+            'definition',
         ).order_by(
             '-pending_deletion_ts')
 
         items = []
         for item in deleted_items_qs:
-            type = item.template.type if item.template else item.type
+            type = item.definition.item_type if item.definition else item.type
             item_data = {
                 'id': item.id,
-                'name': item.template.name if item.template else item.name,
+                'name': item.definition.name if item.definition else item.name,
                 'type': type,
-                'template_id': item.template_id,
+                'definition_id': item.definition_id,
                 'pending_deletion_ts': item.pending_deletion_ts,
                 'contains': [],
             }
@@ -5121,16 +3695,16 @@ class PlayerRestore(BaseWorldBuilderView):
                 {
                     'id': contained_item.id,
                     'name': (
-                        contained_item.template.name
-                        if contained_item.template
+                        contained_item.definition.name
+                        if contained_item.definition
                         else contained_item.name),
                     'type': (
-                        contained_item.type if contained_item.template
+                        contained_item.definition.item_type if contained_item.definition
                         else contained_item.type),
-                    'template_id': contained_item.template_id,
+                    'definition_id': contained_item.definition_id,
                 }
                 for contained_item
-                in item.inventory.prefetch_related('template')
+                in item.inventory.prefetch_related('definition')
             ]
             items.append(item_data)
 

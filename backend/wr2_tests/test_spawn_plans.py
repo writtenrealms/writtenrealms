@@ -2,9 +2,9 @@ import yaml
 
 from django.urls import reverse
 
-from builders.models import ItemDefinition, MobDefinition, MobTemplate, Path, PathRoom, SpawnEntry, SpawnPlan, SpawnPlacement, SpawnPlanRun
+from builders.models import ItemDefinition, MobDefinition, Path, PathRoom, SpawnEntry, SpawnPlan, SpawnPlacement, SpawnPlanRun
 from config import constants as adv_consts
-from spawns.loading import run_loaders
+from spawns.loading import run_spawn_plans_for_world
 from spawns.models import Mob
 from spawns.tasks import run_mob_roaming
 from tests.base import WorldTestCase
@@ -71,20 +71,14 @@ metadata:
   world: world.{self.world.id}
   slug: training-patrols
   name: Training Patrols
-  legacy:
-    model: Loader
-    id: 99
 spec:
   zone: zone@{self.zone.relative_id}
   zone_ref: zone@{self.zone.relative_id}
-  legacy:
-    inherit_zone_wait: false
   entries:
     - slug: dummy-patrol
       source_pool:
         - ref: mobdefinition.{self.mob_definition.slug}
           weight: 2
-      source_legacy_ref: mob_definition.{self.mob_definition.id}
       target:
         room: room@{self.room.x},{self.room.y},{self.room.z}
         room_ref: room.{self.room.id}
@@ -492,42 +486,6 @@ spec:
         self.assertEqual(entry.source, "mobdefinition.practice-dummy")
         self.assertEqual(entry.target["room"], f"room@{instance_room.x},{instance_room.y},{instance_room.z}")
 
-    def test_apply_spawn_plan_manifest_on_instance_rejects_legacy_source(self):
-        instance_template = World.objects.new_world(
-            name="Training Instance",
-            author=self.user,
-            config=WorldConfig.objects.create(),
-            is_multiplayer=True,
-            instance_of=self.world,
-        )
-        instance_zone = instance_template.zones.get()
-        instance_room = instance_zone.rooms.get()
-        MobTemplate.objects.create(
-            world=instance_template,
-            slug="legacy-dummy",
-            name="legacy dummy",
-        )
-        apply_ep = reverse("builder-world-manifest-apply", args=[instance_template.pk])
-        manifest = f"""
-kind: spawnplan
-metadata:
-  slug: legacy-instance-plan
-  name: Legacy Instance Plan
-spec:
-  zone: zone@{instance_zone.relative_id}
-  entries:
-    - slug: legacy-dummy
-      source: mobtemplate.legacy-dummy
-      target:
-        room: room@{instance_room.x},{instance_room.y},{instance_room.z}
-      count: 1
-"""
-
-        resp = self.client.post(apply_ep, {"manifest": manifest}, format="json")
-
-        self.assertEqual(resp.status_code, 400)
-        self.assertFalse(SpawnPlan.objects.filter(world=instance_template, slug="legacy-instance-plan").exists())
-
     def test_apply_spawn_plan_manifest_accepts_path_ref_target(self):
         path = Path.objects.create(
             world=self.world,
@@ -582,7 +540,7 @@ spec:
         self.assertEqual(resp.status_code, 400)
         self.assertFalse(SpawnPlan.objects.filter(world=self.world, slug="named-path-plan").exists())
 
-    def test_zone_loaders_endpoint_lists_spawn_plans(self):
+    def test_zone_spawn_plans_endpoint_lists_spawn_plans(self):
         plan = SpawnPlan.objects.create(
             world=self.world,
             zone=self.zone,
@@ -597,47 +555,18 @@ spec:
             target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
             count=1,
         )
-        list_ep = reverse("builder-zone-loaders", args=[self.world.pk, self.zone.pk])
+        list_ep = reverse("builder-zone-spawn-plans", args=[self.world.pk, self.zone.pk])
 
         resp = self.client.get(list_ep)
 
         self.assertEqual(resp.status_code, 200, resp.data)
-        self.assertEqual(len(resp.data["results"]), 1)
-        payload = resp.data["results"][0]
+        self.assertEqual(len(resp.data["spawn_plans"]), 1)
+        payload = resp.data["spawn_plans"][0]
         self.assertEqual(payload["id"], plan.id)
         self.assertEqual(payload["slug"], "training-grounds")
         self.assertEqual(payload["zone_ref"], f"zone@{self.zone.relative_id}")
         self.assertEqual(payload["num_entries"], 1)
         self.assertNotIn("yaml", payload)
-
-    def test_zone_loader_detail_returns_spawn_plan_yaml(self):
-        plan = SpawnPlan.objects.create(
-            world=self.world,
-            zone=self.zone,
-            slug="training-grounds",
-            name="Training Grounds",
-            respawn_policy={"mode": "fixed", "seconds": 60},
-        )
-        SpawnEntry.objects.create(
-            plan=plan,
-            slug="practice-dummy",
-            source=f"mobdefinition.{self.mob_definition.slug}",
-            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
-            count=1,
-        )
-        detail_ep = reverse(
-            "builder-zone-loader-detail",
-            args=[self.world.pk, self.zone.pk, plan.pk],
-        )
-
-        resp = self.client.get(detail_ep)
-
-        self.assertEqual(resp.status_code, 200, resp.data)
-        self.assertEqual(resp.data["slug"], "training-grounds")
-        self.assertEqual(resp.data["zone"]["manifest_ref"], f"zone@{self.zone.relative_id}")
-        self.assertIn("kind: spawnplan", resp.data["yaml"])
-        self.assertIn(f"zone: zone@{self.zone.relative_id}", resp.data["yaml"])
-        self.assertIn("operation: delete", resp.data["delete_yaml"])
 
 
 class TestSpawnPlanRuntime(WorldTestCase):
@@ -835,14 +764,14 @@ class TestSpawnPlanRuntime(WorldTestCase):
         self.assertEqual(placement.source_type, "mobdefinition")
         self.assertEqual(placement.source_id, self.mob_definition.id)
 
-    def test_run_loaders_reconciles_missing_spawn_plan_copy(self):
+    def test_spawn_plan_runner_reconciles_missing_spawn_plan_copy(self):
         spawn_world = self.world.create_spawn_world()
         WorldSmith(spawn_world).start()
         first_mob = Mob.objects.get(world=spawn_world, definition=self.mob_definition)
         first_placement = first_mob.spawn_placement
 
         first_mob.delete()
-        output = run_loaders(world=spawn_world)
+        output = run_spawn_plans_for_world(world=spawn_world)
 
         self.assertEqual(output["spawn_plans"][0]["spawned"], 1)
         replacement = Mob.objects.get(world=spawn_world, definition=self.mob_definition)
@@ -923,7 +852,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
         follower = next(mob for mob in mobs if mob.definition_id == archer_definition.id)
         follower.delete()
 
-        output = run_loaders(world=spawn_world)
+        output = run_spawn_plans_for_world(world=spawn_world)
 
         self.assertEqual(output["spawn_plans"][0]["spawned"], 1)
         mobs = list(Mob.objects.filter(world=spawn_world).order_by("id"))
@@ -933,7 +862,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
 
         for mob in mobs:
             mob.delete()
-        output = run_loaders(world=spawn_world)
+        output = run_spawn_plans_for_world(world=spawn_world)
 
         self.assertEqual(output["spawn_plans"][0]["spawned"], 2)
         mobs = list(Mob.objects.filter(world=spawn_world).order_by("id"))

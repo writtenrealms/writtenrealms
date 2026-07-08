@@ -6,10 +6,8 @@ from rest_framework.reverse import reverse
 
 from builders.models import (
     Currency,
-    ItemTemplate,
-    ItemTemplateInventory,
-    MobTemplate,
-    MobTemplateInventory,
+    ItemDefinition,
+    MobDefinition,
     Path,
     PathRoom,
     Trigger,
@@ -120,24 +118,18 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             is_default=False,
         )
 
-        self.brass_key = ItemTemplate.objects.create(
+        self.brass_key = ItemDefinition.objects.create(
             world=self.world,
+            slug="brass_key",
             name="a brass key",
-            currency=self.marks,
         )
-        self.lockbox = ItemTemplate.objects.create(
+        self.lockbox = ItemDefinition.objects.create(
             world=self.world,
+            slug="lockbox",
             name="a lockbox",
-            type=adv_consts.ITEM_TYPE_CONTAINER,
-            capacity=10,
-            currency=self.marks,
+            item_type=adv_consts.ITEM_TYPE_CONTAINER,
+            base_properties={"capacity": 10},
             notes="Used in the harbor office.",
-        )
-        ItemTemplateInventory.objects.create(
-            container=self.lockbox,
-            item_template=self.brass_key,
-            probability=100,
-            num_copies=1,
         )
 
         Door.objects.create(
@@ -150,19 +142,13 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             default_state=adv_consts.DOOR_STATE_CLOSED,
         )
 
-        self.quartermaster = MobTemplate.objects.create(
+        self.quartermaster = MobDefinition.objects.create(
             world=self.world,
+            slug="quartermaster",
             name="Quartermaster",
-            level=4,
-            type=adv_consts.MOB_TYPE_HUMANOID,
+            mob_type=adv_consts.MOB_TYPE_HUMANOID,
             description="Keeps the harbor ledgers.",
-            merchant_profit=1.2,
-        )
-        MobTemplateInventory.objects.create(
-            container=self.quartermaster,
-            item_template=self.brass_key,
-            probability=100,
-            num_copies=1,
+            base_properties={"level": 4},
         )
 
         self.quest_arc = QuestArcTemplate.objects.create(
@@ -186,7 +172,7 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
                 "sources": [
                     {
                         "type": "npc_dialogue",
-                        "mob_template": f"mobtemplate.{self.quartermaster.id}",
+                        "mob_definition": f"mobdefinition.{self.quartermaster.id}",
                     }
                 ],
                 "visible_if": {},
@@ -211,14 +197,14 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
                                         "all": [
                                             {
                                                 "eq": [
-                                                    "event.target.template_id",
-                                                    f"mobtemplate.{self.quartermaster.id}",
+                                                    "event.target.definition_id",
+                                                    f"mobdefinition.{self.quartermaster.id}",
                                                 ]
                                             },
                                             {
                                                 "eq": [
-                                                    "event.item.template_id",
-                                                    f"itemtemplate.{self.brass_key.id}",
+                                                    "event.item.definition_id",
+                                                    f"itemdefinition.{self.brass_key.id}",
                                                 ]
                                             },
                                         ]
@@ -248,7 +234,7 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
                 "complete": [
                     {
                         "type": "mob_command",
-                        "mob_template": f"mobtemplate.{self.quartermaster.id}",
+                        "mob_definition": f"mobdefinition.{self.quartermaster.id}",
                         "command": "say Delivery received.",
                     }
                 ],
@@ -336,7 +322,7 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         )
 
         room_ct = ContentType.objects.get_for_model(Room)
-        mob_ct = ContentType.objects.get_for_model(MobTemplate)
+        mob_ct = ContentType.objects.get_for_model(MobDefinition)
         Trigger.objects.create(
             world=self.world,
             scope=adv_consts.TRIGGER_SCOPE_ROOM,
@@ -382,14 +368,12 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
 
         expected_kinds = (
             ["currency"] * resp.data["summary"]["currencies"]
-            + ["itemtemplate"] * resp.data["summary"]["item_templates"]
             + ["itemdefinition"] * resp.data["summary"]["item_definitions"]
             + ["itembundle"] * resp.data["summary"]["item_bundles"]
             + ["merchantprofile"] * resp.data["summary"]["merchant_profiles"]
             + ["zone"] * resp.data["summary"]["zones"]
             + ["room"] * resp.data["summary"]["rooms"]
             + ["path"] * resp.data["summary"]["paths"]
-            + ["mobtemplate"] * resp.data["summary"]["mob_templates"]
             + ["mobdefinition"] * resp.data["summary"]["mob_definitions"]
             + ["spawnplan"] * resp.data["summary"]["spawn_plans"]
             + ["ability"] * resp.data["summary"]["abilities"]

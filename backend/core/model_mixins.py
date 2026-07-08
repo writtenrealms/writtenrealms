@@ -1,7 +1,5 @@
 from config import constants as adv_consts
 
-from config import game_settings as adv_config
-
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericRelation
 from django.db import models
@@ -11,13 +9,9 @@ from core.db import list_to_choice, optional
 
 def get_auto_keywords(self):
     """
-    Automatically gets the keywords for an instance based on its
-    template's name, or its own.
+    Automatically gets the keywords for an instance based on its name.
     """
-    if self.template:
-        name = self.template.name
-    else:
-        name = self.name
+    name = self.name
     keywords = ' '.join(list(reversed([
         token.lower() for token in name.split(' ')
         if token not in adv_consts.EXCLUDE_NAME_TOKENS
@@ -229,11 +223,6 @@ class MobMixin(models.Model):
     fights_back = models.BooleanField(default=True)
     is_invisible = models.BooleanField(default=False)
 
-    is_crafter = models.BooleanField(default=False)
-
-    is_upgrader = models.BooleanField(default=False)
-    upgrade_cost_multiplier = models.FloatField(default=1.0)
-
     traits = models.TextField(**optional)
 
 
@@ -266,12 +255,6 @@ class MobMixin(models.Model):
     weapon_damage = models.FloatField(default=0)
 
     regen_rate = models.IntegerField(default=4)
-
-    # Multipliers
-    craft_multiplier = models.FloatField(
-        default=adv_config.CRAFTER_MULTIPLIER)  # multiplier on cost
-    merchant_profit = models.FloatField(
-        default=adv_config.MERCHANT_PROFITS) # multiplier on merchants
 
     class Meta:
         abstract = True

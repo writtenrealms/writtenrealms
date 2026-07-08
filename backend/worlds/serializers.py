@@ -2,13 +2,12 @@ from django.contrib.auth import get_user_model
 
 from rest_framework import serializers
 
-from core.serializers import ReferenceField
 from core.stat_system import (
     get_world_class_selection,
     get_world_label_bundle,
     world_uses_classes,
 )
-from worlds.models import Room, World, Zone, StartingEq
+from worlds.models import Room, World, Zone
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -186,15 +185,3 @@ class RoomSerializer(serializers.ModelSerializer):
         model = Room
         fields = ('id', 'key', 'name', 'description', 'x', 'y', 'z', 'zone')
 
-
-class StartingEqSerializer(serializers.ModelSerializer):
-    itemtemplate = ReferenceField()
-
-    class Meta:
-        model = StartingEq
-        fields = (
-            'id',
-            'itemtemplate',
-            'num',
-            'archetype',
-        )

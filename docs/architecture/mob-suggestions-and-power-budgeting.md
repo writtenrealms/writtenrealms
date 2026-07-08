@@ -41,11 +41,9 @@ WR2 combat already has the important runtime pieces:
 
 The missing piece is builder assistance.
 
-The old `core.utils.mobs.suggest_stats` helper and `MobTemplateSerializer`
-creation path can suggest legacy mob-template stats, but that path is not the
-right long-term WR2 surface. It is tied to `MobTemplate`, old defaults, and old
-assumptions. The new feature should target `MobDefinition` and the YAML
-manifest flow.
+The old `core.utils.mobs.suggest_stats` helper was tied to the deleted
+legacy mob-template creation path. Builder assistance now targets
+`MobDefinition` and the YAML manifest flow.
 
 The current frontend `Mobs > Add` path simply opens **World > Edit** with a
 static `newMobDefinitionYaml` template. That is useful as a placeholder, but it
@@ -84,7 +82,6 @@ but does not yet provide guardrails.
 - No arbitrary builder-authored formula language for the suggestion engine.
 - No attempt to perfectly solve encounter balance across every possible ability,
   item, party, or build.
-- No immediate replacement for all legacy `MobTemplate` behavior.
 
 ## Recommendation
 

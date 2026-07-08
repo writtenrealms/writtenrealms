@@ -33,7 +33,7 @@ The first WR2 implementation is live in the runtime:
   `attack_power` as direct damage.
 - Combat events include formula details such as base damage, damage dealt,
   damage mitigated, dodge chance, crit chance, and mitigation percentages.
-- Item templates, spawned items, mob templates, and spawned mobs now have
+- Item definitions, spawned items, mob definitions, and spawned mobs now have
   `weapon_damage`.
 - Randomly generated weapons receive level-scaled `weapon_damage`.
 

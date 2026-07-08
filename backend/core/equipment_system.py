@@ -264,15 +264,11 @@ def get_world_equipment_payload(world) -> dict[str, Any]:
 
 def _item_equipment_type(item: Any) -> str:
     value = getattr(item, "equipment_type", None)
-    if value is None and getattr(item, "template", None) is not None:
-        value = getattr(item.template, "equipment_type", "")
     return str(value or "").strip()
 
 
 def _item_weapon_grip(item: Any) -> str:
     value = getattr(item, "weapon_grip", None)
-    if value is None and getattr(item, "template", None) is not None:
-        value = getattr(item.template, "weapon_grip", "")
     grip = str(value or "").strip()
     if grip:
         return grip

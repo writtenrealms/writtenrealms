@@ -76,8 +76,8 @@ Important current limits:
 - no dedicated frontend quest UI yet
 - the runtime `completed` list currently lives at `resolved/` to avoid
   clobbering the legacy completed endpoint before cutover
-- `npc_dialogue` currently means "the matching mob template is present in the
-  room", not a full conversational UI
+- `npc_dialogue` currently means "a spawned mob with the matching mob
+  definition is present in the room", not a full conversational UI
 - `kill` is currently a minimal quest-enabling defeat command, not a finished
   combat system
 
@@ -514,32 +514,40 @@ This is the first common MMO quest loop now supported:
 ```bash
 COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
   python manage.py shell -c "
-from builders.models import ItemTemplate, MobTemplate
+from builders.models import ItemDefinition, MobDefinition
 from spawns.models import Player
 player = Player.objects.select_related('room', 'world', 'world__context').get(pk=<player_id>)
 author_world = player.world.context or player.world
 spawn_world = player.world
-quartermaster_template, _ = MobTemplate.objects.get_or_create(
+quartermaster_definition, _ = MobDefinition.objects.get_or_create(
     world=author_world,
-    name='Quartermaster',
-    defaults={'keywords': 'quartermaster'},
+    slug='quartermaster',
+    defaults={'name': 'Quartermaster', 'keywords': 'quartermaster'},
 )
-if not spawn_world.mobs.filter(room=player.room, template=quartermaster_template).exists():
-    quartermaster_template.spawn(player.room, spawn_world)
-pelt_template, _ = ItemTemplate.objects.get_or_create(world=author_world, name='Wolf Pelt')
-herb_template, _ = ItemTemplate.objects.get_or_create(world=author_world, name='Moonleaf')
-pelt_template.spawn(player, spawn_world)
-pelt_template.spawn(player, spawn_world)
-herb_template.spawn(player, spawn_world)
-print(quartermaster_template.id, pelt_template.id, herb_template.id)
+if not spawn_world.mobs.filter(room=player.room, definition=quartermaster_definition).exists():
+    quartermaster_definition.spawn(player.room, spawn_world)
+pelt_definition, _ = ItemDefinition.objects.get_or_create(
+    world=author_world,
+    slug='wolf-pelt',
+    defaults={'name': 'Wolf Pelt'},
+)
+herb_definition, _ = ItemDefinition.objects.get_or_create(
+    world=author_world,
+    slug='moonleaf',
+    defaults={'name': 'Moonleaf'},
+)
+pelt_definition.spawn(player, spawn_world)
+pelt_definition.spawn(player, spawn_world)
+herb_definition.spawn(player, spawn_world)
+print(quartermaster_definition.slug, pelt_definition.slug, herb_definition.slug)
 "
 ```
 
-Treat the printed ids as:
+Treat the printed slugs as:
 
-- `<quartermaster_template_id>`
-- `<pelt_template_id>`
-- `<herb_template_id>`
+- `<quartermaster_definition_slug>`
+- `<pelt_definition_slug>`
+- `<herb_definition_slug>`
 
 ### Step 2: Apply The Quest
 
@@ -576,8 +584,8 @@ spec:
             event: quest.item.delivered
             where:
               all:
-                - eq: [event.target.template_id, <quartermaster_template_id>]
-                - eq: [event.item.template_id, <pelt_template_id>]
+                - eq: [event.target.definition_id, <quartermaster_definition_slug>]
+                - eq: [event.item.definition_id, <pelt_definition_slug>]
           progress:
             mode: count
             target: 2
@@ -587,8 +595,8 @@ spec:
             event: quest.item.delivered
             where:
               all:
-                - eq: [event.target.template_id, <quartermaster_template_id>]
-                - eq: [event.item.template_id, <herb_template_id>]
+                - eq: [event.target.definition_id, <quartermaster_definition_slug>]
+                - eq: [event.item.definition_id, <herb_definition_slug>]
           progress:
             mode: count
             target: 1
@@ -653,33 +661,33 @@ This is the second common loop now supported:
 ```bash
 COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
   python manage.py shell -c "
-from builders.models import MobTemplate
+from builders.models import MobDefinition
 from spawns.models import Player
 player = Player.objects.select_related('room', 'world', 'world__context').get(pk=<player_id>)
 author_world = player.world.context or player.world
 spawn_world = player.world
-captain_template, _ = MobTemplate.objects.get_or_create(
+captain_definition, _ = MobDefinition.objects.get_or_create(
     world=author_world,
-    name='Captain Merrow',
-    defaults={'keywords': 'captain merrow captain'},
+    slug='captain-merrow',
+    defaults={'name': 'Captain Merrow', 'keywords': 'captain merrow captain'},
 )
-rat_template, _ = MobTemplate.objects.get_or_create(
+rat_definition, _ = MobDefinition.objects.get_or_create(
     world=author_world,
-    name='Tunnel Rat',
-    defaults={'keywords': 'rat tunnel rat'},
+    slug='tunnel-rat',
+    defaults={'name': 'Tunnel Rat', 'keywords': 'rat tunnel rat'},
 )
-if not spawn_world.mobs.filter(room=player.room, template=captain_template).exists():
-    captain_template.spawn(player.room, spawn_world)
-rat_template.spawn(player.room, spawn_world)
-rat_template.spawn(player.room, spawn_world)
-print(captain_template.id, rat_template.id)
+if not spawn_world.mobs.filter(room=player.room, definition=captain_definition).exists():
+    captain_definition.spawn(player.room, spawn_world)
+rat_definition.spawn(player.room, spawn_world)
+rat_definition.spawn(player.room, spawn_world)
+print(captain_definition.slug, rat_definition.slug)
 "
 ```
 
-Treat the printed ids as:
+Treat the printed slugs as:
 
-- `<captain_template_id>`
-- `<rat_template_id>`
+- `<captain_definition_slug>`
+- `<rat_definition_slug>`
 
 ### Step 2: Apply The Quest
 
@@ -715,7 +723,7 @@ spec:
           tracker:
             event: quest.mob.killed
             where:
-              eq: [event.target.template_id, <rat_template_id>]
+              eq: [event.target.definition_id, <rat_definition_slug>]
           progress:
             mode: count
             target: 2
@@ -732,7 +740,7 @@ spec:
           tracker:
             event: cmd.talk.success
             where:
-              eq: [event.target.template_id, <captain_template_id>]
+              eq: [event.target.definition_id, <captain_definition_slug>]
           progress:
             mode: boolean
             target: 1
