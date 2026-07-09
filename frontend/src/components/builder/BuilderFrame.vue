@@ -94,6 +94,10 @@
           >Paths</router-link>
 
           <router-link
+            :to="{name: 'builder_zone_spawn_plan_list', params: { world_id: $route.params.world_id, zone_id: route.params.zone_id}}" :class="{ 'router-link-active': isZoneSpawnPlanRoute }"
+          >Spawns</router-link>
+
+          <router-link
             :to="{name: 'builder_zone_config', params: { world_id: $route.params.world_id, zone_id: route.params.zone_id}}" :class="{ 'router-link-active': isZoneConfigRoute }"
           >Config</router-link>
         </template>
@@ -103,7 +107,7 @@
           <router-link
             :to="{name: 'builder_room_spawn_plan_list', params: { world_id: $route.params.world_id, room_id: route.params.room_id}}"
           >
-            Spawn Plans
+            Spawns
             <span v-if="room && room.num_spawn_plan_entries">({{ room.num_spawn_plan_entries}})</span>
           </router-link>
 
@@ -294,6 +298,9 @@ const isWorldBuilderRoute = computed(() => {
 // Zone
 const isZonePathRoute = computed(() => {
   return ['builder_zone_path_list', 'builder_zone_path_details'].includes(route.name as string);
+});
+const isZoneSpawnPlanRoute = computed(() => {
+  return ['builder_zone_spawn_plan_list', 'builder_zone_spawn_plan_details'].includes(route.name as string);
 });
 const isZoneConfigRoute = computed(() => {
   return [

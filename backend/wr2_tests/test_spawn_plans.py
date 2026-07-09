@@ -561,12 +561,35 @@ spec:
 
         self.assertEqual(resp.status_code, 200, resp.data)
         self.assertEqual(len(resp.data["spawn_plans"]), 1)
+        self.assertEqual(resp.data["count"], 1)
+        self.assertEqual(len(resp.data["results"]), 1)
         payload = resp.data["spawn_plans"][0]
         self.assertEqual(payload["id"], plan.id)
         self.assertEqual(payload["slug"], "training-grounds")
         self.assertEqual(payload["zone_ref"], f"zone@{self.zone.relative_id}")
         self.assertEqual(payload["num_entries"], 1)
         self.assertNotIn("yaml", payload)
+
+    def test_zone_spawn_plan_detail_returns_manifest_yaml(self):
+        plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug="training-grounds",
+            name="Training Grounds",
+            respawn_policy={"mode": "fixed", "seconds": 60},
+        )
+        detail_ep = reverse(
+            "builder-zone-spawn-plan-detail",
+            args=[self.world.pk, self.zone.pk, plan.pk],
+        )
+
+        resp = self.client.get(detail_ep)
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data["id"], plan.id)
+        self.assertEqual(resp.data["slug"], "training-grounds")
+        self.assertIn("kind: spawnplan", resp.data["yaml"])
+        self.assertIn("operation: delete", resp.data["delete_yaml"])
 
 
 class TestSpawnPlanRuntime(WorldTestCase):

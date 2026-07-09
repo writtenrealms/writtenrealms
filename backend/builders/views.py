@@ -678,6 +678,8 @@ class ZoneBuilderViewSet(WorldCreationMixin,
             'rooms',
             'paths',
             'map',
+            'spawn_plans',
+            'spawn_plan_detail',
             'quest_list']:
             return obj
 
@@ -782,18 +784,50 @@ class ZoneBuilderViewSet(WorldCreationMixin,
     @action(detail=True)
     def spawn_plans(self, request, world_pk, pk):
         zone = self.get_object()
+        qs = zone.spawn_plans.select_related('zone').prefetch_related('entries')
+
+        query = self.request.query_params.get('query')
+        if query:
+            try:
+                qs = qs.filter(pk=int(query))
+            except ValueError:
+                qs = qs.filter(Q(name__icontains=query) | Q(slug__icontains=query))
+
+        sorting = self.request.query_params.get('sort_by')
+        if sorting:
+            qs = qs.order_by(sorting)
+        else:
+            qs = qs.order_by('order', 'created_ts', 'id')
+
         spawn_plans = [
             builder_world_export.serialize_spawn_plan_payload(
                 spawn_plan,
                 include_yaml=False,
             )
-            for spawn_plan in zone.spawn_plans.prefetch_related('entries').order_by(
-                'order', 'created_ts', 'id'
-            )
+            for spawn_plan in qs
         ]
-        return Response({
-            'spawn_plans': spawn_plans,
-        })
+        page = self.paginate_queryset(spawn_plans)
+        if page is None:
+            return Response({
+                'count': len(spawn_plans),
+                'results': spawn_plans,
+                'spawn_plans': spawn_plans,
+            })
+
+        response = self.get_paginated_response(page)
+        response.data['spawn_plans'] = spawn_plans
+        return response
+
+    @action(detail=True)
+    def spawn_plan_detail(self, request, world_pk, pk, spawn_plan_pk):
+        zone = self.get_object()
+        spawn_plan = get_object_or_404(
+            zone.spawn_plans.select_related('zone').prefetch_related('entries'),
+            pk=spawn_plan_pk,
+        )
+        return Response(
+            builder_world_export.serialize_spawn_plan_payload(spawn_plan)
+        )
 
     @action(detail=False)
     def move(self, request, world_pk, pk):
@@ -854,6 +888,9 @@ zone_map = ZoneBuilderViewSet.as_view({
 })
 zone_spawn_plans = ZoneBuilderViewSet.as_view({
     'get': 'spawn_plans',
+})
+zone_spawn_plan_detail = ZoneBuilderViewSet.as_view({
+    'get': 'spawn_plan_detail',
 })
 zone_move = ZoneBuilderViewSet.as_view({
     'post': 'move',

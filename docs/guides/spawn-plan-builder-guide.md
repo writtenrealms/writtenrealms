@@ -1,7 +1,7 @@
 # Spawn Plan Builder Guide
 
 Spawn plans control what appears in a zone when a world or instance is running.
-Use `kind: spawnplan` YAML in **Zone > Loads** or **World > Edit** to
+Use `kind: spawnplan` YAML in **Zone > Spawns** or **World > Edit** to
 create or update them.
 
 A spawn plan does not create rooms or exits. Build the zone layout with `zone`
@@ -423,13 +423,14 @@ To delete one entry, apply the same plan without that entry.
 
 ## Builder UI Workflow
 
-In the builder, open a zone and choose **Loads**. This screen lists the zone's
-spawn plans. Choosing a plan opens its canonical YAML in an editor; saving that
-YAML applies the manifest through the same manifest ingestion path used by
-**World > Edit**.
+In the builder, open a zone and choose **Spawns**. This screen lists the
+zone's spawn plans. Choosing a plan opens its canonical YAML in an editor;
+saving that YAML applies the manifest through the same manifest ingestion path
+used by **World > Edit**.
 
-Use **Add** on **Zone > Loads** to start a new spawn plan for the current zone.
-The generated template includes the zone's `zone@<relative_id>` reference.
+Use **Add** on **Zone > Spawns** to start a new spawn plan for the current
+zone. The generated template includes the zone's `zone@<relative_id>`
+reference.
 
 ## Import And Export
 
