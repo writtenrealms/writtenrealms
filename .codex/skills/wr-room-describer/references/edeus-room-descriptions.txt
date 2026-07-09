@@ -1,0 +1,371 @@
+Outside Ternium Sanctuary
+A faint path cuts across a dense, leafless forest, where the ground is littered with dry, brittle twigs and scattered pebbles. The gnarled branches twist together overhead, creating a tangled canopy that casts twisted shadows across the trail. Barely visible beyond the thick mass of branches, the shadow of a mountain looms in the distance, its dark outline foreboding against the sky. A scent of sulfur fills the air, carried on a breeze that stirs the dead foliage.
+---
+Road to Ternium Sanctuary
+The faint path winds from the north, curving sharply to the east through the dense, leafless forest. The tangled branches close in tightly here, their skeletal limbs arching overhead as if reaching for the trail below. The ground underfoot is uneven, strewn with dry leaves and the occasional twisted root. To the east, the path straightens and disappears into the shadowed forest, while the looming outline of the mountain remains obscured behind the thick canopy.
+---
+In Front of Ternium Sanctuary
+A faint path curves through a dense, leafless forest, where skeletal branches twist and arch overhead, casting narrow shadows on the uneven ground. The tangled canopy offers glimpses of a dark, looming mountain to the south, its silhouette faintly visible between the gaps in the barren trees. The ground is strewn with dry leaves and twisted roots, while the path winds to the north and east, disappearing into the shadowed forest.
+---
+Foot of Ternium Sanctuary
+A road meets the beginning of a stairway, steps cut from the same basalt that surrounds them. The climb looks arduous, the steep path disappearing up the mountainside as it ascends toward unseen heights. A faint scent of sulfur lingers in the air, carried by the occasional gust of wind from the volcanic slopes.
+---
+Ternium Initial Ascent
+Steep stairs ascend toward the first temple, cut directly into the volcano’s basalt surface. The steps are uneven but sturdy, their dark stone worn smooth by the passage of time. Above, the outline of a tower extends beyond a ridge, its silhouette visible against the sky as the path climbs higher.
+---
+Before the Temple of Seeds
+Two fluted columns stand at the entrance to the Temple of Seeds, their bases wrapped in vines whose green tendrils climb gracefully up the stone. The symmetrical temple stretches east and west behind the entryway, its wings extending outward with perfectly aligned walls. From the center of the temple, a tall tower rises, its upper sections visible above the surrounding stone. To the north, a set of stairs descends toward the entrance of the Sanctuary, cut directly into the mountain's rocky slope.
+---
+North Wing of the Temple of Seeds
+A worn path leads into this chamber from the north, the floor shifting from smooth slabs of stone to damp, packed earth. Thin roots snake through the cracks in the walls, their tips curling toward the ground as if searching for moisture. The south archway opens to the heart of the temple.
+---
+Heart of the Temple of Seeds
+The floor is packed earth, uneven in places from the tread of countless footsteps. At the center stands a solid stone column, its surface intricately carved with curling vines and delicate leaves, with steep stairs spiraling upward toward the tower and downward into the cellar below. At its base rests an altar of dark stone, its edges engraved with patterns of seedlings unfurling. Surrounding the column, simple stone archways lead to the four wings of the temple, each facing outward in perfect symmetry.
+---
+West Wing of the Temple of Seeds
+A faint breeze moves through the west wing, stirring the loose dirt on the floor. The walls are etched with scenes of harvest, figures gathering crops beneath the watchful eye of twisting vines. Low stone pedestals dot the room, each supporting a simple clay pot with seedlings just beginning to sprout. The eastern archway leads back to the heart of the temple.
+---
+East Wing of the Temple of Seeds
+This chamber feels still, its walls lined with shallow alcoves, each housing a small, hand-carved bowl filled with soil and seeds. Tendrils of ivy creep along the edges of the room, their leaves curling toward the center. The earth beneath your feet feels soft, damp as though recently watered, and the western archway leads back to the heart of the temple.
+---
+South Wing of the Temple of Seeds
+The smooth stone of the south wing’s entryway seems worn, the path leading out to the slopes of the volcano. Along the walls, faint carvings of saplings stretch upward, their trunks slender but resilient. A low stone bench rests against the far wall, its surface lightly dusted with volcanic ash carried by the winds. The northern archway leads back to the heart of the temple.
+---
+Tower of the Temple of Seeds
+The steep stone steps wind upward to a narrow chamber at the top of the tower, where the floor is made of smooth stone, a stark contrast to the packed earth below. Slender columns line the walls, each adorned with carvings of twisting vines. At the center of the room, an empty stone pedestal stands beneath an open skylight, where the light of the heavens, when present, might bathe it. The stairs spiral back down into the heart of the temple.
+---
+Cellar of the Temple of Seeds
+Descending into the cellar, the air grows cooler and damp. The packed earth of the temple above gives way to hard volcanic stone, with roots snaking down from the ceiling and walls, their tips dripping with condensation. Stone shelves are carved into the walls, holding clay jars filled with dried seeds, each labeled in an ancient script. The stone stairs spiral back up into the heart of the temple.
+---
+Outside the Temple of Seeds
+The south wing of the Temple of Seeds exits onto the mountainside, where stairs cut into the volcano's basalt surface ascend toward another temple. A sharp dropoff looms to the west, beyond which a vast expanse of sky blankets a forest of twisted trees.
+---
+Stairs Ascending the Volcano
+A stairway connects the Temple of Seeds below to the Temple of Earth above, with thick steps cut directly from the volcanic rock. Off the path to the east, a resilient tree grows, its roots anchored deep into the rich, fertile soil of the mountainside. Its branches spread wide, nourished by the nutrients in the volcanic ground, providing a patch of shade along the steep climb.
+---
+Before the Temple of Earth
+The entrance to the Temple of Earth lies to the south, marked by a line of tall stone columns forming a partial colonnade along its west side. The columns rise from the packed earth, their bases wrapped with delicate vines winding upward in spirals. The temple’s facade extends eastward from the entrance, its pale stone walls interrupted by occasional narrow windows carved into the rock. To the north, a staircase cut into the mountainside descends towards the entrance of the Sanctuary.
+---
+Entrance to the Temple of Earth
+Tall stone columns rise from the packed earth, forming a colonnade leading north out to the Sanctuary and south deeper into the temple. Vines cling to their bases, winding upward in delicate spirals, the green contrasting with the pale stone. The ground is uneven, a mixture of compact soil and scattered pebbles, shifting slightly underfoot.
+---
+West Side of the Temple of Earth
+The western wall of the hall is adorned with intricate carvings of towering mountains and sweeping valleys, their ridges and slopes etched with fine detail. The packed earth beneath is solid but uneven, with the occasional pebble crunching underfoot. To the east, the hall opens toward the heart of the temple, while to the north a stone colonnade leads towards the entrance.
+---
+Southwest Side of the Temple of Earth
+In the southwest corner, the packed earth gives way to a patch of exposed clay, its surface rich and deep red, like freshly turned soil. A small pool of clear water has collected in a shallow depression, the clay edges darkened where moisture seeps through. The walls here bear faint carvings of underground roots, twisting and sprawling. East and north, the temple flows back into its ordered design.
+---
+South Side of the Temple of Earth
+The south wall bears a carving of jagged volcanic peaks, their slopes cascading into rivers of molten stone frozen in time. Thin cracks run through the depiction, as though the stone itself once flowed with the same intensity as the lava it represents. To the north, the temple continues toward its central altar, while to the east an arched entryway leads out to its exit.
+---
+Southeast Side of the Temple of Earth
+The packed earth beneath gradually gives way to the rough stone of the volcano’s slope to the east, where a narrow stairway leads upward along the mountainside. Faint carvings of rugged cliffs and canyons line the walls, blending into the natural rock as if etched by time itself. West and north, the temple extends toward its inner halls, the air growing warmer as the chambers lead deeper within.
+---
+Heart of the Temple of Earth
+A vast natural slab of stone forms the floor of this chamber, its surface smooth yet uneven, with veins of darker rock running through it. At the center rests an altar, appearing as though it was carved directly from the same stone, the veins from the floor flowing seamlessly across its surface. Simple stone archways lead outward in all directions, marking the paths to the temple’s wings.
+---
+North Side of the Temple of Earth
+The north wall is adorned with a vast carving of barren sand dunes, their windswept forms captured in smooth, flowing lines. To the east, a mound of earth rises in quiet defiance of the temple’s orderly structure. To the south, an altar beckons at the heart of the chamber, a centerpiece carved from the very stone beneath it.
+---
+Northeast Side of the Temple of Earth
+A mound of earth rises gently from the packed floor, indifferent to the temple's designs. Its surface is dotted with small stones and patches of grass, a natural hill that seems to resist the order of the surrounding structure. The uneven terrain slopes softly, blending into the packed earth south and west where the temple stretches into its other halls..
+---
+East Side of the Temple of Earth
+The eastern wall is adorned with carvings of dense forests and thick underbrush, the trees towering with intricately detailed trunks and twisting branches. Bushes and creeping vines fill the spaces between them, etched with the same precision as the towering trees. The ground in this section is uneven, with small boulders jutting from the packed earth. To the west lies the temple’s altar, while to the north, a mound of earth rises gently from the floor.
+---
+Outside the Temple of Earth
+A steep, irregular stairway ascends the slopes of the Sanctuary to the south, with small pebbles fallen from the cliff occasionally scattered across the steps. To the west, an arched entryway marks the exit of the Temple of Earth, where the stone floor seamlessly transitions into the outdoor stairs.
+---
+On the Slopes of Ternium Sanctuary
+A stream of water cascades down a steep cliff to the east, its echoes vanishing into the depths. A staircase cut into the volcano's slope leads up and down, with a temple looming in each direction. A vast, open sky fills the entire western view.
+---
+Before the Temple of Water
+A stone archway leading into the temple rises to the east, its surface intricately carved with symbols of waves, the water’s endless motion captured in flowing patterns. A shallow stream flows from the temple, cascading off a cliff to the north, where the sound of rushing water mingles with the mountain breeze. To the west, stone steps carved into the mountainside descend toward the distant Temple of Earth, their path steep and weathered by the passage of countless feet.
+---
+Northwest Side of the Temple of Water
+A wide stone archway marks the entrance to the temple, its smooth surface worn by time and the elements. The shallow stream flows past the threshold, continuing its journey before cascading down the cliff just beyond, the soft roar of falling water echoing faintly through the chamber. A gentle breeze drifts in from the outside, blending with the quiet murmur of the temple’s flowing streams.
+---
+North Side of the Temple of Water
+A shallow stream flows westward through the chamber, its path meandering across the stone floor toward the temple's entrance. Along the north wall, an intricate carving of a vast ocean dominates the space, waves rising and crashing in mesmerizing detail, their crests frozen in motion. The soft murmur of the stream fills the room, its sound blending with the stillness of the temple as the water continues its course.
+---
+Northeast Side of the Temple of Water
+The shallow stream meanders westward as it meets the northern wall, its gentle current tracing a soft curve across the floor. The water gleams faintly in the torchlight, cast from a simple sconce affixed to the wall, the flame flickering steadily above the quiet flow. The walls are unadorned, their smooth stone surfaces reflecting the soft glow and the ripples of the stream below.
+---
+East Side of the Temple of Water
+A shallow stream flows gently along the smooth stone floor, curving northward as it follows the temple's eastern wall. The water, clear and cool, originates from small spouts at the base of the stone altar to the west, its path winding softly toward the edges of the room. The stream glistens faintly, its quiet murmur blending with the stillness of the temple. The carved walls remain simple, directing attention to the water as it moves ever onward.
+---
+Heart of the Temple of Water
+At the center of the chamber stands a smooth stone altar, its surface reflecting the faint shimmer of water trickling from small carved spouts at its base. These spouts release gentle streams that flow east and west, tracing shallow paths along the floor. The water glistens as it accumulates, creating narrow streams that continue out through the temple’s passageways. The chamber hums with the quiet murmur of water, the sound soft and steady like a distant river.
+---
+West Side of the Temple of Water
+A shallow stream trickles westward from the stone altar, its waters tracing a gentle curve southward along the temple’s western wall. The stream flows steadily, its surface catching the light as it moves toward the far end of the chamber. The soft murmur of water fills the air, flowing continuously from the altar to the east. Smooth stone walls flank the stream, their surfaces unadorned.
+---
+Southwest Side of the Temple of Water
+The shallow stream curves eastward, snaking gently around the corner before flowing straight along the southern wall. Its steady movement creates a quiet murmur, the water tracing its path toward the temple’s exit in the distance. A simple iron sconce is affixed to the wall, a flickering flame casting subtle shadows that dance along the stone.
+---
+South Side of the Temple of Water
+The southern wall is dominated by an intricate carving of a waterfall cascading from a towering cliff, its flowing waters etched in sweeping lines. Below, the carving continues with a snaking river, its curves winding across the stone as if it were alive. The stream from the west moves quietly along the floor, mirroring the carved river’s path as it flows toward the temple’s exit. The steady murmur of water fills the chamber, blending with the artistry on the wall.
+---
+Southeast Side of the Temple of Water
+The stream flows eastward, disappearing through a narrow opening in the wall where it cascades off the cliffside just outside the temple, the soft rush of water tumbling down the rocky slope. The path continues toward an outdoor stone stairway, its steps ascending along the mountainside. The air grows cooler here, the sound of falling water a constant companion as the temple opens to the outside world.
+---
+Outside the Temple of Water
+Water cascades down the cliff to the north, its rush fading as it tumbles into the depths below. A stairway carved into the volcanic rock ascends steeply to the south, leading toward another temple higher on the mountainside. To the west, a stone archway carved with symbols of waves marks the exit of the Temple of Water, its subtle curves mimicking the flow of the stream that passes through it.
+---
+Stairs Between Two Temples
+The roof of the Temple of Water snakes below, like a river winding its way across uneven terrain. The steady murmur of a stream carries from that direction, while steep stairs cut into the mountainside extend up and down the volcano's slope. The outline of another temple looms above.
+---
+In Front of the Temple of the Sun
+The top of the stairs levels out before the entrance to the Temple of the Sun to the south, rows of fluted columns marking a symmetrical perimeter around its walls. A soft, golden glow radiates beyond the arched stone entryway, casting long shadows across the smooth stone floor. The path to the north descends back down the mountainside, leaving the temple behind.
+---
+North Side of the Temple of the Sun
+A wide stone archway to the north frames the open sky beyond, the horizon stretching endlessly outside the temple’s walls. A soft glow from the golden altar emanates from the south, casting a gentle light across the smooth stone floor. A faint breeze drifts in from the outside, carrying with it the open air’s freshness as it filters into the entrance.
+---
+Heart of the Temple of the Sun
+A golden altar stands at the center of the chamber, glowing with a soft, warm light that seems to pulse faintly, like a quiet heartbeat. Four towering stone pillars frame it, rising to support the ceiling above, their smooth surfaces etched with faint, radiant patterns. The space feels vast, open in all directions as the light from the center radiates outward, a quiet reminder of the sun’s reach.
+---
+South Side of the Temple of the Sun
+A stone archway to the south opens to a view of stone steps climbing steadily up the mountainside, their path framed by the jagged rock. A soft glow from the golden altar to the north casts a gentle light across the floor, following the line of the archway. The air feels cool, as the temple’s interior gives way to the exposed heights beyond, the stairs beckoning upward.
+---
+Southwest Side of the Temple of the Sun
+A shallow basin rests on the stone floor, filled with clear water that reflects the soft glow of a nearby torch. Ripples of light dance on the water’s surface, casting shifting patterns on the smooth stone walls. A fluted stone column rises from floor to ceiling, and the temple continues east and north, the torchlight guiding the way through the serene space.
+---
+West Side of the Temple of the Sun
+The west wall is adorned with an intricate carving of fields being cultivated, their orderly rows of crops stretching out beneath a radiant sun. Each plant is depicted growing tall, its leaves angled upward as though reaching for the sun’s nourishing light. The golden glow from the heart of the temple to the east gently illuminates the scene, casting soft light across the stone floor.
+---
+Northwest Side of the Temple of the Sun
+A torchlight casts sharp, angular shadows on the smooth stone walls, the flickering flames slicing between light and dark. A fluted stone column rises from floor to ceiling, its surface catching the shifting light. The temple continues both east and south, the glow of the torches guiding the way through the pristine halls.
+---
+Northeast Side of the Temple of the Sun
+Faint veins of gold run through this section of the temple, catching the soft glow of a torch affixed to the wall. A fluted stone column rises from floor to ceiling, its surface reflecting the warm glow of the light. The temple continues west and south, the subtle shimmer of the gold guiding the way.
+---
+East Side of the Temple of the Sun
+The east wall bears a carving of a valley, its slopes gently rising as a succession of suns journeys across the sky, marking the transition from dawn to dusk. Each sun is depicted at a different point in its path, casting long shadows as it moves from horizon to horizon. The soft light from the altar to the west highlights the intricate details, casting a gentle glow over the valley’s shifting landscape.
+---
+Southeast Side of the Temple of the Sun
+A small, clear prism rests on a pedestal near the wall, catching the light from a nearby torch and scattering faint rainbows across the stone surfaces. The soft colors shift as the flame flickers. A fluted stone column rises from floor to ceiling, and the temple extends west and north, the colors fading into the distance.
+---
+Outside the Temple of the Sun
+A stairway ascends the volcano's slope, with steep steps cut directly into the mountainside. An arched entryway to the north leads inside the Temple of the Sun, where a soft glow radiates from its depths. A faint scent of sulfur lingers in the air.
+---
+On the Stone Stairway
+A stairway cut into the mountain’s volcanic rock runs between the Temple of the Sun to the north and the Temple of Bloom to the south. A faint breeze drifts through the air, shifting specks of dust gathered on the tall steps.
+---
+Outside the Temple of Bloom
+Fluted columns frame the entrance to the Temple of Bloom to the east, vibrant green vines creeping up the stone. A precipitous drop-off plunges to the west, dangerously near. To the north, a set of stairs cut into the mountainside descend towards another temple.
+---
+Northwest Side of the Temple of Bloom
+A wide stone archway marks the temple’s entrance, its edges draped with vines that climb the sides and dangle gently from the top. The green tendrils sway slightly in the breeze, framing the pathway leading deeper into the temple. Coming from the east, a narrow drain etched into the stone floor carries away rainwater out the entrance to the west.
+---
+North Side of the Temple of Bloom
+Etched into the stone floor is a narrow drain, its path running westward toward the temple's entrance, collecting rain when it falls through the open roof to the south. A small pool of water lingers at the bottom, waiting to be evaporated by the warmth of the day. The smooth stone wall of the temple to the north continues east and west.
+---
+Northeast Side of the Temple of Bloom
+In this alcove, a large tree has grown directly out of the ground, its thick roots pushing aside the stone blocks that once lined the floor. Some of the blocks now rest at odd angles, lifted by the tree’s steady growth. The tree’s branches stretch outward through rectangular window insets cut into the stone walls, their tips heavy with fruit, the leaves swaying gently in the open air beyond.
+---
+Heart of the Temple of Bloom
+A moss-covered altar sits at the center of the chamber, its stone surface softened by the lush greenery draping over its sides. Four fluted columns surround the altar, supporting the roof, which opens directly above to let sunlight pour in from the sky during the day. Precisely cut stone tiles extend outward in all directions, forming the base of the temple's symmetrical design.
+---
+West Side of the Temple of Bloom
+A series of raised stone planters lines the room, each filled with carefully tended herbs and medicinal plants. The leaves and stems stand tall, their subtle shades of green contrasting with the stone around them. Rectangular windows cut into the walls allow light to filter in, nurturing the plants within.
+---
+East Side of the Temple of Bloom
+Rectangular windows cut into the stone walls allow light to enter from outside, softly illuminating the space during the day. In the center, a raised stone flower bed brims with colorful blooms, each flower fully open and thriving. To the west, a green altar sits under an open roof, bathed in natural light when the sun is high in the sky.
+---
+South Side of the Temple of Bloom
+The south wall bears an intricate carving of vast fields, each carefully cultivated beneath a radiant sun. Small blades of grass defiantly grow between the floor's stone slabs, indifferent to the temple's designs. A faint breeze drifts in from the east, where the temple’s exit opens out onto the mountainside.
+---
+Southwest Side of the Temple of Bloom
+The western wall is entirely enveloped by a dense network of vines, their tendrils creeping into the rectangular windows cut into the stone. The thick green growth spills out into the open air beyond, refusing to be constrained to the temple's interior. The vines twist and wind together, rustling softly in the breeze drifting in from outside.
+---
+Southeast Side of the Temple of Bloom
+A stone archway covered in thick, winding vines marks the temple’s exit, the greenery spilling over its edges. Beyond the arch, a stairway carved into the volcanic mountainside ascends steeply, the path framed by the rugged rock. The vines sway gently in the open air, as the steps lead upward, leaving the temple behind.
+---
+Outside the Temple of Bloom
+A staircase cut into the volcano's slope levels out in front of the Temple of Bloom to the west, a stone archway marking its exit. Thick vines cling to the fluted columns framing the threshold, gently swaying in the breeze. Up above, the stairs lead to another temple.
+---
+On the Volcano's Slope
+Tall steps are cut into the mountainside, ascending the steep volcano’s rocky slope with irregular but sturdy footing. The roof of the Temple of Bloom lies below, its surface draped in a network of vines that cling and spread over the stone. Up ahead, the silhouette of the Temple of Beasts looms, its fluted columns and dark facade emerging from the volcanic rock.
+---
+In Front of the Temple of Beasts
+The top of the stairs leads to the entrance of the Temple of Beasts to the south, a stone structure encircled by a perimeter of fluted columns that stand just beyond its walls. Above the arched entryway, a pair of large horns is mounted, curving outward like a silent guardian.
+---
+Entrance to the Temple of Beasts
+An arched stone entryway marks this section of the temple, with a torch mounted on each side. The flames flicker and dance in the breeze drifting in from the outside, casting shifting shadows on the stone floor. From the archway’s keystone hangs a cluster of carved wooden talismans, each shaped like a different animal’s claw or fang. They sway gently, clinking together when the wind shifts.
+---
+Heart of the Temple of Beasts
+An imposing altar stands at the center of the chamber, supported by thick animal bones, their surfaces worn and slightly cracked, hinting at the creatures they once belonged to. The altar’s top is covered in a large sheet of tanned leather, its edges frayed and marked with deep lines from years of use. The floor beneath the altar is marked with clawed scratches, deep grooves etched into the stone.
+---
+South Side of the Temple of Beasts
+The head of a bull mounted on the south wall stares at you, its fur and glassy eyes preserved with an unnerving lifelike detail. A pair of iron sconces flank the mount, their torches casting flickering shadows that dance along the wall. The wall stretches east and west, while to the north an altar made of bones and leather looms at the center of the temple.
+---
+West Side of the Temple of Beasts
+The western wall bears a detailed carving of a pack of wolves moving silently through a dense forest, their bodies low and their eyes intent. The trees around them are etched with winding branches and rough bark, creating a sense of depth within the stone. The wall stretches north and south, while to the east an altar made of bones looms at the heart of the temple.
+---
+Northwest Alcove of the Temple of Beasts
+This small alcove is dedicated to offerings made in tribute to the beasts. The walls are lined with shelves carved directly into the stone, each holding an array of animal skulls, bones, and carved wooden totems. The floor is littered with remnants of past offerings—feathers, dried leaves, and worn leather charms. The temple continues south.
+---
+Southwest Corner of the Temple of Beasts
+A fire pit is set into the base of the western wall, with a narrow stone flue cut above it to guide the smoke out of the temple. The charred stones around the pit show signs of frequent use, their edges blackened and worn. In front of the pit lies a large brown bear hide, its thick fur flattened and singed at the edges. The stone walls continue north and east.
+---
+Southeast Corner of the Temple of Beasts
+A wide stone archway marks the temple’s exit to the south, opening to a staircase that ascends the mountainside. The stone just inside the exit is worn smooth from the passage of time, the edges rounded and polished. Beneath the arch, small piles of dried leaves have gathered over time, blown in from the entrance beyond, their edges brittle and worn.
+---
+East Side of the Temple of Beasts
+The eastern wall is adorned with intricate carvings of a flock of birds in flight, their wings spread wide and feathers rendered in fine detail. The birds seem to surge upward together, etched with a sense of motion that gives life to the stone. The wall stretches north and south, while to the west an altar made of bones beckons.
+---
+Northeast Alcove of the Temple of Beasts
+This secluded chamber bears the unmistakable signs of ritual sacrifice. A low stone pedestal occupies the center of the alcove, its surface stained dark from countless offerings made in ages past. Iron rings are embedded into the pedestal’s sides, a grim reminder of its intended use. The alcove opens south to the rest of the temple.
+---
+Outside the Temple of Beasts
+A bare tree lingers outside the Temple of Beasts, its branches devoid of leaves, twisting like skeletal fingers against the sky. A stone archway leads into the temple to the north, its perimeter framed by fluted columns. To the north, a stairway cut into the mountainside ascends the volcano’s steep slope, leading toward a black temple looming in the distance.
+---
+A Stone Staircase
+A staircase is cut directly into the mountainside, steps irregular but solid underfoot. The volcano ascends to the south, its fuming cauldron peeking behind the Temple of Death. To the north, the stairs descend toward the Temple of Beasts, its stone walls blending into the rugged landscape.
+---
+In Front of the Temple of Death
+A staircase cut into the volcanic rock ascends from the north, leading to an imposing black temple to the south. The walls are cut from large blocks of basalt, their surface marked by intricate carvings that seem to vanish into the stone. Weathered steps lead up to the arched entryway, where narrow sconces frame the entrance, their iron rings empty and cold.
+---
+Entrance of the Temple of Death
+An arched black stone entryway marks the entrance to the temple, its surface carved with withered leaves and bare branches, the fine lines etched deeply into the stone. The leaves are shown curling at their edges, dry and delicate, while the branches stretch out like skeletal fingers. A pair of narrow sconces flank the arch, their empty iron rings hinting at torches long since extinguished. Beyond the archway, the stone floor continues deeper into the temple’s shadowed halls.
+---
+Northwest Corner of the Temple of Death
+The western wall is adorned with a carving of bare branches intertwined with scattered leaves, the leaves breaking apart and merging with the earth below. Deeply etched veins in the stone mark the remains of each leaf, while the branches appear brittle and lifeless. The floor remains clear, the faint patterns of roots just visible beneath the smooth surface. The walls extend east towards the entrance and south deeper into a hallway.
+---
+West Side of the Temple of Death
+An intricate carving on the western wall shows thick roots gripping the earth, coiling tightly as they extend downward. Among the roots, faint outlines of decomposed leaves are visible, their shapes blending into the stone. The smooth floor is interrupted by shallow, twisting grooves that mirror the roots above. The black walls stretch north and south, maintaining the temple’s symmetrical design.
+---
+Southwest Corner of the Temple of Death
+A detailed carving on the western wall depicts young saplings emerging from the ground, their slender trunks rising amid the remnants of decayed leaves. The delicate branches stretch upward, unfurling small, intricately detailed leaves that catch the light in the carved stone. The black stone hallway curves north and east.
+---
+Exit of the Temple of Death
+The southern end of the temple opens into a wide archway, exiting onto the mountainside. The stone around the arch is carved with the image of a mature, fully grown tree, its branches reaching upward and its roots spreading deeply into the ground below. A passage to the north leads into a mausoleum, where the flicker of unseen torchlight dances against the dark basalt walls.
+---
+Southeast Corner of the Temple of Death
+A detailed carving on the eastern wall shows a cluster of saplings pushing through the earth, their roots entwined below and new leaves unfurling above. Each sapling is depicted in a moment of early growth, their branches reaching toward the open space of the temple. The black stone walls make a turn from north to west.
+---
+East Side of the Temple of Death
+An intricate carving on the eastern wall depicts roots spreading deep into the stone, winding and branching like veins beneath the earth. The roots intertwine with the remnants of fallen leaves, now crumbled and merging with the carved ground. Small cracks run through the stone floor beneath, mirroring the pattern of the roots. The black stone hallway continues north and south.
+---
+Northeast Corner of the Temple of Death
+The eastern wall bears a detailed carving of fallen leaves, their shapes slowly breaking down into the stone beneath them. The leaves are depicted in various stages of decay, their edges crumbling and veins exposed, merging with the carved ground. The stone floor is smooth, with faint, winding lines mimicking the natural spread of roots beneath the surface. The walls stretch west towards the entrance and south deeper into the temple.
+---
+Mausoleum of the Temple of Death
+Twin torches are mounted on the walls just beyond the entrance, their flames flickering steadily and casting wavering shadows across the smooth basalt. The dim light reveals narrow steps descending into the crypt below, their edges rounded from the passage of time. An altar rises from the floor, its veins seamlessly continuing the natural patterns of the stone beneath it.
+---
+Crypt of the Temple of Death
+The crypt lies deep below, accessed by the narrow steps from the mausoleum above. The chamber’s walls are carved with rows of alcoves, each holding sarcophagi with smooth, unmarked lids. The air is cool and still, heavy with the scent of age. Faint grooves run across the floor, leading toward a central pit lined with dark basalt, its depths disappearing into shadow.
+---
+A Meeting Room
+A long stone table dominates the center of the room, surrounded by high-backed chairs carved with intricate patterns of leaves and vines. The table’s smooth surface is polished to a reflective sheen, catching the light from the sconces mounted on the walls. On the west side of the north wall, a red curtain is drawn over an arched doorway, its rich fabric hanging in heavy folds.
+---
+West Wing of the Basilica
+A sconce holding a torch is mounted on the west wall, framed by a carved rectangular plate of stone. The torch only ignites when the Aspect is present in the Sanctuary, casting flickering shadows when it burns. To the north, an arched entryway reveals just the back of a grand chair and the edge of a long table, hinting at the chamber beyond. The hall opens west toward the nave and south to the tranquil reflective pool.
+---
+A Reflective Pool
+A tranquil pool stretches across the hall, its glassy surface perfectly still and mirroring the vaulted ceiling above. Smooth stone tiles surround the water, their edges worn smooth by time and lined with delicate carvings of unfurling leaves. The quiet is broken only by the occasional ripple that sends waves of reflected light dancing across the walls.
+---
+Southwest Corner of the Basilica
+A set of stairs cut into the stone floor descends into a shadowed chamber, a section of a stone circle intersecting the view below. Just beyond an arched entryway to the east, the silhouette of a Guardian’s bust stands in quiet watch. To the north, a hallway stretches toward a reflective pool.
+---
+Hall of Guardians
+The south wall is lined with seven imposing statues, each honoring one of the Guardians of the Sanctuary: Seeds, Water, Earth, Sun, Beasts, Bloom, and Death. Each figure is carved from pale stone, their features depicted with solemn precision, and their forms adorned with symbols representing the Aspect they once protected. Vines curl around the base of the statues, blending the artistry with the living essence of the Basilica. The wall extends east toward the Altar of Growth and west under an arched entryway.
+---
+The Altar of Growth
+The southern end of the nave opens into a solemn space where an altar rises from the smooth, pale stone floor, adorned with intricate carvings of vines and flowering blooms. The altar’s surface is covered with offerings left by pilgrims: sprigs of fresh herbs, carved wooden totems, and small bundles of seeds. Tall, fluted columns frame the area, extending upward to support the arched ceiling, their shadows dancing gently across the carvings.
+---
+A Candlelit Stone Grove
+A circular stone table dominates the eastern space, its hollow center holding a sculpted tree with twisting, lifelike branches carved from pale rock. Burning candles line the perimeter of the table, their flames casting flickering light and long shadows across the carved surface. Wax drips onto the stone, forming pools that harden in irregular patterns. The wall extends west toward the Altar of Growth and east under an arched entryway.
+---
+The Ternium Library
+Towering shelves brimming with books bound in leather and gilded with fading gold line the walls, reaching up toward a ceiling crossed with elegant wooden beams. Ladders on rolling tracks are placed at intervals, inviting those seeking ancient knowledge to explore the highest shelves. Marble busts of renowned scholars and Guardians continue their solemn watch along the central aisle, while warm light from above casts long shadows on the polished wooden floor. The aisle extends north, leading back toward the library's northern expanse.
+---
+The Ternium Library
+Towering shelves of ancient tomes line the walls, stretching up toward a high, vaulted ceiling where dark wood beams intersect in a pattern of elegant arches. The scent of aged parchment and polished wood fills the air, mingling with the soft rustle of pages being turned. Busts of past scholars and Guardians stand solemnly along the central aisle, each figure cast in marble and illuminated by the warm glow of hanging lamps. The aisle runs south, connecting seamlessly to the library's southern expanse.
+---
+East Wing of the Basilica
+Polished stone floors stretch out in every direction, their surface smooth and cool beneath the vaulted ceiling. To the south lies the hushed expanse of the Ternium Library, while the west passage leads back into the grandeur of the Grand Nave. To the north, a wide hallway beckons toward the audience chamber, its arched entrance standing tall and stately.
+---
+An Audience Chamber
+High ceilings arch overhead, their stonework decorated with intricate patterns of vines and leaves that weave together in elegant loops. The chamber is spacious but solemn, with smooth marble floors that echo each footstep. Against the north wall on the west side, an arched doorway is draped with a long blue ribbon, hinting at more private quarters beyond. At the far end of the chamber, a high stone seat is set atop a raised dais, its back carved with intertwining branches and unfurling leaves, the stone itself alive with natural growth.
+---
+East of the Tree of Life
+A grand tapestry hangs from the east wall, illustrating a vibrant meadow bursting with wildflowers, where rivers of gold and azure weave through a sea of green. Delicate petals of crimson and violet seem to flutter in an unseen breeze, and golden threads glint like sunlight reflecting off gentle streams. To the west, the immense Tree of Life stands tall, its roots spreading outward and its vibrant canopy visible through the open archway.
+---
+The Tree of Life
+At the center of the nave stands the magnificent Tree of Life, its enormous trunk rooted deeply in the stone floor. Thick roots sprawl outward, threading between the flagstones and merging with the surrounding architecture. The branches stretch high, piercing through an oculus in the domed ceiling, where light spills down to bathe the vibrant, emerald leaves. Soft moss carpets the ground around the base, with delicate blooms nestled among the roots, adding bursts of color to the expansive space.
+---
+West of the Tree of Life
+The west wall is adorned with a towering tapestry, its woven scenes depicting an ancient, untamed forest, where wild creatures roam and vines twist around ancient oaks. Threads of deep green and earthy brown bring the woodland to life, while silver accents shimmer like hidden streams winding through the underbrush. To the east, the massive Tree of Life rises, its branches reaching skyward and visible beyond the arched opening, casting dappled shadows across the floor.
+---
+West of the Ternium Grand Nave
+Intricate stained glass adorns the north wall, a kaleidoscope of colors casting vibrant patterns across the stone floor. The glass depicts scenes of flourishing gardens, with blooms in every hue intertwined with flowing streams. An arched entryway leads further west, framed by delicate carvings of vines and petals.
+---
+Ternium Grand Nave
+Towering columns of pale stone line the Ternium Grand Nave, their surfaces wrapped in delicate, living vines that spiral upward toward the vaulted expanse above. Intricate reliefs stretch across the high arches, depicting the cycles of life, from sprouting seeds to towering, fallen trees. Beyond a wide archway to the south, the massive Tree of Life rises, its vibrant branches reaching skyward. The air is rich with the mingling scents of blooming flowers and aged stone.
+---
+East of the Ternium Grand Nave
+The north wall features an elaborate stained glass window, its radiant colors spilling across the room in shifting, jewel-toned light. The scenes within show lush forests teeming with life, where great trees and playful creatures are depicted in vivid detail. An arched entryway opens to the east, bordered by intricate stonework carved into the shape of unfurling leaves.
+---
+Ternium Courtyard
+The Ternium Courtyard is dominated by a grand fountain at its center, where sculpted figures hold wide basins aloft, cascading water in soft streams that murmur throughout the open space. Flanking the courtyard, the curved wings of the Basilica extend outward like protective arms, their columns rising in precise alignment to frame the gathering area. Just to the south, the entrance to the Basilica stands at the head of a broad set of stairs, an arched doorway carved with intricate patterns of interwoven branches and leaves.
+---
+Seven Circles of Stone
+Seven sets of black stones lie on the ground, each arranged in a perfect circle wide enough for someone to stand within. The sets are positioned evenly, forming a larger circle that encompasses them all, like a ritual of concentric rings. Ominous mist coils around the outer edges of the room, seeping toward the black stones yet never crossing the boundary of the inner circles, where the air remains eerily undisturbed.
+---
+A Hidden Cellar
+The passage opens into a dimly lit cellar, the floor made of packed earth that feels cool and solid underfoot. A single candle burns on the south wall, its flame flickering and casting long, wavering shadows across the room. The air is thick with the scent of earth and faint traces of wax. Three sturdy wooden doors stand in silent wait to the north, east, and west.
+---
+Ternium Rules
+The rules for death in Ternium are different than for the rest of Edeus. If you die here, all of your equipped items will be PERMANENTLY DESTROYED. This cannot be reversed or undone regardless of circumstances! Proceed at your own risk.
+
+* If you understand, enter 'I understand, let me in.'
+* If that is too spicy for you, type 'leave'
+
+This is a difficult dungeon, and you should do it as a group. To enter the dungeon as a group, make sure all members are grouped and in the same room when the leader uses the 'enter' command , and everyone will be taken to the same instance.
+
+Once already in an instance, the leader can use the 'invite' command to bring additional players in.
+---
+Outside the Temple of Death
+The black walls of the Temple of Death loom to the north, with faint hints of flickering light dancing beyond the entryway. Small tendrils of grass grow just outside the exit, their green blades timidly stretching toward the sky. To the south, the stone steps resume their ascent up the volcano’s slope.
+---
+The Final Ascent
+The steep, uneven steps continue their climb up the volcano’s slope, with the black roof of the Temple of Death resting below. The path narrows as the stairs ascend toward a looming corner of a large structure above, its silhouette partially revealed against the sky. The worn stone steps blend into a broader landing ahead, their upward path appearing to merge with the final approach.
+---
+Plateau Before the Basilica
+The stairs reach a broad plateau, where the rough stone transitions into a paved road that stretches to the east. To the south, a wing of a large stone building extends along the path, its walls punctuated by stained glass windows that catch and refract the light.
+---
+Top of the Plateau
+The wing of the building terminates just to the south, its walls overgrown with a lush network of vines that climb all the way to the roof. The thick greenery contrasts with the pale stone, softening the structure’s edges as it merges with the landscape. East and west, a vast expanse of sky stretches endlessly beyond the road, the plateau offering an unobstructed view of the horizon.
+---
+Before the Basilica
+To the south, the courtyard of the Basilica opens in a grand expanse, flanked by two curved wings that extend forward like open arms. Towering columns line each side, framing the road that runs between them. Beyond the courtyard, the imposing structure stands in solemn majesty, its high walls and domed roof rising against the backdrop of the volcanic peak. Above, the dark cauldron simmers, with a plume of smoke curling slowly into the sky.
+---
+Entrance to the Basilica
+A broad road runs through the center of the courtyard, extending between the Basilica’s curved wings to the north and leading southward to the grand structure itself. Towering columns rise along the road, their pale stone catching and reflecting the ambient light. In the courtyard ahead, the gentle murmur of flowing water can be heard from a large fountain. Beyond the Basilica’s domed roof, a plume of dark smoke curls steadily into the sky.
+---
+The Archon's Study
+Bookshelves line the walls, overflowing with ancient tomes and neatly stacked scrolls, their spines worn from years of study. A heavy oak desk sits near the center, its surface scattered with ink pots, parchment, and a bronze writing instrument. Behind the desk, a high-backed chair faces the red curtain on the south wall, its wooden arms polished from frequent use. In the corner, a small, unlit brazier waits, its coals cold but ready to warm the room on colder days.
+---
+Chamber of the Archon
+Dark wooden panels line the walls, gleaming under the soft light of bronze sconces. In the center of the room, a circular stone mosaic lies embedded in the floor, its intricate pattern of interlocking branches spiraling inward. A solitary iron candelabrum stands near the eastern wall, casting long shadows that flicker gently with the flame’s movement. Along the northern wall rests a simple wooden bed, neatly made with a modest woolen blanket, its edge drawn taut below the mattress, reaching all the way to the ground.
+---
+The Inner Grove
+The walls of this chamber stretch like an unbroken night in all directions, absorbing the light. In the center, a natural spring bubbles gently, encircled by a lush ring of moss, with delicate clovers fringing the edges. A graceful tree leans over the water, its branches hosting a slow dance of phosphorescent fireflies, their glow casting ripples of soft luminescence across the chamber. Two wooden benches face each other on either side of the spring, carved simply but polished to a warm sheen.
+---
+Chamber of the Aspect
+A floor-to-ceiling transparent glass window dominates the north wall, offering an uninterrupted view of the descending slope of the volcano. From this vantage, sections of each of the seven temples can be seen below, scattered like sacred guardians across the landscape. At the center of the room stands a canopy bed, its upper crossbeams draped with hanging leaves. A fireplace is cut into the south wall, its stonework carved with intertwined branches.
+---
+A Stuffy Chamber
+The air is thick and unmoving, carrying a chill that clings to the skin. Moisture seeps from the stone walls, leaving them slick and cool to the touch.
+---
+A Stuffy Chamber
+The air is thick and unmoving, carrying a chill that clings to the skin. Moisture seeps from the stone walls, leaving them slick and cool to the touch.
+---
+A Stuffy Chamber
+The air is thick and unmoving, carrying a chill that clings to the skin. Moisture seeps from the stone walls, leaving them slick and cool to the touch.
+---
+An Endless Void
+The void stretches endlessly in all directions, a perfect and oppressive darkness that swallows all sense of distance or form. There is no ground beneath, no sky above—only an infinite, soundless expanse. The absence of light leaves no shapes to perceive, no edges to define, as if the boundaries of existence itself have unraveled. Suspended weightlessly, untethered to time or space, a faint scintillating blue dot pulses softly in the darkness, its light barely touching the emptiness around it.
+
+RETURN when you are ready.

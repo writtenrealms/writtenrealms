@@ -1,0 +1,4 @@
+interface:
+  display_name: "WR Mob Describer"
+  short_description: "Draft Written Realms mob descriptions"
+  default_prompt: "Use $wr-mob-describer to fill missing Written Realms mob definition names and descriptions from a database ID."

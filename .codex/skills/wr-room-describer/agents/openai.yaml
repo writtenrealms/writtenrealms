@@ -1,0 +1,4 @@
+interface:
+  display_name: "WR Room Describer"
+  short_description: "Draft Written Realms room descriptions"
+  default_prompt: "Use $wr-room-describer to draft or update Written Realms room descriptions from database room IDs and builder notes."
