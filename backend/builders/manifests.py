@@ -1519,7 +1519,12 @@ def ability_to_manifest(ability: AbilityDefinition) -> dict[str, Any]:
             "version": 1,
             "command": {"verbs": list(ability.command_verbs or [])},
             "action_type": ability.action_type,
-            "consumes_primary_action": bool(ability.consumes_primary_action),
+            "consumes_primary_action_on_resolve": bool(
+                ability.consumes_primary_action_on_resolve
+            ),
+            "consumes_primary_action_while_casting": bool(
+                ability.consumes_primary_action_while_casting
+            ),
             "target": ability.target or {},
             "availability": ability.availability or {},
             "requirements": ability.requirements or {},
@@ -1557,7 +1562,12 @@ def serialize_ability_payload(ability: AbilityDefinition) -> dict[str, Any]:
         "name": ability.name or "",
         "command_verbs": list(ability.command_verbs or []),
         "action_type": ability.action_type,
-        "consumes_primary_action": bool(ability.consumes_primary_action),
+        "consumes_primary_action_on_resolve": bool(
+            ability.consumes_primary_action_on_resolve
+        ),
+        "consumes_primary_action_while_casting": bool(
+            ability.consumes_primary_action_while_casting
+        ),
         "target": ability.target or {},
         "availability": ability.availability or {},
         "requirements": ability.requirements or {},
@@ -4971,7 +4981,12 @@ def apply_ability_manifest(parsed: ParsedAbilityManifest) -> AbilityDefinition:
         "name": parsed.name,
         "command_verbs": spec["command"]["verbs"],
         "action_type": spec["action_type"],
-        "consumes_primary_action": spec["consumes_primary_action"],
+        "consumes_primary_action_on_resolve": spec[
+            "consumes_primary_action_on_resolve"
+        ],
+        "consumes_primary_action_while_casting": spec[
+            "consumes_primary_action_while_casting"
+        ],
         "target": spec["target"],
         "availability": spec["availability"],
         "requirements": spec["requirements"],

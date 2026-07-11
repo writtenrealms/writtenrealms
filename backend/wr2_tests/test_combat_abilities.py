@@ -76,7 +76,8 @@ class TestCombatAbilities(WorldTestCase):
         cost=None,
         cast_time=None,
         cooldown=None,
-        consumes_primary_action=True,
+        consumes_primary_action_on_resolve=True,
+        consumes_primary_action_while_casting=True,
     ):
         return AbilityDefinition.objects.create(
             world=self.world,
@@ -84,7 +85,8 @@ class TestCombatAbilities(WorldTestCase):
             name=name,
             command_verbs=verbs,
             action_type="primary",
-            consumes_primary_action=consumes_primary_action,
+            consumes_primary_action_on_resolve=consumes_primary_action_on_resolve,
+            consumes_primary_action_while_casting=consumes_primary_action_while_casting,
             target=target or {
                 "type": "hostile",
                 "default": "current_target",
@@ -171,7 +173,7 @@ class TestCombatAbilities(WorldTestCase):
             slug="cleave",
             name="Cleave",
             verbs=["cleave"],
-            consumes_primary_action=False,
+            consumes_primary_action_on_resolve=False,
             components=[
                 {
                     "type": "effect",
@@ -292,6 +294,93 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(mob_ability_attacks[0]["data"]["target"]["key"], self.player.key)
         self.assertEqual(mob.ability_cooldowns, {"shadow-bolt": 2})
         self.assertLess(self.player.health, self.stats["health_max"])
+
+    def test_mob_cast_can_consume_charge_round_but_not_resolution_round(self):
+        self._ability(
+            slug="mob-crack",
+            name="Crack",
+            verbs=["crack"],
+            cast_time={"rounds": 1},
+            cooldown={"rounds": 2},
+            consumes_primary_action_on_resolve=False,
+            consumes_primary_action_while_casting=True,
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "stun",
+                    "target": "ability.target",
+                    "duration": {"rounds": 1},
+                    "apply": "on_resolve",
+                    "text": {"label": "Crack"},
+                }
+            ],
+        )
+        mob_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="persian-slinger",
+            name="a Persian slinger",
+            keywords="persian slinger",
+            base_properties={
+                "level": 1,
+                "health_max": 200,
+                "attack_power": 7,
+                "weapon_damage": 0,
+                "fights_back": True,
+            },
+            combat_abilities=[{"ability": "mob-crack", "weight": 1}],
+        )
+        mob = mob_definition.spawn(self.room, self.spawn_world)
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            initiative_order=self._player_first_initiative(mob),
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with patch("spawns.actions.combat.random.randint", return_value=1):
+                with capture_game_messages() as charge_messages:
+                    resolve_combat_encounter(encounter.id)
+
+        casts = self._messages_by_type(
+            charge_messages,
+            "notification.combat.ability_casting",
+        )
+        charge_round_mob_attacks = [
+            attack
+            for attack in self._messages_by_type(
+                charge_messages,
+                "notification.combat.attack",
+            )
+            if attack["data"]["actor"]["key"] == mob.key
+        ]
+        self.assertEqual(len(casts), 1)
+        self.assertEqual(charge_round_mob_attacks, [])
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with patch("spawns.actions.combat.random.randint", return_value=1):
+                with capture_game_messages() as resolve_messages:
+                    resolve_combat_encounter(encounter.id)
+
+        effects = self._messages_by_type(
+            resolve_messages,
+            "notification.combat.effect",
+        )
+        resolve_round_mob_attacks = [
+            attack
+            for attack in self._messages_by_type(
+                resolve_messages,
+                "notification.combat.attack",
+            )
+            if attack["data"]["actor"]["key"] == mob.key
+        ]
+        mob.refresh_from_db()
+        self.assertTrue(
+            any(effect["data"]["label"] == "Crack" for effect in effects)
+        )
+        self.assertEqual(len(resolve_round_mob_attacks), 1)
+        self.assertEqual(mob.ability_cooldowns, {"mob-crack": 2})
 
     def test_mob_ability_chance_failure_falls_back_to_basic_attack(self):
         self._ability(
@@ -913,7 +1002,12 @@ class TestCombatAbilities(WorldTestCase):
         )
         self.assertTrue(
             payload["world"]["abilities"]["definitions"]["power-strike"][
-                "consumes_primary_action"
+                "consumes_primary_action_on_resolve"
+            ]
+        )
+        self.assertTrue(
+            payload["world"]["abilities"]["definitions"]["power-strike"][
+                "consumes_primary_action_while_casting"
             ]
         )
 
@@ -1226,6 +1320,44 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(len(attacks), 1)
         self.assertEqual(attacks[0]["data"]["attack"], "charged-strike")
         self.assertEqual(attacks[0]["data"]["damage_taken"], self.stats["attack_power"] * 2)
+
+    def test_cast_time_can_allow_basic_attack_while_charging(self):
+        self._ability(
+            slug="charged-mark",
+            name="Charged Mark",
+            verbs=["mark"],
+            cast_time={"rounds": 1},
+            consumes_primary_action_on_resolve=True,
+            consumes_primary_action_while_casting=False,
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "stun",
+                    "duration": {"rounds": 1},
+                    "text": {"label": "Charged Mark"},
+                }
+            ],
+        )
+        self.player.known_abilities = ["charged-mark"]
+        self.player.save(update_fields=["known_abilities"])
+        starting_health = self.stats["attack_power"] * 5
+        mob = self._mob(health=starting_health)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "mark rat")
+
+        mob.refresh_from_db()
+        casts = self._messages_by_type(messages, "notification.combat.ability_casting")
+        player_attacks = [
+            attack
+            for attack in self._messages_by_type(messages, "notification.combat.attack")
+            if attack["data"]["actor"]["key"] == self.player.key
+        ]
+        effects = self._messages_by_type(messages, "notification.combat.effect")
+        self.assertEqual(len(casts), 1)
+        self.assertEqual(len(player_attacks), 1)
+        self.assertEqual(effects, [])
+        self.assertLess(mob.health, starting_health)
 
     def test_charging_ability_cannot_be_replaced_mid_cast(self):
         self._ability(
@@ -1708,7 +1840,7 @@ class TestCombatAbilities(WorldTestCase):
             slug="bleeding-cut",
             name="Bleeding Cut",
             verbs=["bleed"],
-            consumes_primary_action=False,
+            consumes_primary_action_on_resolve=False,
             components=[
                 {
                     "type": "effect",

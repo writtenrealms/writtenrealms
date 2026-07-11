@@ -1593,8 +1593,14 @@ def _component_label(component: dict, ability: AbilityDefinition | None = None) 
     return "Ability"
 
 
-def _ability_consumes_primary_action(ability: AbilityDefinition) -> bool:
-    return bool(getattr(ability, "consumes_primary_action", True))
+def _ability_consumes_primary_action_on_resolve(ability: AbilityDefinition) -> bool:
+    return bool(getattr(ability, "consumes_primary_action_on_resolve", True))
+
+
+def _ability_consumes_primary_action_while_casting(
+    ability: AbilityDefinition,
+) -> bool:
+    return bool(getattr(ability, "consumes_primary_action_while_casting", True))
 
 
 def _combat_failure_event(player: Player, text: str, *, code: str) -> GameEvent:
@@ -1634,7 +1640,12 @@ def _ability_casting_event(
                 "slug": ability.slug,
                 "name": ability.name,
                 "action_type": ability.action_type,
-                "consumes_primary_action": _ability_consumes_primary_action(ability),
+                "consumes_primary_action_on_resolve": (
+                    _ability_consumes_primary_action_on_resolve(ability)
+                ),
+                "consumes_primary_action_while_casting": (
+                    _ability_consumes_primary_action_while_casting(ability)
+                ),
             },
             "round_id": round_id,
             "rounds_remaining": rounds_remaining,
@@ -1664,7 +1675,12 @@ def _mob_ability_casting_event(
                 "slug": ability.slug,
                 "name": ability.name,
                 "action_type": ability.action_type,
-                "consumes_primary_action": _ability_consumes_primary_action(ability),
+                "consumes_primary_action_on_resolve": (
+                    _ability_consumes_primary_action_on_resolve(ability)
+                ),
+                "consumes_primary_action_while_casting": (
+                    _ability_consumes_primary_action_while_casting(ability)
+                ),
             },
             "actor": serialize_char_from_mob(mob).model_dump(),
             "round_id": round_id,
@@ -3066,7 +3082,7 @@ def _execute_pending_player_ability(
                 rounds_remaining=next_remaining,
             )
         ], AbilityRoundResult(
-            consumed_primary=_ability_consumes_primary_action(ability)
+            consumed_primary=_ability_consumes_primary_action_while_casting(ability)
         )
 
     try:
@@ -3185,7 +3201,7 @@ def _execute_pending_player_ability(
         player.save(update_fields=list(dict.fromkeys(field for field in update_fields if field)))
 
     return events, AbilityRoundResult(
-        consumed_primary=_ability_consumes_primary_action(ability),
+        consumed_primary=_ability_consumes_primary_action_on_resolve(ability),
         cooldown_exclude=ability.slug if cooldown_started else None,
     )
 
@@ -3237,7 +3253,7 @@ def _execute_pending_mob_ability(
                 rounds_remaining=next_remaining,
             )
         ], AbilityRoundResult(
-            consumed_primary=_ability_consumes_primary_action(ability)
+            consumed_primary=_ability_consumes_primary_action_while_casting(ability)
         )
 
     paid_resource = _pay_mob_ability_cost(target_mob, ability)
@@ -3341,7 +3357,7 @@ def _execute_pending_mob_ability(
         target_mob.save(update_fields=list(dict.fromkeys(update_fields)))
 
     return events, AbilityRoundResult(
-        consumed_primary=_ability_consumes_primary_action(ability),
+        consumed_primary=_ability_consumes_primary_action_on_resolve(ability),
         cooldown_exclude=ability.slug if cooldown_started else None,
     )
 

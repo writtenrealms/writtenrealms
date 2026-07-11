@@ -30,15 +30,15 @@ An ability is an authored command that resolves one or more components:
 - resource-changing damage procs
 
 In combat, an ability is queued for the next encounter round. By default, it
-consumes the actor's primary action and replaces the auto-attack for that
-round. Builders can set `consumes_primary_action: false` for supplemental
-abilities that should resolve without suppressing the normal attack.
+consumes the actor's primary action while casting and when it resolves,
+replacing the auto-attack in both phases. Builders can configure those phases
+independently for supplemental abilities.
 
 If an ability has `cast_time.rounds`, the queued ability spends that many
 encounter rounds charging before its components resolve. For `rounds: 1`, the
 sequence is: prepare the ability, spend the next encounter round charging, then
 resolve the damage or healing on the following encounter round. Charging rounds
-consume the primary action only when `consumes_primary_action` is true.
+consume the primary action when `consumes_primary_action_while_casting` is true.
 
 If no ability is queued, the actor uses the normal auto-attack.
 
@@ -132,7 +132,8 @@ spec:
       - strike
       - powerstrike
   action_type: primary
-  consumes_primary_action: true
+  consumes_primary_action_on_resolve: true
+  consumes_primary_action_while_casting: true
   target:
     type: hostile
     default: current_target
@@ -237,7 +238,7 @@ spec:
   command:
     verbs: [cleave]
   action_type: primary
-  consumes_primary_action: false
+  consumes_primary_action_on_resolve: false
   target:
     type: hostile
     default: current_target
@@ -328,16 +329,27 @@ combat-round behavior.
 
 ## Primary Action Consumption
 
-Abilities default to consuming the actor's primary action:
+Abilities configure primary-action consumption separately for casting rounds
+and the resolution round. Both fields default to `true`:
 
 ```yaml
-consumes_primary_action: true
+consumes_primary_action_on_resolve: true
+consumes_primary_action_while_casting: true
 ```
 
-This preserves the standard "ability instead of auto-attack" combat rhythm.
-Use `consumes_primary_action: false` for supplemental abilities such as light
-DOTs, marks, minor debuffs, or quick setup effects that should apply while the
-actor still takes their normal attack in the same encounter round:
+This preserves the standard "ability instead of auto-attack" combat rhythm in
+both phases. The four combinations behave as follows:
+
+| While casting | On resolve | Behavior |
+| --- | --- | --- |
+| `true` | `true` | No regular attack during either phase. |
+| `true` | `false` | Charge without attacking, then resolve alongside the regular attack. |
+| `false` | `true` | Attack while charging, then replace the resolution-round attack. |
+| `false` | `false` | Regular attack during both phases. |
+
+Use `consumes_primary_action_on_resolve: false` for supplemental abilities such
+as light DOTs, marks, minor debuffs, or quick setup effects that should apply
+while the actor still takes their normal attack in the resolution round:
 
 ```yaml
 kind: ability
@@ -348,7 +360,7 @@ spec:
   command:
     verbs: [minorbleed]
   action_type: primary
-  consumes_primary_action: false
+  consumes_primary_action_on_resolve: false
   target:
     type: hostile
     default: current_target
@@ -368,10 +380,11 @@ spec:
             multiplier: 0.25
 ```
 
-Non-consuming abilities still use normal requirements, costs, cooldowns, target
-validation, and cast-time delays. If a cast-time ability should occupy the
-caster's combat rounds while it charges, leave `consumes_primary_action` at the
-default `true`.
+Phase-specific consumption does not change requirements, costs, cooldowns,
+target validation, or cast-time delays. To let an ability resolve alongside a
+regular attack while still occupying its charging rounds, set only
+`consumes_primary_action_on_resolve: false` and leave
+`consumes_primary_action_while_casting` at its default `true`.
 
 ## Cooldowns
 
@@ -640,13 +653,13 @@ spec:
 
 DOT ticks should resolve during encounter rounds, not as separate wall-clock
 timers. DOT application consumes the primary action by default; set
-`consumes_primary_action: false` when the DOT is meant to be supplemental
-damage alongside the caster's normal attack. Application messages use the
-effect label, such as `You apply Bleed on a guard.` for the caster,
-`A guard applies Bleed on you.` for the target, and `Mira applies Bleed on a
-guard.` for observers. Tick damage is presented as passive harm from the
-effect, such as `A guard suffers 12 damage from your Bleed.`, rather than as a
-fresh direct hit.
+`consumes_primary_action_on_resolve: false` when the DOT is meant to be
+supplemental damage alongside the caster's normal attack. Application messages
+use the effect label, such as `You apply Bleed on a guard.` for the caster, `A
+guard applies Bleed on you.` for the target, and `Mira applies Bleed on a
+guard.` for observers. Tick damage is presented as passive harm from the effect,
+such as `A guard suffers 12 damage from your Bleed.`, rather than as a fresh
+direct hit.
 
 ## Heal-Over-Time
 

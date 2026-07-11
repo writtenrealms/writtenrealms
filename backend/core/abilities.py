@@ -101,7 +101,8 @@ ABILITY_DEFINITION_FIELDS = {
     "version",
     "command",
     "action_type",
-    "consumes_primary_action",
+    "consumes_primary_action_on_resolve",
+    "consumes_primary_action_while_casting",
     "target",
     "availability",
     "requirements",
@@ -1176,9 +1177,13 @@ def normalize_ability_definition(
             choices=ACTION_TYPES,
             field_name="spec.action_type",
         ),
-        "consumes_primary_action": _coerce_bool(
-            value.get("consumes_primary_action", True),
-            field_name="spec.consumes_primary_action",
+        "consumes_primary_action_on_resolve": _coerce_bool(
+            value.get("consumes_primary_action_on_resolve", True),
+            field_name="spec.consumes_primary_action_on_resolve",
+        ),
+        "consumes_primary_action_while_casting": _coerce_bool(
+            value.get("consumes_primary_action_while_casting", True),
+            field_name="spec.consumes_primary_action_while_casting",
         ),
         "target": _normalize_target(value.get("target")),
         "availability": _normalize_availability(value.get("availability")),

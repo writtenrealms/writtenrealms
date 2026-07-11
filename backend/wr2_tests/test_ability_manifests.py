@@ -36,7 +36,8 @@ class TestAbilityManifests(AuthenticatedBuilderWorldTestCase):
             "name": "Power Strike",
             "command_verbs": ["strike"],
             "action_type": "primary",
-            "consumes_primary_action": True,
+            "consumes_primary_action_on_resolve": True,
+            "consumes_primary_action_while_casting": True,
             "target": {"type": "hostile", "default": "current_target"},
             "availability": {"classes": [], "min_level": 1},
             "requirements": {},
@@ -100,7 +101,8 @@ spec:
         ability = AbilityDefinition.objects.get(world=self.world, slug="power-strike")
         self.assertEqual(ability.name, "Power Strike")
         self.assertEqual(ability.command_verbs, ["strike"])
-        self.assertTrue(ability.consumes_primary_action)
+        self.assertTrue(ability.consumes_primary_action_on_resolve)
+        self.assertTrue(ability.consumes_primary_action_while_casting)
         self.assertEqual(ability.cast_time["rounds"], 1)
         self.assertEqual(ability.cooldown, {"rounds": 2, "trigger": "on_hit"})
         self.assertEqual(
@@ -146,7 +148,7 @@ spec:
         self.assertTrue(AbilityDefinition.objects.filter(world=self.world, slug="mend").exists())
         self.assertTrue(AbilityDefinition.objects.filter(world=self.world, slug="stun-bash").exists())
 
-    def test_apply_ability_manifest_accepts_non_primary_consuming_ability(self):
+    def test_apply_ability_manifest_accepts_phase_specific_primary_action_consumption(self):
         manifest = f"""
 kind: ability
 metadata:
@@ -156,7 +158,8 @@ metadata:
 spec:
   command:
     verbs: [bleed]
-  consumes_primary_action: false
+  consumes_primary_action_on_resolve: false
+  consumes_primary_action_while_casting: true
   target:
     type: hostile
     default: current_target
@@ -175,10 +178,40 @@ spec:
 
         self.assertEqual(resp.status_code, 201, resp.data)
         ability = AbilityDefinition.objects.get(world=self.world, slug="bleeding-cut")
-        self.assertFalse(ability.consumes_primary_action)
+        self.assertFalse(ability.consumes_primary_action_on_resolve)
+        self.assertTrue(ability.consumes_primary_action_while_casting)
         self.assertFalse(
-            resp.data["ability"]["manifest"]["spec"]["consumes_primary_action"]
+            resp.data["ability"]["manifest"]["spec"][
+                "consumes_primary_action_on_resolve"
+            ]
         )
+        self.assertTrue(
+            resp.data["ability"]["manifest"]["spec"][
+                "consumes_primary_action_while_casting"
+            ]
+        )
+
+    def test_apply_ability_manifest_rejects_removed_primary_action_field(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: bleeding-cut
+  name: Bleeding Cut
+spec:
+  command:
+    verbs: [bleed]
+  consumes_primary_action: false
+  components:
+    - type: effect
+      effect: dot
+      duration:
+        rounds: 2
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("consumes_primary_action", str(resp.data))
 
     def test_mob_definition_manifest_accepts_combat_ability_loadout(self):
         self._create_ability(
@@ -778,7 +811,13 @@ spec:
         self.assertEqual(len(ability_docs), 1)
         self.assertEqual(ability_docs[0]["metadata"]["slug"], "power-strike")
         self.assertEqual(ability_docs[0]["spec"]["cast_time"], {"rounds": 1})
-        self.assertTrue(ability_docs[0]["spec"]["consumes_primary_action"])
+        self.assertTrue(
+            ability_docs[0]["spec"]["consumes_primary_action_on_resolve"]
+        )
+        self.assertTrue(
+            ability_docs[0]["spec"]["consumes_primary_action_while_casting"]
+        )
+        self.assertNotIn("consumes_primary_action", ability_docs[0]["spec"])
         self.assertEqual(resp.data["summary"]["abilities"], 1)
 
     def test_world_ability_list_includes_yaml_manifest(self):
@@ -794,7 +833,9 @@ spec:
         self.assertEqual(ability_data["slug"], "power-strike")
         self.assertEqual(ability_data["command_verbs"], ["strike"])
         self.assertEqual(ability_data["action_type"], "primary")
-        self.assertTrue(ability_data["consumes_primary_action"])
+        self.assertTrue(ability_data["consumes_primary_action_on_resolve"])
+        self.assertTrue(ability_data["consumes_primary_action_while_casting"])
+        self.assertNotIn("consumes_primary_action", ability_data)
         self.assertEqual(ability_data["target"]["type"], "hostile")
         self.assertEqual(ability_data["help"], {})
         self.assertTrue(ability_data["is_active"])
@@ -810,7 +851,16 @@ spec:
         self.assertEqual(detail_resp.status_code, 200)
         self.assertEqual(detail_resp.data["id"], ability.id)
         self.assertEqual(detail_resp.data["manifest"]["spec"]["cast_time"], {"rounds": 1})
-        self.assertTrue(detail_resp.data["manifest"]["spec"]["consumes_primary_action"])
+        self.assertTrue(
+            detail_resp.data["manifest"]["spec"][
+                "consumes_primary_action_on_resolve"
+            ]
+        )
+        self.assertTrue(
+            detail_resp.data["manifest"]["spec"][
+                "consumes_primary_action_while_casting"
+            ]
+        )
 
     def test_instance_ability_list_reads_base_world_definitions(self):
         ability = self._create_ability()
