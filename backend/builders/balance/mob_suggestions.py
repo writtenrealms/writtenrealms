@@ -290,6 +290,7 @@ def suggest_mob_definition_manifest(
         "keywords": keywords,
         "type": mob_type,
         "assists": False,
+        "aggression": adv_consts.MOB_AGGRESSION_NORMAL,
         "level": normalized_level,
         **stats,
         "fights_back": True,

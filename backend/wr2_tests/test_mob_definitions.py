@@ -509,11 +509,16 @@ class TestMobDefinitionBuilderEndpoints(WorldTestCase):
         self.assertEqual(resp.data["manifest"]["metadata"]["slug"], "cave-wolf")
         self.assertEqual(resp.data["manifest"]["spec"]["level"], 4)
         self.assertEqual(resp.data["manifest"]["spec"]["type"], adv_consts.MOB_TYPE_BEAST)
+        self.assertEqual(
+            resp.data["manifest"]["spec"]["aggression"],
+            adv_consts.MOB_AGGRESSION_NORMAL,
+        )
         self.assertEqual(resp.data["manifest"]["spec"]["attributes"], {})
         self.assertGreater(resp.data["suggested_stats"]["health_max"], 0)
         self.assertGreater(resp.data["suggested_stats"]["attack_power"], 0)
         self.assertGreater(resp.data["suggested_stats"]["weapon_damage"], 0)
         self.assertIn("kind: mobdefinition", resp.data["yaml"])
+        self.assertIn("aggression: normal", resp.data["yaml"])
 
         apply_resp = self.client.post(
             self.apply_ep,
@@ -524,6 +529,10 @@ class TestMobDefinitionBuilderEndpoints(WorldTestCase):
         self.assertEqual(apply_resp.status_code, 201, apply_resp.data)
         definition = MobDefinition.objects.get(world=self.world, slug="cave-wolf")
         self.assertEqual(definition.name, "a cave wolf")
+        self.assertEqual(
+            definition.base_properties["aggression"],
+            adv_consts.MOB_AGGRESSION_NORMAL,
+        )
         self.assertEqual(definition.base_properties["level"], 4)
         self.assertEqual(
             definition.base_properties["health_max"],

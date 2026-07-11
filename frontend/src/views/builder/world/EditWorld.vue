@@ -428,7 +428,7 @@ spec:
   level: 1
   exp_worth: 1
   gold: 0
-  aggression: passive
+  aggression: normal
   health_max: 30
   health_regen: 0
   energy_max: 1
