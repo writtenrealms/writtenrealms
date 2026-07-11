@@ -130,6 +130,7 @@ const receiveMessage = async ({
     "notification.longtic",
     "notification.who",
     "player.abilities.update",
+    "player.combat_effects.update",
     "notification.regen",
   ];
 
@@ -227,6 +228,17 @@ const receiveMessage = async ({
     Array.isArray(message_data.data.active_effects)
   ) {
     commit("player_active_effects_set", message_data.data.active_effects);
+  }
+
+  if (
+    message_data.type === "player.combat_effects.update" &&
+    message_data.data &&
+    message_data.data.target &&
+    state.player &&
+    message_data.data.target.key === state.player.key &&
+    Array.isArray(message_data.data.active_effects)
+  ) {
+    commit("player_combat_effects_set", message_data.data.active_effects);
   }
 
   // Disconection
@@ -971,6 +983,14 @@ const mutations = {
     state.player = {
       ...state.player,
       active_effects: Array.isArray(active_effects) ? active_effects : [],
+    };
+  },
+
+  player_combat_effects_set: (state, active_effects) => {
+    if (!state.player) return;
+    state.player = {
+      ...state.player,
+      combat_effects: Array.isArray(active_effects) ? active_effects : [],
     };
   },
 

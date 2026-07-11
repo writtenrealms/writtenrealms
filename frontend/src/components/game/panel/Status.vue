@@ -53,6 +53,7 @@ type ActiveEffect = {
     type?: string;
     id?: number | string;
   };
+  encounter_id?: number | string;
 };
 
 const player = computed(() => store.state.game.player);
@@ -62,8 +63,13 @@ const player_effects = computed(() => {
 });
 const player_state = computed(() => capfirst(player.value?.state || ""));
 const active_effects = computed(() => {
-  const effects = player.value?.active_effects;
-  if (!Array.isArray(effects)) return [];
+  const character_effects = Array.isArray(player.value?.active_effects)
+    ? player.value.active_effects
+    : [];
+  const combat_effects = Array.isArray(player.value?.combat_effects)
+    ? player.value.combat_effects
+    : [];
+  const effects = [...character_effects, ...combat_effects];
 
   return effects
     .map((effect: ActiveEffect, index: number) => {
@@ -80,6 +86,7 @@ const active_effects = computed(() => {
       const source = effect.source || {};
       const key = [
         effect.stack_key || effect.effect || label,
+        effect.encounter_id || "character",
         source.type || "source",
         source.id || index,
         index,

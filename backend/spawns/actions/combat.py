@@ -23,7 +23,11 @@ from core.world_config import inherited_system_config
 from builders.loot_tables import roll_mob_loot
 from builders.models import AbilityDefinition
 from spawns.actions.base import ActionError, ActionResult
-from spawns.actions.effects import advance_character_effect_durations, component_targets_character_effect
+from spawns.actions.effects import (
+    active_combat_effects,
+    advance_character_effect_durations,
+    component_targets_character_effect,
+)
 from spawns.actions.movement_costs import movement_cost
 from spawns.actions.targeting import resolve_room_mob_target
 from spawns.events import GameEvent
@@ -2178,12 +2182,17 @@ def _stun_event(
         "effect": "stun",
         "round_id": round_id,
     }
+    player_text = (
+        "You are stunned and cannot act."
+        if target_payload.get("key") == player.key
+        else f"{safe_capitalize(target_name)} is stunned and cannot act."
+    )
     events = [
         GameEvent(
             type="notification.combat.effect",
             recipients=[player.key],
             data=data,
-            text=f"{safe_capitalize(target_name)} is stunned and cannot act.",
+            text=player_text,
         )
     ]
     if not player.is_invisible:
@@ -2198,6 +2207,17 @@ def _stun_event(
                 )
             )
     return events
+
+
+def _combat_effect_state_event(player: Player) -> GameEvent:
+    return GameEvent(
+        type="player.combat_effects.update",
+        recipients=[player.key],
+        data={
+            "target": {"key": player.key},
+            "active_effects": active_combat_effects(player),
+        },
+    )
 
 
 def _apply_healing(
@@ -3808,11 +3828,19 @@ def resolve_combat_encounter_step(
         )
         if not target_mob:
             _finish_encounter(encounter)
-            return CombatStepResult(actor_key=player.key, events=[], encounter_active=False)
+            return CombatStepResult(
+                actor_key=player.key,
+                events=[_combat_effect_state_event(player)],
+                encounter_active=False,
+            )
 
         if player.room_id != encounter.room_id or target_mob.room_id != encounter.room_id:
             _finish_encounter(encounter)
-            return CombatStepResult(actor_key=player.key, events=[], encounter_active=False)
+            return CombatStepResult(
+                actor_key=player.key,
+                events=[_combat_effect_state_event(player)],
+                encounter_active=False,
+            )
 
         config = player.world.effective_config
         result = _apply_encounter_round(
@@ -3835,6 +3863,11 @@ def resolve_combat_encounter_step(
             next_delay = encounter.resolution_interval
         elif not result.encounter_active:
             _finish_encounter(encounter)
+
+        result = replace(
+            result,
+            events=[*result.events, _combat_effect_state_event(player)],
+        )
 
     if next_delay:
         _schedule_encounter_resolution(encounter_id, next_delay)

@@ -30,7 +30,7 @@ from core.stat_system import (
 )
 from quests.services.interactions import room_mob_quest_indicator_map, room_quest_callouts
 from quests.services.room_items import serialized_quest_room_items_for_room
-from spawns.actions.effects import active_character_effects
+from spawns.actions.effects import active_character_effects, active_combat_effects
 from spawns.models import DoorState, Item, Mob, Player
 from spawns.schemas import (
     Actor,
@@ -774,6 +774,7 @@ def serialize_actor(player: Player, room: Optional[Room]) -> Actor:
             "ability_hotkeys": _ability_hotkeys(player),
             "ability_cooldowns": _ability_cooldowns(player),
             "active_effects": active_character_effects(player),
+            "combat_effects": active_combat_effects(player),
         }
     )
     actor_data["room"] = {"key": room_payload_key_for(room)} if room else None

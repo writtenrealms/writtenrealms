@@ -5,7 +5,7 @@ from typing import Any
 
 from django.db.models import Q
 
-from spawns.models import Player
+from spawns.models import CombatEncounter, Player
 
 
 ROOM_ALLY_TARGETS = {"room.allies", "room.players"}
@@ -33,6 +33,30 @@ def active_character_effects(actor: Any) -> list[dict[str, Any]]:
         for effect in effects
         if isinstance(effect, dict) and _positive_int(effect.get("remaining_rounds")) > 0
     ]
+
+
+def active_combat_effects(player: Player) -> list[dict[str, Any]]:
+    """Return encounter-scoped effects that currently target ``player``."""
+    effects: list[dict[str, Any]] = []
+    encounters = player.combat_encounters.filter(
+        status=CombatEncounter.STATUS_ACTIVE,
+    ).only("id", "active_effects")
+    for encounter in encounters:
+        for effect in encounter.active_effects or []:
+            if not isinstance(effect, dict):
+                continue
+            target = effect.get("target") or {}
+            if target.get("type") != "player" or target.get("id") != player.id:
+                continue
+            if _positive_int(effect.get("remaining_rounds")) <= 0:
+                continue
+            effects.append(
+                {
+                    **deepcopy(effect),
+                    "encounter_id": encounter.id,
+                }
+            )
+    return effects
 
 
 def _combat_modifier_primitives(component: dict[str, Any]) -> list[dict[str, Any]]:

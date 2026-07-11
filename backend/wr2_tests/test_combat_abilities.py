@@ -379,8 +379,41 @@ class TestCombatAbilities(WorldTestCase):
         self.assertTrue(
             any(effect["data"]["label"] == "Crack" for effect in effects)
         )
+        combat_effect_updates = self._messages_by_type(
+            resolve_messages,
+            "player.combat_effects.update",
+        )
+        self.assertEqual(
+            combat_effect_updates[-1]["data"]["active_effects"][0]["label"],
+            "Crack",
+        )
+        self.assertEqual(
+            combat_effect_updates[-1]["data"]["active_effects"][0]["remaining_rounds"],
+            1,
+        )
         self.assertEqual(len(resolve_round_mob_attacks), 1)
         self.assertEqual(mob.ability_cooldowns, {"mob-crack": 2})
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with patch("spawns.actions.combat.random.randint", return_value=1):
+                with capture_game_messages() as stunned_messages:
+                    resolve_combat_encounter(encounter.id)
+
+        stun_events = self._messages_by_type(
+            stunned_messages,
+            "notification.combat.effect",
+        )
+        self.assertTrue(
+            any(
+                event.get("text") == "You are stunned and cannot act."
+                for event in stun_events
+            )
+        )
+        combat_effect_updates = self._messages_by_type(
+            stunned_messages,
+            "player.combat_effects.update",
+        )
+        self.assertEqual(combat_effect_updates[-1]["data"]["active_effects"], [])
 
     def test_mob_ability_chance_failure_falls_back_to_basic_attack(self):
         self._ability(
@@ -1009,6 +1042,36 @@ class TestCombatAbilities(WorldTestCase):
             payload["world"]["abilities"]["definitions"]["power-strike"][
                 "consumes_primary_action_while_casting"
             ]
+        )
+
+    def test_state_sync_includes_active_player_combat_effects(self):
+        from spawns.state_payloads import build_state_sync
+
+        mob = self._mob()
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            active_effects=[
+                {
+                    "effect": "stun",
+                    "source": {"type": "mob", "id": mob.id},
+                    "target": {"type": "player", "id": self.player.id},
+                    "remaining_rounds": 1,
+                    "duration_rounds": 1,
+                    "label": "Crack",
+                }
+            ],
+        )
+
+        payload = build_state_sync(self.player).model_dump()
+
+        self.assertEqual(len(payload["actor"]["combat_effects"]), 1)
+        self.assertEqual(payload["actor"]["combat_effects"][0]["label"], "Crack")
+        self.assertEqual(
+            payload["actor"]["combat_effects"][0]["encounter_id"],
+            encounter.id,
         )
 
     def test_queued_ability_replaces_auto_attack_for_the_round(self):

@@ -52,6 +52,11 @@ comes up.
 Some effects can change what happens on a turn. For example, stun can prevent a
 combatant from taking their primary action.
 
+Your active round-based effects appear beside your current posture in the
+status panel. This includes both character effects, such as buffs that can span
+encounters, and encounter-scoped effects such as stun. The display updates as
+rounds advance and removes an effect when its remaining duration is consumed.
+
 ## Recovery
 
 Health, energy, and stamina recover automatically while you are in the game.
