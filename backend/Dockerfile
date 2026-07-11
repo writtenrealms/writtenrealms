@@ -13,7 +13,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ \
     libffi-dev \
     libpq-dev \
-    libzmq3-dev \
     nginx \
     vim-tiny \
     && rm -rf /var/lib/apt/lists/*
