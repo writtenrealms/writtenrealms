@@ -31,7 +31,10 @@
   .ui-notification {
     border: 3px solid $color-green;
     position: absolute;
-    max-width: 300px;
+    // Leave a comfortable gutter on narrow screens while allowing detailed
+    // validation errors to remain readable on larger displays.
+    width: calc(100% - 32px);
+    max-width: 600px;
     left: 0;
     right: 0;
     top: 17px;
@@ -61,10 +64,15 @@
     div.message {
       @include font-text-regular;
       position: relative;
-      padding: 10px;
-      display: flex;
-      justify-content: center;
+      padding: 10px 30px;
+      text-align: center;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
       z-index: 110;
+
+      &.multiline {
+        text-align: left;
+      }
     }
 
     div.close-button {

@@ -2,7 +2,7 @@
   <div id="notification-box">
     <div class="ui-notification" :class="notificationType">
       <div class="notification-background"></div>
-      <div class="message" v-html="formattedNotification"></div>
+      <div class="message" :class="{ multiline: isMultiline }">{{ notification }}</div>
       <div class="close-button" aria-label="Close" @click="closeNotification">
         <span aria-hidden="true">&#10006;</span>
       </div>
@@ -18,7 +18,8 @@ const store = useStore();
 let timeout: ReturnType<typeof setTimeout> | null = null;
 
 const notificationType = computed(() => store.state.ui.notificationType);
-const formattedNotification = computed(() => store.state.ui.notification.replace(/\n/g, '<br />'));
+const notification = computed(() => String(store.state.ui.notification ?? ""));
+const isMultiline = computed(() => notification.value.includes("\n"));
 
 onMounted(() => {
   if (store.state.ui.notification_expires) {
