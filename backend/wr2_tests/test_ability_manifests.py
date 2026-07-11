@@ -201,6 +201,7 @@ spec:
     abilities:
       - ability: shadow-bolt
         weight: 3
+        chance: 25
         when:
           lte:
             - actor.health_percent
@@ -214,6 +215,7 @@ spec:
             {
                 "ability": "shadow-bolt",
                 "weight": 3,
+                "chance": 25,
                 "when": {"lte": ["actor.health_percent", 50]},
             }
         ]
@@ -222,6 +224,33 @@ spec:
             resp.data["mob_definition"]["manifest"]["spec"]["combat"]["abilities"],
             expected,
         )
+
+    def test_mob_definition_manifest_rejects_invalid_combat_ability_chance(self):
+        self._create_ability(
+            slug="shadow-bolt",
+            name="Shadow Bolt",
+            command_verbs=["shadowbolt"],
+        )
+
+        for chance in (-1, 101):
+            with self.subTest(chance=chance):
+                manifest = f"""
+kind: mobdefinition
+metadata:
+  world: world.{self.world.id}
+  slug: cave-shaman
+  name: a cave shaman
+spec:
+  type: humanoid
+  combat:
+    abilities:
+      - ability: shadow-bolt
+        chance: {chance}
+"""
+                resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+                self.assertEqual(resp.status_code, 400)
+                self.assertIn("chance must be 0-100", str(resp.data))
 
     def test_apply_ability_manifest_accepts_condition_requirements(self):
         manifest = f"""

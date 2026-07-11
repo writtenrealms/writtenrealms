@@ -2860,7 +2860,10 @@ def _coerce_mob_combat_ability_entry(
 ) -> dict[str, Any]:
     field_name = f"spec.combat.abilities[{index}]"
     if isinstance(entry, dict):
-        unknown_fields = sorted(set(entry.keys()) - {"ability", "slug", "weight", "when", "conditions"})
+        unknown_fields = sorted(
+            set(entry.keys())
+            - {"ability", "slug", "weight", "chance", "when", "conditions"}
+        )
         if unknown_fields:
             raise serializers.ValidationError(
                 f"Unsupported {field_name} field(s): {', '.join(unknown_fields)}."
@@ -2874,6 +2877,9 @@ def _coerce_mob_combat_ability_entry(
         weight = _coerce_int(entry.get("weight", 1), f"{field_name}.weight")
         if weight <= 0:
             raise serializers.ValidationError(f"{field_name}.weight must be positive.")
+        chance = _coerce_int(entry.get("chance", 100), f"{field_name}.chance")
+        if chance < 0 or chance > 100:
+            raise serializers.ValidationError(f"{field_name}.chance must be 0-100.")
         conditions = entry.get("when", entry.get("conditions", {}))
     else:
         ability_slug = _resolve_ability_slug_reference(
@@ -2882,6 +2888,7 @@ def _coerce_mob_combat_ability_entry(
             field_name=field_name,
         )
         weight = 1
+        chance = 100
         conditions = {}
 
     if conditions in (None, "", []):
@@ -2895,6 +2902,8 @@ def _coerce_mob_combat_ability_entry(
         "ability": ability_slug,
         "weight": weight,
     }
+    if isinstance(entry, dict) and "chance" in entry:
+        normalized["chance"] = chance
     if conditions:
         normalized["when"] = conditions
     return normalized

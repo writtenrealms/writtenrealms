@@ -418,15 +418,24 @@ spec:
     abilities:
       - ability: shadow-bolt
         weight: 3
+        chance: 25
 ```
 
 Each loadout entry supports:
 
 - `ability`: required ability slug, id, or `ability.<id>` key.
+- `chance`: optional integer from `0` to `100`, defaulting to `100`. Each
+  otherwise-eligible ability must pass this percentage roll before selection.
 - `weight`: optional positive integer. Higher weights make the ability more
-  likely when multiple entries are eligible.
+  likely when multiple entries pass their chance rolls.
 - `when`: optional WR2 condition DSL gate. Use this for health thresholds,
   phases, room state, or world state.
+
+Cooldown, resource cost, and `when` eligibility are checked before `chance`.
+Chance is rolled independently for each remaining entry, then `weight` chooses
+among the entries that passed. If none pass, the mob uses its normal basic
+attack. A failed chance roll does not start the ability cooldown, so the mob can
+try again on its next turn.
 
 Example self-heal that only becomes eligible when the mob is wounded:
 

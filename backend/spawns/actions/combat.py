@@ -1984,6 +1984,14 @@ def _choose_mob_ability(
         ):
             continue
         try:
+            chance = max(0, min(100, int(entry.get("chance", 100))))
+        except (TypeError, ValueError):
+            chance = 100
+        if chance <= 0:
+            continue
+        if chance < 100 and random.randint(1, 100) > chance:
+            continue
+        try:
             weight = max(1, int(entry.get("weight") or 1))
         except (TypeError, ValueError):
             weight = 1
