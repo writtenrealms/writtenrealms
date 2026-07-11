@@ -52,6 +52,14 @@ comes up.
 Some effects can change what happens on a turn. For example, stun can prevent a
 combatant from taking their primary action.
 
+## Recovery
+
+Health, energy, and stamina recover automatically while you are in the game.
+Resting increases the normal out-of-combat recovery rate. During combat, the
+explicit regeneration values from your stats still apply, and stamina keeps its
+baseline recovery. These passive updates refresh the vitals display silently;
+they do not add entries to the game console.
+
 ## Multiple Hostiles
 
 Several hostile mobs in the same room can engage you at once. You still have one

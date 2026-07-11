@@ -130,17 +130,17 @@ const receiveMessage = async ({
     "notification.longtic",
     "notification.who",
     "player.abilities.update",
-    // "notification.regen",
+    "notification.regen",
   ];
 
-  // Echo received message to console if not short / long tic
+  // Echo received messages unless they are silent state updates.
   if (skip_messages.indexOf(message_data.type) == -1) {
     const cloned_message_data = _.cloneDeep(message_data);
     console.log(`RECV ${cloned_message_data.type}`);
     console.log(cloned_message_data);
   }
 
-  // Add message to be shown in console
+  // Add visible messages to the console history.
   if (skip_messages.indexOf(message_data.type) == -1) {
     commit("message_add", message_data);
   }
