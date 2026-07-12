@@ -37,6 +37,7 @@ class StatSystemValidationError(ValueError):
 
 CANONICAL_RESOURCE_LABEL_KEYS = ("health", "energy", "stamina")
 CANONICAL_STAT_LABEL_KEYS = (
+    "weapon_damage",
     "attack_power",
     "ability_power",
     "armor",
@@ -90,6 +91,7 @@ DEFAULT_STAT_SYSTEM = {
             "stamina": "Stamina",
         },
         "stats": {
+            "weapon_damage": "Weapon Damage",
             "attack_power": "Attack Power",
             "ability_power": "Ability Power",
             "armor": "Armor",
@@ -103,6 +105,7 @@ DEFAULT_STAT_SYSTEM = {
         "classes": {},
     },
     "stat_display_order": [
+        "weapon_damage",
         "attack_power",
         "ability_power",
         "crit",
@@ -1413,15 +1416,30 @@ def build_player_stat_payload(player) -> dict[str, Any]:
         int(stats.get("stamina_max") or 0),
         int(getattr(player, "stamina", 0) or 0),
     )
+    equipment = getattr(player, "equipment", None)
+    equipped_weapon = getattr(equipment, "weapon", None) if equipment else None
+    weapon_damage_value = max(
+        0.0,
+        float(getattr(equipped_weapon, "weapon_damage", 0) or 0),
+    )
+    weapon_damage: int | float = weapon_damage_value
+    if weapon_damage_value.is_integer():
+        weapon_damage = int(weapon_damage_value)
+
+    display_stats: dict[str, int | float] = {
+        key: (
+            weapon_damage
+            if key == "weapon_damage"
+            else int(stats.get(key) or 0)
+        )
+        for key in stat_order
+    }
     return {
         "attributes": {
             key: int(stats.get(key) or 0)
             for key in attribute_order
         },
-        "stats": {
-            key: int(stats.get(key) or 0)
-            for key in stat_order
-        },
+        "stats": display_stats,
         "energy": int(getattr(player, "energy", 0) or 0),
         "energy_base": int(stats.get("energy_base") or 0),
         "energy_max": energy_max,
@@ -1434,6 +1452,7 @@ def build_player_stat_payload(player) -> dict[str, Any]:
         "stamina_max": stamina_max,
         "stamina_regen": int(stats.get("stamina_regen") or 0),
         "attack_power": int(stats.get("attack_power") or 0),
+        "weapon_damage": weapon_damage,
         "armor": int(stats.get("armor") or 0),
         "crit": int(stats.get("crit") or 0),
         "dodge": int(stats.get("dodge") or 0),

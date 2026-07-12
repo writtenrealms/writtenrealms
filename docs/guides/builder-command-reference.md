@@ -346,6 +346,8 @@ Format:
 
 Shows a builder stat readout for the builder, a player or mob in the builder's
 current room, or a keyed character anywhere in the current runtime world.
+Player readouts include the equipped main-hand Weapon Damage, or `0` when
+unarmed.
 
 Room targets use the same builder room-character selector behavior as commands
 such as `/grantitem`, `/setlevel`, and `/setclass`. Keyed targets can be

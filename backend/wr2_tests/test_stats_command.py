@@ -1,3 +1,5 @@
+from config import constants as adv_consts
+from spawns.models import Item
 from tests.base import WorldTestCase
 from wr2_tests.utils import capture_game_messages, dispatch_text_command
 
@@ -49,6 +51,8 @@ class TestStatsCommand(WorldTestCase):
         self.assertEqual(actor["experience"], self.player.experience)
         self.assertEqual(actor["experience_needed"], 30)
         self.assertEqual(actor["attributes"], {})
+        self.assertEqual(actor["weapon_damage"], 0)
+        self.assertEqual(actor["stats"]["weapon_damage"], 0)
         self.assertIn("attack_power", actor["stats"])
 
         self.assertEqual(world["labels"]["resources"]["energy"], "Focus")
@@ -57,6 +61,34 @@ class TestStatsCommand(WorldTestCase):
             "Ability Power",
         )
         self.assertEqual(world["labels"]["classes"]["warrior"], "Vanguard")
+
+    def test_stats_command_reports_equipped_main_hand_weapon_damage(self):
+        weapon = Item.objects.create(
+            world=self.spawn_world,
+            name="a balanced sword",
+            type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            equipment_type=adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
+            weapon_damage=44.5,
+        )
+        self.player.equipment.equip(weapon, adv_consts.EQUIPMENT_SLOT_WEAPON)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "stats")
+
+        message = self._message_by_type(messages, "cmd.stats.success")
+        actor = message["data"]["actor"]
+        world = message["data"]["world"]
+
+        self.assertEqual(actor["weapon_damage"], 44.5)
+        self.assertEqual(actor["stats"]["weapon_damage"], 44.5)
+        self.assertEqual(
+            world["labels"]["stats"]["weapon_damage"],
+            "Weapon Damage",
+        )
+        self.assertLess(
+            world["labels"]["order"]["stats"].index("weapon_damage"),
+            world["labels"]["order"]["stats"].index("attack_power"),
+        )
 
     def test_stats_command_uses_combat_rating_percentages(self):
         self.world.config.stat_system = {

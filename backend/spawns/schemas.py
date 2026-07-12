@@ -214,6 +214,7 @@ class Actor(BaseModel):
     focus: Optional[str] = None
 
     # Stats
+    weapon_damage: int | float = 0
     attack_power: int = 0
     ability_power: int = 0
     crit: int = 0
@@ -223,7 +224,7 @@ class Actor(BaseModel):
     resilience: int = 0
     resilience_perc: float = 0.0
     attributes: Dict[str, float] = Field(default_factory=dict)
-    stats: Dict[str, int] = Field(default_factory=dict)
+    stats: Dict[str, int | float] = Field(default_factory=dict)
 
     # Equipment & inventory
     equipment: Equipment = Field(default_factory=Equipment)

@@ -124,6 +124,7 @@ spec:
         energy: Mana
         stamina: Stamina
       stats:
+        weapon_damage: Weapon Damage
         attack_power: Attack Power
         ability_power: Spell Power
         armor: Armor
@@ -140,6 +141,7 @@ spec:
         cleric: Cleric
 
     stat_display_order:
+      - weapon_damage
       - attack_power
       - ability_power
       - crit

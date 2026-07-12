@@ -25,6 +25,7 @@ Resources:
 
 Combat stats:
 
+- `weapon_damage` (the equipped main-hand weapon's damage in player stat output)
 - `attack_power`
 - `ability_power`
 - `armor`
@@ -44,6 +45,7 @@ spec:
   stats:
     labels:
       stats:
+        weapon_damage: Weapon Damage
         ability_power: Spell Power
 ```
 
@@ -107,7 +109,9 @@ spec:
 labels the fixed WR2 stat keys shown as stat rows. Both are presentation labels;
 neither creates new stats or attributes.
 
-The key stays `ability_power`; players can see `Spell Power`.
+The key stays `ability_power`; players can see `Spell Power`. The `stats`
+command also shows the equipped main-hand `weapon_damage` before Attack Power,
+or `0` when the player is unarmed.
 
 ## Mapping Attributes To Stats
 
