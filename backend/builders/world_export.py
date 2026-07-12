@@ -571,7 +571,6 @@ def _serialize_spawn_plan_manifest(spawn_plan: SpawnPlan) -> dict[str, Any]:
         "zone": _zone_ref(spawn_plan.zone),
         "order": int(spawn_plan.order),
         "is_active": bool(spawn_plan.is_active),
-        "reset": copy.deepcopy(spawn_plan.reset_policy),
         "respawn": copy.deepcopy(spawn_plan.respawn_policy),
         "entries": [
             _serialize_spawn_entry(entry)
@@ -2099,7 +2098,6 @@ def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tupl
         spawn_plan.notes = str(spec.get("notes") or "")
         spawn_plan.order = int(spec.get("order", spawn_plan.order or 0) or 0)
         spawn_plan.is_active = bool(spec.get("is_active", True))
-        spawn_plan.reset_policy = copy.deepcopy(spec.get("reset") or {})
         spawn_plan.respawn_policy = copy.deepcopy(spec.get("respawn") or {})
         spawn_plan.randomization = copy.deepcopy(spec.get("randomization") or {})
         spawn_plan.conditions = conditions

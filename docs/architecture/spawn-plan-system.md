@@ -53,8 +53,9 @@ prefer portable refs so manifests round-trip across fresh databases.
   needed.
 - Reconciliation should create missing runtime entities and avoid duplicating
   existing live placements.
-- Reset behavior belongs to spawn-plan policy and instance/world lifecycle
-  services, not ad hoc command handlers.
+- Initial population and deliberate repopulation belong to instance/world
+  lifecycle services. Spawn plans have no separate reset policy; ordinary
+  replacement timing belongs to their respawn policy.
 - Conditional logic must use the WR2 condition DSL in
   `backend/core/condition_dsl.py`.
 

@@ -31,6 +31,12 @@ spec:
 `metadata.slug` is the stable id for updates. Applying another manifest with
 the same slug updates the existing plan.
 
+Spawn plans do not have a `reset` setting. World and instance lifecycle
+services perform initial population when they start. Use `spec.respawn` to
+control replacement of missing placements while a world is running. Legacy
+manifests containing `spec.reset` are accepted for import compatibility, but
+the key is ignored and omitted from exported YAML.
+
 `spec.zone` is the authored zone the plan belongs to. It must use the portable
 `zone@<relative_id>` form exported by zone manifests and shown on the zone
 detail API as `manifest_ref`. Zone names are not accepted here because names

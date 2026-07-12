@@ -79,7 +79,6 @@ def _plan_spec_hash(plan: SpawnPlan) -> str:
     payload = {
         "slug": plan.slug,
         "zone_id": plan.zone_id,
-        "reset_policy": plan.reset_policy,
         "respawn_policy": plan.respawn_policy,
         "randomization": plan.randomization,
         "conditions": plan.conditions,

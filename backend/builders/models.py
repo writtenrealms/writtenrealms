@@ -413,7 +413,6 @@ class SpawnPlan(AdventBaseModel):
     notes = models.TextField(**optional)
     order = models.IntegerField(default=0)
     is_active = models.BooleanField(default=True)
-    reset_policy = models.JSONField(default=dict, blank=True)
     respawn_policy = models.JSONField(default=dict, blank=True)
     randomization = models.JSONField(default=dict, blank=True)
     conditions = models.JSONField(default=dict, blank=True)

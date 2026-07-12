@@ -309,11 +309,11 @@ Materialization flow for mobs:
 4. Persist `trait_instances`, origin metadata, and any changed stat fields.
 5. Run `on_spawn` trait hooks when needed.
 
-Reset flow:
+Fresh-run flow:
 
 1. Mark or expire the current `SpawnPlanRun`.
-2. Despawn or retire runtime output according to reset policy.
-3. Generate a new run if policy requires a fresh roll.
+2. Despawn or retire runtime output through the owning lifecycle service.
+3. Generate a new run when that lifecycle operation requests a fresh roll.
 4. Reconcile the new placements.
 
 ## Numeric Modifiers

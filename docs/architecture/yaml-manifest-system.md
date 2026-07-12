@@ -57,6 +57,10 @@ Current required mappings:
 - WR1 `Loader` / `Rule` rows export as `kind: spawnplan` entries. WR2 no longer
   imports or stores loader/rule rows, and runtime item/mob rows no longer keep
   `rule_id` or source-template FKs.
+- WR1 loader reset configuration does not export. WR2 spawn-plan manifests have
+  no `spec.reset` key: world/instance lifecycle services perform initial
+  population, while `spec.respawn` controls replacement of missing placements
+  in a running world.
 - WR1 `Zone.is_warzone` does not export. WR2 zones no longer have an
   `is_warzone` model field or zone manifest key.
 - Runtime spawn reconciliation is now named spawn-plan processing in WR2:

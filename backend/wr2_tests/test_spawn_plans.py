@@ -64,6 +64,39 @@ spec:
         self.assertEqual(entry.target["room"], f"room@{self.room.x},{self.room.y},{self.room.z}")
         self.assertEqual(entry.count, 1)
 
+    def test_apply_spawn_plan_manifest_ignores_legacy_reset_key(self):
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: training-grounds
+  name: Training Grounds
+spec:
+  zone: zone@{self.zone.relative_id}
+  reset:
+    mode: world_start
+  respawn:
+    mode: fixed
+    seconds: 0
+  entries:
+    - slug: practice-dummy
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+      count: 1
+"""
+
+        apply_resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(apply_resp.status_code, 201, apply_resp.data)
+        plan = SpawnPlan.objects.get(world=self.world, slug="training-grounds")
+        detail_ep = reverse(
+            "builder-zone-spawn-plan-detail",
+            args=[self.world.pk, self.zone.pk, plan.pk],
+        )
+        detail_resp = self.client.get(detail_ep)
+        exported_manifest = yaml.safe_load(detail_resp.data["yaml"])
+        self.assertNotIn("reset", exported_manifest["spec"])
+
     def test_apply_spawn_plan_manifest_accepts_transition_metadata_and_source_pool(self):
         manifest = f"""
 kind: spawnplan
@@ -590,6 +623,8 @@ spec:
         self.assertEqual(resp.data["slug"], "training-grounds")
         self.assertIn("kind: spawnplan", resp.data["yaml"])
         self.assertIn("operation: delete", resp.data["delete_yaml"])
+        manifest = yaml.safe_load(resp.data["yaml"])
+        self.assertNotIn("reset", manifest["spec"])
 
 
 class TestSpawnPlanRuntime(WorldTestCase):
