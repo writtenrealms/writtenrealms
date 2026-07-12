@@ -9,6 +9,7 @@ from tests.base import WorldTestCase
 from wr2_tests.utils import (
     apply_basic_stat_system,
     capture_game_messages,
+    create_active_effect,
     dispatch_text_command,
 )
 
@@ -27,6 +28,8 @@ class TestRestCommands(WorldTestCase):
         self.player.stamina = self.stats["stamina_max"]
         self.player.in_game = True
         self.player.save(update_fields=["health", "energy", "stamina", "in_game"])
+        self.spawn_world.lifecycle = adv_consts.WORLD_LIFECYCLE_RUNNING
+        self.spawn_world.save(update_fields=["lifecycle"])
         self.world.config.combat_system = normalize_combat_system(
             {
                 "variance": {
@@ -126,6 +129,37 @@ class TestRestCommands(WorldTestCase):
             room=self.room,
             player=self.player,
             mob=mob,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "rest")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.state, adv_consts.CHARACTER_STATE_STANDING)
+        error = self._message_by_type(messages, "cmd.rest.error", self.player.key)
+        self.assertIsNotNone(error)
+        self.assertEqual(error["data"]["code"], "in_combat")
+
+    def test_rest_command_rejects_hostile_effect_combat_tag(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Rat",
+            keywords="rat",
+            health=100,
+            health_max=100,
+        )
+        create_active_effect(
+            source=mob,
+            target=self.player,
+            payload={
+                "effect": "dot",
+                "category": "debuff",
+                "label": "Burning Curse",
+                "remaining_rounds": 2,
+                "duration_rounds": 2,
+                "tick": {"every_rounds": 1, "component": {"type": "damage"}},
+            },
         )
 
         with capture_game_messages() as messages:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from config import constants as adv_consts
 from spawns.actions.base import ActionError, ActionResult
+from spawns.actions.effects import actor_is_combat_tagged
 from spawns.events import GameEvent
 from spawns.models import CombatEncounter, Player
 from spawns.state_payloads import get_player_with_related, serialize_actor
@@ -35,7 +36,7 @@ def _state_event(*, player: Player, command_type: str, text: str) -> GameEvent:
 class RestAction:
     def execute(self, player_id: int) -> ActionResult:
         player = Player.objects.select_for_update().get(pk=player_id)
-        if _active_player_encounter_exists(player):
+        if _active_player_encounter_exists(player) or actor_is_combat_tagged(player):
             raise ActionError("You cannot rest in combat.", code="in_combat")
 
         if player.state != adv_consts.CHARACTER_STATE_RESTING:

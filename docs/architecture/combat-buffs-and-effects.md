@@ -87,7 +87,7 @@ Conceptual active effect fields:
 ActiveEffect
   id
   world_id
-  key
+  origin_encounter_id    # provenance, not clock ownership
   label
   category              # buff, debuff, neutral
   source_ref            # player, mob, item, room, system
@@ -103,12 +103,23 @@ ActiveEffect
   primitives            # normalized effect primitives
   conditions            # WR2 condition DSL, if any
   flags                 # dispellable, visible, hidden, harmful, etc.
+  next_tick_at
+  last_tick_token
+  source_snapshot
   version
 ```
 
-The exact storage can start as structured JSON on encounter runtime state, but
-the shape should remain versioned and inspectable. If effects become long-lived
-or shared across systems, they should move toward explicit rows.
+WR2 stores active effect instances as explicit `ActiveEffect` rows. Both
+encounter- and character-scoped effects use the same canonical table. The
+source and target are typed player/mob references, while `source_snapshot`
+preserves frozen combat stats and attribution metadata if the live source later
+disappears. Exactly one target is required.
+
+Migration `spawns.0138_active_effects` converts the former player and encounter
+JSON stores and then removes those columns. It is intentionally irreversible
+because the old stores cannot represent all character-scoped rows. Deploy it
+with backend and worker processes quiesced so no legacy process can write the
+JSON columns between backfill and removal.
 
 ## Scope And Lifetime
 
@@ -119,10 +130,10 @@ Effects can have different scopes:
 - `room`: affects anyone in a room
 - `world`: global runtime effect for a world or instance
 
-The first implementation should favor encounter-scoped effects because they are
-bounded and cheap to resolve. Character-scoped effects are necessary for
-important gameplay such as invisibility, long buffs, food buffs, curses, and
-resting effects.
+Encounter scope remains appropriate for fight-only mechanics such as stun,
+threat, and opponent-specific barriers. Character scope is used for effects
+that follow players or mobs, including DOTs, HOTs, long buffs, food buffs,
+curses, and resting effects.
 
 Durations should be explicit:
 
@@ -133,6 +144,12 @@ Durations should be explicit:
 
 Combat effects should prefer `rounds`. Wall-clock duration is appropriate only
 when the effect must survive outside an active encounter.
+
+Round advancement is owned by the target actor, not the origin encounter. An
+active encounter advances effects on its participants at round start. When a
+target has no active encounter, an indexed, bounded actor-effect pulse advances
+due effects. This gives each target one clock and prevents re-engagement or
+multiple origin encounters from double-ticking the same effect.
 
 ## Effect Primitives
 
@@ -683,6 +700,22 @@ Effects should expire when:
 Encounter-scoped effects should not leak into character state after combat.
 Character-scoped effects should survive encounter boundaries when their lifetime
 requires it.
+
+Harmful character-scoped periodic effects also maintain a combat tag for their
+live source and target. Engagement controls legal attacks; the combat tag only
+controls combat-exit policies such as regeneration and resting. Offline actors
+and actors in stopped worlds pause their effect clocks and do not hold combat
+tags. Damage attribution belongs to the active effect rather than encounter
+membership, so a lethal remote tick resolves death, corpse placement, rewards,
+and conditional loot against the original source in the effect transaction and
+emits the normal `quest.mob.killed` event for quest credit after commit.
+
+Detached effect events use `GameEventOutbox`: the pulse writes its event rows in
+the same transaction as damage, death, and rewards, then the heartbeat drains
+them with at-least-once delivery. Quest and trigger subscribers persist an
+event/subscriber receipt before mutating database state, so a publish retry
+cannot grant the same quest progress twice. Websocket, Redis, and Celery side
+effects remain at-least-once and must tolerate duplicate delivery.
 
 ## Performance Requirements
 

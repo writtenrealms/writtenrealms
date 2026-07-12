@@ -1,10 +1,24 @@
 from __future__ import annotations
 
 from typing import Callable
+import uuid
+
+from django.db import transaction
 
 from config import constants as adv_consts
-from spawns.models import Player
-from spawns.triggers import execute_mob_event_triggers, execute_room_event_triggers
+from spawns.models import EventSubscriptionReceipt, Player
+
+
+def execute_mob_event_triggers(*args, **kwargs):
+    from spawns.triggers import execute_mob_event_triggers as execute
+
+    return execute(*args, **kwargs)
+
+
+def execute_room_event_triggers(*args, **kwargs):
+    from spawns.triggers import execute_room_event_triggers as execute
+
+    return execute(*args, **kwargs)
 
 
 TriggerSubscriptionHandler = Callable[[dict, str | None, str | None], None]
@@ -157,4 +171,19 @@ def dispatch_trigger_subscriptions_for_event(
         return
 
     data = event_data if isinstance(event_data, dict) else {}
-    handler(data, actor_key, connection_id)
+    try:
+        event_id = uuid.UUID(str(data.get("_event_id") or ""))
+    except (TypeError, ValueError, AttributeError):
+        event_id = None
+    if event_id is None:
+        handler(data, actor_key, connection_id)
+        return
+
+    with transaction.atomic():
+        _, created = EventSubscriptionReceipt.objects.get_or_create(
+            event_id=event_id,
+            subscriber="triggers",
+        )
+        if not created:
+            return
+        handler(data, actor_key, connection_id)

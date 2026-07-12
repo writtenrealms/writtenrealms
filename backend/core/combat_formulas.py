@@ -219,6 +219,7 @@ class CombatantSnapshot:
     stats: dict[str, float]
     weapon_damage: float
     is_disarmed: bool = False
+    outgoing_damage_multiplier: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -875,6 +876,7 @@ def _player_snapshot(actor: Any, world: Any, *, weapon_slot: str = "weapon") -> 
         level=max(1, int(getattr(actor, "level", 1) or 1)),
         stats=snapshot_stats,
         weapon_damage=snapshot_stats["weapon_damage"],
+        outgoing_damage_multiplier=_outgoing_damage_multiplier(actor),
     )
 
 
@@ -897,6 +899,7 @@ def _mob_snapshot(actor: Any, *, is_disarmed: bool = False) -> CombatantSnapshot
         stats=snapshot_stats,
         weapon_damage=snapshot_stats["weapon_damage"],
         is_disarmed=is_disarmed,
+        outgoing_damage_multiplier=_outgoing_damage_multiplier(actor),
     )
 
 
@@ -1080,6 +1083,7 @@ def resolve_attack(
     actor_disarmed: bool = False,
     weapon_slot: str = "weapon",
     damage_multiplier: float = 1.0,
+    actor_snapshot: CombatantSnapshot | None = None,
 ) -> CombatAttackResult:
     runtime_world = world or getattr(actor, "world", None) or getattr(target, "world", None)
     combat_system = get_world_combat_system(runtime_world)
@@ -1100,7 +1104,7 @@ def resolve_attack(
         )
 
     rng = rng or random.random
-    actor_snapshot = combatant_snapshot(
+    actor_snapshot = actor_snapshot or combatant_snapshot(
         actor,
         world=runtime_world,
         is_disarmed=actor_disarmed,
@@ -1115,7 +1119,7 @@ def resolve_attack(
     )
     output = base * float(profile["multiplier"]) * max(0.0, float(damage_multiplier or 0))
     if profile["kind"] == "damage":
-        output *= _outgoing_damage_multiplier(actor)
+        output *= max(0.0, float(actor_snapshot.outgoing_damage_multiplier or 0))
 
     dodge_chance = 0.0
     if profile["can_dodge"] and "dodge" in combat_system["ratings"]:

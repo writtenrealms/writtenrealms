@@ -1,10 +1,13 @@
 import math
 from copy import deepcopy
+from datetime import timedelta
 from unittest.mock import patch
 
 from config import constants as api_consts
 from core.computations import compute_stats
-from spawns.models import CombatEncounter, Mob
+from django.utils import timezone
+from spawns.actions.combat import resolve_due_character_effects
+from spawns.models import ActiveEffect, CombatEncounter, Mob
 from spawns.tasks import (
     WR2_RESTING_REGEN_MULTIPLIER,
     WR2_STANDING_REGEN_RATE,
@@ -14,8 +17,10 @@ from tests.base import WorldTestCase
 from wr2_tests.utils import (
     apply_basic_stat_system,
     capture_game_messages,
+    create_active_effect,
     dispatch_text_command,
     dispatch_text_command_as_mob,
+    replace_active_effects,
 )
 
 
@@ -158,7 +163,7 @@ class TestGameHeartbeat(WorldTestCase):
 
     def test_heartbeat_decrements_active_effects_outside_combat(self):
         self.player.in_game = True
-        self.player.active_effects = [
+        replace_active_effects(target=self.player, source=self.player, payloads=[
             {
                 "effect": "shout",
                 "category": "buff",
@@ -179,8 +184,8 @@ class TestGameHeartbeat(WorldTestCase):
                     }
                 ],
             }
-        ]
-        self.player.save(update_fields=["in_game", "active_effects"])
+        ])
+        self.player.save(update_fields=["in_game"])
 
         with patch("spawns.tasks.publish_events") as publish_mock:
             result = run_game_heartbeat()
@@ -190,11 +195,132 @@ class TestGameHeartbeat(WorldTestCase):
         self.assertEqual(result["active_effects"], 1)
         publish_mock.assert_called_once()
 
+        self.player.active_effect_records.update(next_tick_ts=timezone.now())
         with patch("spawns.tasks.publish_events"):
             run_game_heartbeat()
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.active_effects, [])
+
+    def test_hostile_periodic_effect_keeps_actor_combat_tagged_for_regen(self):
+        stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
+        self.player.in_game = True
+        self.player.health = stats["health_max"] - 10
+        self.player.save(update_fields=["in_game", "health"])
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.spawn_room,
+            name="Hexer",
+            health=20,
+            health_max=20,
+            attack_power=1,
+            fights_back=False,
+        )
+        effect = create_active_effect(
+            target=self.player,
+            source=mob,
+            payload={
+                "effect": "dot",
+                "category": "debuff",
+                "remaining_rounds": 2,
+                "tick": {
+                    "every_rounds": 1,
+                    "component": {
+                        "type": "damage",
+                        "profile": "basic_physical",
+                        "overrides": {"multiplier": 1},
+                    },
+                },
+            },
+        )
+        effect.next_tick_ts = timezone.now() + timedelta(minutes=1)
+        effect.save(update_fields=["next_tick_ts"])
+
+        run_game_heartbeat()
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.health, stats["health_max"] - 10)
+
+        effect.delete()
+        run_game_heartbeat()
+        self.player.refresh_from_db()
+        self.assertGreater(self.player.health, stats["health_max"] - 10)
+
+    def test_offline_periodic_target_pauses_without_tagging_source(self):
+        observer = self.create_player("Observer")
+        observer.in_game = True
+        observer.save(update_fields=["in_game"])
+        self.player.in_game = False
+        self.player.health = 20
+        self.player.save(update_fields=["in_game", "health"])
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.spawn_room,
+            name="Hexer",
+            health=10,
+            health_max=20,
+            regen_rate=10,
+            fights_back=False,
+        )
+        effect = create_active_effect(
+            target=self.player,
+            source=mob,
+            payload={
+                "effect": "dot",
+                "category": "debuff",
+                "remaining_rounds": 2,
+                "tick": {
+                    "every_rounds": 1,
+                    "component": {"type": "damage", "profile": "basic_physical"},
+                },
+            },
+        )
+        effect.next_tick_ts = timezone.now() - timedelta(seconds=1)
+        effect.save(update_fields=["next_tick_ts"])
+
+        run_game_heartbeat()
+
+        self.player.refresh_from_db()
+        mob.refresh_from_db()
+        effect.refresh_from_db()
+        self.assertEqual(self.player.health, 20)
+        self.assertEqual(effect.remaining_rounds, 2)
+        self.assertGreater(mob.health, 10)
+
+    def test_due_effect_limit_processes_oldest_target_first(self):
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+        older_target = self.create_player("Older")
+        older_target.in_game = True
+        older_target.save(update_fields=["in_game"])
+        newer = create_active_effect(
+            target=self.player,
+            source=self.player,
+            payload={
+                "effect": "shout",
+                "remaining_rounds": 1,
+                "duration_rounds": 1,
+            },
+        )
+        older = create_active_effect(
+            target=older_target,
+            source=older_target,
+            payload={
+                "effect": "shout",
+                "remaining_rounds": 1,
+                "duration_rounds": 1,
+            },
+        )
+        now = timezone.now()
+        newer.next_tick_ts = now - timedelta(seconds=5)
+        newer.save(update_fields=["next_tick_ts"])
+        older.next_tick_ts = now - timedelta(seconds=10)
+        older.save(update_fields=["next_tick_ts"])
+
+        resolve_due_character_effects(due_at=now, limit=1)
+
+        self.assertFalse(ActiveEffect.objects.filter(pk=older.id).exists())
+        self.assertTrue(ActiveEffect.objects.filter(pk=newer.id).exists())
 
     def test_heartbeat_leaves_active_combat_ability_cooldowns_to_combat_rounds(self):
         stats = compute_stats(self.player.level, self.player.archetype, char=self.player)
@@ -300,7 +426,6 @@ class TestGameHeartbeat(WorldTestCase):
             stamina_regen=3,
             regen_rate=10,
         )
-
         run_game_heartbeat()
 
         mob.refresh_from_db()
@@ -362,6 +487,21 @@ class TestGameHeartbeat(WorldTestCase):
             stamina_max=20,
             regen_rate=10,
         )
+        effect = create_active_effect(
+            target=mob,
+            source=self.player,
+            payload={
+                "effect": "dot",
+                "category": "debuff",
+                "remaining_rounds": 2,
+                "tick": {
+                    "every_rounds": 1,
+                    "component": {"type": "damage", "profile": "basic_physical"},
+                },
+            },
+        )
+        effect.next_tick_ts = timezone.now() - timedelta(seconds=1)
+        effect.save(update_fields=["next_tick_ts"])
 
         self.spawn_world.lifecycle = api_consts.WORLD_LIFECYCLE_STOPPED
         self.spawn_world.save(update_fields=["lifecycle"])
@@ -373,8 +513,10 @@ class TestGameHeartbeat(WorldTestCase):
 
         self.player.refresh_from_db()
         mob.refresh_from_db()
+        effect.refresh_from_db()
         self.assertEqual((self.player.health, self.player.energy, self.player.stamina), player_before)
         self.assertEqual((mob.health, mob.energy, mob.stamina), mob_before)
+        self.assertEqual(effect.remaining_rounds, 2)
 
     def test_player_regen_publishes_notification_event(self):
         stats = compute_stats(self.player.level, self.player.archetype, char=self.player)

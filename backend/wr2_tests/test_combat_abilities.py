@@ -16,7 +16,9 @@ from wr2_tests.utils import (
     BASIC_TEST_STAT_SYSTEM,
     apply_basic_stat_system,
     capture_game_messages,
+    create_active_effect,
     dispatch_text_command,
+    replace_active_effects,
 )
 
 
@@ -1053,16 +1055,20 @@ class TestCombatAbilities(WorldTestCase):
             room=self.room,
             player=self.player,
             mob=mob,
-            active_effects=[
-                {
-                    "effect": "stun",
-                    "source": {"type": "mob", "id": mob.id},
-                    "target": {"type": "player", "id": self.player.id},
-                    "remaining_rounds": 1,
-                    "duration_rounds": 1,
-                    "label": "Crack",
-                }
-            ],
+        )
+        create_active_effect(
+            target=self.player,
+            source=mob,
+            encounter=encounter,
+            scope="encounter",
+            payload={
+                "effect": "stun",
+                "source": {"type": "mob", "id": mob.id},
+                "target": {"type": "player", "id": self.player.id},
+                "remaining_rounds": 1,
+                "duration_rounds": 1,
+                "label": "Crack",
+            },
         )
 
         payload = build_state_sync(self.player).model_dump()
@@ -1826,27 +1832,30 @@ class TestCombatAbilities(WorldTestCase):
             player=self.player,
             mob=mob,
             initiative_order=self._player_first_initiative(mob),
-            active_effects=[
-                {
-                    "effect": "dot",
-                    "category": "debuff",
-                    "source": {"type": "mob", "id": mob.id},
-                    "target": {"type": "player", "id": self.player.id},
-                    "remaining_rounds": 1,
-                    "rounds_elapsed": 0,
-                    "label": "Venom",
-                    "primitives": [],
-                    "tick": {
-                        "every_rounds": 1,
-                        "component": {
-                            "type": "damage",
-                            "profile": "basic_physical",
-                            "overrides": {"multiplier": 1},
-                            "text": {"label": "Venom"},
-                        },
+        )
+        create_active_effect(
+            target=self.player,
+            source=mob,
+            encounter=encounter,
+            payload={
+                "effect": "dot",
+                "category": "debuff",
+                "source": {"type": "mob", "id": mob.id},
+                "target": {"type": "player", "id": self.player.id},
+                "remaining_rounds": 1,
+                "rounds_elapsed": 0,
+                "label": "Venom",
+                "primitives": [],
+                "tick": {
+                    "every_rounds": 1,
+                    "component": {
+                        "type": "damage",
+                        "profile": "basic_physical",
+                        "overrides": {"multiplier": 1},
+                        "text": {"label": "Venom"},
                     },
-                }
-            ],
+                },
+            },
         )
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
@@ -2265,10 +2274,8 @@ class TestCombatAbilities(WorldTestCase):
         ).damage_taken
         self.assertEqual(buffed, math.ceil(baseline * 1.2))
 
-        self.player.active_effects[0]["remaining_rounds"] = 2
-        ally.active_effects[0]["remaining_rounds"] = 2
-        self.player.save(update_fields=["active_effects"])
-        ally.save(update_fields=["active_effects"])
+        self.player.active_effect_records.update(remaining_rounds=2)
+        ally.active_effect_records.update(remaining_rounds=2)
 
         with capture_game_messages() as messages:
             dispatch_text_command(ally.id, "shout")
@@ -2298,7 +2305,7 @@ class TestCombatAbilities(WorldTestCase):
 
     def test_character_damage_buff_duration_advances_in_combat_rounds(self):
         mob = self._mob(health=self.stats["attack_power"] * 20, fights_back=False)
-        self.player.active_effects = [
+        replace_active_effects(target=self.player, source=self.player, payloads=[
             {
                 "effect": "shout",
                 "category": "buff",
@@ -2319,8 +2326,7 @@ class TestCombatAbilities(WorldTestCase):
                     }
                 ],
             }
-        ]
-        self.player.save(update_fields=["active_effects"])
+        ])
         encounter = CombatEncounter.objects.create(
             world=self.spawn_world,
             room=self.room,
@@ -2342,7 +2348,7 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(self.player.active_effects, [])
 
     def test_character_stat_modifier_adds_fixed_armor_to_effective_stats(self):
-        self.player.active_effects = [
+        replace_active_effects(target=self.player, source=self.player, payloads=[
             {
                 "effect": "guard",
                 "category": "buff",
@@ -2362,8 +2368,7 @@ class TestCombatAbilities(WorldTestCase):
                     }
                 ],
             }
-        ]
-        self.player.save(update_fields=["active_effects"])
+        ])
 
         stats = compute_stats(
             self.player.level,

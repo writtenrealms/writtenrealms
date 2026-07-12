@@ -949,10 +949,13 @@ Skip channels, reactions, bonus actions, and complex effects.
 
 ### Phase 2: First Effects
 
-- define active effect runtime schema
+- persist the unified active effect runtime schema as canonical rows
 - implement simple effect primitives
 - support stun, dot, and hot
-- route effect ticks through encounter rounds
+- route target-owned effect advancement through encounter rounds while engaged
+  and bounded actor pulses while detached
+- retain effect source attribution for remote death and reward resolution
+- distinguish spatial engagement from hostile-effect combat tagging
 - emit effect lifecycle events
 - add query-count tests for dot/hot-heavy rounds
 

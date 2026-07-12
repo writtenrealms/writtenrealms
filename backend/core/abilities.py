@@ -40,6 +40,7 @@ COMPONENT_TYPES = ("damage", "healing", "effect", "state")
 EFFECT_TYPES = ("stun", "dot", "hot")
 EFFECT_APPLY_POLICIES = ("on_resolve", "on_hit")
 EFFECT_CATEGORIES = ("buff", "debuff", "neutral")
+EFFECT_SCOPES = ("encounter", "character")
 EFFECT_TARGETS = (
     "actor",
     "self",
@@ -701,9 +702,29 @@ def _normalize_effect_component(
         field_name=f"{field_name}.apply",
     )
 
+    raw_primitives = value.get("primitives") or []
+    primitive_types = {
+        str(primitive.get("type") or "").strip().lower()
+        for primitive in raw_primitives
+        if isinstance(primitive, dict)
+    }
+    target_selector = str(value.get("target") or "ability.target").strip().lower()
+    default_scope = (
+        "character"
+        if effect_type in {"dot", "hot"}
+        or "tick" in value
+        or target_selector in {"room.allies", "room.players"}
+        or bool(primitive_types & {"combat_modifier", "stat_modifier"})
+        else "encounter"
+    )
     normalized: dict[str, Any] = {
         "type": "effect",
         "effect": effect_type,
+        "scope": _coerce_choice(
+            value.get("scope", default_scope),
+            choices=EFFECT_SCOPES,
+            field_name=f"{field_name}.scope",
+        ),
         "category": _coerce_choice(
             value.get("category", "neutral"),
             choices=EFFECT_CATEGORIES,

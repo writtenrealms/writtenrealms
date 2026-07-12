@@ -54,6 +54,13 @@ class CharMixin(models.Model):
     class Meta:
         abstract = True
 
+    @property
+    def active_effects(self):
+        """Compatibility payload backed by canonical ActiveEffect rows."""
+        from spawns.actions.effects import active_character_effects
+
+        return active_character_effects(self)
+
     @staticmethod
     def post_char_save(sender, **kwargs):
         from spawns.models import Equipment

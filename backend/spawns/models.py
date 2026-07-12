@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import uuid
 
 from django.contrib.contenttypes.fields import (
     GenericForeignKey,
@@ -189,7 +190,6 @@ class Player(CharMixin, AdventBaseModel):
     known_abilities = models.JSONField(default=list)
     ability_hotkeys = models.JSONField(default=dict)
     ability_cooldowns = models.JSONField(default=dict)
-    active_effects = models.JSONField(default=list)
     command_history = models.JSONField(default=list)
 
     def __str__(self):
@@ -319,7 +319,7 @@ class Player(CharMixin, AdventBaseModel):
             self.known_abilities = []
             self.ability_hotkeys = {}
             self.ability_cooldowns = {}
-            self.active_effects = []
+            self.active_effect_records.all().delete()
         elif self.level < leveling_config.starting_level:
             self.level = leveling_config.starting_level
             self.experience = experience_for_level(self.level, leveling_config)
@@ -583,7 +583,6 @@ class CombatEncounter(BaseModel):
     pending_player_ability = models.JSONField(default=dict)
     pending_mob_ability = models.JSONField(default=dict)
     pending_flee = models.JSONField(default=dict)
-    active_effects = models.JSONField(default=list)
     initiative_order = models.JSONField(default=list)
     opening_priority = models.JSONField(default=list)
     faceoff_override = models.BooleanField(default=False)
@@ -593,6 +592,186 @@ class CombatEncounter(BaseModel):
             models.Index(fields=['status', 'next_resolution_ts']),
             models.Index(fields=['player', 'status']),
             models.Index(fields=['mob', 'status']),
+        ]
+
+    @property
+    def active_effects(self):
+        from spawns.actions.effects import active_effect_payload, encounter_effects
+
+        return [active_effect_payload(effect) for effect in encounter_effects(self)]
+
+
+class ActiveEffect(BaseModel):
+    """Canonical runtime state for effects that follow an actor between fights."""
+
+    SCOPE_ENCOUNTER = "encounter"
+    SCOPE_CHARACTER = "character"
+    SCOPE_CHOICES = list_to_choice((SCOPE_ENCOUNTER, SCOPE_CHARACTER))
+
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='active_effects',
+    )
+    encounter = models.ForeignKey(
+        'spawns.CombatEncounter',
+        on_delete=models.SET_NULL,
+        related_name='character_effects',
+        blank=True,
+        null=True,
+    )
+    source_player = models.ForeignKey(
+        'spawns.Player',
+        on_delete=models.SET_NULL,
+        related_name='sourced_active_effects',
+        blank=True,
+        null=True,
+    )
+    source_mob = models.ForeignKey(
+        'spawns.Mob',
+        on_delete=models.SET_NULL,
+        related_name='sourced_active_effects',
+        blank=True,
+        null=True,
+    )
+    target_player = models.ForeignKey(
+        'spawns.Player',
+        on_delete=models.CASCADE,
+        related_name='active_effect_records',
+        blank=True,
+        null=True,
+    )
+    target_mob = models.ForeignKey(
+        'spawns.Mob',
+        on_delete=models.CASCADE,
+        related_name='active_effect_records',
+        blank=True,
+        null=True,
+    )
+    scope = models.TextField(
+        choices=SCOPE_CHOICES,
+        default=SCOPE_CHARACTER,
+    )
+    effect = models.SlugField(max_length=120)
+    category = models.TextField(default='neutral')
+    label = models.TextField()
+    stack_key = models.SlugField(max_length=120, blank=True)
+    stacking = models.TextField(default='independent')
+    remaining_rounds = models.PositiveIntegerField(default=1)
+    duration_rounds = models.PositiveIntegerField(default=1)
+    rounds_elapsed = models.PositiveIntegerField(default=0)
+    started_round = models.PositiveIntegerField(default=0)
+    started_round_id = models.TextField(blank=True)
+    primitives = models.JSONField(default=list)
+    tick = models.JSONField(default=dict)
+    source_snapshot = models.JSONField(default=dict)
+    is_hostile = models.BooleanField(default=False, db_index=True)
+    next_tick_ts = models.DateTimeField(db_index=True, blank=True, null=True)
+    last_tick_ts = models.DateTimeField(blank=True, null=True)
+    last_tick_token = models.TextField(blank=True)
+
+    class Meta(BaseModel.Meta):
+        indexes = [
+            models.Index(fields=['encounter', 'remaining_rounds']),
+            models.Index(fields=['target_player', 'remaining_rounds']),
+            models.Index(fields=['target_mob', 'remaining_rounds']),
+            models.Index(fields=['is_hostile', 'next_tick_ts']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(target_player__isnull=False, target_mob__isnull=True)
+                    | models.Q(target_player__isnull=True, target_mob__isnull=False)
+                ),
+                name='spawns_effect_exactly_one_target',
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(source_player__isnull=True)
+                    | models.Q(source_mob__isnull=True)
+                ),
+                name='spawns_effect_at_most_one_source',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(remaining_rounds__gte=1),
+                name='spawns_effect_remaining_rounds_positive',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(duration_rounds__gte=1),
+                name='spawns_effect_duration_rounds_positive',
+            ),
+            models.UniqueConstraint(
+                fields=['target_player', 'scope', 'stack_key'],
+                condition=(
+                    models.Q(
+                        scope='character',
+                        stacking='refresh',
+                        target_player__isnull=False,
+                    )
+                    & ~models.Q(stack_key='')
+                ),
+                name='spawns_effect_unique_player_refresh_stack',
+            ),
+            models.UniqueConstraint(
+                fields=['target_mob', 'scope', 'stack_key'],
+                condition=(
+                    models.Q(
+                        scope='character',
+                        stacking='refresh',
+                        target_mob__isnull=False,
+                    )
+                    & ~models.Q(stack_key='')
+                ),
+                name='spawns_effect_unique_mob_refresh_stack',
+            ),
+        ]
+
+
+def delete_encounter_scoped_effects(sender, instance, using, **kwargs):
+    """Keep SET_NULL provenance from orphaning encounter-owned effects."""
+    ActiveEffect.objects.using(using).filter(
+        encounter_id=instance.id,
+        scope=ActiveEffect.SCOPE_ENCOUNTER,
+    ).delete()
+
+
+models.signals.pre_delete.connect(
+    delete_encounter_scoped_effects,
+    sender=CombatEncounter,
+)
+
+
+class GameEventOutbox(BaseModel):
+    """Durable, at-least-once delivery for events produced by committed work."""
+
+    event_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    batch_id = models.UUIDField(default=uuid.uuid4, db_index=True, editable=False)
+    sequence = models.PositiveIntegerField(default=0)
+    event_type = models.TextField()
+    data = models.JSONField(default=dict)
+    recipients = models.JSONField(default=list)
+    text = models.TextField(**optional)
+    group = models.TextField(**optional)
+    connection_id = models.TextField(**optional)
+    available_ts = models.DateTimeField(default=timezone.now, db_index=True)
+    claim_token = models.UUIDField(**optional)
+    claimed_until = models.DateTimeField(db_index=True, **optional)
+    attempt_count = models.PositiveIntegerField(default=0)
+    last_error = models.TextField(blank=True, default='')
+
+
+class EventSubscriptionReceipt(BaseModel):
+    """Idempotency receipt for at-least-once event subscribers."""
+
+    event_id = models.UUIDField()
+    subscriber = models.SlugField(max_length=120)
+
+    class Meta(BaseModel.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=['event_id', 'subscriber'],
+                name='spawns_event_receipt_unique_subscriber',
+            ),
         ]
 
 

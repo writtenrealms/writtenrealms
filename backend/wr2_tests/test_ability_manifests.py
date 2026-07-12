@@ -180,6 +180,7 @@ spec:
         ability = AbilityDefinition.objects.get(world=self.world, slug="bleeding-cut")
         self.assertFalse(ability.consumes_primary_action_on_resolve)
         self.assertTrue(ability.consumes_primary_action_while_casting)
+        self.assertEqual(ability.components[0]["scope"], "character")
         self.assertFalse(
             resp.data["ability"]["manifest"]["spec"][
                 "consumes_primary_action_on_resolve"
@@ -487,6 +488,7 @@ spec:
             {
                 "type": "effect",
                 "effect": "energized-strikes",
+                "scope": "encounter",
                 "category": "buff",
                 "target": "self",
                 "duration": {"rounds": 10},
@@ -614,6 +616,7 @@ spec:
             {
                 "type": "effect",
                 "effect": "ward",
+                "scope": "encounter",
                 "category": "buff",
                 "target": "self",
                 "duration": {"rounds": 3},
@@ -674,6 +677,7 @@ spec:
             {
                 "type": "effect",
                 "effect": "shout",
+                "scope": "character",
                 "category": "buff",
                 "target": "room.allies",
                 "duration": {"rounds": 4},
@@ -735,6 +739,7 @@ spec:
             {
                 "type": "effect",
                 "effect": "shield-wall",
+                "scope": "character",
                 "category": "buff",
                 "target": "self",
                 "duration": {"rounds": 3},

@@ -453,10 +453,13 @@ combat:
 
 Mob abilities use the same round-based cast time and cooldown fields as player
 abilities. If no loadout entry is eligible, the mob falls back to its normal
-basic attack. Current mob loadout execution supports damage, healing, and
-encounter-scoped effects such as stun, DOT, HOT, resource ticks, and barriers.
-Character state components and room-wide player buff components are ignored for
-mob actors until mob runtime state is expanded.
+basic attack. Current mob loadout execution supports damage, healing, and active
+effects such as stun, DOT, HOT, resource ticks, and barriers. DOTs, HOTs, and
+other `scope: character` effects can target either players or mobs and survive
+fleeing; `scope: encounter` effects end with the fight. A mob's lingering DOT
+can therefore defeat a player after the player escapes, using the mob as the
+recorded damage source. Character state components and room-wide player buff
+components are still ignored for mob actors.
 
 ## Transition Notes
 

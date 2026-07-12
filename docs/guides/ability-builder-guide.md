@@ -614,6 +614,25 @@ spec:
 
 Stun prevents the target's primary action while it is active.
 
+## Effect Scope
+
+Active effects declare whether their lifetime belongs to one fight or follows
+their target:
+
+```yaml
+scope: character  # or encounter
+```
+
+`character` effects follow either a player or mob across encounter boundaries.
+`encounter` effects are removed when their owning fight ends. When `scope` is
+omitted, DOTs, HOTs, ticking effects, room-wide player effects, and stat or
+combat modifiers default to `character`; other effects such as stun and
+fight-specific barriers default to `encounter`.
+
+Use `character` for poison, bleeding, curses, regeneration, and other effects
+that should survive fleeing. Use `encounter` for effects whose meaning depends
+on the current opponents or fight state.
+
 ## Damage-Over-Time
 
 Use `dot` for periodic damage:
@@ -651,8 +670,14 @@ spec:
       apply: on_hit
 ```
 
-DOT ticks should resolve during encounter rounds, not as separate wall-clock
-timers. DOT application consumes the primary action by default; set
+DOTs are character-scoped by default. While the target is engaged, they advance
+at the start of the target's combat rounds. After the target leaves combat, the
+same effect advances through the world's bounded effect pulse; fleeing never
+removes it. A lethal tick retains its original source, so a player receives
+normal kill, experience, gold, loot-condition, and quest credit even when the
+player is no longer in the mob's room.
+
+DOT application consumes the primary action by default; set
 `consumes_primary_action_on_resolve: false` when the DOT is meant to be
 supplemental damage alongside the caster's normal attack. Application messages
 use the effect label, such as `You apply Bleed on a guard.` for the caster, `A

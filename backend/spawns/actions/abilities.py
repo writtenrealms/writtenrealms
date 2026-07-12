@@ -500,6 +500,7 @@ def execute_character_effect_component(
     room: Room | None = None,
     hit_landed: bool = False,
     round_id: str | None = None,
+    encounter: CombatEncounter | None = None,
 ) -> list[GameEvent]:
     if component.get("type") != "effect":
         return []
@@ -524,11 +525,14 @@ def execute_character_effect_component(
             source=player,
             target=target,
             round_id=round_id,
+            started_round=int(getattr(encounter, "round_number", 0) or 0),
         )
-        action = refresh_or_add_character_effect(target, effect)
-        target.save(update_fields=["active_effects"])
-        if target.pk == player.pk:
-            player.active_effects = target.active_effects
+        action = refresh_or_add_character_effect(
+            target,
+            effect,
+            source=player,
+            encounter=encounter,
+        )
 
         events.append(
             GameEvent(
@@ -1380,7 +1384,7 @@ class AbilityAction:
             _ability_ack(player=player, ability=ability, replaced=False, target=target_mob)
         ]
         room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
-        encounter = CombatEncounter(
+        encounter = CombatEncounter.objects.create(
             world=player.world,
             room=room,
             player=player,
@@ -1400,7 +1404,6 @@ class AbilityAction:
             encounter,
             player=player,
             target_mob=target_mob,
-            save=False,
         )
         for round_no in range(1, combat_actions.MAX_AUTO_RESOLVE_ROUNDS + 1):
             step = combat_actions._apply_encounter_round(

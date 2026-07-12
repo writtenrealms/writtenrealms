@@ -233,7 +233,15 @@ The runtime pipeline is fixed by the engine:
 11. Enforce minimum output.
 12. Persist health changes.
 13. Emit combat events.
-14. Resolve death, corpse presentation, graveyard routing, and rewards.
+14. Resolve death, corpse presentation, graveyard routing, and rewards using the
+    damage source's durable attribution rather than current encounter membership.
+
+For periodic damage, health mutation, effect advancement, lethal resolution,
+and reward assignment occur in one transaction under the target actor lock. A
+stable tick token prevents a retried encounter step or detached effect pulse
+from applying the same damage and rewards twice. The credited player may be in
+a different room; the corpse and room broadcast always belong to the defeated
+target's actual room.
 
 Builders can tune profile knobs, but they cannot reorder this pipeline. That is
 intentional: predictable pipeline ordering keeps combat debuggable and cheap.

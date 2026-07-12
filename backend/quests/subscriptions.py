@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Callable
+import uuid
 
-from spawns.models import Player
+from django.db import transaction
+
+from spawns.models import EventSubscriptionReceipt, Player
 from quests.services.discovery import refresh_player_quests
 from quests.services.interactions import build_inspect_guidance_events, build_talk_guidance_events
 from quests.services.progress import progress_player_quests_for_event
@@ -44,16 +48,35 @@ def _refresh_and_progress(
     if not player:
         return None, None, None
 
-    refresh_result = refresh_player_quests(
-        player,
-        allow_auto_start=allow_auto_start,
-    )
-    progress_result = progress_player_quests_for_event(
-        player,
-        event_type=event_type,
-        event_data=event_data,
-    )
-    return player, refresh_result, progress_result
+    try:
+        event_id = uuid.UUID(str(event_data.get("_event_id") or ""))
+    except (TypeError, ValueError, AttributeError):
+        event_id = None
+
+    def _progress(current_player):
+        refresh_result = refresh_player_quests(
+            current_player,
+            allow_auto_start=allow_auto_start,
+        )
+        progress_result = progress_player_quests_for_event(
+            current_player,
+            event_type=event_type,
+            event_data=event_data,
+        )
+        return current_player, refresh_result, progress_result
+
+    if event_id is None:
+        return _progress(player)
+
+    with transaction.atomic():
+        player = Player.objects.select_for_update().get(pk=player.pk)
+        _, created = EventSubscriptionReceipt.objects.get_or_create(
+            event_id=event_id,
+            subscriber="quests",
+        )
+        if not created:
+            return player, None, None
+        return _progress(player)
 
 
 def _publish_player_events(
@@ -176,6 +199,45 @@ def _on_quest_item_delivered(event_data: dict, actor_key: str | None, connection
 
 
 def _on_quest_mob_killed(event_data: dict, actor_key: str | None, connection_id: str | None) -> None:
+    try:
+        event_id = uuid.UUID(str(event_data.get("_event_id") or ""))
+    except (TypeError, ValueError, AttributeError):
+        event_id = None
+    if event_id is not None:
+        player = _resolve_player(_extract_actor_key(event_data, actor_key))
+        if not player:
+            return
+        with transaction.atomic():
+            player = Player.objects.select_for_update().get(pk=player.pk)
+            _, created = EventSubscriptionReceipt.objects.get_or_create(
+                event_id=event_id,
+                subscriber="quests",
+            )
+            if not created:
+                return
+            refresh_result = refresh_player_quests(player, allow_auto_start=False)
+            progress_result = progress_player_quests_for_event(
+                player,
+                event_type="quest.mob.killed",
+                event_data=event_data,
+            )
+            derived_events = [
+                *(refresh_result.events if refresh_result else []),
+                *(progress_result.events if progress_result else []),
+            ]
+            if connection_id:
+                derived_events = [
+                    replace(event, connection_id=connection_id)
+                    if player.key in event.recipients
+                    else event
+                    for event in derived_events
+                ]
+            if derived_events:
+                from spawns.events import enqueue_game_events
+
+                enqueue_game_events(derived_events)
+        return
+
     player, refresh_result, progress_result = _refresh_and_progress(
         event_type="quest.mob.killed",
         event_data=event_data,

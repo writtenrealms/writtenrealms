@@ -142,6 +142,14 @@ takes no primary action. On the following combat step, flee resolves at the top
 of the step before effect ticks, attacks, or other damage can occur; the
 encounter finishes and the player moves to the chosen room.
 
+Finishing the encounter ends spatial engagement and all encounter-scoped
+effects. It does not remove character-scoped effects. Lingering DOTs, HOTs,
+curses, and buffs continue on their target after movement. A harmful periodic
+effect keeps both its live source and target combat-tagged until it expires,
+is removed, or its target dies. Combat tagging suppresses normal combat-exit
+behavior such as regeneration, but it does not allow attacks or targeting
+across rooms.
+
 ### Combat Resolution Step
 
 A combat resolution step is one iteration of encounter processing.

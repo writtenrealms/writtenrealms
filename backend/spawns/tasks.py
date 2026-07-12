@@ -16,7 +16,7 @@ from django.db.models import F, Q
 from spawns.services import WorldGate
 from spawns.models import CombatEncounter, Mob, Player
 from spawns.serializers import PlayerConfigSerializer
-from spawns.events import GameEvent, publish_events
+from spawns.events import GameEvent, flush_game_event_outbox, publish_events
 from spawns.handlers import (
     ActorNotFoundError,
     dispatch_command,
@@ -611,13 +611,20 @@ def _regen_mob(mob: Mob, *, in_combat: bool = False) -> bool:
 
 def run_game_heartbeat() -> dict[str, int]:
     from spawns.actions.abilities import ability_state_event, decrement_ability_cooldowns
-    from spawns.actions.effects import advance_character_effect_durations
+    from spawns.actions.combat import resolve_due_character_effects
+    from spawns.actions.effects import (
+        combat_tagged_actor_ids,
+    )
 
     players_regenerated = 0
     player_cooldowns_updated = 0
     player_effects_updated = 0
     mobs_regenerated = 0
     mobs_roamed = 0
+
+    # Recover any effects whose state committed before a previous worker died
+    # while publishing their events.
+    flush_game_event_outbox(publisher=publish_events)
 
     active_players = Player.objects.filter(
         in_game=True,
@@ -634,7 +641,6 @@ def run_game_heartbeat() -> dict[str, int]:
         "known_abilities",
         "ability_hotkeys",
         "ability_cooldowns",
-        "active_effects",
     )
     active_world_ids = list(active_players.values_list("world_id", flat=True).distinct())
     active_combat_player_ids = set(
@@ -652,6 +658,9 @@ def run_game_heartbeat() -> dict[str, int]:
             mob_id__isnull=False,
         ).values_list("mob_id", flat=True)
     )
+    tagged_player_ids, tagged_mob_ids = combat_tagged_actor_ids()
+    active_combat_player_ids.update(tagged_player_ids)
+    active_combat_mob_ids.update(tagged_mob_ids)
 
     for player in active_players.iterator(chunk_size=200):
         actor_update = _regen_player(
@@ -671,20 +680,32 @@ def run_game_heartbeat() -> dict[str, int]:
             )
         if player.id not in active_combat_player_ids:
             cooldowns_changed = decrement_ability_cooldowns(player)
-            effects_changed = advance_character_effect_durations(player)
             update_fields = []
             if cooldowns_changed:
                 update_fields.append("ability_cooldowns")
                 player_cooldowns_updated += 1
-            if effects_changed:
-                update_fields.append("active_effects")
-                player_effects_updated += 1
             if update_fields:
                 player.save(update_fields=update_fields)
+            if cooldowns_changed:
                 publish_events(
                     [ability_state_event(player)],
                     actor_key=player.key,
                 )
+
+    effect_events = resolve_due_character_effects(
+        world_ids=active_world_ids,
+        persist_events=True,
+    )
+    if effect_events:
+        player_effects_updated = len(
+            {
+                recipient
+                for event in effect_events
+                if event.type == "player.abilities.update"
+                for recipient in event.recipients
+            }
+        )
+        flush_game_event_outbox(publisher=publish_events)
 
     if active_world_ids:
         mobs_qs = (

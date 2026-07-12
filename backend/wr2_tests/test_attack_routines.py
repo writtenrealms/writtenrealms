@@ -11,6 +11,7 @@ from wr2_tests.utils import (
     apply_basic_stat_system,
     capture_game_messages,
     dispatch_text_command,
+    replace_active_effects,
 )
 
 
@@ -176,7 +177,7 @@ class TestAttackRoutines(WorldTestCase):
     def test_active_effect_adds_extra_mainhand_strike(self):
         weapon = self._weapon("Steel Sword", weapon_damage=5, container=self.player.equipment)
         self.player.equipment.equip(weapon, adv_consts.EQUIPMENT_SLOT_WEAPON)
-        self.player.active_effects = [
+        replace_active_effects(target=self.player, source=self.player, payloads=[
             {
                 "effect": "battle-trance",
                 "remaining_rounds": 3,
@@ -195,8 +196,7 @@ class TestAttackRoutines(WorldTestCase):
                     }
                 ],
             }
-        ]
-        self.player.save(update_fields=["active_effects"])
+        ])
         mob = Mob.objects.create(
             world=self.spawn_world,
             room=self.room,
