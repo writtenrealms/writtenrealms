@@ -19,6 +19,15 @@
 - For ambient issuer command context direction, see `docs/architecture/ambient-command-issuers-plan.md`.
 - Any feature that needs conditional logic must use the existing WR2 condition framework (`backend/core/condition_dsl.py`) rather than inventing a new predicate/condition format.
 
+## Performance and Scalability (Paramount)
+
+- Performance and scalability are top-level, non-negotiable requirements for WR2. WR1 was abandoned because it could not scale beyond a small number of simultaneous players; WR2 must support at least hundreds of concurrent players and retain a credible path to thousands.
+- Every addition, modification, bug fix, and architectural decision must explicitly evaluate its performance impact under concurrent load. Do not assume that behavior which is acceptable for a few dozen players will remain acceptable at the required scale.
+- Pay particular attention to database query counts and indexes, N+1 queries, synchronous work in request or game-processing paths, queue fan-out and backpressure, locks and contention, repeated serialization or network traffic, cache behavior, memory growth, and any work that scales per player, room, object, event, or tick.
+- When a meaningfully more performant implementation is identified, pursue it as part of the change when practical. Prefer bounded, batched, indexed, cached, event-driven, and asynchronous approaches where appropriate.
+- Keep performance improvements maintainable. Avoid optimizations whose complexity would make the system too difficult for agents to understand, modify, test, or verify; when that tradeoff is real, choose the simplest design that still has a credible scaling path and document the decision.
+- For performance-sensitive paths, measure or profile rather than relying only on intuition, add representative performance or regression coverage when practical, and summarize the expected performance impact and relevant evidence in the PR.
+
 ## Build, Test, and Development Commands
 
 - `docker-compose up -d` starts the full stack in the background.
