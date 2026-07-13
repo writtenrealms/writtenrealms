@@ -14,12 +14,12 @@ Use this skill as a local authoring assistant for Written Realms mob definitions
 
 ## Workflow
 
-1. Run `scripts/db_mob_context.py context --mob-definition-id <id>`.
+1. Run `scripts/db_mob_context.py context --mob-definition-id <id>`. Always read the returned world context before drafting. It includes the current world's description; for an instance world, it also includes the base world's description.
    - If Docker requires sudo, set `WR_MOB_DESCRIBER_DOCKER_CMD="sudo docker compose"`.
    - Pass `--world-id <id>` when the user provides a world ID, as a guard against editing the wrong world.
-2. Use only the currently defined values of `name`, `notes`, `description`, and `room_description` as source material. Do not use mechanics, stats, keywords, factions, or other model fields unless the user explicitly supplies them as authoring context.
+2. Use only the currently defined values of `name`, `notes`, `description`, and `room_description` as mob-specific source material. Use the world description as broader setting context. For an instance world, use its description as the local lens and its base world's description as the broader setting anchor. Do not use mechanics, stats, keywords, factions, or other model fields unless the user explicitly supplies them as authoring context.
 3. Treat a blank name, `a new mob`, or `Unnamed Mob` case-insensitively as a missing name. Treat a blank `description` as missing. Treat `room_description` as missing when it is blank or contains only the creation default `<name> is here.`, ignoring capitalization and whitespace differences.
-4. Stop without generating or applying anything when none of the four source fields contains usable material. Report that the mob definition needs at least one authoring clue.
+4. Stop without generating or applying anything when none of the four mob-specific source fields contains usable material. A world description supplies setting context but does not by itself identify a mob. Report that the mob definition needs at least one authoring clue.
 5. Stop and report that the definition is already complete when no target fields are missing, unless the user explicitly asked for a revision.
 6. Generate every missing target field together so the three components agree:
    - `name`
@@ -39,6 +39,7 @@ For bulk work, inspect and generate each mob independently. Write paired mobs or
 - Write `room_description` as one complete present-tense sentence of roughly 6-15 words, ending in a period. Give the mob one characteristic, repeatable action or posture.
 - Write `description` as one paragraph of 1-4 sentences, scaling length to importance. Keep all behavior habitual and repeatable.
 - Make missing fields consistent with every populated source field. Do not duplicate the room description as the detailed description's opening sentence.
+- Anchor details in the supplied world descriptions without inventing a mob's role in world lore. When instance and base-world descriptions are both present, respect both and prefer the instance description for local atmosphere or scope.
 - Express identity, temperament, threat, humor, and pathos through visible evidence. Avoid exposition and unsupported interiority.
 - Never introduce game mechanics, stats, levels, meta-language, or one-time events.
 

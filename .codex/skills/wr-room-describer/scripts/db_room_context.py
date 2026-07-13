@@ -99,7 +99,14 @@ def run_django(payload: dict[str, Any]) -> dict[str, Any]:
         directions = list(adv_consts.DIRECTIONS)
 
         def room_queryset():
-            return Room.objects.select_related("world", "zone", *directions)
+            return Room.objects.select_related(
+                "world",
+                "world__context",
+                "world__instance_of",
+                "world__context__instance_of",
+                "zone",
+                *directions,
+            )
 
         def load_room(room_id, world_id=None, for_update=False):
             if for_update:
@@ -139,6 +146,30 @@ def run_django(payload: dict[str, Any]) -> dict[str, Any]:
                 "y": room.y,
                 "z": room.z,
                 "exits": exits,
+            }}
+
+        def serialize_world(world):
+            if world is None:
+                return None
+            return {{
+                "id": world.id,
+                "name": world.name or "",
+                "description": world.description or "",
+            }}
+
+        def serialize_world_context(world):
+            instance_world = None
+            if world is not None:
+                if world.instance_of_id:
+                    instance_world = world
+                elif world.context_id and world.context.instance_of_id:
+                    instance_world = world.context
+            return {{
+                "world": serialize_world(world),
+                "instance_world": serialize_world(instance_world),
+                "base_world": serialize_world(
+                    instance_world.instance_of if instance_world is not None else None
+                ),
             }}
 
         def coordinate_neighbor(room, direction):
@@ -197,6 +228,9 @@ def run_django(payload: dict[str, Any]) -> dict[str, Any]:
                     if neighbor is not None:
                         spatial_neighbors.append(neighbor)
             print(json.dumps({{
+                "world_context": serialize_world_context(
+                    root_room.world if root_room is not None else None
+                ),
                 "rooms": rooms,
                 "spatial_neighbors": spatial_neighbors,
                 "missing": missing,
@@ -282,6 +316,21 @@ def print_context(data: dict[str, Any]) -> None:
     root = rooms[0]
     print(f"# Room Context: {root['id']} - {root['name']}")
     print(f"World: {root['world_id']} - {root['world_name']}")
+    world_context = data["world_context"]
+    world = world_context["world"]
+    instance_world = world_context["instance_world"]
+    base_world = world_context["base_world"]
+    print()
+    print("## World Context")
+    if instance_world:
+        print(f"### Instance World: {instance_world['id']} - {instance_world['name']}")
+        print(instance_world["description"] or "[empty]")
+        print()
+        print(f"### Base World: {base_world['id']} - {base_world['name']}")
+        print(base_world["description"] or "[empty]")
+    elif world:
+        print(f"### World: {world['id']} - {world['name']}")
+        print(world["description"] or "[empty]")
     spatial_neighbors = data.get("spatial_neighbors", [])
     if spatial_neighbors:
         print()
