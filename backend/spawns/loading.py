@@ -17,6 +17,11 @@ def run_spawn_plans_for_world(world, zone_id=None, initial=False, repopulate=Fal
         'doors': [],
         'spawn_plans': [],
     }
+    from spawns.spawn_plans import SpawnReconcileContext, run_spawn_plans
+
+    reconcile_context = SpawnReconcileContext(
+        authored_world_id=world.context_id,
+    )
 
     if zone_id:
         zone_qs = Zone.objects.filter(pk=zone_id)
@@ -61,13 +66,13 @@ def run_spawn_plans_for_world(world, zone_id=None, initial=False, repopulate=Fal
                     'name': door.name,
                 })
 
-        from spawns.spawn_plans import run_spawn_plans
         output['spawn_plans'].extend(
             run_spawn_plans(
                 world=world,
                 zone_id=zone.id,
                 initial=initial,
                 repopulate=repopulate,
+                reconcile_context=reconcile_context,
             )
         )
 

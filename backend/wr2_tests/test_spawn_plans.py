@@ -1,14 +1,16 @@
 import yaml
 
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from builders.models import ItemDefinition, MobDefinition, Path, PathRoom, SpawnEntry, SpawnPlan, SpawnPlacement, SpawnPlanRun
 from config import constants as adv_consts
 from spawns.loading import run_spawn_plans_for_world
-from spawns.models import Mob
+from spawns.models import Item, Mob
 from spawns.tasks import run_mob_roaming
 from tests.base import WorldTestCase
-from worlds.models import Room, World, WorldConfig
+from worlds.models import Room, RoomFlag, World, WorldConfig
 from worlds.services import WorldSmith
 
 
@@ -771,6 +773,101 @@ class TestSpawnPlanRuntime(WorldTestCase):
         placement = SpawnPlacement.objects.get(run__plan=self.plan)
         self.assertEqual(placement.room, self.room)
 
+    def test_zone_target_excludes_no_roam_room(self):
+        eligible_room = Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="East Yard",
+            x=1,
+            y=0,
+            z=0,
+        )
+        RoomFlag.objects.create(
+            room=self.room,
+            code=adv_consts.ROOM_FLAG_NO_ROAM,
+        )
+        self.entry.target = {"zone": f"zone@{self.zone.relative_id}"}
+        self.entry.count = 8
+        self.entry.save(update_fields=["target", "count"])
+        spawn_world = self.world.create_spawn_world()
+
+        WorldSmith(spawn_world).start()
+
+        mobs = Mob.objects.filter(world=spawn_world, definition=self.mob_definition)
+        self.assertEqual(mobs.count(), 8)
+        self.assertEqual(set(mobs.values_list("room_id", flat=True)), {eligible_room.id})
+        self.assertEqual(
+            set(SpawnPlacement.objects.filter(run__plan=self.plan).values_list("room_id", flat=True)),
+            {eligible_room.id},
+        )
+
+    def test_path_target_excludes_no_roam_room(self):
+        eligible_room = Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="East Yard",
+            x=1,
+            y=0,
+            z=0,
+        )
+        path = Path.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Patrol Loop",
+        )
+        PathRoom.objects.create(path=path, room=self.room)
+        PathRoom.objects.create(path=path, room=eligible_room)
+        RoomFlag.objects.create(
+            room=self.room,
+            code=adv_consts.ROOM_FLAG_NO_ROAM,
+        )
+        self.entry.target = {"path": f"path@{path.relative_id}"}
+        self.entry.count = 8
+        self.entry.save(update_fields=["target", "count"])
+        spawn_world = self.world.create_spawn_world()
+
+        WorldSmith(spawn_world).start()
+
+        mobs = Mob.objects.filter(world=spawn_world, definition=self.mob_definition)
+        self.assertEqual(mobs.count(), 8)
+        self.assertEqual(set(mobs.values_list("room_id", flat=True)), {eligible_room.id})
+        self.assertEqual(
+            set(SpawnPlacement.objects.filter(run__plan=self.plan).values_list("room_id", flat=True)),
+            {eligible_room.id},
+        )
+
+    def test_path_target_falls_back_when_entry_room_is_no_roam(self):
+        eligible_room = Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="East Yard",
+            x=1,
+            y=0,
+            z=0,
+        )
+        path = Path.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Patrol Loop",
+            entry_room=self.room,
+        )
+        PathRoom.objects.create(path=path, room=self.room)
+        PathRoom.objects.create(path=path, room=eligible_room)
+        RoomFlag.objects.create(
+            room=self.room,
+            code=adv_consts.ROOM_FLAG_NO_ROAM,
+        )
+        self.entry.target = {"path": f"path@{path.relative_id}"}
+        self.entry.save(update_fields=["target"])
+        spawn_world = self.world.create_spawn_world()
+
+        WorldSmith(spawn_world).start()
+
+        mob = Mob.objects.get(world=spawn_world, definition=self.mob_definition)
+        self.assertEqual(mob.room, eligible_room)
+        self.assertEqual(mob.spawn_placement.room, eligible_room)
+        self.assertEqual(mob.roams, path)
+
     def test_world_start_resolves_zone_ref_targets(self):
         self.entry.target = {"zone": f"zone@{self.zone.relative_id}"}
         self.entry.save(update_fields=["target"])
@@ -821,6 +918,129 @@ class TestSpawnPlanRuntime(WorldTestCase):
         placement = run.placements.get()
         self.assertEqual(placement.source_type, "mobdefinition")
         self.assertEqual(placement.source_id, self.mob_definition.id)
+
+    def test_nested_roaming_mob_does_not_load_with_item_in_no_roam_room(self):
+        item_definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="training-crate",
+            name="a training crate",
+        )
+        self.entry.source = f"itemdefinition.{item_definition.slug}"
+        self.entry.target = {"zone": f"zone@{self.zone.relative_id}"}
+        self.entry.traits = {}
+        self.entry.save(update_fields=["source", "target", "traits"])
+        SpawnEntry.objects.create(
+            plan=self.plan,
+            slug="crate-guard",
+            order=2,
+            source=f"mobdefinition.{self.mob_definition.slug}",
+            target={"entry": self.entry.slug},
+            count=1,
+        )
+        RoomFlag.objects.create(
+            room=self.room,
+            code=adv_consts.ROOM_FLAG_NO_ROAM,
+        )
+        spawn_world = self.world.create_spawn_world()
+
+        WorldSmith(spawn_world).start()
+
+        item = Item.objects.get(
+            world=spawn_world,
+            definition=item_definition,
+        )
+        self.assertEqual(item.container, self.room)
+        self.assertFalse(Mob.objects.filter(world=spawn_world).exists())
+
+    def test_direct_room_target_ignores_no_roam_on_initial_load_and_respawn(self):
+        RoomFlag.objects.create(
+            room=self.room,
+            code=adv_consts.ROOM_FLAG_NO_ROAM,
+        )
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        mob = Mob.objects.get(world=spawn_world, definition=self.mob_definition)
+        self.assertEqual(mob.room, self.room)
+        self.assertIsNone(mob.roams)
+        mob.delete()
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 1)
+        replacement = Mob.objects.get(world=spawn_world, definition=self.mob_definition)
+        self.assertEqual(replacement.room, self.room)
+        self.assertIsNone(replacement.roams)
+
+    def test_stale_zone_placements_use_one_no_roam_query_and_skip_respawn(self):
+        placement_count = 12
+        second_placement_count = 3
+        self.entry.target = {"zone": f"zone@{self.zone.relative_id}"}
+        self.entry.count = placement_count
+        self.entry.save(update_fields=["target", "count"])
+        second_plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug="training-annex",
+            name="Training Annex",
+            respawn_policy={"mode": "fixed", "seconds": 0},
+        )
+        SpawnEntry.objects.create(
+            plan=second_plan,
+            slug="annex-dummy",
+            source=f"mobdefinition.{self.mob_definition.slug}",
+            target={"zone": f"zone@{self.zone.relative_id}"},
+            count=second_placement_count,
+        )
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        total_placements = placement_count + second_placement_count
+        self.assertEqual(Mob.objects.filter(world=spawn_world).count(), total_placements)
+
+        with CaptureQueriesContext(connection) as healthy_captured:
+            healthy_output = run_spawn_plans_for_world(world=spawn_world)
+
+        healthy_room_flag_queries = [
+            query["sql"]
+            for query in healthy_captured.captured_queries
+            if "worlds_roomflag" in query["sql"].lower()
+        ]
+        self.assertEqual(sum(result["spawned"] for result in healthy_output["spawn_plans"]), 0)
+        self.assertEqual(healthy_room_flag_queries, [])
+
+        Mob.objects.filter(world=spawn_world).delete()
+        no_roam_flag = RoomFlag.objects.create(
+            room=self.room,
+            code=adv_consts.ROOM_FLAG_NO_ROAM,
+        )
+
+        with CaptureQueriesContext(connection) as captured:
+            output = run_spawn_plans_for_world(world=spawn_world)
+
+        room_flag_queries = [
+            query["sql"]
+            for query in captured.captured_queries
+            if "worlds_roomflag" in query["sql"].lower()
+        ]
+        self.assertEqual(sum(result["spawned"] for result in output["spawn_plans"]), 0)
+        self.assertFalse(Mob.objects.filter(world=spawn_world).exists())
+        self.assertEqual(len(room_flag_queries), 1, "\n".join(room_flag_queries))
+        self.assertEqual(
+            SpawnPlacement.objects.filter(run__plan=self.plan).count(),
+            placement_count,
+        )
+        self.assertEqual(
+            SpawnPlacement.objects.filter(run__plan=second_plan).count(),
+            second_placement_count,
+        )
+
+        no_roam_flag.delete()
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        self.assertEqual(
+            sum(result["spawned"] for result in output["spawn_plans"]),
+            total_placements,
+        )
+        self.assertEqual(Mob.objects.filter(world=spawn_world).count(), total_placements)
 
     def test_spawn_plan_runner_reconciles_missing_spawn_plan_copy(self):
         spawn_world = self.world.create_spawn_world()
@@ -908,8 +1128,20 @@ class TestSpawnPlanRuntime(WorldTestCase):
         self.assertEqual({mob.room_id for mob in mobs}, {destination.id})
         group_id = mobs[0].group_id
         follower = next(mob for mob in mobs if mob.definition_id == archer_definition.id)
+        no_roam_flag = RoomFlag.objects.create(
+            room=destination,
+            code=adv_consts.ROOM_FLAG_NO_ROAM,
+        )
         follower.delete()
 
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 0)
+        mobs = list(Mob.objects.filter(world=spawn_world).order_by("id"))
+        self.assertEqual(len(mobs), 1)
+        self.assertEqual(mobs[0].room_id, destination.id)
+
+        no_roam_flag.delete()
         output = run_spawn_plans_for_world(world=spawn_world)
 
         self.assertEqual(output["spawn_plans"][0]["spawned"], 1)
@@ -918,8 +1150,18 @@ class TestSpawnPlanRuntime(WorldTestCase):
         self.assertEqual({mob.room_id for mob in mobs}, {destination.id})
         self.assertEqual({mob.group_id for mob in mobs}, {group_id})
 
+        origin_no_roam_flag = RoomFlag.objects.create(
+            room=self.room,
+            code=adv_consts.ROOM_FLAG_NO_ROAM,
+        )
         for mob in mobs:
             mob.delete()
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 0)
+        self.assertFalse(Mob.objects.filter(world=spawn_world).exists())
+
+        origin_no_roam_flag.delete()
         output = run_spawn_plans_for_world(world=spawn_world)
 
         self.assertEqual(output["spawn_plans"][0]["spawned"], 2)

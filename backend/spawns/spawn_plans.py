@@ -32,7 +32,7 @@ from core.mob_traits import (
     trait_keys,
     trait_modifiers,
 )
-from worlds.models import Room, World, Zone
+from worlds.models import Room, RoomFlag, World, Zone
 
 
 SOURCE_MODELS = {
@@ -47,6 +47,25 @@ SOURCE_MODELS = {
 INHERITED_INSTANCE_SOURCE_MODELS = {ItemBundle, ItemDefinition, MobDefinition}
 COHORT_RESPAWN_REFILL_MISSING = "refill_missing"
 COHORT_RESPAWN_POLICIES = {COHORT_RESPAWN_REFILL_MISSING}
+
+
+@dataclass
+class SpawnReconcileContext:
+    """Lazily cache canonical room flags for one spawn-world reconciliation."""
+
+    authored_world_id: int
+    _no_roam_room_ids: set[int] | None = None
+
+    def room_is_no_roam(self, room_id: int) -> bool:
+        if self._no_roam_room_ids is None:
+            self._no_roam_room_ids = set(
+                RoomFlag.objects.filter(
+                    room__world_id=self.authored_world_id,
+                    code=adv_consts.ROOM_FLAG_NO_ROAM,
+                ).values_list("room_id", flat=True)
+            )
+        return room_id in self._no_roam_room_ids
+
 
 @dataclass(frozen=True)
 class ResolvedSource:
@@ -294,7 +313,14 @@ def _rooms_for_zone_target(zone: Zone, *, source_type: str) -> list[Room]:
 
 def _rooms_for_path_target(path: Path, *, source_type: str) -> list[Room]:
     if path.entry_room_id:
-        return [path.entry_room]
+        entry_rooms = Room.objects.filter(pk=path.entry_room_id)
+        if source_type.startswith("mob"):
+            entry_rooms = entry_rooms.exclude(
+                flags__code=adv_consts.ROOM_FLAG_NO_ROAM,
+            )
+        entry_room = entry_rooms.first()
+        if entry_room is not None:
+            return [entry_room]
     rooms_qs = path.rooms.all()
     if source_type.startswith("mob"):
         rooms_qs = rooms_qs.exclude(flags__code=adv_consts.ROOM_FLAG_NO_ROAM)
@@ -319,28 +345,67 @@ def _choose_room_for_entry(
     entry: SpawnEntry,
     source_type: str,
     rng: random.Random,
+    room_choice_cache: dict[
+        tuple[int, str],
+        tuple[list[Room], dict[str, Any]],
+    ] | None = None,
 ) -> tuple[Room, dict[str, Any]]:
+    cache_key = (entry.id, source_type)
+    if room_choice_cache is not None and cache_key in room_choice_cache:
+        rooms, state = room_choice_cache[cache_key]
+        if state["target_type"] == "room":
+            return rooms[0], dict(state)
+        return rooms[rng.randrange(0, len(rooms))], dict(state)
+
+    def remember(rooms: list[Room], state: dict[str, Any]) -> None:
+        if room_choice_cache is not None:
+            room_choice_cache[cache_key] = (rooms, state)
+
     target = _target_mapping(entry)
     if target.get("room"):
-        room = _resolve_room(world=world, value=target.get("room"), field_name=f"entries.{entry.slug}.target.room")
-        return room, {"target_type": "room", "target_id": room.id}
+        room = _resolve_room(
+            world=world,
+            value=target.get("room"),
+            field_name=f"entries.{entry.slug}.target.room",
+        )
+        state = {"target_type": "room", "target_id": room.id}
+        remember([room], state)
+        return room, dict(state)
     if target.get("room_ref"):
-        room = _resolve_room(world=world, value=target.get("room_ref"), field_name=f"entries.{entry.slug}.target.room_ref")
-        return room, {"target_type": "room", "target_id": room.id}
+        room = _resolve_room(
+            world=world,
+            value=target.get("room_ref"),
+            field_name=f"entries.{entry.slug}.target.room_ref",
+        )
+        state = {"target_type": "room", "target_id": room.id}
+        remember([room], state)
+        return room, dict(state)
     if target.get("zone"):
-        zone = _resolve_zone(world=world, value=target.get("zone"), field_name=f"entries.{entry.slug}.target.zone")
+        zone = _resolve_zone(
+            world=world,
+            value=target.get("zone"),
+            field_name=f"entries.{entry.slug}.target.zone",
+        )
         rooms = _rooms_for_zone_target(zone, source_type=source_type)
         if not rooms:
             raise serializers.ValidationError(f"Spawn entry '{entry.slug}' zone target has no eligible rooms.")
+        state = {"target_type": "zone", "target_id": zone.id}
+        remember(rooms, state)
         room = rooms[rng.randrange(0, len(rooms))]
-        return room, {"target_type": "zone", "target_id": zone.id}
+        return room, dict(state)
     if target.get("path"):
-        path = _resolve_path(world=world, value=target.get("path"), field_name=f"entries.{entry.slug}.target.path")
+        path = _resolve_path(
+            world=world,
+            value=target.get("path"),
+            field_name=f"entries.{entry.slug}.target.path",
+        )
         rooms = _rooms_for_path_target(path, source_type=source_type)
         if not rooms:
             raise serializers.ValidationError(f"Spawn entry '{entry.slug}' path target has no eligible rooms.")
+        state = {"target_type": "path", "target_id": path.id}
+        remember(rooms, state)
         room = rooms[rng.randrange(0, len(rooms))]
-        return room, {"target_type": "path", "target_id": path.id}
+        return room, dict(state)
     raise serializers.ValidationError(f"Spawn entry '{entry.slug}' must target a room, zone, path, or entry.")
 
 
@@ -527,6 +592,10 @@ def _generate_placements_for_run(*, run: SpawnPlanRun) -> None:
     plan = run.plan
     rng = random.Random(run.seed)
     generated_by_entry: dict[str, list[SpawnPlacement]] = {}
+    room_choice_cache: dict[
+        tuple[int, str],
+        tuple[list[Room], dict[str, Any]],
+    ] = {}
     for entry in plan.entries.filter(is_active=True).order_by("order", "created_ts", "id"):
         parent_entry_slug = _target_entry_slug(entry)
         count = _entry_count(entry, rng)
@@ -581,6 +650,7 @@ def _generate_placements_for_run(*, run: SpawnPlanRun) -> None:
                     entry=entry,
                     source_type=source.source_type,
                     rng=rng,
+                    room_choice_cache=room_choice_cache,
                 )
                 traits, modifiers = _generate_traits(entry, rng)
                 created.append(
@@ -723,7 +793,12 @@ def _preferred_cohort_anchor(members: list):
     return members[0] if members else None
 
 
-def _placement_spawn_room(*, placement: SpawnPlacement, spawn_world: World) -> Room:
+def _placement_spawn_room(
+    *,
+    placement: SpawnPlacement,
+    spawn_world: World,
+    roams: Any,
+) -> Room:
     cohort = _placement_cohort_state(placement)
     if not cohort or cohort["policy"] != COHORT_RESPAWN_REFILL_MISSING:
         return placement.room
@@ -732,7 +807,6 @@ def _placement_spawn_room(*, placement: SpawnPlacement, spawn_world: World) -> R
     )
     if anchor is None or anchor.room_id is None:
         return placement.room
-    roams = _placement_roams(placement)
     if roams is not None and not _roam_target_allows_room(roams, anchor.room):
         return placement.room
     return anchor.room
@@ -780,13 +854,14 @@ def _placement_has_live_output(*, placement: SpawnPlacement, spawn_world: World)
     ).exists()
 
 
-def _materialize_placement(*, placement: SpawnPlacement, spawn_world: World):
+def _materialize_placement(
+    *,
+    placement: SpawnPlacement,
+    spawn_world: World,
+    reconcile_context: SpawnReconcileContext,
+):
     if _placement_has_live_output(placement=placement, spawn_world=spawn_world):
         return []
-    source = _placement_source(placement)
-    if source is None:
-        return []
-    entry = placement.run.plan.entries.filter(slug=placement.entry_slug).first()
     target = placement.room
     if placement.parent_entry_slug:
         parent_target = _parent_instance(placement=placement, spawn_world=spawn_world)
@@ -799,11 +874,26 @@ def _materialize_placement(*, placement: SpawnPlacement, spawn_world: World):
     else:
         target = placement.room
     if placement.source_type.startswith("mob"):
-        spawn_room = _placement_spawn_room(placement=placement, spawn_world=spawn_world)
+        roams = _placement_roams(placement)
+        spawn_room = _placement_spawn_room(
+            placement=placement,
+            spawn_world=spawn_world,
+            roams=roams,
+        )
+        if (
+            _placement_roam_state(placement)
+            and reconcile_context.room_is_no_roam(spawn_room.id)
+        ):
+            return []
+    source = _placement_source(placement)
+    if source is None:
+        return []
+    entry = placement.run.plan.entries.filter(slug=placement.entry_slug).first()
+    if placement.source_type.startswith("mob"):
         spawn_kwargs = {
             "target": spawn_room,
             "spawn_world": spawn_world,
-            "roams": _placement_roams(placement),
+            "roams": roams,
             "rule": None,
         }
         if placement.source_type == "mobdefinition":
@@ -882,7 +972,14 @@ def _plan_is_due(*, run: SpawnPlanRun, initial: bool, repopulate: bool) -> bool:
     return timezone.now() >= run.last_reconciled_at + timedelta(seconds=seconds)
 
 
-def reconcile_spawn_plan(*, spawn_world: World, plan: SpawnPlan, initial: bool = False, repopulate: bool = False) -> dict[str, Any]:
+def reconcile_spawn_plan(
+    *,
+    spawn_world: World,
+    plan: SpawnPlan,
+    initial: bool = False,
+    repopulate: bool = False,
+    reconcile_context: SpawnReconcileContext | None = None,
+) -> dict[str, Any]:
     if not spawn_world.context:
         raise TypeError("Can only run spawn plans on spawn worlds.")
     with transaction.atomic():
@@ -896,12 +993,19 @@ def reconcile_spawn_plan(*, spawn_world: World, plan: SpawnPlan, initial: bool =
         if not _plan_is_due(run=run, initial=initial, repopulate=repopulate):
             return {"plan": plan.slug, "placements": run.placements.count(), "spawned": 0, "skipped": True}
         _generate_placements_for_run(run=run)
+        reconcile_context = reconcile_context or SpawnReconcileContext(
+            authored_world_id=plan.world_id,
+        )
         spawned_count = 0
         for placement in run.placements.select_related("room").order_by("id"):
             entry = plan.entries.filter(slug=placement.entry_slug, is_active=True).first()
             if entry and not _entry_conditions_pass(spawn_world=spawn_world, plan=plan, entry=entry):
                 continue
-            spawned_count += len(_materialize_placement(placement=placement, spawn_world=spawn_world))
+            spawned_count += len(_materialize_placement(
+                placement=placement,
+                spawn_world=spawn_world,
+                reconcile_context=reconcile_context,
+            ))
         run.last_reconciled_at = timezone.now()
         run.save(update_fields=["last_reconciled_at", "modified_ts"])
         return {
@@ -912,9 +1016,19 @@ def reconcile_spawn_plan(*, spawn_world: World, plan: SpawnPlan, initial: bool =
         }
 
 
-def run_spawn_plans(*, world: World, zone_id: int | None = None, initial: bool = False, repopulate: bool = False) -> list[dict[str, Any]]:
+def run_spawn_plans(
+    *,
+    world: World,
+    zone_id: int | None = None,
+    initial: bool = False,
+    repopulate: bool = False,
+    reconcile_context: SpawnReconcileContext | None = None,
+) -> list[dict[str, Any]]:
     if not world.context:
         raise TypeError("Can only run spawn plans on spawn worlds.")
+    reconcile_context = reconcile_context or SpawnReconcileContext(
+        authored_world_id=world.context_id,
+    )
     plans = SpawnPlan.objects.filter(world=world.context, is_active=True).select_related("zone", "world")
     if zone_id:
         plans = plans.filter(zone_id=zone_id)
@@ -926,6 +1040,7 @@ def run_spawn_plans(*, world: World, zone_id: int | None = None, initial: bool =
                 plan=plan,
                 initial=initial,
                 repopulate=repopulate,
+                reconcile_context=reconcile_context,
             )
         )
     return results

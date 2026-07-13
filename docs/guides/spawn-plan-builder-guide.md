@@ -161,7 +161,15 @@ detail screen or path API response.
 
 For mob entries, a path target also becomes the mob's roaming path. The mob can
 only wander to adjacent rooms that belong to that path. If the path has an
-`entry_room`, the initial placement uses that room.
+eligible `entry_room`, the initial placement uses that room. An `entry_room`
+flagged `no_roam` is not eligible for a path-targeted mob, so WR2 chooses from
+the path's other eligible rooms instead.
+
+For both zone and path targets, `no_roam` is also checked when a missing mob is
+repopulated. If a room is flagged after its deterministic placement was
+generated, WR2 keeps the placement but skips loading the mob there. Removing
+the flag makes that placement eligible again. The check is shared across the
+whole world reconciliation, so it does not add one room-flag query per mob.
 
 A fixed room target is static:
 
@@ -172,7 +180,8 @@ target:
 
 Mobs loaded into a specific room do not roam by default. Ambient roam chance is
 configured on the world manifest with `default_roam_chance`, which defaults to
-`10` percent per heartbeat.
+`10` percent per heartbeat. An explicit room target remains allowed when that
+room is flagged `no_roam`; the flag only excludes zone- and path-targeted mobs.
 
 ## Path Manifests
 
