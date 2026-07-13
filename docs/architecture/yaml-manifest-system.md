@@ -96,6 +96,10 @@ Current required mappings:
 - The shared condition DSL resolves typed refs such as
   `mobdefinition.guard_captain` and `itemdefinition.saloon_keg` for
   `.definition_id` paths.
+- WR1 `mob_in_room <numeric_definition_id>` conditions should export as the
+  structured WR2 condition `mob_present: mobdefinition.<slug>`. When a policy
+  should block movement while that mob exists, wrap the condition in `not` so
+  the policy passes only while the mob is absent.
 
 Builder-facing authoring guidance lives in:
 

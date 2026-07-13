@@ -6,8 +6,8 @@ and ability requirements.
 Conditions are small YAML mappings that answer one question: should this thing
 be available right now?
 
-Use conditions when content should depend on the player, room, world state,
-quest progress, event data, or an ability requirement.
+Use conditions when content should depend on the player, room, nearby mobs,
+world state, quest progress, event data, or an ability requirement.
 
 ## Basic Shape
 
@@ -43,6 +43,7 @@ state-aware content should use the structured format.
 | `gte` | `{gte: [<path>, <value>]}` | Greater than or equal. |
 | `lte` | `{lte: [<path>, <value>]}` | Less than or equal. |
 | `in` | `{in: [<path>, [<value>, ...]]}` | Path value is in a list. |
+| `mob_present` | `{mob_present: <mob_definition_ref>}` | A spawned mob from that definition is present in the context room. |
 | `quest_completed` | `{quest_completed: <quest_ref>}` | Player has completed a quest template. |
 | `objective_complete` | `{objective_complete: <objective_id>}` | Current quest objective is complete. |
 
@@ -129,6 +130,26 @@ visible_if:
   quest_completed: first_steps
 ```
 
+Require a guard mob to be present in the current context room:
+
+```yaml
+conditions:
+  mob_present: mobdefinition.guard
+```
+
+To require more than one, use the expanded form:
+
+```yaml
+conditions:
+  mob_present:
+    ref: mobdefinition.guard
+    count: 2
+```
+
+Use a typed mob-definition ref rather than a spawned mob id. For movement
+hooks, the context room depends on the hook: `before_move_exit` checks the
+origin room, while `before_move_enter` checks the destination room.
+
 ## Triggers
 
 Triggers use conditions in `spec.conditions`.
@@ -169,7 +190,13 @@ Movement policy and movement event triggers receive extra event paths:
 
 For `before_move_enter` and `after_move_enter`, `room.*` and `state.room.*`
 refer to the destination room. For `before_move_exit` and `after_move_exit`,
-they refer to the origin room.
+they refer to the origin room. `mob_present` follows the same context-room
+rule.
+
+For example, a movement policy whose condition is `not: {mob_present:
+mobdefinition.guard}` passes while the guard is absent and blocks movement
+while the guard is present. Policy conditions describe when movement is
+allowed, so the `not` is important for this pattern.
 
 Legacy trigger/action text conditions still work for old content:
 
@@ -265,5 +292,7 @@ Use paths and values that are explicit and stable:
 - prefer bare slugs for quest refs when possible
 - use typed refs such as `mobdefinition.guard_captain` when comparing event
   definition ids
+- use `mob_present` with a typed mob-definition ref when presence of a spawned
+  mob should gate behavior; do not key authored behavior to one spawned mob id
 - keep large logic trees small by splitting content into multiple triggers,
   quests, or abilities when that reads better

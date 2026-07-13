@@ -11,6 +11,7 @@ The immediate driver is movement gating:
 - only warlords may enter a warlord-only room
 - a locked ritual chamber can require quest state
 - a faction area can reject hostile players
+- a guard mob can block one direction while it is present
 
 The same architecture should also support post-action room behavior:
 
@@ -23,19 +24,16 @@ direction.
 
 ## Current State
 
-WR2 movement currently resolves and applies movement inside the movement
-handler:
+WR2 ordinary movement and direction-based Charge evaluate room-scoped
+`before_move_exit` and `before_move_enter` policies before changing the
+player's room. Successful movement then publishes `cmd.move.success` and may
+run post-move event triggers.
 
-1. validate direction
-2. validate an exit exists
-3. validate door state
-4. validate stamina and hard-coded room constraints such as water travel
-5. change the player's room
-6. publish `cmd.move.success`
-7. event subscriptions may run trigger reactions afterward
-
-That works for post-move reactions, but it cannot prevent the move after a
-condition fails. Current trigger subscriptions run after `cmd.move.success`.
+Flee is a delayed combat action. Its candidate directions use the movement
+policies when the player starts preparing, and the chosen direction is
+revalidated when the flee completes. This prevents a route from remaining
+usable when a door, guard mob, or other authored condition changes during the
+preparation delay.
 
 Legacy `RoomCheck` still exists in model/UI code, but it is a WR1-era concept
 with its own predicate vocabulary. It should be treated as migration input, not
@@ -150,6 +148,38 @@ spec:
 
 If `match` is blank, the policy applies to every direction for that room.
 
+### Mob-Guarded Exit Policy
+
+The structured `mob_present` condition checks for a spawned mob from a
+particular definition in the policy's context room. Conditions on a policy
+describe when the action is allowed, so negate the presence check to block an
+exit while the mob is present.
+
+```yaml
+kind: trigger
+metadata:
+  world: world.23
+  name: Guard Blocks East
+spec:
+  scope: room
+  kind: policy
+  event: before_move_exit
+  target:
+    type: room
+    key: room.120
+  match: east
+  conditions:
+    not:
+      mob_present: mobdefinition.guard
+  failure_message: The guard bars the eastern way.
+  order: 0
+  is_active: true
+```
+
+This policy applies to normal movement, movement-based abilities such as
+Charge, and flee-route selection. For `before_move_exit`, `mob_present` checks
+the origin room. For `before_move_enter`, it checks the destination room.
+
 ### Entry Trap
 
 ```yaml
@@ -199,6 +229,23 @@ Policies should run before mutating room/stamina state.
 Post-action triggers should run after state and base client events are
 published, and trigger-side failures should not undo the movement.
 
+## Runtime Flee Flow
+
+Flee uses the movement policy layer without turning every combat round into a
+policy scan:
+
+1. Build the mechanically available flee destinations.
+2. Evaluate both `before_move_exit` and `before_move_enter` for each candidate.
+3. Randomly choose from the candidates that remain and begin flee preparation.
+4. When the delayed flee completes, revalidate only the stored direction.
+5. If it is now blocked, rebuild the candidate list and choose another eligible
+   exit when possible.
+6. If no eligible exit remains, fail the flee without moving the player.
+
+The completion-time check is required because authored state can change after
+the initial choice. A guard can enter, a door can close, or a state-backed
+policy can change while the player prepares.
+
 ## Policy Evaluation Context
 
 Movement policy evaluation needs a compact context:
@@ -238,6 +285,8 @@ Required performance design:
 - cache active policy and room-event lookups by world, room, event, and kind
 - cache negative lookups, meaning "there are no active hooks here"
 - avoid database queries in the common no-policy movement path
+- keep the flee completion fast path to revalidating only its stored direction
+- rebuild all flee candidates only when that stored direction becomes invalid
 - compile or normalize policy condition payloads before or during cache fill
 - invalidate affected policy cache entries on trigger create/update/delete
 - add database indexes for policy lookup
@@ -258,6 +307,12 @@ Trigger(world, kind, event, scope, target_type, target_id, is_active, order)
 ```
 
 Do not perform broad world-level scans during movement.
+
+`mob_present` should resolve its typed mob-definition ref in the effective
+world and use a narrow existence query for the context room. It must not build
+the legacy full room-condition payload merely to answer the presence question.
+Policy hook negative caching still ensures that rooms with no matching hooks do
+not pay that presence-query cost.
 
 ## Cache Payload
 

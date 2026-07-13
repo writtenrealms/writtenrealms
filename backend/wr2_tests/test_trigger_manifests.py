@@ -566,6 +566,51 @@ spec:
         self.assertIn("actor.archetype", created_trigger.conditions)
         self.assertFalse(created_trigger.display_action_in_room)
 
+    def test_apply_trigger_manifest_can_create_mob_guarded_exit_policy(self):
+        MobDefinition.objects.create(
+            world=self.world,
+            slug="east-gate-guard",
+            name="East Gate Guard",
+        )
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  name: Guard Blocks East
+spec:
+  scope: room
+  kind: policy
+  target:
+    type: room
+    key: room.{self.room.id}
+  event: before_move_exit
+  match: east
+  conditions:
+    not:
+      mob_present: mobdefinition.east-gate-guard
+  failure_message: The guard bars the eastern way.
+  order: 0
+  is_active: true
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        created_trigger = Trigger.objects.get(pk=resp.data["trigger"]["id"])
+        self.assertEqual(created_trigger.match, "east")
+        self.assertEqual(
+            yaml.safe_load(created_trigger.conditions),
+            {
+                "not": {
+                    "mob_present": "mobdefinition.east-gate-guard",
+                },
+            },
+        )
+
     def test_apply_trigger_manifest_can_create_room_movement_event_trigger(self):
         manifest = f"""
 kind: trigger

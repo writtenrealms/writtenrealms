@@ -221,6 +221,8 @@ Behavior notes:
 - blank `conditions` means the trigger is always eligible
 - structured conditions can read `actor.*`, `room.*`, `world.*`, and `state.*`
   paths
+- `mob_present: mobdefinition.<slug>` checks for that kind of mob in the
+  trigger's context room
 - movement policies and room movement events also receive `event.direction`,
   `event.origin_room`, and `event.destination_room`
 - if conditions fail and `show_details_on_failure` is `false`, the trigger
@@ -492,6 +494,45 @@ spec:
   order: 0
   is_active: true
 ```
+
+### Mob-Guarded Exit
+
+Combine a direction-specific exit policy with `mob_present` when a mob should
+physically hold one route. Policy conditions state when the movement is
+allowed, so negate the presence check to allow passage only while the guard is
+absent:
+
+```yaml
+kind: trigger
+metadata:
+  world: world.23
+  name: Guard Blocks East
+spec:
+  scope: room
+  kind: policy
+  event: before_move_exit
+  target:
+    type: room
+    key: room.120
+  match: east
+  conditions:
+    not:
+      mob_present: mobdefinition.guard
+  failure_message: The guard bars the eastern way.
+  order: 0
+  is_active: true
+```
+
+This blocks ordinary eastward movement while a spawned `guard` mob is in room
+`120`. It also removes east from the routes that `flee` may choose. Because
+fleeing takes time, the selected route is checked again when the flee completes;
+if the guard arrives during preparation, the player must use another eligible
+exit or cannot complete the escape.
+
+Use a typed mob-definition ref such as `mobdefinition.guard`, not the id of one
+spawned mob instance. A policy attached to `before_move_enter` checks the
+destination room instead, which is useful when a mob inside the destination
+guards every entrance.
 
 ### Entry Trap
 

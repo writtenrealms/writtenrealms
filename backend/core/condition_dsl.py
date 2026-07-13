@@ -13,6 +13,7 @@ STRUCTURED_CONDITION_OPERATORS = (
     "all",
     "any",
     "not",
+    "mob_present",
     "quest_completed",
     "objective_complete",
     *COMPARISON_OPERATORS,
@@ -97,6 +98,41 @@ def validate_condition_payload(condition: Any, *, field_name: str = "condition")
 
     if "not" in condition:
         validate_condition_payload(condition.get("not"), field_name=f"{field_name}.not")
+
+    if "mob_present" in condition:
+        spec = condition.get("mob_present")
+        ref = spec.get("ref") if isinstance(spec, dict) else spec
+        if isinstance(spec, dict):
+            if not str(ref or "").strip():
+                raise ValueError(f"{field_name}.mob_present.ref is required.")
+            unsupported_keys = sorted(set(spec) - {"ref", "count"})
+            if unsupported_keys:
+                raise ValueError(
+                    f"{field_name}.mob_present has unsupported field(s): "
+                    f"{', '.join(unsupported_keys)}."
+                )
+            count = spec.get("count", 1)
+            if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+                raise ValueError(
+                    f"{field_name}.mob_present.count must be a positive integer."
+                )
+        elif (
+            isinstance(spec, bool)
+            or not isinstance(spec, (str, int))
+            or not str(spec).strip()
+        ):
+            raise ValueError(
+                f"{field_name}.mob_present must be a mob definition ref or a mapping."
+            )
+        if isinstance(ref, str):
+            prefix, separator, _ = ref.strip().partition(".")
+            if separator:
+                from quests.entity_refs import canonical_entity_type
+
+                if canonical_entity_type(prefix) != "mobdefinition":
+                    raise ValueError(
+                        f"{field_name}.mob_present must reference a mobdefinition."
+                    )
 
     for operator in COMPARISON_OPERATORS + ("in",):
         if operator not in condition:
@@ -345,6 +381,92 @@ def _player_completed_quest_template(value: Any, context: ConditionContext) -> b
     ).exists()
 
 
+def _mob_definition_filter(value: Any) -> dict[str, Any] | None:
+    """Return a Mob queryset filter for a supported definition reference."""
+    if value in (None, "") or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return {"definition_id": value}
+
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return {"definition_id": int(text)}
+
+    prefix, separator, raw_value = text.partition(".")
+    if separator:
+        try:
+            from quests.entity_refs import canonical_entity_type
+        except Exception:
+            return None
+        if canonical_entity_type(prefix) != "mobdefinition":
+            return None
+        text = raw_value.strip()
+        if not text:
+            return None
+        if text.isdigit():
+            return {"definition_id": int(text)}
+
+    return {"definition__slug": text}
+
+
+def _mob_present(value: Any, context: ConditionContext) -> bool:
+    spec = value if isinstance(value, dict) else {"ref": value}
+    definition_filter = _mob_definition_filter(
+        resolve_value(spec.get("ref"), context)
+    )
+    count = spec.get("count", 1)
+    if (
+        not definition_filter
+        or isinstance(count, bool)
+        or not isinstance(count, int)
+        or count < 1
+    ):
+        return False
+
+    actor = _context_actor(context)
+    room = _context_room(context)
+    runtime_world = getattr(actor, "world", None) or _context_world(context)
+    if not room or not runtime_world:
+        return False
+
+    try:
+        from django.db.models import F, Q
+        from spawns.models import Mob
+    except Exception:
+        return False
+
+    # Runtime worlds point at their authored world through ``context``. Instance
+    # runtime worlds point at an instance template whose ``instance_of`` is the
+    # authored world. Keep that resolution in the EXISTS query so evaluating a
+    # room-presence condition does not load an entire World row first.
+    definition_world_scope = (
+        Q(
+            world__context_id__isnull=True,
+            definition__world_id=F("world_id"),
+        )
+        | Q(
+            world__context_id__isnull=False,
+            world__context__instance_of_id__isnull=True,
+            definition__world_id=F("world__context_id"),
+        )
+        | Q(
+            world__context__instance_of_id__isnull=False,
+            definition__world_id=F("world__context__instance_of_id"),
+        )
+    )
+    mobs = Mob.objects.filter(
+        world_id=getattr(runtime_world, "pk", None),
+        room_id=getattr(room, "pk", None),
+        is_pending_deletion=False,
+        **definition_filter,
+    ).filter(definition_world_scope)
+    if count == 1:
+        return mobs.exists()
+    return mobs.count() >= count
+
+
 def evaluate_condition(
     condition: Any,
     *,
@@ -377,6 +499,8 @@ def evaluate_condition(
         )
     if "not" in condition:
         return not evaluate_condition(condition.get("not"), context=context)
+    if "mob_present" in condition:
+        return _mob_present(condition.get("mob_present"), context)
     if "objective_complete" in condition:
         objective_id = str(condition.get("objective_complete") or "").strip()
         if not objective_id:

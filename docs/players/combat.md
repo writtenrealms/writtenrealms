@@ -87,3 +87,10 @@ grant their first-action priority.
 When `flee` succeeds, you leave the room and all active hostile encounters from
 that room end for you. Mobs that remain in the room are no longer shown as
 fighting you on nearby scans unless they later reach and engage you again.
+
+Fleeing respects the same room movement policies as ordinary travel. A blocked
+direction is not eligible when the game chooses an escape route. The chosen
+route is checked again when the delayed flee completes, because doors, mobs,
+and other room conditions may change while you look for an opening. If that
+route has become blocked, the game uses another eligible route when one is
+available; otherwise, you lose the chance to flee and remain in combat.

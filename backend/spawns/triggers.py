@@ -9,6 +9,11 @@ from django.db.models import Q
 from builders.models import ItemDefinition, MobDefinition, Trigger
 from config import constants as adv_consts
 from config import game_settings as adv_config
+from core.condition_dsl import (
+    ConditionContext,
+    evaluate_condition as evaluate_structured_condition,
+    structured_condition_payload,
+)
 from core.conditions import evaluate_conditions
 from core.trigger_policy_cache import get_trigger_policy_cache_version
 from core.utils import format_actor_msg
@@ -443,6 +448,52 @@ def _load_movement_rooms(origin_room_id: int, destination_room_id: int) -> tuple
     return rooms.get(origin_room_id), rooms.get(destination_room_id)
 
 
+def _condition_uses_operator(value, operator: str) -> bool:
+    if isinstance(value, dict):
+        if operator in value:
+            return True
+        return any(
+            _condition_uses_operator(child, operator)
+            for child in value.values()
+        )
+    if isinstance(value, list):
+        return any(_condition_uses_operator(child, operator) for child in value)
+    return False
+
+
+def _evaluate_movement_policy_conditions(
+    *,
+    actor: Player,
+    conditions,
+    room: Room,
+    event_data: dict,
+) -> dict:
+    structured = structured_condition_payload(conditions)
+    if structured is not None and _condition_uses_operator(structured, "mob_present"):
+        return {
+            "result": evaluate_structured_condition(
+                structured,
+                context=ConditionContext(
+                    actor=actor,
+                    player=actor,
+                    room=room,
+                    zone=room.zone,
+                    world=room.world,
+                    event_data=event_data,
+                ),
+            ),
+            "detail": "",
+        }
+    return evaluate_conditions(
+        actor,
+        conditions,
+        room=room,
+        zone=room.zone,
+        world=room.world,
+        event_data=event_data,
+    )
+
+
 def evaluate_movement_policies(
     *,
     actor: Player,
@@ -470,6 +521,14 @@ def evaluate_movement_policies(
     if not hooks:
         return PolicyEvaluationResult(allowed=True)
 
+    applicable_hooks = [
+        hook
+        for hook in hooks
+        if _hook_match_expression_matches(hook.get("match"), direction)
+    ]
+    if not applicable_hooks:
+        return PolicyEvaluationResult(allowed=True)
+
     origin_room, destination_room = _load_movement_rooms(origin_room_id, destination_room_id)
     if not origin_room or not destination_room:
         return PolicyEvaluationResult(
@@ -478,7 +537,6 @@ def evaluate_movement_policies(
         )
 
     target_room = origin_room if target_room_id == origin_room.id else destination_room
-    world = target_room.world
     event_data = _movement_event_data(
         event=normalized_event,
         direction=direction,
@@ -487,18 +545,13 @@ def evaluate_movement_policies(
         target_room=target_room,
     )
 
-    for hook in hooks:
-        if not _hook_match_expression_matches(hook.get("match"), direction):
-            continue
-
+    for hook in applicable_hooks:
         conditions = hook.get("conditions")
         if conditions:
-            evaluated = evaluate_conditions(
-                actor,
-                conditions,
+            evaluated = _evaluate_movement_policy_conditions(
+                actor=actor,
+                conditions=conditions,
                 room=target_room,
-                zone=target_room.zone,
-                world=world,
                 event_data=event_data,
             )
             if not evaluated.get("result"):

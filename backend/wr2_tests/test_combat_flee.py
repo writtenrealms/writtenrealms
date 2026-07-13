@@ -1,6 +1,8 @@
-from unittest.mock import patch
+import json
 from datetime import timedelta
+from unittest.mock import patch
 
+from builders.models import MobDefinition, Trigger
 from config import constants as adv_consts
 from core.combat_formulas import (
     combatant_snapshot,
@@ -8,6 +10,7 @@ from core.combat_formulas import (
     resolve_attack,
 )
 from core.computations import compute_stats
+from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
 from spawns.actions.movement_costs import movement_cost
 from spawns.actions.combat import (
@@ -17,6 +20,7 @@ from spawns.actions.combat import (
 from spawns.models import ActiveEffect, CombatEncounter, Item, Mob, Player
 from spawns.tasks import resolve_combat_encounter
 from tests.base import WorldTestCase
+from worlds.models import Room
 from wr2_tests.utils import (
     apply_basic_stat_system,
     capture_game_messages,
@@ -77,6 +81,49 @@ class TestCombatFlee(WorldTestCase):
         )
         mob.create_corpse()
         return mob
+
+    def _guarded_exit_policy(self, definition, *, direction="east", room=None):
+        room = room or self.room
+        room_ct = ContentType.objects.get_for_model(Room)
+        return Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_POLICY,
+            target_type=room_ct,
+            target_id=room.id,
+            event=adv_consts.TRIGGER_EVENT_BEFORE_MOVE_EXIT,
+            match=direction,
+            conditions=json.dumps({
+                "not": {
+                    "mob_present": f"mobdefinition.{definition.slug}",
+                },
+            }),
+            failure_message="The guard bars the eastern way.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+
+    def _guard(self, definition):
+        return Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            definition=definition,
+            name=definition.name,
+            keywords="guard",
+            health=10,
+            health_max=10,
+            fights_back=False,
+        )
+
+    def _active_encounter(self, mob, *, pending_flee=None):
+        return CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            resolution_interval=1.5,
+            pending_flee=pending_flee or {},
+        )
 
     def _messages_by_type(self, messages, message_type):
         return [
@@ -530,6 +577,129 @@ class TestCombatFlee(WorldTestCase):
         flee_message = self._messages_by_type(second_messages, "cmd.flee.success")[0]
         self.assertEqual(flee_message["text"], "You flee east.")
         self.assertEqual(flee_message["data"]["round_id"], f"encounter:{encounter.id}:3")
+
+    def test_flee_excludes_direction_guarded_by_present_mob(self):
+        north_room = self.room.create_at(adv_consts.DIRECTION_NORTH)
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="east-gate-guard",
+            name="East Gate Guard",
+        )
+        self._guarded_exit_policy(definition)
+        self._guard(definition)
+        encounter = self._active_encounter(self._mob())
+
+        dispatch_text_command(self.player.id, "flee")
+
+        encounter.refresh_from_db()
+        self.assertEqual(encounter.pending_flee["direction"], "north")
+        self.assertEqual(encounter.pending_flee["destination_room_id"], north_room.id)
+
+    def test_flee_reports_guard_policy_when_it_blocks_only_exit(self):
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="east-gate-guard",
+            name="East Gate Guard",
+        )
+        self._guarded_exit_policy(definition)
+        self._guard(definition)
+        encounter = self._active_encounter(self._mob())
+        starting_stamina = self.player.stamina
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "flee")
+
+        encounter.refresh_from_db()
+        self.player.refresh_from_db()
+        error = self._messages_by_type(messages, "cmd.flee.error")[0]
+        self.assertEqual(error["text"], "The guard bars the eastern way.")
+        self.assertEqual(error["data"]["code"], "policy_blocked")
+        self.assertEqual(encounter.pending_flee, {})
+        self.assertEqual(self.player.stamina, starting_stamina)
+
+    def test_flee_reroutes_when_guard_arrives_during_preparation(self):
+        north_room = self.room.create_at(adv_consts.DIRECTION_NORTH)
+        north_room.type = adv_consts.ROOM_TYPE_ROAD
+        north_room.save(update_fields=["type"])
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="east-gate-guard",
+            name="East Gate Guard",
+        )
+        self._guarded_exit_policy(definition)
+        encounter = self._active_encounter(self._mob())
+
+        with patch(
+            "spawns.actions.combat.random.choice",
+            side_effect=lambda choices: next(
+                choice for choice in choices if choice.direction == "east"
+            ),
+        ):
+            dispatch_text_command(self.player.id, "flee")
+        encounter.refresh_from_db()
+        self.assertEqual(encounter.pending_flee["direction"], "east")
+        reserved_cost = encounter.pending_flee["movement_cost"]
+        encounter.pending_flee = {**encounter.pending_flee, "status": "ready"}
+        encounter.save(update_fields=["pending_flee"])
+        self._guard(definition)
+
+        result = resolve_combat_encounter_step(encounter.id, auto_advance=False)
+
+        self.player.refresh_from_db()
+        encounter.refresh_from_db()
+        flee_event = next(event for event in result.events if event.type == "cmd.flee.success")
+        self.assertEqual(self.player.room_id, north_room.id)
+        self.assertEqual(flee_event.data["direction"], "north")
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
+        self.assertEqual(
+            self.player.stamina,
+            self.stats["stamina_max"] - movement_cost(north_room),
+        )
+        self.assertGreater(reserved_cost, movement_cost(north_room))
+
+    def test_flee_completion_does_not_rescan_routes_when_stored_route_is_valid(self):
+        encounter = self._active_encounter(self._mob())
+        dispatch_text_command(self.player.id, "flee")
+        encounter.refresh_from_db()
+        encounter.pending_flee = {**encounter.pending_flee, "status": "ready"}
+        encounter.save(update_fields=["pending_flee"])
+
+        with patch("spawns.actions.combat._choose_flee_destination") as choose:
+            result = resolve_combat_encounter_step(encounter.id, auto_advance=False)
+
+        choose.assert_not_called()
+        self.assertTrue(any(event.type == "cmd.flee.success" for event in result.events))
+
+    def test_flee_stays_in_combat_and_refunds_cost_when_route_becomes_blocked(self):
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="east-gate-guard",
+            name="East Gate Guard",
+        )
+        policy = self._guarded_exit_policy(definition)
+        encounter = self._active_encounter(self._mob())
+
+        dispatch_text_command(self.player.id, "flee")
+        encounter.refresh_from_db()
+        self.assertEqual(encounter.pending_flee["direction"], "east")
+        self.player.refresh_from_db()
+        self.assertLess(self.player.stamina, self.stats["stamina_max"])
+        encounter.pending_flee = {**encounter.pending_flee, "status": "ready"}
+        encounter.save(update_fields=["pending_flee"])
+        self._guard(definition)
+
+        result = resolve_combat_encounter_step(encounter.id, auto_advance=False)
+
+        self.player.refresh_from_db()
+        encounter.refresh_from_db()
+        error = next(event for event in result.events if event.type == "cmd.flee.error")
+        self.assertEqual(error.text, "The guard bars the eastern way.")
+        self.assertEqual(error.data["code"], "policy_blocked")
+        self.assertEqual(error.data["trigger_id"], policy.id)
+        self.assertEqual(self.player.room_id, self.room.id)
+        self.assertEqual(self.player.stamina, self.stats["stamina_max"])
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
+        self.assertEqual(encounter.pending_flee, {})
 
     def test_flee_finishes_all_active_origin_room_encounters(self):
         self.world.config.combat_resolution_interval = -1

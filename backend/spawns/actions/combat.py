@@ -123,6 +123,12 @@ def stand_player(*args, **kwargs):
     return fn(*args, **kwargs)
 
 
+def evaluate_movement_policies(*args, **kwargs):
+    from spawns.triggers import evaluate_movement_policies as fn
+
+    return fn(*args, **kwargs)
+
+
 def door_state_lookup(*args, **kwargs):
     from spawns.state_payloads import door_state_lookup as fn
 
@@ -314,6 +320,14 @@ class FleeDestination:
     direction: str
     room_id: int
     movement_cost: int
+
+
+@dataclass(frozen=True)
+class FleeRouteContext:
+    room: Room
+    door_states: dict[str, str]
+    viewed_room_ids: set[int]
+    movement_budget: int
 
 
 def _player_combat_stats(player: Player) -> CombatStats:
@@ -1297,7 +1311,11 @@ def _room_with_exits(room_id: int) -> Room:
     ).get(pk=room_id)
 
 
-def _available_flee_destinations(player: Player) -> list[FleeDestination]:
+def _flee_route_context(
+    player: Player,
+    *,
+    movement_budget: int | None = None,
+) -> FleeRouteContext:
     if not player.room_id:
         raise ActionError("You are nowhere. Cannot flee.", code="no_room")
 
@@ -1307,42 +1325,125 @@ def _available_flee_destinations(player: Player) -> list[FleeDestination]:
     viewed_room_ids: set[int] = set()
     if config and not config.flee_to_unknown_rooms:
         viewed_room_ids = set(player.viewed_rooms.values_list("id", flat=True))
+    return FleeRouteContext(
+        room=room,
+        door_states=door_states,
+        viewed_room_ids=viewed_room_ids,
+        movement_budget=(
+            int(player.stamina or 0)
+            if movement_budget is None
+            else max(0, int(movement_budget))
+        ),
+    )
+
+
+def _flee_policy_failure(
+    *,
+    player: Player,
+    origin_room: Room,
+    destination_room: Room,
+    direction: str,
+):
+    for policy_event in (
+        adv_consts.TRIGGER_EVENT_BEFORE_MOVE_EXIT,
+        adv_consts.TRIGGER_EVENT_BEFORE_MOVE_ENTER,
+    ):
+        policy_result = evaluate_movement_policies(
+            actor=player,
+            event=policy_event,
+            direction=direction,
+            origin_room_id=origin_room.id,
+            destination_room_id=destination_room.id,
+            world_id=destination_room.world_id,
+        )
+        if not policy_result.allowed:
+            return policy_result
+    return None
+
+
+def _flee_destination_for_direction(
+    player: Player,
+    route_context: FleeRouteContext,
+    direction: str,
+) -> FleeDestination:
+    room = route_context.room
+    destination = getattr(room, direction, None)
+    if not destination:
+        raise ActionError("There is nowhere to flee to.", code="no_flee_exit")
+    if route_context.door_states.get(direction) in ("closed", "locked"):
+        raise ActionError("The way is blocked.", code="closed_door")
+    if (
+        route_context.viewed_room_ids
+        and destination.id not in route_context.viewed_room_ids
+    ):
+        raise ActionError("There is nowhere to flee to.", code="no_flee_exit")
+    if destination.type == adv_consts.ROOM_TYPE_WATER:
+        has_boat = player.inventory.filter(is_boat=True).exists()
+        if not has_boat:
+            raise ActionError("There is nowhere to flee to.", code="no_flee_exit")
+
+    destination_cost = movement_cost(destination)
+    if route_context.movement_budget < destination_cost:
+        raise ActionError("You are too exhausted to flee.", code="exhausted")
+
+    policy_failure = _flee_policy_failure(
+        player=player,
+        origin_room=room,
+        destination_room=destination,
+        direction=direction,
+    )
+    if policy_failure:
+        raise ActionError(
+            policy_failure.feedback or "You cannot flee that way.",
+            code=policy_failure.code,
+            data={"trigger_id": policy_failure.trigger_id},
+        )
+
+    return FleeDestination(
+        direction=direction,
+        room_id=destination.id,
+        movement_cost=destination_cost,
+    )
+
+
+def _available_flee_destinations(
+    player: Player,
+    *,
+    route_context: FleeRouteContext | None = None,
+) -> list[FleeDestination]:
+    route_context = route_context or _flee_route_context(player)
 
     destinations: list[FleeDestination] = []
     has_unaffordable_destination = False
+    first_policy_error: ActionError | None = None
     for direction in adv_consts.DIRECTIONS:
-        destination = getattr(room, direction, None)
-        if not destination:
-            continue
-        if door_states.get(direction) in ("closed", "locked"):
-            continue
-        if viewed_room_ids and destination.id not in viewed_room_ids:
-            continue
-        if destination.type == adv_consts.ROOM_TYPE_WATER:
-            has_boat = player.inventory.filter(is_boat=True).exists()
-            if not has_boat:
-                continue
-        destination_cost = movement_cost(destination)
-        if int(player.stamina or 0) < destination_cost:
-            has_unaffordable_destination = True
-            continue
-        destinations.append(
-            FleeDestination(
-                direction=direction,
-                room_id=destination.id,
-                movement_cost=destination_cost,
+        try:
+            destinations.append(
+                _flee_destination_for_direction(player, route_context, direction)
             )
-        )
+        except ActionError as err:
+            if err.code == "exhausted":
+                has_unaffordable_destination = True
+            elif err.code == "policy_blocked" and first_policy_error is None:
+                first_policy_error = err
 
     if not destinations:
         if has_unaffordable_destination:
             raise ActionError("You are too exhausted to flee.", code="exhausted")
+        if first_policy_error:
+            raise first_policy_error
         raise ActionError("There is nowhere to flee to.", code="no_flee_exit")
     return destinations
 
 
-def _choose_flee_destination(player: Player) -> FleeDestination:
-    return random.choice(_available_flee_destinations(player))
+def _choose_flee_destination(
+    player: Player,
+    *,
+    route_context: FleeRouteContext | None = None,
+) -> FleeDestination:
+    return random.choice(
+        _available_flee_destinations(player, route_context=route_context)
+    )
 
 
 def _flee_success_events(
@@ -1415,6 +1516,41 @@ def _flee_success_events(
     return events
 
 
+def _flee_completion_error_event(
+    player: Player,
+    *,
+    message: str,
+    code: str,
+    round_id: str,
+    data: dict | None = None,
+) -> GameEvent:
+    return GameEvent(
+        type="cmd.flee.error",
+        recipients=[player.key],
+        data={
+            "error": message,
+            "code": code,
+            "round_id": round_id,
+            **(data or {}),
+        },
+        text=message,
+    )
+
+
+def _reconciled_flee_stamina(
+    player: Player,
+    *,
+    reserved_cost: int,
+    replacement_cost: int,
+) -> int:
+    reconciled = max(
+        0,
+        int(player.stamina or 0) + max(0, reserved_cost) - max(0, replacement_cost),
+    )
+    stamina_max = int(getattr(player, "stamina_max", 0) or 0)
+    return min(reconciled, stamina_max) if stamina_max > 0 else reconciled
+
+
 def _complete_flee(
     *,
     encounter: CombatEncounter,
@@ -1440,10 +1576,80 @@ def _complete_flee(
             encounter_active=True,
         )
 
+    reserved_cost = max(0, int(pending.get("movement_cost") or 0))
+    route_context = _flee_route_context(
+        player,
+        movement_budget=int(player.stamina or 0) + reserved_cost,
+    )
+    destination: FleeDestination | None = None
+    try:
+        stored_destination = _flee_destination_for_direction(
+            player,
+            route_context,
+            direction,
+        )
+        if stored_destination.room_id == destination_room_id:
+            destination = stored_destination
+    except ActionError:
+        pass
+
+    if destination is None:
+        try:
+            destination = _choose_flee_destination(
+                player,
+                route_context=route_context,
+            )
+        except ActionError as err:
+            encounter.pending_flee = {}
+            encounter.pending_player_ability = {}
+            encounter.pending_mob_ability = {}
+            if not encounter._state.adding:
+                encounter.save(update_fields=[
+                    "pending_flee",
+                    "pending_player_ability",
+                    "pending_mob_ability",
+                ])
+            player.stamina = _reconciled_flee_stamina(
+                player,
+                reserved_cost=reserved_cost,
+                replacement_cost=0,
+            )
+            player.save(update_fields=["stamina"])
+            return CombatStepResult(
+                actor_key=player.key,
+                events=[
+                    _flee_completion_error_event(
+                        player,
+                        message=err.message,
+                        code=err.code,
+                        round_id=round_id,
+                        data=err.data,
+                    )
+                ],
+                encounter_active=True,
+            )
+
+    route_changed = (
+        destination.direction != direction
+        or destination.room_id != destination_room_id
+        or destination.movement_cost != reserved_cost
+    )
+    if route_changed:
+        player.stamina = _reconciled_flee_stamina(
+            player,
+            reserved_cost=reserved_cost,
+            replacement_cost=destination.movement_cost,
+        )
+
+    direction = destination.direction
+    destination_room_id = destination.room_id
     origin_room_id = encounter.room_id
     player.room_id = destination_room_id
     player.last_action_ts = timezone.now()
-    player.save(update_fields=["room", "last_action_ts"])
+    player_update_fields = ["room", "last_action_ts"]
+    if route_changed:
+        player_update_fields.append("stamina")
+    player.save(update_fields=player_update_fields)
     player.viewed_rooms.add(destination_room_id)
 
     encounter.pending_flee = {}
@@ -1488,7 +1694,7 @@ def _complete_flee(
             origin_room_id=origin_room_id,
             destination_room_id=destination_room_id,
             direction=direction,
-            movement_cost=int(pending.get("movement_cost") or 0),
+            movement_cost=destination.movement_cost,
             round_id=round_id,
         ),
         encounter_active=False,

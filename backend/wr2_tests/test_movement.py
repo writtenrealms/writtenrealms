@@ -2,10 +2,12 @@ import json
 
 from django.contrib.contenttypes.models import ContentType
 
-from builders.models import Trigger
+from builders.models import MobDefinition, Trigger
 from config import constants as adv_consts
 from config import game_settings as adv_config
 from spawns.handlers import dispatch_command
+from spawns.models import Mob
+from spawns.triggers import evaluate_movement_policies
 from tests.base import WorldTestCase
 from worlds.models import Room
 from wr2_tests.utils import capture_game_messages, dispatch_text_command
@@ -220,6 +222,23 @@ class TestMovementCommands(WorldTestCase):
         self.assertEqual(error_message["data"]["code"], "policy_blocked")
         self.assertEqual(error_message["data"]["trigger_id"], trigger.id)
 
+    def test_movement_policy_negative_cache_avoids_database_queries(self):
+        dest_room = self.room.create_at(adv_consts.DIRECTION_EAST)
+        policy_args = {
+            "actor": self.player,
+            "event": adv_consts.TRIGGER_EVENT_BEFORE_MOVE_EXIT,
+            "direction": "east",
+            "origin_room_id": self.room.id,
+            "destination_room_id": dest_room.id,
+            "world_id": dest_room.world_id,
+        }
+        self.assertTrue(evaluate_movement_policies(**policy_args).allowed)
+
+        with self.assertNumQueries(0):
+            result = evaluate_movement_policies(**policy_args)
+
+        self.assertTrue(result.allowed)
+
     def test_before_move_enter_policy_allows_when_condition_passes(self):
         dest_room = self.room.create_at(adv_consts.DIRECTION_EAST)
         room_ct = ContentType.objects.get_for_model(Room)
@@ -297,6 +316,65 @@ class TestMovementCommands(WorldTestCase):
         error_message = self._message_by_type(blocked_messages, "cmd.move.error")
         self.assertIsNotNone(error_message)
         self.assertEqual(error_message["text"], "The northern guard bars your path.")
+
+    def test_before_move_exit_policy_can_require_mob_definition_absence(self):
+        dest_room = self.room.create_at(adv_consts.DIRECTION_EAST)
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="east-gate-guard",
+            name="East Gate Guard",
+        )
+        guard = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            definition=definition,
+            name=definition.name,
+        )
+        room_ct = ContentType.objects.get_for_model(Room)
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_POLICY,
+            target_type=room_ct,
+            target_id=self.room.id,
+            event=adv_consts.TRIGGER_EVENT_BEFORE_MOVE_EXIT,
+            match="east",
+            conditions=json.dumps({
+                "not": {
+                    "mob_present": "mobdefinition.east-gate-guard",
+                },
+            }),
+            failure_message="The guard bars the eastern way.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+
+        with capture_game_messages() as blocked_messages:
+            dispatch_command(
+                command_type="move",
+                player_id=self.player.id,
+                payload={"direction": "east"},
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.room.id)
+        self.assertEqual(
+            self._message_by_type(blocked_messages, "cmd.move.error")["text"],
+            "The guard bars the eastern way.",
+        )
+
+        guard.is_pending_deletion = True
+        guard.save(update_fields=["is_pending_deletion"])
+        with capture_game_messages() as allowed_messages:
+            dispatch_command(
+                command_type="move",
+                player_id=self.player.id,
+                payload={"direction": "east"},
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, dest_room.id)
+        self.assertIn("cmd.move.success", self._message_types(allowed_messages))
 
     def test_after_move_enter_room_event_trigger_runs_script(self):
         self.player.in_game = True
