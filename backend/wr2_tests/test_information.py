@@ -3,6 +3,7 @@ from config import constants as adv_consts
 from core.computations import compute_stats
 from spawns.handlers import dispatch_command
 from spawns.models import CombatEncounter, Item, Mob
+from spawns.state_payloads import build_map_payload
 from django.utils import timezone
 from tests.base import WorldTestCase
 from wr2_tests.utils import (
@@ -646,6 +647,50 @@ class TestStateSyncMapKeys(WorldTestCase):
         self.assertEqual(actor_room_key, room_key)
         self.assertIn(actor_room_key, map_keys)
         self.assertEqual(actor_room_key, f"room.{self.room.relative_id}")
+
+    def test_state_sync_map_room_keeps_exit_to_unvisited_room(self):
+        west_room = self.room.create_at("west")
+        unvisited_room = west_room.create_at("west")
+        unvisited_room.relative_id = unvisited_room.id + 7000
+        unvisited_room.save(update_fields=["relative_id"])
+        self.player.viewed_rooms.add(west_room)
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="state.sync",
+                player_id=self.player.id,
+                payload={},
+            )
+
+        message = self._message_by_type(messages, "cmd.state.sync.success")
+        self.assertIsNotNone(message)
+
+        map_by_key = {room["key"]: room for room in message["data"]["map"]}
+        west_room_key = f"room.{west_room.relative_id or west_room.id}"
+        unvisited_room_key = f"room.{unvisited_room.relative_id}"
+        self.assertIn(west_room_key, map_by_key)
+        self.assertNotIn(unvisited_room_key, map_by_key)
+        self.assertEqual(map_by_key[west_room_key]["west"], unvisited_room_key)
+
+    def test_map_payload_bulk_resolves_unvisited_exit_keys(self):
+        exit_rooms = {
+            direction: self.room.create_at(direction)
+            for direction in ("north", "east", "south", "west")
+        }
+
+        with self.assertNumQueries(2):
+            map_rooms, room_key_lookup = build_map_payload(
+                self.world,
+                [self.room.id],
+                {},
+            )
+
+        self.assertEqual(len(map_rooms), 1)
+        payload = map_rooms[0].model_dump()
+        for direction, exit_room in exit_rooms.items():
+            exit_key = f"room.{exit_room.relative_id or exit_room.id}"
+            self.assertEqual(payload[direction], exit_key)
+            self.assertEqual(room_key_lookup[exit_room.id], exit_key)
 
     def test_state_sync_world_room_refs_use_relative_key(self):
         self.room.relative_id = self.room.id + 9000

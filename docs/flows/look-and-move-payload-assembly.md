@@ -35,6 +35,10 @@ Key responsibilities:
    - Computes effective door states (`open` / `closed` / `locked`) per room direction.
 3. `build_map_payload(...)`
    - Serializes map rooms and exits into `MapRoom` entries.
+   - Keeps exit keys on known rooms even when the destination room is not yet
+     included in `data.map`; the frontend renders these as partial connections.
+   - Resolves unknown destination keys in one bulk query and does not disclose
+     destination room metadata or add unvisited rooms to the map.
 4. `serialize_room(...)`
    - Builds full current-room payload, including:
      - `inventory`
