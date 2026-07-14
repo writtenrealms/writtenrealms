@@ -1,9 +1,9 @@
 # WR2 Mob Traits
 
-This document describes the target architecture for mob traits in WR2. Traits
-are what some systems call affixes: authored or rolled modifiers that make a
-spawned mob behave differently, such as `exploder`, `tracker`, `enraged`,
-`colossal`, `linker`, `armored`, or `resilient`.
+This document describes the architecture and current implementation of mob
+traits in WR2. Traits are what some systems call affixes: authored or rolled
+modifiers that make a spawned mob behave differently, such as `exploder`,
+`tracker`, `enraged`, `colossal`, `linker`, `armored`, or `resilient`.
 
 Related combat-routine behavior, including dual-wielding mobs and multiattack
 traits, is covered in
@@ -21,6 +21,9 @@ traits, is covered in
   reviewed runtime handlers.
 - Do not introduce a new predicate language. Any conditional trait logic must
   use the WR2 condition DSL in `backend/core/condition_dsl.py`.
+- `tracker` is the first implemented cross-action behavior trait. It follows a
+  player through the exit used to leave an opening aggro encounter or complete
+  a successful flee, then re-engages when the chase remains valid.
 
 The rename is worth doing now because `trait` is already a more natural WR
 builder/player term, and traits can be intrinsic to a mob definition. `Affix`
@@ -343,6 +346,7 @@ Behavior traits should be backed by explicit handlers. Suggested hook phases:
 - `before_damage_taken`
 - `after_damage_applied`
 - `after_mob_defeated`
+- `after_player_move`
 - `after_player_flee`
 - `on_combat_round_start`
 - `on_combat_round_end`
@@ -353,6 +357,13 @@ Initial implementation can call these hooks directly from existing combat and
 movement code. The target WR2 architecture should migrate behavior hooks toward
 queued actions and emitted events where delayed or cross-aggregate behavior is
 involved.
+
+`tracker` uses a guarded cross-action flow. Ordinary movement registers the
+follow-up at transaction commit, while successful flee hands the captured plan
+off after combat resolution. Both paths capture only tracker mobs associated
+with the player's active origin-room encounters and pass that bounded candidate
+batch to the follow-up action. They do not scan the world's mobs or query all
+trait JSON on each player movement.
 
 Handler registry sketch:
 
@@ -388,19 +399,38 @@ resolve deterministically after the corpse/mob cleanup path runs.
 
 ### Tracker
 
-Intent: chases the player after they flee, usually after a round or short delay.
+Intent: chases an aggro target through the next exit and re-engages them.
 
-Recommended design:
+Current behavior:
 
-- Hook into successful flee completion.
-- Schedule a delayed mob movement or engagement action.
-- Use the same command issuer direction as ambient/mob commands: the mob is the
-  embodied subject issuing a movement or engagement command.
-- Revalidate at execution time that the mob is alive, the player is in the
-  expected world, and movement is still possible.
+- Aggro creates an active encounter at round `0`. During this opening window,
+  the player may still use ordinary movement. Tracker mobs from active
+  origin-room encounters follow through the same exit and re-engage in the
+  destination room.
+- Once the first combat round has resolved, ordinary movement is rejected. The
+  player must use `flee` to leave combat.
+- On a successful flee, tracker mobs from all of the player's active encounters
+  in the origin room follow the final resolved flee route and re-engage. This
+  includes every eligible tracker in a multi-mob fight, not only the primary
+  faceoff target.
+- Tracking is one edge at a time. It does not pathfind, teleport, or search for
+  a player who is no longer at the expected destination.
+- Before moving a tracker, execution revalidates that the mob is alive, remains
+  in the expected origin room and world, the player remains in the expected
+  destination and world, the rooms still share the expected directional edge,
+  neither endpoint is flagged `no_roam`, and the traversed door is still
+  passable. A failed revalidation leaves the mob in place and does not
+  re-engage it.
 
-This should align with the ambient command issuer plan rather than crafting
-ad-hoc movement mutations.
+Candidate collection is encounter-driven and bounded. Duplicate tracker trait
+sources on one mob must not cause duplicate movement or encounters in response
+to the same player transition.
+
+Tracker movement is currently a dedicated embodied-mob action. It validates the
+edge and door and emits normal movement notifications, but the generalized mob
+movement issuer/policy hook contract described in the ambient command issuer
+plan is still future work. Once that contract exists, tracker pursuit should
+route through it without changing this one-edge chase behavior.
 
 ### Linker
 
@@ -456,8 +486,9 @@ Target action/event concepts:
 - `MobTraitDelayedEffectResolved`
 
 For the first implementation, direct function calls from combat may be
-acceptable for synchronous hooks. Delayed hooks like `exploder` and `tracker`
-should use a scheduled task/action from the start if practical.
+acceptable for synchronous hooks. `tracker` uses a guarded follow-up action;
+longer delayed hooks such as `exploder` should use a scheduled task/action from
+the start.
 
 ## Visibility And UI
 
@@ -508,7 +539,11 @@ Minimum coverage:
 - numeric modifiers update stats and current resources correctly
 - unsupported modifier keys are preserved but inert
 - `exploder` schedules and resolves delayed effects
-- `tracker` follows a successful flee only when still valid
+- `tracker` follows ordinary movement from a round-zero aggro encounter
+- ordinary movement is rejected after the first combat round resolves
+- all eligible `tracker` mobs from the origin room follow a successful flee
+- `tracker` revalidates actor state, world, rooms, edge, and door before moving
+- duplicate trait sources do not enqueue duplicate tracker movement
 - `linker` blocks damage until the linked mob is dead
 - trait conditions use the shared condition DSL
 
@@ -535,8 +570,10 @@ Minimum coverage:
 
 ### Phase 4: Delayed And Cross-Action Traits
 
-- Add scheduled action support for `exploder` and `tracker`.
-- Align tracker execution with mob/ambient command issuer rules.
+- `tracker` follow and re-engagement are implemented as a guarded, bounded
+  cross-action flow. Generalized mob movement issuer/policy integration remains
+  future work.
+- Add scheduled action support for `exploder`.
 - Emit durable trait events for debugging and client presentation.
 
 ### Phase 5: Optional Reusable Trait Manifests

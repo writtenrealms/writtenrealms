@@ -250,6 +250,7 @@ class CombatStepResult:
     actor_key: str | None
     events: list[GameEvent]
     encounter_active: bool
+    tracker_chase: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -1044,14 +1045,34 @@ def _aggro_engage_events(
     room: Room,
     mob: Mob,
     primary_mob: Mob | None = None,
+    player_char_payload: dict | None = None,
+    mob_char_payload: dict | None = None,
+    primary_mob_char_payload: dict | None = None,
+    room_payload: dict | None = None,
 ) -> list[GameEvent]:
+    serialized_player = (
+        player_char_payload
+        if player_char_payload is not None
+        else serialize_char_from_player(player).model_dump()
+    )
+    serialized_mob = (
+        mob_char_payload
+        if mob_char_payload is not None
+        else serialize_char_from_mob(mob).model_dump()
+    )
+    if primary_mob_char_payload is not None:
+        serialized_primary_mob = primary_mob_char_payload
+    elif primary_mob is None or primary_mob.id == mob.id:
+        serialized_primary_mob = serialized_mob
+    else:
+        serialized_primary_mob = serialize_char_from_mob(primary_mob).model_dump()
     player_payload = _combat_state_payload(
-        serialize_char_from_player(player).model_dump(),
-        target_payload=serialize_char_from_mob(primary_mob or mob).model_dump(),
+        serialized_player,
+        target_payload=serialized_primary_mob,
     )
     target_payload = _combat_state_payload(
-        serialize_char_from_mob(mob).model_dump(),
-        target_payload=serialize_char_from_player(player).model_dump(),
+        serialized_mob,
+        target_payload=serialized_player,
     )
     mob_name = target_payload.get("name") or "Something"
     return [
@@ -1061,7 +1082,11 @@ def _aggro_engage_events(
             data={
                 "actor": player_payload,
                 "target": target_payload,
-                "room": _room_payload(player, room),
+                "room": (
+                    room_payload
+                    if room_payload is not None
+                    else _room_payload(player, room)
+                ),
             },
             text=f"{safe_capitalize(mob_name)} attacks you!",
         )
@@ -1652,6 +1677,16 @@ def _complete_flee(
     player.save(update_fields=player_update_fields)
     player.viewed_rooms.add(destination_room_id)
 
+    from spawns.actions.mob_movement import plan_player_escape
+
+    tracker_plan = plan_player_escape(
+        player=player,
+        origin_room_id=origin_room_id,
+        destination_room_id=destination_room_id,
+        direction=direction,
+        source="flee",
+    )
+
     encounter.pending_flee = {}
     encounter.pending_player_ability = {}
     encounter.pending_mob_ability = {}
@@ -1698,6 +1733,11 @@ def _complete_flee(
             round_id=round_id,
         ),
         encounter_active=False,
+        tracker_chase=(
+            tracker_plan.action_payload()
+            if tracker_plan.tracker_mob_ids
+            else None
+        ),
     )
 
 
@@ -4838,6 +4878,25 @@ def resolve_combat_encounter_step(
             events=[*result.events, _combat_effect_state_event(player)],
         )
 
+    if result.tracker_chase:
+        from spawns.actions.mob_movement import ResolveTrackerChaseAction
+
+        try:
+            tracker_result = ResolveTrackerChaseAction().execute(
+                **result.tracker_chase
+            )
+        except Exception:
+            logger.exception(
+                "Failed to resolve tracker chase %s.",
+                result.tracker_chase.get("chase_key"),
+            )
+        else:
+            result = replace(
+                result,
+                events=[*result.events, *tracker_result.events],
+                tracker_chase=None,
+            )
+
     if next_delay:
         _schedule_encounter_resolution(encounter_id, next_delay)
 
@@ -4862,6 +4921,10 @@ class ScanRoomAggroAction:
         primary_mob: Mob | None,
         rules_config,
         death_config,
+        player_char_payload: dict | None = None,
+        mob_char_payload: dict | None = None,
+        primary_mob_char_payload: dict | None = None,
+        room_payload: dict | None = None,
     ) -> ActionResult:
         interval = _combat_interval(rules_config)
         events = _aggro_engage_events(
@@ -4869,6 +4932,10 @@ class ScanRoomAggroAction:
             room=room,
             mob=mob,
             primary_mob=primary_mob,
+            player_char_payload=player_char_payload,
+            mob_char_payload=mob_char_payload,
+            primary_mob_char_payload=primary_mob_char_payload,
+            room_payload=room_payload,
         )
 
         if interval == 0:

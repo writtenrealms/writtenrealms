@@ -9,10 +9,10 @@ Traits can come from two places:
 - A spawn plan entry, when the trait should be guaranteed or randomly rolled for
   generated placements.
 
-Current runtime support applies numeric modifiers immediately. Behavior-style
-traits such as `exploder`, `tracker`, or `linker` can be authored and preserved
-as structured metadata, but they need dedicated runtime handlers before they
-change gameplay by themselves.
+Current runtime support applies numeric modifiers immediately and implements
+the `tracker` behavior trait. Other behavior-style traits such as `exploder` or
+`linker` can be authored and preserved as structured metadata, but they need
+dedicated runtime handlers before they change gameplay by themselves.
 
 ## Intrinsic Traits
 
@@ -136,9 +136,59 @@ Common mob modifier fields:
 Unsupported modifier keys are preserved in trait metadata but do not change
 runtime stats.
 
-## Behavior Trait Metadata
+## Tracker
 
-Behavior traits can carry params even before a runtime handler exists:
+Use `tracker` when a mob that has aggroed a player should pursue that player into
+the next room.
+
+```yaml
+kind: mobdefinition
+metadata:
+  slug: relentless-hound
+  name: a relentless hound
+spec:
+  type: beast
+  aggression: all
+  traits:
+    - key: tracker
+```
+
+`tracker` does not make a passive mob aggressive. Configure the mob's normal
+aggression or faction hostility separately. The trait only changes what a mob
+already in an active encounter does when its target leaves the room. If a
+player starts a fight with a passive tracker, that active fight still qualifies
+for pursuit.
+
+An aggro encounter starts at round `0`. Before its first combat round resolves,
+the player may use an ordinary direction command to leave. Every tracker mob
+with an active encounter against that player in the origin room follows through
+the same exit and re-engages in the destination. After the first round resolves,
+ordinary movement is rejected and the player must use `flee`.
+
+When `flee` succeeds, every eligible tracker from all of the player's active
+origin-room encounters follows the final escape route and re-engages. A tracker
+does not pathfind or teleport: it follows only that one exit, and only if the
+mob is still alive and in the expected origin, the player is still in the
+expected destination, the rooms remain connected in that direction, and the
+door remains passable. A room flagged `no_roam` is a hard boundary for tracker
+pursuit: a tracker cannot enter or leave it. If any of those checks fail, the
+mob stays behind.
+
+The same key can be guaranteed or rolled on a spawn-plan entry:
+
+```yaml
+traits:
+  guaranteed:
+    - key: tracker
+```
+
+Tracker candidates come from the player's active encounters and are processed
+as a bounded batch. The runtime does not scan all mobs in the world when a
+player moves or flees.
+
+## Other Behavior Trait Metadata
+
+Unimplemented behavior traits can carry params before a runtime handler exists:
 
 ```yaml
 traits:
@@ -197,13 +247,15 @@ Use intrinsic traits for identity:
 - a named boss that is always `colossal`
 - a trap construct that is always `exploder`
 - a guardian that is always `resilient`
+- a relentless hunter that always has `tracker`
 
 Use spawn-plan traits for variety:
 
 - random patrol mobs sometimes become `enraged`
 - elite guards always get `armored`
+- some hunting beasts roll `tracker`
 - a dungeon reset rolls a different mix of `armored`, `resilient`, and
   `enraged` mobs
 
-Use simple numeric modifiers first. They are deterministic, visible in spawned
-mob trait snapshots, and covered by the current runtime.
+Numeric modifiers and `tracker` are covered by the current runtime. Other
+behavior keys remain metadata until their dedicated handlers are implemented.

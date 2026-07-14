@@ -53,6 +53,9 @@ from spawns.triggers import (
 from worlds.models import Door, Room, World
 
 
+_CORE_FACTION_UNSET = object()
+
+
 # ---- Utilities ----
 
 def player_state(player: Player) -> str:
@@ -453,6 +456,7 @@ def serialize_char_from_mob(
     viewer: Player | Mob | None = None,
     quest_indicator_map: dict[int, dict[str, bool]] | None = None,
     include_equipment: bool = False,
+    core_faction_override: str | None | object = _CORE_FACTION_UNSET,
 ) -> Char:
     name = (
         mob.name
@@ -471,7 +475,15 @@ def serialize_char_from_mob(
     room_desc = mob.room_description
     if not room_desc and mob.definition:
         room_desc = mob.definition.room_description
-    factions = mob.factions
+    factions = (
+        mob.factions
+        if core_faction_override is _CORE_FACTION_UNSET
+        else (
+            {"core": str(core_faction_override)}
+            if core_faction_override
+            else {}
+        )
+    )
     actions = get_char_action_labels_for_actor(viewer, mob)
     quest_indicator = (quest_indicator_map or {}).get(mob.id, {})
     return Char(
@@ -611,6 +623,26 @@ def build_map_payload(
     id_to_key = {
         room["id"]: room_payload_key(room["id"], room["relative_id"]) for room in rooms
     }
+
+    # A map room must retain all of its exit references even when the player
+    # has not visited the destination yet. Resolve those destination keys in
+    # one bounded query without adding the destinations to the map payload.
+    exit_ids = {
+        exit_id
+        for room in rooms
+        for direction in adv_consts.DIRECTIONS
+        if (exit_id := room[f"{direction}_id"])
+    }
+    unresolved_exit_ids = exit_ids.difference(id_to_key)
+    if unresolved_exit_ids:
+        id_to_key.update(
+            {
+                room_id: room_payload_key(room_id, relative_id)
+                for room_id, relative_id in Room.objects.filter(
+                    id__in=unresolved_exit_ids
+                ).values_list("id", "relative_id")
+            }
+        )
 
     map_rooms: List[MapRoom] = []
     for room in rooms:

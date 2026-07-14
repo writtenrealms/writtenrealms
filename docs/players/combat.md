@@ -79,14 +79,27 @@ same room while your normal primary attack continues against the faceoff target.
 
 ## Leaving Combat
 
-Combat movement and flee behavior is still evolving. The current design goal is
-that ordinary hostile contact starts a fight without granting either side a free
-opener, while explicit opener actions such as charge commit you to combat and
-grant their first-action priority.
+When combat begins, its encounter starts at round zero. You may still use an
+ordinary direction command to leave before the first combat round resolves.
+Once that first round has resolved, ordinary movement is blocked and you must
+use `flee` to leave combat.
+
+Some mobs have the `tracker` trait. If a tracker has aggroed you during the
+round-zero opening, it follows you through the exit used for ordinary movement
+and immediately re-engages in the next room. Other hostile mobs remain behind.
 
 When `flee` succeeds, you leave the room and all active hostile encounters from
-that room end for you. Mobs that remain in the room are no longer shown as
-fighting you on nearby scans unless they later reach and engage you again.
+that room end for you. Any tracker mobs from those encounters follow your final
+escape route and re-engage in the destination room; this can include multiple
+trackers from the same fight, not just your primary target. Mobs that remain in
+the origin room are no longer shown as fighting you on nearby scans unless they
+later reach and engage you again.
+
+A tracker follows only the single exit you just used. It does not teleport or
+search across multiple rooms. If the mob can no longer traverse that exact
+route, or either of you has moved somewhere unexpected before the chase
+resolves, it stays behind. Rooms flagged `no_roam` stop tracker pursuit: the
+player may cross the boundary, but the tracker cannot enter or leave that room.
 
 Fleeing respects the same room movement policies as ordinary travel. A blocked
 direction is not eligible when the game chooses an escape route. The chosen

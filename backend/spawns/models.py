@@ -600,6 +600,11 @@ class CombatEncounter(BaseModel):
 
         return [active_effect_payload(effect) for effect in encounter_effects(self)]
 
+    @property
+    def is_combat_locked(self) -> bool:
+        """Ordinary movement closes after the first encounter round begins."""
+        return int(self.round_number or 0) > 0
+
 
 class ActiveEffect(BaseModel):
     """Canonical runtime state for effects that follow an actor between fights."""
