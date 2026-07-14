@@ -498,6 +498,7 @@ class ResolveTrackerChaseAction:
             return ActionResult(data={"moved_mob_ids": []})
 
         moved_mob_ids: list[int] = []
+        destination_room_snapshot: dict | None = None
         movement_events: list[GameEvent] = []
         engagement_events: list[GameEvent] = []
         mob_char_payloads: dict[int, dict] = {}
@@ -639,6 +640,7 @@ class ResolveTrackerChaseAction:
                     player,
                     destination_room,
                 )
+                destination_room_snapshot = destination_room_payload
 
                 if interval > 0:
                     for mob in eligible_mobs:
@@ -714,5 +716,8 @@ class ResolveTrackerChaseAction:
             )
         return ActionResult(
             events=[*movement_events, *engagement_events],
-            data={"moved_mob_ids": moved_mob_ids},
+            data={
+                "moved_mob_ids": moved_mob_ids,
+                "destination_room_snapshot": destination_room_snapshot,
+            },
         )

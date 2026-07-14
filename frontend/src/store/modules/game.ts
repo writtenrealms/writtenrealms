@@ -9,6 +9,18 @@ import router from "@/router";
 
 const MESSAGE_LIMIT = 200;
 
+const cloneRoomChar = (char) => ({
+  ...char,
+  target: char && char.target ? { ...char.target } : char?.target,
+});
+
+const replaceRoomChars = (state, chars) => {
+  state.room_chars = chars;
+  if (state.room) {
+    state.room.chars = chars;
+  }
+};
+
 const set_initial_state = () => {
   return {
     player_id: null,
@@ -1153,33 +1165,45 @@ const mutations = {
   },
 
   room_set: (state, room) => {
-    state.room = room;
-    state.room_chars = room.chars;
+    const chars = (room.chars || []).map(cloneRoomChar);
+    state.room = { ...room, chars };
+    state.room_chars = chars;
   },
 
   room_chars_add: (state, char) => {
-    state.room_chars.push(char);
+    const chars = state.room_chars.map(cloneRoomChar);
+    const incoming = cloneRoomChar(char);
+    const existingIndex = incoming.key
+      ? chars.findIndex(existingChar => existingChar.key === incoming.key)
+      : -1;
+    if (existingIndex === -1) {
+      chars.push(incoming);
+    } else {
+      chars[existingIndex] = incoming;
+    }
+    replaceRoomChars(state, chars);
   },
 
   room_chars_update: (state, char) => {
     const room_chars: {}[] = [];
     for (const existing_char of state.room_chars) {
       if (existing_char.key === char.key) {
-        room_chars.push(char);
+        room_chars.push(cloneRoomChar(char));
       } else {
         room_chars.push(existing_char);
       }
     }
-    state.room_chars = room_chars;
+    replaceRoomChars(state, room_chars);
   },
 
   room_chars_update_target: (state, { char, target }) => {
-    state.room_chars = state.room_chars.map(c => {
+    const room_chars = state.room_chars.map(c => {
       if (c.key === char.key) {
-        c.target = target;
+        return { ...c, target };
       }
       return c;
     });
+    replaceRoomChars(state, room_chars);
   },
 
   room_chars_remove: (state, char) => {
@@ -1189,7 +1213,7 @@ const mutations = {
         room_chars.push(existing_char);
       }
     }
-    state.room_chars = room_chars;
+    replaceRoomChars(state, room_chars);
   },
 
   connected_set: (state) => {

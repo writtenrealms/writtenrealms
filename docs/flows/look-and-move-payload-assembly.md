@@ -94,10 +94,13 @@ Key responsibilities:
    - `AdjustStaminaAction` consumes stamina
    - persists player and updates viewed rooms
 3. After mutation, `BuildMoveEventsAction` (`backend/spawns/actions/movement.py`) assembles output payloads:
-   - fresh `room` payload for destination room
+   - arrival-time `room` payload for the destination room
    - fresh `map` payload
    - actor payload
    - `door_states` delta entries for frontend map updates
+   - when a tracker follow-up has already run at transaction commit, the
+     tracker action's pre-chase destination snapshot is reused so the room
+     display still represents the instant when the player arrived
 4. Returned events include:
    - actor event `cmd.move.success`
    - optional room notifications:
@@ -150,6 +153,9 @@ This keeps textual output deterministic and aligned with structured payload data
 - `cmd.look.success` with `target_type === "room"` updates:
   - `state.room` from `data.target`
   - map and room key
+- Live room character state is copied away from the message payload. Later
+  movement notifications update the live room by character key without
+  rewriting historical look/move output or duplicating a replayed arrival.
 
 ### Console component selection
 

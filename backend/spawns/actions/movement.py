@@ -116,7 +116,12 @@ def _room_ref_payload(room: Room | None, fallback_id: int) -> dict:
 
 
 class BuildMoveEventsAction:
-    def execute(self, context: MoveContext) -> ActionResult:
+    def execute(
+        self,
+        context: MoveContext,
+        *,
+        room_payload_override: dict | None = None,
+    ) -> ActionResult:
         player = get_player_with_related(context.player_id)
         dest_room = _room_with_exits(context.dest_room_id)
         origin_room = Room.objects.filter(pk=context.origin_room_id).only(
@@ -130,12 +135,14 @@ class BuildMoveEventsAction:
         door_states_all = door_state_lookup(player.world, room_ids)
         map_rooms, room_key_lookup = build_map_payload(room_world, room_ids, door_states_all)
 
-        room_payload = serialize_room(
-            dest_room,
-            room_key_lookup,
-            door_states_all,
-            viewer=player,
-        )
+        room_payload = room_payload_override
+        if room_payload is None:
+            room_payload = serialize_room(
+                dest_room,
+                room_key_lookup,
+                door_states_all,
+                viewer=player,
+            ).model_dump()
         actor_payload = serialize_actor(player, dest_room)
 
         door_state_updates = []
@@ -150,7 +157,7 @@ class BuildMoveEventsAction:
 
         move_data = {
             "direction": context.direction,
-            "room": room_payload.model_dump(),
+            "room": room_payload,
             "origin_room": _room_ref_payload(origin_room, context.origin_room_id),
             "destination_room": _room_ref_payload(dest_room, context.dest_room_id),
             "actor": actor_payload.model_dump(),

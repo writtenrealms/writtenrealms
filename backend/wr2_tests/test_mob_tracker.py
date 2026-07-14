@@ -138,6 +138,60 @@ class TestMobTracker(WorldTestCase):
             self._player_messages_by_type(messages, "cmd.kill.success")
         )
 
+    def test_move_snapshot_precedes_tracker_arrival_at_real_commit_timing(self):
+        tracker = self._mob()
+        resident = self._mob("a resident guard", tracker=False)
+        resident.room = self.destination
+        resident.aggression = adv_consts.MOB_AGGRESSION_PASSIVE
+        resident.save(update_fields=["room", "aggression"])
+        self._encounter(tracker)
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with patch(
+                "spawns.handlers.movement.transaction.on_commit",
+                side_effect=lambda callback: callback(),
+            ):
+                with capture_game_messages() as messages:
+                    dispatch_text_command(self.player.id, "east")
+
+        self.player.refresh_from_db()
+        tracker.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.destination.id)
+        self.assertEqual(tracker.room_id, self.destination.id)
+
+        move_messages = self._player_messages_by_type(messages, "cmd.move.success")
+        self.assertEqual(len(move_messages), 1)
+        move_char_keys = {
+            char["key"] for char in move_messages[0]["data"]["room"]["chars"]
+        }
+        self.assertNotIn(tracker.key, move_char_keys)
+        self.assertIn(resident.key, move_char_keys)
+        self.assertNotIn(
+            "A tracker is here.",
+            move_messages[0].get("text") or "",
+        )
+
+        enter_messages = self._player_messages_by_type(
+            messages,
+            "notification.movement.enter",
+        )
+        self.assertEqual(
+            [message["data"]["actor"]["key"] for message in enter_messages],
+            [tracker.key],
+        )
+        kill_messages = self._player_messages_by_type(messages, "cmd.kill.success")
+        self.assertEqual(len(kill_messages), 1)
+        self.assertEqual(kill_messages[0]["data"]["target"]["key"], tracker.key)
+        self.assertEqual(
+            CombatEncounter.objects.filter(
+                player=self.player,
+                mob=tracker,
+                room=self.destination,
+                status=CombatEncounter.STATUS_ACTIVE,
+            ).count(),
+            1,
+        )
+
     def test_pre_lock_move_tracker_does_not_enter_no_roam_room(self):
         RoomFlag.objects.create(
             room=self.destination,
@@ -403,6 +457,24 @@ class TestMobTracker(WorldTestCase):
         )
         self.assertTrue(
             self._player_messages_by_type(messages, "cmd.kill.success")
+        )
+        flee_messages = self._player_messages_by_type(messages, "cmd.flee.success")
+        self.assertNotIn(
+            tracker.key,
+            {
+                char["key"]
+                for char in flee_messages[0]["data"]["room"]["chars"]
+            },
+        )
+        self.assertEqual(
+            [
+                message["data"]["actor"]["key"]
+                for message in self._player_messages_by_type(
+                    messages,
+                    "notification.movement.enter",
+                )
+            ],
+            [tracker.key],
         )
 
     def test_flee_tracker_does_not_enter_no_roam_room(self):

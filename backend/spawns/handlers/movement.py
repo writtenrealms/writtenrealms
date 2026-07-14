@@ -54,6 +54,7 @@ class MoveHandler(CommandHandler):
     def handle(self, ctx: CommandContext) -> None:
         direction = ctx.payload.get("direction")
         tracker_plan = None
+        tracker_room_snapshot = None
         followup_events = []
         move_events_published = False
 
@@ -128,6 +129,7 @@ class MoveHandler(CommandHandler):
                 )
 
                 def _resolve_tracker_chase() -> None:
+                    nonlocal tracker_room_snapshot
                     resolved_events = []
                     try:
                         tracker_result = ResolveTrackerChaseAction().execute(
@@ -140,6 +142,11 @@ class MoveHandler(CommandHandler):
                         )
                     else:
                         resolved_events.extend(tracker_result.events)
+                        snapshot = tracker_result.data.get(
+                            "destination_room_snapshot"
+                        )
+                        if isinstance(snapshot, dict):
+                            tracker_room_snapshot = snapshot
 
                     if not resolved_events:
                         return
@@ -157,7 +164,10 @@ class MoveHandler(CommandHandler):
                 if tracker_payload:
                     transaction.on_commit(_resolve_tracker_chase)
 
-            events_result = BuildMoveEventsAction().execute(context)
+            events_result = BuildMoveEventsAction().execute(
+                context,
+                room_payload_override=tracker_room_snapshot,
+            )
 
         except ActionError as err:
             ctx.publish(

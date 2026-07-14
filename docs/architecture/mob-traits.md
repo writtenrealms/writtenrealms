@@ -415,6 +415,9 @@ Current behavior:
   faceoff target.
 - Tracking is one edge at a time. It does not pathfind, teleport, or search for
   a player who is no longer at the expected destination.
+- The player's destination-room event represents the instant before trackers
+  cross the exit. Each successful pursuer is introduced afterward by one
+  movement-arrival event and then re-engages.
 - Before moving a tracker, execution revalidates that the mob is alive, remains
   in the expected origin room and world, the player remains in the expected
   destination and world, the rooms still share the expected directional edge,
@@ -425,6 +428,12 @@ Current behavior:
 Candidate collection is encounter-driven and bounded. Duplicate tracker trait
 sources on one mob must not cause duplicate movement or encounters in response
 to the same player transition.
+
+The chase resolver already serializes the destination before moving trackers
+for use by its engagement events. When an ordinary-movement commit resolves the
+chase before `cmd.move.success` is assembled, that pre-chase payload is reused
+as the player's arrival snapshot. This preserves event chronology without
+moving map, inventory, quest, and room serialization under the player-row lock.
 
 Tracker movement is currently a dedicated embodied-mob action. It validates the
 edge and door and emits normal movement notifications, but the generalized mob

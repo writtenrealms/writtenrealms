@@ -87,6 +87,8 @@ use `flee` to leave combat.
 Some mobs have the `tracker` trait. If a tracker has aggroed you during the
 round-zero opening, it follows you through the exit used for ordinary movement
 and immediately re-engages in the next room. Other hostile mobs remain behind.
+Your initial view of the destination does not list the pursuer; its arrival is
+announced afterward when it actually crosses the exit.
 
 When `flee` succeeds, you leave the room and all active hostile encounters from
 that room end for you. Any tracker mobs from those encounters follow your final

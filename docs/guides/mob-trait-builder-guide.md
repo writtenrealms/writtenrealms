@@ -165,6 +165,10 @@ with an active encounter against that player in the origin room follows through
 the same exit and re-engages in the destination. After the first round resolves,
 ordinary movement is rejected and the player must use `flee`.
 
+The player sees the destination as it stood when they arrived, before any
+trackers cross the exit. Each pursuing tracker is then announced once as it
+arrives and re-engages.
+
 When `flee` succeeds, every eligible tracker from all of the player's active
 origin-room encounters follows the final escape route and re-engages. A tracker
 does not pathfind or teleport: it follows only that one exit, and only if the
