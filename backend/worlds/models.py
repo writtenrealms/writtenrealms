@@ -1111,9 +1111,6 @@ class Zone(AdventWorldBaseModel):
         for spawn_world in running_worlds:
             pass
 
-Zone.connect_relative_id_post_save_signal()
-
-
 class ZoneState(BaseModel):
 
     zone = models.OneToOneField(
@@ -1327,8 +1324,6 @@ class RoomState(BaseModel):
     class Meta(BaseModel.Meta):
         ordering = ['room_id']
 
-
-Room.connect_relative_id_post_save_signal()
 
 # On room save, empty out the world's full map
 def post_room_save(sender, **kwargs):

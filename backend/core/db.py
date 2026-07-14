@@ -1,8 +1,10 @@
+import hashlib
+
 from core.utils import CamelCase__to__camel_case
 
 from django.conf import settings
-from django.db import models, transaction
-from django.db.models import Case, When
+from django.db import connections, models, router, transaction
+from django.db.models import Case, Max, When
 
 
 optional = dict(blank=True, null=True)
@@ -68,28 +70,46 @@ class AdventWorldBaseModel(AdventBaseModel):
         abstract = True
         unique_together = ['world', 'relative_id']
 
-    @staticmethod
-    def post_save_relative_id_model(sender, **kwargs):
-        if kwargs.get('created'):
-            instance = kwargs['instance']
-            # Get queryset for all the other instances of a same model class
-            # relative to that same world.
-            qs = instance.__class__.objects\
-                    .filter(world=instance.world)\
-                    .exclude(relative_id__isnull=True)\
-                    .exclude(pk=instance.pk)\
-                    .order_by('-created_ts')
-
-            if qs.count():
-                most_recent_instance = qs[0]
-                instance.relative_id = most_recent_instance.relative_id + 1
-            else:
-                instance.relative_id = 1
-            instance.save()
-
     @classmethod
-    def connect_relative_id_post_save_signal(cls):
-        models.signals.post_save.connect(cls.post_save_relative_id_model, cls)
+    def _relative_id_lock_key(cls, world_id):
+        lock_scope = f'{cls._meta.label_lower}:{world_id}'.encode('utf-8')
+        lock_digest = hashlib.blake2b(lock_scope, digest_size=8).digest()
+        return int.from_bytes(lock_digest, byteorder='big', signed=True)
+
+    def save(self, *args, **kwargs):
+        needs_relative_id = (
+            self._state.adding
+            and self.relative_id is None
+            and self.world_id is not None
+        )
+        if not needs_relative_id:
+            return super().save(*args, **kwargs)
+
+        using = kwargs.get('using') or router.db_for_write(
+            self.__class__,
+            instance=self,
+        )
+        connection = connections[using]
+
+        with transaction.atomic(using=using):
+            # Serialize allocation only for this model and world. This keeps
+            # concurrent builders from selecting the same next value without
+            # introducing a global lock across unrelated worlds or models.
+            if connection.vendor == 'postgresql':
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        'SELECT pg_advisory_xact_lock(%s)',
+                        [self._relative_id_lock_key(self.world_id)],
+                    )
+
+            highest_relative_id = (
+                self.__class__.objects
+                .using(using)
+                .filter(world_id=self.world_id)
+                .aggregate(highest=Max('relative_id'))['highest']
+            )
+            self.relative_id = (highest_relative_id or 0) + 1
+            return super().save(*args, **kwargs)
 
     @property
     def key(self):

@@ -262,6 +262,11 @@ for full examples and ordering notes.
 
 Zone manifests now use `spec.state` for zone-scoped mutable state.
 
+Creating a zone with **World > Zones > Add** assigns the next available
+world-relative zone ID. The resulting `zone@<relative_id>` manifest reference
+is independent of the zone's database ID and remains stable when copied
+between environments.
+
 Example:
 
 ```yaml

@@ -957,9 +957,6 @@ class Path(AdventWorldBaseModel):
             pass
 
 
-Path.connect_relative_id_post_save_signal()
-
-
 class Procession(AdventBaseModel):
 
     faction = models.ForeignKey('builders.Faction',
