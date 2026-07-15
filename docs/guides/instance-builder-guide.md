@@ -160,6 +160,9 @@ game commands from the linked base room.
 | `instance` | Show the linked entrance, or show the current run's Instance ID while inside. |
 | `/reset` | Builder-only: reset the current instance run to its initial spawned state. |
 
+At a linked base-world room, the room look output includes an **Enter** action.
+Selecting it issues the normal `enter` command.
+
 When the first player enters, WR2 prints the run's Instance ID in the room
 output. The leader can share that ID with group members. A group member should
 stand at the same linked entrance and type `enter <instance_ref>` to join the

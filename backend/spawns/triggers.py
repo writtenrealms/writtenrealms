@@ -1002,16 +1002,21 @@ def get_room_action_labels_for_actor(actor: Player | Mob | None, room: Room | No
     triggers, resolved_room, resolved_zone, trigger_world = (
         _get_applicable_command_fallback_triggers(actor, room=room)
     )
-    if not triggers:
-        return []
-
-    return _collect_display_action_labels(
+    labels = _collect_display_action_labels(
         actor=actor,
         triggers=triggers,
         room=resolved_room,
         zone=resolved_zone,
         world=trigger_world,
-    )
+    ) if triggers else []
+
+    # Room.transfer_to is the authored base-room -> instance-room link. Keep
+    # this check on the already-loaded FK id so room output at busy entrances
+    # does not add a database query per look.
+    if isinstance(actor, Player) and room.transfer_to_id and "enter" not in labels:
+        labels.append("enter")
+
+    return labels
 
 
 def get_item_action_labels_for_actor(actor: Player | Mob | None, item: Item | None) -> list[str]:

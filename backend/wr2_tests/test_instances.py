@@ -403,6 +403,18 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self.assertEqual(state_message["data"]["world"]["instance_ref"], run.ref)
         self.assertEqual(state_message["data"]["room"]["id"], self.instance_room.id)
 
+    def test_look_at_instance_entrance_includes_enter_action(self):
+        self._link_current_room_to_instance()
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "look")
+
+        look_message = self._message_by_type(messages, "cmd.look.success")
+
+        self.assertIsNotNone(look_message)
+        self.assertIn("enter", look_message["data"]["target"]["actions"])
+        self.assertIn("Action available: enter", look_message["text"])
+
     def test_enter_command_without_instance_link_returns_error(self):
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "enter")
