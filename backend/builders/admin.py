@@ -20,8 +20,6 @@ from builders.models import (
     RandomItemProfile,
     RoomAction,
     RoomBlock,
-    RoomCheck,
-    RoomCommandCheck,
     RoomGetTrigger,
     Social,
     SpawnEntry,
@@ -125,17 +123,6 @@ class RoomGetTriggerAdmin(BaseAdmin):
     display_as_choicefield = ['action']
 
 
-class RoomCommandCheckAdmin(BaseAdmin):
-    list_display = ['id', room_world, 'name', 'room', 'check_type']
-    raw_id_fields = ['room']
-
-
-class RoomCheckAdmin(BaseAdmin):
-    list_display = ['id', room_world, 'name', 'room', 'prevent', 'check_type', 'argument']
-    raw_id_fields = ['room']
-    display_as_choicefield = ['prevent', 'check_type']
-
-
 class RoomActionAdmin(BaseAdmin):
     list_display = ['id', room_world, 'name', 'room']
     raw_id_fields = ['room']
@@ -228,8 +215,6 @@ admin.site.register(Procession, ProcessionAdmin)
 admin.site.register(RandomItemProfile, RandomItemProfileAdmin)
 admin.site.register(RoomAction, RoomActionAdmin)
 admin.site.register(RoomBlock, RoomBlockAdmin)
-admin.site.register(RoomCheck, RoomCheckAdmin)
-admin.site.register(RoomCommandCheck, RoomCommandCheckAdmin)
 admin.site.register(RoomGetTrigger, RoomGetTriggerAdmin)
 admin.site.register(Social, SocialAdmin)
 admin.site.register(SpawnPlan, SpawnPlanAdmin)

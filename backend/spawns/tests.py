@@ -15,7 +15,6 @@ from config import constants as api_consts
 from backend.config.exceptions import ServiceError
 from builders.models import (
     MobDefinition,
-    RoomCommandCheck,
     Faction,
     FactionAssignment,
     Procession)
@@ -27,7 +26,6 @@ from spawns.models import (
     Item,
     Equipment,
     Mob,
-    RoomCommandCheckState,
     PlayerConfig)
 from spawns.services import WorldGate
 from system.models import IntroConfig
@@ -43,9 +41,7 @@ Animation notes:
     - first world frame
     - zones
     - rooms
-        - command checks
         - get triggers
-        - room checks
 
 
 * spawn plans:
@@ -434,79 +430,6 @@ class APIExtractionPlayerTests(APIExtractionTests):
 
 
 class APIExtractionSinglePlayerWorldTests(APIExtractionTests):
-
-    def test_command_checks_extraction(self):
-        """
-        Start with 4 command checks, 2 with no states and 2 with a passed
-        state. One null becomes passed and one passed is not in the extraction
-        data. At the end, we expect 1 null and 3 passed (but all recorded)
-        """
-
-        # Null, will create a new record with None passed_ts
-        cmd_check_1 = RoomCommandCheck.objects.create(
-            room=self.room,
-            allow_commands='cmd.get',
-            check=adv_consts.ROOM_CHECK_IN_INV,
-            argument='item_definition.1',
-            failure_msg="You can't do anything until you get the thing!",
-            track_state=True)
-        # Null, will be set to passed
-        cmd_check_2 = RoomCommandCheck.objects.create(
-            room=self.room,
-            allow_commands='cmd.get',
-            check=adv_consts.ROOM_CHECK_IN_INV,
-            argument='item_definition.2',
-            failure_msg="You can't do anything until you get the thing!",
-            track_state=True)
-        # Passed, won't change
-        cmd_check_3 = RoomCommandCheck.objects.create(
-            room=self.room,
-            allow_commands='cmd.get',
-            check=adv_consts.ROOM_CHECK_IN_INV,
-            argument='item_definition.3',
-            failure_msg="You can't do anything until you get the thing!",
-            track_state=True)
-        RoomCommandCheckState.objects.create(
-            world=self.spawn_world,
-            cmd_check=cmd_check_3,
-            passed_ts=timezone.now())
-        # Passed, won't be mentioned and still won't change
-        cmd_check_4 = RoomCommandCheck.objects.create(
-            room=self.room,
-            allow_commands='cmd.get',
-            check=adv_consts.ROOM_CHECK_IN_INV,
-            argument='item_definition.4',
-            failure_msg="You can't do anything until you get the thing!",
-            track_state=True)
-        RoomCommandCheckState.objects.create(
-            world=self.spawn_world,
-            cmd_check=cmd_check_4,
-            passed_ts=timezone.now())
-
-        api_extractor = APIExtractor(
-            self.spawn_world,
-            [
-                {
-                    "id": str(cmd_check_1.id),
-                    "model": "room_cmd_check",
-                    "state": None
-                },
-                {
-                    "id": str(cmd_check_2.id),
-                    "model": "room_cmd_check",
-                    "state": 'passed'
-                },
-                {
-                    "id": str(cmd_check_3.id),
-                    "model": "room_cmd_check",
-                    "state": 'passed'
-                },
-            ])
-        api_extractor.save_command_checks()
-        check_states = self.spawn_world.world_check_states.all()
-        self.assertEqual(check_states.count(), 4)
-        self.assertIsNone(check_states.get(cmd_check=cmd_check_1).passed_ts)
-        self.assertIsNotNone(check_states.get(cmd_check=cmd_check_3).passed_ts)
 
     @mock.patch('spawns.extraction.api_consts')
     def test_mobs_extraction(self, mock_api_consts):

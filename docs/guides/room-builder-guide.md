@@ -1,0 +1,192 @@
+# WR2 Room Builder Guide
+
+Rooms are authored as `kind: room` YAML manifests. Use **Rooms > Edit** to
+edit the currently selected room in place. The page loads canonical YAML only
+when opened, saves it through the shared world manifest endpoint, and then
+refreshes both the room and the YAML shown in the editor.
+
+Room movement rules and interactions are separate triggers. Use
+**Rooms > Triggers** for command triggers, movement policies, and
+post-movement events. WR2 has no Room Checks screen or room-check model.
+
+## Editing A Room
+
+1. Select a room in the world editor.
+2. Open **Rooms > Edit**.
+3. Edit the loaded YAML.
+4. Keep `metadata.ref` unchanged when updating that room.
+5. Select **Save YAML**.
+6. Review the refreshed room and canonical YAML.
+
+The editor accepts one room manifest. Use **World > Edit World** when applying
+multiple related documents, such as a room plus a zone, neighboring rooms,
+triggers, and spawn plans.
+
+## Complete Example
+
+```yaml
+kind: room
+metadata:
+  ref: room@10,4,0
+  name: North Gate
+spec:
+  zone: zone@2
+  description: An ironbound gate closes the northern road.
+  note: Builder-only note about the gate encounter.
+  type: road
+  color: "#8a8175"
+  is_landmark: true
+  exits:
+    north: room@10,5,0
+    east: null
+    south: room@10,3,0
+    west: null
+    up: null
+    down: null
+  flags:
+    - no_roam
+  details:
+    - keywords: gate ironbound
+      description: Rivets run in black rows across the gate.
+      is_hidden: false
+  doors:
+    - direction: north
+      name: ironbound gate
+      to_room: room@10,5,0
+      key: itemdefinition.north-gate-key
+      destroy_key: false
+      default_state: locked
+```
+
+## Identity And Location
+
+`metadata.ref` is the room's portable coordinate identity:
+
+```yaml
+metadata:
+  ref: room@10,4,0
+```
+
+Coordinates are world-relative and survive export/import even when database
+ids differ. Changing this ref does not move the currently selected row. It
+means "apply a room at these coordinates" and may create or update a different
+room. Preserve it during ordinary edits.
+
+`metadata.name` is the player-facing room name. `spec.zone` uses a portable
+`zone@<relative_id>` ref. Copy that value from the zone screen or an existing
+room rather than using a database id or a possibly duplicated zone name.
+
+## Room Fields
+
+| Field | Purpose |
+| --- | --- |
+| `metadata.name` | Player-facing room name. |
+| `spec.zone` | Owning zone as `zone@<relative_id>`, or blank for no zone. |
+| `spec.description` | Main room prose shown to players. |
+| `spec.note` | Builder-only authoring note. |
+| `spec.type` | Terrain/type used by movement and room presentation. |
+| `spec.color` | Optional builder-map display color. |
+| `spec.is_landmark` | Whether the room is marked as a landmark. |
+| `spec.exits` | Direction-to-room mappings. |
+| `spec.flags` | Complete set of room behavior flags. |
+| `spec.details` | Complete set of inspectable room details. |
+| `spec.doors` | Complete set of doors originating in the room. |
+
+Supported room types are `road`, `city`, `indoor`, `field`, `mountain`,
+`forest`, `desert`, `water`, `shallow`, and `trail`.
+
+## Exits
+
+Exit values use `room@x,y,z` refs. Set a direction to `null` when there is no
+exit:
+
+```yaml
+exits:
+  north: room@10,5,0
+  east: null
+  south: room@10,3,0
+  west: null
+  up: null
+  down: null
+```
+
+An exit is directional. When both rooms should link to each other, make sure
+the neighboring room has the reverse exit as well. For coordinated layout
+changes, apply both room documents together through **World > Edit World**.
+
+## Flags, Details, And Doors Replace Their Lists
+
+The canonical room YAML includes the complete `flags`, `details`, and `doors`
+collections. When any of those keys is present, saving replaces that whole
+collection for the room. Do not omit an existing entry that should remain.
+
+Flags are string codes. Current choices are `no_ride`, `no_load`, `no_roam`,
+`dark`, `no_spell`, `peaceful`, `interest`, `fountain`, `trainer`, `inn`,
+`exp`, `horse`, `shop`, `food`, `choke`, `smob`, `action`, `herb`, and
+`no_quit`.
+
+A detail needs search keywords and description text:
+
+```yaml
+details:
+  - keywords: inscription runes
+    description: The weathered runes name a forgotten king.
+    is_hidden: false
+```
+
+A door identifies its direction and destination independently from the exit
+map. `key` is optional; when present, use an `itemdefinition.<slug>` ref.
+`default_state` is `open`, `closed`, or `locked`.
+
+## Movement Rules Use Policy Triggers
+
+Do not add `checks` or `room_checks` to a room manifest. Gate entry or exit
+with a room-scoped policy trigger:
+
+```yaml
+kind: trigger
+metadata:
+  name: Warlord Gate
+spec:
+  scope: room
+  kind: policy
+  event: before_move_enter
+  target:
+    type: room
+    key: room.120
+  conditions:
+    eq:
+      - actor.archetype
+      - warlord
+  failure_message: Only warlords may enter.
+  order: 0
+  is_active: true
+```
+
+Use `before_move_exit` on the origin room to gate leaving. Add `match: north`
+or another direction when the policy should affect only one route. Policy
+conditions state when movement is allowed; a false condition blocks movement.
+
+For more examples, see
+[trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md)
+and
+[condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md).
+
+## Applying And Validation
+
+Room manifests support `operation: apply` only. They do not have a room-delete
+operation. Saving validates refs, room types, flags, directions, item keys, and
+door states before applying the document.
+
+Rank 1-2 builders may edit rooms covered by their room or zone assignment.
+Creating a room through YAML requires rank 3 or higher. The same permission
+rules apply whether YAML is saved from **Rooms > Edit** or
+**World > Edit World**. When the current builder may inspect a room but not
+alter it, **Rooms > Edit** is view-only and disables save.
+
+## Related Docs
+
+- [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
+- [trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md)
+- [condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md)
+- [spawn-plan-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/spawn-plan-builder-guide.md)

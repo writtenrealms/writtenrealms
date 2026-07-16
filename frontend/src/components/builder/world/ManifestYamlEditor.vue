@@ -36,6 +36,7 @@ const props = withDefaults(defineProps<{
   loadedValue?: string;
   isSubmitting?: boolean;
   disabled?: boolean;
+  saveDisabled?: boolean;
   copyLabel?: string;
   saveLabel?: string;
   savingLabel?: string;
@@ -47,6 +48,7 @@ const props = withDefaults(defineProps<{
   loadedValue: "",
   isSubmitting: false,
   disabled: false,
+  saveDisabled: false,
   copyLabel: "COPY YAML",
   saveLabel: "SAVE YAML",
   savingLabel: "SAVING...",
@@ -70,6 +72,7 @@ const savedValue = computed(() => props.loadedValue || "");
 const canCopy = computed(() => !props.disabled && Boolean(currentValue.value.trim()));
 const canSave = computed(() => (
   !props.disabled
+  && !props.saveDisabled
   && !props.isSubmitting
   && Boolean(currentValue.value.trim())
   && currentValue.value !== savedValue.value

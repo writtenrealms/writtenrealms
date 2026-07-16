@@ -440,6 +440,14 @@ def _serialize_room_manifest(room: Room) -> dict[str, Any]:
     }
 
 
+def serialize_room_manifest_payload(room: Room) -> dict[str, Any]:
+    manifest = _serialize_room_manifest(room)
+    return {
+        "manifest": manifest,
+        "yaml": _manifest_to_yaml(manifest),
+    }
+
+
 def _serialize_path_manifest(path: Path) -> dict[str, Any]:
     return {
         "kind": PATH_MANIFEST_KIND,

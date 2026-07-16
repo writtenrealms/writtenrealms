@@ -172,6 +172,7 @@ api_v1_urls = [
     # Rooms
     path('builder/worlds/<world_pk>/rooms/', builder_views.room_list, name='builder-room-list'),
     path('builder/worlds/<world_pk>/rooms/<pk>/', builder_views.room_detail, name='builder-room-detail'),
+    path('builder/worlds/<world_pk>/rooms/<pk>/manifest/', builder_views.room_manifest, name='builder-room-manifest'),
     path('builder/worlds/<world_pk>/rooms/<pk>/legacy/', builder_views.room_detail_legacy, name='builder-room-detail-legacy'),
     path('builder/worlds/<world_pk>/rooms/<pk>/dir_action/', builder_views.room_dir_action, name='builder-room-action'),
     path('builder/worlds/<world_pk>/rooms/<pk>/last_viewed/', builder_views.room_mark_last_viewed, name='builder-room-mark-last-viewed'),
@@ -179,8 +180,6 @@ api_v1_urls = [
     path('builder/worlds/<world_pk>/rooms/<pk>/flags/', builder_views.room_flag_list, name='builder-room-flags'),
     path('builder/worlds/<world_pk>/rooms/<pk>/flags/<code>/', builder_views.room_flag_toggle, name='builder-room-flag-toggle'),
     path('builder/worlds/<world_pk>/rooms/<room_pk>/spawn-plans/', builder_views.room_spawn_plans, name='builder-room-spawn-plans'),
-    path('builder/worlds/<world_pk>/rooms/<room_pk>/checks/', builder_views.room_checks, name='builder-room-checks'),
-    path('builder/worlds/<world_pk>/rooms/<room_pk>/checks/<pk>/', builder_views.room_check_detail, name='builder-room-check-detail'),
     path('builder/worlds/<world_pk>/rooms/<room_pk>/triggers/', builder_views.room_triggers, name='builder-room-trigger-list'),
     path('builder/worlds/<world_pk>/rooms/<room_pk>/triggers/<pk>/', builder_views.room_trigger_detail, name='builder-room-trigger-detail'),
     path('builder/worlds/<world_pk>/rooms/<room_pk>/actions/', builder_views.room_action_list, name='builder-room-action-list'),

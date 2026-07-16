@@ -18,6 +18,12 @@ This plan remains directional, but several pieces are now implemented:
 - Builder command primitives are `/echo` and `/cmd`.
 - Trigger YAML manifest ingestion is in place for create/update/delete.
 - Room builder UI now exposes **Triggers** and a room-tailored new-trigger template.
+- Room builder UI exposes **Edit** in the former **Checks** slot. It loads the
+  selected room's canonical `kind: room` YAML on demand and applies changes
+  through the shared manifest endpoint.
+- Room-scoped `before_move_exit` and `before_move_enter` policy triggers now
+  provide veto-capable movement gates. WR2 no longer has `RoomCheck`,
+  `RoomCommandCheck`, or `RoomCommandCheckState` models or APIs.
 - The command dispatcher can resolve `room`, `zone`, and `world` actor types
   through the existing actor compatibility path.
 - `CommandContext` carries optional `room`, `zone`, and `world` references in
@@ -55,6 +61,8 @@ Still future work:
 - There is not yet a dedicated `ScriptCommandRunner`.
 - Ambient command recursion limits, rate limits, and structured diagnostics are
   not complete.
+- A generic `before_command` policy hook for vetoing already resolved command
+  handlers is not implemented.
 
 ## Why This Is Needed
 
@@ -188,67 +196,56 @@ Responsibilities:
 
 This prevents room/quest logic from directly crafting ad hoc command calls.
 
-## Legacy Room Check Replacement Requirement
+## WR1 Room Check Retirement And Export Boundary
 
-WR1-style `RoomCheck` and `RoomCommandCheck` are legacy authored concepts and
-should not remain a permanent parallel system in WR2.
+WR1 `RoomCheck` and `RoomCommandCheck` were pre-action veto concepts. WR2 does
+not store either model, and it has no `RoomCommandCheckState`. The old builder
+UI, REST endpoints, runtime payloads, and state cleanup paths are removed.
 
-Detailed design direction for the replacement lives in
+Movement replacement is implemented through room-scoped policy triggers:
+
+- `before_move_exit` runs against the origin room before movement mutates
+  state.
+- `before_move_enter` runs against the destination room before movement
+  mutates state.
+- a false policy condition vetoes movement and returns authored
+  `failure_message` text.
+- ordinary movement, direction-based Charge, and flee-route selection use the
+  policy path.
+
+Detailed movement behavior lives in
 [pre-action-policy-hooks.md](/Users/teebes/code/writtenrealms/docs/architecture/pre-action-policy-hooks.md).
 
-This ambient issuer plan must account for replacing them with the trigger and
-command-policy model, not merely coexisting with them.
+Command gating remains a distinct future capability. An ordinary WR2
+`kind: command` trigger is not a replacement for `RoomCommandCheck`: command
+triggers handle authored matched commands, while command checks intercepted
+already resolved handlers. A semantics-preserving replacement would require a
+`before_command` policy hook after parsing/resolution and before mutation.
 
-Why this matters:
-- Room checks currently represent pre-action veto logic, especially for
-  movement and command gating.
-- The current WR2 command trigger path is not sufficient on its own because it
-  only runs as a fallback for otherwise unresolved text commands.
-- To retire room checks cleanly, WR2 needs first-class pre-action policy hooks,
-  not only script execution after a command has already been resolved.
+WR1 conversion is an exporter concern, not a WR2 database migration:
 
-Required runtime hooks:
-- `before_command`: runs after command parsing and resolution, but before the
-  resolved handler executes.
-- `before_move_exit`: runs before leaving the current room.
-- `before_move_enter`: runs before entering the destination room.
-- `after_command` or equivalent event hooks: remain useful for side effects,
-  but they are not a substitute for veto-capable checks.
+- supported `RoomCheck` predicates become `kind: policy` trigger documents
+- unsupported predicates produce explicit exporter diagnostics
+- `RoomCommandCheck` rows are reported until `before_command` exists
+- WR2 imports only canonical room and trigger manifests into a fresh world
 
-Required behavior:
-- Hooks must be able to veto execution with authored feedback text.
-- Hooks must support room, zone, world, and ambient issuer context.
-- Hooks must support the same practical gating predicates room checks were used
-  for, such as inventory, equipment, room occupancy, faction standing, health,
-  and quest state.
-- Hooks must define how legacy `track_state`-style behavior maps into WR2,
-  whether by durable trigger state, quest facts, world facts, or explicit
-  policy state tables.
+The field-level mappings and unsupported cases are tracked in
+[yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md).
+Do not reintroduce a compatibility model, predicate vocabulary, or state table
+to make export easier.
 
-Migration direction:
-- Do not keep investing in `RoomCheck` and `RoomCommandCheck` as first-class
-  builder-facing end-state models.
-- Introduce trigger or policy authoring that can represent equivalent pre-action
-  rules.
-- Add a migration path from legacy room checks into the new authored model.
-- Remove legacy builder UI and runtime reliance only after the new policy path
-  is proven by tests.
+Remaining TODOs for this plan:
 
-Open TODOs for this plan:
-- Extend the movement policy hook contract described in
-  `pre-action-policy-hooks.md` as new pre-action hooks are added.
-- Update command planning or handler dispatch so recognized commands consult
-  pre-action hooks before normal execution.
-- Define issuer and subject semantics for `before_move_exit` and
-  `before_move_enter`.
-- Decide whether these hooks live inside `Trigger` with additional kinds or
-  phases, or in a sibling policy model that shares the same runtime pipeline.
-- Audit current condition coverage and close gaps needed for room-check
-  migration, especially quest-related predicates.
-- Decide how legacy `failure_msg`, `hint_msg`, and tracked pass or fail state
-  map into WR2 behavior.
-- Define builder export, manifest, and migration tooling for converting legacy
-  room checks into the new authored format.
+- Add `before_command` only when there is a concrete WR2 command-veto use case,
+  and define issuer/subject semantics at the same time.
+- If `before_command` is added, make recognized command planning consult the
+  policy before the domain handler mutates state.
+- Extend the structured condition DSL for any inventory, equipment, or
+  health-percentage predicate accepted by the WR1 exporter.
+- Define explicit WR2 behavior for any desired WR1 `hint_msg`, `cmd_issued`, or
+  tracked-state use case; do not imply these fields already map.
+- Implement WR1 exporter fixtures that prove supported movement conversion and
+  unsupported-row reporting.
 
 ## Safety Requirements
 
@@ -314,16 +311,24 @@ Exit criteria:
 
 ### Phase 5: Pre-action policy hooks and room-check replacement
 
-1. Add veto-capable pre-action hooks for resolved commands and movement.
-2. Ensure hooks execute before domain handlers mutate state.
-3. Support authored failure text and policy outcomes in standard publish paths.
-4. Prove one migrated legacy room-check flow end to end.
+Status: movement complete; generic command veto remains future work.
+
+1. Movement uses veto-capable `before_move_exit` and `before_move_enter`
+   policy triggers before state mutation.
+2. Movement failures use authored feedback through standard publish paths.
+3. Legacy room-check models, APIs, payloads, and builder UI are removed.
+4. If a concrete command-veto use case is adopted, add `before_command`
+   without reviving `RoomCommandCheck`.
+5. Prove WR1 room-check conversion in exporter fixtures rather than a WR2 data
+   migration.
 
 Exit criteria:
-- A migrated room-check scenario can block command or movement execution
-  without relying on legacy room-check runtime code.
-- Builder-authored pre-action rules work for at least room and zone scope.
-- Movement gating and command gating are both covered by tests.
+
+- Builder-authored room movement rules work without legacy runtime code. Met.
+- WR2 contains no room-check storage or builder surface. Met.
+- Supported WR1 movement checks export to policy manifests with regression
+  coverage. Pending in the WR1 exporter.
+- Command gating is covered if and when `before_command` joins the WR2 scope.
 
 ### Phase 6: Safety and hardening
 
@@ -339,13 +344,13 @@ Exit criteria:
 
 1. Remove temporary actor-only compatibility fields once migrated.
 2. Update docs and developer references.
-3. Remove or fully deprecate legacy room-check models and UI once replacement
-   coverage is complete.
+3. Keep legacy room-check models, UI, APIs, and runtime payloads absent from
+   WR2. This room-check cleanup is complete.
 4. Expand command coverage as needed.
 
 Exit criteria:
 - No core path depends on legacy actor-only API.
-- No core gameplay path depends on legacy room-check models.
+- No core gameplay path depends on legacy room-check models. Met.
 
 ## Testing Strategy
 
@@ -353,9 +358,11 @@ Required test layers:
 - Unit tests for context resolution and capability checks
 - Handler tests for issuer/subject enforcement
 - Integration tests for room/zone/world script execution
-- Integration tests for pre-action command and movement veto hooks
+- Integration tests for movement veto hooks, plus command-veto coverage if
+  `before_command` is implemented
 - Regression tests for player/mob command behavior
-- Migration regressions for legacy room-check replacement cases
+- WR1 exporter fixtures for supported room-check conversion and unsupported
+  command-check diagnostics
 - Loop safety tests (depth and dedupe guards)
 
 ## Implemented First Vertical Slice

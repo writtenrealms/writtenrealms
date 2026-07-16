@@ -154,6 +154,10 @@ origin room, while `before_move_enter` checks the destination room.
 
 Triggers use conditions in `spec.conditions`.
 
+WR2 does not store legacy Room Checks. Put entry and exit gates on
+room-scoped `kind: policy` triggers and express their allow rule with this
+shared condition syntax.
+
 ```yaml
 kind: trigger
 metadata:

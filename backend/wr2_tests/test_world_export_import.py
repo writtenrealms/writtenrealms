@@ -5,12 +5,14 @@ import yaml
 from rest_framework.reverse import reverse
 
 from builders.models import (
+    BuilderAssignment,
     Currency,
     ItemDefinition,
     MobDefinition,
     Path,
     PathRoom,
     Trigger,
+    WorldBuilder,
 )
 from config import constants as adv_consts
 from core.scoped_state import STATE_SCOPE_ZONE, replace_state_snapshot
@@ -484,6 +486,101 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(delete_manifest["kind"], "zone")
         self.assertEqual(delete_manifest["operation"], "delete")
         self.assertEqual(delete_manifest["metadata"]["ref"], f"zone@{self.harbor_zone.relative_id}")
+
+    def test_room_manifest_endpoint_returns_yaml_without_expanding_room_reads(self):
+        manifest_ep = reverse(
+            "builder-room-manifest",
+            args=[self.world.pk, self.start_room.pk],
+        )
+
+        manifest_resp = self.client.get(manifest_ep)
+
+        self.assertEqual(manifest_resp.status_code, 200, manifest_resp.data)
+        manifest = yaml.safe_load(manifest_resp.data["yaml"])
+        self.assertEqual(manifest_resp.data["manifest"], manifest)
+        self.assertEqual(manifest["kind"], "room")
+        self.assertEqual(
+            manifest["metadata"]["ref"],
+            f"room@{self.start_room.x},{self.start_room.y},{self.start_room.z}",
+        )
+        self.assertEqual(manifest["metadata"]["name"], "Old Gate")
+        self.assertEqual(manifest["spec"]["zone"], f"zone@{self.start_zone.relative_id}")
+        self.assertEqual(
+            manifest["spec"]["exits"]["east"],
+            f"room@{self.harbor_room.x},{self.harbor_room.y},{self.harbor_room.z}",
+        )
+
+        detail_resp = self.client.get(
+            reverse(
+                "builder-room-detail",
+                args=[self.world.pk, self.start_room.pk],
+            )
+        )
+        self.assertEqual(detail_resp.status_code, 200, detail_resp.data)
+        self.assertNotIn("manifest", detail_resp.data)
+        self.assertNotIn("yaml", detail_resp.data)
+
+        list_resp = self.client.get(
+            reverse("builder-room-list", args=[self.world.pk])
+        )
+        self.assertEqual(list_resp.status_code, 200, list_resp.data)
+        self.assertTrue(list_resp.data["results"])
+        for room_payload in list_resp.data["results"]:
+            self.assertNotIn("manifest", room_payload)
+            self.assertNotIn("yaml", room_payload)
+
+    def test_rank_two_builder_can_read_room_manifest_without_assignment(self):
+        builder_user = self.create_user("room-manifest-builder@example.com")
+        builder = WorldBuilder.objects.create(
+            world=self.world,
+            user=builder_user,
+            builder_rank=2,
+        )
+        self.client.force_authenticate(builder_user)
+
+        resp = self.client.get(
+            reverse(
+                "builder-room-manifest",
+                args=[self.world.pk, self.start_room.pk],
+            )
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data["manifest"]["kind"], "room")
+
+        apply_resp = self.client.post(
+            self.apply_ep,
+            {"manifest": resp.data["yaml"]},
+            format="json",
+        )
+        self.assertEqual(apply_resp.status_code, 403, apply_resp.data)
+
+        BuilderAssignment.objects.create(
+            builder=builder,
+            assignment=self.start_room,
+        )
+        apply_resp = self.client.post(
+            self.apply_ep,
+            {"manifest": resp.data["yaml"]},
+            format="json",
+        )
+        self.assertEqual(apply_resp.status_code, 200, apply_resp.data)
+        self.assertEqual(apply_resp.data["operation"], "updated")
+
+    def test_room_manifest_apply_rejects_non_mapping_metadata(self):
+        resp = self.client.post(
+            self.apply_ep,
+            {
+                "manifest": """kind: room
+metadata: invalid
+spec: {}
+""",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400, resp.data)
+        self.assertIn("metadata must be a mapping", str(resp.data))
 
     def test_copied_zone_yaml_updates_existing_zone_by_ref(self):
         detail_ep = reverse(

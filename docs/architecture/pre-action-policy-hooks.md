@@ -2,9 +2,9 @@
 
 ## Purpose
 
-WR2 needs a first-class way for authored content to veto or react to common
-runtime actions without reviving WR1 `RoomCheck` as a permanent parallel
-system.
+WR2 uses first-class policy and event triggers for authored content that must
+veto or react to common runtime actions. This replaces WR1 `RoomCheck` rather
+than preserving a parallel room-check subsystem.
 
 The immediate driver is movement gating:
 
@@ -19,8 +19,7 @@ The same architecture should also support post-action room behavior:
 - ambushes or room flavor on entry
 - quest/event reactions to movement
 
-This document defines the implemented v1 shape and the remaining migration
-direction.
+This document defines the implemented v1 shape and the WR1 exporter boundary.
 
 ## Current State
 
@@ -35,9 +34,14 @@ revalidated when the flee completes. This prevents a route from remaining
 usable when a door, guard mob, or other authored condition changes during the
 preparation delay.
 
-Legacy `RoomCheck` still exists in model/UI code, but it is a WR1-era concept
-with its own predicate vocabulary. It should be treated as migration input, not
-the WR2 end-state.
+WR2 has no `RoomCheck`, `RoomCommandCheck`, or `RoomCommandCheckState` model,
+runtime payload, API, or builder screen. The former **Rooms > Checks** slot is
+**Rooms > Edit**, an on-demand YAML editor for the selected `kind: room`
+manifest. Movement policies are authored separately in **Rooms > Triggers**.
+
+Any conversion of live WR1 content happens before import in the WR1 manifest
+exporter. WR2 starts from the exported room and trigger documents; there is no
+in-place legacy-row migration or compatibility table.
 
 ## Design Decision
 
@@ -46,7 +50,7 @@ manifest, and condition systems.
 
 Do not add a new room-check-specific subsystem.
 
-Add a new trigger kind:
+Use the trigger kind:
 
 - `policy`: evaluates before a resolved action is applied and may veto it
 
@@ -81,12 +85,12 @@ evaluation plus failure text only.
 
 ## Movement Hook Names
 
-Initial movement hooks:
+Supported movement hooks:
 
 - `before_move_exit`: evaluated against the origin room before leaving it
 - `before_move_enter`: evaluated against the destination room before entering it
-- `after_move_exit`: optional post-action event hook for leaving a room
-- `after_move_enter`: optional post-action event hook for entering a room
+- `after_move_exit`: post-action event hook for leaving a room
+- `after_move_enter`: post-action event hook for entering a room
 
 `before_*` hooks are policies and may veto.
 
@@ -341,50 +345,74 @@ Do not publish `cmd.move.success` when a policy vetoes movement.
 
 Do not run `after_move_*` triggers when movement is vetoed.
 
-## Relationship To Legacy RoomCheck
+## WR1 Export Relationship
 
-Legacy room checks map naturally into policies:
+WR1 room checks map into policy trigger documents:
 
 - `prevent=enter` -> `kind: policy`, `event: before_move_enter`, target room
 - `prevent=exit` -> `kind: policy`, `event: before_move_exit`, target room
+- `prevent=all` -> one entry policy and one exit policy
 - direction field -> policy applicability through event direction
-- `conditions` -> shared WR2 condition framework
+- blocking predicate -> an equivalent **allow** predicate in the shared WR2
+  condition framework
 - `failure_msg` -> `failure_message`
 
-Migration should convert authored room checks to policy triggers where possible.
+The polarity change matters: a WR1 check described when movement was blocked,
+while `spec.conditions` on a policy describes when movement is allowed. For
+example, a legacy guard-present block becomes `not: {mob_present:
+mobdefinition.guard}`.
 
-Do not add new behavior to legacy `RoomCheck` except where needed to support
-migration or compatibility before removal.
+The WR1 exporter should emit policy triggers only where it can preserve the
+predicate exactly and should report unsupported rows for author review. The
+authoritative field-by-field mappings and unsupported condition list live in
+[yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md).
 
-## V1 Implementation Checklist
+`RoomCommandCheck` is not equivalent to an ordinary `kind: command` trigger.
+The former vetoed already resolved commands, while the latter handles an
+authored matched command. Until WR2 implements a `before_command` policy hook,
+the exporter must report command-check rows instead of silently changing them
+or recreating their model.
+
+## V1 Implementation Status
 
 ### Phase 1: Movement Entry Policies
 
-- add `policy` as an accepted trigger kind
-- support `before_move_enter`
-- evaluate room-scoped policy conditions before `ChangeRoomAction`
-- cache policy lookup by world, destination room, and event
-- add tests for class/archetype-gated entry
+Implemented:
+
+- `policy` is an accepted trigger kind
+- `before_move_enter` is evaluated before movement mutation
+- room policy lookup is cached by world, room, and event
+- class/archetype-gated entry has regression coverage
 
 ### Phase 2: Exit Policies And Direction Context
 
-- support `before_move_exit`
-- expose `event.direction`, origin, and destination refs to conditions
-- add tests for direction-specific exit behavior
+Implemented:
+
+- `before_move_exit` is evaluated before movement mutation
+- conditions receive `event.direction`, origin, and destination refs
+- direction-specific exit behavior has regression coverage
 
 ### Phase 3: Post-Move Room Events
 
-- add `after_move_enter` and optionally `after_move_exit`
-- dispatch them from the canonical movement event path
-- support scripts only in post-action event triggers
-- add trap-style tests
+Implemented:
 
-### Phase 4: Migration And Builder UI
+- `after_move_enter` and `after_move_exit` are room event triggers
+- the canonical movement path dispatches them after movement succeeds
+- scripts remain post-action behavior rather than veto logic
 
-- show policy triggers in the existing room trigger list/detail UI
-- document policy authoring in the trigger/condition builder guides
-- add migration tooling for legacy room checks
-- remove or hide legacy room check builder UI after parity is proven
+### Phase 4: Builder UI And WR1 Export Boundary
+
+Implemented in WR2:
+
+- policy triggers appear in the room trigger UI
+- policy authoring is documented in the trigger and condition builder guides
+- **Rooms > Edit** exposes the selected room's canonical YAML
+- legacy room-check UI, models, APIs, and runtime payloads are removed
+
+Remaining outside WR2 runtime:
+
+- teach the WR1 manifest exporter to emit supported movement policy triggers
+  and explicit unsupported-row diagnostics using the mapping above
 
 ## Non-Goals For V1
 

@@ -22,9 +22,7 @@ from config import constants as api_consts
 from config import game_settings as adv_config
 from builders.models import (
     Currency,
-    RoomCommandCheck,
     RoomGetTrigger,
-    RoomCheck,
     ItemDefinition,
     MobDefinition,
     Faction,
@@ -1044,71 +1042,6 @@ class AnimateEquipmentSerializer(serializers.ModelSerializer):
             return eq.player.key
         except AttributeError:
             return eq.mob.key
-
-
-class AnimateRoomCommandCheckSerializer(serializers.ModelSerializer):
-    room = serializers.CharField(source='room.key')
-    state = serializers.SerializerMethodField()
-    check = serializers.CharField(source='check_type')
-    #key = serializers.SerializerMethodField()
-
-    class Meta:
-        model = RoomCommandCheck
-        fields = [
-            'id', 'key', 'room',
-            'disallow_commands', 'allow_commands',
-            'check', 'argument',
-            'failure_msg',
-            'hint_msg',
-            'state',
-        ]
-
-    def get_state(self, room_cmd_check):
-        if room_cmd_check.track_state:
-            world = self.context.get('world')
-            state_q = room_cmd_check.room_cmd_check_states.filter(world=world)
-            if state_q.exists():
-                if state_q.get().passed_ts:
-                    return adv_consts.ROOM_CHECK_STATE_PASSED
-            return adv_consts.ROOM_CHECK_STATE_FAILED
-        return None
-
-    # def get_key(self, cmd_check):
-    #     return cmd_check.get_game_key(self.context['world'])
-
-
-class AnimateRoomCheckSerializer(serializers.ModelSerializer):
-    prevent_entry = serializers.SerializerMethodField()
-    prevent_exit = serializers.SerializerMethodField()
-    check = serializers.CharField(source='check_type', allow_null=True)
-
-    def get_prevent_entry(self, cmd_check):
-        if cmd_check.prevent == adv_consts.ROOM_PREVENT_ENTER:
-            return cmd_check.room.key
-        return None
-
-    def get_prevent_exit(self, cmd_check):
-        if cmd_check.prevent == adv_consts.ROOM_PREVENT_EXIT:
-            return cmd_check.room.key
-        return None
-
-    class Meta:
-        model = RoomCheck
-        fields = [
-            'id',
-            'key',
-            'direction',
-            'prevent_entry',
-            'prevent_exit',
-            'check',
-            'argument',
-            'argument2',
-            'failure_msg',
-            'conditions',
-        ]
-
-    def get_key(self, room_check):
-        return room_check.get_game_key(self.context['world'])
 
 
 class AnimateRoomActionSerializer(serializers.ModelSerializer):

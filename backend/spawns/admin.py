@@ -8,7 +8,6 @@ from spawns.models import (
     Item,
     Mob,
     Equipment,
-    RoomCommandCheckState,
     Alias,
     PlayerEvent,
     PlayerConfig,
@@ -74,11 +73,6 @@ class MobAdmin(BaseAdmin):
     raw_id_fields = ['world', 'room', 'definition']
 
 
-class RoomCommandCheckStateAdmin(BaseAdmin):
-    list_display = ('id', 'world', 'cmd_check', 'passed_ts')
-    raw_id_fields = ['world', 'cmd_check']
-
-
 class AliasAdmin(BaseAdmin):
     list_display = ('id', 'player', 'match', 'replacement')
     raw_id_fields = ('player',)
@@ -122,7 +116,6 @@ admin.site.register(Player, PlayerAdmin)
 admin.site.register(Equipment, EquipmentAdmin)
 admin.site.register(Item, ItemAdmin)
 admin.site.register(Mob, MobAdmin)
-admin.site.register(RoomCommandCheckState, RoomCommandCheckStateAdmin)
 admin.site.register(Alias, AliasAdmin)
 admin.site.register(PlayerEvent, PlayerEventAdmin)
 admin.site.register(PlayerConfig, PlayerConfigAdmin)

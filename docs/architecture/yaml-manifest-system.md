@@ -121,6 +121,52 @@ Current required mappings:
   structured WR2 condition `mob_present: mobdefinition.<slug>`. When a policy
   should block movement while that mob exists, wrap the condition in `not` so
   the policy passes only while the mob is absent.
+- WR2 has no `RoomCheck`, `RoomCommandCheck`, or `RoomCommandCheckState` model,
+  API, runtime payload, or builder screen. These WR1 rows are exporter input
+  only; do not recreate them as a WR2 manifest kind or compatibility table.
+- WR1 `RoomCheck` rows export as room-scoped `kind: trigger` documents with
+  `spec.kind: policy`. Use the checked room's portable `room@x,y,z` ref as the
+  full-world export target (`spec.target: {type: room, ref: room@x,y,z}`). Map
+  `prevent: enter` to the `before_move_enter` event, `prevent: exit` to the
+  `before_move_exit` event, and `prevent: all` to two policy documents, one for
+  each event. Copy a non-empty direction to `spec.match`, `failure_msg` to
+  `spec.failure_message`, and preserve deterministic source order in
+  `spec.order`.
+- A policy condition describes when movement is **allowed**, while a WR1 room
+  check describes the case that prevents movement. Exporters must therefore
+  invert the WR1 blocking predicate. Current direct mappings are:
+  - `mob_is_present <mob_id>` -> `not: {mob_present:
+    mobdefinition.<slug>}`.
+  - `faction_below <faction> <standing>` -> `gte:
+    [actor.factions.<faction_code>, <standing>]` when a missing assignment and
+    the source threshold retain the same result; flag edge cases instead of
+    changing WR1's missing-standing behavior.
+  - `quest_incomplete <quest_id>` -> `quest_completed: <quest_slug>`.
+  - `quest_complete <quest_id>` -> `not: {quest_completed: <quest_slug>}`.
+  Resolve every numeric WR1 id against the source export and emit portable
+  slugs/refs. Never copy a numeric definition, quest, or room id into portable
+  WR2 YAML.
+- Flag WR1 room-check `in_inv`, `not_in_inv`, `equipped`, `not_equipped`, and
+  `health_below` rows until the structured WR2 condition DSL has equivalent
+  inventory/equipment membership and health-percentage predicates. Also flag
+  `argument2` exemptions and any legacy free-form `conditions` expression that
+  cannot be translated with identical polarity. Do not fall back to a new
+  room-check vocabulary or silently drop part of a predicate.
+- WR1 `RoomCommandCheck` has no semantics-preserving automatic mapping yet.
+  Its allow/disallow lists veto already recognized commands, whereas a WR2
+  `kind: command` trigger handles an authored matched command and does not wrap
+  every resolved command handler. Exporters must report and omit these rows
+  until WR2 has a `before_command` policy hook. Do not copy
+  `allow_commands`/`disallow_commands` into `spec.match`. `check_type:
+  cmd_issued`, `track_state`, and `hint_msg` likewise require explicit redesign
+  and must be reported as unsupported. If the WR1 content was actually meant
+  to introduce a custom room verb rather than veto a core command, an author
+  may replace it with a separate room-scoped `kind: command` trigger and an
+  explicit script; the check row alone does not contain enough behavior to
+  generate that trigger safely.
+- Room-check conversion belongs in the WR1 manifest exporter, not in a WR2
+  database migration. WR2 imports the resulting trigger documents into a fresh
+  world and never stores the legacy rows.
 - WR1 room-action `transfer {{ actor }} <numeric_room_id>` scripts should
   export as `/cmd room -- /transfer {{ actor_key }} room@x,y,z`. Resolve the
   legacy room id to the imported room's coordinates; never copy a WR1 or WR2
@@ -147,6 +193,7 @@ Builder-facing authoring guidance lives in:
 - [docs/guides/leveling-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/leveling-builder-guide.md)
 - [docs/guides/spawn-plan-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/spawn-plan-builder-guide.md)
 - [docs/guides/mob-trait-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-trait-builder-guide.md)
+- [docs/guides/room-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/room-builder-guide.md)
 
 ## Current Flows
 
@@ -169,7 +216,23 @@ In room navigation, **Triggers** now replaces **Actions**.
 - Each trigger includes **Copy YAML** and **Copy Delete YAML** actions.
 - Recommended workflow: copy template YAML, tweak it, ingest in **Edit World**.
 
-### 3. Item Definition Details Screen
+### 3. Room Edit Screen
+
+The former room **Checks** navigation slot is now **Edit**. In **Rooms > Edit**,
+the selected room's current `kind: room` manifest is loaded into the shared YAML
+editor used by other manifest-authored definitions. YAML and its related
+collections are fetched only when this screen opens, keeping ordinary map and
+room-selection payloads lean.
+
+- **Save YAML** applies the document through the world manifest endpoint.
+- A successful save reloads the selected room and its canonical YAML.
+- The room manifest edits room identity/display fields, zone, description,
+  notes, type, color, landmark state, exits, flags, details, and doors.
+- Triggers remain separate `kind: trigger` documents under
+  **Rooms > Triggers**; they are not nested inside the room manifest.
+- Room checks are not exposed because they are not part of WR2.
+
+### 4. Item Definition Details Screen
 
 In **World > Items**, the item definition detail screen can expose the current
 item definition as YAML.
@@ -179,7 +242,7 @@ item definition as YAML.
 - Recommended workflow: copy the YAML, edit it, then ingest it in
   **World > Edit World**.
 
-### 4. Spawn Plan Screens
+### 5. Spawn Plan Screens
 
 Spawn plans are authored through `kind: spawnplan` YAML in **World > Edit World**.
 Room **Spawn Plans** is a read-only view of spawn plans targeting that room.
@@ -193,7 +256,7 @@ Room **Spawn Plans** is a read-only view of spawn plans targeting that room.
 - Path API responses also expose `relative_id` and `manifest_ref`; spawn-plan
   path targets should use `path@<relative_id>`, not path names.
 
-### 5. World Edit Screen
+### 6. World Edit Screen
 
 A new world-level **Edit World** view accepts a YAML manifest textarea.
 
@@ -441,6 +504,55 @@ metadata:
   id: 42
 ```
 
+## Room Manifest Shape
+
+Rooms use coordinate refs as their portable identity. The selected room's
+**Rooms > Edit** screen exposes this complete shape:
+
+```yaml
+kind: room
+metadata:
+  ref: room@10,4,0
+  name: North Gate
+spec:
+  zone: zone@2
+  description: An ironbound gate closes the northern road.
+  note: Builder-only note.
+  type: road
+  color: "#8a8175"
+  is_landmark: true
+  exits:
+    north: room@10,5,0
+    east: null
+    south: room@10,3,0
+    west: null
+    up: null
+    down: null
+  flags:
+    - no_roam
+  details:
+    - keywords: gate ironbound
+      description: Rivets run in black rows across the gate.
+      is_hidden: false
+  doors:
+    - direction: north
+      name: ironbound gate
+      to_room: room@10,5,0
+      key: itemdefinition.north-gate-key
+      destroy_key: false
+      default_state: locked
+```
+
+Room manifests currently support `operation: apply` only. Preserve
+`metadata.ref` when editing an existing room: changing the coordinate ref means
+"apply a room at these other coordinates," not "rename this room's id."
+Including `flags`, `details`, or `doors` replaces that complete collection for
+the room. The canonical YAML shown after a save includes every exit direction,
+so copy/edit/save round trips do not depend on hidden form state.
+
+Room triggers are separate documents. Use `kind: trigger` with a room target;
+do not add a `checks`, `room_checks`, or `triggers` key to `kind: room`.
+
 ## World Config Manifest Shape
 
 World config edits are update-only manifests (no create/delete mode). The config screen and the full world export emit the same single world document shape:
@@ -679,6 +791,11 @@ Permission checks are applied when editing via manifest:
 - Manifest helpers live in `backend/builders/manifests.py`.
 - World config read/export endpoint:
   - `GET /api/v1/builder/worlds/<world_pk>/config/`
+- Selected-room manifest endpoint:
+  - `GET /api/v1/builder/worlds/<world_pk>/rooms/<pk>/manifest/`
+  - Django route name: `builder-room-manifest`
+  - this is loaded on demand by **Rooms > Edit**; ordinary room/map payloads
+    do not carry YAML
 - Trigger list + YAML serialization endpoint:
   - `GET /api/v1/builder/worlds/<world_pk>/rooms/<room_pk>/triggers/`
 - Manifest apply endpoint:
@@ -705,6 +822,16 @@ Permission checks are applied when editing via manifest:
 5. Submit manifest.
 6. Verify response indicates `operation: created`.
 7. Refresh room Triggers view and confirm new trigger appears.
+
+## How To Edit A Room
+
+1. Open the room in the world editor.
+2. Select **Rooms > Edit**.
+3. Edit the loaded `kind: room` YAML while preserving `metadata.ref`.
+4. Select **Save YAML**.
+5. Confirm the success message and review the reloaded canonical YAML.
+6. Use **Rooms > Triggers** for movement policies or room commands; those are
+   separate `kind: trigger` documents.
 
 ## How To Edit An Existing Trigger
 

@@ -112,10 +112,9 @@
           </router-link>
 
           <router-link
-            :to="{name: 'builder_room_check_list', params: { world_id: $route.params.world_id, room_id: route.params.room_id}}"
+            :to="{name: 'builder_room_edit', params: { world_id: $route.params.world_id, room_id: route.params.room_id}}"
           >
-            Checks
-            <span v-if="room && room.num_room_checks">({{ room.num_room_checks}})</span>
+            Edit
           </router-link>
 
           <router-link :to="{name: 'builder_room_trigger_list', params: { world_id: $route.params.world_id, room_id: route.params.room_id }}">

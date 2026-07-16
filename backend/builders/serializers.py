@@ -63,7 +63,6 @@ from builders.models import (
     FactionRank,
     FactSchedule,
     RandomItemProfile,
-    RoomCheck,
     RoomAction,
     Trigger,
     Social,
@@ -136,7 +135,6 @@ def _coerce_attribute_map(value):
     return normalized
 
 
-# Common to both RoomActionSerializer and RoomCheckSerializer
 def validate_conditions(self, conditions):
         if isinstance(conditions, (dict, list)):
             from core.condition_dsl import validate_condition_payload
@@ -1185,7 +1183,6 @@ class RoomBuilderSerializer(serializers.ModelSerializer):
     up = ReferenceField(required=False, allow_null=True)
     down = ReferenceField(required=False, allow_null=True)
 
-    num_room_checks = serializers.SerializerMethodField()
     num_spawn_plan_entries = serializers.SerializerMethodField()
     num_actions = serializers.SerializerMethodField()
     num_triggers = serializers.SerializerMethodField()
@@ -1200,7 +1197,7 @@ class RoomBuilderSerializer(serializers.ModelSerializer):
             'type', 'description', 'note', 'color',
             'x', 'y', 'z',
             'zone',
-            'num_room_checks', 'num_actions', 'num_triggers', 'num_spawn_plan_entries', 'details', 'doors',
+            'num_actions', 'num_triggers', 'num_spawn_plan_entries', 'details', 'doors',
             'has_assignment',
         ] + list(adv_consts.DIRECTIONS)
 
@@ -1218,9 +1215,6 @@ class RoomBuilderSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError(
                         "Cannot link to a room in another world.")
         return super().validate(attrs)
-
-    def get_num_room_checks(self, room):
-        return room.room_checks.count()
 
     def get_num_actions(self, room):
         return room.room_actions.count()
@@ -1550,26 +1544,6 @@ class RoomDirActionSerializer(serializers.Serializer):
         room.z = z
         room.save()
         return room
-
-
-class RoomCheckSerializer(serializers.ModelSerializer):
-    check = serializers.CharField(source='check_type', required=False, allow_blank=True)
-
-    class Meta:
-        model = RoomCheck
-        fields = [
-            'id',
-            'name',
-            'direction',
-            'prevent',
-            'check',
-            'argument',
-            'argument2',
-            'failure_msg',
-            'conditions',
-        ]
-
-    validate_conditions = validate_conditions
 
 
 class RoomDetailSerializer(serializers.ModelSerializer):

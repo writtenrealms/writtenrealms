@@ -442,7 +442,6 @@ def reset_instance(*, player) -> InstanceResetResult:
         DoorState,
         Item,
         Mob,
-        RoomCommandCheckState,
     )
     from worlds.models import WorldState
 
@@ -485,7 +484,6 @@ def reset_instance(*, player) -> InstanceResetResult:
         mobs_qs.delete()
 
         DoorState.objects.filter(world=spawned_world).delete()
-        RoomCommandCheckState.objects.filter(world=spawned_world).delete()
         WorldState.objects.filter(world=spawned_world).delete()
         replace_state_snapshot(STATE_SCOPE_WORLD, spawned_world, {})
         template_scoped_state_reset = False

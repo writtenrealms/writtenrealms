@@ -1204,17 +1204,6 @@ class Item(ItemMixin, AdventBaseModel):
                 spent_budget += adv_consts.ATTR_BUDGET[attr] * value
         return spent_budget
 
-class RoomCommandCheckState(BaseModel):
-
-    world = models.ForeignKey('worlds.World',
-                              on_delete=models.CASCADE,
-                              related_name='world_check_states')
-    cmd_check = models.ForeignKey('builders.RoomCommandCheck',
-                                  on_delete=models.CASCADE,
-                                  related_name='room_cmd_check_states')
-    passed_ts = models.DateTimeField(**optional)
-
-
 class Alias(BaseModel):
 
     player = models.ForeignKey('spawns.Player',

@@ -2,8 +2,25 @@
 
 from django.db import migrations, models
 
-from config import constants as adv_consts
 from core.db import list_to_choice
+
+
+LEGACY_CMD_CHECKS = [
+    'in_inv',
+    'cmd_issued',
+]
+
+LEGACY_ROOM_CHECKS = [
+    'equipped',
+    'not_equipped',
+    'in_inv',
+    'not_in_inv',
+    'mob_is_present',
+    'faction_below',
+    'health_below',
+    'quest_complete',
+    'quest_incomplete',
+]
 
 
 class Migration(migrations.Migration):
@@ -25,7 +42,7 @@ class Migration(migrations.Migration):
                     model_name='roomcommandcheck',
                     name='check_type',
                     field=models.TextField(
-                        choices=list_to_choice(adv_consts.CMD_CHECKS),
+                        choices=list_to_choice(LEGACY_CMD_CHECKS),
                         db_column='check',
                     ),
                 ),
@@ -35,7 +52,7 @@ class Migration(migrations.Migration):
                     field=models.TextField(
                         blank=True,
                         null=True,
-                        choices=list_to_choice(adv_consts.ROOM_CHECKS),
+                        choices=list_to_choice(LEGACY_ROOM_CHECKS),
                         db_column='check',
                     ),
                 ),

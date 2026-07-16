@@ -25,7 +25,6 @@ from builders.models import (
     FactionAssignment,
     FactionRank,
     FactSchedule,
-    RoomCheck,
     RoomAction,
     Trigger,
     RandomItemProfile,
@@ -906,27 +905,6 @@ class RoomEditTests(WorldTestCase):
                 'value': 'INVALID'
             })
         self.assertFalse(serializer.is_valid())
-
-
-class RoomCheckTests(BuilderTestCase):
-
-    def test_add_room_check(self):
-        ep = reverse(
-            'builder-room-checks',
-            args=[
-                self.world.pk,
-                self.room.pk])
-        resp = self.client.post(ep, {
-          'name': "Unnamed Check",
-          'prevent': "exit",
-          'check': "equipped",
-          'direction': "",
-          'argument': "",
-          'argument2': ""
-        }, format='json')
-        self.assertEqual(resp.status_code, 201)
-        check = RoomCheck.objects.get(pk=resp.data['id'])
-        self.assertEqual(check.room, self.room)
 
 
 class RoomDetailTests(BuilderTestCase):
@@ -2549,45 +2527,6 @@ class BuilderRoomPermissionTests(BuilderPermissionsBase):
             'action': adv_consts.EXIT_ACTION_CREATE
         })
         self.assertEqual(resp.status_code, 201)
-
-    def test_rank_2_room_checks(self):
-        self.builder.builder_rank = 2
-        self.builder.save()
-
-        check_list_endpoint = reverse('builder-room-checks',
-                                      args=[self.world.pk, self.room.pk])
-        check = RoomCheck.objects.create(
-            room=self.room,
-            prevent='enter',
-            conditions='level 1')
-        check_details_endpoint = reverse('builder-room-check-detail',
-                                        args=[self.world.pk, self.room.pk, check.pk])
-
-        resp = self.client.post(check_list_endpoint, {
-            'prevent': 'exit',
-            'conditions': 'level 2'
-        })
-        self.assertEqual(resp.status_code, 403)
-        resp = self.client.put(check_details_endpoint, {
-            'prevent': 'enter',
-            'conditions': 'not level 1',
-        })
-        self.assertEqual(resp.status_code, 403)
-
-        BuilderAssignment.objects.create(
-            builder=self.builder,
-            assignment=self.room)
-
-        resp = self.client.post(check_list_endpoint, {
-            'prevent': 'exit',
-            'conditions': 'level 2'
-        })
-        self.assertEqual(resp.status_code, 201)
-        resp = self.client.put(check_details_endpoint, {
-            'prevent': 'enter',
-            'conditions': 'not level 1',
-        })
-        self.assertEqual(resp.status_code, 200)
 
     def test_rank_2_room_actions(self):
         self.builder.builder_rank = 2

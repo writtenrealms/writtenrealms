@@ -125,40 +125,6 @@ export const CONDITIONS: FormElement = {
     </code>`,
 };
 
-// Room Checks
-
-const ROOM_CHECK: FormElement[] = [
-  NAME,
-  CONDITIONS,
-  {
-    attr: "prevent",
-    label: "Prevent",
-    default: "enter",
-    options: [
-      {
-        value: "enter",
-        label: "Enter",
-      },
-      {
-        value: "exit",
-        label: "Exit",
-      },
-    ],
-    help: `Which action to prevent.<br/>
-          - entry: look at the move’s destination room entry checks before allowing the actor to enter it.<br/>
-          - exit: look at the move’s current room exit checks before allowing the actor to exit it.`,
-  },
-  {
-    ...DIRECTION,
-    help: `Only applicable for 'exit' prevents. If defined, specifies which exit is blocked by the room check.`,
-  },
-  {
-    attr: "failure_msg",
-    label: "Failure Message",
-    help: `The message to display if the check was true, meaning the action was prevented.`,
-  },
-];
-
 const ROOM_ACTION: FormElement[] = [
   NAME,
   {
@@ -205,7 +171,6 @@ export const BUILDER_FORMS = {
   NAME,
   DESCRIPTION,
 
-  ROOM_CHECK,
   ROOM_ACTION,
 
   // Builder screens

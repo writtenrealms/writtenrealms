@@ -9,8 +9,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from config import constants as api_consts
-from builders.models import (
-    RoomCommandCheck, Faction, FactionAssignment)
+from builders.models import Faction, FactionAssignment
 from core.scoped_state import (
     STATE_SCOPE_CHARACTER,
     STATE_SCOPE_WORLD,
@@ -22,7 +21,6 @@ from spawns.models import (
     Item,
     Mob,
     Equipment,
-    RoomCommandCheckState,
     Alias)
 from worlds.models import World, Room, Door
 
@@ -100,7 +98,6 @@ class APIExtractor:
         self.save_mobs()
         self.simple_save('equipment')
         self.save_doors()
-        self.save_command_checks()
         self.save_facts()
 
     def extract_persistent_items(self):
@@ -382,21 +379,6 @@ class APIExtractor:
                     mob.save(update_fields=['room_id'])
 
     # Single Player World component
-
-    def save_command_checks(self):
-        for chunk in self.chunks.get('room_cmd_check', []):
-            room_cmd_check = RoomCommandCheck.objects.get(pk=chunk['id'])
-            if room_cmd_check.track_state:
-                try:
-                    check_state = room_cmd_check.room_cmd_check_states.filter(
-                        world=self.world).get()
-                except RoomCommandCheckState.DoesNotExist:
-                    check_state = RoomCommandCheckState.objects.create(
-                        world=self.world,
-                        cmd_check=room_cmd_check)
-                if chunk['state'] == 'passed' and not check_state.passed_ts:
-                    check_state.passed_ts = timezone.now()
-                    check_state.save()
 
     def save_doors(self):
         for chunk in self.chunks.get('door', []):

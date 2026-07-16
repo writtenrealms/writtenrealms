@@ -63,7 +63,6 @@ from builders.models import (
     SpawnPlan,
     TransformationTemplate,
     RandomItemProfile,
-    RoomCheck,
     RoomAction,
     Trigger,
     Social,
@@ -941,7 +940,7 @@ class RoomBuilderDetailViewSet(RoomBuilderListViewSet):
         obj = super().get_object()
 
         if self._builder_rank >= 3: return obj
-        if self._builder_rank >= 2 and self.action == 'retrieve': return obj
+        if self._builder_rank >= 2 and self.action in ['retrieve', 'manifest']: return obj
 
         if not BuilderAssignment.objects.filter(
             builder__user=self.request.user,
@@ -975,6 +974,12 @@ class RoomBuilderDetailViewSet(RoomBuilderListViewSet):
             room = Room.objects.get(pk=resp.data['id'])
             self.mark_last_viewed(room)
         return resp
+
+    def manifest(self, request, *args, **kwargs):
+        room = self.get_object()
+        return Response(
+            builder_world_export.serialize_room_manifest_payload(room)
+        )
 
     def last_viewed(self, request, world_pk, pk):
         try:
@@ -1097,6 +1102,9 @@ room_detail = RoomBuilderDetailViewSet.as_view({
 room_mark_last_viewed = RoomBuilderDetailViewSet.as_view({
     'post': 'last_viewed',
 })
+room_manifest = RoomBuilderDetailViewSet.as_view({
+    'get': 'manifest',
+})
 
 room_detail_legacy = LegacyRoomBuilderDetailViewSet.as_view({
     'get': 'retrieve',
@@ -1208,82 +1216,6 @@ class RoomSpawnPlansView(BaseWorldBuilderView):
 
 room_spawn_plans = RoomSpawnPlansView.as_view()
 
-
-class RoomCheckViewSet(BaseWorldBuilderViewSet):
-
-    serializer_class = builder_serializers.RoomCheckSerializer
-    pagination_class = None
-    queryset = RoomCheck.objects.all()
-
-    def get_queryset(self):
-        qs = RoomCheck.objects.filter(
-            room__world=self.world,
-            room_id=self.kwargs['room_pk'])
-        return qs
-
-    def get_object(self):
-        obj = super().get_object()
-
-        if self._builder_rank >= 3: return obj
-        if self._builder_rank >= 2 and self.action == 'retrieve': return obj
-
-        if not BuilderAssignment.objects.filter(
-            builder__user=self.request.user,
-            assignment_id=obj.room.zone.id,
-            assignment_type=ContentType.objects.get_for_model(Zone),
-        ).exists():
-            if not BuilderAssignment.objects.filter(
-                builder__user=self.request.user,
-                assignment_id=obj.room.id,
-                assignment_type=ContentType.objects.get_for_model(Room),
-            ).exists():
-                raise drf_exceptions.PermissionDenied(
-                    "You do not have permission to this room.")
-
-        return obj
-
-    def perform_create(self, serializer):
-        try:
-            room = Room.objects.get(
-                pk=self.kwargs['room_pk'],
-                world=self.world)
-        except Room.DoesNotExist:
-            raise drf_exceptions.NotFound(
-                "Room not found")
-
-        if self._builder_rank <= 2:
-            if not BuilderAssignment.objects.filter(
-                builder__user=self.request.user,
-                assignment_id=room.zone.id,
-                assignment_type=ContentType.objects.get_for_model(Zone),
-            ).exists():
-                if not BuilderAssignment.objects.filter(
-                    builder__user=self.request.user,
-                    assignment_id=room.id,
-                    assignment_type=ContentType.objects.get_for_model(Room),
-                ).exists():
-                    raise drf_exceptions.PermissionDenied(
-                        "You do not have permission to alter this room.")
-
-        check = serializer.save(room=room)
-        check.room.update_live_instances()
-        return check.room
-
-    def perform_update(self, serializer):
-        check = serializer.save()
-        check.room.update_live_instances()
-        return check.room
-
-
-room_checks = RoomCheckViewSet.as_view({
-    'get': 'list',
-    'post': 'create',
-})
-room_check_detail = RoomCheckViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'update',
-    'delete': 'destroy',
-})
 
 class RoomActionViewSet(BaseWorldBuilderViewSet):
 
@@ -1812,7 +1744,7 @@ class WorldManifestApplyView(BaseWorldBuilderView):
         )
 
     def _assert_can_edit_room_manifest(self, manifest):
-        metadata = manifest.get("metadata") or {}
+        metadata = builder_world_export._manifest_metadata(manifest)
         room_ref = str(metadata.get("ref") or "").strip()
         if not room_ref:
             return

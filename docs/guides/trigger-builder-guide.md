@@ -3,9 +3,10 @@
 This guide is for builders authoring triggers in WR2.
 
 It focuses on the current builder workflow exposed in **Rooms > Triggers** in
-the world editor, where the UI shows existing room triggers, gives you a
-copyable YAML template, and expects edits to happen through **World > Edit
-World**.
+the world editor, where the UI shows existing room triggers and gives you a
+copyable YAML template. Trigger documents are applied through **World > Edit
+World**. The neighboring **Rooms > Edit** screen edits the selected room's
+`kind: room` YAML; it does not inline room triggers.
 
 For shared runtime state used by triggers, quests, and builder commands, also
 read
@@ -30,7 +31,9 @@ For room builders, the most common trigger is a room-scoped command trigger:
 - the trigger runs `script`
 
 Room triggers also support movement policies and post-move room events. Those
-use the same YAML screen and the same shared condition system.
+use the same trigger manifest contract and shared condition system. Movement
+policies are the WR2 replacement for legacy room checks; WR2 has no Room Check
+model or builder screen.
 
 ## Builder Workflow
 
@@ -44,6 +47,11 @@ Use this loop when building room interactions:
 6. Apply it.
 7. Refresh **Rooms > Triggers** to confirm it appears as expected.
 
+When the room itself also needs changes, open **Rooms > Edit**, update its
+`kind: room` YAML, and save there. Use **World > Edit World** instead when you
+want to apply the room and trigger documents together in one multi-document
+submission.
+
 For existing triggers:
 
 - use **Copy YAML** to get an updateable manifest
@@ -54,6 +62,22 @@ For new triggers:
 
 - start from the room template
 - do not include `metadata.key` or `metadata.id`
+
+## Room YAML And Trigger YAML Are Separate
+
+**Rooms > Edit** owns the selected room document: name, zone, description,
+notes, type, color, landmark state, exits, flags, details, and doors.
+
+**Rooms > Triggers** owns behavior attached to that room:
+
+- `kind: command` for an authored room verb
+- `kind: policy` for an entry or exit gate
+- `kind: event` for behavior after movement
+
+Do not add `checks`, `room_checks`, or `triggers` under `kind: room`. Each
+trigger is its own `kind: trigger` document targeting the room. See
+[room-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/room-builder-guide.md)
+for the complete room manifest workflow.
 
 ## First Room Trigger
 
@@ -482,7 +506,8 @@ builder command such as `/setclass` or `/grantitem`.
 
 Use a policy trigger when movement should be prevented unless a condition is
 met. Policy triggers do not run scripts; they either allow the action or return
-the failure message.
+the failure message. This is the WR2 authoring path for behavior that formerly
+used a Room Check.
 
 ```yaml
 kind: trigger
@@ -725,6 +750,7 @@ For builder work, the important distinction is:
 
 ## Related Docs
 
+- [room-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/room-builder-guide.md)
 - [builder-command-reference.md](/Users/teebes/code/writtenrealms/docs/guides/builder-command-reference.md)
 - [item-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/item-definition-builder-guide.md)
 - [mob-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-definition-builder-guide.md)
