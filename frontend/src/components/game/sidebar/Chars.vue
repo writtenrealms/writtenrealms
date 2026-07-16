@@ -21,16 +21,13 @@
 import { computed } from "vue";
 import { useStore } from "vuex";
 import { getTargetInGroup } from "@/core/utils.ts";
+import { hasDifferentCoreFaction } from "@/core/charActions";
 
 const store = useStore();
 const player = computed(() => store.state.game.player);
 const chars = computed(() => store.state.game.room.chars);
 
-const isHostile = (char) => {
-  if (player.value.core_faction != char.core_faction && char.char_type === "player")
-    return true;
-  return false;
-};
+const isHostile = (char) => hasDifferentCoreFaction(player.value, char);
 
 const onClickChar = (char) => {
   if (char.key === store.state.game.player.key) {

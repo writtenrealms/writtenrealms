@@ -1,7 +1,19 @@
-const getCoreFaction = (entity) => {
+export const getCoreFaction = (entity) => {
   if (!entity) return "";
   const coreFaction = entity.core_faction || entity.factions?.core;
   return typeof coreFaction === "string" ? coreFaction : "";
+};
+
+export const hasDifferentCoreFaction = (player, char) => {
+  if (!char || char.char_type !== "player") return false;
+
+  const playerCoreFaction = getCoreFaction(player);
+  const charCoreFaction = getCoreFaction(char);
+  return Boolean(
+    playerCoreFaction &&
+    charCoreFaction &&
+    playerCoreFaction !== charCoreFaction
+  );
 };
 
 const getHostileFactions = (world, factionCode: string): string[] => {

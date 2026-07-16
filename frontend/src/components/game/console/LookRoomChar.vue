@@ -39,6 +39,7 @@
 import { computed } from "vue";
 import { useStore } from "vuex";
 import { capfirst } from "@/core/utils.ts";
+import { hasDifferentCoreFaction } from "@/core/charActions";
 /*
   When fighting, want to just show name + fighting target / you
   When not fighting, if not hostile should show room desc
@@ -54,10 +55,7 @@ const props = defineProps<{
 }>();
 const player = computed(() => store.state.game.player);
 
-const isHostile = computed(() => {
-  if (player.value.core_faction != props.char.core_faction && props.char.char_type === "player") return true;
-  return false;
-});
+const isHostile = computed(() => hasDifferentCoreFaction(player.value, props.char));
 
 const targetsYou = computed(() => {
   if (props.char.target && props.char.target.key == player.value.key) return true;
