@@ -32,6 +32,10 @@ This plan remains directional, but several pieces are now implemented:
 - `/grantitem <target> <item>` supports builder player, mob, and room issuers.
   It resolves a player or mob target in the issuer's current room and loads the
   item into that target's inventory. Mob and room usage is script-source gated.
+- `/transfer <target> <room>` supports direct builder players plus script-gated
+  mob and room issuers. Player targets stay inside one live runtime world, mob
+  targets are local to the issuer room, and portable scripts can use
+  `room@x,y,z` destinations.
 - `/echo` and `/state` support room, zone, and world actors.
 - `/setclass` supports a room actor with an explicit player target, preserving
   trigger patterns such as `/cmd room -- /setclass {{ actor_key }} tidecaller`.
@@ -292,6 +296,8 @@ Status: partially implemented for scoped builder primitives.
    items into inventory, while room actors load items onto the room floor.
 5. Support `/grantitem` as a targeted item-spawn primitive for room-triggered
    rewards and starter-equipment scripts.
+6. Support `/transfer` as a runtime-isolated forced-movement primitive for room
+   and mob scripts, without treating ambient issuers as physical movers.
 
 Exit criteria:
 - A room issuer can produce visible room/zone/world outputs through standard publish paths.
@@ -367,6 +373,11 @@ The first compatibility slice is:
 6. `/grantitem <target> <slug>` under a room or mob actor loads the item into
    the target character inventory and sends player targets an inventory-updating
    notification.
+7. `/transfer <target> <room@x,y,z>` under a room or mob actor relocates a
+   character within the current runtime world, emits the legacy-compatible
+   exit/enter flow plus a transfer-state snapshot for player targets, runs
+   runtime-isolated destination mob reactions, and terminates active combat
+   with bulk cleanup queries.
 
 This delivers immediate value for WR1-style content migration while validating
 ambient actor dispatch before the broader issuer/subject refactor.

@@ -37,7 +37,13 @@ def _normalize_roll_target(target: str | None) -> str:
 
 
 class LookAction:
-    def execute(self, player_id: int, target_selector: str | None = None) -> ActionResult:
+    def execute(
+        self,
+        player_id: int,
+        target_selector: str | None = None,
+        *,
+        isolate_runtime_world: bool = False,
+    ) -> ActionResult:
         player = get_player_with_related(player_id)
         world = player.world
         room = player.room
@@ -128,6 +134,7 @@ class LookAction:
             room_key_lookup,
             door_states,
             viewer=player,
+            runtime_world=world if isolate_runtime_world else None,
         )
         data = {
             "actor": actor_payload.model_dump(),

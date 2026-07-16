@@ -265,6 +265,7 @@ def _on_cmd_state_sync_success(event_data: dict, actor_key: str | None, connecti
 
 
 _EVENT_SUBSCRIPTIONS: dict[str, QuestSubscriptionHandler] = {
+    "affect.transfer": _on_cmd_look_success,
     "cmd.state.sync.success": _on_cmd_state_sync_success,
     "cmd.look.success": _on_cmd_look_success,
     "cmd.move.success": _on_cmd_move_success,

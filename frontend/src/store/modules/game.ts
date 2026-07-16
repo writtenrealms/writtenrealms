@@ -535,7 +535,11 @@ const receiveMessage = async ({
 
   // Hint processing
   if (
-    (message_data.type === "cmd.move.success" || isStateSnapshot) &&
+    (
+      message_data.type === "cmd.move.success" ||
+      message_data.type === "affect.transfer" ||
+      isStateSnapshot
+    ) &&
     message_data.data.room.hint
   ) {
     commit("hint_set", message_data.data.room.hint);

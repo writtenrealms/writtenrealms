@@ -679,6 +679,7 @@ def execute_mob_event_triggers(
     room: Room | int | None = None,
     match_text: str | None = None,
     connection_id: str | None = None,
+    isolate_runtime_world: bool = False,
 ) -> None:
     normalized_event = _normalized_text(event)
     if normalized_event not in adv_consts.MOB_REACTION_EVENTS:
@@ -692,10 +693,14 @@ def execute_mob_event_triggers(
     if not trigger_world:
         return
 
+    mobs_qs = Mob.objects.filter(room_id=resolved_room.id)
+    actor_world_id = getattr(actor, "world_id", None)
+    if isolate_runtime_world and actor_world_id:
+        mobs_qs = mobs_qs.filter(world_id=actor_world_id)
+    if isinstance(actor, Mob):
+        mobs_qs = mobs_qs.exclude(pk=actor.id)
     mobs = list(
-        Mob.objects.filter(room_id=resolved_room.id)
-        .select_related("definition")
-        .order_by("id")
+        mobs_qs.select_related("definition").order_by("id")
     )
     if not mobs:
         return
@@ -766,6 +771,7 @@ def execute_mob_event_triggers(
             first_line_segments = script_lines[0]
             _dispatch_trigger_script_segments(
                 actor=mob,
+                render_actor=actor or mob,
                 segments=first_line_segments,
                 issuer_scope=trigger.scope,
                 connection_id=connection_id,
@@ -774,6 +780,7 @@ def execute_mob_event_triggers(
             for line_index, line_segments in enumerate(script_lines[1:], start=1):
                 _schedule_trigger_script_line_segments(
                     actor=mob,
+                    render_actor=actor or mob,
                     line_segments=line_segments,
                     line_index=line_index,
                     issuer_scope=trigger.scope,
@@ -828,11 +835,15 @@ def _consume_gate(trigger: Trigger, scope_key: str) -> None:
 def _dispatch_trigger_script_segment(
     *,
     actor: Player | Mob,
+    render_actor: Player | Mob | None = None,
     segment: str,
     issuer_scope: str | None = None,
     connection_id: str | None = None,
 ) -> str | None:
-    rendered_segment = _render_trigger_script_segment(actor=actor, segment=segment)
+    rendered_segment = _render_trigger_script_segment(
+        actor=render_actor or actor,
+        segment=segment,
+    )
     command_token = _first_token(rendered_segment)
     if not command_token:
         return None
@@ -877,6 +888,7 @@ def _render_trigger_script_segment(*, actor: Player | Mob, segment: str) -> str:
 def _dispatch_trigger_script_segments(
     *,
     actor: Player | Mob,
+    render_actor: Player | Mob | None = None,
     segments: list[str],
     issuer_scope: str | None = None,
     connection_id: str | None = None,
@@ -885,6 +897,7 @@ def _dispatch_trigger_script_segments(
     for segment in segments:
         dispatched_error = _dispatch_trigger_script_segment(
             actor=actor,
+            render_actor=render_actor,
             segment=segment,
             issuer_scope=issuer_scope,
             connection_id=connection_id,
@@ -906,6 +919,7 @@ def _trigger_script_multiline_delay_seconds() -> float:
 def _schedule_trigger_script_line_segments(
     *,
     actor: Player | Mob,
+    render_actor: Player | Mob | None = None,
     line_segments: list[str],
     line_index: int,
     issuer_scope: str | None = None,
@@ -918,6 +932,7 @@ def _schedule_trigger_script_line_segments(
     if delay_seconds <= 0:
         return _dispatch_trigger_script_segments(
             actor=actor,
+            render_actor=render_actor,
             segments=line_segments,
             issuer_scope=issuer_scope,
             connection_id=connection_id,
@@ -929,7 +944,12 @@ def _schedule_trigger_script_line_segments(
     rendered_line_segments = [
         rendered_segment
         for segment in line_segments
-        if (rendered_segment := _render_trigger_script_segment(actor=actor, segment=segment))
+        if (
+            rendered_segment := _render_trigger_script_segment(
+                actor=render_actor or actor,
+                segment=segment,
+            )
+        )
     ]
     if not rendered_line_segments:
         return []
@@ -948,6 +968,7 @@ def _schedule_trigger_script_line_segments(
     except Exception:
         return _dispatch_trigger_script_segments(
             actor=actor,
+            render_actor=render_actor,
             segments=line_segments,
             issuer_scope=issuer_scope,
             connection_id=connection_id,

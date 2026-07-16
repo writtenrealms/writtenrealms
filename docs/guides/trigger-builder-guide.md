@@ -273,6 +273,7 @@ Common commands you will often use in trigger scripts:
 - `/cmd room -- /load item <item_slug>`
 - `/cmd room -- /grantitem {{ actor_key }} <item_slug>`
 - `/cmd room -- /kill {{ actor_key }} -- <private death message>`
+- `/cmd room -- /transfer {{ actor_key }} room@x,y,z`
 
 For the full slash command matrix and command-by-command reference, see
 [builder-command-reference.md](/Users/teebes/code/writtenrealms/docs/guides/builder-command-reference.md).
@@ -362,6 +363,40 @@ script: /cmd room -- /grantitem {{ actor_key }} -- starter-trident starter-helm 
 
 The multi-item form validates every item selector before spawning anything. If
 one slug or id is invalid, no items are granted.
+
+## Transferring Characters
+
+Use `/transfer` when a scripted room or mob must forcibly move a player or mob
+without ordinary movement checks:
+
+```yaml
+script: /cmd room -- /transfer {{ actor_key }} room@10,4,0
+```
+
+Always use the portable `room@x,y,z` destination form in trigger YAML. Database
+room ids can differ after export and import. The room issuer and target must be
+in the same live runtime world; transfer cannot cross instance runs.
+
+Transfer bypasses stamina, door traversal checks, and movement policy triggers.
+A direction destination still reads the issuer room's exit topology. Transfer
+finishes active combat for a character that actually changes rooms, sends a
+player target a full transfer room snapshot, updates origin and destination
+occupants, and runs destination mob `entering` reactions only in the target's
+runtime world.
+
+If the transfer needs custom text, run that text before the transfer. Keep both
+independently wrapped room commands on the same script line when they should
+happen immediately:
+
+```yaml
+script: /cmd room -- /send {{ actor_key }} -- The wall folds around you. && /cmd room -- /transfer {{ actor_key }} room@10,4,0
+```
+
+WR1's `transfer <target> <room> <command>` trailing-command form is not valid
+WR2 syntax. Keep the pre-transfer command explicit as shown above. Repeat the
+`/cmd room --` wrapper because `&&` segments are dispatched independently. The
+WR2 transfer will also emit its standard disappearance notification; review
+migrated scripts that used the WR1 trailing command to suppress that text.
 
 ## Death Traps
 
@@ -650,6 +685,11 @@ metadata:
 
 The same manifest format also powers mob reaction triggers. Mob reactions target
 WR2 mob definitions with `mobdefinition` refs.
+
+The reacting mob remains the command issuer, while actor templates such as
+`{{ actor_key }}` refer to the character that caused the event. This lets an
+`entering` reaction issue `/transfer {{ actor_key }} room@x,y,z` without moving
+the reacting mob itself.
 
 Example:
 

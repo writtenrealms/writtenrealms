@@ -7,7 +7,7 @@ from typing import TypeVar
 from config import constants as adv_consts
 from spawns.actions.base import ActionError
 from spawns.models import Item, Mob, Player
-from worlds.models import Room
+from worlds.models import Room, World
 
 _COUNTED_SELECTOR_RE = re.compile(r"^(?P<count>\d+)\.(?P<token>.+)$")
 T = TypeVar("T")
@@ -81,6 +81,7 @@ def find_room_char_target(
     selector: str | None,
     *,
     viewer: Player | None = None,
+    world: World | None = None,
 ) -> Player | Mob | None:
     normalized = _normalize_selector(selector)
     if not normalized:
@@ -89,12 +90,17 @@ def find_room_char_target(
     if normalized in {"self", "me"} and viewer and getattr(viewer, "room_id", None) == room.id:
         return viewer
 
+    room_players_qs = room.players.filter(in_game=True)
+    room_mobs_qs = room.mobs.filter(is_pending_deletion=False)
+    if world is not None:
+        room_players_qs = room_players_qs.filter(world=world)
+        room_mobs_qs = room_mobs_qs.filter(world=world)
     room_players = list(
-        room.players.filter(in_game=True)
-        .select_related("user", "equipment")
-        .order_by("id")
+        room_players_qs.select_related("user", "equipment").order_by("id")
     )
-    room_mobs = list(room.mobs.select_related("definition", "equipment").order_by("id"))
+    room_mobs = list(
+        room_mobs_qs.select_related("definition", "equipment").order_by("id")
+    )
     chars: list[Player | Mob] = [*room_players, *room_mobs]
 
     if normalized.startswith("player.") or normalized.startswith("mob."):

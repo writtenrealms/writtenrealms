@@ -114,6 +114,22 @@ Current required mappings:
   structured WR2 condition `mob_present: mobdefinition.<slug>`. When a policy
   should block movement while that mob exists, wrap the condition in `not` so
   the policy passes only while the mob is absent.
+- WR1 room-action `transfer {{ actor }} <numeric_room_id>` scripts should
+  export as `/cmd room -- /transfer {{ actor_key }} room@x,y,z`. Resolve the
+  legacy room id to the imported room's coordinates; never copy a WR1 or WR2
+  database id into portable trigger YAML. Normalize slashless `transfer` to
+  `/transfer`. For mob-authored scripts, keep the mob as issuer and use the same
+  portable destination. WR1's optional trailing transfer command does not map
+  directly: export it as an explicit command before `/transfer`. For immediate
+  timing, use same-line `&&` segments and repeat the ambient wrapper for every
+  segment, for example `/cmd room -- /send ... && /cmd room -- /transfer ...`.
+  Separate script lines are heartbeat-paced and are not equivalent. WR2 still
+  emits the standard disappearance notification, whereas WR1 suppressed that
+  text when a trailing command was present, so exporters should flag those
+  scripts for author review. WR1 could also transfer a local floor item even
+  though its help advertised only players and mobs; WR2 `/transfer` deliberately
+  accepts character targets only, so exporters must flag item-target scripts
+  instead of silently rewriting them.
 
 Builder-facing authoring guidance lives in:
 

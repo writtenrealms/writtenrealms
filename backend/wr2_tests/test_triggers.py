@@ -249,6 +249,35 @@ class TestCommandFallbackTriggers(WorldTestCase):
             self.player.key,
         )
 
+    def test_room_trigger_transfers_triggering_player_in_runtime_world(self):
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+        destination = self.room.create_at("east")
+        self._create_room_trigger(
+            script=(
+                "/cmd room -- /send {{ actor_key }} -- The floor shifts. && "
+                f"/cmd room -- /transfer {{{{ actor_key }}}} "
+                f"room@{destination.x},{destination.y},{destination.z}"
+            ),
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "touch altar")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, destination.id)
+        transfer_message = self._message_by_type(
+            messages,
+            "cmd./transfer.success",
+        )
+        self.assertIsNotNone(transfer_message)
+        self.assertEqual(
+            transfer_message["data"]["target"]["id"],
+            destination.id,
+        )
+        send_message = self._message_by_type(messages, "cmd./send.success")
+        self.assertIsNotNone(send_message)
+
     def test_room_inventory_item_includes_trigger_actions(self):
         item = Item.objects.create(
             world=self.spawn_world,

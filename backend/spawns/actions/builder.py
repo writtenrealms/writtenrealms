@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import re
 
@@ -30,12 +31,15 @@ from core.stat_system import (
 )
 from core.utils import capfirst, format_actor_msg
 from django.contrib.contenttypes.models import ContentType
-from django.db import transaction
+from django.db import OperationalError, transaction
 from django.utils import timezone
 from rest_framework import serializers as drf_serializers
 
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.combat import apply_player_death
+from spawns.actions.effects import active_combat_effects
+from spawns.actions.information import LookAction
+from spawns.actions.targeting import find_room_char_target
 from spawns.events import GameEvent
 from spawns.handlers.base import ChoiceResolutionError, resolve_unambiguous_choice
 from spawns.handlers.registry import (
@@ -44,7 +48,7 @@ from spawns.handlers.registry import (
     dispatch_command,
     resolve_text_handler,
 )
-from spawns.models import CombatEncounter, Equipment, Item, Mob, Player
+from spawns.models import ActiveEffect, CombatEncounter, Equipment, Item, Mob, Player
 from spawns.serializers import LoadDefinitionSerializer
 from spawns.state_payloads import (
     door_state_lookup,
@@ -57,6 +61,7 @@ from spawns.state_payloads import (
     serialize_room,
     serialize_world,
 )
+from quests.entity_refs import resolve_room_ref_id
 from worlds.models import Room, World, Zone
 
 ECHO_SCOPES = ("room", "zone", "world")
@@ -559,6 +564,16 @@ def _resolve_room_in_world(room_world, room_selector_id: int):
     if room:
         return room
     return room_world.rooms.filter(relative_id=room_selector_id).first()
+
+
+def _room_reference_payload(room: Room | None) -> dict[str, object] | None:
+    if room is None:
+        return None
+    return {
+        "id": room.id,
+        "key": room_payload_key_for(room),
+        "name": room.name or "",
+    }
 
 
 def _normalize_jump_direction(room_selector: str) -> str | None:
@@ -2291,6 +2306,506 @@ class CmdAction:
                     text=text,
                 )
             ]
+        )
+
+
+@dataclass(frozen=True)
+class _TransferTargetRef:
+    target_type: str
+    target_id: int
+    required_room_id: int | None = None
+
+
+class TransferAction:
+    """Move one player or mob without applying ordinary movement rules."""
+
+    @staticmethod
+    def _runtime_authored_world_id(runtime_world: World) -> int:
+        return runtime_world.context_id or runtime_world.id
+
+    def _validate_runtime_context(
+        self,
+        *,
+        actor: Player | Mob | Room,
+        issuer_room: Room,
+        runtime_world: World,
+    ) -> None:
+        if issuer_room.world_id != self._runtime_authored_world_id(runtime_world):
+            raise ActionError(
+                "The issuer room is not part of this runtime world.",
+                code="invalid_world_context",
+            )
+        if isinstance(actor, (Player, Mob)) and actor.world_id != runtime_world.id:
+            raise ActionError(
+                "The issuer is not part of this runtime world.",
+                code="invalid_world_context",
+            )
+
+    def _resolve_destination(
+        self,
+        *,
+        issuer_room: Room,
+        runtime_world: World,
+        selector: str,
+    ) -> Room:
+        normalized = str(selector or "").strip().lower()
+        if not normalized:
+            raise ActionError(
+                "Usage: /transfer <target> <room_id|room@x,y,z|direction|here>",
+                code="invalid_args",
+            )
+
+        destination = None
+        if normalized == "here":
+            destination = issuer_room
+
+        direction = _normalize_jump_direction(normalized)
+        if destination is None and direction:
+            destination = getattr(issuer_room, direction, None)
+            if not destination:
+                raise ActionError(
+                    f"There is no exit {direction}.",
+                    code="no_exit",
+                )
+        if destination is None and normalized.isdigit():
+            # Bare WR1 room ids were world-local ids. Prefer that legacy
+            # meaning when a database id and relative id happen to collide.
+            destination = issuer_room.world.rooms.filter(
+                relative_id=int(normalized),
+            ).first()
+
+        if destination is None:
+            room_id = resolve_room_ref_id(world=issuer_room.world, value=normalized)
+            if room_id is not None:
+                destination = issuer_room.world.rooms.filter(pk=room_id).first()
+
+        if destination is None:
+            raise ActionError(
+                "Invalid room reference.",
+                code="invalid_room",
+            )
+        if destination.world_id != self._runtime_authored_world_id(runtime_world):
+            raise ActionError(
+                "The destination room is not part of this runtime world.",
+                code="invalid_world_context",
+            )
+        return destination
+
+    @staticmethod
+    def _limited_player_name_matches(
+        *,
+        runtime_world: World,
+        selector: str,
+    ) -> list[int]:
+        players = Player.objects.filter(
+            world=runtime_world,
+            in_game=True,
+        )
+        return list(
+            players.filter(name__iexact=selector)
+            .order_by("id")
+            .values_list("id", flat=True)[:2]
+        )
+
+    def _resolve_target_ref(
+        self,
+        *,
+        actor: Player | Mob | Room,
+        issuer_room: Room,
+        runtime_world: World,
+        selector: str,
+    ) -> _TransferTargetRef:
+        normalized = str(selector or "").strip().lower()
+        if not normalized:
+            raise ActionError("Target is required.", code="invalid_target")
+
+        if normalized in {"self", "me"}:
+            if isinstance(actor, Player):
+                return _TransferTargetRef("player", actor.id)
+            if isinstance(actor, Mob):
+                return _TransferTargetRef("mob", actor.id, issuer_room.id)
+            raise ActionError("Room actors must specify a target.", code="invalid_target")
+
+        parsed_key = _parse_character_key(normalized)
+        if parsed_key is not None:
+            target_type, target_id = parsed_key
+            if target_type == "player":
+                exists = Player.objects.filter(
+                    pk=target_id,
+                    world=runtime_world,
+                    in_game=True,
+                ).exists()
+                if exists:
+                    return _TransferTargetRef("player", target_id)
+            else:
+                exists = Mob.objects.filter(
+                    pk=target_id,
+                    world=runtime_world,
+                    room=issuer_room,
+                    is_pending_deletion=False,
+                ).exists()
+                if exists:
+                    return _TransferTargetRef("mob", target_id, issuer_room.id)
+            raise ActionError(
+                "Target not found in this runtime world.",
+                code="invalid_target",
+            )
+
+        player_ids = self._limited_player_name_matches(
+            runtime_world=runtime_world,
+            selector=normalized,
+        )
+        if len(player_ids) > 1:
+            raise ActionError("Player target is ambiguous.", code="ambiguous_target")
+        if player_ids:
+            return _TransferTargetRef("player", player_ids[0])
+
+        local_target = find_room_char_target(
+            issuer_room,
+            normalized,
+            viewer=actor if isinstance(actor, Player) else None,
+            world=runtime_world,
+        )
+        if isinstance(local_target, Player):
+            return _TransferTargetRef(
+                "player",
+                local_target.id,
+                issuer_room.id,
+            )
+        if isinstance(local_target, Mob):
+            return _TransferTargetRef(
+                "mob",
+                local_target.id,
+                issuer_room.id,
+            )
+
+        raise ActionError("Target not found.", code="invalid_target")
+
+    @staticmethod
+    def _active_encounters_for_update(target_ref: _TransferTargetRef):
+        encounters = CombatEncounter.objects.select_for_update(nowait=True).filter(
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        if target_ref.target_type == "player":
+            encounters = encounters.filter(player_id=target_ref.target_id)
+        else:
+            encounters = encounters.filter(mob_id=target_ref.target_id)
+        return list(encounters.order_by("id"))
+
+    @staticmethod
+    def _finish_active_encounters(encounters: list[CombatEncounter]) -> list[int]:
+        encounter_ids = [encounter.id for encounter in encounters]
+        if not encounter_ids:
+            return []
+        ActiveEffect.objects.filter(
+            encounter_id__in=encounter_ids,
+            scope=ActiveEffect.SCOPE_ENCOUNTER,
+        ).delete()
+        CombatEncounter.objects.filter(pk__in=encounter_ids).update(
+            status=CombatEncounter.STATUS_FINISHED,
+            next_resolution_ts=None,
+            pending_player_ability={},
+            pending_mob_ability={},
+            pending_flee={},
+        )
+        return encounter_ids
+
+    @staticmethod
+    def _lock_target(
+        *,
+        target_ref: _TransferTargetRef,
+        runtime_world: World,
+    ) -> Player | Mob:
+        if target_ref.target_type == "player":
+            target = (
+                Player.objects.select_for_update(of=("self",), nowait=True)
+                .select_related("room")
+                .filter(
+                    pk=target_ref.target_id,
+                    world=runtime_world,
+                    in_game=True,
+                )
+                .first()
+            )
+        else:
+            target = (
+                Mob.objects.select_for_update(of=("self",), nowait=True)
+                .select_related("room")
+                .filter(
+                    pk=target_ref.target_id,
+                    world=runtime_world,
+                    is_pending_deletion=False,
+                )
+                .first()
+            )
+        if target is None:
+            raise ActionError(
+                "Target is no longer part of this runtime world.",
+                code="invalid_target",
+            )
+        if (
+            target_ref.required_room_id is not None
+            and target.room_id != target_ref.required_room_id
+        ):
+            raise ActionError(
+                "Target is no longer in the issuer's room.",
+                code="invalid_target",
+            )
+        authored_world_id = TransferAction._runtime_authored_world_id(runtime_world)
+        if target.room_id and target.room.world_id != authored_world_id:
+            raise ActionError(
+                "The target's room is not part of this runtime world.",
+                code="invalid_world_context",
+            )
+        return target
+
+    @staticmethod
+    def _room_player_recipient_ids(
+        *,
+        runtime_world: World,
+        room_id: int | None,
+        transferred_player_id: int | None,
+    ) -> list[int]:
+        if room_id is None:
+            return []
+        players = Player.objects.filter(
+            world=runtime_world,
+            room_id=room_id,
+            in_game=True,
+        )
+        if transferred_player_id is not None:
+            players = players.exclude(pk=transferred_player_id)
+        return list(players.order_by("id").values_list("id", flat=True))
+
+    @staticmethod
+    def _combat_effect_state_events(
+        encounters: list[CombatEncounter],
+    ) -> list[GameEvent]:
+        player_ids = sorted({encounter.player_id for encounter in encounters})
+        if not player_ids:
+            return []
+        players = Player.objects.filter(pk__in=player_ids).order_by("id")
+        return [
+            GameEvent(
+                type="player.combat_effects.update",
+                recipients=[player.key],
+                data={
+                    "target": {"key": player.key},
+                    "active_effects": active_combat_effects(player),
+                },
+            )
+            for player in players
+        ]
+
+    def execute(
+        self,
+        *,
+        actor: Player | Mob | Room,
+        target_selector: str,
+        room_selector: str,
+        runtime_world: World | None = None,
+    ) -> ActionResult:
+        issuer_room = _actor_room(actor)
+        if issuer_room is None:
+            raise ActionError(
+                "There is no current room for this transfer.",
+                code="no_room",
+            )
+
+        resolved_runtime_world = _actor_world(actor, runtime_world=runtime_world)
+        if resolved_runtime_world is None:
+            raise ActionError(
+                "No runtime world is available for this transfer.",
+                code="no_world",
+            )
+        self._validate_runtime_context(
+            actor=actor,
+            issuer_room=issuer_room,
+            runtime_world=resolved_runtime_world,
+        )
+
+        destination = self._resolve_destination(
+            issuer_room=issuer_room,
+            runtime_world=resolved_runtime_world,
+            selector=room_selector,
+        )
+        target_ref = self._resolve_target_ref(
+            actor=actor,
+            issuer_room=issuer_room,
+            runtime_world=resolved_runtime_world,
+            selector=target_selector,
+        )
+
+        try:
+            with transaction.atomic():
+                # Acquire both encounter and target rows without waiting. This
+                # avoids joining either encounter-first resolution cycles or
+                # player-first combat-start cycles; callers can retry instead.
+                active_encounters = self._active_encounters_for_update(target_ref)
+                target = self._lock_target(
+                    target_ref=target_ref,
+                    runtime_world=resolved_runtime_world,
+                )
+                origin_room_id = target.room_id
+                origin_room = target.room if target.room_id else None
+                moved = origin_room_id != destination.id
+
+                finished_encounter_ids: list[int] = []
+                combat_effect_events: list[GameEvent] = []
+                if moved:
+                    finished_encounter_ids = self._finish_active_encounters(
+                        active_encounters,
+                    )
+
+                    target.room_id = destination.id
+                    target.save(update_fields=["room"])
+                    if isinstance(target, Player):
+                        target.viewed_rooms.add(destination.id)
+                    combat_effect_events = self._combat_effect_state_events(
+                        active_encounters,
+                    )
+                elif isinstance(target, Player):
+                    target.viewed_rooms.add(destination.id)
+
+                transferred_player_id = (
+                    target.id if isinstance(target, Player) else None
+                )
+                is_visible = not isinstance(target, Player) or not target.is_invisible
+                origin_recipient_ids = []
+                destination_recipient_ids = []
+                if moved and is_visible:
+                    origin_recipient_ids = self._room_player_recipient_ids(
+                        runtime_world=resolved_runtime_world,
+                        room_id=origin_room_id,
+                        transferred_player_id=transferred_player_id,
+                    )
+                    destination_recipient_ids = self._room_player_recipient_ids(
+                        runtime_world=resolved_runtime_world,
+                        room_id=destination.id,
+                        transferred_player_id=transferred_player_id,
+                    )
+
+                origin_payload = _room_reference_payload(origin_room)
+                destination_payload = _room_reference_payload(destination)
+
+                if target_ref.target_type == "player":
+                    updated_target = get_player_with_related(target_ref.target_id)
+                    transferred_payload = serialize_char_from_player(
+                        updated_target,
+                    ).model_dump()
+                    target_name = updated_target.name or "target"
+                    look_result = LookAction().execute(
+                        updated_target.id,
+                        isolate_runtime_world=True,
+                    )
+                    look_event = next(
+                        (
+                            event
+                            for event in look_result.events
+                            if event.type == "cmd.look.success"
+                        ),
+                        None,
+                    )
+                    if look_event is None:
+                        raise ActionError(
+                            "Could not build the transferred player's room state.",
+                            code="state_sync_failed",
+                        )
+                    if moved:
+                        target_state_events = [
+                            GameEvent(
+                                type="affect.transfer",
+                                recipients=look_event.recipients,
+                                data={
+                                    **look_event.data,
+                                    "room": look_event.data["target"],
+                                },
+                                text=look_event.text,
+                            )
+                        ]
+                    else:
+                        target_state_events = [look_event]
+                else:
+                    updated_target = (
+                        Mob.objects.select_related("definition", "room", "world")
+                        .get(pk=target_ref.target_id)
+                    )
+                    transferred_payload = serialize_char_from_mob(
+                        updated_target,
+                    ).model_dump()
+                    target_name = updated_target.name or "target"
+                    target_state_events = []
+        except OperationalError as exc:
+            cause = getattr(exc, "__cause__", None)
+            sqlstate = getattr(cause, "sqlstate", None) or getattr(
+                cause,
+                "pgcode",
+                None,
+            )
+            if sqlstate == "55P03":
+                raise ActionError(
+                    "The target is busy. Try the transfer again.",
+                    code="target_busy",
+                ) from exc
+            raise
+
+        movement_data = {
+            "actor": transferred_payload,
+            "origin_room": origin_payload,
+            "destination_room": destination_payload,
+        }
+        events: list[GameEvent] = [
+            GameEvent(
+                type="cmd./transfer.success",
+                recipients=[actor.key],
+                data={
+                    "transferred": transferred_payload,
+                    "transferred_type": target_ref.target_type,
+                    "target": destination_payload,
+                    "target_type": "room",
+                    "origin_room": origin_payload,
+                    "destination_room": destination_payload,
+                    "moved": moved,
+                    "finished_encounter_ids": finished_encounter_ids,
+                },
+                text=f"You transfer {target_name} to {destination.name}.",
+            )
+        ]
+        if moved and is_visible:
+            events.append(
+                GameEvent(
+                    type="notification./transfer.exit",
+                    recipients=[
+                        f"player.{player_id}"
+                        for player_id in origin_recipient_ids
+                    ],
+                    data=movement_data,
+                    text=f"{target_name} disappears.",
+                )
+            )
+        events.extend(target_state_events)
+        events.extend(combat_effect_events)
+        if moved:
+            events.append(
+                GameEvent(
+                    type="notification./transfer.enter",
+                    recipients=[
+                        f"player.{player_id}"
+                        for player_id in destination_recipient_ids
+                    ],
+                    data=movement_data,
+                    text=f"{target_name} appears." if is_visible else None,
+                )
+            )
+
+        return ActionResult(
+            events=events,
+            data={
+                "target_id": target_ref.target_id,
+                "target_key": updated_target.key,
+                "target_type": target_ref.target_type,
+                "moved": moved,
+            },
         )
 
 

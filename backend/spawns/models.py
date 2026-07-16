@@ -161,6 +161,14 @@ class Player(CharMixin, AdventBaseModel):
 
     class Meta:
         unique_together = ['name', 'world']
+        indexes = [
+            models.Index(
+                models.F('world'),
+                models.functions.Lower('name'),
+                condition=models.Q(in_game=True),
+                name='spawn_player_world_lname_live',
+            ),
+        ]
 
     inventory = GenericRelation(
         'spawns.Item',

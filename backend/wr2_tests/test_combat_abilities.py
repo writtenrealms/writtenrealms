@@ -1156,6 +1156,72 @@ class TestCombatAbilities(WorldTestCase):
         )
         self.assertEqual(schedule_mock.call_args.kwargs["countdown"], 1.5)
 
+    def test_charge_revalidates_target_room_after_lock_race(self):
+        self._charge_ability()
+        self.player.known_abilities = ["charge"]
+        self.player.save(update_fields=["known_abilities"])
+        dest_room = self.room.create_at(adv_consts.DIRECTION_EAST)
+        moved_room = dest_room.create_at(adv_consts.DIRECTION_EAST)
+        mob = self._mob(room=dest_room)
+
+        def move_before_lock(*args, **kwargs):
+            mob.room = moved_room
+            mob.save(update_fields=["room"])
+            return mob
+
+        with patch(
+            "spawns.actions.abilities.resolve_room_mob_target",
+            side_effect=move_before_lock,
+        ):
+            with capture_game_messages() as messages:
+                dispatch_text_command(self.player.id, "charge rat east")
+
+        self.player.refresh_from_db()
+        mob.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.room.id)
+        # The simulated move shares this test transaction and is rolled back
+        # with the rejected opener; the important invariant is no encounter.
+        self.assertEqual(mob.room_id, dest_room.id)
+        self.assertFalse(CombatEncounter.objects.filter(mob=mob).exists())
+        errors = self._messages_by_type(messages, "cmd.ability.error")
+        self.assertEqual(errors[0]["data"]["code"], "target_missing")
+
+    def test_hostile_opener_revalidates_target_room_after_lock_race(self):
+        self._ability(
+            slug="power-strike-race",
+            name="Power Strike",
+            verbs=["strike-race"],
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "text": {"label": "Power Strike"},
+                }
+            ],
+        )
+        self.player.known_abilities = ["power-strike-race"]
+        self.player.save(update_fields=["known_abilities"])
+        moved_room = self.room.create_at(adv_consts.DIRECTION_WEST)
+        mob = self._mob(room=self.room)
+
+        def move_before_lock(*args, **kwargs):
+            mob.room = moved_room
+            mob.save(update_fields=["room"])
+            return mob
+
+        with patch(
+            "spawns.actions.abilities.resolve_room_mob_target",
+            side_effect=move_before_lock,
+        ):
+            with capture_game_messages() as messages:
+                dispatch_text_command(self.player.id, "strike-race rat")
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.room_id, self.room.id)
+        self.assertFalse(CombatEncounter.objects.filter(mob=mob).exists())
+        errors = self._messages_by_type(messages, "cmd.ability.error")
+        self.assertEqual(errors[0]["data"]["code"], "target_missing")
+
     def test_charge_accepts_direction_before_target(self):
         self._charge_ability()
         self.player.known_abilities = ["charge"]

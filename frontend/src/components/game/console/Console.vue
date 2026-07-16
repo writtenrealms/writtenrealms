@@ -102,6 +102,7 @@ const consoleMessage = (message) => {
       type === "cmd.move.success" ||
       type === "affect.flee.success" ||
       isCompletedFleeSuccess ||
+      type === "affect.transfer" ||
       type === "cmd.state.sync.success" ||
       (type === "system.connect.success" && message.data && message.data.room) ||
       type === "cmd./jump.success" ||

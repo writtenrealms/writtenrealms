@@ -5270,7 +5270,12 @@ class KillAction:
                 )
             target_mob = (
                 Mob.objects.select_for_update()
-                .filter(pk=target_ref.id, is_pending_deletion=False)
+                .filter(
+                    pk=target_ref.id,
+                    world=player.world,
+                    room=room,
+                    is_pending_deletion=False,
+                )
                 .first()
             )
             if not target_mob:

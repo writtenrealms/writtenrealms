@@ -6,7 +6,7 @@ import uuid
 from django.db import transaction
 
 from config import constants as adv_consts
-from spawns.models import EventSubscriptionReceipt, Player
+from spawns.models import EventSubscriptionReceipt, Mob, Player
 
 
 def execute_mob_event_triggers(*args, **kwargs):
@@ -45,6 +45,21 @@ def _resolve_player(actor_ref: str | None) -> Player | None:
         return None
 
     return Player.objects.filter(pk=int(player_id_text)).first()
+
+
+def _resolve_character(actor_ref: str | None) -> Player | Mob | None:
+    player = _resolve_player(actor_ref)
+    if player is not None:
+        return player
+    if not actor_ref:
+        return None
+    actor_ref = str(actor_ref)
+    if not actor_ref.startswith("mob."):
+        return None
+    mob_id_text = actor_ref.split(".", 1)[1]
+    if not mob_id_text.isdigit():
+        return None
+    return Mob.objects.filter(pk=int(mob_id_text)).first()
 
 
 def _on_cmd_say_success(
@@ -119,6 +134,33 @@ def _on_cmd_move_success(
     )
 
 
+def _on_transfer_enter(
+    event_data: dict,
+    actor_key: str | None,
+    connection_id: str | None,
+) -> None:
+    actor = _resolve_character(_extract_actor_key(event_data, actor_key))
+    if not actor:
+        return
+
+    room_id = None
+    destination = event_data.get("destination_room")
+    if isinstance(destination, dict):
+        room_id = destination.get("id")
+    if not room_id:
+        room_id = getattr(actor, "room_id", None)
+    if not room_id:
+        return
+
+    execute_mob_event_triggers(
+        event=adv_consts.MOB_REACTION_EVENT_ENTERING,
+        actor=actor,
+        room=room_id,
+        connection_id=connection_id,
+        isolate_runtime_world=True,
+    )
+
+
 def _on_affect_death(
     event_data: dict,
     actor_key: str | None,
@@ -156,6 +198,7 @@ _EVENT_SUBSCRIPTIONS: dict[str, TriggerSubscriptionHandler] = {
     "affect.death": _on_affect_death,
     "cmd.say.success": _on_cmd_say_success,
     "cmd.move.success": _on_cmd_move_success,
+    "notification./transfer.enter": _on_transfer_enter,
 }
 
 

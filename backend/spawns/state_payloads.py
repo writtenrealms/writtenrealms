@@ -679,6 +679,7 @@ def serialize_room(
     door_states: Dict[int, Dict[str, str]],
     *,
     viewer: Player | Mob | None = None,
+    runtime_world: World | None = None,
 ) -> RoomSchema:
     if room is None:
         return RoomSchema(
@@ -688,10 +689,12 @@ def serialize_room(
             description="Room data is unavailable.",
         )
 
-    room_inventory = serialize_inventory(
-        room.inventory.filter(is_pending_deletion=False).select_related("definition", "currency"),
-        viewer=viewer,
-    )
+    room_inventory_qs = room.inventory.filter(
+        is_pending_deletion=False,
+    ).select_related("definition", "currency")
+    if runtime_world is not None:
+        room_inventory_qs = room_inventory_qs.filter(world=runtime_world)
+    room_inventory = serialize_inventory(room_inventory_qs, viewer=viewer)
     if isinstance(viewer, Player):
         room_inventory.extend(
             ItemSchema(**payload)
@@ -699,7 +702,11 @@ def serialize_room(
         )
 
     room_players = room.players.filter(in_game=True).select_related("user", "equipment")
-    room_mobs = list(room.mobs.select_related("definition"))
+    room_mobs_qs = room.mobs.select_related("definition")
+    if runtime_world is not None:
+        room_players = room_players.filter(world=runtime_world)
+        room_mobs_qs = room_mobs_qs.filter(world=runtime_world)
+    room_mobs = list(room_mobs_qs)
     quest_indicator_map: dict[int, dict[str, bool]] = {}
     quest_callout_data: list[dict] = []
     if isinstance(viewer, Player):

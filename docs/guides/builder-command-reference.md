@@ -50,6 +50,7 @@ Legend:
 | `/load` | Direct | Script | Script | Script | No | No |
 | `/grantitem` | Direct | Script | Script | Script | No | No |
 | `/kill` | Direct | No | Script | Script | No | No |
+| `/transfer` | Direct | No | Script | Script | No | No |
 | `/purge` | Direct | No | No | No | No | No |
 | `/echo`, `/zecho`, `/wecho` | Direct | Script | Script | Script | Script | Script |
 | `/send` | Direct | No | Script | Script | Script | Script |
@@ -558,6 +559,72 @@ Examples:
 
 This command is direct-builder-only.
 
+### `/transfer`
+
+Format:
+
+```text
+/transfer <target> <room_id|room@x,y,z|direction|here>
+```
+
+Instantly moves a player or mob without using ordinary movement. Transfer does
+not spend stamina or traverse doors, and it does not run movement policy
+triggers. A direction selector still reads the issuer room's exit topology.
+Moving a character also finishes that character's active combat encounters
+before the room changes.
+
+Target behavior:
+
+- `player.<id>` selects a player in the current live runtime world
+- an exact active player name can select a player elsewhere in that same
+  runtime world; prefixes never select remote players
+- `mob.<id>` selects a mob in the issuer's current room
+- an untyped keyword or ordinal such as `guard` or `2.guard` uses normal local
+  character order (players first, then mobs) in the issuer's room
+- `self` selects an embodied player or mob issuer
+
+Player targets must currently be in game. This prevents scripts from producing
+ghost room notifications or starting combat for disconnected characters.
+
+Transfers never move a character between parallel runtime worlds or instance
+runs, and they do not replace the instance enter/leave workflow.
+
+Destination behavior:
+
+- `room@x,y,z` is the portable form and should be used in trigger YAML
+- a bare numeric selector is the WR1-compatible, world-relative room id
+- `room.<id>` selects an explicit WR2 room database id for interactive testing
+- a direction such as `north` or `n` uses the issuer room's exit
+- `here` means the issuer's current room
+
+Examples:
+
+```text
+/transfer player.123 room@10,4,0
+/transfer aria 50201
+/transfer guard north
+/cmd room -- /transfer {{ actor_key }} room@10,4,0
+```
+
+Direct use requires a builder player. Mob and room issuers require a trusted
+script context. Player-issued scripts cannot use `/transfer`; room triggers
+should dispatch it through `/cmd room` and pass the triggering character with
+`{{ actor_key }}`. Transfer sends a complete `affect.transfer` room snapshot to
+player targets, refreshes combat-effect state, and runs destination mob
+`entering` reactions in the same runtime world.
+
+WR2 does not accept WR1's optional trailing command on `/transfer`. Put custom
+feedback before the transfer as explicit script commands. For immediate ordered
+room behavior, repeat the room wrapper for each chained segment:
+
+```yaml
+script: /cmd room -- /send {{ actor_key }} -- The wall folds around you. && /cmd room -- /transfer {{ actor_key }} room@10,4,0
+```
+
+This explicit form still emits transfer's standard disappearance notification.
+Exporters that relied on WR1's trailing command to suppress that text should
+flag the script for an authoring review.
+
 ### `/reset`
 
 Format:
@@ -631,6 +698,12 @@ Kill the triggering player in a room trap:
 
 ```yaml
 script: /cmd room -- /kill {{ actor_key }} -- The pit swallows you whole.
+```
+
+Transfer the triggering player to another room:
+
+```yaml
+script: /cmd room -- /transfer {{ actor_key }} room@10,4,0
 ```
 
 Have a scripted mob restore health:

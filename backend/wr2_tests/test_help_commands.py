@@ -107,6 +107,10 @@ class TestHelpCommands(WorldTestCase):
         self.assertIn("look | look <target>", message.get("text", ""))
         self.assertIn("scan <direction>", message.get("text", ""))
         self.assertIn("/load <item|mob> <definition_id|slug> [cmd]", message.get("text", ""))
+        self.assertIn(
+            "/transfer <target> <room_id|room@x,y,z|direction|here>",
+            message.get("text", ""),
+        )
         self.assertNotIn("/resync", message.get("text", ""))
 
         commands = message["data"]["commands"]
@@ -180,6 +184,15 @@ class TestHelpCommands(WorldTestCase):
         self.assertIsNotNone(message)
         self.assertEqual(message["data"]["command"]["command"], "/load")
         self.assertIn("/load <item|mob> <definition_id|slug> [cmd]", message.get("text", ""))
+
+    def test_help_resolves_legacy_transfer_alias(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "help transfer")
+
+        message = self._message_by_type(messages, "cmd.help.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["command"]["command"], "/transfer")
+        self.assertIn("Use room@x,y,z", message.get("text", ""))
 
     def test_help_known_ability_uses_authored_help_text(self):
         self._ability(

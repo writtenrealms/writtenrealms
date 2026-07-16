@@ -1,6 +1,8 @@
 import json
+from datetime import timedelta
 
 from django.contrib.contenttypes.models import ContentType
+from django.utils import timezone
 
 from builders.models import (
     AbilityDefinition,
@@ -16,11 +18,13 @@ from core.scoped_state import (
     get_state_snapshot,
 )
 from spawns.handlers import dispatch_command, get_registered_handlers
-from spawns.models import CombatEncounter, Item, Mob
+from spawns.models import ActiveEffect, CombatEncounter, Item, Mob
 from tests.base import WorldTestCase
+from worlds.models import Room, World, WorldConfig
 from wr2_tests.utils import (
     apply_basic_stat_system,
     capture_game_messages,
+    create_active_effect,
     dispatch_text_command,
     dispatch_text_command_as_mob,
 )
@@ -1117,6 +1121,872 @@ class TestBuilderPurge(BuilderCommandTestCase):
         message = self._message_by_type(messages, "cmd./purge.error")
         self.assertIsNotNone(message)
         self.assertIn("permission", message.get("text", "").lower())
+
+
+class TestBuilderTransfer(BuilderCommandTestCase):
+    def setUp(self):
+        super().setUp()
+        self._set_online(self.player)
+
+    def _message_by_type(self, messages, message_type):
+        for msg in messages:
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def _messages_by_type(self, messages, message_type):
+        return [
+            msg
+            for msg in messages
+            if msg["message"].get("type") == message_type
+        ]
+
+    @staticmethod
+    def _set_online(*players):
+        for player in players:
+            player.in_game = True
+            player.save(update_fields=["in_game"])
+
+    @staticmethod
+    def _room_ref(room):
+        return f"room@{room.x},{room.y},{room.z}"
+
+    def test_builder_transfers_remote_player_and_refreshes_target_room(self):
+        origin = self.room.create_at("west")
+        destination = self.room.create_at("east")
+        target_user = self.create_user("transfer-target@example.com")
+        target = self.create_player(
+            "Target",
+            user=target_user,
+            room=origin,
+        )
+        self._set_online(target)
+        idle_timestamp = timezone.now() - timedelta(minutes=10)
+        target.last_action_ts = idle_timestamp
+        target.save(update_fields=["last_action_ts"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/transfer target {self._room_ref(destination)}",
+            )
+
+        target.refresh_from_db()
+        self.assertEqual(target.room_id, destination.id)
+        self.assertEqual(target.world_id, self.spawn_world.id)
+        self.assertEqual(target.last_action_ts, idle_timestamp)
+        self.assertTrue(target.viewed_rooms.filter(pk=destination.id).exists())
+
+        success = self._message_by_type(messages, "cmd./transfer.success")
+        self.assertIsNotNone(success)
+        self.assertEqual(success["data"]["transferred"]["key"], target.key)
+        self.assertEqual(success["data"]["target"]["id"], destination.id)
+        self.assertIn("You transfer Target", success["text"])
+
+        transfer_messages = self._messages_by_type(messages, "affect.transfer")
+        self.assertEqual(len(transfer_messages), 1)
+        self.assertEqual(transfer_messages[0]["player_key"], target.key)
+        self.assertEqual(
+            transfer_messages[0]["message"]["data"]["room"]["id"],
+            destination.id,
+        )
+
+    def test_transfer_supports_portable_absolute_typed_and_direction_rooms(self):
+        destination = self.room.create_at("east")
+        selectors = (
+            self._room_ref(destination),
+            str(destination.relative_id),
+            f"room.{destination.id}",
+            "east",
+        )
+
+        for selector in selectors:
+            with self.subTest(selector=selector):
+                self.player.room = self.room
+                self.player.save(update_fields=["room"])
+
+                with capture_game_messages() as messages:
+                    dispatch_text_command(
+                        self.player.id,
+                        f"/transfer self {selector}",
+                    )
+
+                self.player.refresh_from_db()
+                self.assertEqual(self.player.room_id, destination.id)
+                self.assertIsNotNone(
+                    self._message_by_type(messages, "cmd./transfer.success")
+                )
+
+    def test_slashless_transfer_alias_moves_player(self):
+        destination = self.room.create_at("east")
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                f"transfer self {self._room_ref(destination)}",
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, destination.id)
+        self.assertIsNotNone(
+            self._message_by_type(messages, "cmd./transfer.success")
+        )
+
+    def test_builder_transfers_local_mob(self):
+        destination = self.room.create_at("east")
+        target = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="a gate guard",
+            keywords="gate guard",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/transfer guard {self._room_ref(destination)}",
+            )
+
+        target.refresh_from_db()
+        self.assertEqual(target.room_id, destination.id)
+        success = self._message_by_type(messages, "cmd./transfer.success")
+        self.assertEqual(success["data"]["transferred_type"], "mob")
+        self.assertIsNone(self._message_by_type(messages, "affect.transfer"))
+
+    def test_scripted_room_and_mob_issuers_can_transfer(self):
+        destination = self.room.create_at("east")
+        room_target_user = self.create_user("room-transfer-target@example.com")
+        room_target = self.create_player(
+            "RoomTarget",
+            user=room_target_user,
+            room=self.room,
+        )
+        mob_target_user = self.create_user("mob-transfer-target@example.com")
+        mob_target = self.create_player(
+            "MobTarget",
+            user=mob_target_user,
+            room=self.room,
+        )
+        issuer_mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="an usher",
+            keywords="usher",
+        )
+        self._set_online(room_target, mob_target)
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="room",
+                actor_id=self.room.id,
+                payload={
+                    "text": f"/transfer {room_target.key} {self._room_ref(destination)}",
+                    "world_id": self.spawn_world.id,
+                },
+                script_source=True,
+            )
+            dispatch_command(
+                command_type="text",
+                actor_type="mob",
+                actor_id=issuer_mob.id,
+                payload={
+                    "text": f"/transfer {mob_target.key} {self._room_ref(destination)}",
+                },
+                script_source=True,
+            )
+
+        room_target.refresh_from_db()
+        mob_target.refresh_from_db()
+        self.assertEqual(room_target.room_id, destination.id)
+        self.assertEqual(mob_target.room_id, destination.id)
+        successes = self._messages_by_type(messages, "cmd./transfer.success")
+        self.assertEqual(len(successes), 2)
+        self.assertEqual(
+            {message["player_key"] for message in successes},
+            {self.room.key, issuer_mob.key},
+        )
+
+    def test_cmd_room_transfer_preserves_runtime_world_context(self):
+        destination = self.room.create_at("east")
+        target_user = self.create_user("cmd-room-transfer@example.com")
+        target = self.create_player(
+            "CmdTarget",
+            user=target_user,
+            room=self.room,
+        )
+        self._set_online(target)
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                payload={
+                    "text": (
+                        f"/cmd room -- /transfer {target.key} "
+                        f"{self._room_ref(destination)}"
+                    ),
+                },
+                script_source=True,
+            )
+
+        target.refresh_from_db()
+        self.assertEqual(target.room_id, destination.id)
+        cmd_success = self._message_by_type(messages, "cmd./cmd.success")
+        self.assertIsNotNone(cmd_success)
+        self.assertEqual(cmd_success["data"]["errors"], [])
+
+    def test_untrusted_player_mob_and_room_scripts_cannot_transfer(self):
+        destination = self.room.create_at("east")
+        other_user = self.create_user("untrusted-transfer@example.com")
+        other_player = self.create_player(
+            "Other",
+            user=other_user,
+            room=self.room,
+        )
+        issuer_mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="an untrusted usher",
+            keywords="usher",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=other_player.id,
+                payload={"text": f"/transfer self {self._room_ref(destination)}"},
+                script_source=True,
+            )
+            dispatch_command(
+                command_type="text",
+                actor_type="mob",
+                actor_id=issuer_mob.id,
+                payload={"text": f"/transfer self {self._room_ref(destination)}"},
+            )
+            dispatch_command(
+                command_type="text",
+                actor_type="room",
+                actor_id=self.room.id,
+                payload={
+                    "text": f"/transfer {other_player.key} {self._room_ref(destination)}",
+                    "world_id": self.spawn_world.id,
+                },
+            )
+
+        other_player.refresh_from_db()
+        issuer_mob.refresh_from_db()
+        self.assertEqual(other_player.room_id, self.room.id)
+        self.assertEqual(issuer_mob.room_id, self.room.id)
+        errors = self._messages_by_type(messages, "cmd./transfer.error")
+        self.assertEqual(len(errors), 3)
+        for error in errors:
+            self.assertIn("permission", error["message"].get("text", "").lower())
+
+    def test_transfer_rejects_target_from_parallel_runtime_world(self):
+        destination = self.room.create_at("east")
+        other_runtime = self.world.create_spawn_world()
+        target_user = self.create_user("parallel-transfer-target@example.com")
+        target = self.create_player(
+            "ParallelTarget",
+            user=target_user,
+            world=other_runtime,
+            room=self.room,
+        )
+        self._set_online(target)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/transfer {target.key} {self._room_ref(destination)}",
+            )
+
+        target.refresh_from_db()
+        self.assertEqual(target.room_id, self.room.id)
+        self.assertEqual(target.world_id, other_runtime.id)
+        error = self._message_by_type(messages, "cmd./transfer.error")
+        self.assertEqual(error["data"]["code"], "invalid_target")
+
+    def test_transfer_emits_runtime_isolated_exit_look_and_enter_events(self):
+        destination = self.room.create_at("east")
+        target_user = self.create_user("visible-transfer-target@example.com")
+        target = self.create_player(
+            "VisibleTarget",
+            user=target_user,
+            room=self.room,
+        )
+        origin_user = self.create_user("transfer-origin-watcher@example.com")
+        origin_watcher = self.create_player(
+            "OriginWatcher",
+            user=origin_user,
+            room=self.room,
+        )
+        destination_user = self.create_user("transfer-destination-watcher@example.com")
+        destination_watcher = self.create_player(
+            "DestinationWatcher",
+            user=destination_user,
+            room=destination,
+        )
+        other_runtime = self.world.create_spawn_world()
+        isolated_user = self.create_user("transfer-isolated-watcher@example.com")
+        isolated_watcher = self.create_player(
+            "IsolatedWatcher",
+            user=isolated_user,
+            world=other_runtime,
+            room=destination,
+        )
+        self._set_online(
+            target,
+            origin_watcher,
+            destination_watcher,
+            isolated_watcher,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/transfer {target.key} {self._room_ref(destination)}",
+            )
+
+        exit_messages = self._messages_by_type(
+            messages,
+            "notification./transfer.exit",
+        )
+        enter_messages = self._messages_by_type(
+            messages,
+            "notification./transfer.enter",
+        )
+        self.assertEqual(
+            {message["player_key"] for message in exit_messages},
+            {self.player.key, origin_watcher.key},
+        )
+        self.assertEqual(
+            {message["player_key"] for message in enter_messages},
+            {destination_watcher.key},
+        )
+        self.assertNotIn(
+            isolated_watcher.key,
+            {message["player_key"] for message in enter_messages},
+        )
+        transfer_state = self._messages_by_type(messages, "affect.transfer")
+        self.assertEqual(
+            [message["player_key"] for message in transfer_state],
+            [target.key],
+        )
+        look_char_keys = {
+            char["key"]
+            for char in transfer_state[0]["message"]["data"]["room"]["chars"]
+        }
+        self.assertNotIn(isolated_watcher.key, look_char_keys)
+        event_types = [
+            message["message"]["type"]
+            for message in messages
+            if message["message"]["type"] in {
+                "notification./transfer.exit",
+                "affect.transfer",
+                "notification./transfer.enter",
+            }
+        ]
+        exit_indices = [
+            index
+            for index, event_type in enumerate(event_types)
+            if event_type == "notification./transfer.exit"
+        ]
+        enter_indices = [
+            index
+            for index, event_type in enumerate(event_types)
+            if event_type == "notification./transfer.enter"
+        ]
+        transfer_index = event_types.index("affect.transfer")
+        self.assertLess(max(exit_indices), transfer_index)
+        self.assertLess(transfer_index, min(enter_indices))
+
+    def test_invisible_and_same_room_transfers_do_not_notify_watchers(self):
+        destination = self.room.create_at("east")
+        origin_watcher_user = self.create_user("transfer-origin-no-notify@example.com")
+        origin_watcher = self.create_player(
+            "OriginWatcher",
+            user=origin_watcher_user,
+            room=self.room,
+        )
+        watcher_user = self.create_user("transfer-no-notify@example.com")
+        watcher = self.create_player(
+            "Watcher",
+            user=watcher_user,
+            room=destination,
+        )
+        self._set_online(origin_watcher, watcher)
+        self.player.is_invisible = True
+        self.player.save(update_fields=["is_invisible"])
+
+        with capture_game_messages() as invisible_messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/transfer self {self._room_ref(destination)}",
+            )
+
+        self.assertEqual(
+            self._messages_by_type(
+                invisible_messages,
+                "notification./transfer.enter",
+            ),
+            [],
+        )
+        self.assertEqual(
+            self._messages_by_type(
+                invisible_messages,
+                "notification./transfer.exit",
+            ),
+            [],
+        )
+
+        opponent = Mob.objects.create(
+            world=self.spawn_world,
+            room=destination,
+            name="a waiting opponent",
+            fights_back=False,
+        )
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=destination,
+            player=self.player,
+            mob=opponent,
+        )
+        effect = create_active_effect(
+            target=self.player,
+            source=opponent,
+            encounter=encounter,
+            scope=ActiveEffect.SCOPE_ENCOUNTER,
+            payload={
+                "effect": "dot",
+                "label": "Waiting",
+                "remaining_rounds": 2,
+                "duration_rounds": 2,
+            },
+        )
+
+        with capture_game_messages() as same_room_messages:
+            dispatch_text_command(self.player.id, "/transfer self here")
+
+        encounter.refresh_from_db()
+        success = self._message_by_type(
+            same_room_messages,
+            "cmd./transfer.success",
+        )
+        self.assertFalse(success["data"]["moved"])
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
+        self.assertTrue(ActiveEffect.objects.filter(pk=effect.pk).exists())
+        self.assertIsNone(
+            self._message_by_type(same_room_messages, "affect.transfer")
+        )
+        self.assertIsNotNone(
+            self._message_by_type(same_room_messages, "cmd.look.success")
+        )
+        self.assertEqual(
+            self._messages_by_type(
+                same_room_messages,
+                "notification./transfer.exit",
+            ),
+            [],
+        )
+
+    def test_transfer_finishes_active_combat_in_one_relocation(self):
+        destination = self.room.create_at("east")
+        target_user = self.create_user("combat-transfer-target@example.com")
+        target = self.create_player(
+            "CombatTarget",
+            user=target_user,
+            room=self.room,
+        )
+        self._set_online(target)
+        opponent = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="an opponent",
+            keywords="opponent",
+            fights_back=False,
+        )
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=target,
+            mob=opponent,
+            pending_player_ability={"ability": "strike"},
+            pending_mob_ability={"ability": "bite"},
+            pending_flee={"direction": "east"},
+        )
+        effect = create_active_effect(
+            target=target,
+            source=opponent,
+            encounter=encounter,
+            scope=ActiveEffect.SCOPE_ENCOUNTER,
+            payload={
+                "effect": "dot",
+                "label": "Burning",
+                "remaining_rounds": 2,
+                "duration_rounds": 2,
+            },
+        )
+
+        encounter.next_resolution_ts = timezone.now() + timedelta(minutes=1)
+        encounter.save(update_fields=["next_resolution_ts"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/transfer {target.key} {self._room_ref(destination)}",
+            )
+
+        encounter.refresh_from_db()
+        target.refresh_from_db()
+        self.assertEqual(target.room_id, destination.id)
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
+        self.assertIsNone(encounter.next_resolution_ts)
+        self.assertEqual(encounter.pending_player_ability, {})
+        self.assertEqual(encounter.pending_mob_ability, {})
+        self.assertEqual(encounter.pending_flee, {})
+        self.assertFalse(ActiveEffect.objects.filter(pk=effect.pk).exists())
+        effect_state = self._message_by_type(
+            messages,
+            "player.combat_effects.update",
+        )
+        self.assertIsNotNone(effect_state)
+        self.assertEqual(effect_state["data"]["active_effects"], [])
+
+    def test_transfer_finishes_mob_combat_and_refreshes_opponent_effects(self):
+        destination = self.room.create_at("east")
+        target = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="a bound sentinel",
+            keywords="sentinel",
+            fights_back=False,
+        )
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=target,
+            next_resolution_ts=timezone.now() + timedelta(minutes=1),
+        )
+        effect = create_active_effect(
+            target=self.player,
+            source=target,
+            encounter=encounter,
+            scope=ActiveEffect.SCOPE_ENCOUNTER,
+            payload={
+                "effect": "dot",
+                "label": "Marked",
+                "remaining_rounds": 2,
+                "duration_rounds": 2,
+            },
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/transfer {target.key} {self._room_ref(destination)}",
+            )
+
+        target.refresh_from_db()
+        encounter.refresh_from_db()
+        self.assertEqual(target.room_id, destination.id)
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
+        self.assertFalse(ActiveEffect.objects.filter(pk=effect.pk).exists())
+        effect_state = self._message_by_type(
+            messages,
+            "player.combat_effects.update",
+        )
+        self.assertIsNotNone(effect_state)
+        self.assertEqual(effect_state["data"]["active_effects"], [])
+
+    def test_transfer_fires_runtime_isolated_mob_enter_reactions(self):
+        destination = self.room.create_at("east")
+        onward_destination = destination.create_at("east")
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            name="Threshold Watcher",
+        )
+        watcher = Mob.objects.create(
+            world=self.spawn_world,
+            room=destination,
+            definition=definition,
+            name="a threshold watcher",
+        )
+        other_runtime = self.world.create_spawn_world()
+        isolated_watcher = Mob.objects.create(
+            world=other_runtime,
+            room=destination,
+            definition=definition,
+            name="an isolated threshold watcher",
+        )
+        Trigger.objects.create(
+            world=self.world,
+            kind=api_consts.TRIGGER_KIND_EVENT,
+            scope=api_consts.TRIGGER_SCOPE_WORLD,
+            target_type=ContentType.objects.get_for_model(MobDefinition),
+            target_id=definition.id,
+            event=api_consts.MOB_REACTION_EVENT_ENTERING,
+            script=(
+                "say The threshold stirs. && "
+                f"/transfer {{{{ actor_key }}}} "
+                f"{self._room_ref(onward_destination)}"
+            ),
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+        self.player.is_invisible = True
+        self.player.save(update_fields=["is_invisible"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/transfer self {self._room_ref(destination)}",
+            )
+
+        reaction_actor_keys = {
+            message["message"].get("data", {}).get("actor", {}).get("key")
+            for message in messages
+            if message["message"].get("type") == "notification.cmd.say.success"
+        }
+        self.assertIn(watcher.key, reaction_actor_keys)
+        self.assertNotIn(isolated_watcher.key, reaction_actor_keys)
+        self.player.refresh_from_db()
+        watcher.refresh_from_db()
+        self.assertEqual(self.player.room_id, onward_destination.id)
+        self.assertEqual(watcher.room_id, destination.id)
+
+        self.player.room = self.room
+        self.player.save(update_fields=["room"])
+        transferred_mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            definition=definition,
+            name="a threshold courier",
+            keywords="courier",
+        )
+        with capture_game_messages() as mob_messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/transfer {transferred_mob.key} {self._room_ref(destination)}",
+            )
+
+        transferred_mob.refresh_from_db()
+        watcher.refresh_from_db()
+        isolated_watcher.refresh_from_db()
+        self.assertEqual(transferred_mob.room_id, onward_destination.id)
+        self.assertEqual(watcher.room_id, destination.id)
+        self.assertEqual(isolated_watcher.room_id, destination.id)
+        self.assertTrue(
+            any(
+                message["player_key"] == watcher.key
+                for message in mob_messages
+                if message["message"].get("type") == "cmd.say.success"
+            )
+        )
+        self.assertFalse(
+            any(
+                message["player_key"] == transferred_mob.key
+                for message in mob_messages
+                if message["message"].get("type") == "cmd.say.success"
+            )
+        )
+
+    def test_transfer_rejects_offline_player_keys(self):
+        destination = self.room.create_at("east")
+        target_user = self.create_user("offline-transfer-target@example.com")
+        target = self.create_player(
+            "OfflineTarget",
+            user=target_user,
+            room=self.room,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/transfer {target.key} {self._room_ref(destination)}",
+            )
+
+        target.refresh_from_db()
+        self.assertEqual(target.room_id, self.room.id)
+        error = self._message_by_type(messages, "cmd./transfer.error")
+        self.assertEqual(error["data"]["code"], "invalid_target")
+        self.assertIsNone(self._message_by_type(messages, "affect.transfer"))
+
+    def test_transfer_prefers_exact_players_then_counted_local_characters(self):
+        destination = self.room.create_at("east")
+        remote_room = self.room.create_at("west")
+        remote_user = self.create_user("guardian-transfer-target@example.com")
+        remote_player = self.create_player(
+            "Guardian",
+            user=remote_user,
+            room=remote_room,
+        )
+        local_user = self.create_user("local-guard-transfer-target@example.com")
+        local_player = self.create_player(
+            "Guard Captain",
+            user=local_user,
+            room=self.room,
+        )
+        self._set_online(remote_player, local_player)
+        first_guard = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="a first guard",
+            keywords="guard",
+        )
+        second_guard = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="a second guard",
+            keywords="guard",
+        )
+
+        with capture_game_messages():
+            dispatch_text_command(
+                self.player.id,
+                f"/transfer 2.guard {self._room_ref(destination)}",
+            )
+        first_guard.refresh_from_db()
+        self.assertEqual(first_guard.room_id, destination.id)
+
+        with capture_game_messages():
+            dispatch_text_command(
+                self.player.id,
+                f"/transfer guard {self._room_ref(destination)}",
+            )
+
+        local_player.refresh_from_db()
+        remote_player.refresh_from_db()
+        second_guard.refresh_from_db()
+        self.assertEqual(local_player.room_id, destination.id)
+        self.assertEqual(second_guard.room_id, self.room.id)
+        self.assertEqual(remote_player.room_id, remote_room.id)
+
+    def test_bare_numeric_room_selector_prefers_legacy_relative_id(self):
+        absolute_room = self.room.create_at("east")
+        absolute_room.relative_id = 900000 + absolute_room.id
+        absolute_room.save(update_fields=["relative_id"])
+        legacy_room = Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Legacy numbered room",
+            x=self.room.x,
+            y=self.room.y + 1,
+            z=self.room.z,
+            relative_id=absolute_room.id,
+        )
+
+        with capture_game_messages():
+            dispatch_text_command(
+                self.player.id,
+                f"/transfer self {absolute_room.id}",
+            )
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, legacy_room.id)
+
+        with capture_game_messages():
+            dispatch_text_command(
+                self.player.id,
+                f"/transfer self room.{absolute_room.id}",
+            )
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, absolute_room.id)
+
+    def test_transfer_enforces_instance_authored_room_boundary(self):
+        instance_config = WorldConfig.objects.create()
+        instance_template = World.objects.new_world(
+            name="Transfer instance",
+            author=self.user,
+            config=instance_config,
+            instance_of=self.world,
+        )
+        instance_room = instance_template.rooms.first()
+        instance_runtime = instance_template.create_spawn_world()
+        target_user = self.create_user("instance-transfer-target@example.com")
+        target = self.create_player(
+            "InstanceTarget",
+            user=target_user,
+            world=instance_runtime,
+            room=instance_room,
+        )
+        self._set_online(target)
+
+        with capture_game_messages() as base_room_messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="room",
+                actor_id=self.room.id,
+                payload={
+                    "text": f"/transfer {target.key} here",
+                    "world_id": instance_runtime.id,
+                },
+                script_source=True,
+            )
+        base_error = self._message_by_type(
+            base_room_messages,
+            "cmd./transfer.error",
+        )
+        self.assertEqual(base_error["data"]["code"], "invalid_world_context")
+
+        instance_room.east = self.room
+        instance_room.save(update_fields=["east"])
+        with capture_game_messages() as cross_exit_messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="room",
+                actor_id=instance_room.id,
+                payload={
+                    "text": f"/transfer {target.key} east",
+                    "world_id": instance_runtime.id,
+                },
+                script_source=True,
+            )
+        cross_exit_error = self._message_by_type(
+            cross_exit_messages,
+            "cmd./transfer.error",
+        )
+        self.assertEqual(
+            cross_exit_error["data"]["code"],
+            "invalid_world_context",
+        )
+        target.refresh_from_db()
+        self.assertEqual(target.world_id, instance_runtime.id)
+        self.assertEqual(target.room_id, instance_room.id)
+
+    def test_transfer_rejects_player_prefixes_and_legacy_trailing_commands(self):
+        destination = self.room.create_at("east")
+        anna_user = self.create_user("transfer-anna@example.com")
+        anna = self.create_player("Anna", user=anna_user, room=self.room)
+        annabel_user = self.create_user("transfer-annabel@example.com")
+        annabel = self.create_player("Annabel", user=annabel_user, room=self.room)
+        self._set_online(anna, annabel)
+
+        with capture_game_messages() as prefix_messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/transfer ann {self._room_ref(destination)}",
+            )
+
+        prefix_error = self._message_by_type(
+            prefix_messages,
+            "cmd./transfer.error",
+        )
+        self.assertEqual(prefix_error["data"]["code"], "invalid_target")
+
+        with capture_game_messages() as trailing_messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/transfer self {self._room_ref(destination)} /echo gone",
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.room.id)
+        trailing = self._message_by_type(
+            trailing_messages,
+            "cmd./transfer.error",
+        )
+        self.assertIn("same-line", trailing["text"])
 
 
 class TestBuilderJump(BuilderCommandTestCase):

@@ -21,6 +21,7 @@ from spawns.actions.builder import (
     SetLevelAction,
     SetStatAction,
     StateAction,
+    TransferAction,
     WizKillAction,
 )
 from spawns.events import GameEvent, publish_events
@@ -364,6 +365,34 @@ def _parse_send_args(ctx: CommandContext) -> tuple[str | None, str | None]:
     if len(args) > 1:
         return args[0], " ".join(args[1:]).strip()
     return args[0], None
+
+
+def _parse_transfer_args(
+    ctx: CommandContext,
+) -> tuple[str | None, str | None, bool]:
+    target = ctx.payload.get("target")
+    room_selector = (
+        ctx.payload.get("to")
+        or ctx.payload.get("room")
+        or ctx.payload.get("room_id")
+        or ctx.payload.get("destination")
+    )
+    if target is not None or room_selector is not None:
+        has_trailing_command = bool(
+            ctx.payload.get("cmd") or ctx.payload.get("trailing_command")
+        )
+        return (
+            str(target).strip() if target is not None else None,
+            str(room_selector).strip() if room_selector is not None else None,
+            has_trailing_command,
+        )
+
+    args = [str(arg).strip() for arg in list(ctx.payload.get("args", [])) if str(arg).strip()]
+    if len(args) < 2:
+        return None, None, False
+    if len(args) > 2:
+        return args[0], args[1], True
+    return args[0], args[1], False
 
 
 @register_handler
@@ -1199,6 +1228,135 @@ class CmdHandler(CommandHandler):
             actor_key=ctx.actor_key,
             connection_id=ctx.connection_id,
         )
+
+
+@register_handler
+class TransferHandler(CommandHandler):
+    command_type = "/transfer"
+    text_commands = ("/transfer",)
+    text_aliases = {"transfer": "/transfer"}
+    builder_only = True
+    allow_script_source = True
+    supported_actor_types = ("player", "mob", "room")
+    help = {
+        "name": "Transfer",
+        "format": "/transfer <target> <room_id|room@x,y,z|direction|here>",
+        "description": (
+            "Instantly move a player or mob to a room in the current runtime world. "
+            "Player keys and active player names resolve across that runtime; mob targets "
+            "must be in the issuer's room. Transfer bypasses ordinary movement rules."
+        ),
+        "details": [
+            "Use room@x,y,z in portable trigger YAML.",
+            "Put custom feedback before /transfer in an earlier same-line && segment.",
+            "Room and mob issuers are available only to trusted trigger scripts.",
+        ],
+        "examples": [
+            "/transfer player.123 room@10,4,0",
+            "/transfer aria 50201",
+            "/transfer guard north",
+        ],
+    }
+
+    def _can_execute_transfer_command(self, ctx: CommandContext) -> bool:
+        if has_builder_access(ctx.player):
+            return True
+        return bool(
+            ctx.script_source
+            and self.allow_script_source
+            and ctx.actor_type in {"mob", "room"}
+        )
+
+    def handle(self, ctx: CommandContext) -> None:
+        if not self._can_execute_transfer_command(ctx):
+            ctx.publish(builder_permission_error(self.command_type))
+            return
+
+        target, room_selector, has_trailing_command = _parse_transfer_args(ctx)
+        if has_trailing_command:
+            ctx.publish(
+                {
+                    "type": "cmd./transfer.error",
+                    "text": (
+                        "Trailing transfer commands are not supported. "
+                        "Put the command before /transfer in an earlier "
+                        "same-line && segment."
+                    ),
+                    "data": {
+                        "error": "Trailing commands are not supported.",
+                        "code": "invalid_args",
+                    },
+                }
+            )
+            return
+        if not target or not room_selector:
+            ctx.publish(
+                {
+                    "type": "cmd./transfer.error",
+                    "text": "Usage: /transfer <target> <room_id|room@x,y,z|direction|here>",
+                    "data": {
+                        "error": "Missing target or destination room.",
+                        "code": "invalid_args",
+                    },
+                }
+            )
+            return
+
+        try:
+            result = TransferAction().execute(
+                actor=ctx.actor,
+                target_selector=target,
+                room_selector=room_selector,
+                runtime_world=ctx.world,
+            )
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd./transfer.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        issuer_events = [
+            event
+            for event in result.events
+            if event.type == "cmd./transfer.success"
+        ]
+        target_events = [
+            event
+            for event in result.events
+            if event.type != "cmd./transfer.success"
+        ]
+        publish_events(
+            issuer_events,
+            actor_key=ctx.actor_key,
+            connection_id=ctx.connection_id,
+        )
+
+        target_key = str(result.data.get("target_key") or "")
+        target_connection_id = (
+            ctx.connection_id if target_key == ctx.actor_key else None
+        )
+        publish_events(
+            target_events,
+            actor_key=target_key,
+            connection_id=target_connection_id,
+        )
+
+        if result.data.get("target_type") == "player" and result.data.get("moved"):
+            from spawns.actions.combat import ScanRoomAggroAction
+
+            aggro_result = ScanRoomAggroAction().execute(
+                int(result.data["target_id"]),
+            )
+            if aggro_result.events:
+                publish_events(
+                    aggro_result.events,
+                    actor_key=target_key,
+                    connection_id=target_connection_id,
+                )
 
 
 @register_handler
