@@ -49,6 +49,8 @@ from worlds.models import Room
 
 logger = logging.getLogger(__name__)
 MAX_AUTO_RESOLVE_ROUNDS = 100
+DEFAULT_HIT_MSG_FIRST = "hit"
+DEFAULT_HIT_MSG_THIRD = "hits"
 
 
 def ability_component_overrides(*args, **kwargs):
@@ -616,34 +618,91 @@ def _serialize_corpse(corpse_id: int, *, viewer: Player | None = None) -> dict:
     return serialize_item(corpse, viewer=viewer, include_inventory=True).model_dump()
 
 
-def _actor_attack_text(target_name: str, result: CombatAttackResult) -> str:
+def _normalize_hit_message(value: Any, *, default: str) -> str:
+    message = str(value or "").strip()
+    return message or default
+
+
+def _basic_attack_hit_messages(
+    actor: Player | Mob,
+    *,
+    weapon_slot: str = adv_consts.EQUIPMENT_SLOT_WEAPON,
+) -> tuple[str, str]:
+    source: Any = actor
+    if isinstance(actor, Player):
+        equipment = getattr(actor, "equipment", None)
+        if equipment is None:
+            source = None
+        elif weapon_slot == adv_consts.EQUIPMENT_SLOT_OFFHAND:
+            source = getattr(equipment, adv_consts.EQUIPMENT_SLOT_OFFHAND, None)
+        else:
+            source = getattr(equipment, adv_consts.EQUIPMENT_SLOT_WEAPON, None)
+
+    return (
+        _normalize_hit_message(
+            getattr(source, "hit_msg_first", None),
+            default=DEFAULT_HIT_MSG_FIRST,
+        ),
+        _normalize_hit_message(
+            getattr(source, "hit_msg_third", None),
+            default=DEFAULT_HIT_MSG_THIRD,
+        ),
+    )
+
+
+def _actor_attack_text(
+    target_name: str,
+    result: CombatAttackResult,
+    *,
+    hit_msg_first: str = DEFAULT_HIT_MSG_FIRST,
+) -> str:
     if result.outcome == "dodged":
         return f"{safe_capitalize(target_name)} dodges your attack."
     if result.is_crit_hit:
-        return f"You critically hit {target_name} for {result.damage_taken} damage."
-    return f"You hit {target_name} for {result.damage_taken} damage."
+        return (
+            f"You critically {hit_msg_first} {target_name} "
+            f"for {result.damage_taken} damage."
+        )
+    return f"You {hit_msg_first} {target_name} for {result.damage_taken} damage."
 
 
-def _actor_hit_text(actor_name: str, result: CombatAttackResult) -> str:
+def _actor_hit_text(
+    actor_name: str,
+    result: CombatAttackResult,
+    *,
+    hit_msg_third: str = DEFAULT_HIT_MSG_THIRD,
+) -> str:
     if result.outcome == "dodged":
         return f"You dodge {actor_name}'s attack."
     if result.is_crit_hit:
         return (
-            f"{safe_capitalize(actor_name)} critically hits you "
+            f"{safe_capitalize(actor_name)} critically {hit_msg_third} you "
             f"for {result.damage_taken} damage."
         )
-    return f"{safe_capitalize(actor_name)} hits you for {result.damage_taken} damage."
+    return (
+        f"{safe_capitalize(actor_name)} {hit_msg_third} you "
+        f"for {result.damage_taken} damage."
+    )
 
 
-def _room_attack_text(actor_name: str, target_name: str, result: CombatAttackResult) -> str:
+def _room_attack_text(
+    actor_name: str,
+    target_name: str,
+    result: CombatAttackResult,
+    *,
+    hit_msg_third: str = DEFAULT_HIT_MSG_THIRD,
+) -> str:
     if result.outcome == "dodged":
         return f"{safe_capitalize(target_name)} dodges {actor_name}'s attack."
     if result.is_crit_hit:
         return (
-            f"{safe_capitalize(actor_name)} critically hits {target_name} "
+            f"{safe_capitalize(actor_name)} critically {hit_msg_third} {target_name} "
             f"for {result.damage_taken} damage."
         )
-    return f"{safe_capitalize(actor_name)} hits {target_name} for {result.damage_taken} damage."
+    return (
+        f"{safe_capitalize(actor_name)} {hit_msg_third} {target_name} "
+        f"for {result.damage_taken} damage."
+    )
 
 
 def _combat_name(actor: Player | Mob | StoredEffectSource) -> str:
@@ -3141,10 +3200,22 @@ def _apply_combat_strike(
 
     actor_name = actor_payload.get("name") or "Something"
     target_name = target_payload.get("name") or "them"
+    hit_msg_first, hit_msg_third = _basic_attack_hit_messages(
+        actor,
+        weapon_slot=strike.weapon_slot,
+    )
     if isinstance(actor, Player):
-        actor_text = _actor_attack_text(target_name, result)
+        actor_text = _actor_attack_text(
+            target_name,
+            result,
+            hit_msg_first=hit_msg_first,
+        )
     else:
-        actor_text = _actor_hit_text(actor_name, result)
+        actor_text = _actor_hit_text(
+            actor_name,
+            result,
+            hit_msg_third=hit_msg_third,
+        )
 
     events.extend(
         _combat_attack_events(
@@ -3155,7 +3226,12 @@ def _apply_combat_strike(
             result=result,
             round_id=round_id,
             actor_text=actor_text,
-            room_text=_room_attack_text(actor_name, target_name, result),
+            room_text=_room_attack_text(
+                actor_name,
+                target_name,
+                result,
+                hit_msg_third=hit_msg_third,
+            ),
             attack=strike.attack,
             label=strike.label,
         )

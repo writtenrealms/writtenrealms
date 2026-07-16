@@ -296,6 +296,7 @@ _ITEM_DEFINITION_SPEC_FIELDS = (
     *_ITEM_DEFINITION_BASE_PROPERTY_FIELDS,
 )
 _MOB_DEFINITION_BASE_PROPERTY_FIELDS = mob_definition_property_fields()
+_HIT_MESSAGE_FIELDS = {"hit_msg_first", "hit_msg_third"}
 _MOB_DEFINITION_SPEC_FIELDS = (
     "description",
     "room_description",
@@ -2661,6 +2662,9 @@ def _coerce_item_definition_fields(*, world: World, spec_patch: dict[str, Any], 
         if field_name not in spec_patch:
             continue
         value = spec_patch.get(field_name)
+        if field_name in _HIT_MESSAGE_FIELDS:
+            base_properties[field_name] = _coerce_text(value)
+            continue
         if field_name == "currency":
             if value in (None, ""):
                 base_properties.pop("currency", None)
@@ -2966,6 +2970,8 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
             value = _coerce_mob_aggression(value, "spec.aggression")
         elif field_name == "target_priority":
             value = _coerce_int(value, "spec.target_priority")
+        elif field_name in _HIT_MESSAGE_FIELDS:
+            value = _coerce_text(value)
         base_properties[field_name] = value
 
     combat = spec_patch.get("combat", {})
@@ -2988,6 +2994,8 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
                 value = _coerce_mob_aggression(value, "spec.combat.aggression")
             elif field_name == "target_priority":
                 value = _coerce_int(value, "spec.combat.target_priority")
+            elif field_name in _HIT_MESSAGE_FIELDS:
+                value = _coerce_text(value)
             base_properties[field_name] = value
 
     merchant = spec_patch.get("merchant", {})

@@ -61,6 +61,40 @@ weapon item. Runtime mob damage ignores equipped weapon items and uses the mob's
 own `weapon_damage` plus `attack_power` scaling. If `weapon_damage` is `0`, the
 combat profile's unarmed mob fallback is used instead.
 
+## Basic Attack Messages
+
+Use `hit_msg_first` and `hit_msg_third` to customize a mob's basic-attack verb
+or verb phrase:
+
+```yaml
+kind: mobdefinition
+metadata:
+  slug: village-dog
+  name: a village dog
+spec:
+  type: beast
+  weapon_damage: 2
+  hit_msg_first: bite
+  hit_msg_third: bites
+```
+
+`hit_msg_first` is the first-person form that follows `You` and
+`hit_msg_third` is the third-person form that follows an actor's name. WR2 does
+not conjugate one form into the other, so author both forms. With the example
+above, a player being attacked reads `A village dog bites you` followed by the
+normal damage suffix.
+
+Messages can be multiword phrases. For example, `lash at` and `lashes at`
+produce messages beginning `You lash at a target` and `A tentacle lashes at a
+target`. Author only the phrase: do not include the actor, target, damage
+amount, or punctuation.
+
+On a new definition, an omitted or blank field uses its corresponding `hit` or
+`hits` default. When updating an existing definition, omission preserves the
+current value; set the field to `""` or `null` to restore the default. These
+messages customize successful basic attacks only. Ability damage, periodic
+effects, and other combat output continue to use their ability or effect labels.
+
 Use `aggression: passive`, `normal`, `players`, `all`, or `friendly`. The
 alias `aggressive` is accepted for `all`.
 

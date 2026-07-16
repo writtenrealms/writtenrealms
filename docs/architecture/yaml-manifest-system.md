@@ -52,8 +52,18 @@ Current required mappings:
   `count`, and optional `archetype`; WR2 no longer has a `StartingEq` model.
 - WR1 `ItemTemplate` rows export as `kind: itemdefinition`; WR2 no longer has an
   `ItemTemplate` model, manifest kind, API endpoint, or runtime item FK.
+- WR1 `ItemTemplate.hit_msg_first` and `ItemTemplate.hit_msg_third` export to
+  `kind: itemdefinition` fields `spec.hit_msg_first` and
+  `spec.hit_msg_third`. Preserve non-empty multiword phrases as authored. Emit
+  blank legacy values as `""` so applying over an existing WR2 definition
+  clears an old customization; omission defaults only when creating a definition.
 - WR1 `MobTemplate` rows export as `kind: mobdefinition`; WR2 no longer has a
   `MobTemplate` model, manifest kind, API endpoint, or runtime mob FK.
+- WR1 `MobTemplate.hit_msg_first` and `MobTemplate.hit_msg_third` export to
+  `kind: mobdefinition` fields `spec.hit_msg_first` and
+  `spec.hit_msg_third`. Preserve non-empty multiword phrases as authored. Emit
+  blank legacy values as `""` so applying over an existing WR2 definition
+  clears an old customization; omission defaults only when creating a definition.
 - WR1 `Loader` / `Rule` rows export as `kind: spawnplan` entries. WR2 no longer
   imports or stores loader/rule rows, and runtime item/mob rows no longer keep
   `rule_id` or source-template FKs.

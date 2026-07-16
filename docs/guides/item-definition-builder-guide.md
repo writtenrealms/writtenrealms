@@ -64,6 +64,44 @@ attribute, that key contributes nothing to combat. This is intentional:
 item YAML should not make the world fail to boot because an attribute was
 renamed or removed.
 
+## Basic Attack Messages
+
+Weapon item definitions can customize the basic-attack verb or verb phrase with
+`hit_msg_first` and `hit_msg_third`:
+
+```yaml
+kind: itemdefinition
+metadata:
+  slug: bronze-sword
+  name: a bronze sword
+spec:
+  type: equippable
+  equipment_type: weapon_1h
+  weapon_damage: 4
+  hit_msg_first: slash
+  hit_msg_third: slashes
+```
+
+`hit_msg_first` is the first-person form that follows `You` and
+`hit_msg_third` is the third-person form that follows the attacker's name. WR2
+does not conjugate one form into the other, so author both forms. With the
+example above, the attacker's combat message starts `You slash a dog`, while
+another player's starts `Thibaud slashes a dog`; the normal damage suffix
+follows each phrase.
+
+Messages can be multiword phrases, such as `lash at` and `lashes at`. Author
+only the phrase: do not include the actor, target, damage amount, or
+punctuation. On a new definition, an omitted or blank field uses its
+corresponding `hit` or `hits` default. When updating an existing definition,
+omitting a field preserves its current value; set it to `""` or `null` to
+restore the default.
+
+The message comes from the equipped weapon selected for that basic-attack
+strike. Normal basic attacks use the main-hand weapon; an attack-routine
+offhand strike uses the offhand weapon's message. A weapon that is merely in
+the inventory has no effect, and unarmed attacks use `hit` / `hits`. These
+fields do not replace ability names or periodic-effect text.
+
 ## Armor Classes And Armor Values
 
 Armor classes and armor values are separate systems.
