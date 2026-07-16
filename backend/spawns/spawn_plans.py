@@ -51,10 +51,12 @@ COHORT_RESPAWN_POLICIES = {COHORT_RESPAWN_REFILL_MISSING}
 
 @dataclass
 class SpawnReconcileContext:
-    """Lazily cache canonical room flags for one spawn-world reconciliation."""
+    """Lazily cache shared lookups for one spawn-world reconciliation."""
 
     authored_world_id: int
+    spawn_world_id: int
     _no_roam_room_ids: set[int] | None = None
+    _live_output_placement_ids: set[int] | None = None
 
     def room_is_no_roam(self, room_id: int) -> bool:
         if self._no_roam_room_ids is None:
@@ -65,6 +67,26 @@ class SpawnReconcileContext:
                 ).values_list("room_id", flat=True)
             )
         return room_id in self._no_roam_room_ids
+
+    def placement_has_live_output(self, placement_id: int) -> bool:
+        if self._live_output_placement_ids is None:
+            from spawns.models import Item, Mob
+
+            mob_placement_ids = Mob.objects.filter(
+                world_id=self.spawn_world_id,
+                spawn_placement_id__isnull=False,
+                is_pending_deletion=False,
+            ).values_list("spawn_placement_id", flat=True)
+            item_placement_ids = Item.objects.filter(
+                world_id=self.spawn_world_id,
+                spawn_placement_id__isnull=False,
+                is_pending_deletion=False,
+            ).values_list("spawn_placement_id", flat=True)
+            self._live_output_placement_ids = {
+                *mob_placement_ids,
+                *item_placement_ids,
+            }
+        return placement_id in self._live_output_placement_ids
 
 
 @dataclass(frozen=True)
@@ -79,7 +101,13 @@ def _stable_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
 
 
-def _plan_spec_hash(plan: SpawnPlan) -> str:
+def _spec_digest(value: Any) -> str:
+    return hashlib.sha256(_stable_json(value).encode("utf-8")).hexdigest()
+
+
+def _plan_spec_hash(plan: SpawnPlan, *, entries: list[SpawnEntry] | None = None) -> str:
+    if entries is None:
+        entries = list(plan.entries.all().order_by("order", "created_ts", "id"))
     entries = [
         {
             "slug": entry.slug,
@@ -93,7 +121,7 @@ def _plan_spec_hash(plan: SpawnPlan) -> str:
             "loot": entry.loot,
             "conditions": entry.conditions,
         }
-        for entry in plan.entries.all().order_by("order", "created_ts", "id")
+        for entry in entries
     ]
     payload = {
         "slug": plan.slug,
@@ -103,19 +131,88 @@ def _plan_spec_hash(plan: SpawnPlan) -> str:
         "conditions": plan.conditions,
         "entries": entries,
     }
-    return hashlib.sha256(_stable_json(payload).encode("utf-8")).hexdigest()
+    return _spec_digest(payload)
 
 
-def _seed_for_plan(*, spawn_world: World, plan: SpawnPlan, spec_hash: str) -> str:
+def _entry_spec_hashes(
+    *,
+    plan: SpawnPlan,
+    entry: SpawnEntry,
+    parent_anchor_hash: str = "",
+) -> dict[str, Any]:
+    """Hash independent entry dimensions so narrow edits preserve prior rolls."""
+
+    randomization = plan.randomization if isinstance(plan.randomization, dict) else {}
+    hashes: dict[str, Any] = {
+        "version": 1,
+        "roll": _spec_digest(randomization),
+        "count": _spec_digest({
+            "randomization": randomization,
+            "count": entry.count,
+        }),
+        "source": _spec_digest({
+            "randomization": randomization,
+            "source": entry.source,
+        }),
+        "target": _spec_digest({
+            "randomization": randomization,
+            "target": entry.target,
+            "parent_anchor": parent_anchor_hash,
+        }),
+        "traits": _spec_digest({
+            "randomization": randomization,
+            "traits": entry.traits,
+        }),
+        "placement": _spec_digest({
+            "placement": entry.placement,
+            "parent_anchor": parent_anchor_hash,
+        }),
+        "loot": _spec_digest(entry.loot),
+        "conditions": _spec_digest({
+            "zone_id": plan.zone_id,
+            "conditions": entry.conditions,
+        }),
+    }
+    hashes["anchor"] = _spec_digest({
+        "source": hashes["source"],
+        "target": hashes["target"],
+        "placement": hashes["placement"],
+    })
+    hashes["materialization"] = _spec_digest({
+        key: hashes[key]
+        for key in (
+            "source",
+            "target",
+            "traits",
+            "placement",
+            "loot",
+            "conditions",
+        )
+    })
+    return hashes
+
+
+def _seed_for_plan(*, spawn_world: World, plan: SpawnPlan) -> str:
     seed_scope = str((plan.randomization or {}).get("seed_scope") or "instance").strip().lower()
     if seed_scope == "world":
-        seed_basis = f"world:{plan.world_id}:{plan.slug}:{spec_hash}"
+        seed_basis = f"world:{plan.world_id}:{plan.slug}"
     elif seed_scope == "explicit":
-        explicit_seed = str((plan.randomization or {}).get("seed") or "").strip()
-        seed_basis = explicit_seed or f"explicit:{plan.world_id}:{plan.slug}:{spec_hash}"
+        seed_basis = f"explicit:{plan.world_id}:{plan.slug}"
     else:
-        seed_basis = f"instance:{spawn_world.id}:{plan.world_id}:{plan.slug}:{spec_hash}"
+        seed_basis = f"instance:{spawn_world.id}:{plan.world_id}:{plan.slug}"
     return hashlib.sha256(seed_basis.encode("utf-8")).hexdigest()
+
+
+def _rng_for_entry_dimension(
+    *,
+    run: SpawnPlanRun,
+    entry: SpawnEntry,
+    dimension: str,
+    spec_hash: str,
+    slot_key: str = "",
+) -> random.Random:
+    seed = f"{run.seed}:{entry.slug}:{dimension}:{slot_key}:{spec_hash}"
+    return random.Random(hashlib.sha256(seed.encode("utf-8")).hexdigest())
 
 
 def _parse_key_ref(value: Any, *, expected_prefixes: set[str] | None = None) -> tuple[str | None, str | None]:
@@ -562,55 +659,500 @@ def _generate_traits(entry: SpawnEntry, rng: random.Random) -> tuple[list[dict[s
     return selected, modifiers
 
 
-def _active_run_for_plan(*, spawn_world: World, plan: SpawnPlan, initial: bool = False) -> SpawnPlanRun:
-    spec_hash = _plan_spec_hash(plan)
-    seed = _seed_for_plan(spawn_world=spawn_world, plan=plan, spec_hash=spec_hash)
-    run = SpawnPlanRun.objects.filter(
+@dataclass(frozen=True)
+class ActiveRunResolution:
+    run: SpawnPlanRun | None
+    needs_placement_sync: bool = False
+    spec_changed: bool = False
+    snapshot_stale: bool = False
+
+
+@dataclass(frozen=True)
+class PlacementSyncResult:
+    active_count: int
+    hot_placement_ids: frozenset[int]
+
+
+def _active_entry_hashes(
+    *,
+    plan: SpawnPlan,
+    entries: list[SpawnEntry],
+) -> tuple[dict[int, dict[str, Any]], dict[str, dict[str, Any]]]:
+    hashes_by_id: dict[int, dict[str, Any]] = {}
+    hashes_by_slug: dict[str, dict[str, Any]] = {}
+    for entry in (entry for entry in entries if entry.is_active):
+        parent_slug = _target_entry_slug(entry)
+        parent_hashes = hashes_by_slug.get(parent_slug, {})
+        hashes = _entry_spec_hashes(
+            plan=plan,
+            entry=entry,
+            parent_anchor_hash=str(parent_hashes.get("anchor") or ""),
+        )
+        hashes_by_id[entry.id] = hashes
+        hashes_by_slug[entry.slug] = hashes
+    return hashes_by_id, hashes_by_slug
+
+
+def _entry_count_from_placements(
+    *,
+    entry: SpawnEntry,
+    placements: list[SpawnPlacement],
+) -> int | None:
+    entry_placements = [
+        placement
+        for placement in placements
+        if placement.entry_slug == entry.slug and not placement.is_retired
+    ]
+    parent_slug = _target_entry_slug(entry)
+    if not parent_slug:
+        return len(entry_placements)
+    counts: dict[tuple[str, int], int] = {}
+    for placement in entry_placements:
+        if placement.parent_slot_index is None:
+            continue
+        key = (placement.parent_entry_slug, placement.parent_slot_index)
+        counts[key] = counts.get(key, 0) + 1
+    if counts:
+        return max(counts.values())
+    if any(
+        placement.entry_slug == parent_slug and not placement.is_retired
+        for placement in placements
+    ):
+        return 0
+    return None
+
+
+def _entry_states_match_current_spec(
+    *,
+    spec_hash: str,
+    entry_states: Any,
+) -> bool:
+    return (
+        isinstance(entry_states, dict)
+        and entry_states.get("plan_spec_hash") == spec_hash
+        and isinstance(entry_states.get("entries"), dict)
+    )
+
+
+def _baseline_entry_states_for_run(
+    *,
+    run: SpawnPlanRun,
+    plan: SpawnPlan,
+    entries: list[SpawnEntry],
+) -> None:
+    """Adopt current legacy placements when their run already matches the spec."""
+
+    placements = list(run.placements.all())
+    hashes_by_id, _ = _active_entry_hashes(plan=plan, entries=entries)
+    entries_state = {}
+    for entry in (entry for entry in entries if entry.is_active):
+        entries_state[entry.slug] = {
+            "hashes": hashes_by_id[entry.id],
+            "count": _entry_count_from_placements(
+                entry=entry,
+                placements=placements,
+            ),
+        }
+    run.entry_states = {
+        "plan_spec_hash": run.spec_hash,
+        "entries": entries_state,
+    }
+    run.save(update_fields=["entry_states", "modified_ts"])
+
+
+def _active_run_for_plan(
+    *,
+    spawn_world: World,
+    plan: SpawnPlan,
+    entries: list[SpawnEntry],
+    initial: bool = False,
+) -> ActiveRunResolution:
+    spec_hash = _plan_spec_hash(plan, entries=entries)
+    run = SpawnPlanRun.objects.select_for_update().filter(
         spawn_world=spawn_world,
         plan=plan,
         status=SpawnPlanRun.STATUS_ACTIVE,
     ).order_by("-created_ts", "-id").first()
     if run is None:
+        # Instance population is a start-of-run snapshot. Edits to a template
+        # apply to future runs, not an in-progress completion cohort.
+        if plan.world.instance_of_id and not initial:
+            return ActiveRunResolution(run=None)
         run = SpawnPlanRun.objects.create(
             spawn_world=spawn_world,
             plan=plan,
-            seed=seed,
+            seed=_seed_for_plan(spawn_world=spawn_world, plan=plan),
             spec_hash=spec_hash,
         )
-    elif initial and run.spec_hash != spec_hash:
-        run.placements.all().delete()
-        run.seed = seed
+        return ActiveRunResolution(run=run, needs_placement_sync=True)
+    if run.spec_hash != spec_hash and plan.world.instance_of_id and not initial:
+        return ActiveRunResolution(run=run, snapshot_stale=True)
+    if run.spec_hash != spec_hash:
         run.spec_hash = spec_hash
         run.generated_at = timezone.now()
-        run.save(update_fields=["seed", "spec_hash", "generated_at", "modified_ts"])
-    return run
+        run.save(update_fields=["spec_hash", "generated_at", "modified_ts"])
+        return ActiveRunResolution(
+            run=run,
+            needs_placement_sync=True,
+            spec_changed=True,
+        )
+    if not _entry_states_match_current_spec(
+        spec_hash=spec_hash,
+        entry_states=run.entry_states,
+    ):
+        # Old workers can create current-spec runs with database-default state
+        # during a rolling deployment. Adopt those placements without treating
+        # them as an authored edit or refilling missing output early.
+        _baseline_entry_states_for_run(
+            run=run,
+            plan=plan,
+            entries=entries,
+        )
+    return ActiveRunResolution(run=run)
 
 
-def _generate_placements_for_run(*, run: SpawnPlanRun) -> None:
-    if run.placements.exists():
-        return
+_TARGET_STATE_KEYS = {
+    "target_type",
+    "target_id",
+    "roam_target_type",
+    "roam_target_id",
+}
+_COHORT_STATE_KEYS = {
+    "cohort_slug",
+    "cohort_role",
+    "cohort_policy",
+    "cohort_slot_index",
+}
+
+
+def _source_family(source_type: str) -> str:
+    return "mob" if source_type.startswith("mob") else "item"
+
+
+def _merge_preserved_state(
+    *,
+    existing: dict[str, Any],
+    desired: dict[str, Any],
+    preserve_target: bool,
+    preserve_cohort: bool,
+) -> dict[str, Any]:
+    if preserve_target and preserve_cohort:
+        return copy.deepcopy(existing)
+    merged = copy.deepcopy(desired)
+    for preserve, keys in (
+        (preserve_target, _TARGET_STATE_KEYS),
+        (preserve_cohort, _COHORT_STATE_KEYS),
+    ):
+        if not preserve:
+            continue
+        for key in keys:
+            if key in existing:
+                merged[key] = copy.deepcopy(existing[key])
+            else:
+                merged.pop(key, None)
+    return merged
+
+
+def _sync_placements_for_run(
+    *,
+    run: SpawnPlanRun,
+    entries: list[SpawnEntry],
+    prune_retired: bool = False,
+) -> PlacementSyncResult:
+    """Diff deterministic desired slots into an active run without orphaning output."""
+
     plan = run.plan
-    rng = random.Random(run.seed)
+    if prune_retired:
+        from spawns.models import Item, Mob
+
+        retired_ids = set(
+            run.placements.filter(is_retired=True).values_list("id", flat=True)
+        )
+        if retired_ids:
+            occupied_ids = {
+                *Mob.objects.filter(
+                    world_id=run.spawn_world_id,
+                    spawn_placement_id__in=retired_ids,
+                    is_pending_deletion=False,
+                ).values_list("spawn_placement_id", flat=True),
+                *Item.objects.filter(
+                    world_id=run.spawn_world_id,
+                    spawn_placement_id__in=retired_ids,
+                    is_pending_deletion=False,
+                ).values_list("spawn_placement_id", flat=True),
+            }
+            empty_retired_ids = retired_ids - occupied_ids
+            if empty_retired_ids:
+                run.placements.filter(pk__in=empty_retired_ids).delete()
+
+    existing = list(
+        run.placements.select_related("room").order_by(
+            "entry_slug",
+            "parent_entry_slug",
+            "parent_slot_index",
+            "slot_index",
+            "id",
+        )
+    )
+    root_placements: dict[tuple[str, int], SpawnPlacement] = {}
+    nested_placements: dict[tuple[str, str, int, int], SpawnPlacement] = {}
+    nested_ordinals: dict[tuple[str, str, int], int] = {}
+    used_slots: dict[str, set[int]] = {}
+    placements_by_entry: dict[str, list[SpawnPlacement]] = {}
+    for placement in existing:
+        placements_by_entry.setdefault(placement.entry_slug, []).append(placement)
+        used_slots.setdefault(placement.entry_slug, set()).add(placement.slot_index)
+        if placement.parent_entry_slug and placement.parent_slot_index is not None:
+            group_key = (
+                placement.entry_slug,
+                placement.parent_entry_slug,
+                placement.parent_slot_index,
+            )
+            ordinal = nested_ordinals.get(group_key, 0)
+            nested_ordinals[group_key] = ordinal + 1
+            nested_placements[(*group_key, ordinal)] = placement
+        else:
+            root_placements[(placement.entry_slug, placement.slot_index)] = placement
+
+    run_entry_state = run.entry_states if isinstance(run.entry_states, dict) else {}
+    old_entry_states = run_entry_state.get("entries", {})
+    if not isinstance(old_entry_states, dict):
+        old_entry_states = {}
+    retained_entry_slugs = {placement.entry_slug for placement in existing}
+    next_entry_states = {
+        slug: copy.deepcopy(state)
+        for slug, state in old_entry_states.items()
+        if slug in retained_entry_slugs and isinstance(state, dict)
+    }
     generated_by_entry: dict[str, list[SpawnPlacement]] = {}
     room_choice_cache: dict[
         tuple[int, str],
         tuple[list[Room], dict[str, Any]],
     ] = {}
-    for entry in plan.entries.filter(is_active=True).order_by("order", "created_ts", "id"):
+    desired_ids: set[int] = set()
+    hot_placement_ids: set[int] = set()
+    changed_existing: dict[int, SpawnPlacement] = {}
+    now = timezone.now()
+    active_entries = [entry for entry in entries if entry.is_active]
+    entry_hashes, _ = _active_entry_hashes(plan=plan, entries=entries)
+    next_slots = {
+        entry_slug: max(slots, default=-1) + 1
+        for entry_slug, slots in used_slots.items()
+    }
+
+    def reserve_slot(*, entry_slug: str, preferred: int) -> int:
+        slots = used_slots.setdefault(entry_slug, set())
+        if preferred not in slots:
+            slots.add(preferred)
+            next_slots[entry_slug] = max(
+                next_slots.get(entry_slug, 0),
+                preferred + 1,
+            )
+            return preferred
+        slot_index = next_slots.get(entry_slug, max(slots, default=-1) + 1)
+        while slot_index in slots:
+            slot_index += 1
+        slots.add(slot_index)
+        next_slots[entry_slug] = slot_index + 1
+        return slot_index
+
+    def upsert_placement(
+        *,
+        entry: SpawnEntry,
+        proposed_slot_index: int,
+        room: Room,
+        source: ResolvedSource,
+        traits: list[dict[str, Any]],
+        modifiers: dict[str, Any],
+        state: dict[str, Any],
+        old_hashes: dict[str, Any],
+        parent: SpawnPlacement | None = None,
+        nested_index: int | None = None,
+    ) -> SpawnPlacement:
+        hashes = entry_hashes[entry.id]
+        if parent is None:
+            placement = root_placements.get((entry.slug, proposed_slot_index))
+        else:
+            placement = nested_placements.get((
+                entry.slug,
+                parent.entry_slug,
+                parent.slot_index,
+                int(nested_index or 0),
+            ))
+
+        if placement is None:
+            slot_index = reserve_slot(
+                entry_slug=entry.slug,
+                preferred=proposed_slot_index,
+            )
+            placement = SpawnPlacement.objects.create(
+                run=run,
+                entry_slug=entry.slug,
+                slot_index=slot_index,
+                room=room,
+                source_type=source.source_type,
+                source_slug=source.source_slug,
+                source_id=source.source_id,
+                parent_entry_slug=parent.entry_slug if parent is not None else "",
+                parent_slot_index=parent.slot_index if parent is not None else None,
+                traits=traits,
+                modifiers=modifiers,
+                state=state,
+                is_retired=False,
+            )
+            hot_placement_ids.add(placement.id)
+            desired_ids.add(placement.id)
+            return placement
+
+        was_retired = placement.is_retired
+        preserve_source = (
+            not was_retired
+            and old_hashes.get("source") == hashes["source"]
+        )
+        preserve_target = (
+            not was_retired
+            and old_hashes.get("target") == hashes["target"]
+            and _source_family(placement.source_type) == _source_family(source.source_type)
+        )
+        preserve_traits = (
+            not was_retired
+            and old_hashes.get("traits") == hashes["traits"]
+        )
+        preserve_cohort = (
+            not was_retired
+            and old_hashes.get("placement") == hashes["placement"]
+        )
+        existing_state = placement.state if isinstance(placement.state, dict) else {}
+        desired_values = {
+            "room_id": placement.room_id if preserve_target else room.id,
+            "source_type": placement.source_type if preserve_source else source.source_type,
+            "source_slug": placement.source_slug if preserve_source else source.source_slug,
+            "source_id": placement.source_id if preserve_source else source.source_id,
+            "parent_entry_slug": parent.entry_slug if parent is not None else "",
+            "parent_slot_index": parent.slot_index if parent is not None else None,
+            "traits": placement.traits if preserve_traits else traits,
+            "modifiers": placement.modifiers if preserve_traits else modifiers,
+            "state": _merge_preserved_state(
+                existing=existing_state,
+                desired=state,
+                preserve_target=preserve_target,
+                preserve_cohort=preserve_cohort,
+            ),
+            "is_retired": False,
+        }
+        changed = any(
+            getattr(placement, field_name) != value
+            for field_name, value in desired_values.items()
+        )
+        for field_name, value in desired_values.items():
+            setattr(placement, field_name, value)
+        if changed:
+            placement.modified_ts = now
+            changed_existing[placement.id] = placement
+        if (
+            was_retired
+            or old_hashes.get("materialization") != hashes["materialization"]
+        ):
+            hot_placement_ids.add(placement.id)
+        desired_ids.add(placement.id)
+        return placement
+
+    for entry in active_entries:
+        hashes = entry_hashes[entry.id]
+        old_entry_state = old_entry_states.get(entry.slug, {})
+        if not isinstance(old_entry_state, dict):
+            old_entry_state = {}
+        old_hashes = old_entry_state.get("hashes", {})
+        if not isinstance(old_hashes, dict):
+            old_hashes = {}
+        stored_count = old_entry_state.get("count")
+        if (
+            old_hashes.get("count") == hashes["count"]
+            and isinstance(stored_count, int)
+            and not isinstance(stored_count, bool)
+        ):
+            count = max(0, stored_count)
+        else:
+            count = _entry_count(
+                entry,
+                _rng_for_entry_dimension(
+                    run=run,
+                    entry=entry,
+                    dimension="count",
+                    spec_hash=hashes["count"],
+                ),
+            )
+
+        active_existing = [
+            placement
+            for placement in placements_by_entry.get(entry.slug, [])
+            if not placement.is_retired
+        ]
         parent_entry_slug = _target_entry_slug(entry)
-        count = _entry_count(entry, rng)
+        parents = generated_by_entry.get(parent_entry_slug, []) if parent_entry_slug else []
+        layout_matches = False
+        if old_hashes == hashes:
+            if parent_entry_slug:
+                actual_counts: dict[tuple[str, int], int] = {}
+                for placement in active_existing:
+                    if placement.parent_slot_index is None:
+                        break
+                    key = (placement.parent_entry_slug, placement.parent_slot_index)
+                    actual_counts[key] = actual_counts.get(key, 0) + 1
+                else:
+                    expected_counts = {
+                        (parent.entry_slug, parent.slot_index): count
+                        for parent in parents
+                        if count > 0
+                    }
+                    layout_matches = actual_counts == expected_counts
+            else:
+                layout_matches = (
+                    len(active_existing) == count
+                    and all(not placement.parent_entry_slug for placement in active_existing)
+                )
+        if layout_matches:
+            desired_ids.update(placement.id for placement in active_existing)
+            generated_by_entry[entry.slug] = active_existing
+            next_entry_states[entry.slug] = {
+                "hashes": hashes,
+                "count": count,
+            }
+            continue
+
         created: list[SpawnPlacement] = []
         if parent_entry_slug:
-            parents = generated_by_entry.get(parent_entry_slug, [])
             for parent in parents:
                 for nested_index in range(count):
-                    source_spec = _choose_source_spec(entry, rng)
+                    slot_key = (
+                        f"parent:{parent.entry_slug}:"
+                        f"{parent.slot_index}:{nested_index}"
+                    )
+                    source_spec = _choose_source_spec(
+                        entry,
+                        _rng_for_entry_dimension(
+                            run=run,
+                            entry=entry,
+                            dimension="source",
+                            spec_hash=hashes["source"],
+                            slot_key=slot_key,
+                        ),
+                    )
                     source = resolve_source(
                         world=plan.world,
                         source_spec=source_spec,
                         field_name=f"entries.{entry.slug}.source",
                     )
-                    traits, modifiers = _generate_traits(entry, rng)
+                    traits, modifiers = _generate_traits(
+                        entry,
+                        _rng_for_entry_dimension(
+                            run=run,
+                            entry=entry,
+                            dimension="traits",
+                            spec_hash=hashes["traits"],
+                            slot_key=slot_key,
+                        ),
+                    )
                     state = _apply_cohort_state(
                         entry=entry,
                         parent=parent,
@@ -621,25 +1163,31 @@ def _generate_placements_for_run(*, run: SpawnPlanRun) -> None:
                             **_placement_roam_state(parent),
                         },
                     )
-                    created.append(
-                        SpawnPlacement.objects.create(
-                            run=run,
-                            entry_slug=entry.slug,
-                            slot_index=len(created),
-                            room=parent.room,
-                            source_type=source.source_type,
-                            source_slug=source.source_slug,
-                            source_id=source.source_id,
-                            parent_entry_slug=parent.entry_slug,
-                            parent_slot_index=parent.slot_index,
-                            traits=traits,
-                            modifiers=modifiers,
-                            state=state,
-                        )
-                    )
+                    created.append(upsert_placement(
+                        entry=entry,
+                        proposed_slot_index=len(created),
+                        room=parent.room,
+                        source=source,
+                        traits=traits,
+                        modifiers=modifiers,
+                        state=state,
+                        old_hashes=old_hashes,
+                        parent=parent,
+                        nested_index=nested_index,
+                    ))
         else:
             for slot_index in range(count):
-                source_spec = _choose_source_spec(entry, rng)
+                slot_key = f"root:{slot_index}"
+                source_spec = _choose_source_spec(
+                    entry,
+                    _rng_for_entry_dimension(
+                        run=run,
+                        entry=entry,
+                        dimension="source",
+                        spec_hash=hashes["source"],
+                        slot_key=slot_key,
+                    ),
+                )
                 source = resolve_source(
                     world=plan.world,
                     source_spec=source_spec,
@@ -649,29 +1197,113 @@ def _generate_placements_for_run(*, run: SpawnPlanRun) -> None:
                     world=plan.world,
                     entry=entry,
                     source_type=source.source_type,
-                    rng=rng,
+                    rng=_rng_for_entry_dimension(
+                        run=run,
+                        entry=entry,
+                        dimension="target",
+                        spec_hash=hashes["target"],
+                        slot_key=slot_key,
+                    ),
                     room_choice_cache=room_choice_cache,
                 )
-                traits, modifiers = _generate_traits(entry, rng)
-                created.append(
-                    SpawnPlacement.objects.create(
+                traits, modifiers = _generate_traits(
+                    entry,
+                    _rng_for_entry_dimension(
                         run=run,
-                        entry_slug=entry.slug,
-                        slot_index=slot_index,
-                        room=room,
-                        source_type=source.source_type,
-                        source_slug=source.source_slug,
-                        source_id=source.source_id,
-                        traits=traits,
-                        modifiers=modifiers,
-                        state=_apply_cohort_state(
-                            entry=entry,
-                            state=state,
-                            slot_index=slot_index,
-                        ),
-                    )
+                        entry=entry,
+                        dimension="traits",
+                        spec_hash=hashes["traits"],
+                        slot_key=slot_key,
+                    ),
                 )
+                created.append(upsert_placement(
+                    entry=entry,
+                    proposed_slot_index=slot_index,
+                    room=room,
+                    source=source,
+                    traits=traits,
+                    modifiers=modifiers,
+                    state=_apply_cohort_state(
+                        entry=entry,
+                        state=state,
+                        slot_index=slot_index,
+                    ),
+                    old_hashes=old_hashes,
+                ))
         generated_by_entry[entry.slug] = created
+        next_entry_states[entry.slug] = {
+            "hashes": hashes,
+            "count": count,
+        }
+
+    for placement in existing:
+        if placement.id in desired_ids or placement.is_retired:
+            continue
+        placement.is_retired = True
+        placement.modified_ts = now
+        changed_existing[placement.id] = placement
+
+    if changed_existing:
+        SpawnPlacement.objects.bulk_update(
+            changed_existing.values(),
+            [
+                "room",
+                "source_type",
+                "source_slug",
+                "source_id",
+                "parent_entry_slug",
+                "parent_slot_index",
+                "traits",
+                "modifiers",
+                "state",
+                "is_retired",
+                "modified_ts",
+            ],
+            batch_size=500,
+        )
+    next_run_entry_state = {
+        "plan_spec_hash": run.spec_hash,
+        "entries": next_entry_states,
+    }
+    if run.entry_states != next_run_entry_state:
+        run.entry_states = next_run_entry_state
+        run.save(update_fields=["entry_states", "modified_ts"])
+
+    return PlacementSyncResult(
+        active_count=len(desired_ids),
+        hot_placement_ids=frozenset(hot_placement_ids),
+    )
+
+
+def _sync_live_mob_groups(
+    *,
+    spawn_world: World,
+    placement_ids: frozenset[int],
+) -> None:
+    if not placement_ids:
+        return
+    from spawns.models import Mob
+
+    changed = []
+    mobs = Mob.objects.filter(
+        world=spawn_world,
+        spawn_placement_id__in=placement_ids,
+        is_pending_deletion=False,
+    ).select_related("spawn_placement")
+    now = timezone.now()
+    for mob in mobs:
+        expected_group_id = _placement_group_id(mob.spawn_placement) or None
+        if mob.group_id == expected_group_id:
+            continue
+        mob.group_id = expected_group_id
+        mob.modified_ts = now
+        changed.append(mob)
+    if changed:
+        Mob.objects.bulk_update(
+            changed,
+            ["group_id", "modified_ts"],
+            batch_size=500,
+        )
 
 
 def _placement_source(placement: SpawnPlacement):
@@ -682,8 +1314,20 @@ def _placement_source(placement: SpawnPlacement):
 
 
 def _rng_for_placement(placement: SpawnPlacement) -> random.Random:
+    run_entry_state = (
+        placement.run.entry_states
+        if isinstance(placement.run.entry_states, dict)
+        else {}
+    )
+    entry_states = run_entry_state.get("entries", {})
+    if not isinstance(entry_states, dict):
+        entry_states = {}
+    entry_state = entry_states.get(placement.entry_slug, {})
+    hashes = entry_state.get("hashes", {}) if isinstance(entry_state, dict) else {}
+    roll_hash = str(hashes.get("roll") or "") if isinstance(hashes, dict) else ""
     seed = (
         f"{placement.run.seed}:"
+        f"{roll_hash}:"
         f"{placement.entry_slug}:"
         f"{placement.slot_index}:"
         f"{placement.source_type}:"
@@ -838,20 +1482,14 @@ def _parent_instance(*, placement: SpawnPlacement, spawn_world: World):
     ).first()
 
 
-def _placement_has_live_output(*, placement: SpawnPlacement, spawn_world: World) -> bool:
-    from spawns.models import Item, Mob
-
-    if placement.source_type.startswith("mob"):
-        return Mob.objects.filter(
-            world=spawn_world,
-            spawn_placement=placement,
-            is_pending_deletion=False,
-        ).exists()
-    return Item.objects.filter(
-        world=spawn_world,
-        spawn_placement=placement,
-        is_pending_deletion=False,
-    ).exists()
+def _placement_has_live_output(
+    *,
+    placement: SpawnPlacement,
+    reconcile_context: SpawnReconcileContext,
+) -> bool:
+    # Check both output families. A live mob still satisfies its logical slot
+    # after a mob-to-item edit (and vice versa) until that old output leaves.
+    return reconcile_context.placement_has_live_output(placement.id)
 
 
 def _materialize_placement(
@@ -860,7 +1498,10 @@ def _materialize_placement(
     spawn_world: World,
     reconcile_context: SpawnReconcileContext,
 ):
-    if _placement_has_live_output(placement=placement, spawn_world=spawn_world):
+    if _placement_has_live_output(
+        placement=placement,
+        reconcile_context=reconcile_context,
+    ):
         return []
     target = placement.room
     if placement.parent_entry_slug:
@@ -988,29 +1629,88 @@ def reconcile_spawn_plan(
             return {"plan": plan.slug, "placements": 0, "spawned": 0, "skipped": True}
         if not _plan_conditions_pass(spawn_world=spawn_world, plan=plan):
             return {"plan": plan.slug, "placements": 0, "spawned": 0, "skipped": True}
-        run = _active_run_for_plan(spawn_world=spawn_world, plan=plan, initial=initial)
-        run = SpawnPlanRun.objects.select_for_update().get(pk=run.pk)
-        if not _plan_is_due(run=run, initial=initial, repopulate=repopulate):
-            return {"plan": plan.slug, "placements": run.placements.count(), "spawned": 0, "skipped": True}
-        _generate_placements_for_run(run=run)
+        entries = list(plan.entries.all().order_by("order", "created_ts", "id"))
+        resolution = _active_run_for_plan(
+            spawn_world=spawn_world,
+            plan=plan,
+            entries=entries,
+            initial=initial,
+        )
+        run = resolution.run
+        if run is None:
+            return {"plan": plan.slug, "placements": 0, "spawned": 0, "skipped": True}
+        if resolution.snapshot_stale:
+            return {
+                "plan": plan.slug,
+                "placements": run.placements.filter(is_retired=False).count(),
+                "spawned": 0,
+                "skipped": True,
+            }
+
+        sync_result = None
+        if resolution.needs_placement_sync:
+            sync_result = _sync_placements_for_run(
+                run=run,
+                entries=entries,
+                prune_retired=resolution.spec_changed,
+            )
+            _sync_live_mob_groups(
+                spawn_world=spawn_world,
+                placement_ids=sync_result.hot_placement_ids,
+            )
+
+        is_due = _plan_is_due(run=run, initial=initial, repopulate=repopulate)
+        hot_placement_ids = (
+            sync_result.hot_placement_ids
+            if sync_result is not None
+            else frozenset()
+        )
+        active_placements = run.placements.filter(is_retired=False)
+        active_count = (
+            sync_result.active_count
+            if sync_result is not None
+            else active_placements.count()
+        )
+        if not is_due and not hot_placement_ids:
+            return {
+                "plan": plan.slug,
+                "placements": active_count,
+                "spawned": 0,
+                "skipped": True,
+            }
+
         reconcile_context = reconcile_context or SpawnReconcileContext(
             authored_world_id=plan.world_id,
+            spawn_world_id=spawn_world.id,
         )
+        entries_by_slug = {
+            entry.slug: entry
+            for entry in entries
+            if entry.is_active
+        }
+        placements = active_placements.select_related("room", "run__plan").order_by("id")
+        if not is_due:
+            # A builder edit applies its changed logical slots immediately but
+            # does not refill unrelated missing slots before their deadline.
+            placements = placements.filter(pk__in=hot_placement_ids)
         spawned_count = 0
-        for placement in run.placements.select_related("room").order_by("id"):
-            entry = plan.entries.filter(slug=placement.entry_slug, is_active=True).first()
-            if entry and not _entry_conditions_pass(spawn_world=spawn_world, plan=plan, entry=entry):
+        for placement in placements:
+            entry = entries_by_slug.get(placement.entry_slug)
+            if entry is None:
+                continue
+            if not _entry_conditions_pass(spawn_world=spawn_world, plan=plan, entry=entry):
                 continue
             spawned_count += len(_materialize_placement(
                 placement=placement,
                 spawn_world=spawn_world,
                 reconcile_context=reconcile_context,
             ))
-        run.last_reconciled_at = timezone.now()
-        run.save(update_fields=["last_reconciled_at", "modified_ts"])
+        if is_due:
+            run.last_reconciled_at = timezone.now()
+            run.save(update_fields=["last_reconciled_at", "modified_ts"])
         return {
             "plan": plan.slug,
-            "placements": run.placements.count(),
+            "placements": active_count,
             "spawned": spawned_count,
             "skipped": False,
         }
@@ -1028,6 +1728,7 @@ def run_spawn_plans(
         raise TypeError("Can only run spawn plans on spawn worlds.")
     reconcile_context = reconcile_context or SpawnReconcileContext(
         authored_world_id=world.context_id,
+        spawn_world_id=world.id,
     )
     plans = SpawnPlan.objects.filter(world=world.context, is_active=True).select_related("zone", "world")
     if zone_id:

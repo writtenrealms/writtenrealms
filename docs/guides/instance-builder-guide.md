@@ -565,6 +565,13 @@ its initial spawn plans before placing the player inside. After that,
 the normal spawn-plan scheduler can process the instance while its spawned world is
 running.
 
+An active instance keeps the spawn-plan placement snapshot created at run
+start. Editing the template while players are inside does not add, remove, or
+reroll that run's completion population. Reconciliation for the changed plan is
+paused in that active instance, and the updated plan is used by the next new
+instance run. This differs from ordinary running worlds, which hot-reconcile
+builder edits on the next scheduler pass.
+
 The source side inherits from the base world:
 
 ```yaml

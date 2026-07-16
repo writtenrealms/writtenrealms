@@ -1,6 +1,10 @@
+import importlib
+from types import SimpleNamespace
+
 import yaml
 
 from django.db import connection
+from django.test import SimpleTestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
@@ -12,6 +16,29 @@ from spawns.tasks import run_mob_roaming
 from tests.base import WorldTestCase
 from worlds.models import Room, RoomFlag, World, WorldConfig
 from worlds.services import WorldSmith
+
+
+class TestSpawnPlanMigrationHelpers(SimpleTestCase):
+    def test_nested_zero_count_is_preserved_when_parent_exists(self):
+        migration = importlib.import_module(
+            "builders.migrations.0242_backfill_spawn_plan_entry_states"
+        )
+        entry = SimpleNamespace(
+            slug="child",
+            target={"entry": "parent"},
+        )
+        parent = SimpleNamespace(
+            entry_slug="parent",
+            is_retired=False,
+        )
+
+        self.assertEqual(
+            migration._entry_count_from_placements(entry, [parent]),
+            0,
+        )
+        self.assertIsNone(
+            migration._entry_count_from_placements(entry, []),
+        )
 
 
 class TestSpawnPlanManifests(WorldTestCase):
@@ -1063,6 +1090,641 @@ class TestSpawnPlanRuntime(WorldTestCase):
             1,
         )
         self.assertEqual(SpawnPlacement.objects.filter(run__plan=self.plan).count(), 1)
+
+    def test_running_world_hot_loads_added_entry_without_duplicate(self):
+        self.plan.respawn_policy = {"mode": "fixed", "seconds": 3600}
+        self.plan.save(update_fields=["respawn_policy"])
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        run = SpawnPlanRun.objects.get(spawn_world=spawn_world, plan=self.plan)
+        original_mob = Mob.objects.get(world=spawn_world, definition=self.mob_definition)
+        original_placement = original_mob.spawn_placement
+        original_hash = run.spec_hash
+        archer_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="practice-archer",
+            name="a practice archer",
+            mob_type=adv_consts.MOB_TYPE_HUMANOID,
+            base_properties={"health_max": 10},
+        )
+        SpawnEntry.objects.create(
+            plan=self.plan,
+            slug="practice-archer",
+            order=2,
+            source=f"mobdefinition.{archer_definition.slug}",
+            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            count=1,
+        )
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        run.refresh_from_db()
+        original_mob.refresh_from_db()
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 1)
+        self.assertEqual(run.id, SpawnPlanRun.objects.get(
+            spawn_world=spawn_world,
+            plan=self.plan,
+        ).id)
+        self.assertNotEqual(run.spec_hash, original_hash)
+        self.assertEqual(original_mob.spawn_placement_id, original_placement.id)
+        self.assertEqual(Mob.objects.filter(world=spawn_world).count(), 2)
+        self.assertEqual(
+            SpawnPlacement.objects.filter(run=run, is_retired=False).count(),
+            2,
+        )
+        self.assertFalse(
+            Mob.objects.filter(world=spawn_world, spawn_placement__isnull=True).exists()
+        )
+
+        with CaptureQueriesContext(connection) as captured:
+            second_output = run_spawn_plans_for_world(world=spawn_world)
+
+        self.assertEqual(second_output["spawn_plans"][0]["spawned"], 0)
+        self.assertEqual(Mob.objects.filter(world=spawn_world).count(), 2)
+        placement_writes = [
+            query["sql"]
+            for query in captured.captured_queries
+            if "builders_spawnplacement" in query["sql"].lower()
+            and query["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))
+        ]
+        self.assertEqual(placement_writes, [])
+
+    def test_hot_added_entry_does_not_refill_unrelated_slot_early(self):
+        self.plan.respawn_policy = {"mode": "fixed", "seconds": 3600}
+        self.plan.save(update_fields=["respawn_policy"])
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        Mob.objects.get(world=spawn_world, definition=self.mob_definition).delete()
+        archer_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="practice-archer",
+            name="a practice archer",
+            mob_type=adv_consts.MOB_TYPE_HUMANOID,
+            base_properties={"health_max": 10},
+        )
+        SpawnEntry.objects.create(
+            plan=self.plan,
+            slug="practice-archer",
+            order=2,
+            source=f"mobdefinition.{archer_definition.slug}",
+            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            count=1,
+        )
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 1)
+        self.assertFalse(
+            Mob.objects.filter(world=spawn_world, definition=self.mob_definition).exists()
+        )
+        self.assertTrue(
+            Mob.objects.filter(world=spawn_world, definition=archer_definition).exists()
+        )
+
+    def test_stale_legacy_entry_state_applies_existing_entry_edit(self):
+        self.plan.respawn_policy = {"mode": "none"}
+        self.plan.save(update_fields=["respawn_policy"])
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        run = SpawnPlanRun.objects.get(spawn_world=spawn_world, plan=self.plan)
+        SpawnPlanRun.objects.filter(pk=run.pk).update(entry_states={})
+        self.entry.count = 2
+        self.entry.save(update_fields=["count"])
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        run.refresh_from_db()
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 1)
+        self.assertEqual(
+            SpawnPlacement.objects.filter(
+                run=run,
+                entry_slug=self.entry.slug,
+                is_retired=False,
+            ).count(),
+            2,
+        )
+        self.assertEqual(
+            Mob.objects.filter(world=spawn_world, definition=self.mob_definition).count(),
+            2,
+        )
+        entry_state = run.entry_states["entries"][self.entry.slug]
+        self.assertEqual(entry_state["count"], 2)
+        self.assertTrue(entry_state["hashes"])
+
+    def test_matching_legacy_run_baselines_state_without_refilling(self):
+        self.plan.respawn_policy = {"mode": "none"}
+        self.plan.save(update_fields=["respawn_policy"])
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        run = SpawnPlanRun.objects.get(spawn_world=spawn_world, plan=self.plan)
+        placement = run.placements.get(entry_slug=self.entry.slug)
+        Mob.objects.get(
+            world=spawn_world,
+            spawn_placement=placement,
+        ).delete()
+        SpawnPlanRun.objects.filter(pk=run.pk).update(entry_states={})
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        run.refresh_from_db()
+        placement.refresh_from_db()
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 0)
+        self.assertFalse(placement.is_retired)
+        self.assertFalse(
+            Mob.objects.filter(
+                world=spawn_world,
+                spawn_placement=placement,
+            ).exists()
+        )
+        entry_state = run.entry_states["entries"][self.entry.slug]
+        self.assertEqual(entry_state["count"], 1)
+        self.assertTrue(entry_state["hashes"])
+
+    def test_hot_added_entry_does_not_reroll_unrelated_randomized_entry(self):
+        Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="East Yard",
+            x=1,
+            y=0,
+            z=0,
+        )
+        self.plan.randomization = {"seed_scope": "explicit", "seed": "stable-plan"}
+        self.plan.respawn_policy = {"mode": "none"}
+        self.plan.save(update_fields=["randomization", "respawn_policy"])
+        self.entry.target = {"zone": f"zone@{self.zone.relative_id}"}
+        self.entry.count = {"min": 2, "max": 4}
+        self.entry.traits = {
+            "chance": 100,
+            "pool": [
+                {"key": "armored", "weight": 1, "modifiers": {"armor": 2}},
+                {"key": "swift", "weight": 1},
+            ],
+        }
+        self.entry.save(update_fields=["target", "count", "traits"])
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        run = SpawnPlanRun.objects.get(spawn_world=spawn_world, plan=self.plan)
+        before = list(
+            run.placements.filter(entry_slug=self.entry.slug).order_by("slot_index").values(
+                "id",
+                "slot_index",
+                "room_id",
+                "source_type",
+                "source_id",
+                "traits",
+                "modifiers",
+                "state",
+            )
+        )
+        archer_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="practice-archer",
+            name="a practice archer",
+            mob_type=adv_consts.MOB_TYPE_HUMANOID,
+            base_properties={"health_max": 10},
+        )
+        SpawnEntry.objects.create(
+            plan=self.plan,
+            slug="practice-archer",
+            order=-1,
+            source=f"mobdefinition.{archer_definition.slug}",
+            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            count=1,
+        )
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        after = list(
+            run.placements.filter(entry_slug=self.entry.slug).order_by("slot_index").values(
+                "id",
+                "slot_index",
+                "room_id",
+                "source_type",
+                "source_id",
+                "traits",
+                "modifiers",
+                "state",
+            )
+        )
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 1)
+        self.assertEqual(after, before)
+
+    def test_count_increase_preserves_existing_randomized_slots_and_run_seed(self):
+        Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="East Yard",
+            x=1,
+            y=0,
+            z=0,
+        )
+        alternate_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="practice-archer",
+            name="a practice archer",
+            mob_type=adv_consts.MOB_TYPE_HUMANOID,
+            base_properties={"health_max": 10},
+        )
+        self.plan.randomization = {"seed_scope": "explicit", "seed": "stable-plan"}
+        self.plan.respawn_policy = {"mode": "none"}
+        self.plan.save(update_fields=["randomization", "respawn_policy"])
+        self.entry.source = {
+            "pool": [
+                {"ref": f"mobdefinition.{self.mob_definition.slug}", "weight": 1},
+                {"ref": f"mobdefinition.{alternate_definition.slug}", "weight": 1},
+            ],
+        }
+        self.entry.target = {"zone": f"zone@{self.zone.relative_id}"}
+        self.entry.count = 2
+        self.entry.traits = {
+            "chance": 100,
+            "pool": [
+                {"key": "armored", "weight": 1, "modifiers": {"armor": 2}},
+                {"key": "swift", "weight": 1},
+            ],
+        }
+        self.entry.save(update_fields=["source", "target", "count", "traits"])
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        run = SpawnPlanRun.objects.get(spawn_world=spawn_world, plan=self.plan)
+        original_seed = run.seed
+        before = list(
+            run.placements.filter(entry_slug=self.entry.slug).order_by("slot_index").values(
+                "id",
+                "slot_index",
+                "room_id",
+                "source_type",
+                "source_id",
+                "traits",
+                "modifiers",
+                "state",
+            )
+        )
+        Mob.objects.get(
+            world=spawn_world,
+            spawn_placement_id=before[0]["id"],
+        ).delete()
+
+        self.entry.count = 3
+        self.entry.save(update_fields=["count"])
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        run.refresh_from_db()
+        after = list(
+            run.placements.filter(
+                entry_slug=self.entry.slug,
+                is_retired=False,
+            ).order_by("slot_index").values(
+                "id",
+                "slot_index",
+                "room_id",
+                "source_type",
+                "source_id",
+                "traits",
+                "modifiers",
+                "state",
+            )
+        )
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 1)
+        self.assertEqual(run.seed, original_seed)
+        self.assertEqual(after[:2], before)
+        self.assertEqual(len(after), 3)
+        self.assertFalse(
+            Mob.objects.filter(
+                world=spawn_world,
+                spawn_placement_id=before[0]["id"],
+            ).exists()
+        )
+        self.assertTrue(
+            Mob.objects.filter(
+                world=spawn_world,
+                spawn_placement_id=after[2]["id"],
+            ).exists()
+        )
+
+    def test_hot_added_entry_materializes_once_with_respawn_none(self):
+        self.plan.respawn_policy = {"mode": "none"}
+        self.plan.save(update_fields=["respawn_policy"])
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        archer_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="practice-archer",
+            name="a practice archer",
+            mob_type=adv_consts.MOB_TYPE_HUMANOID,
+            base_properties={"health_max": 10},
+        )
+        SpawnEntry.objects.create(
+            plan=self.plan,
+            slug="practice-archer",
+            order=2,
+            source=f"mobdefinition.{archer_definition.slug}",
+            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            count=1,
+        )
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 1)
+        archer = Mob.objects.get(world=spawn_world, definition=archer_definition)
+        archer.delete()
+
+        second_output = run_spawn_plans_for_world(world=spawn_world)
+
+        self.assertEqual(second_output["spawn_plans"][0]["spawned"], 0)
+        self.assertFalse(
+            Mob.objects.filter(world=spawn_world, definition=archer_definition).exists()
+        )
+
+    def test_hot_source_change_waits_for_live_output_to_leave(self):
+        item_definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="training-token",
+            name="a training token",
+        )
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        mob = Mob.objects.get(world=spawn_world, definition=self.mob_definition)
+        placement_id = mob.spawn_placement_id
+        self.entry.source = f"itemdefinition.{item_definition.slug}"
+        self.entry.traits = {}
+        self.entry.save(update_fields=["source", "traits"])
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        mob.refresh_from_db()
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 0)
+        self.assertEqual(mob.spawn_placement_id, placement_id)
+        self.assertFalse(
+            Item.objects.filter(world=spawn_world, definition=item_definition).exists()
+        )
+        mob.delete()
+
+        second_output = run_spawn_plans_for_world(world=spawn_world)
+
+        self.assertEqual(second_output["spawn_plans"][0]["spawned"], 1)
+        item = Item.objects.get(world=spawn_world, definition=item_definition)
+        self.assertEqual(item.spawn_placement_id, placement_id)
+
+    def test_hot_entry_changes_apply_to_next_mob_for_same_slot(self):
+        east_room = Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="East Yard",
+            x=1,
+            y=0,
+            z=0,
+        )
+        archer_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="practice-archer",
+            name="a practice archer",
+            mob_type=adv_consts.MOB_TYPE_HUMANOID,
+            base_properties={"health_max": 10},
+        )
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        mob = Mob.objects.get(world=spawn_world, definition=self.mob_definition)
+        placement_id = mob.spawn_placement_id
+        self.entry.source = f"mobdefinition.{archer_definition.slug}"
+        self.entry.target = {"room": f"room@{east_room.x},{east_room.y},{east_room.z}"}
+        self.entry.traits = {
+            "guaranteed": [
+                {"key": "reinforced", "modifiers": {"armor": 3}},
+            ],
+        }
+        self.entry.save(update_fields=["source", "target", "traits"])
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        mob.refresh_from_db()
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 0)
+        self.assertEqual(mob.definition, self.mob_definition)
+        self.assertEqual(mob.room, self.room)
+        self.assertEqual(mob.spawn_placement_id, placement_id)
+        mob.delete()
+
+        run_spawn_plans_for_world(world=spawn_world)
+
+        replacement = Mob.objects.get(world=spawn_world, definition=archer_definition)
+        self.assertEqual(replacement.spawn_placement_id, placement_id)
+        self.assertEqual(replacement.room, east_room)
+        self.assertEqual(replacement.armor, 3)
+        self.assertEqual(
+            replacement.roll_metadata["spawn_plan"]["trait_keys"],
+            ["reinforced"],
+        )
+
+    def test_hot_removed_entry_retires_and_can_reactivate_live_slot(self):
+        archer_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="practice-archer",
+            name="a practice archer",
+            mob_type=adv_consts.MOB_TYPE_HUMANOID,
+            base_properties={"health_max": 10},
+        )
+        archer_entry = SpawnEntry.objects.create(
+            plan=self.plan,
+            slug="practice-archer",
+            order=2,
+            source=f"mobdefinition.{archer_definition.slug}",
+            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            count=1,
+        )
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        archer = Mob.objects.get(world=spawn_world, definition=archer_definition)
+        archer_placement_id = archer.spawn_placement_id
+        archer_entry.is_active = False
+        archer_entry.save(update_fields=["is_active"])
+
+        run_spawn_plans_for_world(world=spawn_world)
+
+        archer.refresh_from_db()
+        retired = SpawnPlacement.objects.get(pk=archer_placement_id)
+        self.assertTrue(retired.is_retired)
+        self.assertEqual(archer.spawn_placement_id, retired.id)
+        archer_entry.is_active = True
+        archer_entry.save(update_fields=["is_active"])
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        archer.refresh_from_db()
+        retired.refresh_from_db()
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 0)
+        self.assertFalse(retired.is_retired)
+        self.assertEqual(archer.spawn_placement_id, archer_placement_id)
+        self.assertEqual(
+            Mob.objects.filter(world=spawn_world, definition=archer_definition).count(),
+            1,
+        )
+
+        archer_entry.is_active = False
+        archer_entry.save(update_fields=["is_active"])
+        run_spawn_plans_for_world(world=spawn_world)
+        archer.delete()
+
+        second_output = run_spawn_plans_for_world(world=spawn_world)
+
+        self.assertEqual(second_output["spawn_plans"][0]["spawned"], 0)
+        self.assertFalse(
+            Mob.objects.filter(world=spawn_world, definition=archer_definition).exists()
+        )
+
+    def test_hot_count_decrease_and_increase_reuses_live_slots(self):
+        self.entry.count = 3
+        self.entry.save(update_fields=["count"])
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        run = SpawnPlanRun.objects.get(spawn_world=spawn_world, plan=self.plan)
+        original_placement_ids = set(
+            run.placements.values_list("id", flat=True)
+        )
+        self.assertEqual(Mob.objects.filter(world=spawn_world).count(), 3)
+        self.entry.count = 1
+        self.entry.save(update_fields=["count"])
+
+        run_spawn_plans_for_world(world=spawn_world)
+
+        self.assertEqual(run.placements.filter(is_retired=False).count(), 1)
+        self.assertEqual(run.placements.filter(is_retired=True).count(), 2)
+        self.assertEqual(Mob.objects.filter(world=spawn_world).count(), 3)
+        self.entry.count = 3
+        self.entry.save(update_fields=["count"])
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 0)
+        self.assertEqual(run.placements.filter(is_retired=False).count(), 3)
+        self.assertEqual(run.placements.filter(is_retired=True).count(), 0)
+        self.assertEqual(
+            set(run.placements.values_list("id", flat=True)),
+            original_placement_ids,
+        )
+        self.assertEqual(Mob.objects.filter(world=spawn_world).count(), 3)
+
+    def test_hot_nested_count_increase_preserves_each_parent(self):
+        crate_definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="training-crate",
+            name="a training crate",
+            item_type=adv_consts.ITEM_TYPE_CONTAINER,
+        )
+        token_definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="training-token",
+            name="a training token",
+        )
+        self.entry.source = f"itemdefinition.{crate_definition.slug}"
+        self.entry.count = 2
+        self.entry.traits = {}
+        self.entry.save(update_fields=["source", "count", "traits"])
+        child_entry = SpawnEntry.objects.create(
+            plan=self.plan,
+            slug="crate-token",
+            order=2,
+            source=f"itemdefinition.{token_definition.slug}",
+            target={"entry": self.entry.slug},
+            count=1,
+        )
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        crates = list(
+            Item.objects.filter(
+                world=spawn_world,
+                definition=crate_definition,
+            ).order_by("id")
+        )
+        self.assertEqual(len(crates), 2)
+        self.assertEqual(
+            [crate.inventory.filter(definition=token_definition).count() for crate in crates],
+            [1, 1],
+        )
+        child_entry.count = 2
+        child_entry.save(update_fields=["count"])
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 2)
+        self.assertEqual(
+            [crate.inventory.filter(definition=token_definition).count() for crate in crates],
+            [2, 2],
+        )
+        child_placements = SpawnPlacement.objects.filter(
+            run__spawn_world=spawn_world,
+            entry_slug=child_entry.slug,
+            is_retired=False,
+        )
+        self.assertEqual(child_placements.count(), 4)
+        self.assertEqual(
+            set(child_placements.values_list("parent_slot_index", flat=True)),
+            {0, 1},
+        )
+
+    def test_active_instance_keeps_spawn_plan_snapshot_after_template_edit(self):
+        instance_template = World.objects.new_world(
+            name="Snapshot Instance",
+            author=self.user,
+            config=WorldConfig.objects.create(),
+            is_multiplayer=True,
+            instance_of=self.world,
+        )
+        instance_zone = instance_template.zones.get()
+        instance_room = instance_zone.rooms.get()
+        plan = SpawnPlan.objects.create(
+            world=instance_template,
+            zone=instance_zone,
+            slug="snapshot-population",
+            respawn_policy={"mode": "fixed", "seconds": 0},
+        )
+        SpawnEntry.objects.create(
+            plan=plan,
+            slug="practice-dummy",
+            source=f"mobdefinition.{self.mob_definition.slug}",
+            target={"room": f"room@{instance_room.x},{instance_room.y},{instance_room.z}"},
+            count=1,
+        )
+        spawned_instance = instance_template.create_spawn_world(
+            instance_ref="snapshot-one",
+            leader=self.player,
+        )
+        WorldSmith(spawned_instance).start()
+        run = SpawnPlanRun.objects.get(spawn_world=spawned_instance, plan=plan)
+        original_hash = run.spec_hash
+        archer_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="instance-archer",
+            name="an instance archer",
+            mob_type=adv_consts.MOB_TYPE_HUMANOID,
+            base_properties={"health_max": 10},
+        )
+        SpawnEntry.objects.create(
+            plan=plan,
+            slug="instance-archer",
+            order=2,
+            source=f"mobdefinition.{archer_definition.slug}",
+            target={"room": f"room@{instance_room.x},{instance_room.y},{instance_room.z}"},
+            count=1,
+        )
+
+        run_spawn_plans_for_world(world=spawned_instance)
+
+        run.refresh_from_db()
+        self.assertEqual(run.spec_hash, original_hash)
+        self.assertFalse(
+            Mob.objects.filter(world=spawned_instance, definition=archer_definition).exists()
+        )
+        self.assertEqual(run.placements.filter(is_retired=False).count(), 1)
+        Mob.objects.get(
+            world=spawned_instance,
+            definition=self.mob_definition,
+        ).delete()
+
+        second_output = run_spawn_plans_for_world(world=spawned_instance)
+
+        self.assertTrue(second_output["spawn_plans"][0]["skipped"])
+        self.assertFalse(Mob.objects.filter(world=spawned_instance).exists())
 
     def test_spawn_plan_cohort_roams_and_refills_together(self):
         self.world.config.default_roam_chance = 100

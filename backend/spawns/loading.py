@@ -21,6 +21,7 @@ def run_spawn_plans_for_world(world, zone_id=None, initial=False, repopulate=Fal
 
     reconcile_context = SpawnReconcileContext(
         authored_world_id=world.context_id,
+        spawn_world_id=world.id,
     )
 
     if zone_id:

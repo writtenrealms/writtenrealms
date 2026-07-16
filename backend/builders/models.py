@@ -464,6 +464,7 @@ class SpawnPlanRun(AdventBaseModel):
         related_name='runs')
     seed = models.TextField()
     spec_hash = models.TextField(blank=True)
+    entry_states = models.JSONField(default=dict, blank=True, db_default={})
     status = models.TextField(default=STATUS_ACTIVE)
     generated_at = models.DateTimeField(default=timezone.now)
     last_reconciled_at = models.DateTimeField(**optional)
@@ -494,6 +495,7 @@ class SpawnPlacement(AdventBaseModel):
     traits = models.JSONField(default=list, blank=True)
     modifiers = models.JSONField(default=dict, blank=True)
     state = models.JSONField(default=dict, blank=True)
+    is_retired = models.BooleanField(default=False, db_default=False)
 
     class Meta(AdventBaseModel.Meta):
         unique_together = [('run', 'entry_slug', 'slot_index')]

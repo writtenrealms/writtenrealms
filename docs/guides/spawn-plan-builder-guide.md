@@ -345,6 +345,41 @@ Supported modes:
 `seconds: 0` means a missing copy can be replaced on every reconciliation. Use
 that only for content that should always be present.
 
+### Editing A Running World
+
+Saving a spawn-plan change updates ordinary running worlds on the next
+spawn-plan scheduler pass, normally within about 15 seconds. The save request
+does not synchronously rebuild every spawned world; the existing background
+reconciler detects the changed plan hash and applies the update with bounded
+work per world.
+
+Live edits are rolling and non-destructive:
+
+- Adding an entry or increasing its count creates the new logical slots on the
+  next pass. New slots are populated once even when the plan uses
+  `respawn.mode: none` or its ordinary respawn deadline has not arrived.
+  Existing randomized slots retain their source, room, and traits when only the
+  count changes.
+- Existing logical slots keep their placement identity and live output. Editing
+  a source, target, traits, or loot does not kill or move a mob
+  in combat and does not delete an item a player may be carrying. The new
+  settings take effect when that slot next needs to be materialized.
+- Cohort membership metadata is refreshed during reconciliation so newly added
+  followers can join a surviving patrol without duplicating its leader.
+- Removing or disabling an entry, or decreasing its count, retires the excess
+  slots. Existing mobs or items may finish their natural lifecycle, but retired
+  slots are never refilled. Re-adding a still-live slot reuses it instead of
+  creating a duplicate.
+- Entry slugs are the stable live-edit identity. Renaming a slug is treated as
+  removing the old entry and adding a new one.
+
+Active dungeon instances keep the population snapshot generated when that run
+started. Once an edited template differs from that snapshot, reconciliation for
+that plan is paused in the active instance; the new spec applies to future runs
+without changing a completion cohort in progress. Worlds configured with
+`never_reload` are also excluded from scheduled reconciliation and require a
+restart to pick up edits.
+
 ## Guided Randomness
 
 For a fixed-layout dungeon, keep rooms stable and add variation in the spawn
@@ -389,9 +424,15 @@ spec:
 `randomization.seed_scope` controls repeatability:
 
 - `instance`: each spawn world gets its own deterministic roll.
-- `world`: every spawn world for the authored world uses the same roll until
-  the plan changes.
+- `world`: every spawn world for the authored world uses the same deterministic
+  rolls.
 - `explicit`: use `randomization.seed` for repeatable tests.
+
+Random streams are independent by entry, slot, and dimension. Editing a count
+does not reroll existing sources, rooms, or traits, and editing one entry does
+not perturb the rolls of another. Changing the corresponding source, target,
+traits, or randomization configuration intentionally produces a new roll for
+that dimension.
 
 Traits are stored on the generated placement and copied to spawned mobs in
 `trait_instances` and `roll_metadata.spawn_plan`.

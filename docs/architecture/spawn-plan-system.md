@@ -25,6 +25,19 @@ Generation and reconciliation are separate steps:
 5. Store runtime timestamps on spawn-plan runtime state and
    `World.last_spawn_plan_run_ts`, not authored entities.
 
+For an ordinary running world, an authored spec-hash change is reconciled into
+the active run rather than replacing all placement rows. Logical slots retain
+their database identity, newly desired slots are added, and no-longer-desired
+slots are marked retired. This is important because runtime mob and item links
+use `SET_NULL`: deleting and regenerating every placement would orphan live
+output and create duplicates.
+
+The run stores per-entry count outcomes and hashes for independent source,
+target, trait, placement, loot, and condition dimensions. Its base seed remains
+immutable. Consequently, increasing an entry's count does not reroll the
+source, room, or traits of its existing slots, and changing one entry does not
+perturb another entry's random stream.
+
 ## Manifest Contract
 
 Spawn plans are authored through `kind: spawnplan` YAML.
@@ -53,6 +66,18 @@ prefer portable refs so manifests round-trip across fresh databases.
   needed.
 - Reconciliation should create missing runtime entities and avoid duplicating
   existing live placements.
+- Running-world plan edits should upsert deterministic slots by stable entry and
+  slot identity. Existing output satisfies an edited slot until it leaves, so
+  changing a mob slot to an item slot cannot create both at once.
+- Retired placements are excluded from materialization. Their existing output
+  is not forcibly destroyed, which avoids interrupting combat or deleting
+  carried items.
+- An authored edit may materialize newly added or changed slots before the
+  ordinary respawn deadline, but it must not refill unrelated missing slots
+  early.
+- Active instance runs retain their initial spawn-plan snapshot. Template edits
+  pause reconciliation for the stale plan in that active run and apply when a
+  future instance run performs initial population.
 - Initial population and deliberate repopulation belong to instance/world
   lifecycle services. Spawn plans have no separate reset policy; ordinary
   replacement timing belongs to their respawn policy.
