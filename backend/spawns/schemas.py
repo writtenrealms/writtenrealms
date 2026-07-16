@@ -492,6 +492,8 @@ class World(BaseModel):
 
     # Combat settings
     allow_combat: bool = True
+    pvp_mode: str = "disabled"
+    # Legacy runtime projection derived from pvp_mode; never authored directly.
     allow_pvp: bool = False
     flee_to_unknown_rooms: bool = False
 
@@ -1191,6 +1193,7 @@ def build_mock_state_sync(
         death_route="",
         death_gold_penalty=0.1,
         allow_combat=True,
+        pvp_mode="disabled",
         allow_pvp=False,
         flee_to_unknown_rooms=False,
         players_can_set_title=True,

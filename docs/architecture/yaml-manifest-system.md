@@ -35,6 +35,13 @@ this section in the same change so the WR1 exporter can be kept in sync.
 
 Current required mappings:
 
+- WR1 world PvP settings export only as `kind: world`
+  `spec.pvp_mode`; do not emit `spec.allow_pvp`. When the source has a valid
+  `pvp_mode`, that value wins. Otherwise, map `allow_pvp: true` to
+  `pvp_mode: free_for_all` and `allow_pvp: false` to `pvp_mode: disabled`.
+  Exporters should audit and flag conflicts where both legacy fields are
+  present but disagree (`allow_pvp: false` with `free_for_all` or `zone`, or
+  `allow_pvp: true` with `disabled`) rather than preserving both fields.
 - Trigger mob reactions target `kind: trigger` with `target.type:
   mobdefinition`, not `mobtemplate`.
 - Quest NPC dialogue sources use `mob_definition` / `mob_definition_id`, not
@@ -495,7 +502,6 @@ spec:
   auto_equip: true
   is_narrative: false
   players_can_set_title: true
-  allow_pvp: true
   non_ascii_names: false
   globals_enabled: true
   decay_glory: false
@@ -658,6 +664,8 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   - only `operation: apply` is supported
   - `spec` fields are validated against the world schema
   - room references (`starting_room`, `death_room`) must resolve to rooms in the selected world
+  - `pvp_mode` is the canonical PvP field; legacy `allow_pvp` is accepted only
+    as an import alias and must not conflict when both fields are present
 
 Permission checks are applied when editing via manifest:
 

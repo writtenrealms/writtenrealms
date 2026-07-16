@@ -442,7 +442,6 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'combat_system',
             'is_narrative',
             'players_can_set_title',
-            'allow_pvp',
             'pvp_mode',
             'built_by',
             'non_ascii_names',

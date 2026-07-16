@@ -285,8 +285,9 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
         source='config.flee_to_unknown_rooms')
     players_can_set_title = serializers.BooleanField(
         source='config.players_can_set_title')
+    pvp_mode = serializers.CharField(source='config.pvp_mode')
     allow_pvp = serializers.BooleanField(
-        source='config.allow_pvp')
+        source='config.allow_pvp', read_only=True)
     allow_combat = serializers.BooleanField(
         source='config.allow_combat')
     death_route = serializers.CharField(source='config.death_route')
@@ -327,6 +328,7 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
             'death_mode',
             'flee_to_unknown_rooms',
             'death_route',
+            'pvp_mode',
             'allow_pvp',
             'allow_combat',
             'players_can_set_title',

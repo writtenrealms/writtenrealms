@@ -323,7 +323,7 @@ const manifestGroups = [
   },
   {
     title: "PvP",
-    keys: ["allow_pvp", "pvp_mode"],
+    keys: ["pvp_mode"],
   },
   {
     title: "Player Rules",
@@ -356,7 +356,6 @@ const labelOverrides = {
   motd: "Message Of The Day",
   is_public: "Visibility",
   pvp_mode: "PvP Mode",
-  allow_pvp: "Allow PvP",
   small_background: "General Lobby Art",
   large_background: "World Lobby Art",
 };

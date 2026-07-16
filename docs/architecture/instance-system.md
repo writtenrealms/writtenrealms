@@ -182,7 +182,7 @@ Good initial override candidates:
 | `death_mode` | A base world may use gold loss while an instance destroys equipment or drops inventory. |
 | `death_gold_penalty` | Needed if the instance uses gold-loss death. |
 | `death_route` | Needed if faction or route-specific death behavior should differ. |
-| `allow_pvp` / `pvp_mode` | Instances often need stricter PvP policy than the base world. |
+| `pvp_mode` | Instances often need stricter PvP policy than the base world. |
 | `never_reload` or spawn reload policy | Completion-sensitive instances may need spawn-plan reconciliation disabled or constrained. |
 | presentation fields | Instance lobby/entry art and text can differ from the base world. |
 | cleanup policy | Run lifetime is inherently instance-specific. |
@@ -884,7 +884,7 @@ spec:
 
   overrides:
     death_mode: destroy_eq
-    allow_pvp: false
+    pvp_mode: disabled
 
   goal:
     mode: objective

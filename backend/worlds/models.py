@@ -1012,7 +1012,6 @@ class WorldConfig(BaseModel):
     ability_progression = models.JSONField(default=default_ability_progression)
     player_creation = models.JSONField(default=dict, blank=True)
     players_can_set_title = models.BooleanField(default=True)
-    allow_pvp = models.BooleanField(default=True)
     is_narrative = models.BooleanField(default=False)
     non_ascii_names = models.BooleanField(default=False)
     is_classless = models.BooleanField(default=True)
@@ -1056,6 +1055,11 @@ class WorldConfig(BaseModel):
     decay_glory = models.BooleanField(default=False)
 
     cross_race_cooldown = models.PositiveIntegerField(default=0)
+
+    @property
+    def allow_pvp(self):
+        """Legacy runtime alias; ``pvp_mode`` is the canonical setting."""
+        return self.pvp_mode != adv_consts.PVP_MODE_DISABLED
 
     def __str__(self):
         return "WorldConfig %s" % self.pk

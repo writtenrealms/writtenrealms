@@ -27,7 +27,6 @@ INSTANCE_INHERITED_CONFIG_FIELDS = {
 }
 
 INSTANCE_LOCAL_CONFIG_FIELDS = {
-    "allow_pvp",
     "built_by",
     "death_gold_penalty",
     "death_mode",
@@ -57,7 +56,6 @@ INSTANCE_INHERITED_MANIFEST_FIELDS = {
 }
 
 INSTANCE_LOCAL_MANIFEST_FIELDS = {
-    "allow_pvp",
     "built_by",
     "death_gold_penalty",
     "death_mode",

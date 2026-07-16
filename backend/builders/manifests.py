@@ -162,11 +162,11 @@ _WORLD_CONFIG_CONFIG_BOOL_FIELDS = (
     "auto_equip",
     "is_narrative",
     "players_can_set_title",
-    "allow_pvp",
     "non_ascii_names",
     "decay_glory",
     "globals_enabled",
 )
+_WORLD_CONFIG_LEGACY_ALLOW_PVP_FIELD = "allow_pvp"
 _WORLD_CONFIG_LEGACY_BOOL_FIELDS = (
     "is_classless",
 )
@@ -887,7 +887,6 @@ def world_config_to_manifest(
         "death_route": config.death_route,
         "death_gold_penalty": _serialize_number(config.death_gold_penalty),
         "pvp_mode": config.pvp_mode,
-        "allow_pvp": bool(config.allow_pvp),
         "built_by": config.built_by or "",
         "small_background": config.small_background or "",
         "large_background": config.large_background or "",
@@ -982,7 +981,6 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
         "death_gold_penalty": _serialize_number(config.death_gold_penalty),
         "small_background": config.small_background or "",
         "large_background": config.large_background or "",
-        "allow_pvp": bool(config.allow_pvp),
         "pvp_mode": config.pvp_mode,
         "built_by": config.built_by or "",
     }
@@ -4629,6 +4627,7 @@ def parse_world_config_manifest(
     allowed_fields.update(_WORLD_CONFIG_CONFIG_INT_FIELDS)
     allowed_fields.update(_WORLD_CONFIG_CONFIG_FLOAT_FIELDS)
     allowed_fields.update(_WORLD_CONFIG_CONFIG_CHOICE_FIELDS.keys())
+    allowed_fields.add(_WORLD_CONFIG_LEGACY_ALLOW_PVP_FIELD)
     allowed_fields.update(_WORLD_CONFIG_CONFIG_ROOM_FIELDS)
     allowed_fields.add(_WORLD_CONFIG_STATS_FIELD)
     allowed_fields.add(_WORLD_CONFIG_COMBAT_FIELD)
@@ -4646,6 +4645,9 @@ def parse_world_config_manifest(
 
     if world.instance_of_id:
         requested_fields = set(spec.keys())
+        if _WORLD_CONFIG_LEGACY_ALLOW_PVP_FIELD in requested_fields:
+            requested_fields.remove(_WORLD_CONFIG_LEGACY_ALLOW_PVP_FIELD)
+            requested_fields.add("pvp_mode")
         inherited_fields = sorted(requested_fields & INSTANCE_INHERITED_MANIFEST_FIELDS)
         if inherited_fields:
             raise serializers.ValidationError(
@@ -4731,6 +4733,28 @@ def parse_world_config_manifest(
                 choices=choices,
                 field_name=f"spec.{field_name}",
             )
+
+    if _WORLD_CONFIG_LEGACY_ALLOW_PVP_FIELD in spec:
+        legacy_allow_pvp = _coerce_bool(
+            spec.get(_WORLD_CONFIG_LEGACY_ALLOW_PVP_FIELD),
+            f"spec.{_WORLD_CONFIG_LEGACY_ALLOW_PVP_FIELD}",
+        )
+        legacy_pvp_mode = (
+            adv_consts.PVP_MODE_FFA
+            if legacy_allow_pvp
+            else adv_consts.PVP_MODE_DISABLED
+        )
+        if "pvp_mode" in spec:
+            pvp_mode_allows_pvp = (
+                config_updates["pvp_mode"] != adv_consts.PVP_MODE_DISABLED
+            )
+            if legacy_allow_pvp != pvp_mode_allows_pvp:
+                raise serializers.ValidationError(
+                    "spec.allow_pvp conflicts with spec.pvp_mode. "
+                    "Use pvp_mode as the canonical PvP setting."
+                )
+        else:
+            config_updates["pvp_mode"] = legacy_pvp_mode
 
     for field_name in _WORLD_CONFIG_CONFIG_ROOM_FIELDS:
         if field_name not in spec:

@@ -98,7 +98,6 @@ spec:
   auto_equip: true
   is_narrative: false
   players_can_set_title: true
-  allow_pvp: true
   non_ascii_names: false
   globals_enabled: true
   decay_glory: false

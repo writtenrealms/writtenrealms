@@ -58,6 +58,7 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(config_resp.data["config"]["leveling_curve"][1], 30)
         self.assertEqual(config_resp.data["config"]["combat_resolution_interval"], 0)
         self.assertEqual(config_resp.data["config"]["default_roam_chance"], 10)
+        self.assertNotIn("allow_pvp", config_resp.data["config"])
         stat_system = config_resp.data["config"]["stat_system"]
         self.assertEqual(
             stat_system["formulas"]["base_resources"]["stamina"]["flat"],
@@ -86,6 +87,11 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(world_manifest["spec"]["death_room"], "room@0,0,0")
         self.assertEqual(world_manifest["spec"]["combat_resolution_interval"], 0)
         self.assertEqual(world_manifest["spec"]["default_roam_chance"], 10)
+        self.assertEqual(
+            world_manifest["spec"]["pvp_mode"],
+            adv_consts.PVP_MODE_FFA,
+        )
+        self.assertNotIn("allow_pvp", world_manifest["spec"])
         self.assertIn("player_creation", world_manifest["spec"])
         self.assertNotIn("can_select_faction", world_manifest["spec"])
         self.assertNotIn("is_classless", world_manifest["spec"])
@@ -98,6 +104,29 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
             adv_config.PLAYER_STARTING_STAMINA_REGEN,
         )
         self.assertNotIn("combat", world_manifest["spec"])
+
+    def test_world_config_exports_pvp_mode_without_legacy_allow_pvp(self):
+        self.world.config.pvp_mode = adv_consts.PVP_MODE_ZONE
+        self.world.config.save(update_fields=["pvp_mode"])
+
+        config_resp = self.client.get(self.config_ep)
+        self.assertEqual(config_resp.status_code, 200)
+
+        export_resp = self.client.get(self.export_ep)
+        self.assertEqual(export_resp.status_code, 200)
+        export_docs = [
+            doc
+            for doc in yaml.safe_load_all(export_resp.data["yaml"])
+            if doc is not None
+        ]
+
+        for manifest in (config_resp.data["manifest"], export_docs[-1]):
+            with self.subTest(manifest=manifest):
+                self.assertEqual(
+                    manifest["spec"]["pvp_mode"],
+                    adv_consts.PVP_MODE_ZONE,
+                )
+                self.assertNotIn("allow_pvp", manifest["spec"])
 
     def test_apply_world_config_manifest_updates_world_and_config(self):
         spawn_world = self.world.spawned_worlds.first()
@@ -149,7 +178,6 @@ spec:
   auto_equip: false
   is_narrative: true
   players_can_set_title: false
-  allow_pvp: false
   non_ascii_names: true
   globals_enabled: false
   decay_glory: true
@@ -270,7 +298,6 @@ spec:
         self.assertTrue(config.is_narrative)
         self.assertFalse(config.allow_combat)
         self.assertFalse(config.players_can_set_title)
-        self.assertFalse(config.allow_pvp)
         self.assertFalse(config.is_classless)
         self.assertTrue(config.non_ascii_names)
         self.assertFalse(config.globals_enabled)
@@ -300,6 +327,100 @@ spec:
             entry["key"] for entry in config.stat_system["attributes"]
         ]
         self.assertIn("insight", primary_keys)
+
+    def test_apply_world_config_manifest_normalizes_legacy_allow_pvp_false(self):
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{self.world.id}
+spec:
+  allow_pvp: false
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.world.config.refresh_from_db()
+        self.assertEqual(
+            self.world.config.pvp_mode,
+            adv_consts.PVP_MODE_DISABLED,
+        )
+
+    def test_apply_world_config_manifest_normalizes_legacy_allow_pvp_true(self):
+        self.world.config.pvp_mode = adv_consts.PVP_MODE_DISABLED
+        self.world.config.save(update_fields=["pvp_mode"])
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{self.world.id}
+spec:
+  allow_pvp: true
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.world.config.refresh_from_db()
+        self.assertEqual(
+            self.world.config.pvp_mode,
+            adv_consts.PVP_MODE_FFA,
+        )
+
+    def test_apply_world_config_manifest_accepts_consistent_legacy_allow_pvp(self):
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{self.world.id}
+spec:
+  pvp_mode: zone
+  allow_pvp: true
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.world.config.refresh_from_db()
+        self.assertEqual(self.world.config.pvp_mode, adv_consts.PVP_MODE_ZONE)
+
+    def test_apply_world_config_manifest_rejects_conflicting_pvp_fields(self):
+        conflicts = (
+            (adv_consts.PVP_MODE_DISABLED, True),
+            (adv_consts.PVP_MODE_ZONE, False),
+            (adv_consts.PVP_MODE_FFA, False),
+        )
+
+        for pvp_mode, allow_pvp in conflicts:
+            with self.subTest(pvp_mode=pvp_mode, allow_pvp=allow_pvp):
+                manifest = f"""
+kind: world
+metadata:
+  world: world.{self.world.id}
+spec:
+  pvp_mode: {pvp_mode}
+  allow_pvp: {str(allow_pvp).lower()}
+"""
+
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": manifest},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 400)
+                self.assertIn("allow_pvp", str(resp.data))
+                self.assertIn("pvp_mode", str(resp.data))
 
     def test_apply_world_config_manifest_accepts_starting_equipment(self):
         compass = ItemDefinition.objects.create(
@@ -622,6 +743,26 @@ spec:
         self.assertEqual(instance.config.death_mode, "destroy_eq")
         self.assertEqual(instance.config.death_gold_penalty, 0.1)
         self.assertEqual(instance.config.death_route, "near_room")
+
+    def test_instance_world_config_manifest_normalizes_legacy_allow_pvp(self):
+        instance = self._instance_world()
+        ep = reverse("builder-world-manifest-apply", args=[instance.pk])
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{instance.id}
+spec:
+  allow_pvp: false
+"""
+
+        resp = self.client.post(ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        instance.config.refresh_from_db()
+        self.assertEqual(
+            instance.config.pvp_mode,
+            adv_consts.PVP_MODE_DISABLED,
+        )
 
     def test_instance_direct_config_patch_rejects_inherited_core_system_fields(self):
         instance = self._instance_world()

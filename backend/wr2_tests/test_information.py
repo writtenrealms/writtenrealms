@@ -719,6 +719,26 @@ class TestStateSyncMapKeys(WorldTestCase):
         self.assertEqual(world_data["leveling_curve"][1], 30)
         self.assertEqual(world_data["combat_resolution_interval"], 0.0)
 
+    def test_state_sync_world_pvp_fields_derive_legacy_boolean_from_mode(self):
+        from spawns.state_payloads import build_state_sync
+
+        config = self.spawn_world.config
+        expectations = (
+            (adv_consts.PVP_MODE_DISABLED, False),
+            (adv_consts.PVP_MODE_ZONE, True),
+            (adv_consts.PVP_MODE_FFA, True),
+        )
+
+        for pvp_mode, allow_pvp in expectations:
+            with self.subTest(pvp_mode=pvp_mode):
+                config.pvp_mode = pvp_mode
+                config.save(update_fields=["pvp_mode"])
+
+                world_data = build_state_sync(self.player).model_dump()["world"]
+
+                self.assertEqual(world_data["pvp_mode"], pvp_mode)
+                self.assertIs(world_data["allow_pvp"], allow_pvp)
+
 
 class TestUnknownTextCommand(WorldTestCase):
     def _message_by_type(self, messages, message_type):

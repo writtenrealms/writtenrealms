@@ -92,8 +92,8 @@
             <td>Corinthian Countryside</td>
           </tr>
           <tr>
-            <th scope="row">Allow PvP</th>
-            <td>Yes</td>
+            <th scope="row">PvP Mode</th>
+            <td>PvP Zones</td>
           </tr>
           <tr>
             <th scope="row">Death Route</th>

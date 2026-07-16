@@ -34,7 +34,6 @@ spec:
   death_route: top_faction
   death_gold_penalty: 0.2
   pvp_mode: free_for_all
-  allow_pvp: true
   auto_equip: true
   is_narrative: false
   players_can_set_title: true
@@ -177,8 +176,13 @@ For spawn-plan roaming behavior, see
 | `death_mode` | choice | `lose_none` | `lose_all`, `lose_none`, `lose_eq`, `destroy_eq`, `destroy_all`, `lose_gold`, or `lose_inv`. |
 | `death_route` | choice | `top_faction` | `top_faction`, `near_room`, `far_room`, or `nearest_in_zone`. |
 | `death_gold_penalty` | number | `0.2` | Fraction of gold lost for gold-loss death modes. |
-| `pvp_mode` | choice | `free_for_all` | `free_for_all`, `disabled`, or `zone`. |
-| `allow_pvp` | boolean | `true` | Global PvP permission switch. |
+| `pvp_mode` | choice | `free_for_all` | Sole authored PvP policy: `free_for_all`, `disabled`, or `zone`. |
+
+`pvp_mode` is the only PvP policy authored in current WR2 world manifests.
+During migration, imports still accept the legacy `allow_pvp` boolean and
+normalize `false` to `disabled` or `true` to `free_for_all`. If both fields are
+present, `allow_pvp` must agree with whether `pvp_mode` is disabled. New and
+exported manifests should use only `pvp_mode`.
 
 For death-related builder commands, see
 [builder-command-reference.md](/Users/teebes/code/writtenrealms/docs/guides/builder-command-reference.md).
@@ -222,7 +226,7 @@ manifests:
   `is_public`
 - local rooms: `starting_room`, `death_room`
 - local death/PvP/presentation fields: `death_mode`, `death_route`,
-  `death_gold_penalty`, `pvp_mode`, `allow_pvp`, `built_by`,
+  `death_gold_penalty`, `pvp_mode`, `built_by`,
   `small_background`, `large_background`
 
 Core systems such as `stats`, `combat`, `equipment`, `ability_progression`,

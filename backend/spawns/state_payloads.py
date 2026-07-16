@@ -855,6 +855,7 @@ def serialize_world(world: World) -> Dict:
             "abilities": {},
             "flee_to_unknown_rooms": config.flee_to_unknown_rooms if config else False,
             "death_route": config.death_route if config else "",
+            "pvp_mode": config.pvp_mode if config else adv_consts.PVP_MODE_DISABLED,
             "allow_pvp": config.allow_pvp if config else False,
             "allow_combat": config.allow_combat if config else True,
             "players_can_set_title": config.players_can_set_title if config else False,
