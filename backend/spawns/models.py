@@ -333,18 +333,20 @@ class Player(CharMixin, AdventBaseModel):
         self.health = max(1, int(stats.get('health_max') or 1))
         self.energy = int(stats.get('energy_max') or 0)
         self.stamina = int(stats.get('stamina_max') or 0)
-        self.save()
 
         from spawns.actions.abilities import grant_starting_abilities
-        if grant_starting_abilities(self):
-            self.save(update_fields=["known_abilities", "ability_hotkeys"])
+        grant_starting_abilities(self)
 
+        equipped_starting_items = False
         if include_starting_equipment:
             from builders.models import ItemDefinition
             from core.world_config import inherited_system_world
 
             definition_world = inherited_system_world(self.world) or self.world
 
+            starting_entries = []
+            definition_ids = set()
+            definition_slugs = set()
             for starting_item in self.world.config.starting_equipment or []:
                 if not isinstance(starting_item, dict):
                     continue
@@ -354,46 +356,123 @@ class Player(CharMixin, AdventBaseModel):
                 raw_definition = starting_item.get("item_definition")
                 if raw_definition in (None, ""):
                     raw_definition = starting_item.get("item_definition_id")
-                definition = None
                 if isinstance(raw_definition, int) and not isinstance(raw_definition, bool):
-                    definition = ItemDefinition.objects.filter(
-                        world=definition_world,
-                        pk=raw_definition,
-                    ).first()
+                    definition_key = ("id", raw_definition)
+                    definition_ids.add(raw_definition)
                 else:
                     definition_slug = str(raw_definition or "").strip()
                     prefix, sep, raw = definition_slug.partition(".")
                     if sep == "." and prefix in {"itemdefinition", "item_definition"}:
                         definition_slug = raw
-                    if definition_slug:
-                        definition = ItemDefinition.objects.filter(
-                            world=definition_world,
-                            slug=definition_slug,
-                        ).first()
+                    if not definition_slug:
+                        continue
+                    definition_key = ("slug", definition_slug)
+                    definition_slugs.add(definition_slug)
+                starting_entries.append((starting_item, definition_key))
+
+            definition_filter = models.Q()
+            if definition_ids:
+                definition_filter |= models.Q(pk__in=definition_ids)
+            if definition_slugs:
+                definition_filter |= models.Q(slug__in=definition_slugs)
+
+            definitions_by_key = {}
+            if definition_ids or definition_slugs:
+                definitions = (
+                    ItemDefinition.objects
+                    .filter(world=definition_world)
+                    .filter(definition_filter)
+                    .select_related("world", "world__config")
+                )
+                for definition in definitions:
+                    definitions_by_key[("id", definition.id)] = definition
+                    definitions_by_key[("slug", definition.slug)] = definition
+
+            equipment = self.equipment
+            planned_slot_ids = {
+                slot: getattr(equipment, f"{slot}_id", None)
+                for slot in adv_consts.EQUIPMENT_SLOTS
+            }
+            planned_weapon_type = ""
+            if planned_slot_ids.get(adv_consts.EQUIPMENT_SLOT_WEAPON):
+                planned_weapon_type = str(
+                    getattr(equipment.weapon, "equipment_type", "") or ""
+                )
+
+            touched_slots = set()
+            items_to_equip = []
+            for starting_item, definition_key in starting_entries:
+                definition = definitions_by_key.get(definition_key)
                 if not definition:
                     continue
                 try:
                     count = int(starting_item.get("count", starting_item.get("num", 1)) or 1)
                 except (TypeError, ValueError):
                     count = 1
-                for i in range(0, max(0, count)):
+                for _ in range(0, max(0, count)):
                     item = definition.spawn(self, self.world)
 
-                    if item.equipment_type:
-                        if (self.archetype == adv_consts.ARCHETYPE_ASSASSIN
-                            and (item.equipment_type
-                                    == adv_consts.EQUIPMENT_TYPE_WEAPON_2H)):
-                            continue
+                    if not item.equipment_type or starting_item.get("equip", True) is False:
+                        continue
+                    if (self.archetype == adv_consts.ARCHETYPE_ASSASSIN
+                        and (item.equipment_type
+                                == adv_consts.EQUIPMENT_TYPE_WEAPON_2H)):
+                        continue
 
-                        slot = type_to_slot(
-                            eq_type=item.equipment_type,
-                            archetype=self.archetype,
-                            has_weapon=bool(self.equipment.weapon))
-                        self.equipment.equip(item, slot)
+                    slot = type_to_slot(
+                        eq_type=item.equipment_type,
+                        archetype=self.archetype,
+                        has_weapon=bool(planned_slot_ids.get(
+                            adv_consts.EQUIPMENT_SLOT_WEAPON)),
+                        has_offhand=bool(planned_slot_ids.get(
+                            adv_consts.EQUIPMENT_SLOT_OFFHAND)),
+                    )
+                    if (slot not in adv_consts.EQUIPMENT_SLOTS
+                        or planned_slot_ids.get(slot)):
+                        continue
+                    if (item.equipment_type == adv_consts.EQUIPMENT_TYPE_WEAPON_2H
+                        and planned_slot_ids.get(adv_consts.EQUIPMENT_SLOT_OFFHAND)):
+                        continue
+                    if (slot == adv_consts.EQUIPMENT_SLOT_OFFHAND
+                        and planned_weapon_type == adv_consts.EQUIPMENT_TYPE_WEAPON_2H):
+                        continue
+
+                    setattr(equipment, slot, item)
+                    planned_slot_ids[slot] = item.id
+                    if slot == adv_consts.EQUIPMENT_SLOT_WEAPON:
+                        planned_weapon_type = item.equipment_type
+                    touched_slots.add(slot)
+                    items_to_equip.append(item)
+
+            if items_to_equip:
+                equipment_type = ContentType.objects.get_for_model(Equipment)
+                for item in items_to_equip:
+                    item.container_type = equipment_type
+                    item.container_id = equipment.id
+                with transaction.atomic():
+                    equipment.save(update_fields=sorted(touched_slots))
+                    Item.objects.bulk_update(
+                        items_to_equip,
+                        ["container_type", "container_id"],
+                    )
+                equipped_starting_items = True
 
             if self.world.config.starting_gold:
                 self.gold += self.world.config.starting_gold
-                self.save()
+
+        if equipped_starting_items:
+            # Starter gear can raise resource maxima. New and reset characters
+            # should begin topped off against the fully equipped loadout.
+            stats = compute_stats(
+                self.level,
+                self.archetype,
+                char=self,
+                world=self.world,
+            )
+            self.health = max(1, int(stats.get('health_max') or 1))
+            self.energy = int(stats.get('energy_max') or 0)
+            self.stamina = int(stats.get('stamina_max') or 0)
+        self.save()
 
         # Add door states
         if not self.world.is_multiplayer:

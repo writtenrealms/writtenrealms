@@ -49,7 +49,11 @@ Current required mappings:
   and room NPC markers use `quest_indicator.available` / `quest_indicator.ready`.
 - WR1 `StartingEq` rows export into the `kind: world`
   `spec.starting_equipment` list using WR2 `itemdefinition.<slug>` refs,
-  `count`, and optional `archetype`; WR2 no longer has a `StartingEq` model.
+  `count`, and optional `archetype`. The optional `equip` field defaults to
+  `true`; `equip: false` grants the item into carried inventory without
+  equipping it. WR1 starter equipment should retain its existing auto-equip
+  behavior by omitting `equip` or emitting `equip: true`. WR2 no longer has a
+  `StartingEq` model.
 - WR1 `ItemTemplate` rows export as `kind: itemdefinition`; WR2 no longer has an
   `ItemTemplate` model, manifest kind, API endpoint, or runtime item FK.
 - WR1 `ItemTemplate.hit_msg_first` and `ItemTemplate.hit_msg_third` export to
@@ -431,8 +435,25 @@ spec:
   is_public: true
   starting_gold: 0
   starting_equipment:
+    - item_definition: itemdefinition.training_spear
+      count: 1
+      archetype: hoplite
+      equip: false
     - item_definition: itemdefinition.training_sword
       count: 1
+      archetype: hoplite
+    - item_definition: itemdefinition.training_shield
+      count: 1
+      archetype: hoplite
+  ability_progression:
+    max_known: 6
+    starting_abilities:
+      - ability: bash
+        conditions:
+          eq: [actor.archetype, hoplite]
+      - ability: guard
+        conditions:
+          eq: [actor.archetype, hoplite]
   starting_level: 1
   max_level: 5
   leveling_curve:
@@ -501,6 +522,13 @@ reach level 2. `max_level` cannot be higher than the number of curve entries.
 The example above defines five reachable levels; a 20-level world needs 20
 entries.
 See [leveling-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/leveling-builder-guide.md).
+
+`starting_equipment` grants item definitions during character initialization.
+`count` defaults to `1`, `archetype` limits an entry to one class id, and `equip`
+defaults to `true`. Set `equip: false` for alternate weapons or other equippable
+items that should begin in carried inventory instead of occupying an equipment
+slot. `ability_progression.starting_abilities` supports the same class-specific
+outcome through shared WR2 conditions, as shown above.
 
 World manifests now also support `spec.stats`, which holds the authored WR2
 stat system for that world:

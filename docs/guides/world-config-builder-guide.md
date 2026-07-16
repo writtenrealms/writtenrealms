@@ -19,8 +19,9 @@ spec:
   death_room: room@0,0,0
   starting_gold: 0
   starting_equipment:
-    - item_definition: itemdefinition.training_sword
+    - item_definition: itemdefinition.training_spear
       count: 1
+      equip: false
     - item_definition: itemdefinition.lockpick
       count: 2
       archetype: assassin
@@ -84,7 +85,7 @@ currently authored through `kind: world` manifests.
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `starting_gold` | integer >= 0 | `0` | Gold granted to new players. |
-| `starting_equipment` | list | `[]` | Item definitions granted to new players, with optional `count` and `archetype`. |
+| `starting_equipment` | list | `[]` | Item definitions granted to new players, with optional `count`, `archetype`, and `equip`. |
 | `starting_level` | integer >= 1 | `1` | Initial player level. |
 | `max_level` | integer >= 1 | `20` | Maximum automatic level. |
 | `leveling_curve` | list | WR2 default curve | Cumulative XP thresholds; first entry must be `0`. |
@@ -107,7 +108,40 @@ For ability progression, see
 Starting equipment entries use WR2 item definitions, not legacy item templates.
 Use `itemdefinition.<slug>` or a bare item definition slug. `count` defaults to
 `1`. If `archetype` is present, the item is only granted to players whose
-selected archetype/class id exactly matches that value.
+selected archetype/class id exactly matches that value. `equip` defaults to
+`true` for equippable items. Set `equip: false` to grant an item into the
+character's carried inventory without equipping it.
+
+### Class-Specific Starting Loadout
+
+Class-specific gear uses `starting_equipment[*].archetype`. Class-specific
+abilities use conditions in `ability_progression.starting_abilities`:
+
+```yaml
+kind: world
+spec:
+  starting_equipment:
+    - item_definition: itemdefinition.hoplite-spear
+      archetype: hoplite
+      equip: false
+    - item_definition: itemdefinition.hoplite-sword
+      archetype: hoplite
+    - item_definition: itemdefinition.hoplite-shield
+      archetype: hoplite
+  ability_progression:
+    max_known: 6
+    starting_abilities:
+      - ability: bash
+        conditions:
+          eq: [actor.archetype, hoplite]
+      - ability: guard
+        conditions:
+          eq: [actor.archetype, hoplite]
+```
+
+In this example, a new Hoplite carries the spear as an alternate weapon, starts
+with the sword and shield equipped, and knows both abilities. Other classes
+receive none of these class-specific entries.
 
 ### Combat, Roaming, And Runtime Rules
 

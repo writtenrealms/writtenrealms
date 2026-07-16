@@ -326,6 +326,7 @@ spec:
     - item_definition: {assassin_token.slug}
       count: 2
       archetype: assassin
+      equip: false
 """
         resp = self.client.post(
             self.apply_ep,
@@ -345,6 +346,7 @@ spec:
                     "item_definition": f"itemdefinition.{assassin_token.slug}",
                     "count": 2,
                     "archetype": adv_consts.ARCHETYPE_ASSASSIN,
+                    "equip": False,
                 },
             ],
         )
@@ -376,6 +378,83 @@ spec:
         self.assertEqual(
             config_resp.data["manifest"]["spec"]["starting_equipment"],
             self.world.config.starting_equipment,
+        )
+
+        export_resp = self.client.get(self.export_ep)
+        self.assertEqual(export_resp.status_code, 200)
+        export_docs = [
+            doc
+            for doc in yaml.safe_load_all(export_resp.data["yaml"])
+            if doc is not None
+        ]
+        self.assertEqual(
+            export_docs[-1]["spec"]["starting_equipment"],
+            self.world.config.starting_equipment,
+        )
+
+    def test_apply_world_config_manifest_coerces_starting_equipment_equip(self):
+        compass = ItemDefinition.objects.create(
+            world=self.world,
+            slug="simple-compass",
+            name="a simple compass",
+            item_type=adv_consts.ITEM_TYPE_INERT,
+        )
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{self.world.id}
+spec:
+  starting_equipment:
+    - item_definition: itemdefinition.{compass.slug}
+      equip: "off"
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.world.config.refresh_from_db()
+        self.assertEqual(
+            self.world.config.starting_equipment,
+            [
+                {
+                    "item_definition": f"itemdefinition.{compass.slug}",
+                    "count": 1,
+                    "equip": False,
+                },
+            ],
+        )
+
+    def test_apply_world_config_manifest_rejects_invalid_starting_equipment_equip(self):
+        compass = ItemDefinition.objects.create(
+            world=self.world,
+            slug="simple-compass",
+            name="a simple compass",
+            item_type=adv_consts.ITEM_TYPE_INERT,
+        )
+        manifest = f"""
+kind: world
+metadata:
+  world: world.{self.world.id}
+spec:
+  starting_equipment:
+    - item_definition: itemdefinition.{compass.slug}
+      equip: sometimes
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn(
+            "spec.starting_equipment[0].equip must be a boolean",
+            str(resp.data),
         )
 
     def test_apply_world_config_manifest_accepts_destroy_all_death_mode(self):

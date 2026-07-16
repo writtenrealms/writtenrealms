@@ -794,6 +794,11 @@ def _serialize_starting_equipment_entries(
         archetype = str(entry.get("archetype") or "").strip()
         if archetype:
             normalized["archetype"] = archetype
+        if "equip" in entry:
+            normalized["equip"] = _coerce_bool(
+                entry.get("equip"),
+                "starting_equipment[].equip",
+            )
         serialized.append(normalized)
 
     return serialized
@@ -842,6 +847,11 @@ def _normalize_starting_equipment_entries(
         archetype = str(entry.get("archetype") or "").strip()
         if archetype:
             normalized["archetype"] = archetype
+        if "equip" in entry:
+            normalized["equip"] = _coerce_bool(
+                entry.get("equip"),
+                f"{field_name}.equip",
+            )
         normalized_entries.append(normalized)
 
     return normalized_entries
