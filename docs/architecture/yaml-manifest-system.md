@@ -19,6 +19,9 @@ Implemented manifest kinds currently include the current WR2 authoring path:
 - `itemdefinition`
 - `itembundle`
 - `merchantprofile`
+- `craftmaterial`
+- `craftingrecipe`
+- `craftingprofile`
 - `faction`
 - `mobdefinition`
 - `spawnplan`
@@ -109,9 +112,12 @@ Current required mappings:
   `MerchantInventory`, mob `merchant_profit`, or the
   `/game/system/update_merchants/` endpoint.
 - WR1 crafter/upgrader mob-template flags and item `upgrade_count` do not
-  export. WR2 no longer has mob crafter/upgrader fields, craft/upgrade system
-  endpoints, workshop room flags, or item upgrade counters; any future crafting
-  or upgrading should be rebuilt on WR2 item definitions/manifests.
+  export. WR2 crafting uses `craftmaterial`, `craftingrecipe`, and
+  `craftingprofile` manifests, item-definition `spec.salvage`, and an optional
+  room or mob-definition `spec.crafting` attachment. Exporters must translate
+  intentional legacy recipes into those contracts rather than restoring WR1
+  flags, system endpoints, workshop flags, or upgrade counters. The replacement
+  is documented in [crafting-system.md](crafting-system.md).
 - Quest tracker conditions compare `event.target.definition_id` and
   `event.item.definition_id` to `mobdefinition` / `itemdefinition` refs.
 - The shared condition DSL resolves typed refs such as
@@ -270,6 +276,9 @@ A new world-level **Edit World** view accepts a YAML manifest textarea.
   - `kind: itemdefinition`
   - `kind: itembundle`
   - `kind: merchantprofile`
+  - `kind: craftmaterial`
+  - `kind: craftingrecipe`
+  - `kind: craftingprofile`
   - `kind: faction`
   - `kind: mobdefinition`
   - `kind: spawnplan`

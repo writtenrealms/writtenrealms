@@ -12,7 +12,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from django.db.models import Prefetch
 from django.utils import timezone
 
-from builders.models import AbilityDefinition
+from builders.models import AbilityDefinition, CraftMaterial
 from config import constants as adv_consts
 from core.abilities import definition_world
 from core.combat_formulas import get_world_combat_system, rating_display_percent
@@ -31,7 +31,7 @@ from core.stat_system import (
 from quests.services.interactions import room_mob_quest_indicator_map, room_quest_callouts
 from quests.services.room_items import serialized_quest_room_items_for_room
 from spawns.actions.effects import active_character_effects, active_combat_effects
-from spawns.models import DoorState, Item, Mob, Player
+from spawns.models import DoorState, Item, Mob, Player, PlayerMaterialBalance
 from spawns.schemas import (
     Actor,
     Char,
@@ -212,6 +212,13 @@ def get_player_with_related(player_id: int) -> Player:
     query counts low.
     """
     inventory_qs = Item.objects.select_related("definition", "currency")
+    material_balance_qs = PlayerMaterialBalance.objects.select_related(
+        "material"
+    ).filter(quantity__gt=0).order_by(
+        "material__order",
+        "material__name",
+        "material_id",
+    )
     return (
         Player.objects.select_related(
             "world",
@@ -230,6 +237,7 @@ def get_player_with_related(player_id: int) -> Player:
             "faction_assignments__faction",
             "clan_memberships__clan",
             Prefetch("inventory", queryset=inventory_qs),
+            Prefetch("material_balances", queryset=material_balance_qs),
         )
         .get(pk=player_id)
     )
@@ -819,6 +827,21 @@ def serialize_actor(player: Player, room: Optional[Room]) -> Actor:
     actor_data["room"] = {"key": room_payload_key_for(room)} if room else None
     actor_data["equipment"] = serialize_equipment(player.equipment, viewer=player)
     actor_data["inventory"] = serialize_inventory(player.inventory.all(), viewer=player)
+    source_world = _definition_world(player.world)
+    prefetched = getattr(player, "_prefetched_objects_cache", {})
+    if "material_balances" in prefetched:
+        material_balances = prefetched["material_balances"]
+    else:
+        material_balances = PlayerMaterialBalance.objects.filter(
+            player_id=player.id,
+            material__world_id=source_world.id,
+            quantity__gt=0,
+        ).select_related("material")
+    actor_data["materials"] = {
+        balance.material.slug: int(balance.quantity)
+        for balance in material_balances
+        if balance.quantity > 0 and balance.material.world_id == source_world.id
+    }
     return Actor(**actor_data)
 
 
@@ -871,6 +894,19 @@ def serialize_world(world: World) -> Dict:
 
     if data.get("currencies"):
         data["currencies"] = {str(k): v for k, v in data["currencies"].items()}
+
+    source_world = _definition_world(world)
+    data["craft_materials"] = {
+        material.slug: {
+            "slug": material.slug,
+            "name": material.name,
+            "description": material.description or "",
+            "order": int(material.order),
+        }
+        for material in CraftMaterial.objects.filter(world=source_world).order_by(
+            "order", "name", "id"
+        )
+    }
 
     data["labels"] = get_world_label_bundle(world)
     data["class_selection"] = get_world_class_selection(world)

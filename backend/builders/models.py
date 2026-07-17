@@ -131,6 +131,7 @@ class ItemDefinition(AdventBaseModel):
     base_properties = models.JSONField(default=dict, blank=True)
     attributes = models.JSONField(default=dict, blank=True)
     randomization = models.JSONField(default=dict, blank=True)
+    salvage_only = models.BooleanField(default=False)
 
     class Meta(AdventBaseModel.Meta):
         unique_together = [('world', 'slug')]
@@ -303,6 +304,152 @@ class MerchantStockSlot(AdventBaseModel):
         ordering = ['created_ts', 'id']
 
 
+class CraftMaterial(AdventBaseModel):
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='craft_materials')
+    slug = models.SlugField(max_length=120, blank=True)
+    name = models.TextField(default='Unnamed Material')
+    description = models.TextField(**optional)
+    order = models.IntegerField(default=0)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('world', 'slug')]
+        ordering = ['order', 'name', 'id']
+        indexes = [
+            models.Index(fields=['world', 'order', 'name']),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = _generate_unique_world_slug(
+                self,
+                fallback_prefix="craft-material",
+            )
+        super().save(*args, **kwargs)
+
+
+class CraftingRecipe(AdventBaseModel):
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='crafting_recipes')
+    slug = models.SlugField(max_length=120, blank=True)
+    output_item_definition = models.ForeignKey(
+        'builders.ItemDefinition',
+        on_delete=models.RESTRICT,
+        related_name='crafting_recipes')
+    group = models.SlugField(max_length=120, blank=True, db_index=True)
+    order = models.IntegerField(default=0)
+    conditions = models.JSONField(default=dict, blank=True)
+    failure_message = models.TextField(**optional)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('world', 'slug')]
+        ordering = ['group', 'order', 'slug', 'id']
+        indexes = [
+            models.Index(fields=['world', 'group', 'order']),
+        ]
+
+    @property
+    def name(self):
+        return self.output_item_definition.name
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = _generate_unique_world_slug(
+                self,
+                fallback_prefix="crafting-recipe",
+            )
+        super().save(*args, **kwargs)
+
+
+class CraftingIngredient(AdventBaseModel):
+    recipe = models.ForeignKey(
+        'builders.CraftingRecipe',
+        on_delete=models.CASCADE,
+        related_name='ingredients')
+    material = models.ForeignKey(
+        'builders.CraftMaterial',
+        on_delete=models.RESTRICT,
+        related_name='recipe_ingredients')
+    quantity = models.PositiveIntegerField()
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('recipe', 'material')]
+        ordering = ['created_ts', 'id']
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(quantity__gt=0),
+                name='builders_crafting_ingredient_quantity_positive',
+            ),
+        ]
+
+
+class CraftingProfile(AdventBaseModel):
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='crafting_profiles')
+    slug = models.SlugField(max_length=120, blank=True)
+    name = models.TextField(default='Unnamed Workshop')
+    keywords = models.TextField(**optional)
+    recipes = models.ManyToManyField(
+        'builders.CraftingRecipe',
+        through='builders.CraftingProfileRecipe',
+        related_name='crafting_profiles')
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('world', 'slug')]
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = _generate_unique_world_slug(
+                self,
+                fallback_prefix="crafting-profile",
+            )
+        super().save(*args, **kwargs)
+
+
+class CraftingProfileRecipe(AdventBaseModel):
+    profile = models.ForeignKey(
+        'builders.CraftingProfile',
+        on_delete=models.CASCADE,
+        related_name='recipe_entries')
+    recipe = models.ForeignKey(
+        'builders.CraftingRecipe',
+        on_delete=models.CASCADE,
+        related_name='profile_entries')
+    order = models.IntegerField(default=0)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('profile', 'recipe')]
+        ordering = ['order', 'id']
+
+
+class ItemSalvageYield(AdventBaseModel):
+    item_definition = models.ForeignKey(
+        'builders.ItemDefinition',
+        on_delete=models.CASCADE,
+        related_name='salvage_yields')
+    material = models.ForeignKey(
+        'builders.CraftMaterial',
+        on_delete=models.RESTRICT,
+        related_name='item_salvage_yields')
+    quantity = models.PositiveIntegerField()
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('item_definition', 'material')]
+        ordering = ['created_ts', 'id']
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(quantity__gt=0),
+                name='builders_item_salvage_yield_quantity_positive',
+            ),
+        ]
+
+
 class MobDefinition(AdventBaseModel):
     world = models.ForeignKey(
         'worlds.World',
@@ -331,6 +478,14 @@ class MobDefinition(AdventBaseModel):
         related_name='mob_definitions',
         **optional)
     merchant_availability = models.TextField(
+        default='present',
+        blank=True)
+    crafting_profile = models.ForeignKey(
+        'builders.CraftingProfile',
+        on_delete=models.SET_NULL,
+        related_name='mob_definitions',
+        **optional)
+    crafting_availability = models.TextField(
         default='present',
         blank=True)
     trainer = models.JSONField(default=dict, blank=True)

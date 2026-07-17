@@ -1151,6 +1151,11 @@ class Room(AdventWorldBaseModel):
                              on_delete=models.SET_NULL,
                              related_name='rooms',
                              **optional)
+    crafting_profile = models.ForeignKey(
+        'builders.CraftingProfile',
+        on_delete=models.SET_NULL,
+        related_name='rooms',
+        **optional)
 
     name = models.TextField()
     description = models.TextField(**optional)

@@ -7,16 +7,23 @@ from typing import Any
 import yaml
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
+from django.db.models import Prefetch
 from django.utils.text import slugify
 from rest_framework import serializers
 
 from builders import manifests as builder_manifests
 from builders.models import (
     AbilityDefinition,
+    CraftMaterial,
+    CraftingIngredient,
+    CraftingProfile,
+    CraftingProfileRecipe,
+    CraftingRecipe,
     Currency,
     Faction,
     ItemBundle,
     ItemDefinition,
+    ItemSalvageYield,
     MerchantProfile,
     MobDefinition,
     Path,
@@ -51,6 +58,9 @@ _CURRENCY_KIND_ALIASES = {"currency"}
 _ITEM_DEFINITION_KIND_ALIASES = {"itemdefinition", "item-definition", "item_definition"}
 _ITEM_BUNDLE_KIND_ALIASES = {"itembundle", "item-bundle", "item_bundle"}
 _MERCHANT_PROFILE_KIND_ALIASES = {"merchantprofile", "merchant-profile", "merchant_profile"}
+_CRAFT_MATERIAL_KIND_ALIASES = {"craftmaterial", "craft-material", "craft_material"}
+_CRAFTING_RECIPE_KIND_ALIASES = {"craftingrecipe", "crafting-recipe", "crafting_recipe"}
+_CRAFTING_PROFILE_KIND_ALIASES = {"craftingprofile", "crafting-profile", "crafting_profile"}
 _FACTION_KIND_ALIASES = {"faction"}
 _MOB_DEFINITION_KIND_ALIASES = {"mobdefinition", "mob-definition", "mob_definition"}
 _SPAWN_PLAN_KIND_ALIASES = {"spawnplan", "spawn-plan", "spawn_plan"}
@@ -70,6 +80,7 @@ _PATH_REF_PREFIX = "path@"
 _ITEM_DEFINITION_REF_PREFIX = "itemdefinition."
 _ITEM_BUNDLE_REF_PREFIX = "itembundle."
 _MERCHANT_PROFILE_REF_PREFIX = "merchantprofile."
+_CRAFTING_PROFILE_REF_PREFIX = "craftingprofile."
 _MOB_DEFINITION_REF_PREFIX = "mobdefinition."
 
 _ZONE_SORT_KEY = lambda zone: ((zone.name or "").lower(), zone.id)
@@ -126,6 +137,12 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
         return builder_manifests.ITEM_BUNDLE_MANIFEST_KIND
     if raw_kind in _MERCHANT_PROFILE_KIND_ALIASES:
         return builder_manifests.MERCHANT_PROFILE_MANIFEST_KIND
+    if raw_kind in _CRAFT_MATERIAL_KIND_ALIASES:
+        return builder_manifests.CRAFT_MATERIAL_MANIFEST_KIND
+    if raw_kind in _CRAFTING_RECIPE_KIND_ALIASES:
+        return builder_manifests.CRAFTING_RECIPE_MANIFEST_KIND
+    if raw_kind in _CRAFTING_PROFILE_KIND_ALIASES:
+        return builder_manifests.CRAFTING_PROFILE_MANIFEST_KIND
     if raw_kind in _FACTION_KIND_ALIASES:
         return builder_manifests.FACTION_MANIFEST_KIND
     if raw_kind in _MOB_DEFINITION_KIND_ALIASES:
@@ -436,6 +453,16 @@ def _serialize_room_manifest(room: Room) -> dict[str, Any]:
                 }
                 for door in room.doors_from.all().select_related("key", "to_room").order_by("direction", "id")
             ],
+            **(
+                {
+                    "crafting": {
+                        "profile": (
+                            f"{_CRAFTING_PROFILE_REF_PREFIX}{room.crafting_profile.slug}"
+                        ),
+                    },
+                }
+                if room.crafting_profile_id else {}
+            ),
         },
     }
 
@@ -498,6 +525,31 @@ def _serialize_merchant_profile_manifest(merchant_profile: MerchantProfile) -> d
         if "item_bundle" in slot:
             slot["item_bundle"] = f"{_ITEM_BUNDLE_REF_PREFIX}{slot['item_bundle']}"
     return manifest
+
+
+def _portable_authored_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    manifest["metadata"].pop("world", None)
+    manifest["metadata"].pop("id", None)
+    manifest["metadata"].pop("key", None)
+    return manifest
+
+
+def _serialize_craft_material_manifest(material: CraftMaterial) -> dict[str, Any]:
+    return _portable_authored_manifest(
+        builder_manifests.craft_material_to_manifest(material)
+    )
+
+
+def _serialize_crafting_recipe_manifest(recipe: CraftingRecipe) -> dict[str, Any]:
+    return _portable_authored_manifest(
+        builder_manifests.crafting_recipe_to_manifest(recipe)
+    )
+
+
+def _serialize_crafting_profile_manifest(profile: CraftingProfile) -> dict[str, Any]:
+    return _portable_authored_manifest(
+        builder_manifests.crafting_profile_to_manifest(profile)
+    )
 
 
 def _serialize_faction_manifest(faction: Faction) -> dict[str, Any]:
@@ -936,8 +988,17 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             for currency in world.currencies.all().order_by("code", "id")
         ],
         *[
+            _serialize_craft_material_manifest(material)
+            for material in world.craft_materials.all().order_by("order", "name", "id")
+        ],
+        *[
             _serialize_item_definition_manifest(item_definition)
-            for item_definition in world.item_definitions.all().order_by("slug", "id")
+            for item_definition in world.item_definitions.prefetch_related(
+                Prefetch(
+                    "salvage_yields",
+                    queryset=ItemSalvageYield.objects.select_related("material"),
+                ),
+            ).order_by("slug", "id")
         ],
         *[
             _serialize_item_bundle_manifest(item_bundle)
@@ -951,6 +1012,26 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
                 "stock_slots__item_definition",
                 "stock_slots__item_bundle",
             ).select_related("funds_currency").order_by("slug", "id")
+        ],
+        *[
+            _serialize_crafting_recipe_manifest(recipe)
+            for recipe in world.crafting_recipes.select_related(
+                "output_item_definition",
+            ).prefetch_related(
+                Prefetch(
+                    "ingredients",
+                    queryset=CraftingIngredient.objects.select_related("material"),
+                ),
+            ).order_by("group", "order", "slug", "id")
+        ],
+        *[
+            _serialize_crafting_profile_manifest(profile)
+            for profile in world.crafting_profiles.prefetch_related(
+                Prefetch(
+                    "recipe_entries",
+                    queryset=CraftingProfileRecipe.objects.select_related("recipe"),
+                ),
+            ).order_by("slug", "id")
         ],
         *[
             _serialize_faction_manifest(faction)
@@ -978,6 +1059,7 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
                 "west",
                 "up",
                 "down",
+                "crafting_profile",
             ).order_by("z", "y", "x", "id")
         ],
         *[
@@ -988,7 +1070,10 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
         ],
         *[
             _serialize_mob_definition_manifest(mob_definition)
-            for mob_definition in world.mob_definitions.all().order_by("slug", "id")
+            for mob_definition in world.mob_definitions.select_related(
+                "merchant_profile",
+                "crafting_profile",
+            ).order_by("slug", "id")
         ],
         *[
             _serialize_spawn_plan_manifest(spawn_plan)
@@ -1022,6 +1107,9 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
     counts = {
         "documents": len(documents),
         "currencies": 0,
+        "craft_materials": 0,
+        "crafting_recipes": 0,
+        "crafting_profiles": 0,
         "zones": 0,
         "rooms": 0,
         "paths": 0,
@@ -1040,6 +1128,12 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
         kind = parse_document_kind(document)
         if kind == CURRENCY_MANIFEST_KIND:
             counts["currencies"] += 1
+        elif kind == builder_manifests.CRAFT_MATERIAL_MANIFEST_KIND:
+            counts["craft_materials"] += 1
+        elif kind == builder_manifests.CRAFTING_RECIPE_MANIFEST_KIND:
+            counts["crafting_recipes"] += 1
+        elif kind == builder_manifests.CRAFTING_PROFILE_MANIFEST_KIND:
+            counts["crafting_profiles"] += 1
         elif kind == ZONE_MANIFEST_KIND:
             counts["zones"] += 1
         elif kind == ROOM_MANIFEST_KIND:
@@ -1702,6 +1796,28 @@ def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room
     existing = Room.objects.filter(world=world, x=x, y=y, z=z).first()
     created = existing is None
 
+    crafting_profile = None
+    update_crafting = "crafting" in spec
+    if update_crafting:
+        crafting = spec.get("crafting")
+        if crafting in (None, ""):
+            crafting = {}
+        if not isinstance(crafting, dict):
+            raise serializers.ValidationError("spec.crafting must be a mapping.")
+        unknown_crafting_fields = sorted(set(crafting.keys()) - {"profile"})
+        if unknown_crafting_fields:
+            raise serializers.ValidationError(
+                "Unsupported spec.crafting field(s): "
+                f"{', '.join(unknown_crafting_fields)}."
+            )
+        profile_ref = crafting.get("profile")
+        if profile_ref not in (None, ""):
+            crafting_profile = builder_manifests.resolve_crafting_profile_ref(
+                world=world,
+                value=profile_ref,
+                field_name="spec.crafting.profile",
+            )
+
     with transaction.atomic():
         zone_ref = str(spec.get("zone") or "").strip() if "zone" in spec else (
             _zone_ref(existing.zone) if existing and existing.zone else ""
@@ -1736,6 +1852,8 @@ def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room
         room.x = x
         room.y = y
         room.z = z
+        if update_crafting:
+            room.crafting_profile = crafting_profile
         room.save()
 
         exits = spec.get("exits")
@@ -1975,6 +2093,39 @@ def apply_merchant_profile_manifest(*, world: World, manifest: dict[str, Any]) -
     )
     created = parsed.merchant_profile is None
     return builder_manifests.apply_merchant_profile_manifest(parsed), created
+
+
+def apply_craft_material_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[CraftMaterial, bool]:
+    if parse_document_kind(manifest) != builder_manifests.CRAFT_MATERIAL_MANIFEST_KIND:
+        raise serializers.ValidationError("Unsupported manifest kind. Expected 'craftmaterial'.")
+    parsed = builder_manifests.parse_craft_material_manifest(
+        world=world,
+        manifest=manifest,
+    )
+    created = parsed.material is None
+    return builder_manifests.apply_craft_material_manifest(parsed), created
+
+
+def apply_crafting_recipe_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[CraftingRecipe, bool]:
+    if parse_document_kind(manifest) != builder_manifests.CRAFTING_RECIPE_MANIFEST_KIND:
+        raise serializers.ValidationError("Unsupported manifest kind. Expected 'craftingrecipe'.")
+    parsed = builder_manifests.parse_crafting_recipe_manifest(
+        world=world,
+        manifest=manifest,
+    )
+    created = parsed.recipe is None
+    return builder_manifests.apply_crafting_recipe_manifest(parsed), created
+
+
+def apply_crafting_profile_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[CraftingProfile, bool]:
+    if parse_document_kind(manifest) != builder_manifests.CRAFTING_PROFILE_MANIFEST_KIND:
+        raise serializers.ValidationError("Unsupported manifest kind. Expected 'craftingprofile'.")
+    parsed = builder_manifests.parse_crafting_profile_manifest(
+        world=world,
+        manifest=manifest,
+    )
+    created = parsed.profile is None
+    return builder_manifests.apply_crafting_profile_manifest(parsed), created
 
 
 def _normalize_faction_manifest_for_import(*, world: World, manifest: dict[str, Any]) -> dict[str, Any]:

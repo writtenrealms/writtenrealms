@@ -2,7 +2,7 @@
   <div id="edit-world-manifest">
     <h2>{{ world.name.toUpperCase() }} EDIT WORLD</h2>
     <div class="color-text-60 mb-6">
-      Paste one or more YAML manifests. Each YAML document is applied in order. Supported kinds: world, currency, faction, zone, room, path, itemdefinition, itembundle, merchantprofile, mobdefinition, spawnplan, ability, abilities, quest, questarc, and trigger.
+      Paste one or more YAML manifests. Each YAML document is applied in order. Supported kinds: world, currency, faction, zone, room, path, itemdefinition, itembundle, merchantprofile, craftmaterial, craftingrecipe, craftingprofile, mobdefinition, spawnplan, ability, abilities, quest, questarc, and trigger.
     </div>
 
     <template v-if="!hasApplyResult">
@@ -49,6 +49,11 @@ import { computed, onMounted, ref } from "vue";
 import { type RouteLocationRaw, useRoute } from "vue-router";
 import { useStore } from "vuex";
 import { capfirst } from "@/core/utils.ts";
+import {
+  fetchCraftMaterial,
+  fetchCraftingProfile,
+  fetchCraftingRecipe,
+} from "@/services/crafting";
 
 const store = useStore();
 const route = useRoute();
@@ -95,6 +100,9 @@ type AppliedEntity = {
 
 const payloadKeyByKind: Record<string, string> = {
   ability: "ability",
+  craftmaterial: "craft_material",
+  craftingprofile: "crafting_profile",
+  craftingrecipe: "crafting_recipe",
   currency: "currency",
   faction: "faction",
   itembundle: "item_bundle",
@@ -113,6 +121,9 @@ const payloadKeyByKind: Record<string, string> = {
 const kindLabels: Record<string, string> = {
   ability: "Ability",
   abilities: "Ability",
+  craftmaterial: "Craft material",
+  craftingprofile: "Crafting profile",
+  craftingrecipe: "Crafting recipe",
   currency: "Currency",
   faction: "Faction",
   itembundle: "Item bundle",
@@ -248,6 +259,33 @@ const routeForEntity = (
       name: "builder_merchant_profile_details",
       params: { world_id: worldId, merchant_profile_id: id },
     };
+  }
+  if (kind === "craftmaterial" && id) {
+    return {
+      name: "builder_world_craft_material_details",
+      params: { world_id: worldId, craft_material_id: id },
+    };
+  }
+  if (kind === "craftmaterial") {
+    return { name: "builder_world_craft_material_list", params: { world_id: worldId } };
+  }
+  if (kind === "craftingrecipe" && id) {
+    return {
+      name: "builder_world_crafting_recipe_details",
+      params: { world_id: worldId, crafting_recipe_id: id },
+    };
+  }
+  if (kind === "craftingrecipe") {
+    return { name: "builder_world_crafting_recipe_list", params: { world_id: worldId } };
+  }
+  if (kind === "craftingprofile" && id) {
+    return {
+      name: "builder_world_crafting_profile_details",
+      params: { world_id: worldId, crafting_profile_id: id },
+    };
+  }
+  if (kind === "craftingprofile") {
+    return { name: "builder_world_crafting_profile_list", params: { world_id: worldId } };
   }
   if (kind === "quest" && id) {
     return {
@@ -471,6 +509,42 @@ spec:
   stock: []
 `;
 
+const newCraftMaterialYaml = `apiVersion: v1alpha1
+kind: craftmaterial
+metadata:
+  slug: new-material
+  name: New Material
+spec:
+  description: A reusable material recovered through salvage.
+  order: 10
+`;
+
+const newCraftingRecipeYaml = `apiVersion: v1alpha1
+kind: craftingrecipe
+metadata:
+  slug: new-recipe
+spec:
+  group: armor
+  order: 10
+  output:
+    item_definition: itemdefinition.new-item
+  inputs:
+    - material: craftmaterial.new-material
+      quantity: 1
+  conditions: {}
+  failure_message: You cannot craft that here.
+`;
+
+const newCraftingProfileYaml = `apiVersion: v1alpha1
+kind: craftingprofile
+metadata:
+  slug: new-workshop
+  name: New Workshop
+spec:
+  keywords: workshop forge
+  recipes: []
+`;
+
 const newAbilityYaml = `kind: ability
 metadata:
   world: world.${route.params.world_id}
@@ -663,6 +737,54 @@ const loadMerchantProfileYaml = async () => {
   }
 };
 
+const loadCraftMaterialYaml = async () => {
+  clearApplyResult();
+  const rawMaterialId = route.query.craft_material_id;
+  const materialId = Array.isArray(rawMaterialId) ? rawMaterialId[0] : rawMaterialId;
+  if (!materialId) {
+    manifestText.value = "";
+    return;
+  }
+  try {
+    const material = await fetchCraftMaterial(String(route.params.world_id), materialId);
+    manifestText.value = material.yaml || "";
+  } catch (error: any) {
+    store.commit("ui/notification_set_error", extractError(error));
+  }
+};
+
+const loadCraftingRecipeYaml = async () => {
+  clearApplyResult();
+  const rawRecipeId = route.query.crafting_recipe_id;
+  const recipeId = Array.isArray(rawRecipeId) ? rawRecipeId[0] : rawRecipeId;
+  if (!recipeId) {
+    manifestText.value = "";
+    return;
+  }
+  try {
+    const recipe = await fetchCraftingRecipe(String(route.params.world_id), recipeId);
+    manifestText.value = recipe.yaml || "";
+  } catch (error: any) {
+    store.commit("ui/notification_set_error", extractError(error));
+  }
+};
+
+const loadCraftingProfileYaml = async () => {
+  clearApplyResult();
+  const rawProfileId = route.query.crafting_profile_id;
+  const profileId = Array.isArray(rawProfileId) ? rawProfileId[0] : rawProfileId;
+  if (!profileId) {
+    manifestText.value = "";
+    return;
+  }
+  try {
+    const profile = await fetchCraftingProfile(String(route.params.world_id), profileId);
+    manifestText.value = profile.yaml || "";
+  } catch (error: any) {
+    store.commit("ui/notification_set_error", extractError(error));
+  }
+};
+
 const loadAbilityYaml = async () => {
   clearApplyResult();
   const rawAbilityId = route.query.ability_id;
@@ -757,6 +879,21 @@ onMounted(async () => {
   } else if (route.query.prefill === "new-merchant-profile") {
     clearApplyResult();
     manifestText.value = newMerchantProfileYaml;
+  } else if (route.query.prefill === "craft-material") {
+    await loadCraftMaterialYaml();
+  } else if (route.query.prefill === "new-craft-material") {
+    clearApplyResult();
+    manifestText.value = newCraftMaterialYaml;
+  } else if (route.query.prefill === "crafting-recipe") {
+    await loadCraftingRecipeYaml();
+  } else if (route.query.prefill === "new-crafting-recipe") {
+    clearApplyResult();
+    manifestText.value = newCraftingRecipeYaml;
+  } else if (route.query.prefill === "crafting-profile") {
+    await loadCraftingProfileYaml();
+  } else if (route.query.prefill === "new-crafting-profile") {
+    clearApplyResult();
+    manifestText.value = newCraftingProfileYaml;
   } else if (route.query.prefill === "ability") {
     await loadAbilityYaml();
   } else if (route.query.prefill === "new-ability") {

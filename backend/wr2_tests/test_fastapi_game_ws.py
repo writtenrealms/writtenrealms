@@ -112,3 +112,103 @@ class TestGameWebSocketDisconnect(unittest.TestCase):
             "spawns.tasks.exit_current_world",
             kwargs={"player_id": 42},
         )
+
+    def test_text_command_forwards_client_request_id(self):
+        celery_app = MagicMock()
+        request_id = "a87d7492-075a-4e92-8d5a-a89e93c02c1d"
+        websocket = FakeGameWebSocket(
+            [
+                {
+                    "type": "system.connect",
+                    "token": "token",
+                    "data": {"player_key": "player.42"},
+                },
+                {
+                    "type": "cmd.text",
+                    "text": "craft a blue-crested helm",
+                    "request_id": request_id,
+                },
+                {"type": "system.disconnect"},
+            ]
+        )
+
+        self._run_socket(websocket, celery_app)
+
+        celery_app.send_task.assert_any_call(
+            "spawns.tasks.handle_game_command",
+            kwargs={
+                "command_type": "text",
+                "player_id": 42,
+                "player_key": "player.42",
+                "payload": {
+                    "text": "craft a blue-crested helm",
+                    "_request_id": request_id,
+                },
+                "connection_id": ANY,
+            },
+        )
+
+    def test_invalid_text_request_id_is_rejected_instead_of_replaced(self):
+        celery_app = MagicMock()
+        websocket = FakeGameWebSocket(
+            [
+                {
+                    "type": "system.connect",
+                    "token": "token",
+                    "data": {"player_key": "player.42"},
+                },
+                {
+                    "type": "cmd.text",
+                    "text": "salvage spoils",
+                    "request_id": "not-a-uuid",
+                },
+                {"type": "system.disconnect"},
+            ]
+        )
+
+        self._run_socket(websocket, celery_app)
+
+        error = next(
+            message
+            for message in websocket.sent_json
+            if message["type"] == "cmd.text.error"
+        )
+        self.assertEqual(error["data"]["code"], "invalid_request_id")
+        queued_commands = [
+            call.kwargs["kwargs"]["command_type"]
+            for call in celery_app.send_task.call_args_list
+            if call.args and call.args[0] == "spawns.tasks.handle_game_command"
+        ]
+        self.assertEqual(queued_commands, ["state.sync"])
+
+    def test_invalid_structured_request_id_is_rejected_instead_of_replaced(self):
+        celery_app = MagicMock()
+        websocket = FakeGameWebSocket(
+            [
+                {
+                    "type": "system.connect",
+                    "token": "token",
+                    "data": {"player_key": "player.42"},
+                },
+                {
+                    "type": "cmd.salvage",
+                    "data": {"spoils": True, "request_id": "still-not-a-uuid"},
+                },
+                {"type": "system.disconnect"},
+            ]
+        )
+
+        self._run_socket(websocket, celery_app)
+
+        error = next(
+            message
+            for message in websocket.sent_json
+            if message["type"] == "cmd.salvage.error"
+        )
+        self.assertEqual(error["data"]["code"], "invalid_request_id")
+        queued_commands = [
+            call.kwargs["kwargs"]["command_type"]
+            for call in celery_app.send_task.call_args_list
+            if call.args and call.args[0] == "spawns.tasks.handle_game_command"
+        ]
+        self.assertEqual(queued_commands, ["state.sync"])

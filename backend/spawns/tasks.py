@@ -2,6 +2,7 @@ import os
 import math
 import random
 import uuid
+from datetime import timedelta
 
 from celery import shared_task
 
@@ -13,8 +14,9 @@ from core.computations import compute_stats
 from core.world_config import inherited_system_config
 from django.core.cache import cache
 from django.db.models import F, Q
+from django.utils import timezone
 from spawns.services import WorldGate
-from spawns.models import CombatEncounter, Mob, Player
+from spawns.models import CombatEncounter, CraftingActionReceipt, Mob, Player
 from spawns.serializers import PlayerConfigSerializer
 from spawns.events import GameEvent, flush_game_event_outbox, publish_events
 from spawns.handlers import (
@@ -35,6 +37,20 @@ WR2_STANDING_REGEN_RATE = adv_config.PLAYER_STARTING_STAMINA_REGEN
 WR2_RESTING_REGEN_MULTIPLIER = 3
 DEFAULT_MOB_ROAM_CHANCE = getattr(adv_config, "DEFAULT_MOB_ROAM_CHANCE", 10)
 GAME_HEARTBEAT_LOCK_KEY = "heartbeat_regen_lock"
+
+
+@shared_task(ignore_result=True)
+def prune_crafting_action_receipts(retention_days: int = 7) -> int:
+    """Bound idempotency storage while keeping a generous client retry window."""
+    try:
+        days = max(1, int(retention_days))
+    except (TypeError, ValueError):
+        days = 7
+    cutoff = timezone.now() - timedelta(days=days)
+    deleted, _ = CraftingActionReceipt.objects.filter(
+        created_ts__lt=cutoff
+    ).delete()
+    return deleted
 
 
 def _notify_world_lifecycle(player: Player, world: World, action: str) -> None:

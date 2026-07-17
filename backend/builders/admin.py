@@ -4,6 +4,11 @@ from builders import models as builders_models
 from builders.models import (
     BuilderAction,
     BuilderAssignment,
+    CraftMaterial,
+    CraftingIngredient,
+    CraftingProfile,
+    CraftingProfileRecipe,
+    CraftingRecipe,
     Faction,
     FactionRank,
     FactionAssignment,
@@ -14,6 +19,7 @@ from builders.models import (
     ItemBundle,
     ItemBundleEntry,
     ItemDefinition,
+    ItemSalvageYield,
     MobDefinition,
     Path,
     Procession,
@@ -64,6 +70,47 @@ class ItemDefinitionAdmin(BaseAdmin):
     list_display = ('id', 'key', 'slug', 'name', 'item_type', 'world')
     raw_id_fields = ['world']
     list_filter = (DirectRootWorldFilter,)
+
+
+class ItemSalvageYieldInline(admin.TabularInline):
+    model = ItemSalvageYield
+    raw_id_fields = ['material']
+    extra = 0
+
+
+ItemDefinitionAdmin.inlines = [ItemSalvageYieldInline]
+
+
+class CraftMaterialAdmin(BaseAdmin):
+    list_display = ('id', 'slug', 'name', 'order', 'world')
+    raw_id_fields = ['world']
+    list_filter = (DirectRootWorldFilter,)
+
+
+class CraftingIngredientInline(admin.TabularInline):
+    model = CraftingIngredient
+    raw_id_fields = ['material']
+    extra = 0
+
+
+class CraftingRecipeAdmin(BaseAdmin):
+    list_display = ('id', 'slug', 'name', 'group', 'order', 'world')
+    raw_id_fields = ['world', 'output_item_definition']
+    list_filter = (DirectRootWorldFilter, 'group')
+    inlines = [CraftingIngredientInline]
+
+
+class CraftingProfileRecipeInline(admin.TabularInline):
+    model = CraftingProfileRecipe
+    raw_id_fields = ['recipe']
+    extra = 0
+
+
+class CraftingProfileAdmin(BaseAdmin):
+    list_display = ('id', 'slug', 'name', 'world')
+    raw_id_fields = ['world']
+    list_filter = (DirectRootWorldFilter,)
+    inlines = [CraftingProfileRecipeInline]
 
 
 class ItemBundleEntryInline(admin.TabularInline):
@@ -200,6 +247,9 @@ class SocialAdmin(BaseAdmin):
 
 admin.site.register(BuilderAction, BuilderActionAdmin)
 admin.site.register(BuilderAssignment, BuilderAssignmentAdmin)
+admin.site.register(CraftMaterial, CraftMaterialAdmin)
+admin.site.register(CraftingProfile, CraftingProfileAdmin)
+admin.site.register(CraftingRecipe, CraftingRecipeAdmin)
 admin.site.register(Faction, FactionAdmin)
 admin.site.register(FactionRank, FactionRankAdmin)
 admin.site.register(FactionAssignment, FactionAssignmentAdmin)

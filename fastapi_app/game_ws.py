@@ -236,6 +236,27 @@ def _parse_player_id(player_key: str) -> int | None:
         return None
 
 
+_MISSING_REQUEST_ID = object()
+
+
+def _command_request_id(message: dict, payload: dict | None = None) -> str:
+    """Return a stable command UUID, generating one only when it is omitted."""
+    payload_request_id = (
+        payload.pop('request_id', _MISSING_REQUEST_ID)
+        if payload is not None
+        else _MISSING_REQUEST_ID
+    )
+    raw_request_id = message.get('request_id', _MISSING_REQUEST_ID)
+    if raw_request_id is _MISSING_REQUEST_ID:
+        raw_request_id = payload_request_id
+    if raw_request_id is _MISSING_REQUEST_ID:
+        return str(uuid.uuid4())
+    try:
+        return str(uuid.UUID(str(raw_request_id)))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError('request_id must be a valid UUID.') from exc
+
+
 async def handle_game_websocket(websocket: WebSocket):
     """
     Handle a game WebSocket connection.
@@ -256,15 +277,23 @@ async def handle_game_websocket(websocket: WebSocket):
     connection_id = None
     authenticated = False
 
-    def queue_game_command(command_type: str, payload: dict | None = None):
+    def queue_game_command(
+        command_type: str,
+        payload: dict | None = None,
+        *,
+        request_id: str | None = None,
+    ):
         if not player_key:
             return
         celery_app = get_celery_app()
+        command_payload = dict(payload or {})
+        if request_id:
+            command_payload["_request_id"] = request_id
         kwargs = {
             "command_type": command_type,
             "player_id": player_id,
             "player_key": player_key,
-            "payload": payload or {},
+            "payload": command_payload,
         }
         if connection_id:
             kwargs["connection_id"] = connection_id
@@ -360,13 +389,40 @@ async def handle_game_websocket(websocket: WebSocket):
             if msg_type == 'cmd.text':
                 cmd_text = data.get('text', '')
                 logger.info(f"Game command from {player_key}: {cmd_text}")
-                queue_game_command('text', {'text': cmd_text})
+                try:
+                    embedded_data = data.get('data')
+                    request_payload = embedded_data if isinstance(embedded_data, dict) else None
+                    request_id = _command_request_id(data, request_payload)
+                except ValueError as exc:
+                    await websocket.send_json({
+                        'type': 'cmd.text.error',
+                        'text': str(exc),
+                        'data': {
+                            'error': str(exc),
+                            'code': 'invalid_request_id',
+                        },
+                    })
+                    continue
+                queue_game_command('text', {'text': cmd_text}, request_id=request_id)
                 continue
 
             # Handle structured commands
             if msg_type and msg_type.startswith('cmd.'):
                 logger.info(f"Structured command from {player_key}: {msg_type}")
-                queue_game_command(msg_type[4:], data.get('data', {}))
+                command_data = dict(data.get('data') or {})
+                try:
+                    request_id = _command_request_id(data, command_data)
+                except ValueError as exc:
+                    await websocket.send_json({
+                        'type': f'{msg_type}.error',
+                        'text': str(exc),
+                        'data': {
+                            'error': str(exc),
+                            'code': 'invalid_request_id',
+                        },
+                    })
+                    continue
+                queue_game_command(msg_type[4:], command_data, request_id=request_id)
                 continue
 
             # Unknown message type

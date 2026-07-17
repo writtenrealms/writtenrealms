@@ -50,6 +50,9 @@ from core.world_config import (
 from builders.models import (
     BuilderAssignment,
     Currency,
+    CraftMaterial,
+    CraftingProfile,
+    CraftingRecipe,
     LastViewedRoom,
     ItemBundle,
     ItemDefinition,
@@ -1842,6 +1845,55 @@ class MerchantProfileSerializer(serializers.ModelSerializer):
         if merchant_profile.funds_currency_id:
             return merchant_profile.funds_currency.code
         return ''
+
+
+class CraftMaterialSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CraftMaterial
+        fields = [
+            'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
+            'description', 'order',
+        ]
+
+
+class CraftingRecipeSerializer(serializers.ModelSerializer):
+    name = serializers.CharField(read_only=True)
+    output_item_definition = serializers.SerializerMethodField()
+    ingredient_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CraftingRecipe
+        fields = [
+            'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
+            'group', 'order', 'conditions', 'failure_message',
+            'output_item_definition', 'ingredient_count',
+        ]
+
+    def get_output_item_definition(self, recipe):
+        definition = recipe.output_item_definition
+        return {
+            'id': definition.id,
+            'key': definition.key,
+            'slug': definition.slug,
+            'name': definition.name,
+        }
+
+    def get_ingredient_count(self, recipe):
+        return recipe.ingredients.count()
+
+
+class CraftingProfileSerializer(serializers.ModelSerializer):
+    recipe_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CraftingProfile
+        fields = [
+            'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
+            'keywords', 'recipe_count',
+        ]
+
+    def get_recipe_count(self, profile):
+        return profile.recipe_entries.count()
 
 
 def validate_reaction(self, validated_data):

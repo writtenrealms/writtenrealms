@@ -217,6 +217,33 @@ const configLinks = computed(() => [
     },
   },
   {
+    title: "Craft Materials",
+    description: "Salvaged resources tracked per player and spent by recipes.",
+    rootOnly: true,
+    to: {
+      name: "builder_world_craft_material_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
+    title: "Crafting Recipes",
+    description: "Material costs, item outputs, availability conditions, and failure messages.",
+    rootOnly: true,
+    to: {
+      name: "builder_world_crafting_recipe_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
+    title: "Crafting Profiles",
+    description: "Recipe collections exposed by workshop rooms and crafting NPCs.",
+    rootOnly: true,
+    to: {
+      name: "builder_world_crafting_profile_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
     title: "Transformations",
     description: "One-off template changes applied through spawn-plan entries.",
     rootOnly: true,

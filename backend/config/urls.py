@@ -205,6 +205,12 @@ api_v1_urls = [
     path('builder/worlds/<world_pk>/mobdefinitions/<pk>/', builder_views.mob_definition_detail, name='builder-mob-definition-detail'),
     path('builder/worlds/<world_pk>/merchantprofiles/', builder_views.merchant_profile_list, name='builder-merchant-profile-list'),
     path('builder/worlds/<world_pk>/merchantprofiles/<pk>/', builder_views.merchant_profile_detail, name='builder-merchant-profile-detail'),
+    path('builder/worlds/<world_pk>/craftmaterials/', builder_views.craft_material_list, name='builder-craft-material-list'),
+    path('builder/worlds/<world_pk>/craftmaterials/<pk>/', builder_views.craft_material_detail, name='builder-craft-material-detail'),
+    path('builder/worlds/<world_pk>/craftingrecipes/', builder_views.crafting_recipe_list, name='builder-crafting-recipe-list'),
+    path('builder/worlds/<world_pk>/craftingrecipes/<pk>/', builder_views.crafting_recipe_detail, name='builder-crafting-recipe-detail'),
+    path('builder/worlds/<world_pk>/craftingprofiles/', builder_views.crafting_profile_list, name='builder-crafting-profile-list'),
+    path('builder/worlds/<world_pk>/craftingprofiles/<pk>/', builder_views.crafting_profile_detail, name='builder-crafting-profile-detail'),
 
     # Quests
     path('builder/worlds/<world_pk>/questtemplates/', quest_views.quest_template_list, name='builder-quest-template-list'),

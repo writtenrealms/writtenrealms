@@ -6,7 +6,8 @@ from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
 from django.core.exceptions import ObjectDoesNotExist
-from django.db.models import Count, Q
+from django.db.models.deletion import RestrictedError
+from django.db.models import Count, Prefetch, Q
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 
@@ -55,6 +56,11 @@ from builders.models import (
     BuilderAction,
     BuilderAssignment,
     Currency,
+    CraftMaterial,
+    CraftingIngredient,
+    CraftingProfile,
+    CraftingProfileRecipe,
+    CraftingRecipe,
     LastViewedRoom,
     ItemBundle,
     ItemDefinition,
@@ -1990,7 +1996,12 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                 "slug": item_definition.slug,
                 "name": item_definition.name,
             }
-            item_definition.delete()
+            try:
+                item_definition.delete()
+            except RestrictedError:
+                raise serializers.ValidationError(
+                    "Cannot delete an item definition used by a crafting recipe."
+                )
             return Response(
                 {
                     "kind": builder_manifests.ITEM_DEFINITION_MANIFEST_KIND,
@@ -2130,6 +2141,131 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                 "operation": "created" if is_create else "updated",
                 "merchant_profile": builder_manifests.serialize_merchant_profile_payload(
                     merchant_profile
+                ),
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
+    def _apply_craft_material_manifest(self, manifest):
+        self._assert_can_edit_item_definitions()
+        operation = builder_manifests.parse_manifest_operation(manifest)
+        if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+            parsed = builder_manifests.parse_craft_material_delete_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            material = parsed.material
+            payload = {
+                "id": material.id,
+                "key": material.key,
+                "slug": material.slug,
+                "name": material.name,
+            }
+            try:
+                material.delete()
+            except RestrictedError:
+                raise serializers.ValidationError(
+                    "Cannot delete a craft material that is still referenced."
+                )
+            return Response(
+                {
+                    "kind": builder_manifests.CRAFT_MATERIAL_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "craft_material": payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        material, is_create = builder_world_export.apply_craft_material_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        return Response(
+            {
+                "kind": builder_manifests.CRAFT_MATERIAL_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "craft_material": builder_manifests.serialize_craft_material_payload(
+                    material
+                ),
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
+    def _apply_crafting_recipe_manifest(self, manifest):
+        self._assert_can_edit_item_definitions()
+        operation = builder_manifests.parse_manifest_operation(manifest)
+        if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+            parsed = builder_manifests.parse_crafting_recipe_delete_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            recipe = parsed.recipe
+            payload = {
+                "id": recipe.id,
+                "key": recipe.key,
+                "slug": recipe.slug,
+                "name": recipe.name,
+            }
+            recipe.delete()
+            return Response(
+                {
+                    "kind": builder_manifests.CRAFTING_RECIPE_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "crafting_recipe": payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        recipe, is_create = builder_world_export.apply_crafting_recipe_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        return Response(
+            {
+                "kind": builder_manifests.CRAFTING_RECIPE_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "crafting_recipe": builder_manifests.serialize_crafting_recipe_payload(
+                    recipe
+                ),
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
+    def _apply_crafting_profile_manifest(self, manifest):
+        self._assert_can_edit_item_definitions()
+        operation = builder_manifests.parse_manifest_operation(manifest)
+        if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+            parsed = builder_manifests.parse_crafting_profile_delete_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            profile = parsed.profile
+            payload = {
+                "id": profile.id,
+                "key": profile.key,
+                "slug": profile.slug,
+                "name": profile.name,
+            }
+            profile.delete()
+            return Response(
+                {
+                    "kind": builder_manifests.CRAFTING_PROFILE_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "crafting_profile": payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        profile, is_create = builder_world_export.apply_crafting_profile_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        return Response(
+            {
+                "kind": builder_manifests.CRAFTING_PROFILE_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "crafting_profile": builder_manifests.serialize_crafting_profile_payload(
+                    profile
                 ),
             },
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
@@ -2460,6 +2596,12 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             return self._apply_item_bundle_manifest(manifest)
         if manifest_kind == builder_manifests.MERCHANT_PROFILE_MANIFEST_KIND:
             return self._apply_merchant_profile_manifest(manifest)
+        if manifest_kind == builder_manifests.CRAFT_MATERIAL_MANIFEST_KIND:
+            return self._apply_craft_material_manifest(manifest)
+        if manifest_kind == builder_manifests.CRAFTING_RECIPE_MANIFEST_KIND:
+            return self._apply_crafting_recipe_manifest(manifest)
+        if manifest_kind == builder_manifests.CRAFTING_PROFILE_MANIFEST_KIND:
+            return self._apply_crafting_profile_manifest(manifest)
         if manifest_kind == builder_manifests.FACTION_MANIFEST_KIND:
             return self._apply_faction_manifest(manifest)
         if manifest_kind == builder_manifests.MOB_DEFINITION_MANIFEST_KIND:
@@ -3027,6 +3169,97 @@ merchant_profile_list = MerchantProfileViewSet.as_view({
 merchant_profile_detail = MerchantProfileViewSet.as_view({
     'get': 'retrieve',
 })
+
+
+class CraftMaterialViewSet(BaseWorldBuilderViewSet):
+    serializer_class = builder_serializers.CraftMaterialSerializer
+    http_method_names = ['get', 'head', 'options']
+
+    def get_queryset(self):
+        context = self.world.instance_of or self.world
+        return self.search_queryset(
+            CraftMaterial.objects.filter(world=context).order_by('order', 'name', 'id')
+        )
+
+    def retrieve(self, request, *args, **kwargs):
+        material = self.get_object()
+        payload = builder_manifests.serialize_craft_material_payload(material)
+        payload["modified_ts"] = material.modified_ts
+        payload["model_type"] = material.model_type
+        return Response(payload)
+
+
+craft_material_list = CraftMaterialViewSet.as_view({'get': 'list'})
+craft_material_detail = CraftMaterialViewSet.as_view({'get': 'retrieve'})
+
+
+class CraftingRecipeViewSet(BaseWorldBuilderViewSet):
+    serializer_class = builder_serializers.CraftingRecipeSerializer
+    http_method_names = ['get', 'head', 'options']
+
+    def get_queryset(self):
+        context = self.world.instance_of or self.world
+        qs = (
+            CraftingRecipe.objects
+            .filter(world=context)
+            .select_related('output_item_definition')
+            .prefetch_related(
+                Prefetch(
+                    'ingredients',
+                    queryset=CraftingIngredient.objects.select_related('material'),
+                ),
+            )
+            .order_by('group', 'order', 'slug', 'id')
+        )
+        group = str(self.request.query_params.get('group') or '').strip().lower()
+        if group:
+            qs = qs.filter(group=group)
+        return self.search_queryset(
+            qs,
+            field_name='output_item_definition__name',
+        )
+
+    def retrieve(self, request, *args, **kwargs):
+        recipe = self.get_object()
+        payload = builder_manifests.serialize_crafting_recipe_payload(recipe)
+        payload["modified_ts"] = recipe.modified_ts
+        payload["model_type"] = recipe.model_type
+        return Response(payload)
+
+
+crafting_recipe_list = CraftingRecipeViewSet.as_view({'get': 'list'})
+crafting_recipe_detail = CraftingRecipeViewSet.as_view({'get': 'retrieve'})
+
+
+class CraftingProfileViewSet(BaseWorldBuilderViewSet):
+    serializer_class = builder_serializers.CraftingProfileSerializer
+    http_method_names = ['get', 'head', 'options']
+
+    def get_queryset(self):
+        context = self.world.instance_of or self.world
+        return self.search_queryset(
+            CraftingProfile.objects
+            .filter(world=context)
+            .prefetch_related(
+                Prefetch(
+                    'recipe_entries',
+                    queryset=CraftingProfileRecipe.objects.select_related('recipe'),
+                ),
+            )
+            .order_by('name', 'id')
+        )
+
+    def retrieve(self, request, *args, **kwargs):
+        profile = self.get_object()
+        payload = builder_manifests.serialize_crafting_profile_payload(profile)
+        payload["modified_ts"] = profile.modified_ts
+        payload["model_type"] = profile.model_type
+        payload["recipe_count"] = profile.recipe_entries.count()
+        return Response(payload)
+
+
+crafting_profile_list = CraftingProfileViewSet.as_view({'get': 'list'})
+crafting_profile_detail = CraftingProfileViewSet.as_view({'get': 'retrieve'})
 
 
 class MobDefinitionReactionViewSet(BaseWorldBuilderViewSet):

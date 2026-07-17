@@ -17,6 +17,7 @@ from spawns.handlers.permissions import (
     can_execute_builder_command,
 )
 from spawns.handlers.registry import register_handler, resolve_text_handler
+from spawns.request_segments import append_request_segment
 from spawns.triggers import execute_command_fallback_trigger
 
 
@@ -34,6 +35,20 @@ def _parse_text_command(text: str) -> tuple[str | None, list[str], str]:
 
 _HISTORY_REPLAY_PATTERN = re.compile(r"!(\d+)")
 _ALIAS_DEFINITION_COMMANDS = {"alias", "unalias"}
+_REDISPATCH_REQUEST_KEYS = ("_request_id", "_request_segment")
+
+
+def _redispatch_payload(
+    ctx: CommandContext,
+    text: str,
+    **flags,
+) -> dict:
+    """Build a clean nested text payload while retaining retry identity."""
+    payload = {"text": text, **flags}
+    for key in _REDISPATCH_REQUEST_KEYS:
+        if key in ctx.payload:
+            payload[key] = ctx.payload[key]
+    return payload
 
 
 @register_handler
@@ -71,6 +86,32 @@ class TextCommandHandler(CommandHandler):
         if ctx.script_source or ctx.payload.get("suppress_history"):
             return
         record_player_command_history(ctx.player.id, raw_text)
+
+    def _reject_history_in_command_chain(
+        self,
+        ctx: CommandContext,
+        raw_text: str,
+    ) -> bool:
+        if ctx.actor_type != "player" or ctx.player is None or ctx.script_source:
+            return False
+        segments = [
+            segment.strip()
+            for segment in split_cmd(raw_text)
+            if segment.strip()
+        ]
+        if len(segments) <= 1:
+            return False
+        references = [segment for segment in segments if segment.startswith("!")]
+        if not references:
+            return False
+        self._publish_history_error(
+            ctx,
+            "History references cannot be used inside command chains.",
+            "history_reference_in_chain",
+            command=raw_text,
+            references=references,
+        )
+        return True
 
     def _handle_history_replay(self, ctx: CommandContext, raw_text: str) -> bool:
         if ctx.actor_type != "player" or ctx.player is None:
@@ -133,10 +174,11 @@ class TextCommandHandler(CommandHandler):
             command_type="text",
             actor_type="player",
             actor_id=ctx.player.id,
-            payload={
-                "text": resolved_text,
-                "suppress_history": True,
-            },
+            payload=_redispatch_payload(
+                ctx,
+                resolved_text,
+                suppress_history=True,
+            ),
             connection_id=ctx.connection_id,
             published_messages=ctx.published_messages,
         )
@@ -184,11 +226,12 @@ class TextCommandHandler(CommandHandler):
             command_type="text",
             actor_type="player",
             actor_id=ctx.player.id,
-            payload={
-                "text": result.text,
-                "suppress_history": True,
-                "suppress_aliases": True,
-            },
+            payload=_redispatch_payload(
+                ctx,
+                result.text,
+                suppress_history=True,
+                suppress_aliases=True,
+            ),
             connection_id=ctx.connection_id,
             published_messages=ctx.published_messages,
         )
@@ -203,10 +246,14 @@ class TextCommandHandler(CommandHandler):
 
         from spawns.handlers.registry import dispatch_command
 
-        for segment in segments:
+        for segment_index, segment in enumerate(segments):
             payload = dict(ctx.payload)
             payload["text"] = segment
             payload["suppress_history"] = True
+            payload["_request_segment"] = append_request_segment(
+                ctx.payload.get("_request_segment"),
+                segment_index,
+            )
             dispatch_command(
                 command_type="text",
                 actor_type=ctx.actor_type,
@@ -225,6 +272,12 @@ class TextCommandHandler(CommandHandler):
             return
 
         is_alias_definition = command in _ALIAS_DEFINITION_COMMANDS
+
+        if (
+            not is_alias_definition
+            and self._reject_history_in_command_chain(ctx, raw_text)
+        ):
+            return
 
         if not is_alias_definition and self._handle_history_replay(ctx, raw_text):
             return

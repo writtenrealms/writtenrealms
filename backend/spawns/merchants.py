@@ -377,6 +377,11 @@ def sell_item(player: Player, merchant_selector: str | None, item_selector: str 
         runtime = resolve_merchant_runtime(player, merchant_selector)
         runtime = MerchantRuntime.objects.select_for_update().select_related("profile", "mob").get(pk=runtime.pk)
         item = _find_player_inventory_item(player, item_selector)
+        if item.definition and item.definition.salvage_only:
+            raise ActionError(
+                "Captured spoils must be salvaged, not sold.",
+                code="salvage_only",
+            )
         price = _item_price(item, runtime.profile.buy_multiplier)
 
         if runtime.profile.funds_mode == MerchantProfile.FUNDS_MODE_FINITE:

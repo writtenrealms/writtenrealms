@@ -51,6 +51,8 @@ import LookRoom from "@/components/game/console/LookRoom.vue";
 import Message from "@/components/game/console/Message.vue";
 import OfferInventory from "@/components/game/console/OfferInventory.vue";
 import QuestMessage from "@/components/game/console/QuestMessage.vue";
+import RecipeList from "@/components/game/console/RecipeList.vue";
+import SalvageList from "@/components/game/console/SalvageList.vue";
 import ScrollTool from "@/components/game/console/ScrollTool.vue";
 import Stats from "@/components/game/console/Stats.vue";
 import Who from "@/components/game/console/Who.vue";
@@ -81,6 +83,7 @@ const consoleMessage = (message) => {
     "cmd.inventory.success": Inventory,
     "cmd.list.success": List,
     "cmd.offer.success": OfferInventory,
+    "cmd.recipes.success": RecipeList,
     "cmd./stats.success": BuilderStats,
     "cmd.stats.success": Stats,
     "cmd.who.success": Who,
@@ -89,6 +92,10 @@ const consoleMessage = (message) => {
   };
 
   if (type_mapping[type]) return type_mapping[type];
+
+  if (type === "cmd.salvage.success" && message.data?.operation === "list") {
+    return SalvageList;
+  }
 
   if (type === "cmd.quest.success" || type === "cmd.quest.error" || type.startsWith("quest.")) {
     return QuestMessage;

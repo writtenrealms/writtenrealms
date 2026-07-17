@@ -48,6 +48,10 @@ app.conf.beat_schedule = {
         'task': 'users.tasks.cleanup_stale_connections',
         'schedule': crontab(minute='*/5'),  # Runs every 5 minutes
     },
+    'prune-crafting-action-receipts': {
+        'task': 'spawns.tasks.prune_crafting_action_receipts',
+        'schedule': crontab(hour='4', minute='20'),
+    },
     'monitor-worlds': {
       'task': 'worlds.tasks.monitor_worlds',
         'schedule': crontab(minute='*/1'),  # Runs every minute

@@ -458,7 +458,10 @@ class HistoryHandler(CommandHandler):
     help = {
         "name": "History",
         "format": "history | !<number>",
-        "description": "Show recent commands. Repeat one with !<number>.",
+        "description": (
+            "Show recent commands. Repeat one with standalone !<number>; "
+            "history references cannot be placed inside command chains."
+        ),
         "examples": [
             "history",
             "!1",

@@ -31,9 +31,15 @@ from builders.models import (
     Faction,
     FactionAssignment,
     FactionRank,
+    CraftMaterial,
+    CraftingIngredient,
+    CraftingProfile,
+    CraftingProfileRecipe,
+    CraftingRecipe,
     ItemBundle,
     ItemBundleEntry,
     ItemDefinition,
+    ItemSalvageYield,
     MerchantProfile,
     MerchantStockSlot,
     MobDefinition,
@@ -95,6 +101,9 @@ QUEST_ARC_MANIFEST_KIND = "questarc"
 ITEM_DEFINITION_MANIFEST_KIND = "itemdefinition"
 ITEM_BUNDLE_MANIFEST_KIND = "itembundle"
 MERCHANT_PROFILE_MANIFEST_KIND = "merchantprofile"
+CRAFT_MATERIAL_MANIFEST_KIND = "craftmaterial"
+CRAFTING_RECIPE_MANIFEST_KIND = "craftingrecipe"
+CRAFTING_PROFILE_MANIFEST_KIND = "craftingprofile"
 FACTION_MANIFEST_KIND = "faction"
 MOB_DEFINITION_MANIFEST_KIND = "mobdefinition"
 ABILITY_MANIFEST_KIND = "ability"
@@ -124,6 +133,21 @@ _MERCHANT_PROFILE_MANIFEST_KIND_ALIASES = {
     MERCHANT_PROFILE_MANIFEST_KIND,
     "merchant-profile",
     "merchant_profile",
+}
+_CRAFT_MATERIAL_MANIFEST_KIND_ALIASES = {
+    CRAFT_MATERIAL_MANIFEST_KIND,
+    "craft-material",
+    "craft_material",
+}
+_CRAFTING_RECIPE_MANIFEST_KIND_ALIASES = {
+    CRAFTING_RECIPE_MANIFEST_KIND,
+    "crafting-recipe",
+    "crafting_recipe",
+}
+_CRAFTING_PROFILE_MANIFEST_KIND_ALIASES = {
+    CRAFTING_PROFILE_MANIFEST_KIND,
+    "crafting-profile",
+    "crafting_profile",
 }
 _FACTION_MANIFEST_KIND_ALIASES = {
     FACTION_MANIFEST_KIND,
@@ -293,6 +317,7 @@ _ITEM_DEFINITION_SPEC_FIELDS = (
     "type",
     "attributes",
     "randomization",
+    "salvage",
     *_ITEM_DEFINITION_BASE_PROPERTY_FIELDS,
 )
 _MOB_DEFINITION_BASE_PROPERTY_FIELDS = mob_definition_property_fields()
@@ -311,6 +336,7 @@ _MOB_DEFINITION_SPEC_FIELDS = (
     "combat",
     "factions",
     "merchant",
+    "crafting",
     "trainer",
     *_MOB_DEFINITION_BASE_PROPERTY_FIELDS,
 )
@@ -373,6 +399,7 @@ class ParsedItemDefinitionManifest:
     slug: str
     name: str
     fields: dict[str, Any]
+    salvage_yields: list[dict[str, Any]] | None
 
 
 @dataclass
@@ -416,6 +443,58 @@ class ParsedMerchantProfileDeleteManifest:
     world: World
     merchant_profile: MerchantProfile
     merchant_profile_id: int
+
+
+@dataclass
+class ParsedCraftMaterialManifest:
+    world: World
+    material: CraftMaterial | None
+    material_id: int | None
+    slug: str
+    name: str
+    fields: dict[str, Any]
+
+
+@dataclass
+class ParsedCraftMaterialDeleteManifest:
+    world: World
+    material: CraftMaterial
+    material_id: int
+
+
+@dataclass
+class ParsedCraftingRecipeManifest:
+    world: World
+    recipe: CraftingRecipe | None
+    recipe_id: int | None
+    slug: str
+    fields: dict[str, Any]
+    ingredients: list[dict[str, Any]] | None
+
+
+@dataclass
+class ParsedCraftingRecipeDeleteManifest:
+    world: World
+    recipe: CraftingRecipe
+    recipe_id: int
+
+
+@dataclass
+class ParsedCraftingProfileManifest:
+    world: World
+    profile: CraftingProfile | None
+    profile_id: int | None
+    slug: str
+    name: str
+    fields: dict[str, Any]
+    recipes: list[CraftingRecipe] | None
+
+
+@dataclass
+class ParsedCraftingProfileDeleteManifest:
+    world: World
+    profile: CraftingProfile
+    profile_id: int
 
 
 @dataclass
@@ -578,6 +657,12 @@ def parse_manifest_kind(manifest: dict[str, Any]) -> str:
         return ITEM_BUNDLE_MANIFEST_KIND
     if manifest_kind in _MERCHANT_PROFILE_MANIFEST_KIND_ALIASES:
         return MERCHANT_PROFILE_MANIFEST_KIND
+    if manifest_kind in _CRAFT_MATERIAL_MANIFEST_KIND_ALIASES:
+        return CRAFT_MATERIAL_MANIFEST_KIND
+    if manifest_kind in _CRAFTING_RECIPE_MANIFEST_KIND_ALIASES:
+        return CRAFTING_RECIPE_MANIFEST_KIND
+    if manifest_kind in _CRAFTING_PROFILE_MANIFEST_KIND_ALIASES:
+        return CRAFTING_PROFILE_MANIFEST_KIND
     if manifest_kind in _FACTION_MANIFEST_KIND_ALIASES:
         return FACTION_MANIFEST_KIND
     if manifest_kind in _MOB_DEFINITION_MANIFEST_KIND_ALIASES:
@@ -592,7 +677,7 @@ def parse_manifest_kind(manifest: dict[str, Any]) -> str:
         return QUEST_ARC_MANIFEST_KIND
     raise serializers.ValidationError(
         f"Unsupported manifest kind '{manifest_kind}'. "
-        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_MANIFEST_KIND}, {ITEM_DEFINITION_MANIFEST_KIND}, {ITEM_BUNDLE_MANIFEST_KIND}, {MERCHANT_PROFILE_MANIFEST_KIND}, {FACTION_MANIFEST_KIND}, {MOB_DEFINITION_MANIFEST_KIND}, {ABILITY_MANIFEST_KIND}, {ABILITIES_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
+        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_MANIFEST_KIND}, {ITEM_DEFINITION_MANIFEST_KIND}, {ITEM_BUNDLE_MANIFEST_KIND}, {MERCHANT_PROFILE_MANIFEST_KIND}, {CRAFT_MATERIAL_MANIFEST_KIND}, {CRAFTING_RECIPE_MANIFEST_KIND}, {CRAFTING_PROFILE_MANIFEST_KIND}, {FACTION_MANIFEST_KIND}, {MOB_DEFINITION_MANIFEST_KIND}, {ABILITY_MANIFEST_KIND}, {ABILITIES_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
     )
 
 
@@ -1064,7 +1149,36 @@ def _item_definition_spec_from_instance(item_definition: ItemDefinition) -> dict
         spec["randomization"] = item_definition.randomization
     else:
         spec["randomization"] = {}
+    salvage_yields = _item_salvage_entries(item_definition)
+    if item_definition.salvage_only or salvage_yields:
+        spec["salvage"] = {
+            "only": bool(item_definition.salvage_only),
+            "yields": salvage_yields,
+        }
     return spec
+
+
+def _item_salvage_entries(item_definition: ItemDefinition) -> list[dict[str, Any]]:
+    prefetched = getattr(item_definition, "_prefetched_objects_cache", {})
+    yields = prefetched.get("salvage_yields")
+    if yields is None:
+        yields = list(
+            item_definition.salvage_yields.select_related("material").all()
+        )
+    else:
+        yields = list(yields)
+    yields.sort(key=lambda entry: (
+        int(entry.material.order),
+        (entry.material.name or "").lower(),
+        entry.material_id,
+    ))
+    return [
+        {
+            "material": f"{CRAFT_MATERIAL_MANIFEST_KIND}.{entry.material.slug}",
+            "quantity": int(entry.quantity),
+        }
+        for entry in yields
+    ]
 
 
 def item_definition_to_manifest(item_definition: ItemDefinition) -> dict[str, Any]:
@@ -1111,6 +1225,8 @@ def serialize_item_definition_payload(item_definition: ItemDefinition) -> dict[s
         "base_properties": item_definition.base_properties or {},
         "attributes": item_definition.attributes or {},
         "randomization": item_definition.randomization or {},
+        "salvage_only": bool(item_definition.salvage_only),
+        "salvage": manifest["spec"].get("salvage", {}),
         "manifest": manifest,
         "yaml": manifest_to_yaml(manifest),
         "delete_manifest": delete_manifest,
@@ -1282,6 +1398,11 @@ def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[st
             "profile": f"merchantprofile.{mob_definition.merchant_profile.slug}",
             "availability": mob_definition.merchant_availability or "present",
         }
+    if mob_definition.crafting_profile_id:
+        spec["crafting"] = {
+            "profile": f"{CRAFTING_PROFILE_MANIFEST_KIND}.{mob_definition.crafting_profile.slug}",
+            "availability": mob_definition.crafting_availability or "present",
+        }
     if mob_definition.trainer:
         spec["trainer"] = mob_definition.trainer or {}
     spec["attributes"] = mob_definition.attributes or {}
@@ -1357,6 +1478,16 @@ def serialize_mob_definition_payload(mob_definition: MobDefinition) -> dict[str,
             if mob_definition.merchant_profile_id else None
         ),
         "merchant_availability": mob_definition.merchant_availability or "present",
+        "crafting_profile": (
+            {
+                "id": mob_definition.crafting_profile_id,
+                "key": mob_definition.crafting_profile.key,
+                "slug": mob_definition.crafting_profile.slug,
+                "name": mob_definition.crafting_profile.name,
+            }
+            if mob_definition.crafting_profile_id else None
+        ),
+        "crafting_availability": mob_definition.crafting_availability or "present",
         "manifest": manifest,
         "yaml": manifest_to_yaml(manifest),
         "delete_manifest": delete_manifest,
@@ -1507,6 +1638,195 @@ def serialize_merchant_profile_payload(merchant_profile: MerchantProfile) -> dic
         "buyback_max_items": merchant_profile.buyback_max_items,
         "buyback_expires": merchant_profile.buyback_expires,
         "stock": manifest["spec"]["stock"],
+        "manifest": manifest,
+        "yaml": manifest_to_yaml(manifest),
+        "delete_manifest": delete_manifest,
+        "delete_yaml": manifest_to_yaml(delete_manifest),
+    }
+
+
+def craft_material_to_manifest(material: CraftMaterial) -> dict[str, Any]:
+    return {
+        "kind": CRAFT_MATERIAL_MANIFEST_KIND,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, material.world_id),
+            "id": material.id,
+            "key": material.key,
+            "slug": material.slug,
+            "name": material.name or "",
+        },
+        "spec": {
+            "description": material.description or "",
+            "order": int(material.order),
+        },
+    }
+
+
+def craft_material_delete_manifest(material: CraftMaterial) -> dict[str, Any]:
+    return {
+        "kind": CRAFT_MATERIAL_MANIFEST_KIND,
+        "operation": TRIGGER_MANIFEST_OPERATION_DELETE,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, material.world_id),
+            "id": material.id,
+            "key": material.key,
+            "slug": material.slug,
+            "name": material.name or "",
+        },
+    }
+
+
+def serialize_craft_material_payload(material: CraftMaterial) -> dict[str, Any]:
+    manifest = craft_material_to_manifest(material)
+    delete_manifest = craft_material_delete_manifest(material)
+    return {
+        "id": material.id,
+        "key": material.key,
+        "slug": material.slug,
+        "name": material.name or "",
+        "description": material.description or "",
+        "order": int(material.order),
+        "manifest": manifest,
+        "yaml": manifest_to_yaml(manifest),
+        "delete_manifest": delete_manifest,
+        "delete_yaml": manifest_to_yaml(delete_manifest),
+    }
+
+
+def _recipe_ingredient_entries(recipe: CraftingRecipe) -> list[dict[str, Any]]:
+    prefetched = getattr(recipe, "_prefetched_objects_cache", {})
+    ingredients = prefetched.get("ingredients")
+    if ingredients is None:
+        ingredients = list(recipe.ingredients.select_related("material").all())
+    else:
+        ingredients = list(ingredients)
+    return [
+        {
+            "material": f"{CRAFT_MATERIAL_MANIFEST_KIND}.{ingredient.material.slug}",
+            "quantity": int(ingredient.quantity),
+        }
+        for ingredient in ingredients
+    ]
+
+
+def crafting_recipe_to_manifest(recipe: CraftingRecipe) -> dict[str, Any]:
+    return {
+        "kind": CRAFTING_RECIPE_MANIFEST_KIND,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, recipe.world_id),
+            "id": recipe.id,
+            "key": recipe.key,
+            "slug": recipe.slug,
+        },
+        "spec": {
+            "group": recipe.group or "",
+            "order": int(recipe.order),
+            "output": {
+                "item_definition": (
+                    f"{ITEM_DEFINITION_MANIFEST_KIND}.{recipe.output_item_definition.slug}"
+                ),
+            },
+            "inputs": _recipe_ingredient_entries(recipe),
+            "conditions": recipe.conditions or {},
+            "failure_message": recipe.failure_message or "",
+        },
+    }
+
+
+def crafting_recipe_delete_manifest(recipe: CraftingRecipe) -> dict[str, Any]:
+    return {
+        "kind": CRAFTING_RECIPE_MANIFEST_KIND,
+        "operation": TRIGGER_MANIFEST_OPERATION_DELETE,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, recipe.world_id),
+            "id": recipe.id,
+            "key": recipe.key,
+            "slug": recipe.slug,
+        },
+    }
+
+
+def serialize_crafting_recipe_payload(recipe: CraftingRecipe) -> dict[str, Any]:
+    manifest = crafting_recipe_to_manifest(recipe)
+    delete_manifest = crafting_recipe_delete_manifest(recipe)
+    return {
+        "id": recipe.id,
+        "key": recipe.key,
+        "slug": recipe.slug,
+        "name": recipe.name or "",
+        "group": recipe.group or "",
+        "order": int(recipe.order),
+        "conditions": recipe.conditions or {},
+        "failure_message": recipe.failure_message or "",
+        "output_item_definition": {
+            "id": recipe.output_item_definition_id,
+            "key": recipe.output_item_definition.key,
+            "slug": recipe.output_item_definition.slug,
+            "name": recipe.output_item_definition.name,
+        },
+        "inputs": manifest["spec"]["inputs"],
+        "manifest": manifest,
+        "yaml": manifest_to_yaml(manifest),
+        "delete_manifest": delete_manifest,
+        "delete_yaml": manifest_to_yaml(delete_manifest),
+    }
+
+
+def _profile_recipe_refs(profile: CraftingProfile) -> list[str]:
+    prefetched = getattr(profile, "_prefetched_objects_cache", {})
+    entries = prefetched.get("recipe_entries")
+    if entries is None:
+        entries = list(profile.recipe_entries.select_related("recipe").all())
+    else:
+        entries = list(entries)
+    entries.sort(key=lambda entry: (int(entry.order), entry.id))
+    return [
+        f"{CRAFTING_RECIPE_MANIFEST_KIND}.{entry.recipe.slug}"
+        for entry in entries
+    ]
+
+
+def crafting_profile_to_manifest(profile: CraftingProfile) -> dict[str, Any]:
+    return {
+        "kind": CRAFTING_PROFILE_MANIFEST_KIND,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, profile.world_id),
+            "id": profile.id,
+            "key": profile.key,
+            "slug": profile.slug,
+            "name": profile.name or "",
+        },
+        "spec": {
+            "keywords": profile.keywords or "",
+            "recipes": _profile_recipe_refs(profile),
+        },
+    }
+
+
+def crafting_profile_delete_manifest(profile: CraftingProfile) -> dict[str, Any]:
+    return {
+        "kind": CRAFTING_PROFILE_MANIFEST_KIND,
+        "operation": TRIGGER_MANIFEST_OPERATION_DELETE,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, profile.world_id),
+            "id": profile.id,
+            "key": profile.key,
+            "slug": profile.slug,
+            "name": profile.name or "",
+        },
+    }
+
+
+def serialize_crafting_profile_payload(profile: CraftingProfile) -> dict[str, Any]:
+    manifest = crafting_profile_to_manifest(profile)
+    delete_manifest = crafting_profile_delete_manifest(profile)
+    return {
+        "id": profile.id,
+        "key": profile.key,
+        "slug": profile.slug,
+        "name": profile.name or "",
+        "keywords": profile.keywords or "",
+        "recipes": manifest["spec"]["recipes"],
         "manifest": manifest,
         "yaml": manifest_to_yaml(manifest),
         "delete_manifest": delete_manifest,
@@ -2654,6 +2974,144 @@ def _resolve_currency_reference(*, world: World, value: Any, field_name: str) ->
     raise serializers.ValidationError(f"{field_name} references an unknown currency.")
 
 
+def _resolve_world_slug_reference(
+    *,
+    world: World,
+    value: Any,
+    field_name: str,
+    model,
+    prefixes: set[str],
+    label: str,
+):
+    if isinstance(value, bool):
+        raise serializers.ValidationError(f"{field_name} must reference {label}.")
+    if isinstance(value, int):
+        entity = model.objects.filter(world=world, pk=value).first()
+        if entity:
+            return entity
+        raise serializers.ValidationError(f"{field_name} references unknown {label}.")
+
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(f"{field_name} is required.")
+    if text.isdigit():
+        entity = model.objects.filter(world=world, pk=int(text)).first()
+        if entity:
+            return entity
+        raise serializers.ValidationError(f"{field_name} references unknown {label}.")
+
+    prefix, separator, raw_value = text.partition(".")
+    if separator:
+        if prefix not in prefixes:
+            raise serializers.ValidationError(
+                f"{field_name} must reference {label}."
+            )
+        text = raw_value.strip()
+        if text.isdigit():
+            entity = model.objects.filter(world=world, pk=int(text)).first()
+            if entity:
+                return entity
+            raise serializers.ValidationError(f"{field_name} references unknown {label}.")
+
+    slug = _slug_or_error(text, field_name)
+    entity = model.objects.filter(world=world, slug=slug).first()
+    if entity:
+        return entity
+    raise serializers.ValidationError(f"{field_name} references unknown {label}.")
+
+
+def _resolve_craft_material_ref(*, world: World, value: Any, field_name: str) -> CraftMaterial:
+    return _resolve_world_slug_reference(
+        world=world,
+        value=value,
+        field_name=field_name,
+        model=CraftMaterial,
+        prefixes={CRAFT_MATERIAL_MANIFEST_KIND, "craft_material"},
+        label="a craft material",
+    )
+
+
+def _coerce_crafting_int(value: Any, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(f"{field_name} must be an integer.")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise serializers.ValidationError(f"{field_name} must be an integer.")
+        return int(value)
+    text = str(value or "").strip()
+    if not text or not text.lstrip("+-").isdigit():
+        raise serializers.ValidationError(f"{field_name} must be an integer.")
+    return int(text)
+
+
+def _resolve_crafting_recipe_ref(*, world: World, value: Any, field_name: str) -> CraftingRecipe:
+    return _resolve_world_slug_reference(
+        world=world,
+        value=value,
+        field_name=field_name,
+        model=CraftingRecipe,
+        prefixes={CRAFTING_RECIPE_MANIFEST_KIND, "crafting_recipe"},
+        label="a crafting recipe",
+    )
+
+
+def resolve_crafting_profile_ref(*, world: World, value: Any, field_name: str) -> CraftingProfile:
+    return _resolve_world_slug_reference(
+        world=world,
+        value=value,
+        field_name=field_name,
+        model=CraftingProfile,
+        prefixes={CRAFTING_PROFILE_MANIFEST_KIND, "crafting_profile"},
+        label="a crafting profile",
+    )
+
+
+def _resolve_crafting_metadata(
+    *,
+    world: World,
+    metadata: dict[str, Any],
+    model,
+    prefixes: set[str],
+    label: str,
+):
+    candidates = []
+    if metadata.get("id") is not None:
+        candidates.append(_resolve_world_slug_reference(
+            world=world,
+            value=metadata.get("id"),
+            field_name="metadata.id",
+            model=model,
+            prefixes=prefixes,
+            label=label,
+        ))
+    if metadata.get("key") not in (None, ""):
+        candidates.append(_resolve_world_slug_reference(
+            world=world,
+            value=metadata.get("key"),
+            field_name="metadata.key",
+            model=model,
+            prefixes=prefixes,
+            label=label,
+        ))
+    raw_slug = str(metadata.get("slug") or "").strip()
+    if raw_slug:
+        entity = model.objects.filter(
+            world=world,
+            slug=_slug_or_error(raw_slug, "metadata.slug"),
+        ).first()
+        if entity:
+            candidates.append(entity)
+
+    if len({candidate.pk for candidate in candidates}) > 1:
+        raise serializers.ValidationError(
+            f"metadata.id, metadata.key, and metadata.slug refer to different {label}s."
+        )
+    entity = candidates[0] if candidates else None
+    return entity, entity.pk if entity else None
+
+
 def _coerce_item_definition_fields(*, world: World, spec_patch: dict[str, Any], existing: ItemDefinition | None) -> dict[str, Any]:
     item_type = spec_patch.get(
         "type",
@@ -3031,6 +3489,41 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
             "spec.merchant.availability must be one of: present, alive_and_present."
         )
 
+    crafting_profile = existing.crafting_profile if existing else None
+    crafting_availability = (
+        existing.crafting_availability if existing else "present"
+    )
+    if "crafting" in spec_patch:
+        crafting = spec_patch.get("crafting")
+        if crafting in (None, ""):
+            crafting = {}
+            crafting_profile = None
+        if not isinstance(crafting, dict):
+            raise serializers.ValidationError("spec.crafting must be a mapping.")
+        crafting_unknown = sorted(set(crafting.keys()) - {"profile", "availability"})
+        if crafting_unknown:
+            raise serializers.ValidationError(
+                f"Unsupported spec.crafting field(s): {', '.join(crafting_unknown)}."
+            )
+        if "profile" in crafting:
+            profile_ref = crafting.get("profile")
+            crafting_profile = (
+                resolve_crafting_profile_ref(
+                    world=world,
+                    value=profile_ref,
+                    field_name="spec.crafting.profile",
+                )
+                if profile_ref not in (None, "")
+                else None
+            )
+        crafting_availability = str(
+            crafting.get("availability", crafting_availability or "present")
+        ).strip().lower() or "present"
+    if crafting_availability not in {"present", "alive_and_present"}:
+        raise serializers.ValidationError(
+            "spec.crafting.availability must be one of: present, alive_and_present."
+        )
+
     attackable = _coerce_bool(
         combat.get("attackable", existing.attackable if existing else True),
         "spec.combat.attackable",
@@ -3117,6 +3610,8 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         "attackable": attackable,
         "merchant_profile": merchant_profile,
         "merchant_availability": merchant_availability,
+        "crafting_profile": crafting_profile,
+        "crafting_availability": crafting_availability,
         "trainer": trainer,
     }
 
@@ -3439,6 +3934,89 @@ def parse_faction_delete_manifest(
     )
 
 
+def _coerce_item_salvage(
+    *,
+    world: World,
+    spec_patch: dict[str, Any],
+    existing: ItemDefinition | None,
+    item_fields: dict[str, Any],
+) -> tuple[bool, list[dict[str, Any]] | None]:
+    existing_only = bool(existing.salvage_only) if existing else False
+    if "salvage" not in spec_patch:
+        if existing_only and (
+            item_fields.get("item_type") == adv_consts.ITEM_TYPE_EQUIPPABLE
+            or (item_fields.get("base_properties") or {}).get("equipment_type")
+        ):
+            raise serializers.ValidationError(
+                "A salvage-only item definition cannot be equippable."
+            )
+        return existing_only, None
+
+    raw_salvage = spec_patch.get("salvage")
+    if raw_salvage in (None, ""):
+        raw_salvage = {}
+    if not isinstance(raw_salvage, dict):
+        raise serializers.ValidationError("spec.salvage must be a mapping.")
+    unknown_fields = sorted(set(raw_salvage.keys()) - {"only", "yields"})
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported spec.salvage field(s): {', '.join(unknown_fields)}."
+        )
+
+    salvage_only = _coerce_bool(
+        raw_salvage.get("only", False),
+        "spec.salvage.only",
+    )
+    raw_yields = raw_salvage.get("yields", [])
+    if raw_yields in (None, ""):
+        raw_yields = []
+    if not isinstance(raw_yields, list):
+        raise serializers.ValidationError("spec.salvage.yields must be a list.")
+
+    yields = []
+    seen_material_ids = set()
+    for index, raw_yield in enumerate(raw_yields):
+        field_prefix = f"spec.salvage.yields[{index}]"
+        if not isinstance(raw_yield, dict):
+            raise serializers.ValidationError(f"{field_prefix} must be a mapping.")
+        unknown_yield_fields = sorted(set(raw_yield.keys()) - {"material", "quantity"})
+        if unknown_yield_fields:
+            raise serializers.ValidationError(
+                f"Unsupported {field_prefix} field(s): {', '.join(unknown_yield_fields)}."
+            )
+        material = _resolve_craft_material_ref(
+            world=world,
+            value=raw_yield.get("material"),
+            field_name=f"{field_prefix}.material",
+        )
+        if material.id in seen_material_ids:
+            raise serializers.ValidationError(
+                f"{field_prefix}.material duplicates another salvage yield."
+            )
+        seen_material_ids.add(material.id)
+        quantity = _coerce_crafting_int(
+            raw_yield.get("quantity"),
+            f"{field_prefix}.quantity",
+        )
+        if quantity <= 0:
+            raise serializers.ValidationError(f"{field_prefix}.quantity must be positive.")
+        yields.append({"material": material, "quantity": quantity})
+
+    if salvage_only:
+        if not yields:
+            raise serializers.ValidationError(
+                "spec.salvage.yields must not be empty when spec.salvage.only is true."
+            )
+        if (
+            item_fields.get("item_type") == adv_consts.ITEM_TYPE_EQUIPPABLE
+            or (item_fields.get("base_properties") or {}).get("equipment_type")
+        ):
+            raise serializers.ValidationError(
+                "A salvage-only item definition cannot be equippable."
+            )
+    return salvage_only, yields
+
+
 def parse_item_definition_manifest(
     *,
     world: World,
@@ -3509,6 +4087,13 @@ def parse_item_definition_manifest(
         )
     except ItemDefinitionError as exc:
         raise serializers.ValidationError(str(exc))
+    salvage_only, salvage_yields = _coerce_item_salvage(
+        world=world,
+        spec_patch=spec_patch,
+        existing=item_definition,
+        item_fields=fields,
+    )
+    fields["salvage_only"] = salvage_only
 
     fields["slug"] = slug
     fields["name"] = name
@@ -3520,6 +4105,7 @@ def parse_item_definition_manifest(
         slug=slug,
         name=name,
         fields=fields,
+        salvage_yields=salvage_yields,
     )
 
 
@@ -4317,6 +4903,414 @@ def parse_merchant_profile_delete_manifest(
     )
 
 
+def _crafting_manifest_metadata(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError(
+                "Manifest world does not match the selected world."
+            )
+    return metadata
+
+
+def parse_craft_material_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedCraftMaterialManifest:
+    if parse_manifest_kind(manifest) != CRAFT_MATERIAL_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            "Unsupported manifest kind. Expected 'craftmaterial'."
+        )
+    if parse_manifest_operation(manifest) != TRIGGER_MANIFEST_OPERATION_APPLY:
+        raise serializers.ValidationError(
+            "Craft material manifests only support operation 'apply' in this parser."
+        )
+    metadata = _crafting_manifest_metadata(world=world, manifest=manifest)
+    material, material_id = _resolve_crafting_metadata(
+        world=world,
+        metadata=metadata,
+        model=CraftMaterial,
+        prefixes={CRAFT_MATERIAL_MANIFEST_KIND, "craft_material"},
+        label="craft material",
+    )
+    spec = manifest.get("spec") or {}
+    if not isinstance(spec, dict):
+        raise serializers.ValidationError("spec must be a mapping.")
+    unknown_fields = sorted(set(spec.keys()) - {"description", "order"})
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported spec field(s): {', '.join(unknown_fields)}."
+        )
+    if material is None and not spec:
+        raise serializers.ValidationError("spec is required when creating a craft material.")
+
+    slug_source = metadata.get("slug")
+    if slug_source is None:
+        slug_source = material.slug if material else metadata.get("name")
+    slug = _slug_or_error(str(slug_source or ""), "metadata.slug")
+    if CraftMaterial.objects.filter(world=world, slug=slug).exclude(pk=material_id).exists():
+        raise serializers.ValidationError(
+            "metadata.slug is already used by another craft material."
+        )
+    default_name = material.name if material else slug.replace("-", " ").title()
+    name = _coerce_text(metadata.get("name", default_name))
+    if not name.strip():
+        raise serializers.ValidationError("metadata.name cannot be empty.")
+    order = _coerce_crafting_int(
+        spec.get("order", material.order if material else 0),
+        "spec.order",
+    )
+    return ParsedCraftMaterialManifest(
+        world=world,
+        material=material,
+        material_id=material_id,
+        slug=slug,
+        name=name,
+        fields={
+            "slug": slug,
+            "name": name,
+            "description": _coerce_text(
+                spec.get("description", material.description if material else "")
+            ),
+            "order": order,
+        },
+    )
+
+
+def parse_craft_material_delete_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedCraftMaterialDeleteManifest:
+    if parse_manifest_kind(manifest) != CRAFT_MATERIAL_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            "Unsupported manifest kind. Expected 'craftmaterial'."
+        )
+    if parse_manifest_operation(manifest) != TRIGGER_MANIFEST_OPERATION_DELETE:
+        raise serializers.ValidationError("Delete parser requires operation: delete.")
+    metadata = _crafting_manifest_metadata(world=world, manifest=manifest)
+    material, material_id = _resolve_crafting_metadata(
+        world=world,
+        metadata=metadata,
+        model=CraftMaterial,
+        prefixes={CRAFT_MATERIAL_MANIFEST_KIND, "craft_material"},
+        label="craft material",
+    )
+    if material is None or material_id is None:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, or metadata.slug is required for operation: delete."
+        )
+    if manifest.get("spec") not in (None, {}):
+        raise serializers.ValidationError("spec is not allowed for operation: delete.")
+    return ParsedCraftMaterialDeleteManifest(
+        world=world,
+        material=material,
+        material_id=material_id,
+    )
+
+
+def _coerce_recipe_inputs(
+    *,
+    world: World,
+    value: Any,
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise serializers.ValidationError("spec.inputs must be a list.")
+    if not value:
+        raise serializers.ValidationError("spec.inputs must not be empty.")
+    ingredients = []
+    seen_material_ids = set()
+    for index, raw_input in enumerate(value):
+        field_prefix = f"spec.inputs[{index}]"
+        if not isinstance(raw_input, dict):
+            raise serializers.ValidationError(f"{field_prefix} must be a mapping.")
+        unknown_fields = sorted(set(raw_input.keys()) - {"material", "quantity"})
+        if unknown_fields:
+            raise serializers.ValidationError(
+                f"Unsupported {field_prefix} field(s): {', '.join(unknown_fields)}."
+            )
+        material = _resolve_craft_material_ref(
+            world=world,
+            value=raw_input.get("material"),
+            field_name=f"{field_prefix}.material",
+        )
+        if material.id in seen_material_ids:
+            raise serializers.ValidationError(
+                f"{field_prefix}.material duplicates another recipe input."
+            )
+        seen_material_ids.add(material.id)
+        quantity = _coerce_crafting_int(
+            raw_input.get("quantity"),
+            f"{field_prefix}.quantity",
+        )
+        if quantity <= 0:
+            raise serializers.ValidationError(f"{field_prefix}.quantity must be positive.")
+        ingredients.append({"material": material, "quantity": quantity})
+    return ingredients
+
+
+def parse_crafting_recipe_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedCraftingRecipeManifest:
+    if parse_manifest_kind(manifest) != CRAFTING_RECIPE_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            "Unsupported manifest kind. Expected 'craftingrecipe'."
+        )
+    if parse_manifest_operation(manifest) != TRIGGER_MANIFEST_OPERATION_APPLY:
+        raise serializers.ValidationError(
+            "Crafting recipe manifests only support operation 'apply' in this parser."
+        )
+    metadata = _crafting_manifest_metadata(world=world, manifest=manifest)
+    recipe, recipe_id = _resolve_crafting_metadata(
+        world=world,
+        metadata=metadata,
+        model=CraftingRecipe,
+        prefixes={CRAFTING_RECIPE_MANIFEST_KIND, "crafting_recipe"},
+        label="crafting recipe",
+    )
+    spec = manifest.get("spec") or {}
+    if not isinstance(spec, dict):
+        raise serializers.ValidationError("spec must be a mapping.")
+    unknown_fields = sorted(set(spec.keys()) - {
+        "group", "order", "output", "inputs", "conditions", "failure_message",
+    })
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported spec field(s): {', '.join(unknown_fields)}."
+        )
+    if recipe is None and not spec:
+        raise serializers.ValidationError("spec is required when creating a crafting recipe.")
+
+    slug_source = metadata.get("slug")
+    if slug_source is None:
+        slug_source = recipe.slug if recipe else ""
+    slug = _slug_or_error(str(slug_source or ""), "metadata.slug")
+    if CraftingRecipe.objects.filter(world=world, slug=slug).exclude(pk=recipe_id).exists():
+        raise serializers.ValidationError(
+            "metadata.slug is already used by another crafting recipe."
+        )
+
+    output_item_definition = recipe.output_item_definition if recipe else None
+    if "output" in spec:
+        output = spec.get("output")
+        if not isinstance(output, dict):
+            raise serializers.ValidationError("spec.output must be a mapping.")
+        output_unknown = sorted(set(output.keys()) - {"item_definition"})
+        if output_unknown:
+            raise serializers.ValidationError(
+                f"Unsupported spec.output field(s): {', '.join(output_unknown)}."
+            )
+        if output.get("item_definition") in (None, ""):
+            raise serializers.ValidationError("spec.output.item_definition is required.")
+        output_item_definition = _resolve_bundle_entry_definition(
+            world=world,
+            value=output.get("item_definition"),
+            field_name="spec.output.item_definition",
+        )
+    if output_item_definition is None:
+        raise serializers.ValidationError("spec.output.item_definition is required.")
+
+    group_source = spec.get("group", recipe.group if recipe else "")
+    group = _slug_or_error(str(group_source or ""), "spec.group")
+    conditions = spec.get("conditions", recipe.conditions if recipe else {})
+    if conditions in (None, "", []):
+        conditions = {}
+    try:
+        validate_condition_payload(conditions, field_name="spec.conditions")
+    except ValueError as exc:
+        raise serializers.ValidationError(str(exc))
+
+    ingredients = None
+    if "inputs" in spec or recipe is None:
+        ingredients = _coerce_recipe_inputs(
+            world=world,
+            value=spec.get("inputs", []),
+        )
+    return ParsedCraftingRecipeManifest(
+        world=world,
+        recipe=recipe,
+        recipe_id=recipe_id,
+        slug=slug,
+        fields={
+            "slug": slug,
+            "output_item_definition": output_item_definition,
+            "group": group,
+            "order": _coerce_crafting_int(
+                spec.get("order", recipe.order if recipe else 0),
+                "spec.order",
+            ),
+            "conditions": conditions,
+            "failure_message": _coerce_text(
+                spec.get("failure_message", recipe.failure_message if recipe else "")
+            ),
+        },
+        ingredients=ingredients,
+    )
+
+
+def parse_crafting_recipe_delete_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedCraftingRecipeDeleteManifest:
+    if parse_manifest_kind(manifest) != CRAFTING_RECIPE_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            "Unsupported manifest kind. Expected 'craftingrecipe'."
+        )
+    if parse_manifest_operation(manifest) != TRIGGER_MANIFEST_OPERATION_DELETE:
+        raise serializers.ValidationError("Delete parser requires operation: delete.")
+    metadata = _crafting_manifest_metadata(world=world, manifest=manifest)
+    recipe, recipe_id = _resolve_crafting_metadata(
+        world=world,
+        metadata=metadata,
+        model=CraftingRecipe,
+        prefixes={CRAFTING_RECIPE_MANIFEST_KIND, "crafting_recipe"},
+        label="crafting recipe",
+    )
+    if recipe is None or recipe_id is None:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, or metadata.slug is required for operation: delete."
+        )
+    if manifest.get("spec") not in (None, {}):
+        raise serializers.ValidationError("spec is not allowed for operation: delete.")
+    return ParsedCraftingRecipeDeleteManifest(
+        world=world,
+        recipe=recipe,
+        recipe_id=recipe_id,
+    )
+
+
+def parse_crafting_profile_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedCraftingProfileManifest:
+    if parse_manifest_kind(manifest) != CRAFTING_PROFILE_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            "Unsupported manifest kind. Expected 'craftingprofile'."
+        )
+    if parse_manifest_operation(manifest) != TRIGGER_MANIFEST_OPERATION_APPLY:
+        raise serializers.ValidationError(
+            "Crafting profile manifests only support operation 'apply' in this parser."
+        )
+    metadata = _crafting_manifest_metadata(world=world, manifest=manifest)
+    profile, profile_id = _resolve_crafting_metadata(
+        world=world,
+        metadata=metadata,
+        model=CraftingProfile,
+        prefixes={CRAFTING_PROFILE_MANIFEST_KIND, "crafting_profile"},
+        label="crafting profile",
+    )
+    spec = manifest.get("spec") or {}
+    if not isinstance(spec, dict):
+        raise serializers.ValidationError("spec must be a mapping.")
+    unknown_fields = sorted(set(spec.keys()) - {"keywords", "recipes"})
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported spec field(s): {', '.join(unknown_fields)}."
+        )
+    if profile is None and not spec:
+        raise serializers.ValidationError("spec is required when creating a crafting profile.")
+
+    slug_source = metadata.get("slug")
+    if slug_source is None:
+        slug_source = profile.slug if profile else metadata.get("name")
+    slug = _slug_or_error(str(slug_source or ""), "metadata.slug")
+    if CraftingProfile.objects.filter(world=world, slug=slug).exclude(pk=profile_id).exists():
+        raise serializers.ValidationError(
+            "metadata.slug is already used by another crafting profile."
+        )
+    default_name = profile.name if profile else slug.replace("-", " ").title()
+    name = _coerce_text(metadata.get("name", default_name))
+    if not name.strip():
+        raise serializers.ValidationError("metadata.name cannot be empty.")
+
+    recipes = None
+    if "recipes" in spec or profile is None:
+        raw_recipes = spec.get("recipes", [])
+        if raw_recipes in (None, ""):
+            raw_recipes = []
+        if not isinstance(raw_recipes, list):
+            raise serializers.ValidationError("spec.recipes must be a list.")
+        recipes = []
+        seen_recipe_ids = set()
+        for index, raw_recipe in enumerate(raw_recipes):
+            recipe = _resolve_crafting_recipe_ref(
+                world=world,
+                value=raw_recipe,
+                field_name=f"spec.recipes[{index}]",
+            )
+            if recipe.id in seen_recipe_ids:
+                raise serializers.ValidationError(
+                    f"spec.recipes[{index}] duplicates another recipe."
+                )
+            seen_recipe_ids.add(recipe.id)
+            recipes.append(recipe)
+
+    return ParsedCraftingProfileManifest(
+        world=world,
+        profile=profile,
+        profile_id=profile_id,
+        slug=slug,
+        name=name,
+        fields={
+            "slug": slug,
+            "name": name,
+            "keywords": _coerce_text(
+                spec.get("keywords", profile.keywords if profile else "")
+            ),
+        },
+        recipes=recipes,
+    )
+
+
+def parse_crafting_profile_delete_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedCraftingProfileDeleteManifest:
+    if parse_manifest_kind(manifest) != CRAFTING_PROFILE_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            "Unsupported manifest kind. Expected 'craftingprofile'."
+        )
+    if parse_manifest_operation(manifest) != TRIGGER_MANIFEST_OPERATION_DELETE:
+        raise serializers.ValidationError("Delete parser requires operation: delete.")
+    metadata = _crafting_manifest_metadata(world=world, manifest=manifest)
+    profile, profile_id = _resolve_crafting_metadata(
+        world=world,
+        metadata=metadata,
+        model=CraftingProfile,
+        prefixes={CRAFTING_PROFILE_MANIFEST_KIND, "crafting_profile"},
+        label="crafting profile",
+    )
+    if profile is None or profile_id is None:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, or metadata.slug is required for operation: delete."
+        )
+    if manifest.get("spec") not in (None, {}):
+        raise serializers.ValidationError("spec is not allowed for operation: delete.")
+    return ParsedCraftingProfileDeleteManifest(
+        world=world,
+        profile=profile,
+        profile_id=profile_id,
+    )
+
+
 def _parse_ability_reference(value: Any, field_name: str) -> int:
     if isinstance(value, bool):
         raise serializers.ValidationError(
@@ -4892,14 +5886,25 @@ def apply_world_config_manifest(parsed: ParsedWorldConfigManifest):
 
 
 def apply_item_definition_manifest(parsed: ParsedItemDefinitionManifest) -> ItemDefinition:
-    if parsed.item_definition is None:
-        return ItemDefinition.objects.create(world=parsed.world, **parsed.fields)
+    with transaction.atomic():
+        if parsed.item_definition is None:
+            item_definition = ItemDefinition.objects.create(
+                world=parsed.world,
+                **parsed.fields,
+            )
+        else:
+            item_definition = parsed.item_definition
+            for field_name, value in parsed.fields.items():
+                setattr(item_definition, field_name, value)
+            item_definition.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
 
-    item_definition = parsed.item_definition
-    for field_name, value in parsed.fields.items():
-        setattr(item_definition, field_name, value)
-    item_definition.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
-    return item_definition
+        if parsed.salvage_yields is not None:
+            ItemSalvageYield.objects.filter(item_definition=item_definition).delete()
+            ItemSalvageYield.objects.bulk_create([
+                ItemSalvageYield(item_definition=item_definition, **salvage_yield)
+                for salvage_yield in parsed.salvage_yields
+            ])
+        return item_definition
 
 
 def apply_mob_definition_manifest(parsed: ParsedMobDefinitionManifest) -> MobDefinition:
@@ -5014,6 +6019,54 @@ def apply_merchant_profile_manifest(parsed: ParsedMerchantProfileManifest) -> Me
                 MerchantStockSlot.objects.create(profile=merchant_profile, **slot)
 
         return merchant_profile
+
+
+def apply_craft_material_manifest(parsed: ParsedCraftMaterialManifest) -> CraftMaterial:
+    if parsed.material is None:
+        return CraftMaterial.objects.create(world=parsed.world, **parsed.fields)
+    material = parsed.material
+    for field_name, value in parsed.fields.items():
+        setattr(material, field_name, value)
+    material.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
+    return material
+
+
+def apply_crafting_recipe_manifest(parsed: ParsedCraftingRecipeManifest) -> CraftingRecipe:
+    with transaction.atomic():
+        if parsed.recipe is None:
+            recipe = CraftingRecipe.objects.create(world=parsed.world, **parsed.fields)
+        else:
+            recipe = parsed.recipe
+            for field_name, value in parsed.fields.items():
+                setattr(recipe, field_name, value)
+            recipe.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
+
+        if parsed.ingredients is not None:
+            CraftingIngredient.objects.filter(recipe=recipe).delete()
+            CraftingIngredient.objects.bulk_create([
+                CraftingIngredient(recipe=recipe, **ingredient)
+                for ingredient in parsed.ingredients
+            ])
+        return recipe
+
+
+def apply_crafting_profile_manifest(parsed: ParsedCraftingProfileManifest) -> CraftingProfile:
+    with transaction.atomic():
+        if parsed.profile is None:
+            profile = CraftingProfile.objects.create(world=parsed.world, **parsed.fields)
+        else:
+            profile = parsed.profile
+            for field_name, value in parsed.fields.items():
+                setattr(profile, field_name, value)
+            profile.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
+
+        if parsed.recipes is not None:
+            CraftingProfileRecipe.objects.filter(profile=profile).delete()
+            CraftingProfileRecipe.objects.bulk_create([
+                CraftingProfileRecipe(profile=profile, recipe=recipe, order=index)
+                for index, recipe in enumerate(parsed.recipes)
+            ])
+        return profile
 
 
 def apply_ability_manifest(parsed: ParsedAbilityManifest) -> AbilityDefinition:

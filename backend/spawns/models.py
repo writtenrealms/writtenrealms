@@ -321,6 +321,8 @@ class Player(CharMixin, AdventBaseModel):
             self.equipment.inventory.all().delete()
             # Delete inventory
             self.inventory.all().delete()
+            # Delete accumulated crafting materials.
+            self.material_balances.all().delete()
             # Delete legacy marks and canonical character state
             self.marks.all().delete()
             CharacterState.objects.filter(player=self).delete()
@@ -831,6 +833,62 @@ models.signals.pre_delete.connect(
     delete_encounter_scoped_effects,
     sender=CombatEncounter,
 )
+
+
+class PlayerMaterialBalance(AdventBaseModel):
+    """A compact, transactional balance for one authored craft material."""
+
+    player = models.ForeignKey(
+        'spawns.Player',
+        on_delete=models.CASCADE,
+        related_name='material_balances',
+    )
+    material = models.ForeignKey(
+        'builders.CraftMaterial',
+        on_delete=models.RESTRICT,
+        related_name='player_balances',
+    )
+    quantity = models.PositiveIntegerField(default=0)
+
+    class Meta(AdventBaseModel.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=['player', 'material'],
+                name='spawns_material_balance_unique',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(quantity__gte=0),
+                name='spawns_material_balance_nonnegative',
+            ),
+        ]
+
+
+class CraftingActionReceipt(AdventBaseModel):
+    """Committed result for replay-safe material-spending commands."""
+
+    player = models.ForeignKey(
+        'spawns.Player',
+        on_delete=models.CASCADE,
+        related_name='crafting_action_receipts',
+    )
+    request_id = models.UUIDField()
+    segment = models.CharField(max_length=128, default='r')
+    action = models.SlugField(max_length=32)
+    result = models.JSONField(default=dict)
+
+    class Meta(AdventBaseModel.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=['player', 'request_id', 'segment'],
+                name='spawns_crafting_receipt_unique',
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=['player', 'request_id'],
+                name='spawns_crafting_receipt_idx',
+            ),
+        ]
 
 
 class GameEventOutbox(BaseModel):

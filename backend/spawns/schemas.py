@@ -238,6 +238,7 @@ class Actor(BaseModel):
     glory: int = 0
     medals: int = 0
     currencies: Dict[str, int] = Field(default_factory=dict)
+    materials: Dict[str, int] = Field(default_factory=dict)
 
     # Grouping
     group_id: Optional[str] = None
@@ -436,6 +437,13 @@ class Currency(BaseModel):
     is_default: bool = False
 
 
+class CraftMaterial(BaseModel):
+    slug: str
+    name: str
+    description: str = ""
+    order: int = 0
+
+
 class Social(BaseModel):
     """Social command messages."""
     # [msg_targetless_self, msg_targetless_other, msg_targeted_self, msg_targeted_target, msg_targeted_other]
@@ -510,6 +518,7 @@ class World(BaseModel):
     facts: Dict[str, Any] = Field(default_factory=dict)
     socials: Socials = Field(default_factory=Socials)
     currencies: Dict[str, Currency] = Field(default_factory=dict)
+    craft_materials: Dict[str, CraftMaterial] = Field(default_factory=dict)
 
 
 # =============================================================================

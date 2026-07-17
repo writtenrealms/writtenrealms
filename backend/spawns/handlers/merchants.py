@@ -128,7 +128,17 @@ class SellHandler(CommandHandler):
                 item_selector,
             )
         except ActionError as err:
-            ctx.publish_error("sell", err.message)
+            ctx.publish(
+                {
+                    "type": "cmd.sell.error",
+                    "text": err.message,
+                    "data": {
+                        "error": err.message,
+                        "code": err.code,
+                        **err.data,
+                    },
+                }
+            )
             return
         item_name = (result.data.get("item") or {}).get("name") or "item"
         ctx.publish_success(
