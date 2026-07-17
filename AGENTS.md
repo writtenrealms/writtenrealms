@@ -11,11 +11,13 @@
 ## Written Realms Transition Context
 
 - This repo is transitioning from Written Realms 1.0 (live) to Written Realms 2.0 (aka Written Realms Core).
+- WR2 will launch with a clean, empty database. Do not design or implement an in-place WR1-to-WR2 data migration, production backfill, dual-write cutover, account/player migration, or runtime-state compatibility layer.
+- The only WR1-to-WR2 content bridge is an optional WR1 utility that converts authored WR1 worlds into canonical WR2 manifests for builders who choose to import them. It does not migrate users, players, balances, inventories, quest progress, or any other live/runtime data.
 - The WR2 target architecture keeps real-time game logic in `backend/` with async jobs (Celery/RabbitMQ style), aiming for near-real-time behavior.
-- Legacy WR1 engine code is now maintained out of tree as migration reference material.
+- Legacy WR1 engine code is now maintained out of tree as reference material for architecture and optional authored-world manifest conversion.
 - See `.codex/skills/wr-transition/wr1-architecture.md` and `.codex/skills/wr-transition/wr2-architecture.md` for architecture references.
 - For current Trigger/YAML editing behavior, see `docs/architecture/yaml-manifest-system.md`.
-- When removing or replacing legacy WR1 data structures, update the WR1 export migration notes in `docs/architecture/yaml-manifest-system.md` in the same change so WR1 export scripts can be kept aligned with the current WR2 manifest contracts.
+- When removing or replacing legacy WR1 data structures, update the WR1 manifest-conversion notes in `docs/architecture/yaml-manifest-system.md` in the same change so the optional WR1 export utility can be kept aligned with the current WR2 manifest contracts.
 - For ambient issuer command context direction, see `docs/architecture/ambient-command-issuers-plan.md`.
 - Any feature that needs conditional logic must use the existing WR2 condition framework (`backend/core/condition_dsl.py`) rather than inventing a new predicate/condition format.
 
