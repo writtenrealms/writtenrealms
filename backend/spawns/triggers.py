@@ -1031,9 +1031,16 @@ def get_room_action_labels_for_actor(actor: Player | Mob | None, room: Room | No
         world=trigger_world,
     ) if triggers else []
 
-    # Room.transfer_to is the authored base-room -> instance-room link. Keep
-    # this check on the already-loaded FK id so room output at busy entrances
-    # does not add a database query per look.
+    # Built-in room capabilities use already-loaded FK ids so serializing a
+    # busy room does not add a database query per look.
+    if (
+        isinstance(actor, Player)
+        and room.crafting_profile_id
+        and not any(label.casefold() == "craft" for label in labels)
+    ):
+        labels.append("craft")
+
+    # Room.transfer_to is the authored base-room -> instance-room link.
     if isinstance(actor, Player) and room.transfer_to_id and "enter" not in labels:
         labels.append("enter")
 

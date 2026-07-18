@@ -4,6 +4,7 @@ from threading import Barrier
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.db import connection
 from django.db import close_old_connections
 from django.test import TransactionTestCase
@@ -21,6 +22,7 @@ from builders.models import (
     ItemSalvageYield,
     MerchantProfile,
     MobDefinition,
+    Trigger,
 )
 from config import constants as adv_consts
 from spawns.actions.crafting import (
@@ -47,7 +49,7 @@ from spawns.request_segments import append_request_segment
 from spawns.state_payloads import serialize_actor
 from spawns.wallet import balance_map, mutate_balances
 from tests.base import WorldTestCase
-from worlds.models import World, WorldConfig
+from worlds.models import Room, World, WorldConfig
 from wr2_tests.utils import apply_basic_stat_system, capture_game_messages
 
 
@@ -233,6 +235,46 @@ class CraftingRuntimeTestCase(WorldTestCase):
 
 
 class TestCraftingReadCommands(CraftingRuntimeTestCase):
+    def test_workshop_room_look_exposes_craft_action(self):
+        messages = self._dispatch_text("look")
+
+        message = self._message(messages, "cmd.look.success")
+        self.assertIsNotNone(message)
+        self.assertIn("craft", message["data"]["target"]["actions"])
+        self.assertIn("Action available: craft", message["text"])
+
+    def test_workshop_craft_action_deduplicates_trigger_label(self):
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=self.room.id,
+            match="Craft",
+            script="/echo -- The forge is ready.",
+            display_action_in_room=True,
+        )
+
+        messages = self._dispatch_text("look")
+
+        message = self._message(messages, "cmd.look.success")
+        self.assertIsNotNone(message)
+        actions = message["data"]["target"]["actions"]
+        self.assertEqual(
+            sum(action.casefold() == "craft" for action in actions),
+            1,
+        )
+
+    def test_room_without_crafting_profile_has_no_automatic_craft_action(self):
+        self.room.crafting_profile = None
+        self.room.save(update_fields=["crafting_profile"])
+
+        messages = self._dispatch_text("look")
+
+        message = self._message(messages, "cmd.look.success")
+        self.assertIsNotNone(message)
+        self.assertNotIn("craft", message["data"]["target"]["actions"])
+
     def test_materials_lists_positive_balances_in_authored_order(self):
         self._balance(self.leather, 6)
         self._balance(self.bronze, 18)

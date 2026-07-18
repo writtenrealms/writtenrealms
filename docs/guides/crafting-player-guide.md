@@ -13,6 +13,8 @@ is created.
   `weapons`, and `ready`. A recipe's currency fee and any missing amount appear
   alongside its material readiness.
 - Bare `recipe` and bare `craft` show that same numbered catalog.
+- Rooms configured as workshops display a **CRAFT** room action. Selecting it
+  runs bare `craft` and opens the same numbered catalog.
 - `recipe <number>` shows the corresponding output's fixed values, stat ranges,
   material requirements, currency fee, owned quantities, and anything missing.
   Item names still work.

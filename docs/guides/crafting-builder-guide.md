@@ -128,6 +128,10 @@ spec:
     profile: craftingprofile.town-forge
 ```
 
+A direct room attachment automatically exposes a `craft` action in the room
+display. Builders do not need to create a duplicate room action or command
+trigger for workshop discoverability.
+
 Or attach it to a mob definition when that NPC's presence should control
 access:
 

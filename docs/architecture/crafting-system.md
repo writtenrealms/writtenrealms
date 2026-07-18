@@ -128,6 +128,9 @@ The initial crafting loop is:
 4. `materials` shows the player's current material balances from anywhere.
 5. At a workshop, `recipes`, bare `recipe`, or bare `craft` shows the numbered
    recipe catalog.
+   A room with a direct crafting profile also derives a query-free `craft`
+   room action from its loaded profile foreign-key id; this is not separately
+   authored trigger data.
 6. `recipe <number>` or `recipe <item>` shows the output range,
    owned/required materials, and any currency fee.
 7. `craft <number>` or `craft <item>` atomically spends materials and the
