@@ -10,12 +10,14 @@ is created.
   anywhere and does not list recipes, inventory, currencies, or lifetime totals.
 - `recipes [filter]` lists numbered recipes offered at the current workshop.
   Filters may include builder-authored recipe groups as well as `armor`,
-  `weapons`, and `ready`.
+  `weapons`, and `ready`. A recipe's currency fee and any missing amount appear
+  alongside its material readiness.
 - Bare `recipe` and bare `craft` show that same numbered catalog.
 - `recipe <number>` shows the corresponding output's fixed values, stat ranges,
-  requirements, owned quantities, and anything missing. Item names still work.
-- `craft <number>` spends the requirements atomically and creates the
-  corresponding item. Item names still work here too.
+  material requirements, currency fee, owned quantities, and anything missing.
+  Item names still work.
+- `craft <number>` spends the materials and currency fee atomically, then
+  creates the corresponding item. Item names still work here too.
 - `salvage` lists the carried items that can currently be salvaged, numbered
   from 1. The list is read-only and changes nothing.
 - `salvage <number>` permanently destroys the corresponding item from the
@@ -38,6 +40,13 @@ content or availability changes.
 
 Inspection does not require choosing between workshops that offer the same
 recipe. Crafting does: use `craft <number> at <workshop>` when prompted.
+
+The `ready` label means every material, currency, and non-material condition is
+currently satisfied. Recipe inspection and listing do not reserve anything;
+the complete requirements are checked again when `craft` runs. If the balance
+changed or any requirement fails, no material or currency is spent and no item
+is created. Retrying a successfully processed craft request cannot charge the
+fee or consume the materials a second time.
 
 Equipped items, quest items, nonempty containers, items without salvage data,
 and ambiguous item selections are rejected. Rolled item stats never change the

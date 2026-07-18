@@ -63,6 +63,8 @@ metadata:
 spec:
   group: armor
   order: 10
+  cost: 150
+  currency: obol
   output:
     item_definition: itemdefinition.reinforced-helm
   inputs:
@@ -79,6 +81,27 @@ The output name, slot, combat values, and random ranges all come from the item
 definition. `group` is presentation metadata used by recipe filters; it does
 not restrict a recipe to one player class. `conditions` uses the shared WR2
 condition DSL.
+
+`cost` is an optional currency fee paid in addition to every material input.
+It is a whole number from `0` through `9,007,199,254,740,991`. On a new recipe,
+or when adding a cost to an existing unpriced recipe, an omitted `currency`
+resolves to the world's current default and stores that concrete currency.
+Canonical exports include both fields for a priced recipe, so changing the
+world default never silently retargets an existing fee. Cost-only authoring is
+rejected when the world has no default currency to resolve.
+
+For recipe patches:
+
+- omitting both `cost` and `currency` preserves the existing fee
+- setting `cost` updates the amount and preserves an existing currency, or
+  resolves the default when the recipe was previously unpriced
+- setting `currency` without `cost` is invalid
+- setting `cost: null` removes both the amount and currency
+
+The referenced currency must belong to the recipe's world. Negative,
+fractional, boolean, oversized, unknown-currency, and cross-world values are
+rejected. A zero fee remains an explicitly authored fee; omit the fields or
+use `cost: null` when the recipe should have no monetary requirement.
 
 ## Profiles And Providers
 

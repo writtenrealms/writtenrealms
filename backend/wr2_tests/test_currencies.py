@@ -13,7 +13,9 @@ from builders.currencies import (
     select_default_currency,
 )
 from builders.models import (
+    CraftingRecipe,
     Currency,
+    ItemDefinition,
     MobDefinition,
     Trigger,
     WorldBuilder,
@@ -212,6 +214,29 @@ class CurrencyAuthoringTests(CurrencyTestCase):
         )
 
         with self.assertRaisesMessage(ValidationError, "1 trigger"):
+            delete_currency(obol)
+
+        self.assertTrue(Currency.objects.filter(pk=obol.pk).exists())
+
+    def test_delete_blocks_crafting_recipe_cost_reference(self):
+        obol = create_currency(world=self.world, code="obol", name="Obol")
+        drachma = create_currency(world=self.world, code="drachma", name="Drachma")
+        select_default_currency(world=self.world, currency=drachma)
+        output = ItemDefinition.objects.create(
+            world=self.world,
+            slug="priced-craft-output",
+            name="a priced craft output",
+            item_type=adv_consts.ITEM_TYPE_INERT,
+        )
+        CraftingRecipe.objects.create(
+            world=self.world,
+            slug="priced-craft",
+            output_item_definition=output,
+            cost=90,
+            currency=obol,
+        )
+
+        with self.assertRaisesMessage(ValidationError, "1 crafting recipe cost"):
             delete_currency(obol)
 
         self.assertTrue(Currency.objects.filter(pk=obol.pk).exists())

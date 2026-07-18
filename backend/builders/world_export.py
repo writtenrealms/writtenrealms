@@ -1018,6 +1018,7 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             _serialize_crafting_recipe_manifest(recipe)
             for recipe in world.crafting_recipes.select_related(
                 "output_item_definition",
+                "currency",
             ).prefetch_related(
                 Prefetch(
                     "ingredients",

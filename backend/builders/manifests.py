@@ -68,7 +68,13 @@ from core.equipment_system import (
     normalize_equipment_system,
     validate_armor_class_reference,
 )
-from core.economy import economy_world, validate_currency_amount
+from core.economy import (
+    EconomyConfigurationError,
+    default_currency,
+    economy_world,
+    money_payload,
+    validate_currency_amount,
+)
 from core.factions import (
     faction_is_core,
     faction_is_reputation,
@@ -1762,6 +1768,21 @@ def _recipe_ingredient_entries(recipe: CraftingRecipe) -> list[dict[str, Any]]:
 
 
 def crafting_recipe_to_manifest(recipe: CraftingRecipe) -> dict[str, Any]:
+    spec = {
+        "group": recipe.group or "",
+        "order": int(recipe.order),
+        "output": {
+            "item_definition": (
+                f"{ITEM_DEFINITION_MANIFEST_KIND}.{recipe.output_item_definition.slug}"
+            ),
+        },
+        "inputs": _recipe_ingredient_entries(recipe),
+        "conditions": recipe.conditions or {},
+        "failure_message": recipe.failure_message or "",
+    }
+    if recipe.cost is not None:
+        spec["cost"] = int(recipe.cost)
+        spec["currency"] = _serialize_currency_reference(recipe.currency)
     return {
         "kind": CRAFTING_RECIPE_MANIFEST_KIND,
         "metadata": {
@@ -1770,18 +1791,7 @@ def crafting_recipe_to_manifest(recipe: CraftingRecipe) -> dict[str, Any]:
             "key": recipe.key,
             "slug": recipe.slug,
         },
-        "spec": {
-            "group": recipe.group or "",
-            "order": int(recipe.order),
-            "output": {
-                "item_definition": (
-                    f"{ITEM_DEFINITION_MANIFEST_KIND}.{recipe.output_item_definition.slug}"
-                ),
-            },
-            "inputs": _recipe_ingredient_entries(recipe),
-            "conditions": recipe.conditions or {},
-            "failure_message": recipe.failure_message or "",
-        },
+        "spec": spec,
     }
 
 
@@ -1808,6 +1818,13 @@ def serialize_crafting_recipe_payload(recipe: CraftingRecipe) -> dict[str, Any]:
         "name": recipe.name or "",
         "group": recipe.group or "",
         "order": int(recipe.order),
+        "cost": int(recipe.cost) if recipe.cost is not None else None,
+        "currency": _serialize_currency_reference(recipe.currency) or None,
+        "money": (
+            money_payload(int(recipe.cost), recipe.currency)
+            if recipe.cost is not None and recipe.currency is not None
+            else None
+        ),
         "conditions": recipe.conditions or {},
         "failure_message": recipe.failure_message or "",
         "output_item_definition": {
@@ -5275,7 +5292,8 @@ def parse_crafting_recipe_manifest(
     if not isinstance(spec, dict):
         raise serializers.ValidationError("spec must be a mapping.")
     unknown_fields = sorted(set(spec.keys()) - {
-        "group", "order", "output", "inputs", "conditions", "failure_message",
+        "group", "order", "cost", "currency", "output", "inputs",
+        "conditions", "failure_message",
     })
     if unknown_fields:
         raise serializers.ValidationError(
@@ -5323,6 +5341,45 @@ def parse_crafting_recipe_manifest(
     except ValueError as exc:
         raise serializers.ValidationError(str(exc))
 
+    has_cost = "cost" in spec
+    has_currency = "currency" in spec
+    cost = recipe.cost if recipe else None
+    currency = recipe.currency if recipe else None
+    if has_currency and not has_cost:
+        raise serializers.ValidationError(
+            "spec.currency cannot be set without spec.cost."
+        )
+    if has_cost and spec.get("cost") in (None, ""):
+        if has_currency:
+            raise serializers.ValidationError(
+                "spec.currency cannot be set when spec.cost is null."
+            )
+        cost = None
+        currency = None
+    elif has_cost:
+        try:
+            cost = validate_currency_amount(
+                spec.get("cost"),
+                field_name="spec.cost",
+            )
+        except ValidationError as exc:
+            raise serializers.ValidationError(exc.message_dict)
+        if has_currency:
+            currency = _resolve_currency_reference(
+                world=world,
+                value=spec.get("currency"),
+                field_name="spec.currency",
+            )
+            if currency is None:
+                raise serializers.ValidationError("spec.currency is required.")
+        elif currency is None:
+            try:
+                currency = default_currency(world)
+            except EconomyConfigurationError as exc:
+                raise serializers.ValidationError(
+                    {"spec.currency": str(exc)}
+                ) from exc
+
     ingredients = None
     if "inputs" in spec or recipe is None:
         ingredients = _coerce_recipe_inputs(
@@ -5343,6 +5400,8 @@ def parse_crafting_recipe_manifest(
                 "spec.order",
             ),
             "conditions": conditions,
+            "cost": cost,
+            "currency": currency,
             "failure_message": _coerce_text(
                 spec.get("failure_message", recipe.failure_message if recipe else "")
             ),

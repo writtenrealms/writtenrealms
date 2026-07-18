@@ -294,6 +294,7 @@ def currency_usage_map(*, world, currencies=None) -> dict[int, list[dict]]:
         "currency_id",
     )
     add_grouped("item definition", ItemDefinition.objects.all(), "currency_id")
+    add_grouped("crafting recipe cost", CraftingRecipe.objects.all(), "currency_id")
     add_grouped(
         "merchant profile",
         MerchantProfile.objects.all(),

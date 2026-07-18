@@ -92,8 +92,8 @@ class CraftingIngredientInline(admin.TabularInline):
 
 
 class CraftingRecipeAdmin(BaseAdmin):
-    list_display = ('id', 'slug', 'name', 'group', 'order', 'world')
-    raw_id_fields = ['world', 'output_item_definition']
+    list_display = ('id', 'slug', 'name', 'group', 'cost', 'currency', 'order', 'world')
+    raw_id_fields = ['world', 'output_item_definition', 'currency']
     list_filter = (DirectRootWorldFilter, 'group')
     inlines = [CraftingIngredientInline]
 

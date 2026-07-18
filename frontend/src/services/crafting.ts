@@ -1,4 +1,5 @@
 import axios from "axios";
+import type { Money } from "@/core/economy.ts";
 
 export type BuilderWorldId = string | number;
 export type BuilderEntityId = string | number;
@@ -35,6 +36,9 @@ export interface ItemDefinitionReference {
 export interface CraftingRecipeSummary extends CraftingListEntity {
   group: string;
   order: number;
+  cost: number | null;
+  currency: string | number | { code?: string; name?: string; plural_name?: string } | null;
+  money: Money | null;
   conditions: Record<string, unknown>;
   failure_message: string;
   output_item_definition: ItemDefinitionReference;

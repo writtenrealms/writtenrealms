@@ -368,6 +368,12 @@ class CraftingRecipe(AdventBaseModel):
         related_name='crafting_recipes')
     group = models.SlugField(max_length=120, blank=True, db_index=True)
     order = models.IntegerField(default=0)
+    cost = models.BigIntegerField(**optional)
+    currency = models.ForeignKey(
+        'builders.Currency',
+        on_delete=models.RESTRICT,
+        related_name='crafting_recipes',
+        **optional)
     conditions = models.JSONField(default=dict, blank=True)
     failure_message = models.TextField(**optional)
 
@@ -376,6 +382,18 @@ class CraftingRecipe(AdventBaseModel):
         ordering = ['group', 'order', 'slug', 'id']
         indexes = [
             models.Index(fields=['world', 'group', 'order']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(cost__isnull=True, currency__isnull=True)
+                    | models.Q(
+                        cost__gte=0,
+                        cost__lte=9007199254740991,
+                        currency__isnull=False,
+                    )
+                ),
+                name='builders_crafting_recipe_money_pair'),
         ]
 
     @property

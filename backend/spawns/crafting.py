@@ -17,8 +17,10 @@ from builders.models import (
 from config import constants as adv_consts
 from core.abilities import definition_world
 from core.condition_dsl import ConditionContext, evaluate_condition
+from core.economy import money_payload
 from spawns.actions.base import ActionError
 from spawns.models import Mob, Player, PlayerMaterialBalance
+from spawns.wallet import balance_map as wallet_balance_map
 
 
 BUILTIN_RECIPE_FILTERS = (
@@ -276,6 +278,7 @@ def crafting_offers(
             "recipe",
             "recipe__world",
             "recipe__output_item_definition",
+            "recipe__currency",
         )
         .prefetch_related(
             Prefetch("recipe__ingredients", queryset=ingredient_qs),
@@ -622,6 +625,7 @@ def recipe_payload(
     *,
     providers: Iterable[CraftingProvider],
     balances: dict[int, int] | None = None,
+    currency_balances: dict[str, int] | None = None,
 ) -> dict:
     balances = balances if balances is not None else material_balance_map(player)
     inputs = []
@@ -646,6 +650,25 @@ def recipe_payload(
         )
 
     conditions_met = recipe_condition_met(player, recipe)
+    cost = None
+    currency_owned = None
+    currency_missing = 0
+    currency_missing_display = ""
+    if recipe.cost is not None and recipe.currency_id is not None:
+        currency_balances = (
+            currency_balances
+            if currency_balances is not None
+            else wallet_balance_map(player, include_zero=False)
+        )
+        cost_amount = int(recipe.cost)
+        currency_owned = int(currency_balances.get(recipe.currency.code, 0))
+        currency_missing = max(0, cost_amount - currency_owned)
+        cost = money_payload(cost_amount, recipe.currency)
+        if currency_missing:
+            currency_missing_display = money_payload(
+                currency_missing,
+                recipe.currency,
+            )["display"]
     provider_payloads = [provider.payload() for provider in providers]
     output = item_definition_preview(recipe.output_item_definition)
     return {
@@ -660,7 +683,15 @@ def recipe_payload(
         "conditions_met": conditions_met,
         "failure_message": recipe.failure_message or "",
         "missing": total_missing,
-        "ready": conditions_met and total_missing == 0,
+        "cost": cost,
+        "currency_owned": currency_owned,
+        "currency_missing": currency_missing,
+        "currency_missing_display": currency_missing_display,
+        "ready": (
+            conditions_met
+            and total_missing == 0
+            and currency_missing == 0
+        ),
         "providers": provider_payloads,
         "provider": provider_payloads[0] if len(provider_payloads) == 1 else None,
     }
@@ -700,6 +731,16 @@ def ordered_recipe_payloads(
 ) -> list[dict]:
     offer_list = list(offers)
     balances = material_balance_map(player)
+    priced_recipes = {
+        offer.recipe.id
+        for offer in offer_list
+        if offer.recipe.cost is not None
+    }
+    currency_balances = (
+        wallet_balance_map(player, include_zero=False)
+        if priced_recipes
+        else {}
+    )
     providers_by_recipe: dict[int, list[CraftingProvider]] = {}
     for offer in offer_list:
         providers_by_recipe.setdefault(offer.recipe.id, [])
@@ -732,6 +773,7 @@ def ordered_recipe_payloads(
             recipe,
             providers=providers_by_recipe[recipe.id],
             balances=balances,
+            currency_balances=currency_balances,
         )
         payload["number"] = number
         if filter_name != "ready" or recipe_matches_filter(payload, filter_name):

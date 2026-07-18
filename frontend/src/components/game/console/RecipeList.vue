@@ -23,6 +23,9 @@
           </button>
           <span v-else :class="[recipe.output?.quality]">{{ recipe.name }}</span>
           <span class="color-text-60"> — {{ recipeStatus(recipe) }}</span>
+          <span v-if="recipeCost(recipe)" class="color-text-60">
+            · fee {{ recipeCost(recipe) }}
+          </span>
         </li>
       </ol>
       <div class="color-text-60 mt-4">
@@ -35,6 +38,8 @@
 <script lang="ts" setup>
 import { computed } from "vue";
 import { useStore } from "vuex";
+import { formatMoney } from "@/core/economy.ts";
+import type { Money } from "@/core/economy.ts";
 
 const store = useStore();
 const props = defineProps<{ message: any }>();
@@ -54,6 +59,7 @@ const emptyText = computed(() => (
 const isLastMessage = computed(
   () => store.state.game.last_message[props.message.type] == props.message,
 );
+const economy = computed(() => store.state.game.world?.economy);
 
 const joinPhrases = (phrases: string[]) => {
   if (phrases.length <= 1) return phrases[0] || "materials";
@@ -64,10 +70,24 @@ const joinPhrases = (phrases: string[]) => {
 const recipeStatus = (recipe: any) => {
   if (!recipe.conditions_met) return "locked";
   if (recipe.ready) return "ready";
-  const missing = (recipe.inputs || [])
+  const missing: string[] = (recipe.inputs || [])
     .filter((entry: any) => Number(entry.missing || 0) > 0)
     .map((entry: any) => `${entry.missing} ${entry.material?.name || "material"}`);
+  const currencyMissing = Number(
+    recipe.currency_missing ?? recipe.missing_currency ?? 0,
+  );
+  if (currencyMissing > 0 && recipe.cost?.currency) {
+    missing.push(formatMoney(
+      { amount: currencyMissing, currency: recipe.cost.currency },
+      economy.value,
+    ));
+  }
   return `need ${joinPhrases(missing)}`;
+};
+
+const recipeCost = (recipe: any) => {
+  const cost = recipe.cost as Money | null | undefined;
+  return cost ? formatMoney(cost, economy.value) : "";
 };
 
 const inspectRecipe = (recipe: any) => {

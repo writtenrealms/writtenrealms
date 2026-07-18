@@ -15,6 +15,7 @@ from django.db.models import Exists, OuterRef
 from builders.item_definitions import spawn_item_from_definition
 from builders.models import ItemSalvageYield
 from config import constants as adv_consts
+from core.economy import money_payload
 from spawns.actions.base import ActionError, ActionResult
 from spawns.crafting import (
     aggregate_material_payload,
@@ -33,9 +34,11 @@ from spawns.models import (
     CraftingActionReceipt,
     Item,
     Player,
+    PlayerCurrencyBalance,
     PlayerMaterialBalance,
 )
 from spawns.request_segments import normalize_request_segment
+from spawns.wallet import WalletError, mutate_balances
 
 
 MAX_SPOILS_PER_COMMAND = 100
@@ -193,6 +196,25 @@ def _missing_text(recipe: dict) -> str:
     return _material_phrase(missing, quantity_key="missing")
 
 
+def _missing_requirements_text(recipe: dict) -> str:
+    parts = []
+    material_text = _missing_text(recipe)
+    if material_text:
+        parts.append(material_text)
+    currency_missing = int(recipe.get("currency_missing") or 0)
+    cost = recipe.get("cost") or {}
+    if currency_missing > 0 and cost:
+        parts.append(
+            recipe.get("currency_missing_display")
+            or f"{currency_missing} {cost.get('currency') or 'currency'}"
+        )
+    if not parts:
+        return "requirements"
+    if len(parts) == 1:
+        return parts[0]
+    return f"{', '.join(parts[:-1])}, and {parts[-1]}"
+
+
 def _recipes_text(data: dict) -> str:
     recipes = data.get("recipes") or []
     providers = data.get("providers") or []
@@ -209,9 +231,11 @@ def _recipes_text(data: dict) -> str:
         elif recipe.get("ready"):
             status = "ready"
         else:
-            status = f"need {_missing_text(recipe)}"
+            status = f"need {_missing_requirements_text(recipe)}"
         number = int(recipe.get("number") or fallback_number)
-        lines.append(f"{number}. {recipe['name']}  {status}")
+        fee = (recipe.get("cost") or {}).get("display")
+        fee_text = f"; fee {fee}" if fee else ""
+        lines.append(f"{number}. {recipe['name']}  {status}{fee_text}")
     lines.append("Use: recipe <number> to inspect; craft <number> to make.")
     return "\n".join(lines)
 
@@ -239,10 +263,19 @@ def _recipe_text(data: dict) -> str:
     for entry in recipe.get("inputs") or []:
         material_name = (entry.get("material") or {}).get("name") or "Material"
         lines.append(f"{material_name}: {entry.get('owned', 0)} / {entry.get('required', 0)}")
+    cost = recipe.get("cost") or {}
+    if cost:
+        lines.append(f"Cost: {cost.get('display') or cost.get('amount')}")
+        _amount, separator, unit = str(cost.get("display") or "").partition(" ")
+        currency_label = unit if separator and unit else cost.get("currency") or "Funds"
+        lines.append(
+            f"{currency_label}: {int(recipe.get('currency_owned') or 0)} / "
+            f"{int(cost.get('amount') or 0)}"
+        )
     if not recipe.get("conditions_met"):
         lines.append(recipe.get("failure_message") or "You do not meet this recipe's requirements.")
-    elif recipe.get("missing"):
-        lines.append(f"Missing: {_missing_text(recipe)}")
+    elif recipe.get("missing") or recipe.get("currency_missing"):
+        lines.append(f"Missing: {_missing_requirements_text(recipe)}")
     return "\n".join(lines)
 
 
@@ -252,10 +285,11 @@ def _craft_text(data: dict) -> str:
         lines = [f"Craft already completed: {item.get('name') or 'an item'}."]
     else:
         consumed = _material_phrase(data.get("consumed") or [])
-        lines = [
-            f"You spend {consumed}.",
-            f"You craft {item.get('name') or 'an item'}.",
-        ]
+        lines = [f"You spend {consumed}."]
+        cost = data.get("cost") or {}
+        if int(cost.get("amount") or 0) > 0:
+            lines.append(f"You pay {cost.get('display') or cost.get('amount')}.")
+        lines.append(f"You craft {item.get('name') or 'an item'}.")
     rolled = (data.get("roll") or {}).get("attributes") or {}
     if rolled:
         roll_text = ", ".join(
@@ -550,6 +584,38 @@ class CraftItemAction:
                     data={"missing": missing},
                 )
 
+            cost = None
+            if recipe.cost is not None and recipe.currency_id is not None:
+                cost_amount = int(recipe.cost)
+                cost = money_payload(cost_amount, recipe.currency)
+                try:
+                    mutate_balances(
+                        player,
+                        {recipe.currency: -cost_amount},
+                        reason="crafting.recipe_cost",
+                    )
+                except WalletError as error:
+                    if error.code == "insufficient_funds":
+                        owned = int(
+                            PlayerCurrencyBalance.objects.filter(
+                                player=player,
+                                currency_id=recipe.currency_id,
+                            ).values_list("amount", flat=True).first()
+                            or 0
+                        )
+                        missing_amount = max(0, cost_amount - owned)
+                        missing_money = money_payload(missing_amount, recipe.currency)
+                        raise ActionError(
+                            f"You still need {missing_money['display']}.",
+                            code="insufficient_currency",
+                            data={
+                                "cost": cost,
+                                "owned": owned,
+                                "missing": missing_amount,
+                            },
+                        )
+                    raise ActionError(str(error), code=error.code)
+
             consumed_amounts = {}
             materials_by_id = {}
             for ingredient in ingredients:
@@ -597,6 +663,7 @@ class CraftItemAction:
                                 "attributes": item.attributes or {},
                             },
                             "consumed": consumed,
+                            "cost": cost,
                         },
                     ),
                     GameEvent(
@@ -627,9 +694,11 @@ class CraftItemAction:
                     "key": f"craftingrecipe.{recipe.id}",
                     "slug": recipe.slug,
                     "name": recipe.output_item_definition.name,
+                    "cost": cost,
                 },
                 "item": serialize_item(item, viewer=updated_player).model_dump(),
                 "consumed": consumed,
+                "cost": cost,
                 "materials": list_material_balances(updated_player),
                 "roll": {
                     "attributes": item.attributes or {},

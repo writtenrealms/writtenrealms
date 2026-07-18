@@ -51,6 +51,11 @@
         </div>
 
         <div class="relationship-block compact-block">
+          <span class="relationship-label">Crafting fee</span>
+          <span>{{ recipeCost(recipe) }}</span>
+        </div>
+
+        <div class="relationship-block compact-block">
           <span class="relationship-label">Conditions</span>
           <span>{{ hasConditions(recipe.conditions) ? "Configured" : "None" }}</span>
         </div>
@@ -83,6 +88,18 @@ const hasConditions = (conditions: unknown) => (
   && typeof conditions === "object"
   && Object.keys(conditions as Record<string, unknown>).length > 0
 );
+
+const recipeCost = (recipe: any) => {
+  if (recipe.money?.display) return String(recipe.money.display);
+  if (recipe.money?.amount != null) {
+    return `${recipe.money.amount} ${recipe.money.currency || ""}`.trim();
+  }
+  if (recipe.cost == null) return "None";
+  const currency = typeof recipe.currency === "object"
+    ? recipe.currency?.code || recipe.currency?.name
+    : recipe.currency;
+  return `${recipe.cost} ${currency || ""}`.trim();
+};
 </script>
 
 <style lang="scss" scoped>

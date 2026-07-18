@@ -3213,7 +3213,7 @@ class CraftingRecipeViewSet(BaseWorldBuilderViewSet):
         qs = (
             CraftingRecipe.objects
             .filter(world=context)
-            .select_related('output_item_definition')
+            .select_related('output_item_definition', 'currency')
             .prefetch_related(
                 Prefetch(
                     'ingredients',

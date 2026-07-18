@@ -535,6 +535,8 @@ metadata:
 spec:
   group: armor
   order: 10
+  cost: 1
+  currency: ${defaultCurrencyCode()}
   output:
     item_definition: itemdefinition.new-item
   inputs:

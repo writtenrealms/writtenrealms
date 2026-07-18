@@ -13,6 +13,7 @@ from builders.models import (
     MobDefinition,
 )
 from config import constants as adv_consts
+from core.economy import MAX_CURRENCY_AMOUNT
 from tests.base import WorldTestCase
 from worlds.models import WorldConfig
 
@@ -301,6 +302,193 @@ spec:
         self.assertEqual(recipe.order, 99)
         self.assertEqual(recipe.ingredients.count(), 2)
         self.assertEqual(self.output.salvage_yields.count(), 1)
+
+    def test_recipe_cost_explicit_currency_round_trips_and_null_clears(self):
+        self.create_materials()
+        self.create_recipe()
+        obol = Currency.objects.create(
+            world=self.world,
+            code="obol",
+            name="Obol",
+            plural_name="Obols",
+        )
+
+        response = self.apply(
+            """
+kind: craftingrecipe
+metadata:
+  slug: t2-hoplite-head
+spec:
+  cost: 150
+  currency: obol
+""",
+            expected_status=200,
+        )
+
+        recipe = CraftingRecipe.objects.get(world=self.world, slug="t2-hoplite-head")
+        self.assertEqual((recipe.cost, recipe.currency_id), (150, obol.id))
+        self.assertEqual(response.data["crafting_recipe"]["cost"], 150)
+        self.assertEqual(response.data["crafting_recipe"]["currency"], "obol")
+        self.assertEqual(
+            response.data["crafting_recipe"]["money"],
+            {"amount": 150, "currency": "obol", "display": "150 Obols"},
+        )
+
+        export = self.client.get(self.export_ep)
+        self.assertEqual(export.status_code, 200, export.data)
+        documents = [doc for doc in yaml.safe_load_all(export.data["yaml"]) if doc]
+        recipe_doc = next(
+            doc
+            for doc in documents
+            if doc["kind"] == "craftingrecipe"
+            and doc["metadata"]["slug"] == "t2-hoplite-head"
+        )
+        self.assertEqual(recipe_doc["spec"]["cost"], 150)
+        self.assertEqual(recipe_doc["spec"]["currency"], "obol")
+
+        self.apply(
+            """
+kind: craftingrecipe
+metadata:
+  slug: t2-hoplite-head
+spec:
+  cost: null
+""",
+            expected_status=200,
+        )
+        recipe.refresh_from_db()
+        self.assertIsNone(recipe.cost)
+        self.assertIsNone(recipe.currency_id)
+        cleared = self.client.get(self.export_ep)
+        cleared_documents = [
+            doc for doc in yaml.safe_load_all(cleared.data["yaml"]) if doc
+        ]
+        cleared_recipe_doc = next(
+            doc
+            for doc in cleared_documents
+            if doc["kind"] == "craftingrecipe"
+            and doc["metadata"]["slug"] == "t2-hoplite-head"
+        )
+        self.assertNotIn("cost", cleared_recipe_doc["spec"])
+        self.assertNotIn("currency", cleared_recipe_doc["spec"])
+
+    def test_recipe_cost_without_currency_uses_world_default(self):
+        self.create_materials()
+        self.create_recipe()
+        obol = Currency.objects.create(
+            world=self.world,
+            code="obol",
+            name="Obol",
+            plural_name="Obols",
+        )
+        self.world.default_currency = obol
+        self.world.save(update_fields=["default_currency", "modified_ts"])
+
+        self.apply(
+            """
+kind: craftingrecipe
+metadata:
+  slug: t2-hoplite-head
+spec:
+  cost: 90
+""",
+            expected_status=200,
+        )
+
+        recipe = CraftingRecipe.objects.get(world=self.world, slug="t2-hoplite-head")
+        self.assertEqual((recipe.cost, recipe.currency_id), (90, obol.id))
+
+    def test_recipe_cost_without_currency_rejects_world_without_default(self):
+        self.create_materials()
+        self.create_recipe()
+
+        response = self.apply(
+            """
+kind: craftingrecipe
+metadata:
+  slug: t2-hoplite-head
+spec:
+  cost: 90
+""",
+            expected_status=400,
+        )
+
+        self.assertIn("spec.currency", str(response.data))
+        self.assertIn("default currency", str(response.data))
+
+    def test_recipe_cost_validation_rejects_unpaired_invalid_and_cross_world_values(self):
+        self.create_materials()
+        self.create_recipe()
+        obol = Currency.objects.create(
+            world=self.world,
+            code="obol",
+            name="Obol",
+            plural_name="Obols",
+        )
+        self.world.default_currency = obol
+        self.world.save(update_fields=["default_currency", "modified_ts"])
+
+        currency_without_cost = self.apply(
+            """
+kind: craftingrecipe
+metadata:
+  slug: t2-hoplite-head
+spec:
+  currency: obol
+""",
+            expected_status=400,
+        )
+        self.assertIn("cannot be set without spec.cost", str(currency_without_cost.data))
+
+        currency_with_null_cost = self.apply(
+            """
+kind: craftingrecipe
+metadata:
+  slug: t2-hoplite-head
+spec:
+  cost: null
+  currency: obol
+""",
+            expected_status=400,
+        )
+        self.assertIn("cannot be set when spec.cost is null", str(currency_with_null_cost.data))
+
+        for value in ("-1", "1.5", "true", str(MAX_CURRENCY_AMOUNT + 1)):
+            with self.subTest(value=value):
+                invalid = self.apply(
+                    f"""
+kind: craftingrecipe
+metadata:
+  slug: t2-hoplite-head
+spec:
+  cost: {value}
+""",
+                    expected_status=400,
+                )
+                self.assertIn("spec.cost", str(invalid.data))
+
+        other_world = self.world.__class__.objects.new_world(
+            name="Other Currency World",
+            author=self.user,
+            config=WorldConfig.objects.create(),
+        )
+        Currency.objects.create(
+            world=other_world,
+            code="siglos",
+            name="Siglos",
+        )
+        cross_world = self.apply(
+            """
+kind: craftingrecipe
+metadata:
+  slug: t2-hoplite-head
+spec:
+  cost: 90
+  currency: siglos
+""",
+            expected_status=400,
+        )
+        self.assertIn("unknown currency", str(cross_world.data))
 
     def test_validation_rejects_duplicate_cross_world_and_invalid_specs(self):
         self.create_materials()

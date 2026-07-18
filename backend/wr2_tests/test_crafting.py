@@ -1,6 +1,7 @@
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.db import connection
@@ -44,7 +45,7 @@ from spawns.models import (
 )
 from spawns.request_segments import append_request_segment
 from spawns.state_payloads import serialize_actor
-from spawns.wallet import mutate_balances
+from spawns.wallet import balance_map, mutate_balances
 from tests.base import WorldTestCase
 from worlds.models import World, WorldConfig
 from wr2_tests.utils import apply_basic_stat_system, capture_game_messages
@@ -132,6 +133,19 @@ class CraftingRuntimeTestCase(WorldTestCase):
             player=self.player,
             material=material,
             quantity=quantity,
+        )
+
+    def _price_recipe(self, amount=150):
+        self.recipe.cost = amount
+        self.recipe.currency = self.currency
+        self.recipe.save(update_fields=["cost", "currency", "modified_ts"])
+
+    def _fund(self, amount):
+        return mutate_balances(
+            self.player,
+            {self.currency: amount},
+            reason="crafting test setup",
+            emit_event=False,
         )
 
     def _dispatch_text(self, text):
@@ -311,6 +325,35 @@ class TestCraftingReadCommands(CraftingRuntimeTestCase):
         self.assertTrue(result.data["recipes"][0]["ready"])
         self.assertEqual(result.data["recipes"][0]["group"], "hoplite")
 
+    def test_priced_recipe_list_and_inspect_include_wallet_readiness(self):
+        self._price_recipe(150)
+        self._balance(self.bronze, 8)
+        self._balance(self.leather, 2)
+        self._fund(149)
+
+        listed = ListRecipesAction().execute(self.player.id)
+        inspected = InspectRecipeAction().execute(self.player.id, "1")
+
+        expected_cost = {
+            "amount": 150,
+            "currency": "obol",
+            "display": "150 Obols",
+        }
+        for recipe in (listed.data["recipes"][0], inspected.data["recipe"]):
+            self.assertEqual(recipe["cost"], expected_cost)
+            self.assertEqual(recipe["currency_owned"], 149)
+            self.assertEqual(recipe["currency_missing"], 1)
+            self.assertEqual(recipe["currency_missing_display"], "1 Obol")
+            self.assertFalse(recipe["ready"])
+        self.assertIn("need 1 Obol", listed.events[0].text)
+        self.assertIn("Cost: 150 Obols", inspected.events[0].text)
+        self.assertIn("Obols: 149 / 150", inspected.events[0].text)
+
+        self._fund(1)
+        ready = ListRecipesAction().execute(self.player.id, "ready")
+        self.assertEqual(len(ready.data["recipes"]), 1)
+        self.assertTrue(ready.data["recipes"][0]["ready"])
+
     def test_authored_recipe_groups_are_available_as_filters(self):
         custom_recipe, _definition, _membership = self._add_recipe(
             slug="field-armorer-gloves",
@@ -384,6 +427,8 @@ class TestCraftingReadCommands(CraftingRuntimeTestCase):
         self.assertEqual(explicit.data["recipe"]["slug"], "t2-hoplite-head")
 
     def test_full_t2_sized_catalog_is_loaded_with_bounded_queries(self):
+        self._price_recipe(90)
+        self._fund(90)
         for index in range(44):
             definition = ItemDefinition.objects.create(
                 world=self.world,
@@ -403,6 +448,8 @@ class TestCraftingReadCommands(CraftingRuntimeTestCase):
                 output_item_definition=definition,
                 group="assassin",
                 order=index,
+                cost=90,
+                currency=self.currency,
             )
             CraftingIngredient.objects.create(
                 recipe=recipe,
@@ -425,8 +472,18 @@ class TestCraftingReadCommands(CraftingRuntimeTestCase):
         )
         self.assertLessEqual(
             len(queries),
-            10,
+            11,
             "A 45-recipe catalog should not query once per recipe or ingredient.",
+        )
+        wallet_queries = [
+            query["sql"]
+            for query in queries
+            if 'FROM "spawns_playercurrencybalance"' in query["sql"]
+        ]
+        self.assertEqual(
+            len(wallet_queries),
+            1,
+            "A priced catalog should load the wallet once, not once per recipe.",
         )
 
     def test_unknown_recipe_filter_returns_structured_command_error(self):
@@ -710,6 +767,89 @@ class TestCraftingMutation(CraftingRuntimeTestCase):
             ["crafting.item.crafted", "crafting.material.changed"],
         )
 
+    def test_priced_craft_atomically_debits_wallet_and_records_cost(self):
+        self._price_recipe(150)
+        self._fund(200)
+        bronze = self._balance(self.bronze, 10)
+        leather = self._balance(self.leather, 3)
+
+        result = CraftItemAction().execute(self.player.id, "blue crested helm")
+
+        bronze.refresh_from_db()
+        leather.refresh_from_db()
+        self.player.refresh_from_db()
+        expected_cost = {
+            "amount": 150,
+            "currency": "obol",
+            "display": "150 Obols",
+        }
+        self.assertEqual(balance_map(self.player), {"obol": 50})
+        self.assertEqual((bronze.quantity, leather.quantity), (2, 1))
+        self.assertEqual(result.data["cost"], expected_cost)
+        self.assertEqual(result.data["recipe"]["cost"], expected_cost)
+        self.assertEqual(result.data["actor"]["economy"]["balances"]["obol"], 50)
+        self.assertIn("You pay 150 Obols.", result.events[0].text)
+        outbox = list(GameEventOutbox.objects.order_by("sequence"))
+        self.assertEqual(
+            [event.event_type for event in outbox],
+            [
+                "currency.balances_changed",
+                "crafting.item.crafted",
+                "crafting.material.changed",
+            ],
+        )
+        self.assertEqual(outbox[0].data["changes"][0]["delta"], -150)
+        self.assertEqual(outbox[1].data["cost"], expected_cost)
+
+    def test_insufficient_currency_consumes_nothing(self):
+        self._price_recipe(150)
+        self._fund(149)
+        bronze = self._balance(self.bronze, 8)
+        leather = self._balance(self.leather, 2)
+        self.player.refresh_from_db()
+        revision_before = self.player.wallet_revision
+
+        messages = self._dispatch_text("craft blue crested helm")
+
+        error = self._message(messages, "cmd.craft.error")
+        self.assertEqual(error["data"]["code"], "insufficient_currency")
+        self.assertEqual(error["data"]["cost"]["amount"], 150)
+        self.assertEqual(error["data"]["owned"], 149)
+        self.assertEqual(error["data"]["missing"], 1)
+        bronze.refresh_from_db()
+        leather.refresh_from_db()
+        self.player.refresh_from_db()
+        self.assertEqual((bronze.quantity, leather.quantity), (8, 2))
+        self.assertEqual(balance_map(self.player), {"obol": 149})
+        self.assertEqual(self.player.wallet_revision, revision_before)
+        self.assertFalse(self.player.inventory.filter(definition=self.helm_definition).exists())
+        self.assertFalse(GameEventOutbox.objects.exists())
+
+    def test_spawn_failure_rolls_back_currency_and_material_debits(self):
+        self._price_recipe(150)
+        self._fund(150)
+        bronze = self._balance(self.bronze, 8)
+        leather = self._balance(self.leather, 2)
+        self.player.refresh_from_db()
+        revision_before = self.player.wallet_revision
+
+        with patch(
+            "spawns.actions.crafting.spawn_item_from_definition",
+            side_effect=RuntimeError("simulated spawn failure"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "simulated spawn failure"):
+                CraftItemAction().execute(self.player.id, "blue crested helm")
+
+        bronze.refresh_from_db()
+        leather.refresh_from_db()
+        self.player.refresh_from_db()
+        self.assertEqual((bronze.quantity, leather.quantity), (8, 2))
+        self.assertEqual(balance_map(self.player), {"obol": 150})
+        self.assertEqual(self.player.wallet_revision, revision_before)
+        self.assertFalse(self.player.inventory.filter(definition=self.helm_definition).exists())
+        self.assertFalse(CraftingActionReceipt.objects.exists())
+        self.assertFalse(GameEventOutbox.objects.exists())
+
     def test_insufficient_materials_change_nothing(self):
         bronze = self._balance(self.bronze, 7)
         leather = self._balance(self.leather, 2)
@@ -787,6 +927,34 @@ class TestCraftingMutation(CraftingRuntimeTestCase):
         self.assertNotIn("You spend", replay.events[0].text)
         self.assertEqual(CraftingActionReceipt.objects.count(), 1)
         self.assertEqual(GameEventOutbox.objects.count(), 2)
+
+    def test_priced_craft_receipt_replay_does_not_debit_wallet_twice(self):
+        self._price_recipe(150)
+        self._fund(300)
+        self._balance(self.bronze, 16)
+        self._balance(self.leather, 4)
+        request_id = uuid.uuid4()
+
+        first = CraftItemAction().execute(
+            self.player.id,
+            "blue crested helm",
+            request_id=request_id,
+        )
+        replay = CraftItemAction().execute(
+            self.player.id,
+            "blue crested helm",
+            request_id=request_id,
+        )
+
+        self.player.refresh_from_db()
+        self.assertEqual(balance_map(self.player), {"obol": 150})
+        self.assertFalse(first.data["replayed"])
+        self.assertTrue(replay.data["replayed"])
+        self.assertEqual(first.data["cost"], replay.data["cost"])
+        self.assertEqual(replay.data["cost"]["amount"], 150)
+        self.assertEqual(self.player.inventory.filter(definition=self.helm_definition).count(), 1)
+        self.assertEqual(CraftingActionReceipt.objects.count(), 1)
+        self.assertEqual(GameEventOutbox.objects.count(), 3)
 
     def test_numeric_craft_replay_does_not_retarget_a_reordered_catalog(self):
         base_membership = CraftingProfileRecipe.objects.get(

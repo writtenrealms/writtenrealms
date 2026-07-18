@@ -38,7 +38,7 @@ from core.leveling import (
     normalize_leveling_curve,
     validate_leveling_config,
 )
-from core.economy import MAX_CURRENCY_AMOUNT, economy_world
+from core.economy import MAX_CURRENCY_AMOUNT, economy_world, money_payload
 from core.stat_system import (
     StatSystemValidationError,
     normalize_stat_system,
@@ -1940,14 +1940,25 @@ class CraftingRecipeSerializer(serializers.ModelSerializer):
     name = serializers.CharField(read_only=True)
     output_item_definition = serializers.SerializerMethodField()
     ingredient_count = serializers.SerializerMethodField()
+    currency = serializers.SerializerMethodField()
+    money = serializers.SerializerMethodField()
 
     class Meta:
         model = CraftingRecipe
         fields = [
             'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
-            'group', 'order', 'conditions', 'failure_message',
+            'group', 'order', 'cost', 'currency', 'money',
+            'conditions', 'failure_message',
             'output_item_definition', 'ingredient_count',
         ]
+
+    def get_currency(self, recipe):
+        return recipe.currency.code if recipe.currency_id else None
+
+    def get_money(self, recipe):
+        if recipe.cost is None or recipe.currency_id is None:
+            return None
+        return money_payload(int(recipe.cost), recipe.currency)
 
     def get_output_item_definition(self, recipe):
         definition = recipe.output_item_definition

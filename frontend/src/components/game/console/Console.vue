@@ -52,6 +52,7 @@ import Message from "@/components/game/console/Message.vue";
 import OfferInventory from "@/components/game/console/OfferInventory.vue";
 import QuestMessage from "@/components/game/console/QuestMessage.vue";
 import RecipeList from "@/components/game/console/RecipeList.vue";
+import RecipeDetails from "@/components/game/console/RecipeDetails.vue";
 import SalvageList from "@/components/game/console/SalvageList.vue";
 import ScrollTool from "@/components/game/console/ScrollTool.vue";
 import Stats from "@/components/game/console/Stats.vue";
@@ -83,6 +84,7 @@ const consoleMessage = (message) => {
     "cmd.inventory.success": Inventory,
     "cmd.shop.success": List,
     "cmd.recipes.success": RecipeList,
+    "cmd.recipe.success": RecipeDetails,
     "cmd./stats.success": BuilderStats,
     "cmd.stats.success": Stats,
     "cmd.who.success": Who,

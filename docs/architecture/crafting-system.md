@@ -1,6 +1,6 @@
 # WR2 Crafting And Salvage System
 
-Status as of 2026-07-17: the initial crafting and salvage slice is
+Status as of 2026-07-18: the initial crafting and salvage slice is
 implemented. Deferred extensions remain listed at the end of this document.
 
 ## Purpose
@@ -39,7 +39,8 @@ Reference docs:
 Separate six concepts:
 
 - `CraftMaterial`: an authored bulk resource such as Bronze or Linen
-- `CraftingRecipe`: one exact item-definition output and its required inputs
+- `CraftingRecipe`: one exact item-definition output, its required material
+  inputs, and an optional currency fee
 - `CraftingProfile`: an authored catalog of recipes exposed by a provider
 - crafting provider: a room workshop or, optionally, an NPC
 - `PlayerMaterialBalance`: a player's current unspent amount of one material
@@ -80,9 +81,10 @@ The relevant existing systems are:
   look stacked in the frontend, but the backend has no quantity column for an
   item stack.
 - WR2 has a generic, transactional currency service with normalized,
-  code-keyed player balances and structured `Money` values. Crafting materials
-  remain a separate resource type because they are recipe inputs rather than
-  spendable money.
+  code-keyed player balances and structured `Money` values. A recipe may debit
+  one concrete world currency in addition to its material inputs. Crafting
+  materials remain a separate resource type because they are recipe inputs
+  rather than spendable money.
 
 Crafting is implemented as first-class commands and transactional actions. It
 is not assembled from room triggers. Trigger scripts are not an
@@ -126,10 +128,10 @@ The initial crafting loop is:
 4. `materials` shows the player's current material balances from anywhere.
 5. At a workshop, `recipes`, bare `recipe`, or bare `craft` shows the numbered
    recipe catalog.
-6. `recipe <number>` or `recipe <item>` shows the output range and
-   owned/required materials.
-7. `craft <number>` or `craft <item>` atomically spends materials and spawns one
-   item definition.
+6. `recipe <number>` or `recipe <item>` shows the output range,
+   owned/required materials, and any currency fee.
+7. `craft <number>` or `craft <item>` atomically spends materials and the
+   currency fee, then spawns one item definition.
 8. The item definition's existing randomization rolls once and persists.
 9. An unwanted craft may be salvaged for a minority refund and crafted again.
 
@@ -240,9 +242,9 @@ Example:
 > recipes armor
 
 Armor recipes at the Town Forge:
-  1. a reinforced helm       ready
-  2. a plated cuirass        need 4 Bronze
-  3. a pair of sturdy boots  ready
+  1. a reinforced helm       ready; fee 150 Obols
+  2. a plated cuirass        need 4 Bronze and 60 Obols; fee 150 Obols
+  3. a pair of sturdy boots  ready; fee 90 Obols
 
 Use: recipe <number> to inspect; craft <number> to make.
 ```
@@ -280,7 +282,9 @@ one recipe without spending anything. They should show:
 - minimum and maximum randomized attributes
 - each required material
 - owned and required quantities
+- the optional currency fee and the player's current balance in that currency
 - a concise missing-material summary
+- a concise missing-currency summary
 - any unmet non-material condition
 
 Example:
@@ -295,8 +299,9 @@ Constitution: 2-3
 
 Bronze:  8 / 8
 Leather: 1 / 2
+Obols:  90 / 150
 
-Missing: 1 Leather
+Missing: 1 Leather and 60 Obols
 ```
 
 The first number is owned and the second number is required. The output should
@@ -310,9 +315,10 @@ state-changing actions. They should:
 1. resolve an offered recipe
 2. recheck provider availability and recipe conditions
 3. recheck current material balances
-4. atomically consume the materials
-5. spawn the referenced item definition into player inventory
-6. report the item's actual persisted roll
+4. recheck the current balance of the recipe's currency, when priced
+5. atomically consume the materials and currency fee
+6. spawn the referenced item definition into player inventory
+7. report the item's actual persisted roll
 
 Example:
 
@@ -320,12 +326,15 @@ Example:
 > craft reinforced helm
 
 You spend 8 Bronze and 2 Leather.
+You pay 150 Obols.
 You craft a reinforced helm.
 Roll: Constitution 3.
 ```
 
 No additional confirmation is required. Typing the complete craft command is
-the player's confirmation. A failed requirement must consume nothing.
+the player's confirmation. A failed requirement must consume neither materials
+nor currency. The `ready` filter and label require all material, currency, and
+condition checks to pass; listing and inspection never reserve those resources.
 
 Item and recipe selectors should ignore leading articles. The item definition
 may correctly be named `a reinforced helm`, while the player types
@@ -448,6 +457,11 @@ silently treating Bronze as money. Keeping the resource types separate also
 prevents materials from accidentally appearing in currency grants, merchant
 payments, death penalties, or other economy commands.
 
+A priced recipe deliberately combines the two resource types: `inputs` consume
+crafting-material balances, while `cost` consumes one currency balance through
+the generic wallet service. This does not make either resource interchangeable
+with the other.
+
 ### Material Persistence And Trading
 
 For the first slice:
@@ -534,6 +548,8 @@ metadata:
 spec:
   group: armor
   order: 10
+  cost: 150
+  currency: obol
 
   output:
     item_definition: itemdefinition.reinforced-helm
@@ -554,6 +570,21 @@ spec:
 
 The recipe display name should default to the referenced item definition's
 name. Builders should not have to maintain a duplicate item name on the recipe.
+
+`cost` is an optional whole-number fee paid in addition to `inputs`. Its range
+is `0` through `9,007,199,254,740,991`, matching every canonical `Money`
+amount. `currency` is the code of a currency in the recipe's world. When cost
+is first authored without a currency, manifest application resolves and stores
+the world's current default; canonical export then emits both fields. Changing
+the world default does not retarget an existing recipe. Cost-only authoring
+fails when the world has no default currency to resolve.
+
+On patch, omitting both money fields preserves the existing fee. Supplying a
+new `cost` preserves an existing currency, or resolves the default when the
+recipe was unpriced. `currency` without `cost` is invalid. `cost: null` clears
+both fields. A zero cost is valid and remains an explicitly authored monetary
+requirement. The persisted model enforces that amount and currency are either
+both absent or both present with an in-range amount.
 
 For equippable gear, output quantity is always one. The initial system should
 not allow item bundles or multiple possible outputs. A player chooses the item;
@@ -772,6 +803,12 @@ particular tier's crafting balance without requiring a runtime restriction.
 Builders author exact material quantities. Runtime must not derive costs from
 armor, attributes, quality, or item budget automatically.
 
+Builders also author an optional exact currency fee. Material weights below do
+not derive that fee: the two costs serve different economy goals and should be
+tuned independently. A world may use material quantities to set salvage pace
+and currency fees as a broad money sink, including a steeper fee curve by item
+size or progression tier.
+
 Use these relative cost weights as the starting point:
 
 | Output | Cost weight |
@@ -865,6 +902,8 @@ CraftingRecipe
   world
   slug
   output_item_definition
+  cost (optional)
+  currency (optional)
   group
   order
   conditions
@@ -918,7 +957,10 @@ Database requirements:
 - unique `(profile_id, recipe_id)` membership rows
 - nonnegative balance constraint
 - positive ingredient and salvage quantities
-- protected deletion for referenced output definitions and materials
+- paired recipe-money constraint: both `cost` and `currency` are null, or both
+  are present and cost is within the canonical money range
+- protected deletion for referenced output definitions, materials, and recipe
+  currencies
 - unique `(player_id, request_id, segment)` replay receipts, pruned after
   a bounded retry window
 
@@ -931,25 +973,38 @@ queried efficiently.
 Crafting must use one database transaction:
 
 1. lock the player row
-2. resolve the current provider and numbered or named recipe against the locked
+2. check the request receipt before resolving a mutable catalog position
+3. resolve the current provider and numbered or named recipe against the locked
    player state
-3. load and lock relevant balance rows in material-id order
 4. re-evaluate recipe conditions
-5. verify every balance
-6. subtract all costs
-7. spawn the referenced item definition into player inventory
-8. record the source recipe/provider in roll or provenance metadata
-9. publish state and domain events after successful commit
+5. load and lock relevant material-balance rows in material-id order, then
+   verify every material input
+6. for a priced recipe, debit the relevant wallet row through the generic
+   currency service; the wallet row is locked after the player and material
+   rows
+7. subtract all material inputs
+8. spawn the referenced item definition into player inventory
+9. record the source recipe/provider in roll provenance and the paid `Money`
+   value in the action result and craft domain event
+10. publish state and domain events after successful commit
 
-Any failure rolls back both resource changes and item creation.
+Every crafting path follows the same lock order: player, material rows in
+stable material-id order, then the recipe's currency-balance row. Other wallet
+mutations also lock the player before a currency row, so commands cannot acquire
+these resources in reverse order. Different players never share these locks.
+
+Any failure rolls back the wallet debit, material changes, receipt, and item
+creation together. A missing wallet row means a zero balance; the currency
+service may create the sparse row inside the same transaction when needed.
 
 The WebSocket command boundary accepts or generates a UUID request id and keeps
 a bounded hierarchical segment path for chained text commands. Craft and
 salvage store compact transactional receipts keyed by player, request, and
 segment path, so task redelivery or a client retry cannot spend or grant
-materials twice. The receipt also records the action: the same action replays,
-while a dynamically changed alias or history entry that resolves the same
-request path to a different mutation fails with an idempotency conflict.
+materials or debit currency twice. The receipt also records the action: the
+same action replays, while a dynamically changed alias or history entry that
+resolves the same request path to a different mutation fails with an
+idempotency conflict.
 Replayed responses rebuild current actor/material state instead of returning a
 stale inventory snapshot. A daily task removes receipts after seven days.
 Receipts are checked before resolving a recipe number, so retrying a completed
@@ -998,6 +1053,9 @@ Manifest application should reject:
 - zero, negative, fractional, or nonnumeric quantities
 - duplicate material inputs in one recipe
 - duplicate recipes in one profile
+- a recipe `currency` without `cost`
+- a negative, fractional, boolean, oversized, or otherwise invalid recipe cost
+- an unknown or cross-world recipe currency
 - malformed condition payloads
 - a profile, recipe, material, and output from incompatible authored worlds
 - salvage-only definitions that are still equippable
@@ -1026,6 +1084,10 @@ Recommended domain events:
 - `crafting.material.changed`
 - `crafting.recipe.learned` when learned recipes are implemented
 
+The wallet service additionally emits the player's private
+`currency.balances_changed` event for a nonzero recipe debit. This keeps the
+actor wallet current without creating a crafting-specific balance protocol.
+
 Craft events should include:
 
 - actor/player id
@@ -1034,6 +1096,7 @@ Craft events should include:
 - output item id and item-definition slug
 - actual rolled attributes
 - consumed material quantities
+- paid currency as a structured `Money` value, when the recipe is priced
 
 Salvage events should include:
 
@@ -1046,6 +1109,7 @@ Balance actual gameplay from aggregate source and sink metrics:
 
 - materials earned by source definition
 - materials spent by recipe
+- currency spent on crafting by recipe and currency code
 - items crafted per recipe
 - salvage counts per definition
 - distribution of crafted rolls
@@ -1064,8 +1128,12 @@ Required query behavior:
 
 - load a profile's recipes, outputs, and ingredients with bounded
   `select_related`/`prefetch_related` queries
-- fetch all relevant player balances in one query
-- never issue one balance query per recipe in the recipe list
+- eagerly load each recipe's currency with the catalog
+- fetch all relevant player material balances in one query
+- fetch the player's currency balances once for a priced catalog, rather than
+  once per recipe; an entirely unpriced catalog need not query the wallet
+- never issue one material or currency balance query per recipe in the recipe
+  list
 - derive displayed recipe numbers and numeric resolution from the same
   deterministic, deduplicated catalog order
 - never scan every item definition in the world to discover workshop recipes
@@ -1080,12 +1148,14 @@ volume warrants it. Invalidate that cache when material, recipe, output, or
 profile manifests change.
 
 Player row locking serializes conflicting commands for one character while
-allowing different players to craft concurrently. Balance locks must follow a
-stable material-id order, and item locks must follow a stable item-id order.
+allowing different players to craft concurrently. Crafting balance locks follow
+player -> stable material-id order -> currency balance. Salvage material locks
+and item locks follow stable identifier order.
 
 ## Safety And Economy Rules
 
-- Crafting or salvage failure consumes nothing.
+- Crafting failure consumes neither materials nor currency; salvage failure
+  consumes nothing.
 - Crafted gear should have no vendor value, or merchants must explicitly
   reject it, until material-to-currency loops are evaluated.
 - Salvage never considers equipped gear.
@@ -1103,17 +1173,23 @@ Automated coverage for the implemented slice should include:
 
 - material, recipe, profile, and salvage manifest create/update/export
 - strict reference, quantity, duplicate, and condition validation
+- recipe-fee default-currency resolution, patch/clear behavior, canonical
+  export, money-range validation, and cross-world rejection
 - room and NPC provider resolution
 - `materials` positive-balance ordering and empty state
-- recipe filters and owned/required counts without N+1 queries
+- recipe filters and material/currency owned/required counts without N+1
+  queries
 - bare `recipe`/`craft` listing, canonical numbering across filters, numeric
   inspection/crafting, duplicate-name disambiguation, and invalid indices
 - numeric craft retry after catalog reordering without retargeting
 - successful craft with a persisted guided-random result
-- insufficient-material craft with no partial deduction
-- condition failure with no deduction
-- idempotent retry behavior
-- two concurrent craft attempts against the same balance
+- insufficient-material and insufficient-currency crafts with no partial
+  deduction
+- condition failure with no material or currency deduction
+- successful currency debit and rollback when later craft work fails
+- idempotent retry behavior without a second material or currency debit
+- two concurrent craft attempts against the same material and currency
+  balances
 - single-item salvage safety checks
 - bare salvage list eligibility, one-based numeric selection, empty state,
   result cap, and bounded query count
@@ -1137,8 +1213,8 @@ The initial implementation includes:
    controls
 3. room and optional NPC workshop providers
 4. the `materials`, `recipes`, `recipe`, `craft`, and `salvage` command surface
-5. atomic material spending and granting, persisted guided-random output,
-   request-id receipts, and bounded bulk salvage
+5. atomic material and recipe-fee spending, material granting, persisted
+   guided-random output, request-id receipts, and bounded bulk salvage
 6. aggregate durable domain events and actor/material state payloads
 7. builder and player guides
 
@@ -1153,6 +1229,7 @@ The initial implementation includes:
 - A crafting profile explicitly controls which recipes a provider exposes.
 - Recipes in an accessible profile are available unless their conditions fail.
 - Recipes select exact item definitions.
+- Recipes may charge one world currency in addition to material inputs.
 - Crafting always succeeds and item-definition RNG rolls once.
 - Salvage yield ignores rolled stats.
 - `salvage spoils` is the only initial bulk salvage operation.

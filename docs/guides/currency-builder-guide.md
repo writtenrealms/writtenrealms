@@ -76,8 +76,8 @@ spec:
 ```
 
 Changing the default affects future authoring that omits a currency. It does
-not convert player balances or retarget existing item prices, merchant
-profiles, rewards, or policies.
+not convert player balances or retarget existing item prices, recipe fees,
+merchant profiles, rewards, or policies.
 
 ## Amount Rules
 
@@ -106,6 +106,36 @@ On a new item, an omitted `currency` resolves the current default and stores
 that concrete currency. Canonical exports always include the code. On update,
 omitting both fields preserves the existing value; setting `currency` without
 `cost` is invalid. Use `cost: null` to remove monetary value.
+
+## Crafting Recipe Fees
+
+A recipe may charge currency in addition to its material inputs:
+
+```yaml
+kind: craftingrecipe
+metadata:
+  slug: reinforced-helm
+spec:
+  cost: 150
+  currency: obol
+  output:
+    item_definition: itemdefinition.reinforced-helm
+  inputs:
+    - material: craftmaterial.bronze
+      quantity: 8
+```
+
+The money pair follows the same amount rules as an item value. When a cost is
+first added, omitting `currency` resolves and stores the world's current
+default. Canonical exports include both fields. On update, omitting both fields
+preserves the existing fee, and `cost: null` clears both fields. A currency
+without a cost, an unknown or cross-world currency, and an invalid amount are
+rejected. A cost without a currency is also rejected if the world has no
+default to resolve.
+
+The player must have both the authored material inputs and the complete fee.
+Crafting debits the wallet in the same transaction that consumes materials and
+creates the item, so a failed craft cannot keep a partial payment.
 
 ## Merchants
 
@@ -227,11 +257,12 @@ metadata:
 ```
 
 Deletion is blocked while the currency is the default or is referenced by
-starting balances, items, merchants, mob rewards, death/clan policies, runtime
-merchant/item/mob snapshots, a nonzero player balance, or a canonical
-structured reference in quests, triggers, room actions, crafting recipes, mob
-definitions, spawn plans, or abilities. The builder response lists registered
-usage blockers. Select another default and remove references before deleting.
+starting balances, items, crafting-recipe fees, merchants, mob rewards,
+death/clan policies, runtime merchant/item/mob snapshots, a nonzero player
+balance, or a canonical structured reference in quests, triggers, room
+actions, crafting recipe conditions, mob definitions, spawn plans, or
+abilities. The builder response lists registered usage blockers. Select
+another default and remove references before deleting.
 
 Currency authoring is also blocked while an ordinary spawn or instance run for
 the base world is running. Stop those worlds before changing the catalog,
