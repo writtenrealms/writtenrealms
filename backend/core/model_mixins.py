@@ -44,8 +44,6 @@ class CharMixin(models.Model):
 
     attributes = models.JSONField(default=dict, blank=True)
 
-    gold = models.IntegerField(default=0)
-
     faction_assignments = GenericRelation(
         'builders.FactionAssignment',
         content_type_field='member_type',
@@ -293,13 +291,11 @@ class ItemMixin(models.Model):
     is_boat = models.BooleanField(default=False)
     is_pickable = models.BooleanField(default=True)
 
-    cost = models.PositiveIntegerField(default=0)
-    # currency = models.TextField(
-    #     choices=list_to_choice(adv_consts.ITEM_CURRENCIES),
-    #     default=adv_consts.ITEM_CURRENCY_GOLD)
+    cost = models.BigIntegerField(**optional)
     currency = models.ForeignKey(
         'builders.Currency',
-        on_delete=models.SET_NULL,
+        on_delete=models.RESTRICT,
+        related_name='items',
         **optional)
 
     # Food fields

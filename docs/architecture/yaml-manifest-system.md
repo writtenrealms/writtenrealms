@@ -30,13 +30,38 @@ Implemented manifest kinds currently include the current WR2 authoring path:
 - `quest`
 - `questarc`
 
-## WR1 Export Migration Notes
+## Optional WR1 Authored-World Conversion Notes
 
 WR1-to-WR2 export scripts should target the current WR2 manifest contracts, not
 the temporary compatibility models. As WR2 legacy concepts are removed, update
 this section in the same change so the WR1 exporter can be kept in sync.
 
+WR2 itself starts with a clean, empty database. This exporter is an optional
+authored-world conversion tool only: it does not migrate accounts, players,
+balances, inventories, quest progress, runtime mobs/items, or any other live
+state into WR2.
+
 Current required mappings:
+
+- Emit each WR1 authored currency as `kind: currency` with its portable code,
+  then select exactly one `spec.default_currency` in `kind: world`. Because
+  Gold was WR1's fixed effective default, a converted WR1 world emits a `gold`
+  definition and selects it. Emit `medals` only if authored content references
+  the built-in Medals concept; never inspect or export player balances to infer
+  currency definitions.
+- Map WR1 `starting_gold` to `kind: world`
+  `spec.starting_balances.gold`. Map item values to adjacent `cost` and
+  `currency`, mob Gold to `spec.rewards.currencies.gold`, merchant
+  `funds.currency` to `spec.settlement_currency`, Gold-loss death configuration
+  to `death_mode: lose_currency` plus `death_currency` and
+  `death_currency_penalty`, and quest `grant_gold` to `grant_currency` with an
+  explicit `currency: gold`. Canonical WR2 imports do not accept the old Gold
+  fields or effects as aliases.
+- Normalize only the known WR1 item-currency enum value `medal` to the built-in
+  code `medals`; do not rename an unrelated authored custom code by guesswork.
+- Convert representable legacy currency conditions to the existing structured
+  condition path `actor.balances.<code>`. Flag ambiguous predicates for builder
+  review instead of inventing a second currency condition language.
 
 - WR1 world PvP settings export only as `kind: world`
   `spec.pvp_mode`; do not emit `spec.allow_pvp`. When the source has a valid
@@ -192,6 +217,7 @@ Current required mappings:
 
 Builder-facing authoring guidance lives in:
 
+- [docs/guides/currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md)
 - [docs/guides/world-config-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/world-config-builder-guide.md)
 - [docs/guides/trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md)
 - [docs/guides/builder-command-reference.md](/Users/teebes/code/writtenrealms/docs/guides/builder-command-reference.md)
@@ -297,6 +323,15 @@ A new world-level **Edit World** view accepts a YAML manifest textarea.
   legacy `spec.is_warzone`; use `spec.pvp_zone` only for authored PvP zone
   behavior.
 
+### 7. Currency Screen
+
+**World > Currencies** reads the base world's inherited catalog. Root-world
+builders can create currencies, edit display fields and starting amounts,
+select the single default, inspect deletion blockers, and copy canonical apply
+or delete YAML. Instance currency views are inherited/read-only. The same
+builder services enforce identity, lifecycle, default, starting-balance, and
+deletion rules for REST and manifests.
+
 Zone manifests exported by the system include `metadata.ref` in the portable
 form `zone@<relative_id>`. Path manifests use `metadata.ref` in the portable
 form `path@<relative_id>`. Spawn plans and exported room/path manifests use
@@ -323,6 +358,11 @@ Mob definition authoring details, including plain mobs, fixed stat mobs, and
 randomized stat mobs, live in:
 
 - [docs/guides/mob-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-definition-builder-guide.md)
+
+Currency definitions, defaults, starting balances, prices, rewards, policies,
+and conditions are documented in:
+
+- [docs/guides/currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md)
 
 Spawn plan authoring details, including fixed room spawns, weighted source
 pools, guided dungeon density, spawn-plan trait/affix configuration, and
@@ -562,6 +602,64 @@ so copy/edit/save round trips do not depend on hidden form state.
 Room triggers are separate documents. Use `kind: trigger` with a room target;
 do not add a `checks`, `room_checks`, or `triggers` key to `kind: room`.
 
+## Currency And Economy Manifest Shape
+
+Currency definitions use immutable lowercase codes as their portable identity:
+
+```yaml
+kind: currency
+metadata:
+  code: obol
+spec:
+  name: Obol
+  plural_name: Obols
+  description: The common coin of Phalanx.
+```
+
+The first currency created for a defaultless world becomes its default. The
+world document remains the authoritative place to select the default and set
+starting balances:
+
+```yaml
+kind: world
+spec:
+  default_currency: obol
+  starting_balances:
+    obol: 12
+```
+
+`starting_balances` is an exact replacement mapping. Omitted currencies and
+explicit zero entries both mean a zero starting balance; canonical export omits
+zero rows. Amounts must be integers from `0` through
+`9,007,199,254,740,991`. Changing the default does not convert balances or
+retarget already-authored prices and rewards.
+
+Money-bearing manifests persist the concrete code next to the amount:
+
+```yaml
+kind: itemdefinition
+metadata:
+  slug: bronze-knife
+  name: a bronze knife
+spec:
+  type: equippable
+  cost: 18
+  currency: obol
+---
+kind: mobdefinition
+metadata:
+  slug: road-raider
+  name: a road raider
+spec:
+  rewards:
+    currencies:
+      obol: 4
+```
+
+See [currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md)
+for currency deletion, item, merchant, quest, death-policy, and condition
+examples.
+
 ## World Config Manifest Shape
 
 World config edits are update-only manifests (no create/delete mode). The config screen and the full world export emit the same single world document shape:
@@ -577,7 +675,9 @@ spec:
   description: Long world description
   motd: Questions? Join Discord.
   is_public: true
-  starting_gold: 0
+  default_currency: crowns
+  starting_balances:
+    crowns: 0
   starting_equipment:
     - item_definition: itemdefinition.training_spear
       count: 1
@@ -610,7 +710,9 @@ spec:
   default_roam_chance: 10
   starting_room: room@0,0,0
   death_room: room@10,0,0
-  death_mode: lose_gold
+  death_mode: lose_currency
+  death_currency: crowns
+  death_currency_penalty: 0.2
   death_route: nearest_in_zone
   pvp_mode: zone
   player_creation:
@@ -785,8 +887,20 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   - only `operation: apply` is supported
   - `spec` fields are validated against the world schema
   - room references (`starting_room`, `death_room`) must resolve to rooms in the selected world
+  - `default_currency`, `starting_balances`, `death_currency`, and
+    `clan_registration_currency` resolve against the base-world catalog
+  - currency amounts reject booleans, fractions, negatives, and values above
+    `9,007,199,254,740,991`
   - `pvp_mode` is the canonical PvP field; legacy `allow_pvp` is accepted only
     as an import alias and must not conflict when both fields are present
+- Currency codes match `[a-z][a-z0-9_-]{0,63}`, are unique ignoring case per
+  base world, and cannot be changed after creation. Instance worlds inherit
+  currencies and cannot author their own definitions/default/starting balances.
+- `spec.cost` without `spec.currency` resolves the default on item creation and
+  stores that concrete relation. `spec.currency` without `spec.cost` is invalid.
+- Mob rewards use `spec.rewards.currencies.<code>`, merchant profiles use
+  `spec.settlement_currency`, and quest rewards use `type: grant_currency` with
+  explicit `currency` and `amount`.
 
 Permission checks are applied when editing via manifest:
 

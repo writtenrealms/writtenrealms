@@ -20,13 +20,20 @@
       </li>
     </ul>
 
-    <div class="gold-inv">You have {{ gold }} gold.</div>
+    <div
+      v-for="balance in walletEntries"
+      :key="`currency-${balance.currency}`"
+      class="wallet-inv"
+    >
+      You have {{ balance.display }}.
+    </div>
   </div>
 </template>
 
 <script lang='ts' setup>
 import { computed } from "vue";
 import { useStore } from "vuex";
+import { walletBalanceEntries } from "@/core/economy.ts";
 import { stackedInventory, getTargetInGroup } from "@/core/utils.ts";
 
 const store = useStore();
@@ -35,14 +42,19 @@ const props = defineProps<{
   message: any;
 }>();
 
-const gold = props.message.data.actor.gold;
-const inventory = props.message.data.actor.inventory;
-const inventoryStack = stackedInventory(inventory);
+const actor = computed(() => props.message?.data?.actor || {});
+const world = computed(() => props.message?.data?.world || store.state.game.world || {});
+const inventory = computed(() => actor.value.inventory || []);
+const inventoryStack = computed(() => stackedInventory(inventory.value));
+const walletEntries = computed(() => walletBalanceEntries(
+  world.value?.economy,
+  actor.value?.economy,
+));
 const isLastMessage = computed(() => store.state.game.last_message[props.message.type] == props.message);
 
 const onItemClick = (item) => {
   if (store.state.game.is_mobile) return;
-  const target = getTargetInGroup(item, inventory);
+  const target = getTargetInGroup(item, inventory.value);
   store.dispatch("game/cmd", `drop ${target}`);
 }
 </script>

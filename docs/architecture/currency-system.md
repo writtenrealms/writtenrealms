@@ -1,12 +1,16 @@
 # WR2 Currency System
 
-Status as of 2026-07-17: proposed target architecture. The current code has
-world-scoped currency definitions, but it does not yet have a complete generic
-currency balance or transaction system.
+Status as of 2026-07-17: implemented WR2 currency foundation. Authored currency
+definitions, a customizable world default, relational player balances,
+transactional wallet mutations, manifests, runtime payloads, items, merchants,
+mob rewards, quest rewards, death costs, conditions, and the player
+`currencies` command use the generic system. Generic action receipts,
+player-to-player transfers, exchange rates, and the other items called out as
+deferred below are not implemented.
 
 ## Purpose
 
-WR2 should let each world define its own money, choose any one of those
+WR2 lets each world define its own money, choose any one of those
 currencies as the default, and use every currency consistently across player
 balances, items, merchants, rewards, costs, conditions, events, and frontend
 presentation.
@@ -15,13 +19,16 @@ The builder-facing model should remain small:
 
 1. Define the currencies used by the world.
 2. Choose one default currency.
-3. Give every price, reward, or cost an amount and a currency. When a builder
-   omits the currency, WR2 selects the current default.
+3. Give every persistent price, reward, or cost an amount and a concrete
+   currency. Create surfaces may preselect/materialize the current default;
+   canonical storage and exports remain explicit. Quest effects require the
+   code directly.
 
-Gold may remain a convenient initial value for a new world, but Gold must be
-seed data rather than an engine invariant. A world whose only currency is
-Credits, Crowns, or Shells must work without a `gold` definition or player
-field anywhere in its canonical runtime path.
+Gold remains the world-creation API's convenience default only when the creator
+does not supply initial currency fields. It is seed data rather than an engine
+invariant. A creator can instead supply, for example, `obol` / `Obol` / `Obols`
+and produce a world whose only currency is Obol. Such a world has no `gold`
+definition or player field in its canonical runtime path.
 
 Related documents:
 
@@ -57,8 +64,14 @@ Important decisions:
 - Player balances are normalized relational rows, not JSON serialized on the
   player and not special `gold` or `medals` columns.
 - Missing balance rows mean zero. Amounts are nonnegative integers.
-- Every gameplay balance mutation is transactional, retry-safe, and writes its
-  domain event to the outbox in the same transaction.
+- Every wallet batch is transactional, locks the Player before its balance
+  rows, rejects cross-world or out-of-range results, and increments one
+  `wallet_revision` for a nonempty successful batch.
+- Mutations emit one private `currency.balances_changed` outbox event by
+  default. Initialization and reset deliberately suppress that event while
+  still updating the wallet revision when a balance actually changes.
+- Generic replay receipts are not yet implemented, so callers must not describe
+  arbitrary wallet mutations as idempotent or retry-safe.
 - Command planning resolves a currency code or the default to a concrete
   currency ID before queuing work.
 - Changing the world default never converts existing balances or silently
@@ -89,30 +102,29 @@ wallet. Moving a player to a different economy world is invalid unless an
 explicit cross-world transfer policy defines how every balance is handled;
 ordinary room or instance transfer code must not perform that conversion.
 
-## Current WR2 Baseline And Problems
+## Legacy Baseline Replaced By This Implementation
 
-The current `Currency` model is a useful beginning. It scopes definitions to a
-world and gives them a code, name, and `is_default` flag. Item and merchant
-authoring can also refer to those definitions.
-
-The implementation is not yet a generic economy, however.
+Before this implementation, `Currency` was only a partial authoring concept and
+the runtime still privileged Gold and Medals. The following subsections record
+the problems the new model replaces; they are historical context, not a
+description of the current WR2 contract.
 
 ### Three Player Balance Stores
 
-Player money is split across:
+Player money was split across:
 
 - the inherited `gold` integer field
 - the `medals` integer field
 - a serialized `currencies` text field for other codes
 
-These stores have different mutation paths, query behavior, serialization,
-validation, and concurrency characteristics. The custom field has no complete
-generic atomic-balance service.
+Those fields are removed from the WR2 Player model. Spendable balances now live
+only in `PlayerCurrencyBalance` and are changed through `spawns.wallet`.
 
 ### Default Currency Is Only A Partial Authoring Hint
 
-`Currency.is_default` is consulted by a few authoring paths, but major runtime
-systems still name or mutate Gold directly. Examples include:
+The former `Currency.is_default` flag and Gold-specific paths were replaced by
+`World.default_currency` and explicit currency references. The affected paths
+included:
 
 - starting money
 - mob kill rewards
@@ -123,13 +135,13 @@ systems still name or mutate Gold directly. Examples include:
 - player conditions
 - inventory and stats presentation
 
-The database also permits zero or multiple `is_default` rows. Procedurally
-unsetting other rows does not provide a durable exactly-one invariant under
-concurrent edits.
+One nullable world pointer makes multiple defaults unrepresentable. A world may
+be defaultless only during bootstrap or repair; normal world creation installs
+its chosen initial currency as the default.
 
 ### Currency Identity Is Inconsistent
 
-Current code variously identifies a currency by:
+Legacy code variously identified a currency by:
 
 - database ID
 - code string
@@ -137,22 +149,20 @@ Current code variously identifies a currency by:
 - special field name such as `gold` or `medals`
 - a missing value that is later interpreted as Gold
 
-Some authored definitions persist a code inside JSON while runtime items use a
-foreign key. Renaming or deleting a definition can therefore strand references
-or silently change their meaning.
+Canonical authored references use stable codes and canonical relational runtime
+references use foreign keys. Codes are normalized lowercase and immutable.
 
 ### Builder Write Paths Disagree
 
-The current currency CRUD endpoint and `kind: currency` manifest ingestion do
-not currently share every permission, instance, live-world, deletion, default,
-or validation rule. The ordinary currency screen also does not expose the
-default selector even though the manifest shape can set `is_default`.
-
-All target authoring surfaces must call one service so the rules cannot drift.
+Currency CRUD, default selection, starting-balance replacement, and manifest
+ingestion use the shared builder currency services for base-world ownership,
+lifecycle checks, identity rules, and deletion protection. The REST serializer
+exposes `is_default` as derived read state and accepts a per-currency
+`starting_amount`; the authoritative default remains the world pointer.
 
 ### Performance And Correctness Limits
 
-A serialized balance map is a poor canonical store for a frequently mutated
+A serialized balance map was a poor canonical store for a frequently mutated
 resource:
 
 - one currency change rewrites a larger player value
@@ -210,8 +220,8 @@ receipts.
 
 The complete ordinary workflow is:
 
-1. A new world begins with one editable currency, initially Gold for
-   convenience unless the creation flow supplies another.
+1. World creation accepts an initial code, singular name, and plural name. If
+   omitted, those fields default to Gold for convenience; they are not fixed.
 2. The builder may add more currencies.
 3. The builder selects exactly one default.
 4. Money fields show an amount and a currency selector, with the default
@@ -240,7 +250,7 @@ Conceptual fields:
 | `plural_name` | Optional plural, such as `Crowns`; blank reuses `name`. |
 | `description` | Optional builder-facing explanation. |
 
-Recommended constraints:
+Implemented constraints:
 
 - `code` is normalized lowercase and bounded, for example by
   `[a-z][a-z0-9_-]{0,63}`.
@@ -262,7 +272,7 @@ currency system does not yet need.
 
 The root/base `World` row owns one nullable `default_currency` foreign key to
 `Currency`. It does not live on shared/cloned `WorldConfig`.
-`Currency.is_default` should be removed once the new reference is authoritative.
+The obsolete `Currency.is_default` field has been removed.
 
 Required invariants:
 
@@ -281,9 +291,9 @@ create a currency, select a default, or apply an atomic import that will provide
 one. Dependent authoring, canonical export, publication, and world start remain
 blocked until repaired.
 
-Because WR2 launches with an empty database, implementation replaces
-`Currency.is_default` and updates every default reader before launch. There is
-no production compatibility mirror or data backfill.
+Because WR2 launches with an empty database, the implementation replaced
+`Currency.is_default` and its readers directly. There is no production
+compatibility mirror or data backfill.
 
 An instance template or spawned world cannot set the pointer. The authoring
 service also checks that the selected `Currency.world_id` equals the
@@ -380,18 +390,18 @@ individual `Money` values and do not require an adjacent amount.
 Display names and descriptions are ordinary edits. Codes are identity and are
 not ordinary edits.
 
-Deletion is allowed only when all of the following are true:
+The implemented deletion service blocks the world default and registered
+relational use by starting balances, item definitions, merchant profiles, mob
+rewards, death/clan policies, runtime items/merchant rows, and nonzero player
+balances. It may prune zero player rows after those checks pass. Database
+`RESTRICT` constraints remain the final guard for relational references.
 
-- the currency is not the world default
-- no authored price, reward, cost, condition, merchant, or policy references it
-- no runtime item value snapshot references it
-- no player has a nonzero balance for it
-- no pending Action or unexpired receipt depends on it
-
-The deletion service may prune zero balance rows only after those checks pass.
-It must also use one registered usage resolver that covers relational foreign
-keys and every structured JSON condition/effect field; otherwise a reference
-hidden in a quest or trigger could evade the check.
+The same bounded usage registry scans canonical structured authoring fields once
+per catalog load: quests, quest arcs, triggers, room actions, crafting recipes,
+mob definitions, spawn plans and entries, and abilities. It also checks stopped
+runtime mob reward snapshots. This keeps deletion safe for both relational
+references and portable `actor.balances.<code>`/typed currency references
+without repeating the audit once per currency on the builder list screen.
 
 Foreign keys for canonical monetary references should use `RESTRICT`, not
 `SET_NULL` followed by an implicit Gold or current-default fallback. `RESTRICT`
@@ -454,13 +464,13 @@ spec:
 `starting_balances` is a mapping from currency code to nonnegative integer.
 Omitted currencies start at zero. Canonical export may omit zero entries.
 
-Canonical storage should be relational rather than another JSON wallet-shaped
-field. A small `WorldStartingCurrencyBalance` relation with unique
-`(world, currency)` rows and a nonnegative 64-bit amount provides foreign-key
-integrity and efficient preload. The authoring service enforces that both
-references resolve to the same economy world. This storage detail remains
-invisible behind the simple manifest mapping and currency-screen starting
-amount fields.
+Canonical storage is relational rather than another JSON wallet-shaped field.
+`WorldStartingCurrencyBalance` has unique `(world, currency)` rows and amounts
+from zero through `9,007,199,254,740,991`. That cap is JavaScript's maximum safe
+integer (`2^53 - 1`), so values round-trip exactly through JSON and the
+frontend. The authoring service enforces that references resolve to the same
+economy world. This storage detail remains invisible behind the simple manifest
+mapping and currency-screen starting amount fields.
 
 The default currency does not need to appear in `starting_balances`; a world may
 intentionally start players with zero money.
@@ -495,11 +505,11 @@ Currency manifest validation should reject:
 - obsolete WR1/early-WR2 fields such as currency `is_default` or
   `starting_gold`; the external conversion utility must emit target fields
 
-Multi-document world ingestion should preflight all documents before mutating
-data, then apply them atomically. Currency definitions must be resolvable before
-the world document or dependent item, merchant, mob, and quest documents are
-committed. Full exports should therefore place currency definitions before
-dependent content and the final world settings document.
+Multi-document world ingestion applies the bundle atomically in document order.
+Currency definitions must therefore appear before the world document or
+dependent item, merchant, mob, and quest documents that reference them. Full
+exports place currency definitions before dependent content and world economy
+settings.
 
 The normal builder UI, REST endpoints, and manifest ingestion must call the
 same currency-authoring service for permissions, base-world resolution,
@@ -525,8 +535,9 @@ Required constraints:
 
 - unique `(player, currency)`
 - `amount >= 0`
-- `amount` is a signed database `BIGINT` constrained to the nonnegative range;
-  all arithmetic checks overflow before persistence
+- `amount` is a signed database `BIGINT` constrained to the inclusive range
+  `0..9,007,199,254,740,991`; all arithmetic checks the JavaScript-safe cap
+  before persistence
 - the player's economy world equals the currency's owning world, enforced by
   the currency service because a simple foreign key cannot express it
 
@@ -562,7 +573,7 @@ runtime data may be cached or serialized only when rebuildable.
 
 ### No Generic Wallet Owner In The Initial Version
 
-The first implementation should model player balances directly rather than
+The first implementation models player balances directly rather than
 introducing a generic foreign-key wallet for players, mobs, clans, merchants,
 rooms, and arbitrary future entities.
 
@@ -574,50 +585,49 @@ advance.
 
 ## Currency Service
 
-All runtime reads and mutations go through one domain service. Feature code
-must not update `PlayerCurrencyBalance.amount` directly.
+All runtime mutations go through one domain service. Snapshot/condition readers
+may use bounded prefetched/query helpers, but feature code must not update
+`PlayerCurrencyBalance.amount` directly.
 
-The service should provide operations equivalent to:
+The implemented service in `backend/spawns/wallet.py` exposes:
 
-- `get_balance(player, currency)`
-- `get_snapshot(player)`
-- `credit(player, currency, amount, operation)`
-- `debit(player, currency, amount, operation)`
-- `transfer(source, destination, currency, amount, operation)`
-- `apply_batch(entries, operation)`
+- `mutate_balances(player, deltas, reason, emit_event=True)` for one atomic
+  signed-delta batch on one player
+- `replace_balances(player, amounts, reason, emit_event=True)` for an exact
+  snapshot replacement; omitted existing currencies become zero
+- `balance_map(player, include_zero=True)` for a code-keyed snapshot; missing
+  catalog rows are represented as zero when requested
 
-Names may differ in code, but the semantics should remain centralized.
+Dedicated transfer and durable-operation APIs remain deferred.
 
 ### Mutation Contract
 
-Every mutation supplies:
+Every implemented mutation supplies one player, one or more concrete Currency
+objects or IDs with integer deltas, a stable reason such as
+`merchant.purchase`, `quest.reward`, or `mob.kill`, and whether to emit the
+private balance event. Duplicate currency deltas in an iterable are aggregated
+before locking.
 
-- one or more concrete player IDs
-- one concrete economy-world ID
-- one or more concrete currency IDs
-- positive amounts or explicit signed deltas in an internal batch
-- an operation/idempotency key
-- a stable reason such as `merchant.purchase`, `quest.reward`, or `mob.kill`
-- action/command correlation identifiers when available
-
-The service returns:
-
-- currency identity
-- delta
-- balance before and after for a newly applied mutation
-- the current wallet snapshot for a replay
-- whether the result was newly applied or replayed
+The returned `WalletMutation` contains the locked Player, the resulting wallet
+revision, and an ordered tuple of changes. Each change contains the Currency,
+signed delta, balance before, and balance after.
 
 Debits fail atomically when funds are insufficient. No partial batch is
-committed. Public APIs should accept positive amounts for `credit`, `debit`, and
-`transfer`; signed deltas should remain an internal batch/administrative shape
-with the same nonnegative final-balance rule.
+committed. `mutate_balances` rejects boolean, fractional, malformed,
+cross-economy, negative-result, and greater-than-safe-integer deltas.
+`replace_balances` is an internal trusted-snapshot API; callers must pass
+already-validated integers (authoring and manifest paths do so).
 
-Before locking balances, the service aggregates duplicate deltas by
-`(player_id, currency_id)`. It validates the entire resulting batch for
-same-economy ownership, nonnegative final values, and 64-bit overflow before
+Before locking balances, the service aggregates duplicate deltas by currency
+ID. It validates the entire resulting batch for same-economy ownership,
+nonnegative final values, and the `9,007,199,254,740,991` safe-integer cap before
 persisting any part. The service is a transactional primitive used inside a
 feature Action, not an alternate command path.
+
+A successful nonempty batch increments `Player.wallet_revision` exactly once,
+regardless of how many currencies changed. A normalized empty batch changes no
+rows, emits no event, and does not increment the revision. A failed batch also
+leaves the revision unchanged.
 
 ### Locking Order
 
@@ -640,10 +650,10 @@ rows. A merchant purchase locks the affected Player, merchant runtime/stock,
 Item, and finally balance. Feature code must not debit first and then acquire an
 earlier aggregate lock.
 
-For a transfer, both Player rows are locked before either player's balance is
-changed. Locking the Player first serializes missing-row creation for that
-player when every mutation uses the service; the database unique constraint
-remains the final race guard.
+Player-to-player transfer is not part of the implemented service. A future
+transfer must lock both Player rows before either balance is changed. Locking a
+Player first serializes missing-row creation for that player; the database
+unique constraint remains the final race guard.
 
 All wallet writes must acquire every affected Player row first. Code must not
 `get_or_create` a balance or lock a balance before acquiring its owner lock.
@@ -656,15 +666,18 @@ debit is committed in one transaction.
 
 ### Idempotency And Receipts
 
-Workers and clients may retry. A retry must return the committed result without
-applying the delta or emitting the domain event again.
+Generic currency idempotency receipts are deferred. The current wallet API has
+no operation key and calling it twice applies the delta twice. Feature handlers
+must therefore avoid retry claims unless their outer feature supplies its own
+replay protection.
 
-WR2 does not currently have a generic Action receipt; the current pattern is
-crafting-specific. Currency integration should introduce a reusable durable
-`ActionMutationReceipt`. The outer feature Action owns one receipt covering the
-entire atomic change: item/quest/merchant state, wallet deltas, and emitted
-events. The wallet service accepts that operation context but does not create a
-separate wallet-only replay boundary.
+A later reusable durable `ActionMutationReceipt` should let the outer feature
+Action own one receipt covering item/quest/merchant state, wallet deltas, and
+emitted events. The receipt belongs at that logical-operation boundary rather
+than as a wallet-only receipt.
+
+The remainder of this subsection is deferred design direction, not an
+implemented contract.
 
 The receipt is stored in the same transaction and contains a stable idempotency
 key, operation fingerprint, immutable operation facts, and retention metadata.
@@ -692,37 +705,50 @@ one.
 
 ### Events
 
-Committed mutations enqueue a domain event through the transactional outbox in
-the same transaction. Publication happens after commit and never while balance
-locks are held. The current `GameEventOutbox` is deleted after successful
-delivery, so it provides reliable delivery but is not a retained audit log.
+By default, a committed nonempty mutation enqueues one private domain event
+through the transactional outbox in the same transaction. Callers may set
+`emit_event=False` for initialization/reset or when a larger feature owns its
+event contract. Publication happens after commit. `GameEventOutbox` is deleted
+after successful delivery, so it provides reliable delivery rather than a
+retained audit log.
 
-Recommended shape:
+Implemented shape:
 
 ```json
 {
   "type": "currency.balances_changed",
   "data": {
-    "operation_id": "...",
-    "player_id": 42,
+    "player": "player.42",
+    "wallet_revision": 8,
     "reason": "quest.reward",
     "changes": [
       {
-        "currency": "crowns",
+        "currency": {
+          "code": "crowns",
+          "name": "Crown",
+          "plural_name": "Crowns",
+          "description": "The ordinary coin of the realm."
+        },
         "delta": 25,
-        "balance_after": 35
+        "before": 10,
+        "after": 35,
+        "money": {
+          "amount": 35,
+          "currency": "crowns",
+          "display": "35 Crowns"
+        }
       }
     ]
   }
 }
 ```
 
-Emit at most one private balance event per affected player per Action, with all
-of that player's changes in the array. Absolute `balance_after` values let a
-client converge despite duplicate at-least-once delivery; consumers still
-deduplicate by event ID. A replay does not enqueue this event again. A public
-room event may say that a player received a reward without broadcasting the
-player's wallet.
+All currencies changed by the batch appear in one event. The monotonically
+increasing `wallet_revision` and absolute `after` values let a client reject an
+older snapshot and converge after duplicate/out-of-order delivery. Because the
+wallet currently has no generic replay receipt, replaying the mutation itself
+would produce another revision and event. A public room event may say that a
+player received a reward without broadcasting the player's wallet.
 
 Feature events such as `merchant.item.bought`, `quest.completed`, or
 `mob.killed` should still be emitted. Consumers should not parse text to learn
@@ -744,7 +770,7 @@ Planning:
   authoritative aggregate IDs into the Action payload
 - includes every aggregate identifier needed for locking
 
-Example conceptual Action:
+Example future fully queued Action (including the deferred receipt key):
 
 ```json
 {
@@ -779,7 +805,8 @@ Execution:
 - revalidates same-world currency ownership
 - invokes the currency service within the feature transaction
 - mutates the other feature state atomically with the balance
-- stores the receipt and events before commit
+- stores feature events before commit; a future generic action-receipt layer
+  will add the receipt at the outer feature boundary
 
 Buying an item must not charge without transferring the item, and transferring
 the item must not occur without charging. Quest completion must not be marked
@@ -794,7 +821,7 @@ remain inside Action and persistence boundaries.
 
 ### Character Creation And Reset
 
-Replace `starting_gold` with authored starting balances.
+`starting_gold` is removed; authored starting balances use:
 
 ```yaml
 kind: world
@@ -804,8 +831,8 @@ spec:
     guild-marks: 2
 ```
 
-Character initialization applies the configured credits in one batch. Reset
-semantics must be explicit:
+Character initialization applies the configured balances in one batch. Reset
+semantics are:
 
 - a true character reset replaces the affected balances with configured
   starting values
@@ -820,7 +847,7 @@ spawn, and instance entry are never initialization events.
 
 ### Items And Prices
 
-Manifest authoring may retain the familiar adjacent fields:
+Item manifests use adjacent fields:
 
 ```yaml
 spec:
@@ -829,18 +856,18 @@ spec:
 ```
 
 The parser resolves the code to a same-world `Currency` relation. Canonical
-item-definition storage should not rely only on an unvalidated code string
-inside generic JSON for a frequently queried economic field.
+item-definition storage uses the concrete relation rather than an unvalidated
+code inside generic JSON.
 
-Runtime item instances may keep a concrete value/currency snapshot when item
-values are intended to persist across later definition edits. Null currency
-must not mean Gold. An item with no monetary value stores neither amount nor
-currency; an explicit free offer stores zero plus a concrete currency. This
-distinction prevents null from carrying hidden fallback behavior.
+Runtime item instances keep a concrete cost/currency snapshot so later
+definition edits do not reinterpret existing items. Null currency never means
+Gold. An item with no monetary value stores neither amount nor currency; an
+explicit free value stores zero plus a concrete currency. This distinction
+prevents null from carrying hidden fallback behavior.
 
-Item values and every other monetary amount use the same checked 64-bit integer
-range as balances. Prices are integers in v1; fractional subunits are not
-smuggled into one feature through floats.
+Item values and every other monetary amount use the same checked
+`0..9,007,199,254,740,991` safe-integer range as balances. Prices are integers
+in v1; fractional subunits are not smuggled into one feature through floats.
 
 ### Merchants
 
@@ -903,8 +930,8 @@ justifies the additional UI and arbitrage rules.
 
 ### Mob Rewards And Combat
 
-Replace the singular mob `gold` reward with zero or more authored currency
-rewards.
+The singular mob `gold` reward is removed. Mob definitions use zero or more
+authored currency rewards.
 
 Conceptual manifest shape:
 
@@ -926,7 +953,7 @@ policy; the currency service should not guess how a reward is divided.
 
 ### Death Costs
 
-Replace Gold-specific naming with a currency loss/repair policy.
+Gold-specific death naming is replaced by a currency loss policy.
 
 Conceptual fields:
 
@@ -938,9 +965,11 @@ spec:
 ```
 
 The currency is selected explicitly when the policy is authored. The existing
-meaning of the penalty basis must be documented alongside the field; changing
-from equipment-value repair cost to a percentage of wallet balance is a
-separate game-design decision, not part of making the currency generic.
+penalty basis is the value of equipped items whose concrete snapshots use that
+same currency, multiplied by the configured rate and capped by the player's
+balance. Values in other currencies are not converted or added. Changing to a
+percentage of wallet balance is a separate game-design decision, not part of
+making the currency generic.
 Percentage/rate policy uses fixed-point or `Decimal` arithmetic with documented
 rounding before producing the integer debit; it never mutates balances with a
 floating-point amount.
@@ -1057,7 +1086,7 @@ world and prevents instance cleanup from deleting player money.
 
 ### World Currency Catalog
 
-World payloads should key definitions by stable code rather than database ID.
+World payloads key definitions by stable code rather than database ID.
 
 ```json
 {
@@ -1067,11 +1096,13 @@ World payloads should key definitions by stable code rather than database ID.
     "currencies": {
       "crowns": {
         "name": "Crown",
-        "plural_name": "Crowns"
+        "plural_name": "Crowns",
+        "description": "The ordinary coin of the realm."
       },
       "guild-marks": {
         "name": "Guild Mark",
-        "plural_name": "Guild Marks"
+        "plural_name": "Guild Marks",
+        "description": ""
       }
     }
   }
@@ -1088,11 +1119,12 @@ balance mutations do not.
 
 ### Player Balances
 
-Player-private payloads use one mapping:
+Player-private payloads include the wallet revision and one mapping:
 
 ```json
 {
   "economy": {
+    "wallet_revision": 12,
     "balances": {
       "crowns": 125,
       "guild-marks": 3
@@ -1101,8 +1133,11 @@ Player-private payloads use one mapping:
 }
 ```
 
-The default balance should be present even when zero. Other zero balances may
-be omitted. Frontends treat an omitted configured balance as zero.
+The state-sync snapshot and `currencies` command include the default even at
+zero and include only positive nondefault balances. Frontends treat any omitted
+configured balance as zero. Each successful nonempty wallet batch increments
+`wallet_revision` once; catalog edits instead increment the world economy
+`revision`.
 
 WR2 launches its backend and frontend together against this shape. It does not
 publish legacy `gold`, `medals`, or serialized `currencies` projections. A
@@ -1115,12 +1150,19 @@ Structured feature payloads use a common shape:
 ```json
 {
   "amount": 20,
-  "currency": "crowns"
+  "currency": "crowns",
+  "display": "20 Crowns"
 }
 ```
 
-This applies to prices, rewards, costs, penalties, and transaction summaries.
-Text rendering uses the world catalog:
+The Pydantic `Money` container has exactly these three fields: integer `amount`,
+currency code `currency`, and preformatted `display`. It applies to item values,
+merchant prices, rewards, penalties, and transaction summaries. `display` is a
+convenience string; clients should use `amount` and `currency` for logic. Text
+rendering uses the authored singular/plural names:
+
+Runtime item payloads expose this nullable container as `value`. They do not
+also expose fallback `cost` or `currency` fields.
 
 - `0 Crowns`
 - `1 Crown`
@@ -1133,20 +1175,20 @@ singular text by trimming characters from the code.
 
 ### Player Commands And Screens
 
-A proposed `currencies` command is the natural WR2 wallet display. It should:
+The implemented `currencies` command:
 
-- show the default first
-- show nondefault positive balances
-- show an empty/default-zero state clearly
-- use authored names rather than codes when presenting text
-- return both console text and structured balances
+- shows the default first
+- shows nondefault positive balances
+- shows an empty/default-zero state clearly
+- uses authored names rather than codes when presenting text
+- returns both console text and structured balances
 
-Inventory, stats, merchant, lookup, and reward screens should render dynamic
-currency data. They must not have hardcoded Gold or Medals rows.
+Inventory, stats, merchant, lookup, and reward screens render dynamic currency
+data and do not publish hardcoded Gold or Medals wallet rows.
 
 ## Builder UX
 
-**World > Currencies** should be the ordinary economy screen.
+**World > Currencies** is the ordinary economy screen.
 
 Each row should show:
 
@@ -1177,35 +1219,23 @@ base world, with a link back to the base-world screen.
 
 ### Live Editing Policy
 
-The target implementation should use one explicit policy across REST and YAML.
-
-Recommended initial rules:
-
-- editing display names/descriptions may occur live
-- adding an unused currency may occur live
-- switching the default may occur live once every authoring/runtime reader uses
-  concrete references, persisted economic commands have been audited, and the
-  revisioned catalog is active; the UI requires confirmation that only future
-  omissions/new authoring are affected
-- editing starting balances may occur live with the same future-character-only
-  warning
-- deletion requires the world to be stopped and all references absent
-- code retargeting is a separate offline administrative workflow
-
-The runtime is deterministic even around a default switch because Actions carry
-concrete currency IDs. The live switch is enabled only after every default
-reader has been replaced and persisted economic commands have been audited in
-the target implementation.
+REST and YAML share a conservative initial policy: currency creation, display
+edits, default selection, starting-balance replacement, and deletion are
+rejected while any ordinary spawn or instance run for the base world is
+running. Codes cannot be edited. Deletion additionally requires every
+registered authored/runtime usage to be absent. This stopped-world policy can
+be relaxed later without changing currency identity or manifest shapes.
 
 ## Performance And Scalability
 
 Performance requirements:
 
-- Currency lookup is indexed by `(world, code)` and may be cached per base-world
-  economy revision.
-- A player wallet snapshot is one `select_related` query for nonzero balance
-  rows, or no query when the rows were already prefetched. The separately
-  cached catalog supplies configured zero balances.
+- Currency lookup is backed by the case-insensitive per-world unique index.
+  The economy revision supports client/cache invalidation, although a shared
+  backend catalog cache is not part of this implementation.
+- A player wallet snapshot is one `select_related` query for positive balance
+  rows, or no query when those rows were already prefetched. The default
+  relation is selected with the owning world and is included at zero.
 - A mutation locks only involved Player and balance rows.
 - A batch touching `k` currencies performs bounded bulk reads/writes in `O(k)`;
   it does not issue one query per configured currency.
@@ -1225,11 +1255,12 @@ Performance requirements:
 - A currency mutation is not one Celery task per balance row. One feature
   Action performs its bounded batch in one transaction.
 
-For a `k`-currency mutation, the intended shape is one ordered Player-lock
-query, one batched currency-validation query (or a catalog-cache hit), one
-ordered balance-lock query, bounded bulk create/update work, one receipt insert,
-and bounded outbox inserts. Exact query counts may vary with the ORM, but growth
-must not become one query per currency or one full Player reload.
+For a `k`-currency mutation, the implemented shape is one Player-lock query,
+one batched currency-validation query, one ordered balance-lock query, bounded
+bulk create/update work, and at most one balance-event outbox insert. Exact
+query counts may vary with missing-row creation, but growth must not become one
+query per currency or one full Player reload. A future generic receipt adds one
+outer-operation insert rather than one receipt per balance.
 
 The normalized model creates at most one row per player/currency pair that has
 been used. That is a small, predictable cost compared with rewriting serialized
@@ -1241,12 +1272,14 @@ Representative performance tests should assert:
 - bounded query count for a multi-currency reward
 - no N+1 default lookup while spawning batches of items or mobs
 - no negative result under concurrent debits
-- no duplicate credit under concurrent/retried delivery
+- no negative result under concurrent debit contention; duplicate-delivery
+  protection remains deferred with generic action receipts
 
 Production metrics should include wallet transaction duration, lock wait time,
-deadlocks/retries, idempotency conflicts, and outbox delivery lag. Load tests
-must cover both independent-player throughput and contention on one hot player
-or merchant; averages alone will miss the economically dangerous cases.
+deadlocks/retries, revision gaps, and outbox delivery lag. Once generic receipts
+exist, add replay/idempotency-conflict metrics. Load tests must cover both
+independent-player throughput and contention on one hot player or merchant;
+averages alone will miss the economically dangerous cases.
 
 ## Authorization And Validation
 
@@ -1291,10 +1324,10 @@ database. They are not a WR1 data-transition mechanism. Local development data
 may be reset while the target schema is built rather than complicating the
 runtime with temporary preservation logic.
 
-Current early-WR2 fields such as `Player.gold`, `Player.medals`, serialized
-`Player.currencies`, `WorldConfig.starting_gold`, and `Currency.is_default` are
-implementation scaffolding to replace before launch, not production data
-sources to migrate.
+Early-WR2 fields such as `Player.gold`, `Player.medals`, serialized
+`Player.currencies`, `WorldConfig.starting_gold`, and `Currency.is_default` have
+been removed from the target models. Their schema migrations define the clean
+WR2 database; they do not read or transform WR1 production data.
 
 ### Optional Authored-World Conversion Utility
 
@@ -1341,14 +1374,13 @@ The utility must not inspect or export player balance fields to decide which
 currencies exist. A world manifest bundle contains authored definitions and
 configuration only, never live player state.
 
-When this target contract is implemented, update the WR1 manifest-conversion
-notes in [yaml-manifest-system.md](yaml-manifest-system.md) so the optional
-utility emits the final currency, world, item, merchant, mob, death, condition,
-and quest shapes directly.
+The WR1 manifest-conversion notes in
+[yaml-manifest-system.md](yaml-manifest-system.md) describe these final currency,
+world, item, merchant, mob, death, condition, and quest shapes directly.
 
-## Implementation Phases
+## Implementation Status
 
-### Phase 1: Definitions And Invariants
+### Implemented: Definitions And Invariants
 
 - introduce the shared `economy_world()` resolver
 - tighten currency code and name validation
@@ -1360,14 +1392,17 @@ and quest shapes directly.
 - introduce one authoring service used by REST and manifests
 - add usage-aware deletion protection
 
-### Phase 2: Balance Foundation
+### Implemented: Balance Foundation
 
 - add `PlayerCurrencyBalance`
 - add the currency service
-- integrate ordered locking, idempotent receipts, and outbox events
+- integrate ordered Player/balance locking and outbox events
 - add wallet snapshot serialization
 
-### Phase 3: Runtime Integrations
+Generic idempotent receipts are deferred and are not part of the implemented
+wallet API.
+
+### Implemented: Runtime Integrations
 
 - character starting/reset balances
 - items and prices
@@ -1376,10 +1411,14 @@ and quest shapes directly.
 - death costs
 - quest and instance reward effects
 - clan/system costs
-- admin awards and existing currency conditions
+- existing currency conditions
 - route every writer through the service and remove direct special-field writes
 
-### Phase 4: Builder And Player Surfaces
+Privileged generic currency adjustments/awards are deferred. The former
+Gold-specific `/award` help entries have been removed until a permissioned,
+audited command with an explicit currency code is designed and implemented.
+
+### Implemented Foundation: Builder And Player Surfaces
 
 - replace the currency list with the target economy screen
 - add default selection and usage-aware delete
@@ -1388,7 +1427,11 @@ and quest shapes directly.
 - implement the `currencies` wallet command
 - add canonical copy/apply/delete YAML
 
-### Phase 5: Clean-Launch Finalization
+The REST/manifests and player payload/command foundation is implemented.
+Additional polish to currency selectors on every builder form may continue
+without changing the contracts in this document.
+
+### Implemented: Clean-Launch Schema
 
 - remove Gold-specific runtime constants and branches
 - remove old player balance/config fields and legacy manifest/effect aliases
@@ -1501,7 +1544,8 @@ That world must support:
 - player wallet, inventory, stats, lookup, and messages
 - export/import round trip
 - instance inheritance
-- concurrent debits and retry-safe credits
+- concurrent debit protection and monotonic wallet revisions; generic
+  retry-safe credits remain deferred with action receipts
 
 No canonical runtime path in that test may query, display, or mutate a special
 Gold field. Passing this test demonstrates that the default currency is truly
@@ -1551,11 +1595,12 @@ The target system is correct when all of the following are true:
   balance.
 - No runtime path interprets null, an unknown code, or a deleted reference as
   Gold or as the current default.
-- Every queued mutation names concrete economy-world and currency IDs and is
-  retry-safe.
+- Runtime feature work resolves a concrete base-world currency; the wallet
+  primitive itself is not replay-safe until generic action receipts are added.
 - Every authored or runtime reference resolves within the same base world.
 - Instances inherit definitions and mutate persistent player balances.
-- Feature state, balances, replay receipts, and outbox events commit atomically.
+- Balance changes, wallet revision, and any enabled outbox balance event commit
+  atomically.
 - Wallet query and lock work is bounded by the Action, never by world
   population.
 - Builders can understand the system as definitions, one default, and

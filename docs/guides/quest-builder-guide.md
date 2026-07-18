@@ -96,7 +96,7 @@ Builders can rely on these pieces today:
   - `quest.item.delivered`
   - `quest.mob.killed`
 - Common reward/effect types:
-  - `grant_gold`
+  - `grant_currency`
   - `grant_xp`
   - `set_state`
   - `increment_state`
@@ -362,10 +362,14 @@ Use canonical effect `type` values when authoring new manifests:
 | `type`        | Fields                                      | Behavior                                            |
 | ------------- | ------------------------------------------- | --------------------------------------------------- |
 | `set_local`   | `key`, `value` or `set_local: [key, value]` | Writes quest-local state under `quest.local_state`. |
-| `grant_gold`  | `amount`                                    | Adds gold to the player immediately.                |
+| `grant_currency` | `currency`, `amount`                    | Adds one authored currency to the player immediately. |
 | `grant_xp`    | `amount`                                    | Adds experience and applies world leveling immediately. |
 | `adjust_reputation` | `faction`, `amount`                   | Adds or subtracts player standing with a reputation faction. |
 | `mob_command` | `mob_definition` and `command` or `commands` | Runs a constrained mob speech/emote/echo command.   |
+
+`grant_currency` requires an explicit currency code and a positive whole-number
+amount. It does not fall back to Gold or the current default. See
+[currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md).
 
 
 Allowed `mob_command` verbs today:
@@ -482,7 +486,8 @@ spec:
       recap: The bartender rolls the fresh keg into place.
   rewards:
     complete:
-      - type: grant_gold
+      - type: grant_currency
+        currency: obol
         amount: 10
       - type: grant_xp
         amount: 50

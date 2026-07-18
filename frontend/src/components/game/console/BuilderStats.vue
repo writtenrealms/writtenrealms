@@ -52,6 +52,7 @@
 <script lang="ts" setup>
 import { computed } from "vue";
 import { useStore } from "vuex";
+import { walletBalanceEntries } from "@/core/economy.ts";
 import { capfirst, formatCombatStatValue } from "@/core/utils.ts";
 
 const props = defineProps<{
@@ -120,22 +121,35 @@ const detailEntries = computed(() => {
       value: target.value?.experience ?? 0,
     });
   }
-  entries.push({
-    key: "gold",
-    label: "Gold",
-    value: target.value?.gold ?? 0,
-  });
   if (targetType.value === "player") {
+    for (const balance of walletBalanceEntries(
+      world.value?.economy,
+      target.value?.economy,
+    )) {
+      entries.push({
+        key: `currency-${balance.currency}`,
+        label: balance.label,
+        value: balance.amount,
+      });
+    }
     entries.push({
       key: "glory",
       label: "Glory",
       value: target.value?.glory ?? 0,
     });
-    entries.push({
-      key: "medals",
-      label: "Medals",
-      value: target.value?.medals ?? 0,
-    });
+  } else {
+    const rewards = target.value?.currency_rewards || {};
+    for (const [code, amount] of Object.entries(rewards)) {
+      const definition = world.value?.economy?.currencies?.[code];
+      const numericAmount = Number(amount) || 0;
+      entries.push({
+        key: `currency-reward-${code}`,
+        label: numericAmount === 1
+          ? definition?.name || code
+          : definition?.plural_name || definition?.name || code,
+        value: numericAmount,
+      });
+    }
   }
   return entries;
 });

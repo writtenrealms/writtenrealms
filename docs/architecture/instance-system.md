@@ -19,6 +19,7 @@ defines the target shape those pieces should move toward.
 - [quest-system-endstate.md](/Users/teebes/code/writtenrealms/docs/architecture/quest-system-endstate.md)
 - [condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md)
 - [instance-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/instance-builder-guide.md)
+- [currency-system.md](/Users/teebes/code/writtenrealms/docs/architecture/currency-system.md)
 - [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
 
 ## Goals
@@ -90,7 +91,7 @@ duplicated onto the instance template:
 | Item definitions | `ItemDefinition` | Instance spawn plans can reference base-world item definitions. Spawned item rows still belong to the instance run's spawned world. |
 | Mob definitions | `MobDefinition` | Instance spawn plans can reference base-world mobs. Spawned mob rows still belong to the instance run's spawned world. |
 | Item bundles | Weighted reward/drop/load bundles | Bundles stay global so rewards mean the same thing inside and outside the instance. |
-| Currencies | Gold, medals, custom currencies | Currency definitions are base-owned. Player balances remain player/global state, not instance definitions. |
+| Currency economy | Currency definitions, default currency, starting balances, and player wallets | Definitions and creation policy are base-owned. Code-keyed player balances remain player/global state rather than instance definitions. |
 | Socials | Shared emote commands | Social vocabulary should not fork per instance. |
 | Abilities | Ability definitions and ability progression | Instances may restrict use later through policies, but definitions are inherited. |
 | Leveling | Starting/max level, leveling curve | Instances should not have hidden XP curves unless a later explicit feature needs it. |
@@ -100,6 +101,13 @@ duplicated onto the instance template:
 
 This matches the direction already visible in the frontend: many base-world
 resource pages are hidden or redirected when editing an instance world.
+
+The base world also owns `clan_registration_currency` and
+`clan_registration_cost`; entering an instance does not create a second clan
+economy. Instance templates do not clone currencies, convert balances, or open
+instance-local wallets. They may override only the allowlisted death currency
+policy described below, and every such currency code still resolves against
+the base-world catalog.
 
 ### Owned By Instance Template
 
@@ -179,8 +187,9 @@ Good initial override candidates:
 
 | Field | Why it makes sense |
 | --- | --- |
-| `death_mode` | A base world may use gold loss while an instance destroys equipment or drops inventory. |
-| `death_gold_penalty` | Needed if the instance uses gold-loss death. |
+| `death_mode` | A base world may use currency loss while an instance destroys equipment or drops inventory. |
+| `death_currency` | Selects the concrete base-catalog currency used when `death_mode` is `lose_currency`. |
+| `death_currency_penalty` | Sets the balance fraction lost when `death_mode` is `lose_currency`. |
 | `death_route` | Needed if faction or route-specific death behavior should differ. |
 | `pvp_mode` | Instances often need stricter PvP policy than the base world. |
 | `never_reload` or spawn reload policy | Completion-sensitive instances may need spawn-plan reconciliation disabled or constrained. |
@@ -192,7 +201,8 @@ Fields that should stay inherited initially:
 | Field | Reason |
 | --- | --- |
 | `leveling_curve` / `max_level` / `starting_level` | Hidden per-instance progression curves make player growth hard to reason about. |
-| `starting_gold` / starting equipment | Character creation rewards should come from the base world. |
+| `default_currency` / `starting_balances` | Character creation economy policy belongs to the base world; balances are keyed by concrete currency code. |
+| starting equipment | Character creation equipment should come from the base world. |
 | character creation and naming policy | Gender, faction, title, class, and name restrictions are base-world player policy. |
 | `stat_system` | Player stats should mean the same thing across the world. |
 | `equipment_system` | Equipment slot and armor-class behavior should not fork silently. |
@@ -201,7 +211,7 @@ Fields that should stay inherited initially:
 | `combat_resolution_interval` | Encounter pacing is part of the base combat system and should stay consistent. |
 | `ability_progression` | Learned/available abilities should remain base-world player progression. |
 | global channels and glory decay | Shared social/economy-style policy should not fork inside an instance. |
-| currencies | Currency definitions must stay shared so rewards and penalties resolve consistently. |
+| currency definitions and clan registration currency/cost | Currency definitions and global clan policy must stay shared so rewards, registration, and penalties resolve consistently. |
 
 If later we need any of these overrides, they should be introduced as deliberate
 features with strong builder UI warnings, manifest diff visibility, and runtime
@@ -955,7 +965,8 @@ Important rules:
 
 - Death room must be instance-local.
 - Death mode may be overridden by the instance.
-- Death penalties still act on the player's real inventory/equipment/currency.
+- Death penalties still act on the player's real inventory, equipment, or
+  code-keyed wallet balances.
 - If items are destroyed or dropped, they belong to the instance run's spawned
   world at that moment.
 - If a death causes failure, the failure should be an instance event, not a
@@ -963,7 +974,8 @@ Important rules:
 
 Example:
 
-- Base world: `death_mode: lose_gold`
+- Base world: `death_mode: lose_currency`, `death_currency: crowns`,
+  `death_currency_penalty: 0.2`
 - Instance override: `death_mode: destroy_eq`
 - Player dies in instance:
   - equipment destruction uses the override
@@ -992,7 +1004,7 @@ Outcome data should be structured:
 
 Rewards may later include:
 
-- currency grants
+- currency grants with an explicit base-catalog currency code
 - item bundle rolls
 - quest or arc progression
 - world/character state changes

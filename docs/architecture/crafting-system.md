@@ -27,6 +27,7 @@ Reference docs:
 
 - [guided-random-item-definitions.md](guided-random-item-definitions.md)
 - [merchant-system.md](merchant-system.md)
+- [currency-system.md](currency-system.md)
 - [trigger-event-subscriptions.md](trigger-event-subscriptions.md)
 - [yaml-manifest-system.md](yaml-manifest-system.md)
 - [attack-routines-and-dual-wielding.md](attack-routines-and-dual-wielding.md)
@@ -78,9 +79,10 @@ The relevant existing systems are:
 - every physical item copy is a separate `spawns.Item` row. Stable items may
   look stacked in the frontend, but the backend has no quantity column for an
   item stack.
-- the existing custom-currency balance is serialized on the player and does
-  not provide a complete generic, transactional balance service. Crafting
-  materials should not be added to that field as-is.
+- WR2 has a generic, transactional currency service with normalized,
+  code-keyed player balances and structured `Money` values. Crafting materials
+  remain a separate resource type because they are recipe inputs rather than
+  spendable money.
 
 Crafting is implemented as first-class commands and transactional actions. It
 is not assembled from room triggers. Trigger scripts are not an
@@ -210,7 +212,7 @@ The structured response should have a stable shape such as:
 - every material type defined in the world with zero beside it
 - physical salvageable items in inventory
 - lifetime material income or spending
-- gold, medals, glory, or combat stats
+- currency balances, Glory, or combat stats
 
 Recipe requirements belong to `recipe <number>` or `recipe <item>`. Physical
 loot belongs to the normal inventory command. Lifetime source and sink totals
@@ -432,17 +434,19 @@ a quantity. Modeling 100 scraps as physical items would therefore create:
 
 A compact balance row avoids those costs.
 
-### Why Materials Do Not Reuse Current Custom Currencies
+### Why Materials Are Not Currencies
 
-WR2 can author custom currency definitions, but player custom balances are
-currently serialized into a player field and are not backed by a complete
-generic atomic-balance service. Merchant configuration can name currencies,
-but the current transaction path still specializes important behavior around
-gold.
+WR2 currencies have a complete generic balance service: definitions are
+world-authored, player balances are normalized and code-keyed, and monetary
+values use explicit currency references. That does not make every bulk ledger
+resource a currency. Currencies are stores of value used by prices, rewards,
+merchant settlement, and economy policies; crafting materials are typed recipe
+ingredients with source, salvage, and consumption semantics.
 
-Crafting should therefore introduce a dedicated normalized material balance
-rather than silently treating Bronze as money or extending the existing
-serialized currency field.
+Crafting therefore uses a dedicated normalized material balance rather than
+silently treating Bronze as money. Keeping the resource types separate also
+prevents materials from accidentally appearing in currency grants, merchant
+payments, death penalties, or other economy commands.
 
 ### Material Persistence And Trading
 
@@ -1002,7 +1006,8 @@ Manifest application should reject:
 Builder tooling should warn, but not necessarily reject, when:
 
 - total salvage yield approaches or exceeds the corresponding craft cost
-- a crafted item has a merchant value that could create a material-to-gold loop
+- a crafted item has a merchant value that could create a
+  material-to-currency loop
 - a recipe is not exposed by any profile
 - a profile contains an unusually large ungrouped catalog
 - a recipe group does not match the intended recipe family
@@ -1082,7 +1087,7 @@ stable material-id order, and item locks must follow a stable item-id order.
 
 - Crafting or salvage failure consumes nothing.
 - Crafted gear should have no vendor value, or merchants must explicitly
-  reject it, until material-to-gold loops are evaluated.
+  reject it, until material-to-currency loops are evaluated.
 - Salvage never considers equipped gear.
 - Bulk salvage initially processes only explicitly marked spoils.
 - Materials survive death in the first slice.

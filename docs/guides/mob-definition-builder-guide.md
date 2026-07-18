@@ -49,11 +49,37 @@ spec:
   exp_worth: 1
 ```
 
-Common direct mob fields include `level`, `exp_worth`, `gold`, `health_max`,
+Common direct mob fields include `level`, `exp_worth`, `health_max`,
 `health_regen`, `energy_max`, `energy_regen`, `stamina_max`, `stamina_regen`,
 `regen_rate`, `attack_power`, `weapon_damage`, `ability_power`, `armor`, `crit`, `dodge`,
 `resilience`, `aggression`, `target_priority`, `fights_back`, `roam_chance`, and
 `is_invisible`.
+
+## Currency Rewards
+
+Use a code-to-amount mapping under `rewards.currencies`; mobs do not have a
+special Gold field:
+
+```yaml
+kind: mobdefinition
+metadata:
+  slug: village-raider
+  name: a village raider
+spec:
+  exp_worth: 8
+  rewards:
+    currencies:
+      obol: 3
+```
+
+Each code must belong to the base world's currency catalog and each reward must
+be a positive whole number no greater than `9,007,199,254,740,991`. A kill
+credits all configured currency rewards as one wallet batch. Applying
+`rewards.currencies` replaces the complete currency-reward mapping for that mob
+definition.
+
+See [currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md)
+for defining currencies and choosing a default.
 
 For mobs, `weapon_damage` is an internal combat stat. It represents the mob's
 weapon, claws, bite, slam, or other natural attack without requiring a spawned

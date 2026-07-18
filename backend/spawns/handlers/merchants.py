@@ -27,6 +27,11 @@ def _split_on_marker(text: str, marker: str) -> tuple[str, str | None]:
     return before, after
 
 
+def _money_text(value: dict | None) -> str:
+    value = value or {}
+    return str(value.get("display") or f"{value.get('amount', 0)} {value.get('currency', '')}").strip()
+
+
 def _stock_text(data: dict) -> str:
     merchant = (data.get("merchant") or {}).get("name") or "The merchant"
     stock = data.get("stock") or []
@@ -35,7 +40,9 @@ def _stock_text(data: dict) -> str:
     lines = [f"{merchant} offers:"]
     for entry in stock:
         item = entry.get("item") or {}
-        lines.append(f"{entry.get('id')}. {item.get('name') or 'item'} - {entry.get('price', 0)} gold")
+        lines.append(
+            f"{entry.get('id')}. {item.get('name') or 'item'} - "
+            f"{_money_text(entry.get('price'))}")
     return "\n".join(lines)
 
 
@@ -47,7 +54,9 @@ def _buyback_text(data: dict) -> str:
     lines = [f"{merchant} can sell back:"]
     for entry in entries:
         item = entry.get("item") or {}
-        lines.append(f"{entry.get('id')}. {item.get('name') or 'item'} - {entry.get('price', 0)} gold")
+        lines.append(
+            f"{entry.get('id')}. {item.get('name') or 'item'} - "
+            f"{_money_text(entry.get('price'))}")
     return "\n".join(lines)
 
 
@@ -102,7 +111,7 @@ class BuyHandler(CommandHandler):
         ctx.publish_success(
             "buy",
             result.data,
-            text=f"You buy {item_name} for {result.data.get('price', 0)} gold.",
+            text=f"You buy {item_name} for {_money_text(result.data.get('price'))}.",
         )
 
 
@@ -144,7 +153,7 @@ class SellHandler(CommandHandler):
         ctx.publish_success(
             "sell",
             result.data,
-            text=f"You sell {item_name} for {result.data.get('price', 0)} gold.",
+            text=f"You sell {item_name} for {_money_text(result.data.get('price'))}.",
         )
 
 
@@ -182,5 +191,5 @@ class BuybackHandler(CommandHandler):
         ctx.publish_success(
             "buyback",
             result.data,
-            text=f"You buy back {item_name} for {result.data.get('price', 0)} gold.",
+            text=f"You buy back {item_name} for {_money_text(result.data.get('price'))}.",
         )

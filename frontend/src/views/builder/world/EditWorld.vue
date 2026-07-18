@@ -392,7 +392,14 @@ const loadWorldConfigYaml = async () => {
   manifestText.value = payload?.yaml || "";
 };
 
-const newItemDefinitionYaml = `kind: itemdefinition
+const defaultCurrencyCode = () => (
+  store.state.builder.world?.default_currency
+  || store.state.builder.world?.currencies?.find((currency: any) => currency.is_default)?.code
+  || store.state.builder.world?.currencies?.[0]?.code
+  || "currency"
+);
+
+const newItemDefinitionYaml = () => `kind: itemdefinition
 metadata:
   slug: new-item
   name: a new item
@@ -406,6 +413,7 @@ spec:
   is_persistent: false
   is_pickable: true
   cost: 0
+  currency: ${defaultCurrencyCode()}
   food_value: 0
   equipment_type:
   armor_class: light
@@ -452,7 +460,7 @@ spec:
       name: Friendly
 `;
 
-const newMobDefinitionYaml = `kind: mobdefinition
+const newMobDefinitionYaml = () => `kind: mobdefinition
 metadata:
   slug: new-mob
   name: a new mob
@@ -465,7 +473,8 @@ spec:
   assists: false
   level: 1
   exp_worth: 1
-  gold: 0
+  rewards:
+    currencies: {}
   aggression: normal
   health_max: 30
   health_regen: 0
@@ -487,12 +496,13 @@ spec:
     attributes: []
 `;
 
-const newMerchantProfileYaml = `kind: merchantprofile
+const newMerchantProfileYaml = () => `kind: merchantprofile
 metadata:
   slug: new-merchant-profile
   name: New Merchant Profile
 spec:
   notes: ''
+  settlement_currency: ${defaultCurrencyCode()}
   pricing:
     sell_markup: 1
     buy_multiplier: 0.4
@@ -500,7 +510,6 @@ spec:
     interval_seconds:
   funds:
     mode: unlimited
-    currency: ''
     purchase_budget: 0
   buyback:
     enabled: false
@@ -714,7 +723,7 @@ const loadSuggestedMobDefinitionYaml = () => {
     window.sessionStorage.removeItem(storageKey);
     return;
   }
-  manifestText.value = newMobDefinitionYaml;
+  manifestText.value = newMobDefinitionYaml();
 };
 
 const loadMerchantProfileYaml = async () => {
@@ -853,7 +862,7 @@ onMounted(async () => {
     await loadItemDefinitionYaml();
   } else if (route.query.prefill === "new-item-definition") {
     clearApplyResult();
-    manifestText.value = newItemDefinitionYaml;
+    manifestText.value = newItemDefinitionYaml();
   } else if (route.query.prefill === "item-bundle") {
     await loadItemBundleYaml();
   } else if (route.query.prefill === "new-item-bundle") {
@@ -870,7 +879,7 @@ onMounted(async () => {
     loadSuggestedMobDefinitionYaml();
   } else if (route.query.prefill === "new-mob-definition") {
     clearApplyResult();
-    manifestText.value = newMobDefinitionYaml;
+    manifestText.value = newMobDefinitionYaml();
   } else if (route.query.prefill === "new-spawn-plan") {
     clearApplyResult();
     manifestText.value = newSpawnPlanYaml();
@@ -878,7 +887,7 @@ onMounted(async () => {
     await loadMerchantProfileYaml();
   } else if (route.query.prefill === "new-merchant-profile") {
     clearApplyResult();
-    manifestText.value = newMerchantProfileYaml;
+    manifestText.value = newMerchantProfileYaml();
   } else if (route.query.prefill === "craft-material") {
     await loadCraftMaterialYaml();
   } else if (route.query.prefill === "new-craft-material") {

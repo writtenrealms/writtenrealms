@@ -30,14 +30,13 @@
           <div class="value">{{ stat.value }}</div>
         </div>
 
-        <div class="stat-entry">
-          <div class="label">Gold</div>
-          <div class="value">{{ player.gold }}</div>
-        </div>
-
-        <div class="stat-entry">
-          <div class="label">Medals</div>
-          <div class="value">{{ player.medals }}</div>
+        <div
+          v-for="balance in walletEntries"
+          :key="`currency-${balance.currency}`"
+          class="stat-entry"
+        >
+          <div class="label">{{ balance.label }}</div>
+          <div class="value">{{ balance.amount }}</div>
         </div>
 
         <div class="stat-entry">
@@ -68,6 +67,7 @@
 <script lang='ts' setup>
 import { computed } from "vue";
 import { useStore } from "vuex";
+import { walletBalanceEntries } from "@/core/economy.ts";
 import { capfirst, formatCombatStatValue } from "@/core/utils.ts";
 
 const props = defineProps({
@@ -81,6 +81,10 @@ const store = useStore();
 
 const player = computed(() => props.message?.data?.actor || store.state.game.player || {});
 const world = computed(() => props.message?.data?.world || store.state.game.world || {});
+const walletEntries = computed(() => walletBalanceEntries(
+  world.value?.economy,
+  player.value?.economy,
+));
 
 const resourceLabels = computed(() => world.value?.labels?.resources || {});
 const healthLabel = computed(() => resourceLabels.value.health || "Health");

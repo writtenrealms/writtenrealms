@@ -118,17 +118,17 @@ the underlying editor URL.
 The instance template owns instance-local content and policy instead: starting
 room, death room, zones, rooms, paths, spawn plans, goals, timer settings,
 cleanup policy, presentation fields, and supported local rules such as death
-behavior. A base world can use a gold-loss death penalty while an instance sends
-dead players to an instance-local death room and uses a different supported
-death mode, but the combat math and player progression still come from the base
-world.
+behavior. A base world can use a currency-loss death penalty while an instance
+sends dead players to an instance-local death room and uses a different
+supported death mode, but every currency reference still resolves against the
+base-world catalog.
 
 Instance world config manifests only accept local fields: identity text,
-visibility, starting/death rooms, death mode, death route, death gold penalty,
-PvP policy, builder credit, and background art. Player-creation and global
-policy fields such as starting gold, title rules, naming rules, globals, class
-selection, starting equipment, leveling, stats, equipment, combat, and abilities
-belong to the base world.
+visibility, starting/death rooms, death mode, death route, death currency and
+penalty, PvP policy, builder credit, and background art. Player-creation and
+global policy fields such as default currency, starting balances, title rules,
+naming rules, globals, class selection, starting equipment, leveling, stats,
+equipment, combat, and abilities belong to the base world.
 
 Learned player abilities also resolve through the base world while the player is
 inside a spawned instance. Ability definitions cannot be authored on instance

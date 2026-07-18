@@ -281,8 +281,9 @@ const configLinks = computed(() => [
   },
   {
     title: "Currencies",
-    description: "Currency definitions and default money behavior.",
-    rootOnly: true,
+    description: isRootWorld.value
+      ? "Currency definitions, starting balances, and default money behavior."
+      : `Currencies inherited from ${baseWorld.value.name}.`,
     to: {
       name: "builder_world_currency_list",
       params: { world_id: route.params.world_id },
@@ -337,7 +338,11 @@ const manifestGroups = [
   },
   {
     title: "Progression",
-    keys: ["starting_level", "max_level", "starting_gold", "leveling_curve", "ability_progression"],
+    keys: ["starting_level", "max_level", "leveling_curve", "ability_progression"],
+  },
+  {
+    title: "Economy",
+    keys: ["default_currency", "starting_balances"],
   },
   {
     title: "Rooms",
@@ -345,7 +350,14 @@ const manifestGroups = [
   },
   {
     title: "Combat",
-    keys: ["combat_resolution_interval", "combat", "death_mode", "death_route", "death_gold_penalty"],
+    keys: [
+      "combat_resolution_interval",
+      "combat",
+      "death_mode",
+      "death_route",
+      "death_currency",
+      "death_currency_penalty",
+    ],
     wide: true,
   },
   {

@@ -104,7 +104,6 @@ export const CONDITIONS: FormElement = {
     - fact_check fact value<br/>
     - fact_above fact value<br/>
     - gender gender<br/>
-    - gold gold<br/>
     - has_weapon<br/>
     - has_shield<br/>
     - health percentage<br/>

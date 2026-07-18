@@ -22,6 +22,7 @@
 import { computed } from "vue";
 import { useStore } from "vuex";
 import ItemInfo from "@/components/game/ItemInfo.vue";
+import { formatMoney } from "@/core/economy.ts";
 
 const store = useStore();
 
@@ -36,6 +37,7 @@ const item = computed(() => props.entity);
 const KNOWN_ACTIONS = [
   "eat",
   "buy",
+  "buyback",
   "sell",
   "wield",
   "wear",
@@ -78,6 +80,10 @@ const actions = computed(() => {
         action: "buy",
         label: "BUY"
       },
+      {
+        action: "buyback",
+        label: "BUY BACK"
+      },
       { action: "sell", label: "SELL" },
       { action: "wield", label: "WIELD" },
       { action: "wear", label: "WEAR" },
@@ -93,10 +99,17 @@ const actions = computed(() => {
   for (const action of actionsPriority) {
     if (hasAction(action.action)) {
       const actionData = { ...action };
-      if (action.action === "buy") {
-        const currency = (item.value.currency || "gold").toUpperCase();
-        const buyPrice = item.value.buy_price || item.value.cost || 0;
-        actionData.label = `BUY FOR ${buyPrice} ${currency}`;
+      if (action.action === "buy" || action.action === "buyback") {
+        const buyPrice = action.action === "buyback"
+          ? item.value.buyback_price || item.value.price || item.value.value
+          : item.value.buy_price || item.value.price || item.value.value;
+        if (buyPrice && typeof buyPrice === "object" && "amount" in buyPrice) {
+          const verb = action.action === "buyback" ? "BUY BACK FOR" : "BUY FOR";
+          actionData.label = `${verb} ${formatMoney(
+            buyPrice,
+            store.state.game.world?.economy,
+          )}`;
+        }
       }
 
       // If we have get_from, make sure the container has an inventory
@@ -140,6 +153,20 @@ const actions = computed(() => {
 const doAction = (item, action) => {
   const rawAction = String(action || "").trim();
   const normalizedAction = rawAction.toLowerCase();
+  let authoredCommand = "";
+  if (normalizedAction === "buy") {
+    authoredCommand = item.buy_command || `buy ${item.key}`;
+  } else if (normalizedAction === "sell") {
+    authoredCommand = item.sell_command || `sell ${item.key}`;
+  } else if (normalizedAction === "buyback") {
+    authoredCommand = item.buyback_command || "";
+  }
+  if (authoredCommand) {
+    store.dispatch("game/cmd", authoredCommand);
+    store.commit("game/lookup_clear");
+    store.commit("ui/modal/close");
+    return;
+  }
   if (!KNOWN_ACTIONS.includes(normalizedAction)) {
     if (rawAction) {
       store.dispatch("game/cmd", rawAction);

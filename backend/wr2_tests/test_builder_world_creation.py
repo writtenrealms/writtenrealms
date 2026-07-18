@@ -12,6 +12,8 @@ from django.test import TransactionTestCase
 from rest_framework.reverse import reverse
 from rest_framework.test import APITestCase
 
+from builders.models import Currency
+from spawns.wallet import balance_map
 from worlds.models import World, Zone
 
 User = get_user_model()
@@ -63,6 +65,39 @@ class TestBuilderWorldCreation(APITestCase):
 
         world = World.objects.get(pk=resp.data['id'])
         self.assertTrue(world.is_multiplayer)
+
+    def test_create_world_can_use_obol_as_its_only_currency(self):
+        resp = self.client.post(self.endpoint, {
+            'name': 'Phalanx',
+            'is_multiplayer': True,
+            'initial_currency_code': 'obol',
+            'initial_currency_name': 'Obol',
+            'initial_currency_plural_name': 'Obols',
+        })
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        world = World.objects.select_related(
+            'default_currency',
+            'config__death_currency',
+            'config__clan_registration_currency',
+        ).get(pk=resp.data['id'])
+        self.assertEqual(world.default_currency.code, 'obol')
+        self.assertEqual(world.config.death_currency.code, 'obol')
+        self.assertEqual(world.config.clan_registration_currency.code, 'obol')
+        self.assertEqual(
+            list(world.currencies.values_list('code', flat=True)),
+            ['obol'],
+        )
+        self.assertFalse(
+            Currency.objects.filter(
+                world=world,
+                code__in=('gold', 'medals'),
+            ).exists()
+        )
+        self.assertEqual(
+            balance_map(world.spawned_worlds.get().players.get(is_builder=True)),
+            {'obol': 0},
+        )
 
 
 class TestBuilderZoneCreation(APITestCase):

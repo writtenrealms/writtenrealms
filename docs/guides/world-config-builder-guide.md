@@ -17,7 +17,9 @@ spec:
   is_public: true
   starting_room: room@0,0,0
   death_room: room@0,0,0
-  starting_gold: 0
+  default_currency: crowns
+  starting_balances:
+    crowns: 0
   starting_equipment:
     - item_definition: itemdefinition.training_spear
       count: 1
@@ -32,7 +34,8 @@ spec:
   default_roam_chance: 10
   death_mode: lose_none
   death_route: top_faction
-  death_gold_penalty: 0.2
+  death_currency: crowns
+  death_currency_penalty: 0.2
   pvp_mode: free_for_all
   auto_equip: true
   is_narrative: false
@@ -83,7 +86,8 @@ currently authored through `kind: world` manifests.
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `starting_gold` | integer >= 0 | `0` | Gold granted to new players. |
+| `default_currency` | currency code | initial currency | Default used for new authoring that omits a currency. |
+| `starting_balances` | code-to-integer mapping | `{}` | Exact starting wallet policy; omitted currencies start at zero. |
 | `starting_equipment` | list | `[]` | Item definitions granted to new players, with optional `count`, `archetype`, and `equip`. |
 | `starting_level` | integer >= 1 | `1` | Initial player level. |
 | `max_level` | integer >= 1 | `20` | Maximum automatic level. |
@@ -110,6 +114,12 @@ Use `itemdefinition.<slug>` or a bare item definition slug. `count` defaults to
 selected archetype/class id exactly matches that value. `equip` defaults to
 `true` for equippable items. Set `equip: false` to grant an item into the
 character's carried inventory without equipping it.
+
+Starting balances are inherited from the base world and applied on character
+initialization and explicit reset. They are not granted again on reconnect or
+instance entry. Amounts must be whole numbers from `0` through
+`9,007,199,254,740,991`. For definitions, prices, rewards, and deletion rules,
+see [currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md).
 
 ### Class-Specific Starting Loadout
 
@@ -173,16 +183,18 @@ For spawn-plan roaming behavior, see
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `death_mode` | choice | `lose_none` | `lose_all`, `lose_none`, `lose_eq`, `destroy_eq`, `destroy_all`, `lose_gold`, or `lose_inv`. |
+| `death_mode` | choice | `lose_none` | `lose_all`, `lose_none`, `lose_eq`, `destroy_eq`, `destroy_all`, `lose_currency`, or `lose_inv`. |
 | `death_route` | choice | `top_faction` | `top_faction`, `near_room`, `far_room`, or `nearest_in_zone`. |
-| `death_gold_penalty` | number | `0.2` | Fraction of gold lost for gold-loss death modes. |
+| `death_currency` | currency code/null | initial currency | Balance charged by `lose_currency`. |
+| `death_currency_penalty` | number 0-1 | `0.2` | Fraction of equipped-item value denominated in `death_currency`, capped by that balance, charged on a non-PvP `lose_currency` death. |
 | `pvp_mode` | choice | `free_for_all` | Sole authored PvP policy: `free_for_all`, `disabled`, or `zone`. |
 
-`pvp_mode` is the only PvP policy authored in current WR2 world manifests.
-During migration, imports still accept the legacy `allow_pvp` boolean and
-normalize `false` to `disabled` or `true` to `free_for_all`. If both fields are
-present, `allow_pvp` must agree with whether `pvp_mode` is disabled. New and
-exported manifests should use only `pvp_mode`.
+`pvp_mode` is the only PvP policy authored in current WR2 world manifests. The
+manifest importer still accepts the legacy authored-content alias `allow_pvp`
+and normalizes `false` to `disabled` or `true` to `free_for_all`. This is not a
+WR1 database migration path. If both fields are present, `allow_pvp` must agree
+with whether `pvp_mode` is disabled. New and exported manifests should use only
+`pvp_mode`.
 
 For death-related builder commands, see
 [builder-command-reference.md](/Users/teebes/code/writtenrealms/docs/guides/builder-command-reference.md).
@@ -226,7 +238,7 @@ manifests:
   `is_public`
 - local rooms: `starting_room`, `death_room`
 - local death/PvP/presentation fields: `death_mode`, `death_route`,
-  `death_gold_penalty`, `pvp_mode`, `built_by`,
+  `death_currency`, `death_currency_penalty`, `pvp_mode`, `built_by`,
   `small_background`, `large_background`
 
 Core systems such as `stats`, `combat`, `equipment`, `ability_progression`,

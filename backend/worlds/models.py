@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 import json
 import logging
 import traceback
@@ -6,6 +7,7 @@ import traceback
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericRelation
 from django.contrib.contenttypes.models import ContentType
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -117,6 +119,13 @@ class World(AdventBaseModel):
                                related_name='configured_worlds',
                                on_delete=models.SET_NULL,
                                **optional)
+
+    default_currency = models.ForeignKey(
+        'builders.Currency',
+        related_name='default_for_worlds',
+        on_delete=models.RESTRICT,
+        **optional)
+    economy_revision = models.BigIntegerField(default=0)
 
     nexus = models.ForeignKey('system.Nexus',
                               related_name='worlds',
@@ -992,6 +1001,16 @@ class WorldConfig(BaseModel):
                                    related_name='death_room_for',
                                    on_delete=models.CASCADE,
                                    **optional)
+    death_currency = models.ForeignKey(
+        'builders.Currency',
+        related_name='death_policies',
+        on_delete=models.RESTRICT,
+        **optional)
+    clan_registration_currency = models.ForeignKey(
+        'builders.Currency',
+        related_name='clan_registration_policies',
+        on_delete=models.RESTRICT,
+        **optional)
 
     exits_to = models.ForeignKey('worlds.Room',
                                  related_name='exits_for',
@@ -1039,13 +1058,24 @@ class WorldConfig(BaseModel):
     # Values
     built_by = models.TextField(**optional)
     name_exclusions = models.TextField(**optional)
-    starting_gold = models.PositiveIntegerField(default=0)
     starting_equipment = models.JSONField(default=list, blank=True)
     starting_level = models.PositiveIntegerField(default=1)
     leveling_curve = models.JSONField(default=default_leveling_curve)
     max_level = models.PositiveIntegerField(default=20)
-    death_gold_penalty = models.FloatField(default=0.2)
-    clan_registration_cost = models.PositiveIntegerField(default=1000)
+    death_currency_penalty = models.DecimalField(
+        max_digits=6,
+        decimal_places=5,
+        default=Decimal('0.2'),
+        validators=[
+            MinValueValidator(Decimal('0')),
+            MaxValueValidator(Decimal('1')),
+        ])
+    clan_registration_cost = models.BigIntegerField(
+        default=0,
+        validators=[
+            MinValueValidator(0),
+            MaxValueValidator(9007199254740991),
+        ])
     # URLs for the frontend to use for world backgrounds.
     # 740 x 332
     small_background = models.TextField(**optional)
@@ -1055,6 +1085,22 @@ class WorldConfig(BaseModel):
     decay_glory = models.BooleanField(default=False)
 
     cross_race_cooldown = models.PositiveIntegerField(default=0)
+
+    class Meta(BaseModel.Meta):
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(
+                    death_currency_penalty__gte=0,
+                    death_currency_penalty__lte=1,
+                ),
+                name='worlds_death_currency_penalty_rate'),
+            models.CheckConstraint(
+                condition=models.Q(
+                    clan_registration_cost__gte=0,
+                    clan_registration_cost__lte=9007199254740991,
+                ),
+                name='worlds_clan_registration_cost_safe'),
+        ]
 
     @property
     def allow_pvp(self):

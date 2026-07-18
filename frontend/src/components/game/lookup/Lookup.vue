@@ -44,6 +44,7 @@ const ITEM_ACTIONS = [
   "get_all_from",
   "sell",
   "buy",
+  "buyback",
   "eat",
   "use",
 ];
@@ -199,8 +200,7 @@ const normalizeItemActions = (item: any) => {
     if (item.type === "food") actions.eat = true;
     if (item.on_use_cmd) actions.use = true;
 
-    const currency = (item.currency || "").toLowerCase();
-    if ((currency === "gold" || !currency) && item.cost && hasMerchant) {
+    if (item.value && hasMerchant) {
       actions.sell = true;
     }
 
@@ -217,8 +217,12 @@ const normalizeItemActions = (item: any) => {
     if (merchant) {
       actions.buy = true;
     }
-  } else if (!inRoom && !inInventory && !inEquipment && hasMerchant && item.cost) {
+  } else if (!inRoom && !inInventory && !inEquipment && hasMerchant && item.value) {
     actions.buy = true;
+  }
+
+  if (item.buyback_command) {
+    actions.buy = false;
   }
 
   return actions;

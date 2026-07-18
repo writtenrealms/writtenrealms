@@ -2,7 +2,8 @@ import yaml
 
 from rest_framework.reverse import reverse
 
-from builders.models import ItemDefinition, WorldBuilder
+from builders.currencies import create_currency
+from builders.models import ItemDefinition, WorldBuilder, WorldStartingCurrencyBalance
 from config import constants as adv_consts
 from config import game_settings as adv_config
 from spawns.models import Player
@@ -13,6 +14,18 @@ from worlds.models import Room, World, WorldConfig
 class AuthenticatedBuilderWorldTestCase(WorldTestCase):
     def setUp(self):
         super().setUp()
+        self.currency = create_currency(
+            world=self.world,
+            code="obol",
+            name="Obol",
+            plural_name="Obols",
+        )
+        self.world.config.death_currency = self.currency
+        self.world.config.clan_registration_currency = self.currency
+        self.world.config.save(update_fields=[
+            "death_currency",
+            "clan_registration_currency",
+        ])
         self.client.force_authenticate(self.user)
 
 
@@ -105,6 +118,68 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         )
         self.assertNotIn("combat", world_manifest["spec"])
 
+    def test_world_config_endpoint_rejects_foreign_world_currencies(self):
+        other_world = World.objects.new_world(
+            name="Other Economy",
+            author=self.user,
+        )
+        foreign_currency = create_currency(
+            world=other_world,
+            code="foreign",
+            name="Foreign Coin",
+        )
+
+        response = self.client.patch(
+            self.config_ep,
+            {"death_currency": foreign_currency.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("death_currency", response.data)
+        self.world.config.refresh_from_db()
+        self.assertEqual(self.world.config.death_currency, self.currency)
+
+    def test_world_config_endpoint_requires_currencies_for_monetary_policies(self):
+        response = self.client.patch(
+            self.config_ep,
+            {
+                "death_mode": adv_consts.DEATH_MODE_LOSE_CURRENCY,
+                "death_currency": None,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("death_currency", response.data)
+
+        response = self.client.patch(
+            self.config_ep,
+            {
+                "clan_registration_cost": 1,
+                "clan_registration_currency": None,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("clan_registration_currency", response.data)
+
+    def test_world_manifest_rejects_fractional_clan_registration_cost(self):
+        manifest = """
+kind: world
+spec:
+  clan_registration_currency: obol
+  clan_registration_cost: 1.9
+"""
+
+        response = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("must be an integer", str(response.data))
+
     def test_world_config_exports_pvp_mode_without_legacy_allow_pvp(self):
         self.world.config.pvp_mode = adv_consts.PVP_MODE_ZONE
         self.world.config.save(update_fields=["pvp_mode"])
@@ -158,7 +233,9 @@ spec:
   description: Updated via YAML
   motd: Manifest update complete.
   is_public: true
-  starting_gold: 15
+  default_currency: obol
+  starting_balances:
+    obol: 15
   starting_level: 2
   max_level: 5
   leveling_curve: [0, 10, 30, 60, 100]
@@ -166,8 +243,9 @@ spec:
   default_roam_chance: 25
   starting_room: room.{starting_room.id}
   death_room: room.{death_room.id}
-  death_mode: lose_gold
-  death_gold_penalty: 0.35
+  death_mode: lose_currency
+  death_currency: obol
+  death_currency_penalty: 0.35
   death_route: nearest_in_zone
   pvp_mode: zone
   player_creation:
@@ -279,7 +357,13 @@ spec:
         self.assertTrue(spawn_world.is_public)
 
         config = self.world.config
-        self.assertEqual(config.starting_gold, 15)
+        self.assertEqual(
+            WorldStartingCurrencyBalance.objects.get(
+                world=self.world,
+                currency=self.currency,
+            ).amount,
+            15,
+        )
         self.assertEqual(config.starting_level, 2)
         self.assertEqual(config.max_level, 5)
         self.assertEqual(config.leveling_curve, [0, 10, 30, 60, 100])
@@ -287,8 +371,9 @@ spec:
         self.assertEqual(config.default_roam_chance, 25)
         self.assertEqual(config.starting_room_id, starting_room.id)
         self.assertEqual(config.death_room_id, death_room.id)
-        self.assertEqual(config.death_mode, "lose_gold")
-        self.assertEqual(config.death_gold_penalty, 0.35)
+        self.assertEqual(config.death_mode, "lose_currency")
+        self.assertEqual(config.death_currency, self.currency)
+        self.assertEqual(float(config.death_currency_penalty), 0.35)
         self.assertEqual(config.death_route, "nearest_in_zone")
         self.assertEqual(config.pvp_mode, "zone")
         self.assertFalse(config.can_select_faction)
@@ -654,7 +739,7 @@ spec:
             "name_exclusions",
             "players_can_set_title",
             "starting_level",
-            "starting_gold",
+            "starting_balances",
             "stats",
         ):
             self.assertNotIn(field_name, spec)
@@ -662,7 +747,7 @@ spec:
         self.assertIn("starting_room", spec)
         self.assertIn("death_room", spec)
         self.assertIn("death_mode", spec)
-        self.assertIn("death_gold_penalty", spec)
+        self.assertIn("death_currency_penalty", spec)
 
     def test_instance_world_config_manifest_rejects_inherited_core_system_fields(self):
         instance = self._instance_world()
@@ -700,7 +785,8 @@ metadata:
   world: world.{instance.id}
 spec:
   death_mode: destroy_eq
-  starting_gold: 123
+  starting_balances:
+    obol: 123
   players_can_set_title: false
   globals_enabled: false
 """
@@ -710,7 +796,7 @@ spec:
         self.assertEqual(resp.status_code, 400)
         text = str(resp.data)
         self.assertIn("can only alter local instance fields", text)
-        self.assertIn("starting_gold", text)
+        self.assertIn("starting_balances", text)
         self.assertIn("players_can_set_title", text)
 
     def test_instance_world_config_manifest_allows_local_death_settings(self):
@@ -731,7 +817,7 @@ metadata:
 spec:
   death_room: room.{death_room.id}
   death_mode: destroy_eq
-  death_gold_penalty: 0.1
+  death_currency_penalty: 0.1
   death_route: near_room
 """
 
@@ -741,7 +827,7 @@ spec:
         instance.config.refresh_from_db()
         self.assertEqual(instance.config.death_room_id, death_room.id)
         self.assertEqual(instance.config.death_mode, "destroy_eq")
-        self.assertEqual(instance.config.death_gold_penalty, 0.1)
+        self.assertEqual(float(instance.config.death_currency_penalty), 0.1)
         self.assertEqual(instance.config.death_route, "near_room")
 
     def test_instance_world_config_manifest_normalizes_legacy_allow_pvp(self):
@@ -787,7 +873,7 @@ spec:
         resp = self.client.patch(
             ep,
             {
-                "starting_gold": 123,
+                "clan_registration_cost": 123,
                 "players_can_set_title": False,
             },
             format="json",
@@ -796,7 +882,7 @@ spec:
         self.assertEqual(resp.status_code, 400)
         text = str(resp.data)
         self.assertIn("can only alter local instance config", text)
-        self.assertIn("starting_gold", text)
+        self.assertIn("clan_registration_cost", text)
 
     def test_instance_local_config_patch_does_not_rewrite_inherited_combat_flags(self):
         instance = self._instance_world()

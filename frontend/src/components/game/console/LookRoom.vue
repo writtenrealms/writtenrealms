@@ -16,8 +16,8 @@
       {{ message.text || "You have been slain! Rest your weary bones..." }}
     </div>
 
-    <div v-if="message.data.penalty" class='font-text-regular color-text-red'>
-      {{ message.data.penalty }}
+    <div v-if="penaltyDisplay" class='font-text-regular color-text-red'>
+      {{ penaltyDisplay }}
     </div>
 
     <div v-if="isFleeSuccess" class="mb-4">
@@ -115,6 +115,7 @@ import { useStore } from "vuex";
 import { DIRECTIONS } from "@/constants";
 import { stackedInventory, getTargetInGroup } from "@/core/utils";
 import LookRoomChar from "@/components/game/console/LookRoomChar.vue";
+import { formatMoney } from "@/core/economy.ts";
 import { parseLinks } from "@/core/utils";
 
 const store = useStore();
@@ -140,6 +141,14 @@ interface Room {
 
 const props = defineProps<{ message: any }>();
 const room = ref<Room>(props.message.data.room);
+const penaltyDisplay = computed(() => {
+  const penaltyText = String(props.message?.data?.penalty_text || "").trim();
+  if (penaltyText) return penaltyText;
+  const penalty = props.message?.data?.penalty;
+  return penalty
+    ? `You lose ${formatMoney(penalty, store.state.game.world?.economy)}.`
+    : "";
+});
 
 // Room Inventory Management
 const roomInventory = computed(() => {

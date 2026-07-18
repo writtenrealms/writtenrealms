@@ -674,7 +674,7 @@ DOTs are character-scoped by default. While the target is engaged, they advance
 at the start of the target's combat rounds. After the target leaves combat, the
 same effect advances through the world's bounded effect pulse; fleeing never
 removes it. A lethal tick retains its original source, so a player receives
-normal kill, experience, gold, loot-condition, and quest credit even when the
+normal kill, experience, currency rewards, loot-condition, and quest credit even when the
 player is no longer in the mob's room.
 
 DOT application consumes the primary action by default; set

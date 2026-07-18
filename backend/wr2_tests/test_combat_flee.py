@@ -2,6 +2,7 @@ import json
 from datetime import timedelta
 from unittest.mock import patch
 
+from builders.currencies import create_currency
 from builders.models import MobDefinition, Trigger
 from config import constants as adv_consts
 from core.combat_formulas import (
@@ -18,6 +19,7 @@ from spawns.actions.combat import (
     resolve_due_character_effects,
 )
 from spawns.models import ActiveEffect, CombatEncounter, Item, Mob, Player
+from spawns.wallet import balance_map
 from spawns.tasks import resolve_combat_encounter
 from tests.base import WorldTestCase
 from worlds.models import Room
@@ -31,6 +33,12 @@ from wr2_tests.utils import (
 class TestCombatFlee(WorldTestCase):
     def setUp(self):
         super().setUp()
+        self.currency = create_currency(
+            world=self.world,
+            code="obol",
+            name="Obol",
+            plural_name="Obols",
+        )
         apply_basic_stat_system(self.world)
         self.stats = compute_stats(
             self.player.level,
@@ -186,8 +194,14 @@ class TestCombatFlee(WorldTestCase):
         mob.health = self.stats["attack_power"] + 1
         mob.health_max = mob.health
         mob.exp_worth = 7
-        mob.gold = 3
-        mob.save(update_fields=["fights_back", "health", "health_max", "exp_worth", "gold"])
+        mob.currency_reward_snapshot = {"obol": 3}
+        mob.save(update_fields=[
+            "fights_back",
+            "health",
+            "health_max",
+            "exp_worth",
+            "currency_reward_snapshot",
+        ])
         encounter = CombatEncounter.objects.create(
             world=self.spawn_world,
             room=self.room,
@@ -199,7 +213,7 @@ class TestCombatFlee(WorldTestCase):
         effect.encounter = encounter
         effect.save(update_fields=["encounter"])
         starting_experience = self.player.experience
-        starting_gold = self.player.gold
+        starting_balance = balance_map(self.player)["obol"]
 
         dispatch_text_command(self.player.id, "flee")
         dispatch_text_command(self.player.id, "flee")
@@ -222,7 +236,7 @@ class TestCombatFlee(WorldTestCase):
         self.assertFalse(Mob.objects.filter(pk=mob.id).exists())
         self.assertEqual(self.player.room_id, self.escape_room.id)
         self.assertEqual(self.player.experience, starting_experience + 7)
-        self.assertEqual(self.player.gold, starting_gold + 3)
+        self.assertEqual(balance_map(self.player)["obol"], starting_balance + 3)
         corpse = Item.objects.get(type=adv_consts.ITEM_TYPE_CORPSE, container_id=self.room.id)
         self.assertIn("rat", corpse.name)
         death_event = next(
@@ -244,8 +258,14 @@ class TestCombatFlee(WorldTestCase):
         mob.health = 1
         mob.health_max = 1
         mob.exp_worth = 7
-        mob.gold = 3
-        mob.save(update_fields=["fights_back", "health", "health_max", "exp_worth", "gold"])
+        mob.currency_reward_snapshot = {"obol": 3}
+        mob.save(update_fields=[
+            "fights_back",
+            "health",
+            "health_max",
+            "exp_worth",
+            "currency_reward_snapshot",
+        ])
         origin_encounter = CombatEncounter.objects.create(
             world=self.spawn_world,
             room=self.room,
@@ -268,9 +288,9 @@ class TestCombatFlee(WorldTestCase):
             resolution_interval=-1,
         )
         source_experience = self.player.experience
-        source_gold = self.player.gold
+        source_balance = balance_map(self.player)["obol"]
         second_experience = second_player.experience
-        second_gold = second_player.gold
+        second_balance = balance_map(second_player)["obol"]
 
         resolve_combat_encounter_step(encounter.id, auto_advance=False)
 
@@ -278,9 +298,9 @@ class TestCombatFlee(WorldTestCase):
         second_player.refresh_from_db()
         self.assertFalse(Mob.objects.filter(pk=mob.id).exists())
         self.assertEqual(self.player.experience, source_experience + 7)
-        self.assertEqual(self.player.gold, source_gold + 3)
+        self.assertEqual(balance_map(self.player)["obol"], source_balance + 3)
         self.assertEqual(second_player.experience, second_experience)
-        self.assertEqual(second_player.gold, second_gold)
+        self.assertEqual(balance_map(second_player)["obol"], second_balance)
 
     def test_vanished_player_dot_does_not_credit_current_fighter(self):
         mob = self._mob()
@@ -288,8 +308,14 @@ class TestCombatFlee(WorldTestCase):
         mob.health = 1
         mob.health_max = 1
         mob.exp_worth = 7
-        mob.gold = 3
-        mob.save(update_fields=["fights_back", "health", "health_max", "exp_worth", "gold"])
+        mob.currency_reward_snapshot = {"obol": 3}
+        mob.save(update_fields=[
+            "fights_back",
+            "health",
+            "health_max",
+            "exp_worth",
+            "currency_reward_snapshot",
+        ])
         effect = self._periodic_effect(source=self.player, target=mob)
         second_player = self.create_player("Ally")
         second_player.in_game = True
@@ -305,14 +331,14 @@ class TestCombatFlee(WorldTestCase):
             resolution_interval=-1,
         )
         second_experience = second_player.experience
-        second_gold = second_player.gold
+        second_balance = balance_map(second_player)["obol"]
 
         resolve_combat_encounter_step(encounter.id, auto_advance=False)
 
         second_player.refresh_from_db()
         self.assertFalse(Mob.objects.filter(pk=mob.id).exists())
         self.assertEqual(second_player.experience, second_experience)
-        self.assertEqual(second_player.gold, second_gold)
+        self.assertEqual(balance_map(second_player)["obol"], second_balance)
 
     def test_mob_dot_survives_flee_and_can_kill_player_in_new_room(self):
         self.world.config.combat_resolution_interval = -1

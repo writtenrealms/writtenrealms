@@ -5,9 +5,10 @@ import json
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db.models.deletion import RestrictedError
 from django.db.models import Count, Prefetch, Q
+from django.db import transaction
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 
@@ -37,6 +38,7 @@ from core.utils.mobs import suggest_stats
 from config import constants as api_consts
 from config import game_settings as adv_config
 from core.abilities import definition_world
+from core.economy import economy_world
 from core.leveling import LevelingConfigError
 from core.scoped_state import STATE_SCOPE_WORLD, get_state_snapshot
 from core.serializers import KeyNameSerializer, ReferenceField
@@ -2416,21 +2418,31 @@ class WorldManifestApplyView(BaseWorldBuilderView):
         )
 
     def _apply_currency_manifest(self, manifest):
-        currency, is_create = builder_world_export.apply_currency_manifest(
-            world=self.world,
-            manifest=manifest,
-        )
+        self._assert_can_edit_world_config()
+        try:
+            currency, operation = builder_world_export.apply_currency_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+        except ValidationError as error:
+            detail = (
+                error.message_dict
+                if hasattr(error, 'message_dict')
+                else error.messages
+            )
+            raise drf_exceptions.ValidationError(detail)
         return Response(
             {
                 "kind": builder_world_export.CURRENCY_MANIFEST_KIND,
-                "operation": "created" if is_create else "updated",
+                "operation": operation,
                 "currency": {
                     "code": currency.code,
                     "name": currency.name,
-                    "is_default": bool(currency.is_default),
+                    "plural_name": currency.plural_name or currency.name,
+                    "description": currency.description or "",
                 },
             },
-            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+            status=status.HTTP_201_CREATED if operation == "created" else status.HTTP_200_OK,
         )
 
     def _apply_zone_manifest(self, manifest):
@@ -2641,20 +2653,21 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             return self._dispatch_manifest(manifests[0])
 
         results = []
-        for index, manifest in enumerate(manifests, start=1):
-            try:
-                response = self._dispatch_manifest(manifest)
-            except drf_exceptions.PermissionDenied as exc:
-                kind = str((manifest.get("kind") or "manifest")).strip().lower() or "manifest"
-                raise drf_exceptions.PermissionDenied(
-                    f"Document {index} ({kind}) failed: {exc.detail}"
-                )
-            except serializers.ValidationError as exc:
-                kind = str((manifest.get("kind") or "manifest")).strip().lower() or "manifest"
-                raise serializers.ValidationError(
-                    f"Document {index} ({kind}) failed: {exc.detail}"
-                )
-            results.append(response.data)
+        with transaction.atomic():
+            for index, manifest in enumerate(manifests, start=1):
+                try:
+                    response = self._dispatch_manifest(manifest)
+                except drf_exceptions.PermissionDenied as exc:
+                    kind = str((manifest.get("kind") or "manifest")).strip().lower() or "manifest"
+                    raise drf_exceptions.PermissionDenied(
+                        f"Document {index} ({kind}) failed: {exc.detail}"
+                    )
+                except serializers.ValidationError as exc:
+                    kind = str((manifest.get("kind") or "manifest")).strip().lower() or "manifest"
+                    raise serializers.ValidationError(
+                        f"Document {index} ({kind}) failed: {exc.detail}"
+                    )
+                results.append(response.data)
 
         return Response(
             {
@@ -3141,7 +3154,7 @@ class MerchantProfileViewSet(BaseWorldBuilderViewSet):
         qs = (
             MerchantProfile.objects
             .filter(world=context)
-            .select_related("funds_currency")
+            .select_related("settlement_currency")
             .prefetch_related("stock_slots")
             .order_by('-modified_ts')
         )
@@ -3994,85 +4007,88 @@ class CurrencyViewSet(BaseWorldBuilderViewSet):
     serializer_class = builder_serializers.CurrencySerializer
 
     def get_queryset(self):
-        return Currency.objects.filter(world=self.world)
+        return (
+            Currency.objects.filter(world=economy_world(self.world))
+            .select_related('world')
+            .prefetch_related('starting_balance_rules')
+            .order_by('code')
+        )
+
+    def _assert_can_edit_currency(self):
+        if self._builder_rank < 3:
+            raise drf_exceptions.PermissionDenied(
+                "You do not have permission to alter world currencies.")
+        if self.world.pk != economy_world(self.world).pk:
+            raise drf_exceptions.ValidationError(
+                "Currencies are inherited from the base world and are read-only here.")
 
     def perform_create(self, serializer):
+        from builders.currencies import create_currency, set_starting_balance
 
-        # Don't alter any currencies to a running world
-        if World.objects.filter(
-            context=self.world,
-            lifecycle=api_consts.WORLD_STATE_RUNNING).count():
-            raise drf_exceptions.ValidationError(
-                'Cannot add currencies to a running world.')
-
-        # Currencies should only be set at the base world level
-        if self.world.instance_of:
-            raise drf_exceptions.ValidationError(
-                'Cannot add currencies to an instance world.')
-
-        serializer.is_valid(raise_exception=True)
-        if serializer.validated_data.get('is_default', False):
-            # Unset any other default currency for the same world
-            Currency.objects.filter(
-                world=self.world, is_default=True
-            ).update(is_default=False)
-        serializer.save(world=self.world)
+        self._assert_can_edit_currency()
+        starting_amount = serializer.validated_data.pop('starting_amount', None)
+        try:
+            with transaction.atomic():
+                serializer.instance = create_currency(
+                    world=self.world,
+                    **serializer.validated_data)
+                if starting_amount is not None:
+                    set_starting_balance(
+                        currency=serializer.instance,
+                        amount=starting_amount,
+                    )
+        except ValidationError as error:
+            raise drf_exceptions.ValidationError(error.message_dict if hasattr(error, 'message_dict') else error.messages)
 
     def perform_update(self, serializer):
+        from builders.currencies import set_starting_balance, update_currency
 
-        # Don't alter any currencies to a running world
-        if World.objects.filter(
-            context=self.world,
-            lifecycle=api_consts.WORLD_STATE_RUNNING).count():
-            raise drf_exceptions.ValidationError(
-                'Cannot alter currencies in a running world.')
-
-        serializer.is_valid(raise_exception=True)
-
-        # Check if the new value of 'is_default' is True
-        if serializer.validated_data.get('is_default', False):
-            # Only update if the current instance is not already the default
-            if not serializer.instance.is_default:
-                # Unset any other default currency for the same world
-                Currency.objects.filter(
-                    world=self.world, is_default=True
-                ).exclude(
-                    id=serializer.instance.id
-                ).update(is_default=False)
-
-        # Make sure that the 'gold' and 'medals' currencies can't have their
-        # codes altered.
-        if ('code' in serializer.validated_data and
-            serializer.instance.code in ('gold', 'medals') and
-            serializer.validated_data['code'] != serializer.instance.code):
-            raise drf_exceptions.ValidationError(
-                'Cannot alter the code of the gold or medals currency.')
-
-        # Save the instance with the new data
-        serializer.save()
+        self._assert_can_edit_currency()
+        serializer.validated_data.pop('code', None)
+        starting_amount = serializer.validated_data.pop('starting_amount', None)
+        try:
+            with transaction.atomic():
+                serializer.instance = update_currency(
+                    serializer.instance,
+                    **serializer.validated_data)
+                if starting_amount is not None:
+                    set_starting_balance(
+                        currency=serializer.instance,
+                        amount=starting_amount,
+                    )
+        except ValidationError as error:
+            raise drf_exceptions.ValidationError(error.message_dict if hasattr(error, 'message_dict') else error.messages)
 
     def perform_destroy(self, instance):
-        # Don't alter any currencies to a running world
-        if World.objects.filter(
-            context=self.world,
-            lifecycle=api_consts.WORLD_STATE_RUNNING).count():
-            raise drf_exceptions.ValidationError(
-                'Cannot delete currencies in a running world.')
+        from builders.currencies import delete_currency
 
-        # Currencies should only be set at the base world level
-        if self.world.instance_of:
-            raise drf_exceptions.ValidationError(
-                'Cannot delete currencies in an instance world.')
+        self._assert_can_edit_currency()
+        try:
+            delete_currency(instance)
+        except ValidationError as error:
+            raise drf_exceptions.ValidationError(error.messages)
 
-        if instance.code in ('gold', 'medals'):
-            raise drf_exceptions.ValidationError(
-                'Cannot delete the gold or medals currency.')
+    @action(detail=True, methods=['post'])
+    def make_default(self, request, *args, **kwargs):
+        from builders.currencies import select_default_currency
 
-        super().perform_destroy(instance)
+        self._assert_can_edit_currency()
+        currency = self.get_object()
+        try:
+            select_default_currency(world=self.world, currency=currency)
+        except ValidationError as error:
+            raise drf_exceptions.ValidationError(error.messages)
+        return Response(self.get_serializer(currency).data)
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
         context['world'] = self.world  # Add world to the context
+        if self.action in ('list', 'retrieve'):
+            from builders.currencies import currency_usage_map
+
+            context['currency_usage_map'] = currency_usage_map(
+                world=economy_world(self.world),
+            )
         return context
 
 
@@ -4084,4 +4100,7 @@ currency_details = CurrencyViewSet.as_view({
     'get': 'retrieve',
     'put': 'update',
     'delete': 'destroy',
+})
+currency_make_default = CurrencyViewSet.as_view({
+    'post': 'make_default',
 })

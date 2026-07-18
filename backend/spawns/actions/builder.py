@@ -101,9 +101,7 @@ PLAYER_SET_FIELD_CHOICES = (
     "energy",
     "stamina",
     "attributes",
-    "gold",
     "glory",
-    "medals",
 )
 PLAYER_SET_FIELDS = set(PLAYER_SET_FIELD_CHOICES)
 MOB_SET_FIELD_CHOICES = (
@@ -114,7 +112,6 @@ MOB_SET_FIELD_CHOICES = (
     "stamina",
     "attributes",
     "aggression",
-    "gold",
     "exp_worth",
     *MOB_DIRECT_STAT_FIELDS,
 )
@@ -685,7 +682,7 @@ def _serialize_mob_stats_target(mob: Mob) -> dict[str, object]:
         {
             "experience": int(getattr(mob, "experience", 0) or 0),
             "exp_worth": int(getattr(mob, "exp_worth", 0) or 0),
-            "gold": int(getattr(mob, "gold", 0) or 0),
+            "currency_rewards": dict(mob.currency_reward_snapshot or {}),
             "aggression": adv_consts.canonical_mob_aggression(
                 getattr(mob, "aggression", "")
             ),
@@ -789,12 +786,23 @@ def _render_builder_stats_text(
 
     if target_type == "player":
         lines.append(f"Experience: {target_payload.get('experience', 0)}")
-        lines.append(f"Gold: {target_payload.get('gold', 0)}")
         lines.append(f"Glory: {target_payload.get('glory', 0)}")
-        lines.append(f"Medals: {target_payload.get('medals', 0)}")
+        balances = (target_payload.get("economy") or {}).get("balances") or {}
+        if balances:
+            lines.append("Currencies:")
+            lines.extend(
+                f"  {code}: {amount}"
+                for code, amount in sorted(balances.items())
+            )
     else:
         lines.append(f"Experience worth: {target_payload.get('exp_worth', 0)}")
-        lines.append(f"Gold: {target_payload.get('gold', 0)}")
+        rewards = target_payload.get("currency_rewards") or {}
+        if rewards:
+            lines.append("Currency rewards:")
+            lines.extend(
+                f"  {code}: {amount}"
+                for code, amount in sorted(rewards.items())
+            )
 
     attributes = target_payload.get("attributes") or {}
     if isinstance(attributes, dict):

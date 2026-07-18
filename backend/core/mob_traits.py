@@ -17,7 +17,6 @@ NUMERIC_MODIFIER_FIELDS = {
     "energy_regen",
     "exp_worth",
     "food_value",
-    "gold",
     "health_max",
     "health_regen",
     "level",

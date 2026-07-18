@@ -8,6 +8,7 @@ from django.db import close_old_connections
 from django.test import TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 
+from builders.currencies import create_currency
 from builders.models import (
     CraftMaterial,
     CraftingIngredient,
@@ -43,6 +44,7 @@ from spawns.models import (
 )
 from spawns.request_segments import append_request_segment
 from spawns.state_payloads import serialize_actor
+from spawns.wallet import mutate_balances
 from tests.base import WorldTestCase
 from worlds.models import World, WorldConfig
 from wr2_tests.utils import apply_basic_stat_system, capture_game_messages
@@ -51,6 +53,12 @@ from wr2_tests.utils import apply_basic_stat_system, capture_game_messages
 class CraftingRuntimeTestCase(WorldTestCase):
     def setUp(self):
         super().setUp()
+        self.currency = create_currency(
+            world=self.world,
+            code="obol",
+            name="Obol",
+            plural_name="Obols",
+        )
         apply_basic_stat_system(self.world)
         self.bronze = CraftMaterial.objects.create(
             world=self.world,
@@ -751,8 +759,12 @@ class TestCraftingMutation(CraftingRuntimeTestCase):
         # player state backward to the moment of the first response.
         bronze.quantity = 9
         bronze.save(update_fields=["quantity"])
-        self.player.gold = 77
-        self.player.save(update_fields=["gold"])
+        mutate_balances(
+            self.player,
+            {self.currency: 77},
+            reason="receipt replay test setup",
+            emit_event=False,
+        )
         replay = CraftItemAction().execute(
             self.player.id,
             "blue crested helm",
@@ -765,7 +777,7 @@ class TestCraftingMutation(CraftingRuntimeTestCase):
         self.assertEqual(self.player.inventory.filter(definition=self.helm_definition).count(), 1)
         self.assertFalse(first.data["replayed"])
         self.assertTrue(replay.data["replayed"])
-        self.assertEqual(replay.data["actor"]["gold"], 77)
+        self.assertEqual(replay.data["actor"]["economy"]["balances"]["obol"], 77)
         replay_bronze = next(
             entry for entry in replay.data["materials"] if entry["slug"] == "bronze"
         )
@@ -1405,17 +1417,11 @@ class TestSalvageRuntime(CraftingRuntimeTestCase):
         )
 
     def test_salvage_only_spoils_cannot_be_sold_to_merchants(self):
-        currency = Currency.objects.create(
-            world=self.world,
-            code="gold",
-            name="Gold",
-            is_default=True,
-        )
         profile = MerchantProfile.objects.create(
             world=self.world,
             slug="camp-broker",
             name="Camp Broker",
-            funds_currency=currency,
+            settlement_currency=self.currency,
         )
         merchant_definition = MobDefinition.objects.create(
             world=self.world,

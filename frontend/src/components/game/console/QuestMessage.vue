@@ -23,6 +23,9 @@
       <span class="quest-inline-text">
         Quest <span class="quest-link" @click="runCommand(startedQuest.infoCommand)">{{ startedQuest.name }}</span> has started.
       </span>
+      <div v-for="(line, index) in rewardLines" :key="`started-reward-${index}`" class="quest-inline-reward">
+        {{ line }}
+      </div>
     </div>
 
     <div v-else-if="updatedQuest" class="quest-inline quest-inline-updated mt-2">
@@ -32,6 +35,9 @@
       <span class="quest-inline-progress ml-2 color-text-50" :class="{ complete: updatedQuest.objective.status === 'complete' }">
         [ {{ updatedQuest.objective.progress }} ]
       </span>
+      <div v-for="(line, index) in rewardLines" :key="`updated-reward-${index}`" class="quest-inline-reward">
+        {{ line }}
+      </div>
     </div>
 
     <div v-else-if="abandonedQuest">
@@ -146,6 +152,7 @@
 <script lang="ts" setup>
 import { computed } from "vue";
 import { useStore } from "vuex";
+import { formatMoney } from "@/core/economy.ts";
 
 const store = useStore();
 
@@ -234,7 +241,26 @@ const variantClass = computed(() => {
 });
 
 const rewardLines = computed(() => {
-  return splitLines(props.message.text).filter((line) => line.startsWith("Rewards:"));
+  const textLine = splitLines(props.message.text).find((line) => line.startsWith("Rewards:"));
+  const currencyRewards = Array.isArray(props.message?.data?.currency_rewards)
+    ? props.message.data.currency_rewards
+    : [];
+  if (!currencyRewards.length) return textLine ? [textLine] : [];
+
+  const authoredCurrencyDisplays = new Set(
+    currencyRewards
+      .map((reward: any) => String(reward?.display || "").trim())
+      .filter(Boolean),
+  );
+  const otherRewards = String(textLine || "")
+    .replace(/^Rewards:\s*/, "")
+    .split(",")
+    .map((reward) => reward.trim())
+    .filter((reward) => reward && !authoredCurrencyDisplays.has(reward));
+  const formattedCurrencies = currencyRewards.map((reward: any) => (
+    formatMoney(reward, store.state.game.world?.economy)
+  ));
+  return [`Rewards: ${[...otherRewards, ...formattedCurrencies].join(", ")}`];
 });
 
 const startedQuest = computed(() => {
@@ -453,6 +479,11 @@ const runCommand = (command: string) => {
     &.complete {
       color: $color-green;
     }
+  }
+
+  .quest-inline-reward {
+    color: $color-secondary;
+    flex-basis: 100%;
   }
 
   .quest-inline-name {

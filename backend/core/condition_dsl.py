@@ -217,6 +217,39 @@ def _condition_ref_world(context: ConditionContext) -> Any:
     return getattr(world, "context", None) or world
 
 
+def _actor_currency_balance(
+    context: ConditionContext,
+    actor: Any,
+    code: str,
+) -> int:
+    try:
+        from spawns.models import Player, PlayerCurrencyBalance
+    except Exception:
+        return 0
+    if not isinstance(actor, Player):
+        return 0
+
+    actor_data = context.actor_data or {}
+    data_balances = (actor_data.get("economy") or {}).get("balances")
+    if isinstance(data_balances, dict):
+        return int(data_balances.get(code, 0) or 0)
+    if actor is None or getattr(actor, "pk", None) is None:
+        return 0
+    snapshot = getattr(actor, "_currency_condition_snapshot", None)
+    if snapshot is None:
+        try:
+            snapshot = {
+                currency_code: int(amount)
+                for currency_code, amount in PlayerCurrencyBalance.objects.filter(
+                    player_id=actor.pk,
+                ).values_list("currency__code", "amount")
+            }
+        except Exception:
+            snapshot = {}
+        actor._currency_condition_snapshot = snapshot
+    return int(snapshot.get(code, 0) or 0)
+
+
 def resolve_path(path: Any, context: ConditionContext) -> Any:
     normalized = str(path or "").strip()
     if not normalized:
@@ -239,7 +272,15 @@ def resolve_path(path: Any, context: ConditionContext) -> Any:
             quest_instance=context.quest_instance,
         )
     if normalized.startswith("player.") or normalized.startswith("actor."):
+        root, _, _remainder = normalized.partition(".")
         segments = normalized.split(".")[1:]
+        if len(segments) == 2 and segments[0] == "balances":
+            balance_owner = player if root == "player" else actor
+            return _actor_currency_balance(
+                context,
+                balance_owner,
+                segments[1],
+            )
         return _walk_context_value(context.actor_data, actor, segments)
     if normalized.startswith("room."):
         segments = normalized.split(".")[1:]

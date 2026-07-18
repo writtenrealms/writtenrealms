@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-import math
 from datetime import timedelta
+from decimal import Decimal, ROUND_CEILING
 from typing import Iterable
 
 from django.db import transaction
 from django.utils import timezone
 
 from builders.models import MerchantProfile, MerchantStockSlot
+from core.economy import MAX_CURRENCY_AMOUNT, money_payload
 from spawns.actions.base import ActionError
 from spawns.actions.targeting import item_matches_selector, resolve_room_mob_target
 from spawns.models import (
@@ -18,13 +19,19 @@ from spawns.models import (
     Mob,
     Player,
 )
+from spawns.wallet import WalletError, balance_map, mutate_balances
 
 
 def _item_price(item: Item, markup: float = 1.0) -> int:
     base_cost = max(0, int(item.cost or 0))
     if base_cost <= 0:
         return 0
-    return max(0, int(math.ceil(base_cost * float(markup or 0))))
+    price = int(
+        (Decimal(base_cost) * Decimal(str(markup or 0))).to_integral_value(
+            rounding=ROUND_CEILING))
+    if price > MAX_CURRENCY_AMOUNT:
+        raise ActionError("That price is too large.", code="price_out_of_range")
+    return max(0, price)
 
 
 def _serialized_item_payload(item: Item, *, viewer: Player) -> dict:
@@ -37,12 +44,7 @@ def _serialize_stock_entry(entry: MerchantStockEntry, *, viewer: Player) -> dict
     return {
         "id": entry.id,
         "key": f"merchant_stock_entry.{entry.id}",
-        "price": int(entry.price or 0),
-        "currency": (
-            entry.runtime.profile.funds_currency.code
-            if entry.runtime.profile.funds_currency
-            else "gold"
-        ),
+        "price": money_payload(int(entry.price or 0), entry.currency),
         "item": _serialized_item_payload(entry.item, viewer=viewer),
         "source_slot": entry.stock_slot.key if entry.stock_slot else "",
     }
@@ -52,12 +54,7 @@ def _serialize_buyback_entry(entry: MerchantBuybackEntry, *, viewer: Player) -> 
     return {
         "id": entry.id,
         "key": f"merchant_buyback_entry.{entry.id}",
-        "price": int(entry.buyback_price or 0),
-        "currency": (
-            entry.runtime.profile.funds_currency.code
-            if entry.runtime.profile.funds_currency
-            else "gold"
-        ),
+        "price": money_payload(int(entry.buyback_price or 0), entry.currency),
         "item": _serialized_item_payload(entry.item, viewer=viewer),
     }
 
@@ -77,6 +74,7 @@ def _set_next_restock(runtime: MerchantRuntime, *, now=None) -> None:
         runtime.next_restock_ts = None
 
 
+@transaction.atomic
 def create_or_update_merchant_runtime(mob: Mob) -> MerchantRuntime | None:
     definition = mob.definition
     profile = definition.merchant_profile if definition else None
@@ -86,25 +84,40 @@ def create_or_update_merchant_runtime(mob: Mob) -> MerchantRuntime | None:
             existing.is_active = False
             existing.save(update_fields=["is_active", "modified_ts"])
         return None
+    if profile.settlement_currency_id is None:
+        raise ActionError(
+            "That merchant has no settlement currency.",
+            code="merchant_currency_missing",
+        )
 
     runtime, created = MerchantRuntime.objects.get_or_create(
         mob=mob,
         defaults={
             "world": mob.world,
             "profile": profile,
+            "settlement_currency": profile.settlement_currency,
             "is_active": True,
             "remaining_purchase_budget": _profile_budget(profile),
         },
     )
+    runtime = (
+        MerchantRuntime.objects.select_for_update(of=("self",))
+        .select_related("profile", "settlement_currency")
+        .get(pk=runtime.pk)
+    )
     if not created:
         update_fields = []
-        profile_changed = False
         if runtime.profile_id != profile.id:
             runtime.profile = profile
             update_fields.append("profile")
             runtime.last_restocked_ts = None
             update_fields.append("last_restocked_ts")
-            profile_changed = True
+        if runtime.settlement_currency_id != profile.settlement_currency_id:
+            runtime.settlement_currency = profile.settlement_currency
+            update_fields.append("settlement_currency")
+            if "last_restocked_ts" not in update_fields:
+                runtime.last_restocked_ts = None
+                update_fields.append("last_restocked_ts")
         if runtime.world_id != mob.world_id:
             runtime.world = mob.world
             update_fields.append("world")
@@ -113,15 +126,9 @@ def create_or_update_merchant_runtime(mob: Mob) -> MerchantRuntime | None:
             update_fields.append("is_active")
         if update_fields:
             runtime.save(update_fields=[*update_fields, "modified_ts"])
-        if profile_changed:
-            _retire_stock_entries(
-                runtime.stock_entries.filter(
-                    status=MerchantStockEntry.STATUS_AVAILABLE,
-                ).select_related("item")
-            )
 
     if created or not runtime.last_restocked_ts:
-        restock_merchant(runtime)
+        restock_merchant(runtime, only_if_due=True)
     return runtime
 
 
@@ -159,12 +166,18 @@ def _expire_buyback_entries(runtime: MerchantRuntime) -> None:
 
 def _create_stock_entry(runtime: MerchantRuntime, slot: MerchantStockSlot, item: Item) -> MerchantStockEntry:
     roll_metadata = item.roll_metadata if isinstance(item.roll_metadata, dict) else {}
+    if item.cost is not None and item.currency_id != runtime.settlement_currency_id:
+        raise ActionError(
+            "Merchant stock uses a different currency.",
+            code="merchant_currency_mismatch",
+        )
     return MerchantStockEntry.objects.create(
         runtime=runtime,
         stock_slot=slot,
         item=item,
         bundle_roll_id=roll_metadata.get("source_bundle_roll_id") or "",
         price=_item_price(item, runtime.profile.sell_markup),
+        currency=runtime.settlement_currency,
     )
 
 
@@ -206,10 +219,50 @@ def _restock_bundle_slot(runtime: MerchantRuntime, slot: MerchantStockSlot) -> N
             _create_stock_entry(runtime, slot, item)
 
 
-def restock_merchant(runtime: MerchantRuntime) -> MerchantRuntime:
-    runtime = MerchantRuntime.objects.select_related("profile", "profile__funds_currency").get(pk=runtime.pk)
+@transaction.atomic
+def restock_merchant(
+    runtime: MerchantRuntime,
+    *,
+    only_if_due: bool = False,
+) -> MerchantRuntime:
+    runtime = (
+        MerchantRuntime.objects.select_for_update(of=("self",))
+        .select_related(
+            "profile",
+            "profile__settlement_currency",
+            "settlement_currency",
+        )
+        .get(pk=runtime.pk)
+    )
     now = timezone.now()
+    if runtime.profile.settlement_currency_id is None:
+        raise ActionError(
+            "That merchant has no settlement currency.",
+            code="merchant_currency_missing",
+        )
+    settlement_changed = (
+        runtime.settlement_currency_id
+        != runtime.profile.settlement_currency_id
+    )
+    generation_changed = runtime.last_restocked_ts is None or settlement_changed
+    if (
+        only_if_due
+        and not generation_changed
+        and (
+            runtime.next_restock_ts is None
+            or runtime.next_restock_ts > now
+        )
+    ):
+        return runtime
+
+    if generation_changed:
+        _retire_stock_entries(
+            runtime.stock_entries.filter(
+                status=MerchantStockEntry.STATUS_AVAILABLE,
+            ).select_related("item")
+        )
     runtime.remaining_purchase_budget = _profile_budget(runtime.profile)
+    runtime.settlement_currency = runtime.profile.settlement_currency
     _expire_buyback_entries(runtime)
 
     for slot in runtime.profile.stock_slots.select_related("item_definition", "item_bundle").order_by("created_ts", "id"):
@@ -223,6 +276,7 @@ def restock_merchant(runtime: MerchantRuntime) -> MerchantRuntime:
     runtime.save(
         update_fields=[
             "remaining_purchase_budget",
+            "settlement_currency",
             "last_restocked_ts",
             "next_restock_ts",
             "modified_ts",
@@ -232,8 +286,16 @@ def restock_merchant(runtime: MerchantRuntime) -> MerchantRuntime:
 
 
 def restock_if_due(runtime: MerchantRuntime) -> MerchantRuntime:
-    if runtime.next_restock_ts and runtime.next_restock_ts <= timezone.now():
-        return restock_merchant(runtime)
+    if (
+        runtime.last_restocked_ts is None
+        or runtime.settlement_currency_id
+        != runtime.profile.settlement_currency_id
+        or (
+            runtime.next_restock_ts
+            and runtime.next_restock_ts <= timezone.now()
+        )
+    ):
+        return restock_merchant(runtime, only_if_due=True)
     return runtime
 
 
@@ -267,7 +329,7 @@ def list_merchant_stock(player: Player, merchant_selector: str | None) -> dict:
     entries = (
         runtime.stock_entries
         .filter(status=MerchantStockEntry.STATUS_AVAILABLE, item__is_pending_deletion=False)
-        .select_related("item", "item__definition", "item__currency", "stock_slot", "runtime__profile__funds_currency")
+        .select_related("item", "item__definition", "item__currency", "stock_slot", "currency")
         .order_by("stock_slot__created_ts", "stock_slot__id", "id")
     )
     return {
@@ -280,6 +342,7 @@ def list_merchant_stock(player: Player, merchant_selector: str | None) -> dict:
         "funds": {
             "mode": runtime.profile.funds_mode,
             "remaining_purchase_budget": runtime.remaining_purchase_budget,
+            "currency": runtime.settlement_currency.code,
         },
     }
 
@@ -316,15 +379,33 @@ def buy_item(player: Player, merchant_selector: str | None, item_selector: str |
     with transaction.atomic():
         player = Player.objects.select_for_update().get(pk=player.pk)
         runtime = resolve_merchant_runtime(player, merchant_selector)
-        runtime = MerchantRuntime.objects.select_for_update().select_related("profile", "mob").get(pk=runtime.pk)
+        runtime = MerchantRuntime.objects.select_for_update(of=("self",)).select_related(
+            "profile", "mob", "settlement_currency").get(pk=runtime.pk)
         entry = _find_stock_entry(runtime, item_selector)
-        entry = MerchantStockEntry.objects.select_for_update().select_related("item").get(pk=entry.pk)
+        entry = MerchantStockEntry.objects.select_for_update(of=("self",)).select_related(
+            "item", "currency").get(pk=entry.pk)
+        if (
+            entry.status != MerchantStockEntry.STATUS_AVAILABLE
+            or entry.item.is_pending_deletion
+        ):
+            raise ActionError(
+                "That item is not for sale.",
+                code="stock_not_found",
+            )
+        entry.item = (
+            Item.objects.select_for_update(of=("self",))
+            .select_related("definition", "currency")
+            .get(pk=entry.item_id)
+        )
         price = int(entry.price or 0)
-        if int(player.gold or 0) < price:
-            raise ActionError("You cannot afford that.", code="insufficient_funds")
-
-        player.gold = int(player.gold or 0) - price
-        player.save(update_fields=["gold", "modified_ts"])
+        try:
+            mutation = mutate_balances(
+                player,
+                {entry.currency: -price},
+                reason="merchant.purchase",
+            )
+        except WalletError as error:
+            raise ActionError(str(error), code=error.code)
         entry.status = MerchantStockEntry.STATUS_SOLD
         entry.save(update_fields=["status", "modified_ts"])
         entry.item.container = player
@@ -333,8 +414,11 @@ def buy_item(player: Player, merchant_selector: str | None, item_selector: str |
     return {
         "merchant": {"id": runtime.mob_id, "key": runtime.mob.key, "name": runtime.mob.name},
         "item": _serialized_item_payload(entry.item, viewer=player),
-        "price": price,
-        "gold": player.gold,
+        "price": money_payload(price, entry.currency),
+        "economy": {
+            "wallet_revision": mutation.revision,
+            "balances": balance_map(mutation.player),
+        },
     }
 
 
@@ -375,14 +459,30 @@ def sell_item(player: Player, merchant_selector: str | None, item_selector: str 
     with transaction.atomic():
         player = Player.objects.select_for_update().get(pk=player.pk)
         runtime = resolve_merchant_runtime(player, merchant_selector)
-        runtime = MerchantRuntime.objects.select_for_update().select_related("profile", "mob").get(pk=runtime.pk)
+        runtime = MerchantRuntime.objects.select_for_update(of=("self",)).select_related(
+            "profile", "mob", "settlement_currency").get(pk=runtime.pk)
         item = _find_player_inventory_item(player, item_selector)
+        item = (
+            Item.objects.select_for_update(of=("self",))
+            .select_related("definition", "currency")
+            .get(pk=item.pk)
+        )
+        if item.is_pending_deletion or item.container != player:
+            raise ActionError(
+                "You are not carrying that.",
+                code="item_not_found",
+            )
         if item.definition and item.definition.salvage_only:
             raise ActionError(
                 "Captured spoils must be salvaged, not sold.",
                 code="salvage_only",
             )
         price = _item_price(item, runtime.profile.buy_multiplier)
+        if item.cost is not None and item.currency_id != runtime.settlement_currency_id:
+            raise ActionError(
+                "The merchant does not trade in that currency.",
+                code="merchant_currency_mismatch",
+            )
 
         if runtime.profile.funds_mode == MerchantProfile.FUNDS_MODE_FINITE:
             remaining = int(runtime.remaining_purchase_budget or 0)
@@ -391,8 +491,14 @@ def sell_item(player: Player, merchant_selector: str | None, item_selector: str 
             runtime.remaining_purchase_budget = remaining - price
             runtime.save(update_fields=["remaining_purchase_budget", "modified_ts"])
 
-        player.gold = int(player.gold or 0) + price
-        player.save(update_fields=["gold", "modified_ts"])
+        try:
+            mutation = mutate_balances(
+                player,
+                {runtime.settlement_currency: price},
+                reason="merchant.sale",
+            )
+        except WalletError as error:
+            raise ActionError(str(error), code=error.code)
         item.container = runtime
         item.save(update_fields=["container_type", "container_id", "modified_ts"])
 
@@ -404,6 +510,7 @@ def sell_item(player: Player, merchant_selector: str | None, item_selector: str 
                 item=item,
                 sold_price=price,
                 buyback_price=price,
+                currency=runtime.settlement_currency,
             )
             _enforce_buyback_cap(runtime, player)
         else:
@@ -414,8 +521,11 @@ def sell_item(player: Player, merchant_selector: str | None, item_selector: str 
     return {
         "merchant": {"id": runtime.mob_id, "key": runtime.mob.key, "name": runtime.mob.name},
         "item": _serialized_item_payload(item, viewer=player),
-        "price": price,
-        "gold": player.gold,
+        "price": money_payload(price, runtime.settlement_currency),
+        "economy": {
+            "wallet_revision": mutation.revision,
+            "balances": balance_map(mutation.player),
+        },
         "remaining_purchase_budget": runtime.remaining_purchase_budget,
         "buyback_entry_id": buyback_entry.id if buyback_entry else None,
     }
@@ -426,7 +536,7 @@ def list_buyback(player: Player, merchant_selector: str | None) -> dict:
     entries = (
         runtime.buyback_entries
         .filter(player=player, status=MerchantBuybackEntry.STATUS_ACTIVE, item__is_pending_deletion=False)
-        .select_related("item", "item__definition", "item__currency", "runtime__profile__funds_currency")
+        .select_related("item", "item__definition", "item__currency", "currency")
         .order_by("-created_ts", "-id")
     )
     return {
@@ -469,15 +579,34 @@ def buyback_item(player: Player, merchant_selector: str | None, item_selector: s
     with transaction.atomic():
         player = Player.objects.select_for_update().get(pk=player.pk)
         runtime = resolve_merchant_runtime(player, merchant_selector)
-        runtime = MerchantRuntime.objects.select_for_update().select_related("profile", "mob").get(pk=runtime.pk)
+        runtime = MerchantRuntime.objects.select_for_update(of=("self",)).select_related(
+            "profile", "mob", "settlement_currency").get(pk=runtime.pk)
         entry = _find_buyback_entry(runtime, player, item_selector)
-        entry = MerchantBuybackEntry.objects.select_for_update().select_related("item").get(pk=entry.pk)
+        entry = MerchantBuybackEntry.objects.select_for_update(of=("self",)).select_related(
+            "item", "currency").get(pk=entry.pk)
+        if (
+            entry.status != MerchantBuybackEntry.STATUS_ACTIVE
+            or entry.player_id != player.pk
+            or entry.item.is_pending_deletion
+        ):
+            raise ActionError(
+                "That item is not available for buyback.",
+                code="buyback_not_found",
+            )
+        entry.item = (
+            Item.objects.select_for_update(of=("self",))
+            .select_related("definition", "currency")
+            .get(pk=entry.item_id)
+        )
         price = int(entry.buyback_price or 0)
-        if int(player.gold or 0) < price:
-            raise ActionError("You cannot afford that.", code="insufficient_funds")
-
-        player.gold = int(player.gold or 0) - price
-        player.save(update_fields=["gold", "modified_ts"])
+        try:
+            mutation = mutate_balances(
+                player,
+                {entry.currency: -price},
+                reason="merchant.buyback",
+            )
+        except WalletError as error:
+            raise ActionError(str(error), code=error.code)
         entry.status = MerchantBuybackEntry.STATUS_BOUGHT_BACK
         entry.save(update_fields=["status", "modified_ts"])
         entry.item.container = player
@@ -486,6 +615,9 @@ def buyback_item(player: Player, merchant_selector: str | None, item_selector: s
     return {
         "merchant": {"id": runtime.mob_id, "key": runtime.mob.key, "name": runtime.mob.name},
         "item": _serialized_item_payload(entry.item, viewer=player),
-        "price": price,
-        "gold": player.gold,
+        "price": money_payload(price, entry.currency),
+        "economy": {
+            "wallet_revision": mutation.revision,
+            "balances": balance_map(mutation.player),
+        },
     }

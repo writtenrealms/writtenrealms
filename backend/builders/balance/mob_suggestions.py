@@ -231,7 +231,6 @@ def _suggest_direct_stats(*, level: int, mob_type: str, scale: float) -> dict[st
     modifier = TYPE_MODIFIERS.get(mob_type, TypeModifier())
     return {
         "exp_worth": _fallback_experience(level, scale),
-        "gold": _ceil_stat(scale) if mob_type == adv_consts.MOB_TYPE_HUMANOID else 0,
         "health_max": _ceil_stat(scale * 5.0 * modifier.health, minimum=1),
         "health_regen": 0,
         "energy_max": 0,

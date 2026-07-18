@@ -61,6 +61,7 @@ from spawns.handlers import builder
 from spawns.handlers import items
 from spawns.handlers import merchants
 from spawns.handlers import crafting
+from spawns.handlers import currencies
 from spawns.handlers import quests
 from spawns.handlers import instances
 

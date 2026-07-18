@@ -5,6 +5,7 @@ from croniter import croniter
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import RegexValidator
 from django.contrib.contenttypes.fields import (
     GenericForeignKey,
     GenericRelation)
@@ -132,9 +133,27 @@ class ItemDefinition(AdventBaseModel):
     attributes = models.JSONField(default=dict, blank=True)
     randomization = models.JSONField(default=dict, blank=True)
     salvage_only = models.BooleanField(default=False)
+    cost = models.BigIntegerField(**optional)
+    currency = models.ForeignKey(
+        'builders.Currency',
+        on_delete=models.RESTRICT,
+        related_name='item_definitions',
+        **optional)
 
     class Meta(AdventBaseModel.Meta):
         unique_together = [('world', 'slug')]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(cost__isnull=True, currency__isnull=True)
+                    | models.Q(
+                        cost__gte=0,
+                        cost__lte=9007199254740991,
+                        currency__isnull=False,
+                    )
+                ),
+                name='builders_item_definition_money_pair'),
+        ]
 
     def save(self, *args, **kwargs):
         is_create = self._state.adding
@@ -244,12 +263,11 @@ class MerchantProfile(AdventBaseModel):
     funds_mode = models.TextField(
         choices=list_to_choice(FUNDS_MODES),
         default=FUNDS_MODE_UNLIMITED)
-    funds_currency = models.ForeignKey(
+    settlement_currency = models.ForeignKey(
         'builders.Currency',
-        on_delete=models.SET_NULL,
-        related_name='merchant_funds_profiles',
-        **optional)
-    purchase_budget = models.PositiveIntegerField(default=0)
+        on_delete=models.RESTRICT,
+        related_name='merchant_profiles')
+    purchase_budget = models.BigIntegerField(default=0)
 
     buyback_enabled = models.BooleanField(default=False)
     buyback_max_items = models.PositiveIntegerField(default=0)
@@ -259,6 +277,14 @@ class MerchantProfile(AdventBaseModel):
 
     class Meta(AdventBaseModel.Meta):
         unique_together = [('world', 'slug')]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(
+                    purchase_budget__gte=0,
+                    purchase_budget__lte=9007199254740991,
+                ),
+                name='builders_merchant_purchase_budget_safe'),
+        ]
 
     def save(self, *args, **kwargs):
         if not self.slug:
@@ -498,6 +524,7 @@ class MobDefinition(AdventBaseModel):
         unique_together = [('world', 'slug')]
 
     def save(self, *args, **kwargs):
+        sync_spawned = kwargs.pop("sync_spawned", True)
         is_create = self._state.adding
         if not self.slug:
             self.slug = _generate_unique_world_slug(
@@ -510,7 +537,7 @@ class MobDefinition(AdventBaseModel):
                 "modified_ts",
             ]))
         super().save(*args, **kwargs)
-        if not is_create:
+        if not is_create and sync_spawned:
             from builders.mob_definitions import sync_spawned_mobs_from_definition
 
             sync_spawned_mobs_from_definition(self)
@@ -526,6 +553,31 @@ class MobDefinition(AdventBaseModel):
             roams=roams,
             rule=rule,
         )
+
+
+class MobCurrencyReward(AdventBaseModel):
+    mob_definition = models.ForeignKey(
+        'builders.MobDefinition',
+        on_delete=models.CASCADE,
+        related_name='currency_rewards')
+    currency = models.ForeignKey(
+        'builders.Currency',
+        on_delete=models.RESTRICT,
+        related_name='mob_rewards')
+    amount = models.BigIntegerField()
+
+    class Meta(AdventBaseModel.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=['mob_definition', 'currency'],
+                name='builders_mob_currency_reward_unique'),
+            models.CheckConstraint(
+                condition=models.Q(amount__gt=0),
+                name='builders_mob_currency_reward_positive'),
+            models.CheckConstraint(
+                condition=models.Q(amount__lte=9007199254740991),
+                name='builders_mob_currency_reward_safe_integer'),
+        ]
 
 
 class TransformationTemplate(AdventBaseModel):
@@ -1294,9 +1346,64 @@ class Currency(BaseModel):
                               related_name='currencies',
                               on_delete=models.CASCADE)
 
-    code = models.TextField()
+    code = models.CharField(
+        max_length=64,
+        validators=[RegexValidator(r'^[a-z][a-z0-9_-]{0,63}$')])
     name = models.TextField()
-    is_default = models.BooleanField(default=False, db_index=True)
+    plural_name = models.TextField(blank=True)
+    description = models.TextField(blank=True)
 
     class Meta:
-        unique_together = ['world', 'code']
+        constraints = [
+            models.UniqueConstraint(
+                models.F('world'),
+                models.functions.Lower('code'),
+                name='builders_currency_world_code_ci_unique'),
+            models.CheckConstraint(
+                condition=models.Q(code__regex=r'^[a-z][a-z0-9_-]{0,63}$'),
+                name='builders_currency_code_valid'),
+        ]
+
+    def save(self, *args, **kwargs):
+        from core.economy import economy_world
+
+        self.code = str(self.code or '').strip().lower()
+        self.name = str(self.name or '').strip()
+        self.plural_name = str(self.plural_name or '').strip()
+        self.description = str(self.description or '').strip()
+        if not self.name:
+            raise ValidationError({'name': 'A currency name is required.'})
+        if self.world_id and economy_world(self.world).pk != self.world_id:
+            raise ValidationError(
+                {'world': 'Currencies must belong to a base world.'})
+        if self.pk:
+            original_code = type(self).objects.filter(pk=self.pk).values_list(
+                'code', flat=True).first()
+            if original_code is not None and self.code != original_code:
+                raise ValidationError({'code': 'Currency codes cannot be changed.'})
+        super().save(*args, **kwargs)
+
+
+class WorldStartingCurrencyBalance(AdventBaseModel):
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='starting_currency_balances')
+    currency = models.ForeignKey(
+        'builders.Currency',
+        on_delete=models.RESTRICT,
+        related_name='starting_balance_rules')
+    amount = models.BigIntegerField(default=0)
+
+    class Meta(AdventBaseModel.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=['world', 'currency'],
+                name='builders_starting_currency_balance_unique'),
+            models.CheckConstraint(
+                condition=models.Q(amount__gte=0),
+                name='builders_starting_currency_balance_nonnegative'),
+            models.CheckConstraint(
+                condition=models.Q(amount__lte=9007199254740991),
+                name='builders_starting_currency_balance_safe_integer'),
+        ]

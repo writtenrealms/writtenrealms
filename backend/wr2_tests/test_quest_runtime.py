@@ -3,6 +3,7 @@ from datetime import timedelta
 from django.utils import timezone
 from django.urls import reverse
 
+from builders.currencies import create_currency
 from builders.models import ItemDefinition, MobDefinition
 from config import constants as adv_consts
 from core.computations import compute_stats
@@ -14,6 +15,7 @@ from core.scoped_state import (
 )
 from spawns.handlers import dispatch_command
 from spawns.models import Item
+from spawns.wallet import balance_map
 from quests.models import QuestInstance, QuestTemplate
 from quests.services.discovery import list_opportunities
 from tests.base import WorldTestCase
@@ -37,6 +39,12 @@ def _runtime_rewards():
 class QuestRuntimeTestCase(WorldTestCase):
     def setUp(self):
         super().setUp()
+        self.currency = create_currency(
+            world=self.world,
+            code="obol",
+            name="Obol",
+            plural_name="Obols",
+        )
         self.player.stamina = 20
         self.player.in_game = True
         self.player.save(update_fields=["stamina", "in_game"])
@@ -216,6 +224,49 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
         quest_instance = QuestInstance.objects.get(player=self.player, template__slug="tiny_hello")
         self.assertEqual(quest_instance.status, "resolved")
         self.assertEqual(quest_instance.resolution, "complete")
+
+    def test_choice_effects_roll_back_when_the_transition_is_invalid(self):
+        template = self.create_runtime_quest(
+            slug="broken_toll",
+            name="Broken Toll",
+            steps=[
+                {
+                    "id": "offer",
+                    "kind": "storylet",
+                    "choices": [
+                        {
+                            "id": "pay",
+                            "text": "Take the coin.",
+                            "effects": [
+                                {
+                                    "type": "grant_currency",
+                                    "currency": "obol",
+                                    "amount": 5,
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        )
+        QuestInstance.objects.create(
+            world=self.world,
+            template=template,
+            player=self.player,
+            status="active",
+            current_step_id="offer",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                "quest choose broken_toll pay",
+            )
+
+        error = self._message_by_type(messages, "cmd.quest.error")
+        self.assertIsNotNone(error)
+        self.assertEqual(error["data"]["code"], "missing_goto")
+        self.assertEqual(balance_map(self.player), {"obol": 0})
 
     def test_quest_abandon_resolves_active_quest_without_arc(self):
         with capture_game_messages():
@@ -1208,7 +1259,7 @@ class TestTurnInQuestRuntime(QuestRuntimeTestCase):
         self.pelt_template.spawn(self.player, self.spawn_world)
         self.pelt_template.spawn(self.player, self.spawn_world)
         self.herb_template.spawn(self.player, self.spawn_world)
-        self.gold_before = self.player.gold
+        self.balance_before = balance_map(self.player)["obol"]
         self.exp_before = self.player.experience
 
         self.create_runtime_quest(
@@ -1276,7 +1327,7 @@ class TestTurnInQuestRuntime(QuestRuntimeTestCase):
             ],
             reward_policy={
                 "complete": [
-                    {"type": "grant_gold", "amount": 10},
+                    {"type": "grant_currency", "currency": "obol", "amount": 10},
                     {"type": "grant_xp", "amount": 50},
                     {
                         "type": "mob_command",
@@ -1304,7 +1355,7 @@ class TestTurnInQuestRuntime(QuestRuntimeTestCase):
         quest_instance = QuestInstance.objects.get(player=self.player, template__slug="quartermaster_supplies")
         self.assertEqual(quest_instance.status, "resolved")
         self.assertEqual(quest_instance.resolution, "complete")
-        self.assertEqual(self.player.gold, self.gold_before + 10)
+        self.assertEqual(balance_map(self.player)["obol"], self.balance_before + 10)
         self.assertEqual(self.player.experience, self.exp_before + 50)
         self.assertIn("quest.instance.resolved", self._message_types(final_messages))
         self.assertIn("notification./echo", self._message_types(final_messages))
@@ -1590,7 +1641,7 @@ class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
             ],
             reward_policy={
                 "complete": [
-                    {"type": "grant_gold", "amount": 8},
+                    {"type": "grant_currency", "currency": "obol", "amount": 8},
                     {"type": "mob_command", "command": "say Good work."},
                 ],
                 "compromised": [],
@@ -1616,7 +1667,7 @@ class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
         quest_instance = QuestInstance.objects.get(player=self.player, template__slug="rat_cull")
         self.assertEqual(quest_instance.status, "resolved")
         self.assertEqual(quest_instance.resolution, "complete")
-        self.assertEqual(self.player.gold, 8)
+        self.assertEqual(balance_map(self.player)["obol"], 8)
         self.assertIn("quest.instance.resolved", self._message_types(final_messages))
         self.assertIn("notification.cmd.say.success", self._message_types(final_messages))
 

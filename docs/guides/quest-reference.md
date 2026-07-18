@@ -43,7 +43,7 @@ At the time of writing, the runtime supports:
   - `quest.item.delivered`
   - `quest.mob.killed`
 - current typed rewards/effects:
-  - `grant_gold`
+  - `grant_currency`
   - `grant_item`
   - `grant_xp`
   - `adjust_reputation`
@@ -51,6 +51,10 @@ At the time of writing, the runtime supports:
   - `increment_state`
   - `clear_state`
   - constrained `mob_command`
+
+The currency examples below assume the world defines `obol`.
+`grant_currency` always requires an explicit authored code and positive integer
+amount; it never assumes Gold.
 
 For `auto_start`, the qualifying events are currently:
 
@@ -345,7 +349,8 @@ spec:
           command: say Good. I have been waiting for this packet.
   rewards:
     complete:
-      - type: grant_gold
+      - type: grant_currency
+        currency: obol
         amount: 8
       - type: grant_xp
         amount: 25
@@ -372,7 +377,7 @@ The shrine keeper waits beside the old altar. [ ? ]
 give sealed_packet shrine_keeper
 Quest resolved: Shrine Packet
 The shrine keeper accepts the packet and breaks the wax seal.
-Rewards: 8 gold, 25 experience
+Rewards: 8 Obols, 25 experience
 ```
 
 What this teaches:
@@ -458,7 +463,8 @@ spec:
           command: say Good work. The stores might last the week now.
   rewards:
     complete:
-      - type: grant_gold
+      - type: grant_currency
+        currency: obol
         amount: 8
     compromised: []
     failed_forward: []
@@ -490,7 +496,7 @@ Captain Merrow stands watch here. [ ? ]
 talk captain
 Quest resolved: Rat Cull
 Captain Merrow confirms the camp is safe for now.
-Rewards: 8 gold
+Rewards: 8 Obols
 ```
 
 What this teaches:
@@ -809,7 +815,8 @@ spec:
       kind: resolution
       recap: The guildmaster counts coins into your palm and sends you on your way.
       effects:
-        - type: grant_gold
+        - type: grant_currency
+          currency: obol
           amount: 20
         - type: mob_command
           mob_definition: guildmaster
@@ -852,7 +859,7 @@ Choices:
 quest choose guildmaster_favor take_coin
 Quest resolved: The Guildmaster's Favor
 The guildmaster counts coins into your palm and sends you on your way.
-Rewards: 20 gold
+Rewards: 20 Obols
 ```
 
 What this teaches:

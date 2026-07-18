@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import yaml
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.utils.text import slugify
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -23,7 +24,8 @@ from quests.models import (
     QuestArcTemplate,
     QuestTemplate,
 )
-from builders.models import ItemDefinition
+from builders.models import Currency, ItemDefinition
+from core.economy import economy_world
 from worlds.models import World
 
 
@@ -360,6 +362,18 @@ def _validate_condition_entity_refs(world: World, condition: Any, field_name: st
 
         left_path = raw_args[0]
         right_value = raw_args[1]
+        path_parts = str(left_path or "").strip().split(".")
+        if (
+            len(path_parts) == 3
+            and path_parts[0] in {"actor", "player"}
+            and path_parts[1] == "balances"
+        ):
+            if not Currency.objects.filter(
+                world=economy_world(world),
+                code=path_parts[2],
+            ).exists():
+                raise serializers.ValidationError(
+                    f"{field_name}.{operator}[0] references an unknown currency.")
         base_expected_type = _condition_expected_entity_type(left_path)
 
         if operator == "in" and isinstance(right_value, (list, tuple, set)):
@@ -471,6 +485,28 @@ def _validate_effect_entity_refs(world: World, effects: list[dict[str, Any]] | N
     for index, effect in enumerate(effects):
         if not isinstance(effect, dict):
             continue
+        effect_type = str(effect.get("type") or "").strip().lower()
+        if effect_type in {"grant_gold", "gold"} or "gold" in effect:
+            raise serializers.ValidationError(
+                f"{field_name}[{index}] uses obsolete Gold-specific reward fields. "
+                "Use type: grant_currency with currency and amount.")
+        if effect_type == "grant_currency":
+            from core.economy import resolve_currency, validate_currency_amount
+
+            if effect.get("currency") in (None, ""):
+                raise serializers.ValidationError(
+                    f"{field_name}[{index}].currency is required.")
+            try:
+                currency = resolve_currency(world, effect.get("currency"))
+                amount = validate_currency_amount(
+                    effect.get("amount"),
+                    allow_zero=False,
+                    field_name=f"{field_name}[{index}].amount",
+                )
+            except (ValueError, DjangoValidationError) as exc:
+                raise serializers.ValidationError(str(exc))
+            effect["currency"] = currency.code
+            effect["amount"] = amount
         if "mob_definition" in effect:
             _validate_entity_ref(
                 world,

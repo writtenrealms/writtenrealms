@@ -208,9 +208,6 @@
             <div class="cmd" @click="cmdHelp('/nochat')">/nochat</div>
           </div>
           <div class="cmds">
-            <div class="cmd" @click="cmdHelp('/award')">/award</div>
-            <div class="cmd" @click="cmdHelp('/raward')">/raward</div>
-            <div class="cmd" @click="cmdHelp('/zaward')">/zaward</div>
           </div>
         </div>
       </template>

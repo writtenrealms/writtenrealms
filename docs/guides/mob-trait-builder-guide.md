@@ -130,7 +130,6 @@ Common mob modifier fields:
 - `energy_regen`
 - `stamina_regen`
 - `level`
-- `gold`
 - `exp_worth`
 
 Unsupported modifier keys are preserved in trait metadata but do not change

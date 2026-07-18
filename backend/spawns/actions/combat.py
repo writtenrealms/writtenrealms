@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import timedelta
+from decimal import Decimal, ROUND_HALF_UP
 import logging
 import math
 import random
@@ -27,7 +28,8 @@ from core.factions import faction_is_core
 from core.leveling import ExperienceGrant, apply_experience
 from core.world_config import inherited_system_config
 from builders.loot_tables import roll_mob_loot
-from builders.models import AbilityDefinition
+from builders.models import AbilityDefinition, Currency
+from core.economy import economy_world, money_payload
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.effects import (
     active_effect_payload,
@@ -43,7 +45,15 @@ from spawns.actions.effects import (
 from spawns.actions.movement_costs import movement_cost
 from spawns.actions.targeting import resolve_room_mob_target
 from spawns.events import GameEvent, enqueue_game_events
-from spawns.models import ActiveEffect, CombatEncounter, Item, Mob, Player
+from spawns.models import (
+    ActiveEffect,
+    CombatEncounter,
+    Item,
+    Mob,
+    Player,
+    PlayerCurrencyBalance,
+)
+from spawns.wallet import WalletError, mutate_balances
 from worlds.models import Room
 
 
@@ -794,7 +804,7 @@ def _mob_death_text(mob_name: str | None) -> str:
 def _reward_text(
     *,
     experience_gained: int = 0,
-    gold_gained: int = 0,
+    currency_rewards: list[dict] | None = None,
     leveling: ExperienceGrant | None = None,
 ) -> str | None:
     lines: list[str] = []
@@ -802,8 +812,8 @@ def _reward_text(
         lines.append(f"You gain {experience_gained} experience.")
     if leveling and leveling.leveled_up:
         lines.append(f"You are now level {leveling.new_level}!")
-    if gold_gained > 0:
-        lines.append(f"You receive {gold_gained} gold.")
+    for reward in currency_rewards or []:
+        lines.append(f"You receive {reward['display']}.")
     if not lines:
         return None
     return "\n".join(lines)
@@ -892,18 +902,24 @@ def _create_player_corpse(player: Player, room: Room | None) -> Item | None:
     )
 
 
-def _equipped_item_value(player: Player) -> int:
-    return sum(max(0, int(item.cost or 0)) for _, item in _equipped_items(player))
+def _equipped_item_value(player: Player, *, currency) -> int:
+    """Return only repair value denominated in the configured death currency."""
+    return sum(
+        max(0, int(item.cost or 0))
+        for _, item in _equipped_items(player)
+        if item.currency_id == currency.pk
+    )
 
 
 def _apply_player_death_penalty(
     *,
     player: Player,
     death_mode: str,
-    death_gold_penalty: float,
+    death_currency,
+    death_currency_penalty,
     origin_room: Room | None,
     is_pvp_death: bool,
-) -> tuple[str, int | None]:
+) -> tuple[str, int | None, dict | None]:
     if death_mode == adv_consts.DEATH_MODE_LOSE_ALL:
         equipped = _equipped_items(player)
         carried_items = list(player.inventory.filter(is_pending_deletion=False))
@@ -911,16 +927,38 @@ def _apply_player_death_penalty(
         _clear_equipment_slots(player, [slot for slot, _ in equipped])
         if corpse:
             _transfer_items_to_container([item for _, item in equipped] + carried_items, corpse)
-        return "Your equipment is left behind.", corpse.id if corpse else None
+        return "Your equipment is left behind.", corpse.id if corpse else None, None
 
-    if death_mode == adv_consts.DEATH_MODE_LOSE_GOLD and not is_pvp_death:
-        penalty = round(_equipped_item_value(player) * death_gold_penalty)
-        penalty = min(max(0, penalty), player.gold)
+    if death_mode == adv_consts.DEATH_MODE_LOSE_CURRENCY and not is_pvp_death:
+        if death_currency is None:
+            raise ActionError(
+                "This world's death currency is not configured.",
+                code="death_currency_missing",
+            )
+        penalty = int(
+            (Decimal(_equipped_item_value(player, currency=death_currency)) * Decimal(
+                str(death_currency_penalty or 0))).to_integral_value(
+                    rounding=ROUND_HALF_UP))
+        balance = (
+            PlayerCurrencyBalance.objects.select_for_update()
+            .filter(player=player, currency=death_currency)
+            .values_list("amount", flat=True)
+            .first()
+            or 0
+        )
+        penalty = min(max(0, penalty), int(balance))
         if penalty > 0:
-            player.gold -= penalty
-            player.save(update_fields=["gold"])
-            return f"You pay {penalty} gold for repairs.", None
-        return "", None
+            try:
+                mutate_balances(
+                    player,
+                    {death_currency: -penalty},
+                    reason="character.death",
+                )
+            except WalletError as error:
+                raise ActionError(str(error), code=error.code)
+            penalty_money = money_payload(penalty, death_currency)
+            return f"You pay {penalty_money['display']} for repairs.", None, penalty_money
+        return "", None, None
 
     if death_mode == adv_consts.DEATH_MODE_DESTROY_EQ:
         equipped = _equipped_items(player)
@@ -928,7 +966,7 @@ def _apply_player_death_penalty(
             item_ids = [item.id for _, item in equipped]
             _clear_equipment_slots(player, [slot for slot, _ in equipped])
             Item.objects.filter(pk__in=item_ids).delete()
-        return "Your equipment is destroyed.", None
+        return "Your equipment is destroyed.", None, None
 
     if death_mode == adv_consts.DEATH_MODE_DESTROY_ALL:
         equipped = _equipped_items(player)
@@ -937,14 +975,14 @@ def _apply_player_death_penalty(
         _clear_equipment_slots(player, [slot for slot, _ in equipped])
         if item_ids:
             Item.objects.filter(pk__in=item_ids).delete()
-        return "Your equipment and inventory are destroyed.", None
+        return "Your equipment and inventory are destroyed.", None, None
 
     if death_mode == adv_consts.DEATH_MODE_LOSE_INV:
         carried_items = list(player.inventory.filter(is_pending_deletion=False))
         corpse = _create_player_corpse(player, origin_room)
         if corpse:
             _transfer_items_to_container(carried_items, corpse)
-        return "Your inventory is left behind.", corpse.id if corpse else None
+        return "Your inventory is left behind.", corpse.id if corpse else None, None
 
     if death_mode == adv_consts.DEATH_MODE_LOSE_EQ:
         equipped = _equipped_items(player)
@@ -952,9 +990,9 @@ def _apply_player_death_penalty(
         _clear_equipment_slots(player, [slot for slot, _ in equipped])
         if corpse:
             _transfer_items_to_container([item for _, item in equipped], corpse)
-        return "Your equipment is left behind.", corpse.id if corpse else None
+        return "Your equipment is left behind.", corpse.id if corpse else None, None
 
-    return "", None
+    return "", None, None
 
 
 def apply_player_death(
@@ -986,10 +1024,12 @@ def apply_player_death(
         updated_player.save(update_fields=["health", "energy", "stamina", "room"])
         ActiveEffect.objects.filter(target_player=updated_player).delete()
         clear_actor_effect_cache(updated_player)
-        penalty_text, corpse_id = _apply_player_death_penalty(
+        penalty_text, corpse_id, penalty_money = _apply_player_death_penalty(
             player=updated_player,
             death_mode=death_config.death_mode if death_config else adv_consts.DEATH_MODE_LOSE_NONE,
-            death_gold_penalty=death_config.death_gold_penalty if death_config else 0,
+            death_currency=death_config.death_currency if death_config else None,
+            death_currency_penalty=(
+                death_config.death_currency_penalty if death_config else 0),
             origin_room=origin_room or death_room,
             is_pvp_death=(
                 isinstance(killer, Player)
@@ -1010,7 +1050,8 @@ def apply_player_death(
     affect_data = {
         "actor": serialize_actor(updated_player, death_room).model_dump(),
         "room": _room_payload(updated_player, death_room),
-        "penalty": penalty_text,
+        "penalty": penalty_money,
+        "penalty_text": penalty_text,
     }
     if origin_room:
         affect_data["origin_room"] = _room_payload(updated_player, origin_room)
@@ -1837,7 +1878,19 @@ def _append_mob_defeat_events(
     corpse_id = _ensure_corpse(target_mob)
     deceased_payload = serialize_char_from_mob(target_mob).model_dump()
     exp_reward = int(target_mob.exp_worth or 0)
-    gold_reward = int(target_mob.gold or 0)
+    reward_snapshot = dict(target_mob.currency_reward_snapshot or {})
+    reward_currencies = {
+        currency.code: currency
+        for currency in Currency.objects.filter(
+            world=economy_world(player.world),
+            code__in=reward_snapshot,
+        )
+    }
+    reward_deltas = {
+        reward_currencies[code].pk: int(reward_snapshot[code])
+        for code in sorted(reward_currencies)
+        if int(reward_snapshot[code]) > 0
+    }
     finished_encounter_ids: set[int] = set()
     if encounter is not None:
         _finish_encounter(encounter)
@@ -1871,12 +1924,22 @@ def _append_mob_defeat_events(
         reward_update_fields.append("experience")
         if leveling.leveled_up:
             reward_update_fields.append("level")
-    if gold_reward:
-        # TODO: Route mob spoils through a party/share policy once WR2 grouping exists.
-        player.gold = int(player.gold or 0) + gold_reward
-        reward_update_fields.append("gold")
     if reward_update_fields:
         player.save(update_fields=reward_update_fields)
+    if reward_deltas:
+        try:
+            mutate_balances(
+                player,
+                reward_deltas,
+                reason="mob.kill",
+            )
+        except WalletError as error:
+            raise ActionError(str(error), code=error.code)
+    currency_rewards = [
+        money_payload(int(reward_snapshot[code]), reward_currencies[code])
+        for code in sorted(reward_currencies)
+        if int(reward_snapshot[code]) > 0
+    ]
 
     actor_payload = serialize_actor(player, killer_room).model_dump()
     corpse_payload = _serialize_corpse(corpse_id, viewer=player)
@@ -1886,7 +1949,7 @@ def _append_mob_defeat_events(
         "deceased": deceased_payload,
         "corpse": _empty_corpse_payload() if remote_kill else corpse_payload,
         "experience_gained": exp_reward,
-        "gold_gained": gold_reward,
+        "currency_rewards": currency_rewards,
     }
     if not remote_kill:
         death_data["killer"] = serialize_char_from_player(player).model_dump()
@@ -1921,7 +1984,7 @@ def _append_mob_defeat_events(
 
     reward_text = _reward_text(
         experience_gained=exp_reward,
-        gold_gained=gold_reward,
+        currency_rewards=currency_rewards,
         leveling=leveling,
     )
     if reward_text:
@@ -1929,7 +1992,7 @@ def _append_mob_defeat_events(
             "actor": actor_payload,
             "source": deceased_payload,
             "experience_gained": exp_reward,
-            "gold_gained": gold_reward,
+            "currency_rewards": currency_rewards,
         }
         if leveling:
             reward_data.update(
@@ -1960,7 +2023,7 @@ def _append_mob_defeat_events(
                 "target": deceased_payload,
                 "room": room_payload,
                 "experience_gained": exp_reward,
-                "gold_gained": gold_reward,
+                "currency_rewards": currency_rewards,
                 "levels_gained": leveling.levels_gained if leveling else 0,
             },
         )

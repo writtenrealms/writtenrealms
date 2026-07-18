@@ -17,6 +17,7 @@ from config import constants as adv_consts
 from core.abilities import definition_world
 from core.combat_formulas import get_world_combat_system, rating_display_percent
 from core.equipment_system import get_world_equipment_payload
+from core.economy import money_payload
 from core.scoped_state import STATE_SCOPE_WORLD, get_state_snapshot
 from core.leveling import (
     get_world_leveling_config,
@@ -31,7 +32,14 @@ from core.stat_system import (
 from quests.services.interactions import room_mob_quest_indicator_map, room_quest_callouts
 from quests.services.room_items import serialized_quest_room_items_for_room
 from spawns.actions.effects import active_character_effects, active_combat_effects
-from spawns.models import DoorState, Item, Mob, Player, PlayerMaterialBalance
+from spawns.models import (
+    DoorState,
+    Item,
+    Mob,
+    Player,
+    PlayerCurrencyBalance,
+    PlayerMaterialBalance,
+)
 from spawns.schemas import (
     Actor,
     Char,
@@ -44,11 +52,11 @@ from spawns.schemas import (
     WhoListEntry,
     Zone as ZoneSchema,
 )
-from spawns.serializers import AnimatePlayerSerializer, AnimateWorldSerializer
-from spawns.triggers import (
-    get_char_action_labels_for_actor,
-    get_item_action_labels_for_actor,
-    get_room_action_labels_for_actor,
+from spawns.serializers import (
+    AnimatePlayerSerializer,
+    AnimateWorldSerializer,
+    player_economy_payload,
+    world_economy_payload,
 )
 from worlds.models import Door, Room, World
 
@@ -219,13 +227,23 @@ def get_player_with_related(player_id: int) -> Player:
         "material__name",
         "material_id",
     )
+    currency_balance_qs = PlayerCurrencyBalance.objects.select_related(
+        "currency"
+    ).filter(amount__gt=0).order_by("currency__code", "currency_id")
     return (
         Player.objects.select_related(
             "world",
+            "world__default_currency",
             "world__config",
+            "world__config__death_currency",
             "world__context",
+            "world__context__default_currency",
             "world__context__config",
+            "world__context__config__death_currency",
+            "world__context__instance_of",
+            "world__context__instance_of__default_currency",
             "world__instance_of",
+            "world__instance_of__default_currency",
             "room",
             "user",
             "config",
@@ -238,6 +256,7 @@ def get_player_with_related(player_id: int) -> Player:
             "clan_memberships__clan",
             Prefetch("inventory", queryset=inventory_qs),
             Prefetch("material_balances", queryset=material_balance_qs),
+            Prefetch("currency_balances", queryset=currency_balance_qs),
         )
         .get(pk=player_id)
     )
@@ -297,8 +316,9 @@ def serialize_item(
     include_inventory: bool = False,
 ) -> ItemSchema:
     """Serialize an item into the WR2 Item schema."""
+    from spawns.triggers import get_item_action_labels_for_actor
+
     name = resolve_item_name(item)
-    currency = item.currency.code if item.currency else "gold"
     description = item.description
     if not description and item.definition:
         description = item.definition.description
@@ -367,8 +387,11 @@ def serialize_item(
         stamina_max=item.stamina_max,
         stamina_regen=item.stamina_regen,
         is_pickable=item.is_pickable,
-        cost=item.cost,
-        currency=currency,
+        value=(
+            money_payload(int(item.cost), item.currency)
+            if item.cost is not None and item.currency is not None
+            else None
+        ),
         keywords=keywords,
         keyword=first_keyword(keywords, name),
         label=item.label,
@@ -466,6 +489,8 @@ def serialize_char_from_mob(
     include_equipment: bool = False,
     core_faction_override: str | None | object = _CORE_FACTION_UNSET,
 ) -> Char:
+    from spawns.triggers import get_char_action_labels_for_actor
+
     name = (
         mob.name
         or (mob.definition.name if mob.definition else "")
@@ -689,6 +714,8 @@ def serialize_room(
     viewer: Player | Mob | None = None,
     runtime_world: World | None = None,
 ) -> RoomSchema:
+    from spawns.triggers import get_room_action_labels_for_actor
+
     if room is None:
         return RoomSchema(
             id=None,
@@ -842,6 +869,8 @@ def serialize_actor(player: Player, room: Optional[Room]) -> Actor:
         for balance in material_balances
         if balance.quantity > 0 and balance.material.world_id == source_world.id
     }
+    if "economy" not in actor_data:
+        actor_data["economy"] = player_economy_payload(player)
     return Actor(**actor_data)
 
 
@@ -869,7 +898,11 @@ def serialize_world(world: World) -> Dict:
             "max_level": int(config.max_level) if config else 20,
             "leveling_curve": list(config.leveling_curve or []) if config else [],
             "combat_resolution_interval": float(config.combat_resolution_interval) if config else 0.0,
-            "death_gold_penalty": config.death_gold_penalty if config else 0.0,
+            "death_currency": (
+                config.death_currency.code
+                if config and config.death_currency_id else None),
+            "death_currency_penalty": (
+                float(config.death_currency_penalty) if config else 0.0),
             "has_corpse_decay": config.has_corpse_decay if config else True,
             "auto_equip": config.auto_equip if config else True,
             "globals_enabled": config.globals_enabled if config else False,
@@ -887,15 +920,15 @@ def serialize_world(world: World) -> Dict:
             "is_classless": not world_uses_classes(world) if config else False,
             "tier": world.tier,
             "socials": {"cmds": {}, "order": []},
-            "currencies": {},
+            "economy": {},
             "equipment": get_world_equipment_payload(world),
             "leader": world.leader.key if world.leader else None,
         }
 
-    if data.get("currencies"):
-        data["currencies"] = {str(k): v for k, v in data["currencies"].items()}
-
     source_world = _definition_world(world)
+    data.pop("currencies", None)
+    if not data.get("economy"):
+        data["economy"] = world_economy_payload(world)
     data["craft_materials"] = {
         material.slug: {
             "slug": material.slug,

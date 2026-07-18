@@ -81,8 +81,7 @@ const consoleMessage = (message) => {
     "cmd.factions.success": Factions,
     "cmd.help.success": Help,
     "cmd.inventory.success": Inventory,
-    "cmd.list.success": List,
-    "cmd.offer.success": OfferInventory,
+    "cmd.shop.success": List,
     "cmd.recipes.success": RecipeList,
     "cmd./stats.success": BuilderStats,
     "cmd.stats.success": Stats,
@@ -92,6 +91,10 @@ const consoleMessage = (message) => {
   };
 
   if (type_mapping[type]) return type_mapping[type];
+
+  if (type === "cmd.buyback.success" && Array.isArray(message.data?.buyback)) {
+    return OfferInventory;
+  }
 
   if (type === "cmd.salvage.success" && message.data?.operation === "list") {
     return SalvageList;

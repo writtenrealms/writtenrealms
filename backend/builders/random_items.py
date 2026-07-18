@@ -2,6 +2,7 @@ import random
 from core import utils as adv_utils
 
 from config import constants as adv_consts
+from core.economy import default_currency
 from core.utils.items import price_item
 
 from config import constants as api_consts
@@ -251,6 +252,7 @@ def generate_item(char, chance_imbued, chance_enchanted, specification,
         level=level,
         quality=quality,
         eq_type=attrs.get('equipment_type'))
+    attrs['currency'] = default_currency(char.world)
     fold_declared_attributes(
         attrs,
         world=char.world,

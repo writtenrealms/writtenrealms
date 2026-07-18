@@ -12,6 +12,10 @@ Merchants are built from two clean WR2 concepts:
 Merchant stock is not mob inventory. Killing a shopkeeper does not drop the shop
 stock unless you explicitly author drops or death triggers.
 
+The examples use a previously defined `obol` currency. Replace that code with
+the currency defined by your world. See
+[currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md).
+
 ## How It Works
 
 Create the items first:
@@ -22,6 +26,7 @@ Create the items first:
 
 Then create a `merchantprofile`:
 
+- `settlement_currency`: the one authored currency used by this shop.
 - `pricing.sell_markup`: multiplier applied when players buy from the merchant.
 - `pricing.buy_multiplier`: multiplier applied when the merchant buys from
   players.
@@ -67,7 +72,7 @@ spec:
   type: equippable
   keywords: iron sword blade
   cost: 100
-  currency: gold
+  currency: obol
   equipment_type: weapon_1h
   weapon_damage: 8
 ---
@@ -79,13 +84,14 @@ spec:
   type: inert
   keywords: repair kit tools
   cost: 25
-  currency: gold
+  currency: obol
 ---
 kind: merchantprofile
 metadata:
   slug: garron-smithy
   name: Garron's Smithy
 spec:
+  settlement_currency: obol
   pricing:
     sell_markup: 1.2
     buy_multiplier: 0.4
@@ -135,7 +141,7 @@ spec:
   type: inert
   keywords: lucky charm curio
   cost: 40
-  currency: gold
+  currency: obol
 ---
 kind: itemdefinition
 metadata:
@@ -145,7 +151,7 @@ spec:
   type: inert
   keywords: cracked glass orb curio
   cost: 60
-  currency: gold
+  currency: obol
 ---
 kind: itembundle
 metadata:
@@ -163,6 +169,7 @@ metadata:
   slug: mira-curio-cart
   name: Mira's Curio Cart
 spec:
+  settlement_currency: obol
   pricing:
     sell_markup: 1.5
     buy_multiplier: 0.25
@@ -170,7 +177,6 @@ spec:
     interval_seconds: 3600
   funds:
     mode: finite
-    currency: gold
     purchase_budget: 500
   buyback:
     enabled: true
@@ -214,14 +220,16 @@ Use finite funds when the merchant should only buy so much from players between
 restocks:
 
 ```yaml
+settlement_currency: obol
 funds:
   mode: finite
-  currency: gold
   purchase_budget: 500
 ```
 
-Finite purchase budget resets at restock. Player purchases from the merchant do
-not increase that budget.
+`settlement_currency` is a top-level profile field, not a child of `funds`.
+It defaults to the world default when a new profile omits it, then remains a
+concrete stored reference. Finite purchase budget uses that currency and resets
+at restock. Player purchases from the merchant do not increase that budget.
 
 Buyback is per player:
 

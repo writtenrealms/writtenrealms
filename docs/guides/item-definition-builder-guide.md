@@ -64,6 +64,32 @@ attribute, that key contributes nothing to combat. This is intentional:
 item YAML should not make the world fail to boot because an attribute was
 renamed or removed.
 
+## Monetary Value
+
+An item value is one amount plus one authored currency:
+
+```yaml
+kind: itemdefinition
+metadata:
+  slug: bronze-sword
+  name: a bronze sword
+spec:
+  type: equippable
+  equipment_type: weapon_1h
+  weapon_damage: 4
+  cost: 25
+  currency: obol
+```
+
+`cost` must be a whole number from `0` through `9,007,199,254,740,991`.
+On create, omitting `currency` uses the world's current default and stores that
+concrete relation. Canonical YAML exports the code explicitly so a later
+default change cannot reinterpret the item. `currency` without `cost` is
+invalid; set `cost: null` to remove both parts of the monetary value.
+
+For world defaults, starting balances, merchants, rewards, and deletion rules,
+see [currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md).
+
 ## Basic Attack Messages
 
 Weapon item definitions can customize the basic-attack verb or verb phrase with
@@ -293,7 +319,9 @@ randomization:
 
 Stable definition-backed items are meant to behave like authored copies of the
 definition. When a stable item definition is edited, existing unmodified spawned
-items are resynced to the new definition values.
+items are resynced to the new descriptive and gameplay values. Their `cost` and
+`currency` remain concrete spawn-time snapshots; repricing a definition affects
+new items only and cannot retroactively reprice player inventory or shop stock.
 
 Randomized items keep their rolled attributes. Upgraded and augmented
 items are treated as modified instances and do not stack or get reset by later

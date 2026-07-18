@@ -348,7 +348,8 @@ def _serialize_currency_manifest(currency: Currency) -> dict[str, Any]:
         },
         "spec": {
             "name": currency.name,
-            "is_default": bool(currency.is_default),
+            "plural_name": currency.plural_name or "",
+            "description": currency.description or "",
         },
     }
 
@@ -1011,7 +1012,7 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             for merchant_profile in world.merchant_profiles.prefetch_related(
                 "stock_slots__item_definition",
                 "stock_slots__item_bundle",
-            ).select_related("funds_currency").order_by("slug", "id")
+            ).select_related("settlement_currency").order_by("slug", "id")
         ],
         *[
             _serialize_crafting_recipe_manifest(recipe)
@@ -1073,7 +1074,7 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             for mob_definition in world.mob_definitions.select_related(
                 "merchant_profile",
                 "crafting_profile",
-            ).order_by("slug", "id")
+            ).prefetch_related("currency_rewards__currency").order_by("slug", "id")
         ],
         *[
             _serialize_spawn_plan_manifest(spawn_plan)
@@ -1669,11 +1670,15 @@ def _validate_spawn_entry_relationships(entries: list[dict[str, Any]]) -> None:
             leader_by_cohort[cohort] = entry["slug"]
 
 
-def apply_currency_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Currency, bool]:
+def apply_currency_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Currency, str]:
     if parse_document_kind(manifest) != CURRENCY_MANIFEST_KIND:
         raise serializers.ValidationError("Unsupported manifest kind. Expected 'currency'.")
-    if builder_manifests.parse_manifest_operation(manifest) != builder_manifests.TRIGGER_MANIFEST_OPERATION_APPLY:
-        raise serializers.ValidationError("Currency manifests only support operation 'apply'.")
+    operation = builder_manifests.parse_manifest_operation(manifest)
+    if operation not in {
+        builder_manifests.TRIGGER_MANIFEST_OPERATION_APPLY,
+        builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE,
+    }:
+        raise serializers.ValidationError("Currency manifests support apply or delete.")
 
     metadata = _manifest_metadata(manifest)
     spec = _manifest_spec(manifest)
@@ -1681,26 +1686,45 @@ def apply_currency_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[
     if not code:
         raise serializers.ValidationError("metadata.code is required.")
 
-    existing = Currency.objects.filter(world=world, code=code).first()
+    existing = Currency.objects.filter(world=world, code__iexact=code).first()
+    if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+        if existing is None:
+            raise serializers.ValidationError("Currency was not found.")
+        from builders.currencies import delete_currency
+
+        delete_currency(existing)
+        return existing, "deleted"
+
+    unknown_fields = sorted(set(spec) - {"name", "plural_name", "description"})
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported spec field(s): {', '.join(unknown_fields)}.")
     name = str(spec.get("name", existing.name if existing else "")).strip()
     if not name:
         raise serializers.ValidationError("spec.name is required.")
 
-    with transaction.atomic():
-        currency, created = Currency.objects.update_or_create(
+    plural_name = str(spec.get(
+        "plural_name", existing.plural_name if existing else "") or "").strip()
+    description = str(spec.get(
+        "description", existing.description if existing else "") or "").strip()
+    from builders.currencies import create_currency, update_currency
+
+    if existing is None:
+        currency = create_currency(
             world=world,
             code=code,
-            defaults={
-                "name": name,
-                "is_default": bool(spec.get("is_default", existing.is_default if existing else False)),
-            },
+            name=name,
+            plural_name=plural_name,
+            description=description,
         )
-        if currency.is_default:
-            Currency.objects.filter(
-                world=world,
-                is_default=True,
-            ).exclude(pk=currency.pk).update(is_default=False)
-    return currency, created
+        return currency, "created"
+    currency = update_currency(
+        existing,
+        name=name,
+        plural_name=plural_name,
+        description=description,
+    )
+    return currency, "updated"
 
 
 def apply_zone_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Zone, bool]:
@@ -2315,19 +2339,19 @@ def apply_world_manifest(*, world: World, manifest: dict[str, Any]) -> None:
     if parse_document_kind(manifest) != WORLD_MANIFEST_KIND:
         raise serializers.ValidationError("Unsupported manifest kind. Expected 'world'.")
 
-    normalized = copy.deepcopy(manifest)
-    spec = _manifest_spec(normalized)
-    for field_name in ("starting_room", "death_room"):
-        if field_name not in spec:
-            continue
-        room_ref = str(spec.get(field_name) or "").strip()
-        if not room_ref:
-            continue
-        if room_ref.startswith(_ROOM_REF_PREFIX):
-            room = _get_or_create_room(world=world, room_ref=room_ref)
-            spec[field_name] = f"room.{room.id}"
-
     with transaction.atomic():
+        normalized = copy.deepcopy(manifest)
+        spec = _manifest_spec(normalized)
+        for field_name in ("starting_room", "death_room"):
+            if field_name not in spec:
+                continue
+            room_ref = str(spec.get(field_name) or "").strip()
+            if not room_ref:
+                continue
+            if room_ref.startswith(_ROOM_REF_PREFIX):
+                room = _get_or_create_room(world=world, room_ref=room_ref)
+                spec[field_name] = f"room.{room.id}"
+
         parsed = builder_manifests.parse_world_config_manifest(
             world=world,
             manifest=normalized,

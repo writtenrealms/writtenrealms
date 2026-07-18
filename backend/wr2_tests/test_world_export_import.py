@@ -4,6 +4,7 @@ import yaml
 
 from rest_framework.reverse import reverse
 
+from builders.currencies import create_currency, replace_starting_balances
 from builders.models import (
     BuilderAssignment,
     Currency,
@@ -35,6 +36,18 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         self._build_source_world()
 
     def _build_source_world(self):
+        self.obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="Obol",
+            plural_name="Obols",
+        )
+        self.world.config.death_currency = self.obol
+        self.world.config.clan_registration_currency = self.obol
+        self.world.config.save(update_fields=[
+            "death_currency",
+            "clan_registration_currency",
+        ])
         self.world.name = "Export Source"
         self.world.short_description = "Canonical export test"
         self.world.description = "World export/import should round-trip."
@@ -106,18 +119,20 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
 
         self.world.config.starting_room = self.harbor_room
         self.world.config.death_room = self.harbor_room
-        self.world.config.starting_gold = 12
         self.world.config.built_by = "WR Export Tests"
         self.world.config.small_background = "https://assets.example/small.png"
         self.world.config.large_background = "https://assets.example/large.png"
         self.world.config.name_exclusions = "admin\nmoderator"
         self.world.config.save()
+        replace_starting_balances(
+            world=self.world,
+            balances={self.obol: 12},
+        )
 
-        self.marks = Currency.objects.create(
+        self.marks = create_currency(
             world=self.world,
             code="marks",
             name="Marks",
-            is_default=False,
         )
 
         self.brass_key = ItemDefinition.objects.create(

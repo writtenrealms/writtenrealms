@@ -148,6 +148,18 @@ def _runtime_group_id(definition):
     return None
 
 
+def _currency_reward_snapshot(definition) -> dict[str, int]:
+    prefetched = getattr(definition, "_prefetched_objects_cache", {})
+    rewards = prefetched.get("currency_rewards")
+    if rewards is None:
+        rewards = definition.currency_rewards.select_related("currency").all()
+    return {
+        reward.currency.code: int(reward.amount)
+        for reward in rewards
+        if reward.amount
+    }
+
+
 def _copy_definition_faction_assignments(mob, definition) -> None:
     mob.faction_assignments.filter(
         source=FACTION_ASSIGNMENT_SOURCE_MOB_DEFINITION,
@@ -220,6 +232,7 @@ def spawn_mob_from_definition(
         definition_slug_snapshot=definition.slug,
         roll_metadata=roll_metadata,
         loot=copy.deepcopy(definition.loot or {}),
+        currency_reward_snapshot=_currency_reward_snapshot(definition),
         attackable=definition.attackable,
         health=mob_fields.get("health_max") or 1,
         stamina=mob_fields.get("stamina_max") or 0,
@@ -260,6 +273,7 @@ def sync_spawned_mobs_from_definition(definition) -> int:
         definition.modified_ts.isoformat()
         if definition.modified_ts else ""
     )
+    reward_snapshot = _currency_reward_snapshot(definition)
     queryset = Mob.objects.filter(
         definition=definition,
         is_pending_deletion=False,
@@ -278,6 +292,7 @@ def sync_spawned_mobs_from_definition(definition) -> int:
         for field_name, value in mob_fields.items():
             setattr(mob, field_name, value)
         mob.attackable = definition.attackable
+        mob.currency_reward_snapshot = reward_snapshot
         mob.health = mob.health_max
         mob.stamina = mob.stamina_max
         mob.energy = mob.energy_max
@@ -312,6 +327,7 @@ def sync_spawned_mobs_from_definition(definition) -> int:
                 "stamina",
                 "energy",
                 "attackable",
+                "currency_reward_snapshot",
                 "trait_instances",
                 *trait_update_fields,
                 "roll_metadata",

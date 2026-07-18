@@ -65,17 +65,15 @@ def _refresh_and_progress(
         )
         return current_player, refresh_result, progress_result
 
-    if event_id is None:
-        return _progress(player)
-
     with transaction.atomic():
         player = Player.objects.select_for_update().get(pk=player.pk)
-        _, created = EventSubscriptionReceipt.objects.get_or_create(
-            event_id=event_id,
-            subscriber="quests",
-        )
-        if not created:
-            return player, None, None
+        if event_id is not None:
+            _, created = EventSubscriptionReceipt.objects.get_or_create(
+                event_id=event_id,
+                subscriber="quests",
+            )
+            if not created:
+                return player, None, None
         return _progress(player)
 
 

@@ -151,8 +151,7 @@ class Player(CharMixin, AdventBaseModel):
 
     # Points gained and lost when killing / dying to other players
     glory = models.PositiveIntegerField(default=0)
-    medals = models.PositiveIntegerField(default=0)
-    currencies = models.TextField(**optional)
+    wallet_revision = models.BigIntegerField(default=0)
 
     # Moderation flags
     nochat = models.BooleanField(default=False)
@@ -289,6 +288,8 @@ class Player(CharMixin, AdventBaseModel):
 
     def initialize(self, reset=False, level=None, include_starting_equipment=True):
         from builders.models import FactionAssignment
+        from core.economy import economy_world
+        from spawns.wallet import replace_balances
         from worlds.models import Door
 
         leveling_config = get_world_leveling_config(self.world)
@@ -299,7 +300,6 @@ class Player(CharMixin, AdventBaseModel):
         if reset:
             self.level = level
             self.experience = experience_for_level(level, leveling_config)
-            self.gold = self.world.config.starting_gold
             self.glory = 0
             self.room = self.get_starting_room()
             # Delete factions
@@ -467,9 +467,6 @@ class Player(CharMixin, AdventBaseModel):
                     )
                 equipped_starting_items = True
 
-            if self.world.config.starting_gold:
-                self.gold += self.world.config.starting_gold
-
         if equipped_starting_items:
             # Starter gear can raise resource maxima. New and reset characters
             # should begin topped off against the fully equipped loadout.
@@ -483,6 +480,18 @@ class Player(CharMixin, AdventBaseModel):
             self.energy = int(stats.get('energy_max') or 0)
             self.stamina = int(stats.get('stamina_max') or 0)
         self.save()
+
+        base_world = economy_world(self.world)
+        starting_balances = {
+            row.currency_id: int(row.amount)
+            for row in base_world.starting_currency_balances.all()
+        }
+        replace_balances(
+            self,
+            starting_balances,
+            reason="character.reset" if reset else "character.initialize",
+            emit_event=False,
+        )
 
         # Add door states
         if not self.world.is_multiplayer:
@@ -863,6 +872,33 @@ class PlayerMaterialBalance(AdventBaseModel):
         ]
 
 
+class PlayerCurrencyBalance(AdventBaseModel):
+    """The canonical sparse balance for one player and authored currency."""
+
+    player = models.ForeignKey(
+        'spawns.Player',
+        on_delete=models.CASCADE,
+        related_name='currency_balances')
+    currency = models.ForeignKey(
+        'builders.Currency',
+        on_delete=models.RESTRICT,
+        related_name='player_balances')
+    amount = models.BigIntegerField(default=0)
+
+    class Meta(AdventBaseModel.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=['player', 'currency'],
+                name='spawns_currency_balance_unique'),
+            models.CheckConstraint(
+                condition=models.Q(amount__gte=0),
+                name='spawns_currency_balance_nonnegative'),
+            models.CheckConstraint(
+                condition=models.Q(amount__lte=9007199254740991),
+                name='spawns_currency_balance_safe_integer'),
+        ]
+
+
 class CraftingActionReceipt(AdventBaseModel):
     """Committed result for replay-safe material-spending commands."""
 
@@ -987,6 +1023,7 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
                                    **optional)
     definition_slug_snapshot = models.SlugField(max_length=120, blank=True)
     roll_metadata = models.JSONField(default=dict, blank=True)
+    currency_reward_snapshot = models.JSONField(default=dict, blank=True)
     trait_instances = models.JSONField(default=list, blank=True)
     loot = models.JSONField(default=dict, blank=True)
     ability_cooldowns = models.JSONField(default=dict, blank=True)
@@ -1080,10 +1117,14 @@ class MerchantRuntime(AdventBaseModel):
     profile = models.ForeignKey('builders.MerchantProfile',
                                 on_delete=models.CASCADE,
                                 related_name='merchant_runtimes')
+    settlement_currency = models.ForeignKey(
+        'builders.Currency',
+        on_delete=models.RESTRICT,
+        related_name='merchant_runtimes')
     is_active = models.BooleanField(default=True)
     last_restocked_ts = models.DateTimeField(**optional)
     next_restock_ts = models.DateTimeField(db_index=True, **optional)
-    remaining_purchase_budget = models.IntegerField(**optional)
+    remaining_purchase_budget = models.BigIntegerField(**optional)
 
     inventory = GenericRelation(
         'spawns.Item',
@@ -1094,6 +1135,17 @@ class MerchantRuntime(AdventBaseModel):
         indexes = [
             models.Index(fields=['is_active']),
             models.Index(fields=['next_restock_ts']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(remaining_purchase_budget__isnull=True)
+                    | models.Q(
+                        remaining_purchase_budget__gte=0,
+                        remaining_purchase_budget__lte=9007199254740991,
+                    )
+                ),
+                name='spawns_merchant_budget_safe'),
         ]
 
 
@@ -1120,7 +1172,11 @@ class MerchantStockEntry(AdventBaseModel):
                                 on_delete=models.CASCADE,
                                 related_name='merchant_stock_entry')
     bundle_roll_id = models.TextField(**optional)
-    price = models.PositiveIntegerField(default=0)
+    price = models.BigIntegerField(default=0)
+    currency = models.ForeignKey(
+        'builders.Currency',
+        on_delete=models.RESTRICT,
+        related_name='merchant_stock_entries')
     status = models.TextField(
         choices=list_to_choice(STATUS_CHOICES),
         default=STATUS_AVAILABLE,
@@ -1130,6 +1186,14 @@ class MerchantStockEntry(AdventBaseModel):
         indexes = [
             models.Index(fields=['status']),
             models.Index(fields=['bundle_roll_id']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(
+                    price__gte=0,
+                    price__lte=9007199254740991,
+                ),
+                name='spawns_merchant_stock_price_safe'),
         ]
 
 
@@ -1152,8 +1216,12 @@ class MerchantBuybackEntry(AdventBaseModel):
     item = models.OneToOneField('spawns.Item',
                                 on_delete=models.CASCADE,
                                 related_name='merchant_buyback_entry')
-    sold_price = models.PositiveIntegerField(default=0)
-    buyback_price = models.PositiveIntegerField(default=0)
+    sold_price = models.BigIntegerField(default=0)
+    buyback_price = models.BigIntegerField(default=0)
+    currency = models.ForeignKey(
+        'builders.Currency',
+        on_delete=models.RESTRICT,
+        related_name='merchant_buyback_entries')
     status = models.TextField(
         choices=list_to_choice(STATUS_CHOICES),
         default=STATUS_ACTIVE,
@@ -1163,6 +1231,16 @@ class MerchantBuybackEntry(AdventBaseModel):
         indexes = [
             models.Index(fields=['status']),
             models.Index(fields=['created_ts']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(
+                    sold_price__gte=0,
+                    sold_price__lte=9007199254740991,
+                    buyback_price__gte=0,
+                    buyback_price__lte=9007199254740991,
+                ),
+                name='spawns_merchant_buyback_price_safe'),
         ]
 
 
@@ -1223,6 +1301,18 @@ class Item(ItemMixin, AdventBaseModel):
             models.Index(fields=['container_type']),
             models.Index(fields=['is_persistent']),
             models.Index(fields=['created_ts']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(cost__isnull=True, currency__isnull=True)
+                    | models.Q(
+                        cost__gte=0,
+                        cost__lte=9007199254740991,
+                        currency__isnull=False,
+                    )
+                ),
+                name='spawns_item_money_pair'),
         ]
 
     def get_contained_ids(self):

@@ -1,4 +1,4 @@
-
+import type { EconomyCatalog, PlayerEconomy } from "@/core/economy";
 
 export interface Entity {
   key: string;
@@ -12,6 +12,7 @@ export interface World {
   key: string;
   name: string;
   description: string;
+  economy?: EconomyCatalog;
 }
 
 export interface Player {
@@ -20,6 +21,7 @@ export interface Player {
   name: string;
   level: number;
   description: string;
+  economy?: PlayerEconomy;
 }
 
 export interface Room {

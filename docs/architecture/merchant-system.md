@@ -20,6 +20,7 @@ Reference docs:
 - `.codex/skills/wr-transition/wr2-architecture.md`
 - [guided-random-item-definitions.md](/Users/teebes/code/writtenrealms/docs/architecture/guided-random-item-definitions.md)
 - [combat-encounter-model.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-encounter-model.md)
+- [currency-system.md](/Users/teebes/code/writtenrealms/docs/architecture/currency-system.md)
 - [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
 
 ## Core Recommendation
@@ -28,7 +29,8 @@ Separate these concepts:
 
 - NPC presence: the person or creature visible in the room
 - combat capability: whether that NPC can be attacked and killed
-- merchant profile: shop stock, prices, restock, buyback, and funds
+- merchant profile: settlement currency, shop stock, prices, restock, buyback,
+  and funds
 - runtime stock: concrete item instances currently available for sale
 
 A merchant should usually be an NPC-like room presence with a merchant profile.
@@ -86,6 +88,7 @@ It owns:
 
 - stable slug/key
 - display name for builder UI
+- settlement currency
 - pricing policy
 - restock policy
 - funds policy
@@ -100,6 +103,7 @@ metadata:
   key: merchantprofile.garron_smithy
 spec:
   name: Garron's Smithy
+  settlement_currency: crowns
 
   pricing:
     sell_markup: 1.2
@@ -110,7 +114,6 @@ spec:
 
   funds:
     mode: finite
-    currency: gold
     purchase_budget: 5000
 
   buyback:
@@ -132,6 +135,13 @@ spec:
       count: 3
       refresh: reroll_on_restock
 ```
+
+`settlement_currency` is one concrete currency code from the base world's
+catalog. It denominates every price, player-sale payment, buyback price, and
+finite purchase budget for the profile. Monetary stock must use that same
+currency. Choosing the world's default currency may prefill this field when a
+profile is created, but the stored code remains explicit; changing the world
+default later does not silently retarget an existing merchant.
 
 ### Stock Slots
 
@@ -281,6 +291,7 @@ It should track:
 - active/inactive status
 - last restocked timestamp
 - next restock timestamp
+- settlement-currency snapshot/reference
 - funds state
 - stock entries
 - buyback entries
@@ -297,13 +308,18 @@ It should track:
 - merchant runtime
 - source stock slot
 - item instance
-- price snapshot or price inputs
+- price snapshot as a canonical amount plus concrete settlement-currency
+  reference
 - bundle roll metadata, if applicable
 - whether the entry is available, sold, expired, or retired
 
 Shop stock must not be implemented as ordinary mob inventory. The target
 behavior is a shop ledger from the start. This prevents merchant stock from
 becoming corpse loot, accidental drops, or normal `get` targets.
+
+Runtime responses expose prices as structured `Money` values with `amount`,
+`currency`, and `display`. The stored amount and currency reference are
+canonical; `display` is presentation derived from the currency definition.
 
 ### MerchantBuybackEntry
 
@@ -314,8 +330,8 @@ It should track:
 - merchant runtime
 - player
 - item instance
-- sold price
-- buyback price
+- sold-price `Money` snapshot in the merchant's settlement currency
+- buyback-price `Money` snapshot in the merchant's settlement currency
 - created timestamp
 - expiration policy
 
@@ -380,10 +396,13 @@ default. That can be added later as a separate `resale` policy.
 ## Funds
 
 Merchant funds control whether a merchant can buy items from players.
+`settlement_currency` belongs to the profile, not the funds policy, because it
+also denominates stock prices and buyback transactions.
 
 ### Unlimited Funds
 
 ```yaml
+settlement_currency: crowns
 funds:
   mode: unlimited
 ```
@@ -397,15 +416,16 @@ Behavior:
 ### Finite Purchasing Power
 
 ```yaml
+settlement_currency: crowns
 funds:
   mode: finite
-  currency: gold
   purchase_budget: 5000
 ```
 
 Behavior:
 
 - The merchant starts each restock interval with `purchase_budget`.
+- `purchase_budget` is denominated in the profile's `settlement_currency`.
 - Buying items from players decreases the remaining purchasing power.
 - If the merchant cannot afford the item, the sell command is rejected.
 - At restock, remaining purchasing power resets to `purchase_budget`.
@@ -444,8 +464,11 @@ Planning should reject merchant commands when:
 - the merchant lacks purchasing power
 - the item is not eligible for sale
 
-Execution should lock the relevant player, merchant runtime, item, and currency
-rows in the global aggregate order defined by WR2 architecture.
+Execution should lock the player first, then the merchant runtime and affected
+items according to WR2's global aggregate order, followed by affected player
+balance rows in stable currency-id order. Currency definitions are immutable
+references in this transaction; the mutable rows are the code-keyed player
+balances and merchant runtime state.
 
 ## Events
 
@@ -495,15 +518,17 @@ Do not build new runtime behavior around:
 - `RandomItemProfile`
 - ordinary mob inventory as shop stock
 
-If old content needs to be carried forward, use a one-way conversion into clean
-WR2 manifests:
+The optional WR1 authored-world converter may emit clean WR2 manifests for
+builders who choose to import old content:
 
 - old merchant identity becomes a `mobdefinition`
 - old merchant pricing becomes `MerchantProfile.pricing`
 - old fixed stock becomes `item_definition` stock slots
 - old random stock becomes `item_bundle` stock slots
 
-That conversion should be import tooling, not a permanent compatibility layer.
+That utility converts authored world content only. WR2 launches with an empty
+database and does not migrate WR1 players, balances, inventories, or merchant
+runtime state. It is import tooling, not a permanent compatibility layer.
 
 ## Validation Rules
 
@@ -513,9 +538,13 @@ That conversion should be import tooling, not a permanent compatibility layer.
 - `count` must be greater than zero.
 - `refresh` must be `fill_missing` or `reroll_on_restock`.
 - `buyback.max_items` must be between 0 and 10.
+- `settlement_currency` is required and must resolve to a currency in the base
+  world's catalog.
 - `funds.mode` must be `unlimited` or `finite`.
-- Finite funds require `currency` and `purchase_budget`.
-- `purchase_budget` must be non-negative.
+- Finite funds require `purchase_budget`.
+- `purchase_budget` must be a non-negative safe integer.
+- Every stock price and buyback value must use the profile's
+  `settlement_currency`.
 - `combat.attackable: false` means combat planning rejects the target.
 - `merchant.availability: alive_and_present` requires an NPC presence with
   liveness state.

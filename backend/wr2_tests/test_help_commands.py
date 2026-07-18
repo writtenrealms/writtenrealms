@@ -15,9 +15,7 @@ EXPECTED_SET_PLAYER_FIELDS = (
     "energy",
     "stamina",
     "attributes",
-    "gold",
     "glory",
-    "medals",
 )
 EXPECTED_SET_MOB_FIELDS = (
     "level",
@@ -27,7 +25,6 @@ EXPECTED_SET_MOB_FIELDS = (
     "stamina",
     "attributes",
     "aggression",
-    "gold",
     "exp_worth",
     "health_max",
     "health_regen",

@@ -4,7 +4,10 @@ from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Any
 
-from builders.models import Faction, ItemDefinition
+from django.core.exceptions import ValidationError
+
+from builders.models import Currency, Faction, ItemDefinition
+from core.economy import money_payload, resolve_currency, validate_currency_amount
 from core.factions import faction_type_filter, normalize_faction_code
 from core.scoped_state import (
     STATE_SCOPE_QUEST,
@@ -20,6 +23,7 @@ from quests.entity_refs import resolve_entity_ref_id
 from spawns.actions.base import ActionError
 from spawns.actions.targeting import first_room_mob_with_definition, resolve_room_mob_target
 from spawns.models import Item, Mob
+from spawns.wallet import WalletError, mutate_balances
 from quests.services.predicates import resolve_value
 
 
@@ -37,6 +41,7 @@ GRANTED_ITEM_IDS_STATE_KEY = "granted_item_ids"
 @dataclass
 class QuestEffectResult:
     reward_summaries: list[str] = field(default_factory=list)
+    currency_rewards: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _normalize_granted_item_ids(raw_ids: Any) -> list[int]:
@@ -357,6 +362,7 @@ def apply_quest_effects(
     state = dict(quest_instance.local_state or {})
     state_changed = False
     player_update_fields: set[str] = set()
+    currency_grants: dict[Currency, int] = {}
 
     for effect in effects:
         if not isinstance(effect, dict):
@@ -474,12 +480,25 @@ def apply_quest_effects(
                 clear_state_value(normalized_scope, owner, key)
             continue
 
-        if effect_type in {"grant_gold", "gold"} or "gold" in effect:
-            amount = _coerce_amount(effect.get("amount", effect.get("gold")))
-            if amount:
-                player.gold = int(player.gold or 0) + amount
-                player_update_fields.add("gold")
-                result.reward_summaries.append(f"{amount} gold")
+        if effect_type == "grant_currency":
+            if player is None:
+                continue
+            if effect.get("currency") in (None, ""):
+                raise ActionError(
+                    "grant_currency requires an explicit currency.",
+                    code="invalid_currency_reward",
+                )
+            world = _effect_world(player=player, template=template)
+            try:
+                currency = resolve_currency(world, effect.get("currency"))
+                amount = validate_currency_amount(
+                    effect.get("amount"),
+                    allow_zero=False,
+                    field_name="amount",
+                )
+            except (ValueError, ValidationError) as error:
+                raise ActionError(str(error), code="invalid_currency_reward")
+            currency_grants[currency] = currency_grants.get(currency, 0) + amount
             continue
 
         if effect_type in {"grant_xp", "grant_exp", "grant_experience", "xp", "exp", "experience"} or any(
@@ -591,5 +610,22 @@ def apply_quest_effects(
 
     if player_update_fields:
         player.save(update_fields=sorted(player_update_fields))
+
+    if currency_grants:
+        try:
+            mutate_balances(
+                player,
+                currency_grants,
+                reason="quest.reward",
+            )
+        except WalletError as error:
+            raise ActionError(str(error), code=error.code)
+        result.currency_rewards = [
+            money_payload(amount, currency)
+            for currency, amount in sorted(
+                currency_grants.items(), key=lambda entry: entry[0].code)
+        ]
+        result.reward_summaries.extend(
+            reward["display"] for reward in result.currency_rewards)
 
     return result

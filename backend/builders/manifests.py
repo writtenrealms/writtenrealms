@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import math
+import re
 from typing import Any
 
 import yaml
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Q
 from django.utils.text import slugify
@@ -66,6 +68,7 @@ from core.equipment_system import (
     normalize_equipment_system,
     validate_armor_class_reference,
 )
+from core.economy import economy_world, validate_currency_amount
 from core.factions import (
     faction_is_core,
     faction_is_reputation,
@@ -195,14 +198,14 @@ _WORLD_CONFIG_LEGACY_BOOL_FIELDS = (
     "is_classless",
 )
 _WORLD_CONFIG_CONFIG_INT_FIELDS = (
-    "starting_gold",
     "starting_level",
     "max_level",
     "default_roam_chance",
+    "clan_registration_cost",
 )
 _WORLD_CONFIG_CONFIG_FLOAT_FIELDS = (
     "combat_resolution_interval",
-    "death_gold_penalty",
+    "death_currency_penalty",
 )
 _WORLD_CONFIG_CONFIG_CHOICE_FIELDS = {
     "death_mode": adv_consts.DEATH_MODES,
@@ -318,6 +321,8 @@ _ITEM_DEFINITION_SPEC_FIELDS = (
     "attributes",
     "randomization",
     "salvage",
+    "cost",
+    "currency",
     *_ITEM_DEFINITION_BASE_PROPERTY_FIELDS,
 )
 _MOB_DEFINITION_BASE_PROPERTY_FIELDS = mob_definition_property_fields()
@@ -333,6 +338,7 @@ _MOB_DEFINITION_SPEC_FIELDS = (
     "randomization",
     "traits",
     "loot",
+    "rewards",
     "combat",
     "factions",
     "merchant",
@@ -389,6 +395,9 @@ class ParsedWorldConfigManifest:
     world: World
     world_updates: dict[str, Any]
     config_updates: dict[str, Any]
+    default_currency: Currency | None = None
+    update_default_currency: bool = False
+    starting_balances: dict[Currency, int] | None = None
 
 
 @dataclass
@@ -524,6 +533,7 @@ class ParsedMobDefinitionManifest:
     name: str
     fields: dict[str, Any]
     factions: dict[str, Any] | None
+    currency_rewards: dict[Currency, int] | None
 
 
 @dataclass
@@ -740,10 +750,20 @@ def _coerce_bool(value: Any, field_name: str) -> bool:
 def _coerce_int(value: Any, field_name: str) -> int:
     if isinstance(value, bool):
         raise serializers.ValidationError(f"{field_name} must be an integer.")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or not re.fullmatch(r"[+-]?\d+", text):
+            raise serializers.ValidationError(f"{field_name} must be an integer.")
+        return int(text)
     try:
-        return int(value)
-    except (TypeError, ValueError):
+        coerced = int(value)
+    except (TypeError, ValueError, OverflowError):
         raise serializers.ValidationError(f"{field_name} must be an integer.")
+    if value != coerced:
+        raise serializers.ValidationError(f"{field_name} must be an integer.")
+    return coerced
 
 
 def _coerce_float(value: Any, field_name: str) -> float:
@@ -970,7 +990,8 @@ def world_config_to_manifest(
         ),
         "death_mode": config.death_mode,
         "death_route": config.death_route,
-        "death_gold_penalty": _serialize_number(config.death_gold_penalty),
+        "death_currency": _serialize_currency_reference(config.death_currency),
+        "death_currency_penalty": _serialize_number(config.death_currency_penalty),
         "pvp_mode": config.pvp_mode,
         "built_by": config.built_by or "",
         "small_background": config.small_background or "",
@@ -979,7 +1000,15 @@ def world_config_to_manifest(
     if not is_instance_world:
         spec.update(
             {
-                "starting_gold": int(config.starting_gold),
+                "default_currency": _serialize_currency_reference(world.default_currency),
+                "starting_balances": {
+                    row.currency.code: int(row.amount)
+                    for row in world.starting_currency_balances.select_related("currency")
+                    if row.amount
+                },
+                "clan_registration_currency": _serialize_currency_reference(
+                    config.clan_registration_currency),
+                "clan_registration_cost": int(config.clan_registration_cost),
                 _WORLD_CONFIG_STARTING_EQUIPMENT_FIELD: _serialize_starting_equipment_entries(
                     world=world,
                     entries=config.starting_equipment,
@@ -1063,7 +1092,8 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
         "death_room": _serialize_room_reference(config.death_room),
         "death_mode": config.death_mode,
         "death_route": config.death_route,
-        "death_gold_penalty": _serialize_number(config.death_gold_penalty),
+        "death_currency": _serialize_currency_reference(config.death_currency),
+        "death_currency_penalty": _serialize_number(config.death_currency_penalty),
         "small_background": config.small_background or "",
         "large_background": config.large_background or "",
         "pvp_mode": config.pvp_mode,
@@ -1072,7 +1102,15 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
     if not is_instance_world:
         config_payload.update(
             {
-                "starting_gold": int(config.starting_gold),
+                "default_currency": _serialize_currency_reference(world.default_currency),
+                "starting_balances": {
+                    row.currency.code: int(row.amount)
+                    for row in world.starting_currency_balances.select_related("currency")
+                    if row.amount
+                },
+                "clan_registration_currency": _serialize_currency_reference(
+                    config.clan_registration_currency),
+                "clan_registration_cost": int(config.clan_registration_cost),
                 _WORLD_CONFIG_STARTING_EQUIPMENT_FIELD: _serialize_starting_equipment_entries(
                     world=world,
                     entries=config.starting_equipment,
@@ -1141,6 +1179,9 @@ def _item_definition_spec_from_instance(item_definition: ItemDefinition) -> dict
             spec[field_name] = ""
         else:
             spec[field_name] = value
+    if item_definition.cost is not None:
+        spec["cost"] = int(item_definition.cost)
+        spec["currency"] = _serialize_currency_reference(item_definition.currency)
     if item_definition.attributes:
         spec["attributes"] = item_definition.attributes
     else:
@@ -1411,6 +1452,17 @@ def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[st
         spec["traits"] = mob_definition.traits or []
     if mob_definition.loot:
         spec["loot"] = mob_definition.loot or {}
+    rewards = getattr(mob_definition, "_prefetched_objects_cache", {}).get(
+        "currency_rewards")
+    if rewards is None:
+        rewards = mob_definition.currency_rewards.select_related("currency").all()
+    currency_rewards = {
+        reward.currency.code: int(reward.amount)
+        for reward in rewards
+        if reward.amount
+    }
+    if currency_rewards:
+        spec["rewards"] = {"currencies": currency_rewards}
     factions = faction_assignments_to_manifest_spec(mob_definition)
     if factions:
         spec["factions"] = factions
@@ -1566,6 +1618,7 @@ def merchant_profile_to_manifest(merchant_profile: MerchantProfile) -> dict[str,
         },
         "spec": {
             "notes": merchant_profile.notes or "",
+            "settlement_currency": merchant_profile.settlement_currency.code,
             "pricing": {
                 "sell_markup": _serialize_number(merchant_profile.sell_markup),
                 "buy_multiplier": _serialize_number(merchant_profile.buy_multiplier),
@@ -1575,7 +1628,6 @@ def merchant_profile_to_manifest(merchant_profile: MerchantProfile) -> dict[str,
             },
             "funds": {
                 "mode": merchant_profile.funds_mode,
-                "currency": merchant_profile.funds_currency.code if merchant_profile.funds_currency else "",
                 "purchase_budget": int(merchant_profile.purchase_budget or 0),
             },
             "buyback": {
@@ -1632,7 +1684,7 @@ def serialize_merchant_profile_payload(merchant_profile: MerchantProfile) -> dic
         "buy_multiplier": merchant_profile.buy_multiplier,
         "restock_interval_seconds": merchant_profile.restock_interval_seconds,
         "funds_mode": merchant_profile.funds_mode,
-        "funds_currency": merchant_profile.funds_currency.code if merchant_profile.funds_currency else "",
+        "settlement_currency": merchant_profile.settlement_currency.code,
         "purchase_budget": merchant_profile.purchase_budget,
         "buyback_enabled": bool(merchant_profile.buyback_enabled),
         "buyback_max_items": merchant_profile.buyback_max_items,
@@ -2934,6 +2986,7 @@ def _resolve_merchant_profile_reference(
 
 
 def _resolve_currency_reference(*, world: World, value: Any, field_name: str) -> Currency | None:
+    currency_world = economy_world(world)
     if value is None:
         return None
     if isinstance(value, bool):
@@ -2941,7 +2994,7 @@ def _resolve_currency_reference(*, world: World, value: Any, field_name: str) ->
             f"{field_name} must be a currency id, 'currency.<id>', or currency code."
         )
     if isinstance(value, int):
-        currency = Currency.objects.filter(world=world, pk=value).first()
+        currency = Currency.objects.filter(world=currency_world, pk=value).first()
         if currency:
             return currency
         raise serializers.ValidationError(f"{field_name} references an unknown currency.")
@@ -2950,7 +3003,7 @@ def _resolve_currency_reference(*, world: World, value: Any, field_name: str) ->
     if not text:
         return None
     if text.isdigit():
-        currency = Currency.objects.filter(world=world, pk=int(text)).first()
+        currency = Currency.objects.filter(world=currency_world, pk=int(text)).first()
         if currency:
             return currency
         raise serializers.ValidationError(f"{field_name} references an unknown currency.")
@@ -2963,12 +3016,15 @@ def _resolve_currency_reference(*, world: World, value: Any, field_name: str) ->
             )
         text = raw
         if text.isdigit():
-            currency = Currency.objects.filter(world=world, pk=int(text)).first()
+            currency = Currency.objects.filter(
+                world=currency_world,
+                pk=int(text),
+            ).first()
             if currency:
                 return currency
             raise serializers.ValidationError(f"{field_name} references an unknown currency.")
 
-    currency = Currency.objects.filter(world=world, code=text).first()
+    currency = Currency.objects.filter(world=currency_world, code=text).first()
     if currency:
         return currency
     raise serializers.ValidationError(f"{field_name} references an unknown currency.")
@@ -3124,6 +3180,8 @@ def _coerce_item_definition_fields(*, world: World, spec_patch: dict[str, Any], 
     )
 
     base_properties = dict(existing.base_properties or {}) if existing else {}
+    base_properties.pop("cost", None)
+    base_properties.pop("currency", None)
     for field_name in _ITEM_DEFINITION_BASE_PROPERTY_FIELDS:
         if field_name not in spec_patch:
             continue
@@ -3131,18 +3189,53 @@ def _coerce_item_definition_fields(*, world: World, spec_patch: dict[str, Any], 
         if field_name in _HIT_MESSAGE_FIELDS:
             base_properties[field_name] = _coerce_text(value)
             continue
-        if field_name == "currency":
-            if value in (None, ""):
-                base_properties.pop("currency", None)
-            else:
-                currency = _resolve_currency_reference(
-                    world=world,
-                    value=value,
-                    field_name="spec.currency",
-                )
-                base_properties["currency"] = currency.code if currency else ""
-            continue
         base_properties[field_name] = value
+
+    has_cost = "cost" in spec_patch
+    has_currency = "currency" in spec_patch
+    cost = existing.cost if existing else None
+    currency = existing.currency if existing else None
+    if has_currency and not has_cost:
+        raise serializers.ValidationError(
+            "spec.currency cannot be set without spec.cost.")
+    if has_cost and spec_patch.get("cost") in (None, ""):
+        if has_currency:
+            raise serializers.ValidationError(
+                "spec.currency cannot be set when spec.cost is null.")
+        cost = None
+        currency = None
+    elif has_cost:
+        from core.economy import validate_currency_amount
+
+        try:
+            cost = validate_currency_amount(
+                spec_patch.get("cost"),
+                field_name="spec.cost",
+            )
+        except ValidationError as exc:
+            raise serializers.ValidationError(exc.message_dict)
+        if has_currency:
+            currency = _resolve_currency_reference(
+                world=world,
+                value=spec_patch.get("currency"),
+                field_name="spec.currency",
+            )
+        elif currency is None:
+            from core.economy import default_currency
+
+            currency = default_currency(world)
+
+    if (
+        existing is not None
+        and cost is not None
+        and currency is not None
+        and MerchantStockSlot.objects.filter(
+            Q(item_definition=existing)
+            | Q(item_bundle__entries__item_definition=existing)
+        ).exclude(profile__settlement_currency=currency).exists()
+    ):
+        raise serializers.ValidationError(
+            "spec.currency must match every merchant profile that stocks this item.")
 
     if "armor_class" in base_properties:
         try:
@@ -3199,6 +3292,8 @@ def _coerce_item_definition_fields(*, world: World, spec_patch: dict[str, Any], 
         ),
         "item_type": item_type,
         "base_properties": base_properties,
+        "cost": cost,
+        "currency": currency,
         "attributes": attributes,
         "randomization": randomization,
     }
@@ -4230,6 +4325,35 @@ def parse_mob_definition_manifest(
             world=world,
             spec_patch=spec_patch,
         )
+        currency_rewards = None
+        if "rewards" in spec_patch:
+            raw_rewards = spec_patch.get("rewards") or {}
+            if not isinstance(raw_rewards, dict):
+                raise serializers.ValidationError("spec.rewards must be a mapping.")
+            unknown_rewards = sorted(set(raw_rewards) - {"currencies"})
+            if unknown_rewards:
+                raise serializers.ValidationError(
+                    f"Unsupported spec.rewards field(s): {', '.join(unknown_rewards)}.")
+            raw_currencies = raw_rewards.get("currencies") or {}
+            if not isinstance(raw_currencies, dict):
+                raise serializers.ValidationError(
+                    "spec.rewards.currencies must be a mapping.")
+            currency_rewards = {}
+            for reference, raw_amount in raw_currencies.items():
+                currency = _resolve_currency_reference(
+                    world=world,
+                    value=reference,
+                    field_name=f"spec.rewards.currencies.{reference}",
+                )
+                try:
+                    amount = validate_currency_amount(
+                        raw_amount,
+                        allow_zero=False,
+                        field_name=f"spec.rewards.currencies.{reference}",
+                    )
+                except ValidationError as exc:
+                    raise serializers.ValidationError(exc.message_dict)
+                currency_rewards[currency] = amount
     except ItemDefinitionError as exc:
         raise serializers.ValidationError(str(exc))
     fields["slug"] = slug
@@ -4243,6 +4367,7 @@ def parse_mob_definition_manifest(
         name=name,
         fields=fields,
         factions=factions,
+        currency_rewards=currency_rewards,
     )
 
 
@@ -4572,7 +4697,10 @@ def _coerce_merchant_profile_fields(
     spec: dict[str, Any],
     existing: MerchantProfile | None,
 ) -> dict[str, Any]:
-    unknown_fields = sorted(set(spec.keys()) - {"notes", "pricing", "restock", "funds", "buyback", "stock"})
+    unknown_fields = sorted(set(spec.keys()) - {
+        "notes", "settlement_currency", "pricing", "restock", "funds",
+        "buyback", "stock",
+    })
     if unknown_fields:
         raise serializers.ValidationError(
             f"Unsupported spec field(s): {', '.join(unknown_fields)}."
@@ -4605,7 +4733,7 @@ def _coerce_merchant_profile_fields(
         funds = {}
     if not isinstance(funds, dict):
         raise serializers.ValidationError("spec.funds must be a mapping.")
-    funds_unknown = sorted(set(funds.keys()) - {"mode", "currency", "purchase_budget"})
+    funds_unknown = sorted(set(funds.keys()) - {"mode", "purchase_budget"})
     if funds_unknown:
         raise serializers.ValidationError(
             f"Unsupported spec.funds field(s): {', '.join(funds_unknown)}."
@@ -4638,24 +4766,31 @@ def _coerce_merchant_profile_fields(
         raise serializers.ValidationError(
             f"spec.funds.mode must be one of: {', '.join(MerchantProfile.FUNDS_MODES)}."
         )
-    funds_currency = existing.funds_currency if existing else None
-    if "currency" in funds:
-        funds_currency = _resolve_currency_reference(
+    settlement_currency = existing.settlement_currency if existing else None
+    if "settlement_currency" in spec:
+        settlement_currency = _resolve_currency_reference(
             world=world,
-            value=funds.get("currency"),
-            field_name="spec.funds.currency",
+            value=spec.get("settlement_currency"),
+            field_name="spec.settlement_currency",
         )
-    elif funds_mode == MerchantProfile.FUNDS_MODE_FINITE and funds_currency is None:
-        funds_currency = Currency.objects.filter(world=world, is_default=True).first()
+    elif settlement_currency is None:
+        from core.economy import default_currency
+
+        settlement_currency = default_currency(world)
 
     purchase_budget = _coerce_int(
         funds.get("purchase_budget", existing.purchase_budget if existing else 0),
         "spec.funds.purchase_budget",
     )
-    if purchase_budget < 0:
-        raise serializers.ValidationError("spec.funds.purchase_budget cannot be negative.")
-    if funds_mode == MerchantProfile.FUNDS_MODE_FINITE and funds_currency is None:
-        raise serializers.ValidationError("spec.funds.currency is required when funds.mode is finite.")
+    try:
+        purchase_budget = validate_currency_amount(
+            purchase_budget,
+            field_name="spec.funds.purchase_budget",
+        )
+    except ValidationError as exc:
+        raise serializers.ValidationError(exc.message_dict)
+    if settlement_currency is None:
+        raise serializers.ValidationError("spec.settlement_currency is required.")
 
     buyback_max_items = _coerce_int(
         buyback.get("max_items", existing.buyback_max_items if existing else 0),
@@ -4695,7 +4830,7 @@ def _coerce_merchant_profile_fields(
         "buy_multiplier": buy_multiplier,
         "restock_interval_seconds": interval,
         "funds_mode": funds_mode,
-        "funds_currency": funds_currency,
+        "settlement_currency": settlement_currency,
         "purchase_budget": purchase_budget,
         "buyback_enabled": buyback_enabled,
         "buyback_max_items": buyback_max_items if buyback_enabled else 0,
@@ -4774,6 +4909,47 @@ def _coerce_merchant_stock_slots(*, world: World, raw_stock: Any) -> list[dict[s
     return slots
 
 
+def _validate_merchant_stock_currency(*, settlement_currency, stock_slots) -> None:
+    """Ensure all priced definitions in a merchant catalog use its denomination."""
+    bundle_ids: set[int] = set()
+    normalized_slots = []
+    for index, slot in enumerate(stock_slots):
+        if isinstance(slot, dict):
+            item_definition = slot.get("item_definition")
+            item_bundle = slot.get("item_bundle")
+            key = slot.get("key") or str(index)
+        else:
+            item_definition = slot.item_definition
+            item_bundle = slot.item_bundle
+            key = slot.key or str(index)
+        if item_bundle is not None:
+            bundle_ids.add(item_bundle.pk)
+        normalized_slots.append((key, item_definition, item_bundle))
+
+    bundle_definitions: dict[int, list[ItemDefinition]] = {}
+    if bundle_ids:
+        for entry in ItemBundleEntry.objects.filter(
+            bundle_id__in=bundle_ids,
+        ).select_related("item_definition"):
+            bundle_definitions.setdefault(entry.bundle_id, []).append(
+                entry.item_definition)
+
+    for key, item_definition, item_bundle in normalized_slots:
+        definitions = (
+            [item_definition]
+            if item_definition is not None
+            else bundle_definitions.get(item_bundle.pk, [])
+        )
+        for definition in definitions:
+            if (
+                definition.cost is not None
+                and definition.currency_id != settlement_currency.pk
+            ):
+                raise serializers.ValidationError(
+                    f"Merchant stock slot '{key}' includes item definition "
+                    f"'{definition.slug}' priced in a different currency.")
+
+
 def parse_merchant_profile_manifest(
     *,
     world: World,
@@ -4841,6 +5017,18 @@ def parse_merchant_profile_manifest(
         _coerce_merchant_stock_slots(world=world, raw_stock=spec.get("stock"))
         if "stock" in spec or merchant_profile is None
         else None
+    )
+    effective_stock_slots = (
+        stock_slots
+        if stock_slots is not None
+        else merchant_profile.stock_slots.select_related(
+            "item_definition",
+            "item_bundle",
+        ).all()
+    )
+    _validate_merchant_stock_currency(
+        settlement_currency=fields["settlement_currency"],
+        stock_slots=effective_stock_slots,
     )
 
     return ParsedMerchantProfileManifest(
@@ -5630,6 +5818,12 @@ def parse_world_config_manifest(
     allowed_fields.add(_WORLD_CONFIG_ABILITY_PROGRESS_FIELD)
     allowed_fields.add(_WORLD_CONFIG_PLAYER_CREATION_FIELD)
     allowed_fields.add(_WORLD_CONFIG_STARTING_EQUIPMENT_FIELD)
+    allowed_fields.update({
+        "default_currency",
+        "starting_balances",
+        "death_currency",
+        "clan_registration_currency",
+    })
 
     unknown_fields = sorted(set(spec.keys()) - allowed_fields)
     if unknown_fields:
@@ -5670,6 +5864,56 @@ def parse_world_config_manifest(
             )
 
     config_updates: dict[str, Any] = {}
+    base_world = economy_world(world)
+    update_default_currency = "default_currency" in spec
+    selected_default_currency = None
+    if update_default_currency:
+        if world.pk != base_world.pk:
+            raise serializers.ValidationError(
+                "Instance worlds inherit the base world's default currency.")
+        selected_default_currency = _resolve_currency_reference(
+            world=base_world,
+            value=spec.get("default_currency"),
+            field_name="spec.default_currency",
+        )
+        if selected_default_currency is None:
+            raise serializers.ValidationError("spec.default_currency is required.")
+
+    starting_balances = None
+    if "starting_balances" in spec:
+        if world.pk != base_world.pk:
+            raise serializers.ValidationError(
+                "Instance worlds inherit starting balances from the base world.")
+        raw_balances = spec.get("starting_balances")
+        if not isinstance(raw_balances, dict):
+            raise serializers.ValidationError("spec.starting_balances must be a mapping.")
+        starting_balances = {}
+        for reference, raw_amount in raw_balances.items():
+            currency = _resolve_currency_reference(
+                world=base_world,
+                value=reference,
+                field_name=f"spec.starting_balances.{reference}",
+            )
+            try:
+                amount = validate_currency_amount(
+                    raw_amount,
+                    field_name=f"spec.starting_balances.{reference}",
+                )
+            except ValidationError as exc:
+                raise serializers.ValidationError(exc.message_dict)
+            starting_balances[currency] = amount
+
+    for field_name in ("death_currency", "clan_registration_currency"):
+        if field_name not in spec:
+            continue
+        value = spec.get(field_name)
+        config_updates[field_name] = (
+            None if value in (None, "") else _resolve_currency_reference(
+                world=base_world,
+                value=value,
+                field_name=f"spec.{field_name}",
+            )
+        )
 
     for field_name in _WORLD_CONFIG_CONFIG_TEXT_FIELDS:
         if field_name in spec:
@@ -5701,12 +5945,27 @@ def parse_world_config_manifest(
                 raise serializers.ValidationError(
                     "spec.default_roam_chance must be <= 100."
                 )
+            if (
+                field_name == "clan_registration_cost"
+                and value > 9007199254740991
+            ):
+                raise serializers.ValidationError(
+                    "spec.clan_registration_cost is too large."
+                )
             config_updates[field_name] = value
 
     for field_name in _WORLD_CONFIG_CONFIG_FLOAT_FIELDS:
         if field_name in spec:
             value = _coerce_float(spec.get(field_name), f"spec.{field_name}")
-            if value < 0 and value != -1:
+            if field_name == "death_currency_penalty" and not 0 <= value <= 1:
+                raise serializers.ValidationError(
+                    "spec.death_currency_penalty must be between 0 and 1."
+                )
+            if (
+                field_name != "death_currency_penalty"
+                and value < 0
+                and value != -1
+            ):
                 raise serializers.ValidationError(
                     f"spec.{field_name} must be -1 or >= 0."
                 )
@@ -5845,10 +6104,31 @@ def parse_world_config_manifest(
     except LevelingConfigError as exc:
         raise serializers.ValidationError(str(exc))
 
+    effective_death_mode = config_updates.get("death_mode", config.death_mode)
+    effective_death_currency = config_updates.get(
+        "death_currency", config.death_currency)
+    if (
+        effective_death_mode == adv_consts.DEATH_MODE_LOSE_CURRENCY
+        and effective_death_currency is None
+    ):
+        raise serializers.ValidationError(
+            "spec.death_currency is required when death_mode is lose_currency.")
+
+    effective_clan_cost = config_updates.get(
+        "clan_registration_cost", config.clan_registration_cost)
+    effective_clan_currency = config_updates.get(
+        "clan_registration_currency", config.clan_registration_currency)
+    if effective_clan_cost and effective_clan_currency is None:
+        raise serializers.ValidationError(
+            "spec.clan_registration_currency is required when clan_registration_cost is nonzero.")
+
     return ParsedWorldConfigManifest(
         world=world,
         world_updates=world_updates,
         config_updates=config_updates,
+        default_currency=selected_default_currency,
+        update_default_currency=update_default_currency,
+        starting_balances=starting_balances,
     )
 
 
@@ -5859,6 +6139,23 @@ def apply_world_config_manifest(parsed: ParsedWorldConfigManifest):
         raise serializers.ValidationError("Selected world has no world config.")
 
     with transaction.atomic():
+        if parsed.update_default_currency:
+            from builders.currencies import select_default_currency
+
+            select_default_currency(
+                world=world,
+                currency=parsed.default_currency,
+            )
+        if parsed.starting_balances is not None:
+            from builders.currencies import replace_starting_balances
+
+            replace_starting_balances(
+                world=world,
+                balances={
+                    currency.code: amount
+                    for currency, amount in parsed.starting_balances.items()
+                },
+            )
         world_updates = parsed.world_updates
         if world_updates:
             for field_name, value in world_updates.items():
@@ -5916,14 +6213,29 @@ def apply_mob_definition_manifest(parsed: ParsedMobDefinitionManifest) -> MobDef
             mob_definition = parsed.mob_definition
             for field_name, value in parsed.fields.items():
                 setattr(mob_definition, field_name, value)
-            mob_definition.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
+            mob_definition.save(
+                update_fields=[*parsed.fields.keys(), "modified_ts"],
+                sync_spawned=False,
+            )
 
         _apply_faction_assignments(
             member=mob_definition,
             factions=parsed.factions,
             source=FACTION_ASSIGNMENT_SOURCE_MOB_DEFINITION,
         )
-        if was_existing and parsed.factions is not None:
+        if parsed.currency_rewards is not None:
+            from builders.models import MobCurrencyReward
+
+            MobCurrencyReward.objects.filter(mob_definition=mob_definition).delete()
+            MobCurrencyReward.objects.bulk_create([
+                MobCurrencyReward(
+                    mob_definition=mob_definition,
+                    currency=currency,
+                    amount=amount,
+                )
+                for currency, amount in parsed.currency_rewards.items()
+            ])
+        if was_existing:
             from builders.mob_definitions import sync_spawned_mobs_from_definition
 
             sync_spawned_mobs_from_definition(mob_definition)
@@ -6005,6 +6317,28 @@ def apply_item_bundle_manifest(parsed: ParsedItemBundleManifest) -> ItemBundle:
 
 def apply_merchant_profile_manifest(parsed: ParsedMerchantProfileManifest) -> MerchantProfile:
     with transaction.atomic():
+        generation_fields = {
+            "settlement_currency",
+            "sell_markup",
+            "buy_multiplier",
+            "restock_interval_seconds",
+            "funds_mode",
+            "purchase_budget",
+            "buyback_enabled",
+            "buyback_max_items",
+            "buyback_expires",
+        }
+        generation_changed = bool(
+            parsed.merchant_profile is not None
+            and (
+                parsed.stock_slots is not None
+                or any(
+                    field_name in generation_fields
+                    and getattr(parsed.merchant_profile, field_name) != value
+                    for field_name, value in parsed.fields.items()
+                )
+            )
+        )
         if parsed.merchant_profile is None:
             merchant_profile = MerchantProfile.objects.create(world=parsed.world, **parsed.fields)
         else:
@@ -6017,6 +6351,14 @@ def apply_merchant_profile_manifest(parsed: ParsedMerchantProfileManifest) -> Me
             MerchantStockSlot.objects.filter(profile=merchant_profile).delete()
             for slot in parsed.stock_slots:
                 MerchantStockSlot.objects.create(profile=merchant_profile, **slot)
+
+        if generation_changed:
+            from spawns.models import MerchantRuntime
+
+            MerchantRuntime.objects.filter(profile=merchant_profile).update(
+                last_restocked_ts=None,
+                next_restock_ts=None,
+            )
 
         return merchant_profile
 

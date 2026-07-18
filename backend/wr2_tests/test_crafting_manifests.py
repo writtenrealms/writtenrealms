@@ -7,6 +7,7 @@ from builders.models import (
     CraftingIngredient,
     CraftingProfile,
     CraftingRecipe,
+    Currency,
     ItemDefinition,
     ItemSalvageYield,
     MobDefinition,
@@ -96,6 +97,15 @@ spec:
         )
 
     def test_apply_complete_authored_crafting_catalog_and_provider_attachments(self):
+        obol = Currency.objects.create(
+            world=self.world,
+            code="obol",
+            name="Obol",
+            plural_name="Obols",
+        )
+        self.world.default_currency = obol
+        self.world.save(update_fields=["default_currency", "modified_ts"])
+
         bronze, leather = self.create_materials()
 
         self.apply(

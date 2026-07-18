@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from django.db import transaction
+
 from spawns.models import Player
 from quests.services.engine import (
     QuestTransitionResult,
@@ -8,12 +10,14 @@ from quests.services.engine import (
 )
 
 
+@transaction.atomic
 def progress_player_quests_for_event(
     player: Player,
     *,
     event_type: str,
     event_data: dict | None = None,
 ) -> QuestTransitionResult:
+    player = Player.objects.select_for_update().get(pk=player.pk)
     all_events = []
     last_instance = None
     for quest_instance in active_instances_qs(player):

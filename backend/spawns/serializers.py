@@ -21,7 +21,6 @@ from rest_framework.fields import Field
 from config import constants as api_consts
 from config import game_settings as adv_config
 from builders.models import (
-    Currency,
     RoomGetTrigger,
     ItemDefinition,
     MobDefinition,
@@ -37,6 +36,7 @@ from core.serializers import (
     ContainerTypeField,
     ReferenceField)
 from core.equipment_system import get_world_equipment_payload
+from core.economy import economy_world, money_payload
 from core.stat_system import (
     StatSystemValidationError,
     get_world_class_selection,
@@ -51,9 +51,92 @@ from spawns.models import (
     Equipment,
     Alias,
     PlayerConfig,
-    Mark)
+    Mark,
+    PlayerCurrencyBalance)
 from system.models import SiteControl
 from worlds.models import World, Zone, Room, RoomDetail
+
+
+def _currency_definition_payload(currency):
+    """Serialize a code-keyed catalog entry without repeating its code."""
+    return {
+        'name': currency.name,
+        'plural_name': currency.plural_name or currency.name,
+        'description': currency.description or '',
+    }
+
+
+def world_economy_payload(world):
+    """Return the inherited, stable-code currency catalog for a world."""
+    root_world = economy_world(world)
+    prefetched = getattr(root_world, '_prefetched_objects_cache', {})
+    currencies = prefetched.get('currencies')
+    if currencies is None:
+        currencies = root_world.currencies.all().order_by('code', 'id')
+    else:
+        currencies = sorted(
+            currencies,
+            key=lambda currency: (currency.code, currency.id),
+        )
+
+    currency_list = list(currencies)
+    currencies_by_id = {
+        currency.id: currency
+        for currency in currency_list
+    }
+    default_currency = currencies_by_id.get(root_world.default_currency_id)
+    if root_world.default_currency_id and default_currency is None:
+        raise ValueError(
+            "The world's default currency does not belong to its economy.")
+
+    return {
+        'revision': int(root_world.economy_revision),
+        'default_currency': (
+            default_currency.code if default_currency is not None else None),
+        'currencies': {
+            currency.code: _currency_definition_payload(currency)
+            for currency in currency_list
+        },
+    }
+
+
+def player_economy_payload(player):
+    """Return one private sparse wallet snapshot with the default balance."""
+    root_world = economy_world(player.world)
+    prefetched = getattr(player, '_prefetched_objects_cache', {})
+    rows = prefetched.get('currency_balances')
+    if rows is None:
+        rows = PlayerCurrencyBalance.objects.filter(
+            player=player,
+            amount__gt=0,
+            currency__world_id=root_world.id,
+        ).select_related('currency').order_by('currency__code', 'currency_id')
+
+    positive_balances = {
+        row.currency.code: int(row.amount)
+        for row in rows
+        if row.amount > 0 and row.currency.world_id == root_world.id
+    }
+    default_currency = None
+    if root_world.default_currency_id:
+        default_currency = root_world.default_currency
+        if default_currency.world_id != root_world.id:
+            raise ValueError(
+                "The world's default currency does not belong to its economy.")
+
+    balances = {}
+    if default_currency is not None:
+        balances[default_currency.code] = positive_balances.pop(
+            default_currency.code,
+            0,
+        )
+    for code in sorted(positive_balances):
+        balances[code] = positive_balances[code]
+
+    return {
+        'wallet_revision': int(player.wallet_revision),
+        'balances': balances,
+    }
 
 
 class PlayerSerializer(serializers.ModelSerializer):
@@ -289,8 +372,10 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
     allow_combat = serializers.BooleanField(
         source='config.allow_combat')
     death_route = serializers.CharField(source='config.death_route')
-    death_gold_penalty = serializers.FloatField(
-        source='config.death_gold_penalty')
+    death_currency = serializers.CharField(
+        source='config.death_currency.code', allow_null=True)
+    death_currency_penalty = serializers.FloatField(
+        source='config.death_currency_penalty')
     classless = serializers.SerializerMethodField()
     globals_enabled = serializers.BooleanField(
         source='config.globals_enabled')
@@ -298,7 +383,7 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
     factions = serializers.SerializerMethodField()
     facts = serializers.SerializerMethodField()
     socials = serializers.SerializerMethodField()
-    currencies = serializers.SerializerMethodField()
+    economy = serializers.SerializerMethodField()
     equipment = serializers.SerializerMethodField()
 
     class Meta:
@@ -318,7 +403,8 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
             'max_level',
             'leveling_curve',
             'combat_resolution_interval',
-            'death_gold_penalty',
+            'death_currency',
+            'death_currency_penalty',
             'has_corpse_decay',
             'auto_equip',
             'globals_enabled',
@@ -334,7 +420,7 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
             'classless',
             'tier',
             'socials',
-            'currencies',
+            'economy',
             'equipment',
             'leader',
         ]
@@ -413,17 +499,8 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
         root_world = root_world.instance_of or root_world
         return not world_uses_classes(root_world)
 
-    def get_currencies(self, spawn_world):
-        root_world = spawn_world.context
-        root_world = root_world.instance_of or root_world
-        currencies = {}
-        for currency in root_world.currencies.all():
-            currencies[currency.id] = {
-                'code': currency.code,
-                'name': currency.name,
-                'is_default': currency.is_default,
-            }
-        return currencies
+    def get_economy(self, spawn_world):
+        return world_economy_payload(spawn_world)
 
     def get_equipment(self, spawn_world):
         root_world = spawn_world.context
@@ -519,7 +596,7 @@ class AnimateItemSerializer(serializers.ModelSerializer):
     keywords = serializers.SerializerMethodField()
     in_container = serializers.SerializerMethodField()
     augment = KeyField()
-    currency = serializers.SerializerMethodField()
+    value = serializers.SerializerMethodField()
 
     class Meta:
         model = Item
@@ -527,8 +604,8 @@ class AnimateItemSerializer(serializers.ModelSerializer):
             'id', 'key', 'chunk_type',
             'definition_id', 'definition_slug_snapshot', 'profile_id',
             'in_container',
-            'ground_description', 'keywords', 'cost', 'label',
-            'augment', 'currency',
+            'ground_description', 'keywords', 'label',
+            'augment', 'value',
         ]
 
     def get_fields(self):
@@ -536,7 +613,7 @@ class AnimateItemSerializer(serializers.ModelSerializer):
 
         authored_fields = [
             'name', 'level', 'description',
-            'type', 'is_persistent', 'quality', 'cost', #'currency',
+            'type', 'is_persistent', 'quality',
             'food_value', 'food_type',
             'is_boat', 'is_pickable', 'capacity',
             'equipment_type', 'armor_class', 'weapon_type',
@@ -639,13 +716,10 @@ class AnimateItemSerializer(serializers.ModelSerializer):
 
         return ' '.join(tokens)
 
-    def get_currency(self, item):
-        if item.currency:
-            return item.currency.code
-        currency = Currency.objects.filter(
-            world=item.world.context, is_default=True
-        ).first()
-        return currency.code if currency else 'gold'
+    def get_value(self, item):
+        if item.cost is None or item.currency is None:
+            return None
+        return money_payload(int(item.cost), item.currency)
 
 
 class AnimateItemDeletionSerializer(serializers.ModelSerializer):
@@ -688,7 +762,7 @@ class AnimateMobSerializer(serializers.ModelSerializer):
     keywords = serializers.SerializerMethodField()
     factions = serializers.SerializerMethodField()
     is_merchant = serializers.SerializerMethodField()
-    gold = serializers.SerializerMethodField()
+    currency_rewards = serializers.SerializerMethodField()
     reactions = serializers.SerializerMethodField()
     roams = serializers.SerializerMethodField()
 
@@ -700,7 +774,7 @@ class AnimateMobSerializer(serializers.ModelSerializer):
             'group_id',
             'room_description', 'keywords',
             'factions',
-            'is_merchant', 'gold',
+            'is_merchant', 'currency_rewards',
             'reactions',
             'roams',
         ]
@@ -826,8 +900,12 @@ class AnimateMobSerializer(serializers.ModelSerializer):
 
         return factions
 
-    def get_gold(self, mob):
-        return mob.gold or 0
+    def get_currency_rewards(self, mob):
+        snapshot = mob.currency_reward_snapshot or {}
+        return [
+            {'amount': int(snapshot[code]), 'currency': code}
+            for code in sorted(snapshot)
+        ]
 
     def get_reactions(self, mob):
         if not mob.definition_id:
@@ -882,7 +960,7 @@ class AnimatePlayerSerializer(serializers.ModelSerializer):
     effects = serializers.SerializerMethodField()
     marks = serializers.SerializerMethodField()
     clan = serializers.SerializerMethodField()
-    currencies = serializers.SerializerMethodField()
+    economy = serializers.SerializerMethodField()
 
     class Meta:
         model = Player
@@ -890,7 +968,7 @@ class AnimatePlayerSerializer(serializers.ModelSerializer):
             'id', 'key', 'name', 'title', 'level', 'gender', 'keywords',
             'description',
             'factions', 'aliases', 'language_proficiency',
-            'gold', 'glory', 'medals', 'currencies',
+            'glory', 'economy',
             'is_builder', 'is_invisible', 'autoflee',
             #'notell',
             #'noplay',
@@ -1008,11 +1086,8 @@ class AnimatePlayerSerializer(serializers.ModelSerializer):
             return json.loads(player.effects)
         return effects
 
-    def get_currencies(self, player):
-        currencies = {}
-        if player.currencies:
-            return json.loads(player.currencies)
-        return currencies
+    def get_economy(self, player):
+        return player_economy_payload(player)
 
 
 class AnimateEquipmentSerializer(serializers.ModelSerializer):
@@ -1143,18 +1218,17 @@ class ExtractPlayerSerializer(serializers.ModelSerializer):
             'health',
             'energy',
             'stamina',
-            'gold',
             'glory',
             'title',
-            'medals',
             'last_action_ts',
             'mute_list',
             'channels',
             'is_invisible',
             'cooldowns',
             'effects',
-            'currencies',
+            'wallet_revision',
         ]
+        read_only_fields = ['wallet_revision']
 
 
 class ExtractEquipmentSerializer(serializers.ModelSerializer):

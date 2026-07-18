@@ -28,7 +28,8 @@ INSTANCE_INHERITED_CONFIG_FIELDS = {
 
 INSTANCE_LOCAL_CONFIG_FIELDS = {
     "built_by",
-    "death_gold_penalty",
+    "death_currency",
+    "death_currency_penalty",
     "death_mode",
     "death_room",
     "death_route",
@@ -57,7 +58,8 @@ INSTANCE_INHERITED_MANIFEST_FIELDS = {
 
 INSTANCE_LOCAL_MANIFEST_FIELDS = {
     "built_by",
-    "death_gold_penalty",
+    "death_currency",
+    "death_currency_penalty",
     "death_mode",
     "death_room",
     "death_route",

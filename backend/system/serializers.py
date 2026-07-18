@@ -2,6 +2,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q, Value, CharField
 from django.db.models.functions import Concat, Lower
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 
 from rest_framework import serializers
@@ -10,8 +11,10 @@ from config import constants as adv_consts
 from config import constants as api_consts
 from builders.models import HousingLease, FactionAssignment
 from core.serializers import ref_field, ReferenceField
+from core.economy import format_currency
 from spawns.models import Item, Player, PlayerEvent, Clan, ClanMembership
 from spawns.serializers import PlayerSerializer
+from spawns.wallet import WalletError, balance_map, mutate_balances
 from system.models import EdeusUniques, Nexus
 from users import serializers as user_serializers
 from worlds.models import World, Room
@@ -373,12 +376,17 @@ class ClanRegisterDeserializer(serializers.Serializer):
         player = data['player']
         data['clan'] = None
 
-        # Make sure that the player has enough gold
-        cost = player.world.context.config.clan_registration_cost
-        if cost > player.gold:
+        config = player.world.context.config
+        cost = int(config.clan_registration_cost or 0)
+        currency = config.clan_registration_currency
+        if cost and currency is None:
             raise serializers.ValidationError(
-                "Registering a clan costs %s gold." % cost)
+                "Clan registration currency is not configured.")
+        if cost and cost > balance_map(player).get(currency.code, 0):
+            raise serializers.ValidationError(
+                f"Registering a clan costs {format_currency(cost, currency)}.")
         data['cost'] = cost
+        data['currency'] = currency
 
         # Two register use cases:
         # * register new clan
@@ -417,10 +425,24 @@ class ClanRegisterDeserializer(serializers.Serializer):
                 raise serializers.ValidationError("That name is taken.")
         return data
 
+    @transaction.atomic
     def create(self, validated_data):
-        player = validated_data['player']
+        player = Player.objects.select_for_update().get(
+            pk=validated_data['player'].pk)
         clan = validated_data['clan']
         name = validated_data['name']
+        cost = validated_data['cost']
+        currency = validated_data['currency']
+
+        if cost:
+            try:
+                mutate_balances(
+                    player,
+                    {currency: -cost},
+                    reason="clan.registration",
+                )
+            except WalletError as error:
+                raise serializers.ValidationError(str(error))
 
         if clan:
             clan.name = name
@@ -434,8 +456,6 @@ class ClanRegisterDeserializer(serializers.Serializer):
                 clan=clan,
                 rank=adv_consts.CLAN_RANK_MASTER)
 
-        player.gold -= player.world.context.config.clan_registration_cost
-        player.save(update_fields=['gold'])
         return clan
 
 

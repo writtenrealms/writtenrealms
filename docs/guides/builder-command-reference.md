@@ -179,13 +179,13 @@ Available modes:
 
 | Mode | Effect |
 | --- | --- |
-| `lose_none` | Restores the player in the death room without changing equipment, inventory, or gold. |
+| `lose_none` | Restores the player in the death room without changing equipment, inventory, or currency balances. |
 | `lose_all` | Moves equipped items and carried inventory into a corpse in the room where the player died. |
 | `lose_eq` | Moves equipped items into a corpse in the room where the player died; carried inventory stays with the player. |
 | `lose_inv` | Moves carried inventory into a corpse in the room where the player died; equipment stays equipped. |
 | `destroy_eq` | Deletes equipped items; carried inventory stays with the player. |
 | `destroy_all` | Deletes equipped items and carried inventory. |
-| `lose_gold` | On non-PvP deaths, charges repair gold based on equipped item cost and `death_gold_penalty`, capped by the player's current gold. PvP deaths do not charge this repair cost. |
+| `lose_currency` | On non-PvP deaths, charges `death_currency_penalty` of the player's configured `death_currency` balance, capped by the current balance. PvP deaths do not charge this cost. |
 
 Example world manifest fragment:
 
@@ -193,8 +193,9 @@ Example world manifest fragment:
 kind: world
 spec:
   death_room: room@0,0,0
-  death_mode: lose_eq
-  death_gold_penalty: 0.2
+  death_mode: lose_currency
+  death_currency: obol
+  death_currency_penalty: 0.2
 ```
 
 ### `/purge`
@@ -415,13 +416,13 @@ Set player `attributes.<key>`, equipment, level, or current resources instead.
 Supported player fields:
 
 ```text
-level, experience, health, energy, stamina, attributes, gold, glory, medals
+level, experience, health, energy, stamina, attributes, glory
 ```
 
 Supported mob fields:
 
 ```text
-level, experience, health, energy, stamina, attributes, gold, exp_worth,
+level, experience, health, energy, stamina, attributes, aggression, exp_worth,
 health_max, health_regen, energy_max, energy_regen, stamina_max,
 stamina_regen, armor, dodge, crit, resilience, attack_power, ability_power
 ```

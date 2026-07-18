@@ -1,5 +1,6 @@
 import json
 
+from builders.currencies import create_currency
 from builders.models import MobDefinition
 from core.condition_dsl import (
     ConditionContext,
@@ -10,11 +11,28 @@ from core.condition_dsl import (
 from core.conditions import evaluate_conditions
 from core.scoped_state import STATE_SCOPE_WORLD, set_state_value
 from quests.services.predicates import evaluate_condition as evaluate_quest_condition
-from spawns.models import Mob
+from spawns.models import Mob, PlayerCurrencyBalance
 from tests.base import WorldTestCase
 
 
 class TestSharedConditionDsl(WorldTestCase):
+    def test_actor_balance_does_not_read_a_player_with_the_same_numeric_id(self):
+        obol = create_currency(world=self.world, code="obol", name="Obol")
+        PlayerCurrencyBalance.objects.create(
+            player=self.player,
+            currency=obol,
+            amount=19,
+        )
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Coinless Guard",
+        )
+        context = ConditionContext(actor=mob, player=self.player)
+
+        self.assertEqual(resolve_path("actor.balances.obol", context), 0)
+        self.assertEqual(resolve_path("player.balances.obol", context), 19)
+
     def test_shared_context_evaluates_actor_event_and_state_paths(self):
         set_state_value(STATE_SCOPE_WORLD, self.player.world, "weather", "rainy")
 

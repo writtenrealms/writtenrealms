@@ -34,9 +34,13 @@
             <div class="st-value">{{ player.experience }}</div>
           </div>
 
-          <div class="stat">
-            <div class="st-label">Gold</div>
-            <div class="st-value">{{ player.gold }}</div>
+          <div
+            v-for="balance in walletEntries"
+            :key="`currency-${balance.currency}`"
+            class="stat"
+          >
+            <div class="st-label">{{ balance.label }}</div>
+            <div class="st-value">{{ balance.amount }}</div>
           </div>
 
           <div class="stat">
@@ -44,10 +48,6 @@
             <div class="st-value">{{ player.glory }}</div>
           </div>
 
-          <div class="stat">
-            <div class="st-label">Medals</div>
-            <div class="st-value">{{ player.medals }}</div>
-          </div>
         </div>
       </div>
     </div>
@@ -58,6 +58,7 @@
 import { computed } from "vue";
 import { useStore } from 'vuex';
 import Summary from "@/components/game/panel/Summary.vue";
+import { walletBalanceEntries } from "@/core/economy.ts";
 import { formatCombatStatValue } from "@/core/utils.ts";
 
 const store = useStore();
@@ -65,6 +66,10 @@ const store = useStore();
 const player = computed(() => store.state.game.player);
 const game = computed(() => store.state.game);
 const world = computed(() => store.state.game.world);
+const walletEntries = computed(() => walletBalanceEntries(
+  world.value?.economy,
+  player.value?.economy,
+));
 
 const attributeLabels = computed(() => world.value?.labels?.attributes || {});
 const attributeOrder = computed(() => world.value?.labels?.order?.attributes || Object.keys(player.value?.attributes || {}));

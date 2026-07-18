@@ -26,10 +26,6 @@ CONDITIONS = [
         'args': [str]
     },
     {
-        'name': 'currency',
-        'args': [str, int]
-    },
-    {
         'name': 'fact_check',
         'args': [str, str]
     },
@@ -40,14 +36,6 @@ CONDITIONS = [
     {
         'name': 'gender',
         'args': [str]
-    },
-    {
-        'name': 'gold',
-        'args': [int],
-    },
-    { # deprecated
-        'name': 'gold_above',
-        'args': [int],
     },
     {
         'name': 'has_shield',
@@ -112,10 +100,6 @@ CONDITIONS = [
     {
         'name': 'mark_above',
         'args': [str, int]
-    },
-    {
-        'name': 'medals',
-        'args': [int],
     },
     {
         'name': 'mob_in_room',
@@ -234,9 +218,6 @@ def _build_actor_data(actor):
         'archetype': getattr(actor, 'archetype', '') or '',
         'gender': getattr(actor, 'gender', '') or '',
         'level': int(getattr(actor, 'level', 0) or 0),
-        'gold': int(getattr(actor, 'gold', 0) or 0),
-        'medals': int(getattr(actor, 'medals', 0) or 0),
-        'currencies': _json_to_dict(getattr(actor, 'currencies', None)),
         'health': health,
         'health_max': health_max,
         'state': getattr(actor, 'state', '') or '',
@@ -571,33 +552,6 @@ def evaluate_condition(world_data, actor_data, room_data, text):
             return return_true()
         return return_false("You are %s." % actor_data['gender'])
 
-    # Gold
-    if (condition_name == 'gold'):
-        gold = int(tokens[1])
-        if actor_data['gold'] >= gold: return return_true()
-        return return_false("Not enough gold.")
-
-    # Currency
-    if (condition_name == 'currency'):
-        currency = tokens[1]
-        amount = int(tokens[2])
-        if currency == 'gold':
-            if (actor_data.get('gold') or 0) >= amount: return return_true()
-            return return_false("Not enough gold.")
-        elif currency == 'medals':
-            if (actor_data.get('medals') or 0) >= amount: return return_true()
-            return return_false("Not enough medals.")
-        else:
-            if ((actor_data.get('currencies') or {}).get(currency) or 0) >= amount:
-                return return_true()
-            return return_false("Not enough %s." % currency)
-
-    # Gold Above (DEPRECATED)
-    if (condition_name == 'gold_above'):
-        gold = int(tokens[1])
-        if actor_data['gold'] > gold: return return_true()
-        return return_false("Not enough gold.")
-
     # Has Shield
     if (condition_name == 'has_shield'):
         eq = actor_data.get('equipment') or {}
@@ -734,12 +688,6 @@ def evaluate_condition(world_data, actor_data, room_data, text):
         elif str(value) == str(marks[name]):
             return return_true()
         return return_false("Mark differs.")
-
-    # Medals
-    if (condition_name == 'medals'):
-        medals = int(tokens[1])
-        if actor_data['medals'] >= medals: return return_true()
-        return return_false("Not enough medals.")
 
     # Mark above
     if (condition_name == 'mark_above'):

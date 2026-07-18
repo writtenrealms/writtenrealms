@@ -1,5 +1,9 @@
 import axios from "axios";
 import { FORGE_WS_URI } from "@/config";
+import type {
+  CurrencyBalancesChangedData,
+  PlayerEconomy,
+} from "@/core/economy";
 import _ from "lodash";
 import router from "@/router";
 
@@ -8,6 +12,52 @@ import router from "@/router";
 // Running one more test
 
 const MESSAGE_LIMIT = 200;
+
+interface PlayerEconomyCarrier {
+  economy?: PlayerEconomy | null;
+  [key: string]: unknown;
+}
+
+const walletEventMatchesPlayer = (
+  player: any,
+  payload: CurrencyBalancesChangedData,
+) => {
+  if (!player || !payload) return false;
+  const eventPlayer = payload.player;
+  const eventPlayerId = eventPlayer && typeof eventPlayer === "object"
+    ? eventPlayer.id
+    : eventPlayer;
+  const eventPlayerKey = eventPlayer && typeof eventPlayer === "object"
+    ? eventPlayer.key
+    : eventPlayer;
+  return (
+    String(eventPlayerId ?? "") === String(player.id ?? "") ||
+    String(eventPlayerKey ?? "") === String(player.key ?? "")
+  );
+};
+
+const playerWithCurrentEconomyWhenNewer = (
+  currentPlayer: PlayerEconomyCarrier | null | undefined,
+  incomingPlayer: PlayerEconomyCarrier,
+): PlayerEconomyCarrier => {
+  const currentEconomy = currentPlayer?.economy;
+  const incomingEconomy = incomingPlayer?.economy;
+  if (!currentEconomy || !incomingEconomy) return incomingPlayer;
+
+  const currentRevision = currentEconomy.wallet_revision;
+  const incomingRevision = incomingEconomy.wallet_revision;
+  if (
+    Number.isSafeInteger(currentRevision) &&
+    Number.isSafeInteger(incomingRevision) &&
+    incomingRevision < currentRevision
+  ) {
+    return {
+      ...incomingPlayer,
+      economy: currentEconomy,
+    };
+  }
+  return incomingPlayer;
+};
 
 const cloneRoomChar = (char) => ({
   ...char,
@@ -54,6 +104,7 @@ const set_initial_state = () => {
        updates.
     */
     player: null,
+    wallet_sync_requested: false,
     player_effects: [],
     player_level: 0,
     player_archetype: "",
@@ -144,6 +195,7 @@ const receiveMessage = async ({
     "player.abilities.update",
     "player.combat_effects.update",
     "notification.regen",
+    "currency.balances_changed",
   ];
 
   // Echo received messages unless they are silent state updates.
@@ -206,6 +258,7 @@ const receiveMessage = async ({
     };
     commit("world_set", world_data);
     commit("player_set", message_data.data.actor);
+    commit("wallet_sync_requested_clear");
     commit("who_list_set", message_data.data.who_list);
     commit("full_screen_message_clear");
     router.push({ name: "game" });
@@ -229,6 +282,38 @@ const receiveMessage = async ({
     message_data.data.aliases
   ) {
     commit("player_set", { aliases: message_data.data.aliases });
+  }
+
+  if (
+    message_data.type === "currency.balances_changed" &&
+    message_data.data
+  ) {
+    const walletChange = message_data.data as CurrencyBalancesChangedData;
+    if (walletEventMatchesPlayer(state.player, walletChange)) {
+      const incomingRevision = Number(walletChange.wallet_revision);
+      const rawCurrentRevision = Number(
+        state.player?.economy?.wallet_revision ?? -1,
+      );
+      const currentRevision = Number.isSafeInteger(rawCurrentRevision)
+        ? rawCurrentRevision
+        : -1;
+      if (
+        Number.isSafeInteger(incomingRevision) &&
+        incomingRevision > currentRevision + 1
+      ) {
+        if (!state.wallet_sync_requested) {
+          commit("wallet_sync_requested_set");
+          dispatch("sendWSMessage", {
+            type: "cmd.state.sync",
+            data: { reason: "wallet_revision_gap" },
+          });
+        }
+      } else {
+        commit("player_wallet_changes_apply", walletChange);
+      }
+    }
+  } else if (message_data.type === "cmd.state.sync.error") {
+    commit("wallet_sync_requested_clear");
   }
 
   if (
@@ -976,9 +1061,10 @@ const mutations = {
   },
 
   player_set: (state, player) => {
+    const nextPlayer = playerWithCurrentEconomyWhenNewer(state.player, player);
     state.player = {
       ...state.player,
-      ...player,
+      ...nextPlayer,
     };
 
     if (player.stance && player.stance != state.player_stance) {
@@ -992,6 +1078,46 @@ const mutations = {
     if (player.level && player.level != state.player_level) {
       state.player_level = player.level;
     }
+  },
+
+  player_wallet_changes_apply: (state, payload: CurrencyBalancesChangedData) => {
+    if (!state.player || !payload) return;
+    if (!walletEventMatchesPlayer(state.player, payload)) return;
+
+    const walletRevision = Number(payload.wallet_revision);
+    if (!Number.isSafeInteger(walletRevision) || walletRevision < 0) return;
+
+    const currentEconomy = state.player.economy || {
+      wallet_revision: -1,
+      balances: {},
+    };
+    const currentRevision = Number(currentEconomy.wallet_revision ?? -1);
+    if (walletRevision <= currentRevision) return;
+
+    const balances = { ...(currentEconomy.balances || {}) };
+    for (const change of payload.changes || []) {
+      const currency = change?.currency;
+      const code = typeof currency === "string" ? currency : currency?.code;
+      if (!code || typeof change?.after !== "number") continue;
+      balances[code] = change.after;
+    }
+
+    state.player = {
+      ...state.player,
+      economy: {
+        ...currentEconomy,
+        wallet_revision: walletRevision,
+        balances,
+      },
+    };
+  },
+
+  wallet_sync_requested_set: (state) => {
+    state.wallet_sync_requested = true;
+  },
+
+  wallet_sync_requested_clear: (state) => {
+    state.wallet_sync_requested = false;
   },
 
   player_active_effects_set: (state, active_effects) => {

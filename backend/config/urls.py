@@ -137,6 +137,7 @@ api_v1_urls = [
     path('builder/worlds/<world_pk>/builders/<builder_pk>/assignments/<pk>/', builder_views.builder_assignment_details, name='builder-assignment-details'),
     path('builder/worlds/<world_pk>/currencies/', builder_views.currency_list, name='builder-currency-list'),
     path('builder/worlds/<world_pk>/currencies/<pk>/', builder_views.currency_details, name='builder-currency-details'),
+    path('builder/worlds/<world_pk>/currencies/<pk>/make-default/', builder_views.currency_make_default, name='builder-currency-make-default'),
     path('builder/worlds/<world_id>/facts/', builder_views.FactList.as_view()),
     path('builder/worlds/<world_pk>/factschedules/', builder_views.fact_schedule_list, name='builder-fact-schedule-list'),
     path('builder/worlds/<world_pk>/factschedules/<pk>/', builder_views.fact_schedule_details, name='builder-fact-schedule-details'),

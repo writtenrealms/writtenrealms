@@ -1,5 +1,6 @@
 from rest_framework.reverse import reverse
 
+from builders.currencies import create_currency
 from builders.models import (
     Currency,
     ItemBundle,
@@ -12,6 +13,7 @@ from config import constants as adv_consts
 from spawns.actions.merchants import RestockMerchantAction
 from spawns.handlers import dispatch_command
 from spawns.models import MerchantBuybackEntry, MerchantRuntime, MerchantStockEntry
+from spawns.wallet import balance_map, mutate_balances
 from tests.base import WorldTestCase
 from wr2_tests.utils import apply_basic_stat_system
 
@@ -21,11 +23,11 @@ class MerchantTestCase(WorldTestCase):
         super().setUp()
         self.client.force_authenticate(self.user)
         apply_basic_stat_system(self.world)
-        self.currency = Currency.objects.create(
+        self.currency = create_currency(
             world=self.world,
-            code="gold",
-            name="Gold",
-            is_default=True,
+            code="obol",
+            name="Obol",
+            plural_name="Obols",
         )
 
     def _message_by_type(self, messages, message_type):
@@ -51,10 +53,8 @@ class MerchantTestCase(WorldTestCase):
             name=name,
             keywords=keywords or slug.replace("-", " "),
             item_type=adv_consts.ITEM_TYPE_INERT,
-            base_properties={
-                "cost": cost,
-                "currency": self.currency.code,
-            },
+            cost=cost,
+            currency=self.currency,
         )
 
     def _merchant_mob(self, profile, *, attackable=False, slug="garron"):
@@ -94,6 +94,7 @@ metadata:
   slug: garron-smithy
   name: Garron's Smithy
 spec:
+  settlement_currency: obol
   pricing:
     sell_markup: 1.2
     buy_multiplier: 0.5
@@ -101,7 +102,6 @@ spec:
     interval_seconds: 3600
   funds:
     mode: finite
-    currency: gold
     purchase_budget: 500
   buyback:
     enabled: true
@@ -145,6 +145,68 @@ spec:
         self.assertEqual(definition.merchant_availability, "alive_and_present")
         self.assertEqual(definition.base_properties["health_max"], 120)
 
+    def test_merchant_manifest_rejects_stock_priced_in_another_currency(self):
+        drachma = create_currency(
+            world=self.world,
+            code="drachma",
+            name="Drachma",
+        )
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="drachma-sword",
+            name="a drachma sword",
+            cost=10,
+            currency=drachma,
+        )
+        manifest = """
+kind: merchantprofile
+metadata:
+  slug: obol-smith
+  name: Obol Smith
+spec:
+  settlement_currency: obol
+  stock:
+    - key: swords
+      item_definition: itemdefinition.drachma-sword
+"""
+
+        response = self.client.post(
+            reverse("builder-world-manifest-apply", args=[self.world.pk]),
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("different currency", str(response.data))
+        self.assertFalse(
+            MerchantProfile.objects.filter(
+                world=self.world,
+                slug="obol-smith",
+            ).exists()
+        )
+
+    def test_merchant_manifest_rejects_fractional_purchase_budget(self):
+        manifest = """
+kind: merchantprofile
+metadata:
+  slug: fractional-budget
+  name: Fractional Budget
+spec:
+  settlement_currency: obol
+  funds:
+    mode: finite
+    purchase_budget: 1.9
+"""
+
+        response = self.client.post(
+            reverse("builder-world-manifest-apply", args=[self.world.pk]),
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("must be an integer", str(response.data))
+
 
 class TestMerchantProfileBuilderEndpoints(MerchantTestCase):
     def setUp(self):
@@ -158,7 +220,7 @@ class TestMerchantProfileBuilderEndpoints(MerchantTestCase):
             slug="garron-smithy",
             name="Garron's Smithy",
             funds_mode=MerchantProfile.FUNDS_MODE_FINITE,
-            funds_currency=self.currency,
+            settlement_currency=self.currency,
             purchase_budget=500,
             buyback_enabled=True,
             buyback_max_items=3,
@@ -185,7 +247,7 @@ class TestMerchantProfileBuilderEndpoints(MerchantTestCase):
             world=self.world,
             slug="garron-smithy",
             name="Garron's Smithy",
-            funds_currency=self.currency,
+            settlement_currency=self.currency,
         )
         MerchantStockSlot.objects.create(
             profile=profile,
@@ -206,13 +268,75 @@ class TestMerchantProfileBuilderEndpoints(MerchantTestCase):
 
 
 class TestMerchantRuntime(MerchantTestCase):
+    def test_profile_currency_change_rolls_over_runtime_stock_generation(self):
+        old_item = self._item_definition("old-token", "an old token")
+        profile = MerchantProfile.objects.create(
+            world=self.world,
+            slug="changing-cart",
+            name="Changing Cart",
+            settlement_currency=self.currency,
+        )
+        MerchantStockSlot.objects.create(
+            profile=profile,
+            key="old-stock",
+            item_definition=old_item,
+        )
+        mob = self._merchant_mob(profile, slug="changer")
+        runtime = mob.merchant_runtime
+        old_entry = runtime.stock_entries.get(
+            status=MerchantStockEntry.STATUS_AVAILABLE,
+        )
+        drachma = create_currency(
+            world=self.world,
+            code="drachma",
+            name="Drachma",
+        )
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="new-token",
+            name="a new token",
+            cost=8,
+            currency=drachma,
+        )
+        manifest = """
+kind: merchantprofile
+metadata:
+  slug: changing-cart
+spec:
+  settlement_currency: drachma
+  stock:
+    - key: new-stock
+      item_definition: itemdefinition.new-token
+"""
+
+        response = self.client.post(
+            reverse("builder-world-manifest-apply", args=[self.world.pk]),
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        runtime.refresh_from_db()
+        self.assertIsNone(runtime.last_restocked_ts)
+
+        RestockMerchantAction().execute(runtime.id)
+
+        runtime.refresh_from_db()
+        old_entry.refresh_from_db()
+        self.assertEqual(runtime.settlement_currency, drachma)
+        self.assertEqual(old_entry.status, MerchantStockEntry.STATUS_RETIRED)
+        available = runtime.stock_entries.filter(
+            status=MerchantStockEntry.STATUS_AVAILABLE,
+        )
+        self.assertEqual(available.count(), 1)
+        self.assertEqual(available.get().currency, drachma)
+
     def test_non_attackable_fixed_stock_merchant_can_sell_but_not_be_killed(self):
         sword = self._item_definition("iron-sword", "an iron sword", keywords="iron sword")
         profile = MerchantProfile.objects.create(
             world=self.world,
             slug="garron-smithy",
             name="Garron's Smithy",
-            funds_currency=self.currency,
+            settlement_currency=self.currency,
             sell_markup=1.5,
         )
         MerchantStockSlot.objects.create(
@@ -231,12 +355,23 @@ class TestMerchantRuntime(MerchantTestCase):
         self.assertIsNotNone(error)
         self.assertEqual(error["data"]["code"], "not_attackable")
 
-        self.player.gold = 100
-        self.player.save(update_fields=["gold"])
+        mutate_balances(
+            self.player,
+            {self.currency: 100},
+            reason="merchant test setup",
+            emit_event=False,
+        )
         messages = self._dispatch_text("buy sword from garron")
         buy_message = self._message_by_type(messages, "cmd.buy.success")
         self.assertIsNotNone(buy_message)
-        self.assertEqual(buy_message["data"]["price"], 15)
+        self.assertEqual(
+            buy_message["data"]["price"],
+            {
+                "amount": 15,
+                "currency": "obol",
+                "display": "15 Obols",
+            },
+        )
         self.assertEqual(self.player.inventory.filter(definition=sword).count(), 1)
         runtime.refresh_from_db()
         self.assertEqual(
@@ -256,7 +391,7 @@ class TestMerchantRuntime(MerchantTestCase):
             world=self.world,
             slug="curio-cart",
             name="Curio Cart",
-            funds_currency=self.currency,
+            settlement_currency=self.currency,
         )
         MerchantStockSlot.objects.create(
             profile=profile,
@@ -288,7 +423,7 @@ class TestMerchantRuntime(MerchantTestCase):
             world=self.world,
             slug="pawn-cart",
             name="Pawn Cart",
-            funds_currency=self.currency,
+            settlement_currency=self.currency,
             funds_mode=MerchantProfile.FUNDS_MODE_FINITE,
             purchase_budget=100,
             buy_multiplier=1.0,
@@ -307,7 +442,7 @@ class TestMerchantRuntime(MerchantTestCase):
 
         runtime.refresh_from_db()
         self.player.refresh_from_db()
-        self.assertEqual(self.player.gold, 30)
+        self.assertEqual(balance_map(self.player), {"obol": 30})
         self.assertEqual(runtime.remaining_purchase_budget, 70)
         self.assertEqual(
             runtime.buyback_entries.filter(status=MerchantBuybackEntry.STATUS_ACTIVE).count(),

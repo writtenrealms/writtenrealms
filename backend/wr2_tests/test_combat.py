@@ -4,10 +4,12 @@ from core.combat_formulas import normalize_combat_system
 from core.computations import compute_stats
 from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
+from builders.currencies import create_currency
 from builders.models import Faction, Trigger
 from config import constants as adv_consts
 from spawns.actions.combat import apply_player_death, mob_should_aggro_player
 from spawns.models import CombatEncounter, Item, Mob, Player
+from spawns.wallet import balance_map, mutate_balances
 from spawns.tasks import resolve_combat_encounter
 from tests.base import WorldTestCase
 from worlds.models import Room
@@ -32,6 +34,14 @@ class TestKillCommand(WorldTestCase):
         self.player.stamina = self.stats["stamina_max"]
         self.player.in_game = True
         self.player.save(update_fields=["health", "energy", "stamina", "in_game"])
+        self.currency = create_currency(
+            world=self.world,
+            code="obol",
+            name="Obol",
+            plural_name="Obols",
+        )
+        self.world.config.death_currency = self.currency
+        self.world.config.save(update_fields=["death_currency"])
         self.world.config.combat_system = normalize_combat_system({
             "variance": {
                 "enabled": False,
@@ -75,20 +85,28 @@ class TestKillCommand(WorldTestCase):
                 return event
         return None
 
-    def _set_death_mode(self, death_mode, *, gold_penalty=None):
+    def _set_death_mode(self, death_mode, *, currency_penalty=None):
         self.world.config.death_mode = death_mode
         update_fields = ["death_mode"]
-        if gold_penalty is not None:
-            self.world.config.death_gold_penalty = gold_penalty
-            update_fields.append("death_gold_penalty")
+        if currency_penalty is not None:
+            self.world.config.death_currency_penalty = currency_penalty
+            update_fields.append("death_currency_penalty")
         self.world.config.save(update_fields=update_fields)
 
-    def _equipped_item(self, *, name="Bronze Sword", slot=adv_consts.EQUIPMENT_SLOT_WEAPON, cost=100):
+    def _equipped_item(
+        self,
+        *,
+        name="Bronze Sword",
+        slot=adv_consts.EQUIPMENT_SLOT_WEAPON,
+        cost=100,
+        currency=None,
+    ):
         item = Item.objects.create(
             world=self.spawn_world,
             container=self.player.equipment,
             name=name,
             cost=cost,
+            currency=currency or self.currency,
         )
         setattr(self.player.equipment, slot, item)
         self.player.equipment.save(update_fields=[slot])
@@ -126,7 +144,8 @@ class TestKillCommand(WorldTestCase):
 
         death_affect = self._death_event_by_type(events, "affect.death")
         self.assertIsNotNone(death_affect)
-        self.assertEqual(death_affect.data["penalty"], "Your equipment is destroyed.")
+        self.assertIsNone(death_affect.data["penalty"])
+        self.assertEqual(death_affect.data["penalty_text"], "Your equipment is destroyed.")
         self.assertEqual(death_affect.data["actor"]["equipment"]["weapon"], None)
 
     def test_player_death_destroy_all_destroys_equipment_and_inventory(self):
@@ -162,7 +181,7 @@ class TestKillCommand(WorldTestCase):
         death_affect = self._death_event_by_type(events, "affect.death")
         self.assertIsNotNone(death_affect)
         self.assertEqual(
-            death_affect.data["penalty"],
+            death_affect.data["penalty_text"],
             "Your equipment and inventory are destroyed.",
         )
         self.assertEqual(death_affect.data["actor"]["equipment"]["weapon"], None)
@@ -202,7 +221,8 @@ class TestKillCommand(WorldTestCase):
 
         death_affect = self._death_event_by_type(events, "affect.death")
         self.assertIsNotNone(death_affect)
-        self.assertEqual(death_affect.data["penalty"], "Your equipment is left behind.")
+        self.assertIsNone(death_affect.data["penalty"])
+        self.assertEqual(death_affect.data["penalty_text"], "Your equipment is left behind.")
         self.assertEqual(death_affect.data["actor"]["inventory"], [])
 
         death_notification = self._death_event_by_type(events, "notification.death")
@@ -241,14 +261,22 @@ class TestKillCommand(WorldTestCase):
 
         death_affect = self._death_event_by_type(events, "affect.death")
         self.assertIsNotNone(death_affect)
-        self.assertEqual(death_affect.data["penalty"], "Your inventory is left behind.")
+        self.assertIsNone(death_affect.data["penalty"])
+        self.assertEqual(death_affect.data["penalty_text"], "Your inventory is left behind.")
 
-    def test_player_death_lose_gold_charges_repairs_for_non_pvp_death(self):
-        self._set_death_mode(adv_consts.DEATH_MODE_LOSE_GOLD, gold_penalty=0.25)
+    def test_player_death_lose_currency_charges_repairs_for_non_pvp_death(self):
+        self._set_death_mode(
+            adv_consts.DEATH_MODE_LOSE_CURRENCY,
+            currency_penalty=0.25,
+        )
         self._equipped_item(cost=100)
         self._equipped_item(name="Iron Shield", slot=adv_consts.EQUIPMENT_SLOT_OFFHAND, cost=60)
-        self.player.gold = 30
-        self.player.save(update_fields=["gold"])
+        mutate_balances(
+            self.player,
+            {self.currency: 30},
+            reason="death test setup",
+            emit_event=False,
+        )
         mob = Mob.objects.create(
             world=self.spawn_world,
             room=self.room,
@@ -263,18 +291,70 @@ class TestKillCommand(WorldTestCase):
         )
 
         updated_player.refresh_from_db()
-        self.assertEqual(updated_player.gold, 0)
+        self.assertEqual(balance_map(updated_player), {"obol": 0})
 
         death_affect = self._death_event_by_type(events, "affect.death")
         self.assertIsNotNone(death_affect)
-        self.assertEqual(death_affect.data["penalty"], "You pay 30 gold for repairs.")
-        self.assertEqual(death_affect.data["actor"]["gold"], 0)
+        self.assertEqual(
+            death_affect.data["penalty"],
+            {"amount": 30, "currency": "obol", "display": "30 Obols"},
+        )
+        self.assertEqual(death_affect.data["penalty_text"], "You pay 30 Obols for repairs.")
+        self.assertEqual(death_affect.data["actor"]["economy"]["balances"]["obol"], 0)
 
-    def test_player_death_lose_gold_does_not_charge_repairs_for_pvp_death(self):
-        self._set_death_mode(adv_consts.DEATH_MODE_LOSE_GOLD, gold_penalty=0.25)
+    def test_death_repair_basis_ignores_equipment_in_other_currencies(self):
+        drachma = create_currency(
+            world=self.world,
+            code="drachma",
+            name="Drachma",
+            plural_name="Drachmas",
+        )
+        self._set_death_mode(
+            adv_consts.DEATH_MODE_LOSE_CURRENCY,
+            currency_penalty=0.25,
+        )
         self._equipped_item(cost=100)
-        self.player.gold = 30
-        self.player.save(update_fields=["gold"])
+        self._equipped_item(
+            name="Drachma Shield",
+            slot=adv_consts.EQUIPMENT_SLOT_OFFHAND,
+            cost=400,
+            currency=drachma,
+        )
+        mutate_balances(
+            self.player,
+            {self.currency: 100},
+            reason="death test setup",
+            emit_event=False,
+        )
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Ogre",
+            keywords="ogre",
+        )
+
+        updated_player, events = apply_player_death(
+            player=self.player,
+            origin_room=self.room,
+            killer=mob,
+        )
+
+        self.assertEqual(balance_map(updated_player)["obol"], 75)
+        death_affect = self._death_event_by_type(events, "affect.death")
+        self.assertEqual(death_affect.data["penalty"]["amount"], 25)
+
+    def test_player_death_lose_currency_does_not_charge_repairs_for_pvp_death(self):
+        self._set_death_mode(
+            adv_consts.DEATH_MODE_LOSE_CURRENCY,
+            currency_penalty=0.25,
+        )
+        self._equipped_item(cost=100)
+        mutate_balances(
+            self.player,
+            {self.currency: 30},
+            reason="death test setup",
+            emit_event=False,
+        )
         killer = Player.objects.create(
             world=self.spawn_world,
             room=self.room,
@@ -289,11 +369,12 @@ class TestKillCommand(WorldTestCase):
         )
 
         updated_player.refresh_from_db()
-        self.assertEqual(updated_player.gold, 30)
+        self.assertEqual(balance_map(updated_player), {"obol": 30})
 
         death_affect = self._death_event_by_type(events, "affect.death")
         self.assertIsNotNone(death_affect)
-        self.assertEqual(death_affect.data["penalty"], "")
+        self.assertIsNone(death_affect.data["penalty"])
+        self.assertEqual(death_affect.data["penalty_text"], "")
 
     def test_player_death_lose_eq_drops_equipment_and_keeps_inventory(self):
         self._set_death_mode(adv_consts.DEATH_MODE_LOSE_EQ)
@@ -323,7 +404,8 @@ class TestKillCommand(WorldTestCase):
 
         death_affect = self._death_event_by_type(events, "affect.death")
         self.assertIsNotNone(death_affect)
-        self.assertEqual(death_affect.data["penalty"], "Your equipment is left behind.")
+        self.assertIsNone(death_affect.data["penalty"])
+        self.assertEqual(death_affect.data["penalty_text"], "Your equipment is left behind.")
 
     def test_kill_auto_resolves_until_mob_dies_and_awards_rewards(self):
         mob = Mob.objects.create(
@@ -335,11 +417,11 @@ class TestKillCommand(WorldTestCase):
             health_max=self.stats["attack_power"] + 5,
             attack_power=4,
             exp_worth=17,
-            gold=300,
+            currency_reward_snapshot={"obol": 300},
         )
         mob.create_corpse()
         exp_before = self.player.experience
-        gold_before = self.player.gold
+        balance_before = balance_map(self.player)["obol"]
         watcher = self.create_player("Watcher", room=self.room)
         watcher.in_game = True
         watcher.save(update_fields=["in_game"])
@@ -350,7 +432,7 @@ class TestKillCommand(WorldTestCase):
         self.player.refresh_from_db()
         self.assertFalse(Mob.objects.filter(pk=mob.id).exists())
         self.assertEqual(self.player.experience, exp_before + 17)
-        self.assertEqual(self.player.gold, gold_before + 300)
+        self.assertEqual(balance_map(self.player)["obol"], balance_before + 300)
 
         actor_attacks = self._messages_by_type(
             messages,
@@ -373,8 +455,14 @@ class TestKillCommand(WorldTestCase):
         self.assertIsNotNone(death_message)
         self.assertEqual(death_message["text"], "Rat is dead! R.I.P.")
         self.assertEqual(death_message["data"]["actor"]["experience"], exp_before + 17)
-        self.assertEqual(death_message["data"]["actor"]["gold"], gold_before + 300)
-        self.assertEqual(death_message["data"]["gold_gained"], 300)
+        self.assertEqual(
+            death_message["data"]["actor"]["economy"]["balances"]["obol"],
+            balance_before + 300,
+        )
+        self.assertEqual(
+            death_message["data"]["currency_rewards"],
+            [{"amount": 300, "currency": "obol", "display": "300 Obols"}],
+        )
         self.assertTrue(
             any(
                 item["type"] == "corpse" and "rat" in item["name"].lower()
@@ -390,10 +478,13 @@ class TestKillCommand(WorldTestCase):
         self.assertIsNotNone(reward_message)
         self.assertEqual(
             reward_message["text"],
-            "You gain 17 experience.\nYou receive 300 gold.",
+            "You gain 17 experience.\nYou receive 300 Obols.",
         )
         self.assertEqual(reward_message["data"]["actor"]["experience"], exp_before + 17)
-        self.assertEqual(reward_message["data"]["actor"]["gold"], gold_before + 300)
+        self.assertEqual(
+            reward_message["data"]["actor"]["economy"]["balances"]["obol"],
+            balance_before + 300,
+        )
 
         watcher_death = self._message_by_type(
             messages,
@@ -1313,11 +1404,11 @@ class TestKillCommand(WorldTestCase):
             attack_power=4,
             fights_back=True,
             exp_worth=9,
-            gold=25,
+            currency_reward_snapshot={"obol": 25},
         )
         mob.create_corpse()
         exp_before = self.player.experience
-        gold_before = self.player.gold
+        balance_before = balance_map(self.player)["obol"]
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async") as schedule_mock:
             with capture_game_messages() as first_messages:
@@ -1347,7 +1438,7 @@ class TestKillCommand(WorldTestCase):
             CombatEncounter.STATUS_FINISHED,
         )
         self.assertEqual(self.player.experience, exp_before + 9)
-        self.assertEqual(self.player.gold, gold_before + 25)
+        self.assertEqual(balance_map(self.player)["obol"], balance_before + 25)
         death_message = self._message_by_type(
             second_messages,
             "notification.death",
@@ -1363,5 +1454,5 @@ class TestKillCommand(WorldTestCase):
         self.assertIsNotNone(reward_message)
         self.assertEqual(
             reward_message["text"],
-            "You gain 9 experience.\nYou receive 25 gold.",
+            "You gain 9 experience.\nYou receive 25 Obols.",
         )

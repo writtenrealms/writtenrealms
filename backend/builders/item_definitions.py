@@ -206,6 +206,8 @@ def item_definition_property_fields() -> tuple[str, ...]:
         "keywords",
         "attributes",
         "type",
+        "cost",
+        "currency",
     }
     return tuple(sorted(ITEM_MIXIN_FIELD_NAMES - excluded))
 
@@ -218,29 +220,6 @@ def _default_for_field(field) -> Any:
     if getattr(field, "empty_strings_allowed", False):
         return ""
     return None
-
-
-def _resolve_currency(definition, value: Any):
-    from builders.models import Currency
-
-    if value in (None, ""):
-        return Currency.objects.filter(world=definition.world, is_default=True).first()
-    if hasattr(value, "pk"):
-        return value
-    if isinstance(value, int) and not isinstance(value, bool):
-        currency = Currency.objects.filter(world=definition.world, pk=value).first()
-        if currency:
-            return currency
-        return None
-    text = str(value or "").strip()
-    if not text:
-        return Currency.objects.filter(world=definition.world, is_default=True).first()
-    prefix, sep, raw = text.partition(".")
-    if sep == "." and prefix == "currency":
-        if raw.isdigit():
-            return Currency.objects.filter(world=definition.world, pk=int(raw)).first()
-        text = raw
-    return Currency.objects.filter(world=definition.world, code=text).first()
 
 
 def _item_fields_from_definition(definition, attributes: dict[str, float]) -> dict[str, Any]:
@@ -260,13 +239,10 @@ def _item_fields_from_definition(definition, attributes: dict[str, float]) -> di
     for key, value in base_properties.items():
         if key not in ITEM_MIXIN_FIELD_NAMES or key in {"attributes", "name"}:
             continue
-        if key == "currency":
-            fields[key] = _resolve_currency(definition, value)
-        else:
-            fields[key] = value
+        fields[key] = value
 
-    if "currency" not in base_properties:
-        fields["currency"] = _resolve_currency(definition, None)
+    fields["cost"] = definition.cost
+    fields["currency"] = definition.currency
 
     fields["attributes"] = attributes
     return fields
@@ -340,7 +316,6 @@ def sync_spawned_items_from_definition(definition) -> int:
     queryset = (
         Item.objects
         .filter(definition=definition, augment__isnull=True)
-        .select_related("currency")
     )
     for item in queryset:
         roll_metadata = item.roll_metadata if isinstance(item.roll_metadata, dict) else {}
@@ -351,6 +326,10 @@ def sync_spawned_items_from_definition(definition) -> int:
                 definition.attributes or {},
             )
         item_fields = _item_fields_from_definition(definition, attributes)
+        # Money is a concrete spawn-time snapshot. Definition repricing must
+        # not retroactively reinterpret player inventory or merchant stock.
+        item_fields.pop("cost", None)
+        item_fields.pop("currency", None)
         for field_name, value in item_fields.items():
             setattr(item, field_name, value)
         item.roll_metadata = {

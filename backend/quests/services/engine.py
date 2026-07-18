@@ -477,6 +477,7 @@ def _transition_if_any(
     return QuestTransitionResult(quest_instance=quest_instance, events=[])
 
 
+@transaction.atomic
 def enter_step(
     quest_instance: QuestInstance,
     *,
@@ -485,6 +486,7 @@ def enter_step(
     entry_reason: str,
     event_data: dict[str, Any] | None = None,
 ) -> QuestTransitionResult:
+    player = type(player).objects.select_for_update().get(pk=player.pk)
     step = get_step(quest_instance.template, step_id)
     if not step:
         raise QuestRuntimeError("Quest step was not found.", code="step_not_found")
@@ -551,6 +553,7 @@ def enter_step(
         event_data=event_data,
     )
     reward_summaries = list(step_effect_result.reward_summaries)
+    currency_rewards = list(step_effect_result.currency_rewards)
     if step_kind == "resolution":
         reward_result = _apply_effects(
             refreshed,
@@ -559,6 +562,7 @@ def enter_step(
             event_data=event_data,
         )
         reward_summaries.extend(reward_result.reward_summaries)
+        currency_rewards.extend(reward_result.currency_rewards)
     payload, info_text = _info_for_instance(refreshed, player=player)
     if step_kind == "resolution":
         event_type = "quest.instance.resolved"
@@ -579,7 +583,12 @@ def enter_step(
 
     return QuestTransitionResult(
         quest_instance=refreshed,
-        events=[_build_player_event(player, event_type=event_type, text=text, data={"quest": payload})],
+        events=[_build_player_event(
+            player,
+            event_type=event_type,
+            text=text,
+            data={"quest": payload, "currency_rewards": currency_rewards},
+        )],
     )
 
 
@@ -633,8 +642,15 @@ def accept_template(player, template: QuestTemplate) -> QuestTransitionResult:
     return start_quest_instance(player, template, reason="started")
 
 
+@transaction.atomic
 def choose_for_instance(player, identity: str, choice_id: str) -> QuestTransitionResult:
-    quest_instance = resolve_instance_identity(player, identity, status="active")
+    player = type(player).objects.select_for_update().get(pk=player.pk)
+    resolved_instance = resolve_instance_identity(player, identity, status="active")
+    quest_instance = (
+        QuestInstance.objects.select_for_update(of=("self",))
+        .select_related("template", "template__arc", "world", "player")
+        .get(pk=resolved_instance.pk)
+    )
     step = get_step(quest_instance.template, quest_instance.current_step_id)
     if not step:
         raise QuestRuntimeError("Quest step was not found.", code="step_not_found")
@@ -736,6 +752,7 @@ def info_for_player(player, identity: str) -> tuple[dict[str, Any], str]:
     return _info_for_instance(quest_instance, player=player)
 
 
+@transaction.atomic
 def progress_active_instance_for_event(
     quest_instance: QuestInstance,
     *,
@@ -743,16 +760,26 @@ def progress_active_instance_for_event(
     event_type: str,
     event_data: dict[str, Any] | None,
 ) -> QuestTransitionResult:
-    quest_instance = QuestInstance.objects.select_related("template", "template__arc", "world", "player").prefetch_related("objective_states", "journal_entries").get(pk=quest_instance.pk)
+    player = type(player).objects.select_for_update().get(pk=player.pk)
+    quest_instance = (
+        QuestInstance.objects.select_for_update(of=("self",))
+        .select_related("template", "template__arc", "world", "player")
+        .get(pk=quest_instance.pk)
+    )
     step = get_step(quest_instance.template, quest_instance.current_step_id)
     if not step or str(step.get("kind") or "").strip().lower() != "objective":
         return QuestTransitionResult(quest_instance=quest_instance, events=[])
 
     updated = False
     updated_objective_payload: dict[str, Any] | None = None
+    objective_states = list(
+        QuestObjectiveState.objects.select_for_update()
+        .filter(quest_instance=quest_instance)
+        .order_by("id")
+    )
     objective_state_map = {
         state.objective_id: state
-        for state in quest_instance.objective_states.all()
+        for state in objective_states
     }
     for objective_spec in _objective_specs_for_step(step):
         objective_id = str(objective_spec.get("id") or "").strip()

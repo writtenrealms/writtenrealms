@@ -38,6 +38,7 @@ from core.leveling import (
     normalize_leveling_curve,
     validate_leveling_config,
 )
+from core.economy import MAX_CURRENCY_AMOUNT, economy_world
 from core.stat_system import (
     StatSystemValidationError,
     normalize_stat_system,
@@ -231,6 +232,21 @@ class WorldSerializer(serializers.ModelSerializer):
     instance_of = serializers.SerializerMethodField()
     builder_info = serializers.SerializerMethodField()
     currencies = serializers.SerializerMethodField()
+    default_currency = serializers.SerializerMethodField()
+    initial_currency_code = serializers.RegexField(
+        r'^[a-z][a-z0-9_-]{0,63}$',
+        write_only=True,
+        required=False,
+        default='gold')
+    initial_currency_name = serializers.CharField(
+        write_only=True,
+        required=False,
+        default='Gold')
+    initial_currency_plural_name = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+        default='Gold')
     state = serializers.CharField(source='lifecycle', read_only=True)
 
     class Meta:
@@ -240,7 +256,9 @@ class WorldSerializer(serializers.ModelSerializer):
             'last_viewed_room', 'short_description', 'state', 'is_multiplayer',
             'is_public', 'factions', 'facts', 'is_classless',
             'review', 'maintenance_mode', 'maintenance_msg', 'instance_of',
-            'builder_info', 'currencies',
+            'builder_info', 'currencies', 'default_currency',
+            'initial_currency_code', 'initial_currency_name',
+            'initial_currency_plural_name',
         )
 
     def validate(self, *args, **kwargs):
@@ -344,14 +362,20 @@ class WorldSerializer(serializers.ModelSerializer):
         }
 
     def get_currencies(self, world):
+        base_world = economy_world(world)
         return [
             {
                 'id': currency.id,
                 'name': currency.name,
+                'plural_name': currency.plural_name or currency.name,
+                'description': currency.description,
                 'code': currency.code,
-                'is_default': currency.is_default,
-            } for currency in world.currencies.all()
+                'is_default': currency.id == base_world.default_currency_id,
+            } for currency in base_world.currencies.all()
         ]
+
+    def get_default_currency(self, world):
+        return economy_world(world).default_currency_id and economy_world(world).default_currency.code
 
     def _instance_base_world(self):
         raw_instance_of = self.context['request'].data.get('instance_of')
@@ -374,6 +398,10 @@ class WorldSerializer(serializers.ModelSerializer):
         if 'author' not in validated_data:
             validated_data['author'] = self.context['request'].user
 
+        initial_currency_code = validated_data.pop('initial_currency_code', 'gold')
+        initial_currency_name = validated_data.pop('initial_currency_name', 'Gold')
+        initial_currency_plural_name = validated_data.pop(
+            'initial_currency_plural_name', 'Gold')
         instance_of = self._instance_base_world()
         with transaction.atomic():
             if instance_of:
@@ -388,17 +416,19 @@ class WorldSerializer(serializers.ModelSerializer):
             if instance_of:
                 return world
 
-            Currency.objects.create(
-                code='gold',
-                name='Gold',
-                is_default=True,
-                world=world)
+            from builders.currencies import create_currency
 
-            Currency.objects.create(
-                code='medals',
-                name='Medals',
-                is_default=False,
-                world=world)
+            initial_currency = create_currency(
+                world=world,
+                code=initial_currency_code,
+                name=initial_currency_name,
+                plural_name=initial_currency_plural_name)
+            world.config.death_currency = initial_currency
+            world.config.clan_registration_currency = initial_currency
+            world.config.save(update_fields=[
+                'death_currency',
+                'clan_registration_currency',
+            ])
 
             spawn_world = world.create_spawn_world()
             player = Player.objects.create(
@@ -423,7 +453,6 @@ class WorldConfigSerializer(serializers.ModelSerializer):
     class Meta:
         model = WorldConfig
         fields = [
-            'starting_gold',
             'starting_equipment',
             'starting_level',
             'leveling_curve',
@@ -432,7 +461,10 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'death_room',
             'death_mode',
             'death_route',
-            'death_gold_penalty',
+            'death_currency',
+            'death_currency_penalty',
+            'clan_registration_currency',
+            'clan_registration_cost',
             'small_background',
             'large_background',
             'can_select_faction',
@@ -511,6 +543,56 @@ class WorldConfigSerializer(serializers.ModelSerializer):
                     "Instance worlds can only alter local instance config. "
                     f"Cannot alter: {', '.join(disallowed_fields)}."
                 )
+        if world is not None:
+            base_world = economy_world(world)
+            currency_errors = {}
+            for field_name in (
+                "death_currency",
+                "clan_registration_currency",
+            ):
+                currency = attrs.get(
+                    field_name,
+                    getattr(config, field_name, None),
+                )
+                if currency is not None and currency.world_id != base_world.pk:
+                    currency_errors[field_name] = (
+                        "Currency must belong to this world's base economy."
+                    )
+            if currency_errors:
+                raise serializers.ValidationError(currency_errors)
+
+        effective_death_mode = attrs.get(
+            "death_mode",
+            getattr(config, "death_mode", adv_consts.DEATH_MODE_LOSE_NONE),
+        )
+        effective_death_currency = attrs.get(
+            "death_currency",
+            getattr(config, "death_currency", None),
+        )
+        if (
+            effective_death_mode == adv_consts.DEATH_MODE_LOSE_CURRENCY
+            and effective_death_currency is None
+        ):
+            raise serializers.ValidationError({
+                "death_currency": (
+                    "A death currency is required when death mode is lose_currency."
+                ),
+            })
+
+        effective_clan_cost = attrs.get(
+            "clan_registration_cost",
+            getattr(config, "clan_registration_cost", 0),
+        )
+        effective_clan_currency = attrs.get(
+            "clan_registration_currency",
+            getattr(config, "clan_registration_currency", None),
+        )
+        if effective_clan_cost and effective_clan_currency is None:
+            raise serializers.ValidationError({
+                "clan_registration_currency": (
+                    "A clan registration currency is required when the cost is nonzero."
+                ),
+            })
         equipment_system = attrs.get(
             "equipment_system",
             getattr(config, "equipment_system", None),
@@ -1782,7 +1864,7 @@ class ItemDefinitionSerializer(serializers.ModelSerializer):
             'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
             'description', 'ground_description', 'notes', 'keywords',
             'type', 'base_properties', 'attributes', 'randomization',
-            'randomized',
+            'randomized', 'cost', 'currency',
         ]
 
     def get_randomized(self, item_definition):
@@ -1826,14 +1908,14 @@ class MobDefinitionSerializer(serializers.ModelSerializer):
 
 class MerchantProfileSerializer(serializers.ModelSerializer):
     stock_count = serializers.SerializerMethodField()
-    funds_currency = serializers.SerializerMethodField()
+    settlement_currency = serializers.SerializerMethodField()
 
     class Meta:
         model = MerchantProfile
         fields = [
             'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
             'notes', 'sell_markup', 'buy_multiplier',
-            'restock_interval_seconds', 'funds_mode', 'funds_currency',
+            'restock_interval_seconds', 'funds_mode', 'settlement_currency',
             'purchase_budget', 'buyback_enabled', 'buyback_max_items',
             'stock_count',
         ]
@@ -1841,9 +1923,9 @@ class MerchantProfileSerializer(serializers.ModelSerializer):
     def get_stock_count(self, merchant_profile):
         return merchant_profile.stock_slots.count()
 
-    def get_funds_currency(self, merchant_profile):
-        if merchant_profile.funds_currency_id:
-            return merchant_profile.funds_currency.code
+    def get_settlement_currency(self, merchant_profile):
+        if merchant_profile.settlement_currency_id:
+            return merchant_profile.settlement_currency.code
         return ''
 
 
@@ -2585,6 +2667,65 @@ class SocialSerializer(serializers.ModelSerializer):
 
 class CurrencySerializer(serializers.ModelSerializer):
 
+    is_default = serializers.SerializerMethodField()
+    starting_amount = serializers.IntegerField(
+        required=False,
+        write_only=True,
+        min_value=0,
+        max_value=MAX_CURRENCY_AMOUNT,
+    )
+    usage = serializers.SerializerMethodField()
+    can_delete = serializers.SerializerMethodField()
+
     class Meta:
         model = Currency
-        fields = ['id', 'code', 'name', 'is_default']
+        fields = [
+            'id', 'code', 'name', 'plural_name', 'description',
+            'is_default', 'starting_amount', 'usage', 'can_delete',
+        ]
+
+    def validate_code(self, value):
+        value = str(value or '').strip().lower()
+        if self.instance is not None and value != self.instance.code:
+            raise serializers.ValidationError('Currency codes cannot be changed.')
+        return value
+
+    def get_is_default(self, currency):
+        world = self.context.get('world') or currency.world
+        return economy_world(world).default_currency_id == currency.pk
+
+    def _starting_amount(self, currency):
+        prefetched = getattr(currency, '_prefetched_objects_cache', {})
+        rows = prefetched.get('starting_balance_rules')
+        if rows is not None:
+            row = next(
+                (entry for entry in rows if entry.world_id == currency.world_id),
+                None,
+            )
+        else:
+            row = currency.starting_balance_rules.filter(
+                world=currency.world,
+            ).first()
+        return int(row.amount) if row else 0
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['starting_amount'] = self._starting_amount(instance)
+        return data
+
+    def get_usage(self, currency):
+        usage_map = self.context.get('currency_usage_map')
+        if usage_map is not None:
+            return usage_map.get(currency.pk, [])
+
+        from builders.currencies import currency_usage
+
+        cache = getattr(self, '_currency_usage_cache', None)
+        if cache is None:
+            cache = self._currency_usage_cache = {}
+        if currency.pk not in cache:
+            cache[currency.pk] = currency_usage(currency)
+        return cache[currency.pk]
+
+    def get_can_delete(self, currency):
+        return not self.get_usage(currency)

@@ -3,8 +3,9 @@ import yaml
 
 from rest_framework.reverse import reverse
 
+from builders.currencies import create_currency
+from builders.random_items import generate_item
 from builders.models import (
-    Currency,
     ItemBundle,
     ItemDefinition,
 )
@@ -20,12 +21,23 @@ class TestItemDefinitions(WorldTestCase):
         super().setUp()
         self.client.force_authenticate(self.user)
         apply_basic_stat_system(self.world)
-        self.default_currency = Currency.objects.create(
+        self.default_currency = create_currency(
             world=self.world,
-            code="gold",
-            name="Gold",
-            is_default=True,
+            code="obol",
+            name="Obol",
+            plural_name="Obols",
         )
+
+    def test_random_item_materializes_the_world_default_currency(self):
+        item = generate_item(
+            self.player,
+            chance_imbued=0,
+            chance_enchanted=0,
+            specification=adv_consts.ITEM_SPECIFICATION_WEAPON_1H,
+        )
+
+        self.assertIsNotNone(item.cost)
+        self.assertEqual(item.currency, self.default_currency)
 
     def test_spawn_rolls_declared_attributes_and_ignores_stale_keys(self):
         definition = ItemDefinition.objects.create(
@@ -132,6 +144,32 @@ class TestItemDefinitions(WorldTestCase):
             serialize_item(later_item).stack_key,
         )
 
+    def test_definition_repricing_does_not_reprice_existing_items(self):
+        definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="bronze-sword",
+            name="a bronze sword",
+            cost=25,
+            currency=self.default_currency,
+        )
+        item = definition.spawn(self.player, self.spawn_world)
+        drachma = create_currency(
+            world=self.world,
+            code="drachma",
+            name="Drachma",
+        )
+
+        definition.cost = 90
+        definition.currency = drachma
+        definition.save()
+
+        item.refresh_from_db()
+        later_item = definition.spawn(self.player, self.spawn_world)
+        self.assertEqual(item.cost, 25)
+        self.assertEqual(item.currency, self.default_currency)
+        self.assertEqual(later_item.cost, 90)
+        self.assertEqual(later_item.currency, drachma)
+
     def test_augmented_definition_items_do_not_stack_or_get_resynced(self):
         definition = ItemDefinition.objects.create(
             world=self.world,
@@ -164,11 +202,11 @@ class TestItemDefinitionManifests(WorldTestCase):
         super().setUp()
         self.client.force_authenticate(self.user)
         apply_basic_stat_system(self.world)
-        Currency.objects.create(
+        self.default_currency = create_currency(
             world=self.world,
-            code="gold",
-            name="Gold",
-            is_default=True,
+            code="obol",
+            name="Obol",
+            plural_name="Obols",
         )
         self.apply_ep = reverse("builder-world-manifest-apply", args=[self.world.pk])
         self.export_ep = reverse("builder-world-export", args=[self.world.pk])
@@ -185,7 +223,8 @@ spec:
   type: equippable
   equipment_type: weapon_1h
   weapon_damage: 8
-  currency: gold
+  cost: 12
+  currency: obol
   attributes:
     brawn: 2
   randomization:
@@ -206,9 +245,46 @@ spec:
         self.assertEqual(definition.item_type, adv_consts.ITEM_TYPE_EQUIPPABLE)
         self.assertEqual(definition.base_properties["equipment_type"], "weapon_1h")
         self.assertEqual(definition.base_properties["weapon_damage"], 8)
-        self.assertEqual(definition.base_properties["currency"], "gold")
+        self.assertNotIn("currency", definition.base_properties)
+        self.assertEqual(definition.cost, 12)
+        self.assertEqual(definition.currency, self.default_currency)
         self.assertEqual(definition.attributes, {"brawn": 2})
         self.assertEqual(definition.randomization["attributes"][0]["mode"], "favor_high")
+
+    def test_item_money_patch_rejects_currency_without_cost(self):
+        drachma = create_currency(
+            world=self.world,
+            code="drachma",
+            name="Drachma",
+        )
+        definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="bronze-sword",
+            name="a bronze sword",
+            cost=12,
+            currency=self.default_currency,
+        )
+
+        for cost_line in ("", "  cost: null\n"):
+            with self.subTest(cost_line=cost_line or "omitted"):
+                manifest = f"""
+kind: itemdefinition
+metadata:
+  slug: bronze-sword
+spec:
+{cost_line}  currency: drachma
+"""
+                response = self.client.post(
+                    self.apply_ep,
+                    {"manifest": manifest},
+                    format="json",
+                )
+                self.assertEqual(response.status_code, 400, response.data)
+
+        definition.refresh_from_db()
+        self.assertEqual(definition.cost, 12)
+        self.assertEqual(definition.currency, self.default_currency)
+        self.assertNotEqual(definition.currency, drachma)
 
     def test_apply_item_definition_manifest_accepts_armor_rating_and_class(self):
         self.world.config.equipment_system = {

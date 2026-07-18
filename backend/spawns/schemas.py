@@ -1,9 +1,9 @@
 """
 Pydantic schemas for WR2 state.sync payload.
 
-These schemas define the shape of data sent to the frontend when a player
-enters a world. The goal is to match the shape that WR1's connect_data
-returned.
+These schemas define the canonical WR2 shape sent to the frontend when a
+player enters a world. WR2 launches from an empty database and does not expose
+legacy WR1 runtime projections.
 
 Top-level structure:
 - map: List of rooms the player has visited (for minimap)
@@ -12,16 +12,27 @@ Top-level structure:
 - world: World configuration (abilities, factions, currencies)
 - who_list: List of connected players
 
-Reference: legacy WR1 resource payloads.
 """
 
 from typing import Any, Dict, List, Literal, Optional, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, NonNegativeInt
 
 
 # =============================================================================
 # Equipment & Items
 # =============================================================================
+
+class Money(BaseModel):
+    amount: NonNegativeInt
+    currency: str
+    display: str = ""
+
+
+class PlayerEconomy(BaseModel):
+    """Private wallet state for one player."""
+    wallet_revision: NonNegativeInt = 0
+    balances: Dict[str, NonNegativeInt] = Field(default_factory=dict)
+
 
 class Item(BaseModel):
     """Item data - used for inventory items and room inventory."""
@@ -63,8 +74,7 @@ class Item(BaseModel):
     # Properties
     is_container: bool = False
     is_pickable: bool = True
-    cost: int = 0
-    currency: str = "gold"
+    value: Optional[Money] = None
 
     # Identifiers
     keywords: str = ""
@@ -234,10 +244,8 @@ class Actor(BaseModel):
     experience: int = 0
     experience_progress: int = 0
     experience_needed: int = 0
-    gold: int = 0
     glory: int = 0
-    medals: int = 0
-    currencies: Dict[str, int] = Field(default_factory=dict)
+    economy: PlayerEconomy = Field(default_factory=PlayerEconomy)
     materials: Dict[str, int] = Field(default_factory=dict)
 
     # Grouping
@@ -431,10 +439,17 @@ class Faction(BaseModel):
 
 
 class Currency(BaseModel):
-    """Currency definition."""
-    code: str
+    """One code-keyed entry in the world currency catalog."""
     name: str
-    is_default: bool = False
+    plural_name: str = ""
+    description: str = ""
+
+
+class WorldEconomy(BaseModel):
+    """Authored currency catalog inherited by a playable world."""
+    revision: NonNegativeInt = 0
+    default_currency: Optional[str] = None
+    currencies: Dict[str, Currency] = Field(default_factory=dict)
 
 
 class CraftMaterial(BaseModel):
@@ -496,7 +511,8 @@ class World(BaseModel):
     combat_resolution_interval: float = 0.0
     death_mode: str = "flee"  # "flee", "respawn", etc.
     death_route: str = ""
-    death_gold_penalty: float = 0.0
+    death_currency: Optional[str] = None
+    death_currency_penalty: float = 0.0
 
     # Combat settings
     allow_combat: bool = True
@@ -517,7 +533,7 @@ class World(BaseModel):
     abilities: Dict[str, Any] = Field(default_factory=dict)
     facts: Dict[str, Any] = Field(default_factory=dict)
     socials: Socials = Field(default_factory=Socials)
-    currencies: Dict[str, Currency] = Field(default_factory=dict)
+    economy: WorldEconomy = Field(default_factory=WorldEconomy)
     craft_materials: Dict[str, CraftMaterial] = Field(default_factory=dict)
 
 
@@ -546,9 +562,8 @@ class WhoListEntry(BaseModel):
 
 class StateSyncData(BaseModel):
     """
-    The complete state.sync payload sent to the frontend when a player
-    enters a world. This matches the structure returned by WR1's
-    connect_data payload.
+    The complete canonical WR2 state.sync payload sent when a player enters a
+    world.
     """
     map: List[MapRoom] = Field(default_factory=list)
     actor: Actor
@@ -597,7 +612,7 @@ def build_mock_state_sync(
         keywords="iron sword weapon",
         keyword="sword",
         attack_power=15,
-        cost=50,
+        value=Money(amount=50, currency="obol", display="50 Obols"),
     )
 
     leather_helm = Item(
@@ -614,7 +629,7 @@ def build_mock_state_sync(
         keyword="helm",
         armor=5,
         attributes={"grit": 2},
-        cost=25,
+        value=Money(amount=25, currency="obol", display="25 Obols"),
     )
 
     chainmail = Item(
@@ -633,7 +648,7 @@ def build_mock_state_sync(
         armor=20,
         attributes={"grit": 5},
         health_max=25,
-        cost=200,
+        value=Money(amount=200, currency="obol", display="200 Obols"),
     )
 
     health_potion = Item(
@@ -648,24 +663,24 @@ def build_mock_state_sync(
         keywords="health potion red",
         keyword="potion",
         is_pickable=True,
-        cost=10,
+        value=Money(amount=10, currency="obol", display="10 Obols"),
     )
 
-    gold_ring = Item(
+    ruby_ring = Item(
         key="item.5",
-        name="gold ring",
-        cf_name="Gold ring",
+        name="ruby ring",
+        cf_name="Ruby ring",
         type="equippable",
         equipment_type="accessory",
         level=8,
         quality="enchanted",
         is_magic=True,
-        description="A golden ring set with a small ruby.",
-        keywords="gold ring accessory ruby",
+        description="A bronze ring set with a small ruby.",
+        keywords="bronze ring accessory ruby",
         keyword="ring",
         attributes={"insight": 3},
         ability_power=10,
-        cost=150,
+        value=Money(amount=150, currency="obol", display="150 Obols"),
     )
 
     wooden_shield = Item(
@@ -681,7 +696,7 @@ def build_mock_state_sync(
         keywords="wooden shield",
         keyword="shield",
         armor=8,
-        cost=30,
+        value=Money(amount=30, currency="obol", display="30 Obols"),
     )
 
     leather_boots = Item(
@@ -698,7 +713,7 @@ def build_mock_state_sync(
         keyword="boots",
         armor=3,
         attributes={"dexterity": 1},
-        cost=20,
+        value=Money(amount=20, currency="obol", display="20 Obols"),
     )
 
     bread_loaf = Item(
@@ -713,7 +728,7 @@ def build_mock_state_sync(
         keywords="loaf bread food",
         keyword="bread",
         is_pickable=True,
-        cost=2,
+        value=Money(amount=2, currency="obol", display="2 Obols"),
     )
 
     # --- Mock Equipment ---
@@ -724,7 +739,7 @@ def build_mock_state_sync(
         head=leather_helm,
         body=chainmail,
         feet=leather_boots,
-        accessory=gold_ring,
+        accessory=ruby_ring,
     )
 
     # --- Mock Characters in Room ---
@@ -1055,10 +1070,11 @@ def build_mock_state_sync(
         experience=12500,
         experience_progress=2500,
         experience_needed=5000,
-        gold=347,
         glory=125,
-        medals=3,
-        currencies={"tokens": 15, "gems": 2},
+        economy=PlayerEconomy(
+            wallet_revision=4,
+            balances={"obol": 347},
+        ),
         # Grouping
         group_id=None,
         # Factions
@@ -1148,9 +1164,11 @@ def build_mock_state_sync(
     }
 
     mock_currencies = {
-        "1": Currency(code="gold", name="Gold", is_default=True),
-        "2": Currency(code="tokens", name="Guild Tokens", is_default=False),
-        "3": Currency(code="gems", name="Soul Gems", is_default=False),
+        "obol": Currency(
+            name="Obol",
+            plural_name="Obols",
+            description="The realm's common coin.",
+        ),
     }
 
     mock_socials = Socials(
@@ -1200,7 +1218,8 @@ def build_mock_state_sync(
         combat_resolution_interval=0.0,
         death_mode="flee",
         death_route="",
-        death_gold_penalty=0.1,
+        death_currency="obol",
+        death_currency_penalty=0.1,
         allow_combat=True,
         pvp_mode="disabled",
         allow_pvp=False,
@@ -1210,7 +1229,11 @@ def build_mock_state_sync(
         abilities={},
         facts={"world_started": True, "event_active": False},
         socials=mock_socials,
-        currencies=mock_currencies,
+        economy=WorldEconomy(
+            revision=1,
+            default_currency="obol",
+            currencies=mock_currencies,
+        ),
     )
 
     # --- Who List ---
