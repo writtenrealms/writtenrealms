@@ -45,6 +45,7 @@ from builders.models import (
     MerchantProfile,
     MerchantStockSlot,
     MobDefinition,
+    Social,
     Trigger,
 )
 from config import constants as adv_consts
@@ -88,6 +89,14 @@ from core.leveling import (
     validate_leveling_config,
 )
 from core.mob_traits import normalize_trait_list
+from core.socials import (
+    SOCIAL_CATALOG_MAX_DEFINITIONS,
+    SOCIAL_MESSAGE_FIELDS,
+    SocialDefinitionError,
+    normalize_social_priority,
+    validate_social_command,
+    validate_social_definition,
+)
 from core.stat_system import (
     StatSystemValidationError,
     get_world_stat_system,
@@ -117,10 +126,12 @@ FACTION_MANIFEST_KIND = "faction"
 MOB_DEFINITION_MANIFEST_KIND = "mobdefinition"
 ABILITY_MANIFEST_KIND = "ability"
 ABILITIES_MANIFEST_KIND = "abilities"
+SOCIAL_MANIFEST_KIND = "social"
 TRIGGER_MANIFEST_OPERATION_APPLY = "apply"
 TRIGGER_MANIFEST_OPERATION_DELETE = "delete"
 
 _TRIGGER_KEY_PREFIX = "trigger"
+_SOCIAL_KEY_PREFIX = "social"
 _WORLD_KEY_PREFIX = "world"
 
 _QUEST_ARC_MANIFEST_KIND_ALIASES = {
@@ -572,6 +583,22 @@ class ParsedAbilitiesManifest:
     abilities: list[ParsedAbilityManifest]
 
 
+@dataclass
+class ParsedSocialManifest:
+    world: World
+    social: Social | None
+    social_id: int | None
+    command: str
+    fields: dict[str, Any]
+
+
+@dataclass
+class ParsedSocialDeleteManifest:
+    world: World
+    social: Social
+    social_id: int
+
+
 def _entity_key(entity_type: str, entity_id: int) -> str:
     return f"{entity_type}.{entity_id}"
 
@@ -687,13 +714,15 @@ def parse_manifest_kind(manifest: dict[str, Any]) -> str:
         return ABILITY_MANIFEST_KIND
     if manifest_kind in _ABILITIES_MANIFEST_KIND_ALIASES:
         return ABILITIES_MANIFEST_KIND
+    if manifest_kind == SOCIAL_MANIFEST_KIND:
+        return SOCIAL_MANIFEST_KIND
     if manifest_kind == QUEST_MANIFEST_KIND:
         return QUEST_MANIFEST_KIND
     if manifest_kind in _QUEST_ARC_MANIFEST_KIND_ALIASES:
         return QUEST_ARC_MANIFEST_KIND
     raise serializers.ValidationError(
         f"Unsupported manifest kind '{manifest_kind}'. "
-        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_MANIFEST_KIND}, {ITEM_DEFINITION_MANIFEST_KIND}, {ITEM_BUNDLE_MANIFEST_KIND}, {MERCHANT_PROFILE_MANIFEST_KIND}, {CRAFT_MATERIAL_MANIFEST_KIND}, {CRAFTING_RECIPE_MANIFEST_KIND}, {CRAFTING_PROFILE_MANIFEST_KIND}, {FACTION_MANIFEST_KIND}, {MOB_DEFINITION_MANIFEST_KIND}, {ABILITY_MANIFEST_KIND}, {ABILITIES_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
+        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_MANIFEST_KIND}, {ITEM_DEFINITION_MANIFEST_KIND}, {ITEM_BUNDLE_MANIFEST_KIND}, {MERCHANT_PROFILE_MANIFEST_KIND}, {CRAFT_MATERIAL_MANIFEST_KIND}, {CRAFTING_RECIPE_MANIFEST_KIND}, {CRAFTING_PROFILE_MANIFEST_KIND}, {FACTION_MANIFEST_KIND}, {MOB_DEFINITION_MANIFEST_KIND}, {ABILITY_MANIFEST_KIND}, {ABILITIES_MANIFEST_KIND}, {SOCIAL_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
     )
 
 
@@ -1980,6 +2009,98 @@ def serialize_ability_payload(ability: AbilityDefinition) -> dict[str, Any]:
     }
 
 
+def _validated_social_values(social: Social) -> tuple[str, dict[str, str]]:
+    try:
+        command = validate_social_command(
+            social.cmd,
+            field_name="metadata.command",
+        )
+        definition = validate_social_definition({
+            field_name: getattr(social, field_name, "") or ""
+            for field_name in SOCIAL_MESSAGE_FIELDS
+        })
+    except SocialDefinitionError as exc:
+        raise serializers.ValidationError(
+            f"Social '{social.cmd}' is invalid: {exc}"
+        )
+    return command, definition
+
+
+def social_to_manifest(social: Social) -> dict[str, Any]:
+    command, definition = _validated_social_values(social)
+    return {
+        "kind": SOCIAL_MANIFEST_KIND,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, social.world_id),
+            "id": social.id,
+            "key": _entity_key(_SOCIAL_KEY_PREFIX, social.id),
+            "command": command,
+        },
+        "spec": {
+            "priority": int(social.priority),
+            "targetless": {
+                "self": definition["msg_targetless_self"],
+                "others": definition["msg_targetless_other"],
+            },
+            "targeted": {
+                "self": definition["msg_targeted_self"],
+                "target": definition["msg_targeted_target"],
+                "others": definition["msg_targeted_other"],
+            },
+        },
+    }
+
+
+def social_delete_manifest(social: Social) -> dict[str, Any]:
+    try:
+        command = validate_social_command(
+            social.cmd,
+            field_name="metadata.command",
+        )
+    except SocialDefinitionError as exc:
+        raise serializers.ValidationError(
+            f"Social '{social.cmd}' is invalid: {exc}"
+        )
+    return {
+        "kind": SOCIAL_MANIFEST_KIND,
+        "operation": TRIGGER_MANIFEST_OPERATION_DELETE,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, social.world_id),
+            "id": social.id,
+            "key": _entity_key(_SOCIAL_KEY_PREFIX, social.id),
+            "command": command,
+        },
+    }
+
+
+def serialize_social_payload(social: Social) -> dict[str, Any]:
+    manifest = social_to_manifest(social)
+    delete_manifest = social_delete_manifest(social)
+    spec = manifest["spec"]
+    payload = {
+        "id": social.id,
+        "key": _entity_key(_SOCIAL_KEY_PREFIX, social.id),
+        "world": _entity_key(_WORLD_KEY_PREFIX, social.world_id),
+        "command": manifest["metadata"]["command"],
+        "cmd": manifest["metadata"]["command"],
+        "priority": spec["priority"],
+        "targetless": dict(spec["targetless"]),
+        "targeted": dict(spec["targeted"]),
+        "manifest": manifest,
+        "yaml": manifest_to_yaml(manifest),
+        "delete_manifest": delete_manifest,
+        "delete_yaml": manifest_to_yaml(delete_manifest),
+    }
+    payload.update({
+        "msg_targetless_self": spec["targetless"]["self"],
+        "msg_targetless_other": spec["targetless"]["others"],
+        "msg_targeted_self": spec["targeted"]["self"],
+        "msg_targeted_target": spec["targeted"]["target"],
+        "msg_targeted_other": spec["targeted"]["others"],
+    })
+    return payload
+
+
 def trigger_to_manifest(trigger: Trigger) -> dict[str, Any]:
     target_type = _SCOPE_TO_TARGET_TYPE.get(trigger.scope, "")
     target_key = ""
@@ -2172,6 +2293,269 @@ def trigger_delete_manifest(trigger: Trigger) -> dict[str, Any]:
             "name": trigger.name or "",
         },
     }
+
+
+def _social_validation_error(exc: SocialDefinitionError) -> serializers.ValidationError:
+    return serializers.ValidationError(str(exc))
+
+
+def _resolve_social_reference(
+    *,
+    world: World,
+    metadata: dict[str, Any],
+) -> tuple[Social | None, int | None, str]:
+    try:
+        command = validate_social_command(
+            metadata.get("command"),
+            field_name="metadata.command",
+        )
+    except SocialDefinitionError as exc:
+        raise _social_validation_error(exc)
+
+    raw_id = metadata.get("id")
+    raw_key = metadata.get("key")
+    parsed_id = None
+    parsed_key_id = None
+    if raw_id is not None:
+        parsed_id = _parse_entity_ref(
+            raw_id,
+            expected_type=_SOCIAL_KEY_PREFIX,
+            field_name="metadata.id",
+        )
+    if raw_key not in (None, ""):
+        parsed_key_id = _parse_entity_ref(
+            raw_key,
+            expected_type=_SOCIAL_KEY_PREFIX,
+            field_name="metadata.key",
+        )
+    if parsed_id is not None and parsed_key_id is not None and parsed_id != parsed_key_id:
+        raise serializers.ValidationError(
+            "metadata.id and metadata.key refer to different socials."
+        )
+
+    referenced_id = parsed_key_id if parsed_key_id is not None else parsed_id
+    referenced_social = None
+    if referenced_id is not None:
+        referenced_social = Social.objects.filter(
+            world=world,
+            pk=referenced_id,
+        ).first()
+        if referenced_social is None:
+            raise serializers.ValidationError(
+                "Social referenced by metadata.id/key was not found."
+            )
+        try:
+            referenced_command = validate_social_command(
+                referenced_social.cmd,
+                field_name="metadata.command",
+            )
+        except SocialDefinitionError as exc:
+            raise _social_validation_error(exc)
+        if referenced_command != command:
+            raise serializers.ValidationError(
+                "metadata.id/key and metadata.command refer to different socials."
+            )
+
+    command_matches = list(
+        Social.objects.filter(world=world, cmd__iexact=command).order_by("id")[:2]
+    )
+    if len(command_matches) > 1:
+        raise serializers.ValidationError(
+            "metadata.command matches multiple socials ignoring case. "
+            "Resolve the duplicate commands before applying this manifest."
+        )
+    command_social = command_matches[0] if command_matches else None
+
+    if (
+        referenced_social is not None
+        and command_social is not None
+        and referenced_social.pk != command_social.pk
+    ):
+        raise serializers.ValidationError(
+            "metadata.id/key and metadata.command refer to different socials."
+        )
+
+    social = referenced_social or command_social
+    return social, social.pk if social is not None else None, command
+
+
+def _coerce_social_message_group(
+    *,
+    raw_group: Any,
+    field_name: str,
+    key_to_model_field: dict[str, str],
+    values: dict[str, Any],
+) -> None:
+    if raw_group in (None, "", {}):
+        for model_field in key_to_model_field.values():
+            values[model_field] = ""
+        return
+    if not isinstance(raw_group, dict):
+        raise serializers.ValidationError(f"{field_name} must be a mapping.")
+
+    unknown_fields = sorted(set(raw_group.keys()) - set(key_to_model_field.keys()))
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported {field_name} field(s): {', '.join(unknown_fields)}."
+        )
+    for manifest_field, model_field in key_to_model_field.items():
+        if manifest_field in raw_group:
+            values[model_field] = _coerce_text(raw_group.get(manifest_field))
+
+
+def parse_social_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedSocialManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != SOCIAL_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{SOCIAL_MANIFEST_KIND}'."
+        )
+    if parse_manifest_operation(manifest) != TRIGGER_MANIFEST_OPERATION_APPLY:
+        raise serializers.ValidationError(
+            f"Social manifests only support operation '{TRIGGER_MANIFEST_OPERATION_APPLY}' in this parser."
+        )
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError(
+                "Manifest world does not match the selected world."
+            )
+
+    social, social_id, command = _resolve_social_reference(
+        world=world,
+        metadata=metadata,
+    )
+    if (
+        social is None
+        and Social.objects.filter(world=world).count()
+        >= SOCIAL_CATALOG_MAX_DEFINITIONS
+    ):
+        raise serializers.ValidationError(
+            f"A world can define at most {SOCIAL_CATALOG_MAX_DEFINITIONS} socials."
+        )
+
+    spec_patch = manifest.get("spec") or {}
+    if not isinstance(spec_patch, dict):
+        raise serializers.ValidationError("spec must be a mapping.")
+    if social is None and not spec_patch:
+        raise serializers.ValidationError("spec is required when creating a social.")
+
+    unknown_fields = sorted(
+        set(spec_patch.keys()) - {"priority", "targetless", "targeted"}
+    )
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported spec field(s): {', '.join(unknown_fields)}."
+        )
+
+    values = {
+        field_name: getattr(social, field_name, "") or ""
+        for field_name in SOCIAL_MESSAGE_FIELDS
+    }
+    if "targetless" in spec_patch:
+        _coerce_social_message_group(
+            raw_group=spec_patch.get("targetless"),
+            field_name="spec.targetless",
+            key_to_model_field={
+                "self": "msg_targetless_self",
+                "others": "msg_targetless_other",
+            },
+            values=values,
+        )
+    if "targeted" in spec_patch:
+        _coerce_social_message_group(
+            raw_group=spec_patch.get("targeted"),
+            field_name="spec.targeted",
+            key_to_model_field={
+                "self": "msg_targeted_self",
+                "target": "msg_targeted_target",
+                "others": "msg_targeted_other",
+            },
+            values=values,
+        )
+
+    try:
+        priority = normalize_social_priority(
+            spec_patch.get("priority", social.priority if social else 0),
+            field_name="spec.priority",
+        )
+        definition = validate_social_definition(values)
+    except SocialDefinitionError as exc:
+        raise _social_validation_error(exc)
+
+    return ParsedSocialManifest(
+        world=world,
+        social=social,
+        social_id=social_id,
+        command=command,
+        fields={
+            "cmd": command,
+            "priority": priority,
+            **definition,
+        },
+    )
+
+
+def parse_social_delete_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedSocialDeleteManifest:
+    manifest_kind = parse_manifest_kind(manifest)
+    if manifest_kind != SOCIAL_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            f"Unsupported manifest kind '{manifest_kind}'. Expected '{SOCIAL_MANIFEST_KIND}'."
+        )
+    if parse_manifest_operation(manifest) != TRIGGER_MANIFEST_OPERATION_DELETE:
+        raise serializers.ValidationError("Delete parser requires operation: delete.")
+
+    metadata = manifest.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise serializers.ValidationError("metadata must be a mapping.")
+
+    world_ref = metadata.get("world")
+    if world_ref is not None:
+        manifest_world_id = _parse_entity_ref(
+            world_ref,
+            expected_type=_WORLD_KEY_PREFIX,
+            field_name="metadata.world",
+        )
+        if manifest_world_id != world.id:
+            raise serializers.ValidationError(
+                "Manifest world does not match the selected world."
+            )
+
+    social, social_id, _command = _resolve_social_reference(
+        world=world,
+        metadata=metadata,
+    )
+    if social is None or social_id is None:
+        raise serializers.ValidationError(
+            "metadata.command must reference an existing social for operation: delete."
+        )
+
+    spec = manifest.get("spec")
+    if spec not in (None, {}):
+        raise serializers.ValidationError("spec is not allowed for operation: delete.")
+
+    return ParsedSocialDeleteManifest(
+        world=world,
+        social=social,
+        social_id=social_id,
+    )
 
 
 def _resolve_target(
@@ -2516,6 +2900,7 @@ def parse_trigger_manifest(
             adv_consts.MOB_REACTION_EVENT_SAYING,
             adv_consts.MOB_REACTION_EVENT_RECEIVE,
             adv_consts.MOB_REACTION_EVENT_PERIODIC,
+            adv_consts.MOB_REACTION_EVENT_SOCIAL,
         )
         and not match.strip()
     ):
@@ -6506,6 +6891,26 @@ def apply_abilities_manifest(parsed: ParsedAbilitiesManifest) -> list[AbilityDef
             apply_ability_manifest(parsed_ability)
             for parsed_ability in parsed.abilities
         ]
+
+
+def apply_social_manifest(parsed: ParsedSocialManifest) -> Social:
+    if parsed.social is None:
+        return Social.objects.create(
+            world=parsed.world,
+            **parsed.fields,
+        )
+
+    social = parsed.social
+    for field_name, value in parsed.fields.items():
+        setattr(social, field_name, value)
+    social.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
+    return social
+
+
+def delete_social_manifest(parsed: ParsedSocialDeleteManifest) -> Social:
+    social = parsed.social
+    social.delete()
+    return social
 
 
 def apply_trigger_manifest(parsed: ParsedTriggerManifest) -> Trigger:

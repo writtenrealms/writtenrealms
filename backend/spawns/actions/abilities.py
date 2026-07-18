@@ -5,6 +5,7 @@ from datetime import timedelta
 from typing import Any
 
 from django.db import transaction
+from django.db.models import Case, IntegerField, Q, Value, When
 from django.db.utils import NotSupportedError
 from django.utils import timezone
 
@@ -89,14 +90,26 @@ def resolve_ability_for_command(world, command: str) -> AbilityDefinition | None
     normalized = str(command or "").strip().lower()
     if not normalized:
         return None
-    exact = _ability_queryset_for_world(world).filter(slug=normalized).first()
-    if exact:
-        return exact
-
     try:
-        ability = _ability_queryset_for_world(world).filter(
-            command_verbs__contains=[normalized],
-        ).first()
+        # Preserve exact-slug precedence while resolving slug and authored verb
+        # in one indexed/JSON query. Unknown text commands (including socials)
+        # must not scan the ability catalog several times first.
+        ability = (
+            _ability_queryset_for_world(world)
+            .filter(
+                Q(slug=normalized)
+                | Q(command_verbs__contains=[normalized])
+            )
+            .annotate(
+                command_match_order=Case(
+                    When(slug=normalized, then=Value(0)),
+                    default=Value(1),
+                    output_field=IntegerField(),
+                )
+            )
+            .order_by("command_match_order", "id")
+            .first()
+        )
     except NotSupportedError:
         ability = None
     if ability:
@@ -104,7 +117,9 @@ def resolve_ability_for_command(world, command: str) -> AbilityDefinition | None
 
     # Non-Postgres development databases may not support JSON containment.
     # Keep a fallback so local smoke tests still work.
-    for ability in _ability_queryset_for_world(world).only(
+    if transaction.get_connection().vendor == "postgresql":
+        return None
+    abilities = list(_ability_queryset_for_world(world).only(
         "id",
         "slug",
         "name",
@@ -121,7 +136,11 @@ def resolve_ability_for_command(world, command: str) -> AbilityDefinition | None
         "help",
         "components",
         "is_active",
-    ):
+    ))
+    for ability in abilities:
+        if ability.slug == normalized:
+            return ability
+    for ability in abilities:
         if normalized in [str(verb).strip().lower() for verb in (ability.command_verbs or [])]:
             return ability
     return None

@@ -230,6 +230,23 @@ class TestCommandFallbackTriggers(WorldTestCase):
         self.assertIsNotNone(echo_message)
         self.assertIn("Weather: stormy.", echo_message.get("text", ""))
 
+    def test_trigger_script_renders_actor_state_template(self):
+        replace_state_snapshot(
+            STATE_SCOPE_CHARACTER,
+            self.player,
+            {"badge": "sun"},
+        )
+        self._create_room_trigger(
+            script="/echo -- Badge: {{ actor_state.badge }}.",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "touch altar")
+
+        echo_message = self._message_by_type(messages, "cmd./echo.success")
+        self.assertIsNotNone(echo_message)
+        self.assertIn("Badge: sun.", echo_message.get("text", ""))
+
     def test_trigger_script_sets_triggering_player_character_state(self):
         self._create_room_trigger(
             script="/cmd room -- /state set character {{ actor_key }} starter_gear_issued true",

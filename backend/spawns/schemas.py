@@ -459,18 +459,6 @@ class CraftMaterial(BaseModel):
     order: int = 0
 
 
-class Social(BaseModel):
-    """Social command messages."""
-    # [msg_targetless_self, msg_targetless_other, msg_targeted_self, msg_targeted_target, msg_targeted_other]
-    messages: List[str] = Field(default_factory=list)
-
-
-class Socials(BaseModel):
-    """All social commands."""
-    cmds: Dict[str, List[str]] = Field(default_factory=dict)
-    order: List[str] = Field(default_factory=list)
-
-
 class World(BaseModel):
     """
     World configuration data.
@@ -532,7 +520,6 @@ class World(BaseModel):
     factions: Dict[str, Faction] = Field(default_factory=dict)
     abilities: Dict[str, Any] = Field(default_factory=dict)
     facts: Dict[str, Any] = Field(default_factory=dict)
-    socials: Socials = Field(default_factory=Socials)
     economy: WorldEconomy = Field(default_factory=WorldEconomy)
     craft_materials: Dict[str, CraftMaterial] = Field(default_factory=dict)
 
@@ -1171,33 +1158,6 @@ def build_mock_state_sync(
         ),
     }
 
-    mock_socials = Socials(
-        cmds={
-            "wave": [
-                "You wave.",
-                "{actor} waves.",
-                "You wave at {target}.",
-                "{actor} waves at you.",
-                "{actor} waves at {target}.",
-            ],
-            "bow": [
-                "You bow gracefully.",
-                "{actor} bows gracefully.",
-                "You bow before {target}.",
-                "{actor} bows before you.",
-                "{actor} bows before {target}.",
-            ],
-            "laugh": [
-                "You laugh.",
-                "{actor} laughs.",
-                "You laugh at {target}.",
-                "{actor} laughs at you.",
-                "{actor} laughs at {target}.",
-            ],
-        },
-        order=["wave", "bow", "laugh"],
-    )
-
     mock_world = World(
         id=world_id,
         key=f"world.{world_id}",
@@ -1228,7 +1188,6 @@ def build_mock_state_sync(
         factions=mock_factions,
         abilities={},
         facts={"world_started": True, "event_active": False},
-        socials=mock_socials,
         economy=WorldEconomy(
             revision=1,
             default_currency="obol",

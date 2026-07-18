@@ -39,11 +39,17 @@ The DSL syntax is shared. Literal matching behavior depends on field context:
 
 - `Trigger.match` on command triggers: phrase match against command text.
 - `Trigger.match` on mob `say` event triggers: phrase match against spoken text.
-- `Trigger.match` on mob `receive` / `periodic` event triggers: exact match.
+- `Trigger.match` on mob `receive`, `periodic`, and `social` event triggers:
+  exact match.
 - Events without a match payload (for example `enter`) ignore `Trigger.match`.
 
 This gives a single authored language while preserving event-specific value
 matching where exact comparisons are needed.
+
+For `event: social`, the payload is the canonical resolved command. A player
+abbreviation such as `sal` may resolve to `salute`, but the trigger literal must
+match `salute`. Expressions such as `wave or salute` combine exact social
+commands; they do not enable substring or prefix matching.
 
 ## Validation
 

@@ -166,6 +166,11 @@ class Player(CharMixin, AdventBaseModel):
                 condition=models.Q(in_game=True),
                 name='spawn_player_world_lname_live',
             ),
+            models.Index(
+                fields=['world', 'room', 'id'],
+                condition=models.Q(in_game=True),
+                name='spawn_player_world_room_live',
+            ),
         ]
 
     inventory = GenericRelation(

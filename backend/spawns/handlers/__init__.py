@@ -56,6 +56,7 @@ from spawns.handlers import movement
 from spawns.handlers import combat
 from spawns.handlers import abilities
 from spawns.handlers import communication
+from spawns.handlers import socials
 from spawns.handlers import player_state
 from spawns.handlers import builder
 from spawns.handlers import items

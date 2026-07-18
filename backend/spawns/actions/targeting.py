@@ -82,25 +82,66 @@ def find_room_char_target(
     *,
     viewer: Player | None = None,
     world: World | None = None,
+    exclude: Player | Mob | None = None,
+    lean: bool = False,
+    include_invisible_players: bool = True,
+    include_invisible_mobs: bool = True,
 ) -> Player | Mob | None:
     normalized = _normalize_selector(selector)
     if not normalized:
         return None
 
-    if normalized in {"self", "me"} and viewer and getattr(viewer, "room_id", None) == room.id:
+    if (
+        normalized in {"self", "me"}
+        and viewer
+        and viewer != exclude
+        and getattr(viewer, "room_id", None) == room.id
+    ):
         return viewer
 
     room_players_qs = room.players.filter(in_game=True)
     room_mobs_qs = room.mobs.filter(is_pending_deletion=False)
+    if not include_invisible_players:
+        room_players_qs = room_players_qs.filter(is_invisible=False)
+    if not include_invisible_mobs:
+        room_mobs_qs = room_mobs_qs.filter(is_invisible=False)
     if world is not None:
         room_players_qs = room_players_qs.filter(world=world)
         room_mobs_qs = room_mobs_qs.filter(world=world)
-    room_players = list(
-        room_players_qs.select_related("user", "equipment").order_by("id")
-    )
-    room_mobs = list(
-        room_mobs_qs.select_related("definition", "equipment").order_by("id")
-    )
+    if isinstance(exclude, Player):
+        room_players_qs = room_players_qs.exclude(pk=exclude.pk)
+    elif isinstance(exclude, Mob):
+        room_mobs_qs = room_mobs_qs.exclude(pk=exclude.pk)
+    if lean:
+        room_players_qs = room_players_qs.only(
+            "id",
+            "name",
+            "title",
+            "gender",
+            "room_id",
+            "world_id",
+            "mute_list",
+            "is_invisible",
+            "is_builder",
+        )
+        room_mobs_qs = room_mobs_qs.select_related("definition").only(
+            "id",
+            "name",
+            "title",
+            "gender",
+            "keywords",
+            "room_id",
+            "world_id",
+            "is_invisible",
+            "definition_id",
+            "definition__name",
+            "definition__keywords",
+        )
+    else:
+        room_players_qs = room_players_qs.select_related("user", "equipment")
+        room_mobs_qs = room_mobs_qs.select_related("definition", "equipment")
+    room_players = list(room_players_qs.order_by("id"))
+    room_mobs = list(room_mobs_qs.order_by("id"))
     chars: list[Player | Mob] = [*room_players, *room_mobs]
 
     if normalized.startswith("player.") or normalized.startswith("mob."):

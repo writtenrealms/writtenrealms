@@ -30,6 +30,7 @@ from builders.models import (
     PathRoom,
     SpawnEntry,
     SpawnPlan,
+    Social,
     Trigger,
 )
 from builders.loot_tables import normalize_loot_table
@@ -49,6 +50,7 @@ ZONE_MANIFEST_KIND = "zone"
 ROOM_MANIFEST_KIND = "room"
 PATH_MANIFEST_KIND = "path"
 SPAWN_PLAN_MANIFEST_KIND = "spawnplan"
+SOCIAL_MANIFEST_KIND = builder_manifests.SOCIAL_MANIFEST_KIND
 
 _WORLD_KIND_ALIASES = {"world"}
 _ZONE_KIND_ALIASES = {"zone"}
@@ -64,6 +66,7 @@ _CRAFTING_PROFILE_KIND_ALIASES = {"craftingprofile", "crafting-profile", "crafti
 _FACTION_KIND_ALIASES = {"faction"}
 _MOB_DEFINITION_KIND_ALIASES = {"mobdefinition", "mob-definition", "mob_definition"}
 _SPAWN_PLAN_KIND_ALIASES = {"spawnplan", "spawn-plan", "spawn_plan"}
+_SOCIAL_KIND_ALIASES = {SOCIAL_MANIFEST_KIND}
 _QUEST_KIND_ALIASES = {quest_manifests.QUEST_MANIFEST_KIND}
 _QUEST_ARC_KIND_ALIASES = {
     quest_manifests.QUEST_ARC_MANIFEST_KIND,
@@ -149,6 +152,8 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
         return builder_manifests.MOB_DEFINITION_MANIFEST_KIND
     if raw_kind in _SPAWN_PLAN_KIND_ALIASES:
         return SPAWN_PLAN_MANIFEST_KIND
+    if raw_kind in _SOCIAL_KIND_ALIASES:
+        return SOCIAL_MANIFEST_KIND
     if raw_kind in _QUEST_ARC_KIND_ALIASES:
         return quest_manifests.QUEST_ARC_MANIFEST_KIND
     if raw_kind in _QUEST_KIND_ALIASES:
@@ -161,7 +166,7 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
         return builder_manifests.ABILITIES_MANIFEST_KIND
     raise serializers.ValidationError(
         "Unsupported manifest kind. Supported kinds: "
-        "world, currency, zone, room, path, itemdefinition, itembundle, merchantprofile, faction, mobdefinition, spawnplan, questarc, quest, trigger, ability, abilities."
+        "world, currency, zone, room, path, itemdefinition, itembundle, merchantprofile, faction, mobdefinition, spawnplan, social, questarc, quest, trigger, ability, abilities."
     )
 
 
@@ -707,6 +712,12 @@ def _serialize_ability_manifest(ability: AbilityDefinition) -> dict[str, Any]:
     return manifest
 
 
+def _serialize_social_manifest(social: Social) -> dict[str, Any]:
+    return _portable_authored_manifest(
+        builder_manifests.social_to_manifest(social)
+    )
+
+
 def _canonicalize_entity_ref(
     value: Any,
     *,
@@ -1088,6 +1099,10 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             for ability in world.ability_definitions.all().order_by("slug", "id")
         ],
         *[
+            _serialize_social_manifest(social)
+            for social in world.socials.all().order_by("cmd", "id")
+        ],
+        *[
             _serialize_quest_arc_manifest(quest_arc)
             for quest_arc in world.quest_arc_templates.all().order_by("slug", "id")
         ],
@@ -1122,6 +1137,7 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
         "mob_definitions": 0,
         "spawn_plans": 0,
         "abilities": 0,
+        "socials": 0,
         "quest_arcs": 0,
         "quests": 0,
         "triggers": 0,
@@ -1156,6 +1172,8 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
             counts["spawn_plans"] += 1
         elif kind == builder_manifests.ABILITY_MANIFEST_KIND:
             counts["abilities"] += 1
+        elif kind == SOCIAL_MANIFEST_KIND:
+            counts["socials"] += 1
         elif kind == quest_manifests.QUEST_ARC_MANIFEST_KIND:
             counts["quest_arcs"] += 1
         elif kind == quest_manifests.QUEST_MANIFEST_KIND:
@@ -2151,6 +2169,33 @@ def apply_crafting_profile_manifest(*, world: World, manifest: dict[str, Any]) -
     )
     created = parsed.profile is None
     return builder_manifests.apply_crafting_profile_manifest(parsed), created
+
+
+def apply_social_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Social, bool]:
+    if parse_document_kind(manifest) != SOCIAL_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            "Unsupported manifest kind. Expected 'social'."
+        )
+    parsed = builder_manifests.parse_social_manifest(
+        world=world,
+        manifest=manifest,
+    )
+    created = parsed.social is None
+    return builder_manifests.apply_social_manifest(parsed), created
+
+
+def delete_social_manifest(*, world: World, manifest: dict[str, Any]) -> Social:
+    if parse_document_kind(manifest) != SOCIAL_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            "Unsupported manifest kind. Expected 'social'."
+        )
+    parsed = builder_manifests.parse_social_delete_manifest(
+        world=world,
+        manifest=manifest,
+    )
+    social = parsed.social
+    social._deleted_payload = builder_manifests.serialize_social_payload(social)
+    return builder_manifests.delete_social_manifest(parsed)
 
 
 def _normalize_faction_manifest_for_import(*, world: World, manifest: dict[str, Any]) -> dict[str, Any]:

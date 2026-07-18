@@ -276,7 +276,7 @@ def format_actor_msg(
     message_data = {
         'actor_key': actor.key,
         'actor': name,
-        'actor_marks': character_state,
+        'actor_state': character_state,
         'facts': state_context.get('world') or {},
         'zone_data': state_context.get('zone') or {},
         'quest_state': state_context.get('quest') or {},

@@ -918,7 +918,6 @@ def serialize_world(world: World) -> Dict:
             "classless": not world_uses_classes(world) if config else False,
             "is_classless": not world_uses_classes(world) if config else False,
             "tier": world.tier,
-            "socials": {"cmds": {}, "order": []},
             "economy": {},
             "equipment": get_world_equipment_payload(world),
             "leader": world.leader.key if world.leader else None,

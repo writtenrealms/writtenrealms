@@ -27,6 +27,7 @@ This keeps trigger wiring out of individual command handlers and makes the
 - `cmd.move.success` -> `MOB_REACTION_EVENT_ENTERING`
 - `cmd.move.success` -> `after_move_exit` room event triggers
 - `cmd.move.success` -> `after_move_enter` room event triggers
+- `affect.social` -> `MOB_REACTION_EVENT_SOCIAL`
 - `affect.death` -> `after_death_room_enter` room event triggers
 
 Subscriptions only trigger reactions for **player-originated** events. This
@@ -34,6 +35,21 @@ avoids recursion when mobs or room scripts emit the same event types.
 
 Movement policy hooks such as `before_move_enter` are not subscriptions. They
 run inside the movement handler before room and stamina state are changed.
+
+### Social Subscription
+
+`affect.social` is emitted only for a targeted social. The subscription accepts
+only a player actor and a mob direct target in the same runtime world and room.
+It passes the resolved social command as match text, filters reaction execution
+to that mob id, and evaluates the trigger's normal WR2 `conditions` against the
+player actor. Targetless socials, player targets, mob-originated socials, and
+bystander mobs are ignored.
+
+The social catalog is cached per authored base world. A social action renders
+once for each applicable audience cohort (actor, direct target, and witnesses),
+reuses the witness text for all witnesses, and obtains those witnesses with one
+indexed room-player fanout query. Restricting subscription dispatch to the
+directly targeted mob avoids a room-wide mob scan on every social.
 
 ## Why This Design
 

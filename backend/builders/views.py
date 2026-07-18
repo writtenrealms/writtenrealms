@@ -1697,6 +1697,18 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             "You do not have permission to alter abilities."
         )
 
+    def _assert_can_edit_socials(self):
+        if self.world.pk != definition_world(self.world).pk:
+            raise serializers.ValidationError(
+                "Socials are inherited from the base world and cannot be "
+                "altered on an instance or spawned world."
+            )
+        if self._builder_rank >= 3:
+            return
+        raise drf_exceptions.PermissionDenied(
+            "You do not have permission to alter socials."
+        )
+
     def _assert_can_edit_item_definitions(self):
         if self._builder_rank >= 3:
             return
@@ -2370,6 +2382,36 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             status=status.HTTP_200_OK,
         )
 
+    def _apply_social_manifest(self, manifest):
+        self._assert_can_edit_socials()
+        operation = builder_manifests.parse_manifest_operation(manifest)
+        if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+            social = builder_world_export.delete_social_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            return Response(
+                {
+                    "kind": builder_manifests.SOCIAL_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "social": social._deleted_payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        social, is_create = builder_world_export.apply_social_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        return Response(
+            {
+                "kind": builder_manifests.SOCIAL_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "social": builder_manifests.serialize_social_payload(social),
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
     def _apply_quest_arc_manifest(self, manifest):
         self._assert_can_edit_quest_templates()
         operation = quest_manifests.parse_manifest_operation(manifest)
@@ -2615,6 +2657,8 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             return self._apply_ability_manifest(manifest)
         if manifest_kind == builder_manifests.ABILITIES_MANIFEST_KIND:
             return self._apply_abilities_manifest(manifest)
+        if manifest_kind == builder_manifests.SOCIAL_MANIFEST_KIND:
+            return self._apply_social_manifest(manifest)
         if manifest_kind == builder_world_export.SPAWN_PLAN_MANIFEST_KIND:
             return self._apply_spawn_plan_manifest(manifest)
         if manifest_kind == quest_manifests.QUEST_MANIFEST_KIND:
@@ -3802,16 +3846,36 @@ class SocialViewSet(BaseWorldBuilderViewSet):
 
     serializer_class = builder_serializers.SocialSerializer
 
+    @property
+    def social_world(self):
+        return definition_world(self.world)
+
     def get_queryset(self):
-        return Social.objects.filter(world=self.world).order_by('cmd')
+        return Social.objects.filter(world=self.social_world).order_by('cmd')
+
+    def _assert_can_edit_social(self):
+        if self._builder_rank < 3:
+            raise drf_exceptions.PermissionDenied(
+                "You do not have permission to alter world socials.")
+        if self.world.pk != self.social_world.pk:
+            raise drf_exceptions.ValidationError(
+                "Socials are inherited from the base world and are read-only here.")
 
     def perform_create(self, serializer):
-        serializer.is_valid(raise_exception=True)
-        serializer.save(world=self.world)
+        self._assert_can_edit_social()
+        serializer.save(world=self.social_world)
+
+    def perform_update(self, serializer):
+        self._assert_can_edit_social()
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self._assert_can_edit_social()
+        instance.delete()
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
-        context['world'] = self.world  # Add world to the context
+        context['world'] = self.social_world
         return context
 
 social_list = SocialViewSet.as_view({

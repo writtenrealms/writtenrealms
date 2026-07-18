@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from types import SimpleNamespace
 
 from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
+from django.db import connection
 from django.db.models import Q
 
 from builders.models import ItemDefinition, MobDefinition, Trigger
@@ -37,6 +40,8 @@ TRIGGER_GATED_TEXT = "More time is needed."
 DEFAULT_CONDITION_FAILURE_TEXT = "Action could not be completed."
 DEFAULT_POLICY_FAILURE_TEXT = "You cannot go that way."
 TRIGGER_HOOK_CACHE_TIMEOUT_SECONDS = 60
+COMMAND_TRIGGER_CACHE_MAX_HOOKS = 512
+COMMAND_TRIGGER_CACHE_MAX_BYTES = 512_000
 TRIGGER_SCOPE_PRIORITY = {
     adv_consts.TRIGGER_SCOPE_ROOM: 0,
     adv_consts.TRIGGER_SCOPE_ZONE: 1,
@@ -194,6 +199,28 @@ def _get_applicable_command_fallback_triggers(
         target_id=resolved_room.id,
     )
 
+    cache_key = None
+    if not connection.in_atomic_block:
+        version = get_trigger_policy_cache_version(trigger_world.id)
+        cache_key = (
+            f"spawns.command_trigger_hooks.{version}.{trigger_world.id}."
+            f"{resolved_room.id}.{getattr(resolved_zone, 'id', 0) or 0}"
+        )
+        try:
+            cached_hooks = cache.get(cache_key)
+        except Exception:
+            cached_hooks = None
+        if isinstance(cached_hooks, list):
+            try:
+                return (
+                    [SimpleNamespace(**hook) for hook in cached_hooks],
+                    resolved_room,
+                    resolved_zone,
+                    trigger_world,
+                )
+            except (TypeError, ValueError):
+                cached_hooks = None
+
     triggers = list(
         Trigger.objects.filter(
             world_id=trigger_world.id,
@@ -204,7 +231,23 @@ def _get_applicable_command_fallback_triggers(
         .order_by("order", "created_ts", "id")
     )
 
-    return _ordered_triggers(triggers), resolved_room, resolved_zone, trigger_world
+    triggers = _ordered_triggers(triggers)
+    if cache_key is not None and len(triggers) <= COMMAND_TRIGGER_CACHE_MAX_HOOKS:
+        serialized_hooks = [_serialize_cached_hook(trigger) for trigger in triggers]
+        encoded_size = len(
+            json.dumps(serialized_hooks, separators=(",", ":")).encode("utf-8")
+        )
+        if encoded_size <= COMMAND_TRIGGER_CACHE_MAX_BYTES:
+            try:
+                cache.set(
+                    cache_key,
+                    serialized_hooks,
+                    timeout=TRIGGER_HOOK_CACHE_TIMEOUT_SECONDS,
+                )
+            except Exception:
+                pass
+
+    return triggers, resolved_room, resolved_zone, trigger_world
 
 
 def _ordered_triggers(triggers: list[Trigger]) -> list[Trigger]:
@@ -277,7 +320,7 @@ def _event_match_expression_matches(
     trigger_match = _normalized_text(trigger.match)
     normalized_event = _normalized_text(event)
     if not trigger_match:
-        return True
+        return normalized_event != adv_consts.MOB_REACTION_EVENT_SOCIAL
 
     if normalized_event == adv_consts.MOB_REACTION_EVENT_SAYING:
         return evaluate_match_expression(
@@ -289,6 +332,7 @@ def _event_match_expression_matches(
     if normalized_event in (
         adv_consts.MOB_REACTION_EVENT_RECEIVE,
         adv_consts.MOB_REACTION_EVENT_PERIODIC,
+        adv_consts.MOB_REACTION_EVENT_SOCIAL,
     ):
         return evaluate_match_expression(
             trigger_match,
@@ -366,6 +410,7 @@ def _serialize_cached_hook(trigger: Trigger) -> dict:
         "conditions": trigger.conditions or "",
         "show_details_on_failure": bool(trigger.show_details_on_failure),
         "failure_message": trigger.failure_message or "",
+        "display_action_in_room": bool(trigger.display_action_in_room),
         "gate_delay": int(trigger.gate_delay or 0),
         "order": int(trigger.order or 0),
     }
@@ -680,6 +725,7 @@ def execute_mob_event_triggers(
     match_text: str | None = None,
     connection_id: str | None = None,
     isolate_runtime_world: bool = False,
+    target_mob_id: int | None = None,
 ) -> None:
     normalized_event = _normalized_text(event)
     if normalized_event not in adv_consts.MOB_REACTION_EVENTS:
@@ -694,6 +740,8 @@ def execute_mob_event_triggers(
         return
 
     mobs_qs = Mob.objects.filter(room_id=resolved_room.id)
+    if target_mob_id is not None:
+        mobs_qs = mobs_qs.filter(pk=target_mob_id)
     actor_world_id = getattr(actor, "world_id", None)
     if isolate_runtime_world and actor_world_id:
         mobs_qs = mobs_qs.filter(world_id=actor_world_id)
@@ -755,7 +803,13 @@ def execute_mob_event_triggers(
                 continue
 
             if trigger.conditions:
-                evaluated = evaluate_conditions(evaluator, trigger.conditions)
+                evaluated = evaluate_conditions(
+                    evaluator,
+                    trigger.conditions,
+                    room=resolved_room,
+                    zone=resolved_room.zone,
+                    world=getattr(evaluator, "world", None),
+                )
                 if not evaluated.get("result"):
                     continue
 
@@ -848,26 +902,41 @@ def _dispatch_trigger_script_segment(
     if not command_token:
         return None
 
-    resolved = resolve_text_handler(command_token, include_builder=True)
-    if not resolved:
-        return f"Unknown command: {command_token}"
-
-    resolved_command, handler = resolved
     actor_type = _actor_kind(actor)
-    if actor_type not in getattr(handler, "supported_actor_types", ("player",)):
-        return f"{actor_type.capitalize()}s cannot execute {resolved_command}."
+    resolved = resolve_text_handler(command_token, include_builder=True)
+    resolved_social = None
+    if not resolved:
+        from spawns.socials import resolve_social_for_command
+
+        resolved_social = resolve_social_for_command(actor.world, command_token)
+        if resolved_social is None:
+            return f"Unknown command: {command_token}"
+    else:
+        resolved_command, handler = resolved
+        if actor_type not in getattr(handler, "supported_actor_types", ("player",)):
+            return f"{actor_type.capitalize()}s cannot execute {resolved_command}."
 
     dispatched_messages: list[dict] = []
-    payload: dict[str, object] = {
-        "text": rendered_segment,
-        "skip_triggers": True,
-    }
+    command_type = "text"
+    payload: dict[str, object]
+    if resolved_social is not None:
+        tokens = rendered_segment.split()
+        command_type = "social"
+        payload = {
+            "social": resolved_social["command"],
+            "target": tokens[1] if len(tokens) > 1 else None,
+        }
+    else:
+        payload = {
+            "text": rendered_segment,
+            "skip_triggers": True,
+        }
     if issuer_scope:
         payload["issuer_scope"] = issuer_scope
 
     try:
         dispatch_command(
-            command_type="text",
+            command_type=command_type,
             actor_type=actor_type,
             actor_id=actor.id,
             payload=payload,

@@ -334,6 +334,11 @@ class TextCommandHandler(CommandHandler):
                                 )
                             return
 
+                    from spawns.handlers.socials import handle_dynamic_social_command
+
+                    if handle_dynamic_social_command(ctx):
+                        return
+
                 ctx.publish(
                     {
                         "type": "cmd.text.error",

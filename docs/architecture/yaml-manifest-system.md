@@ -27,6 +27,7 @@ Implemented manifest kinds currently include the current WR2 authoring path:
 - `spawnplan`
 - `ability`
 - `abilities`
+- `social`
 - `quest`
 - `questarc`
 
@@ -62,6 +63,19 @@ Current required mappings:
 - Convert representable legacy currency conditions to the existing structured
   condition path `actor.balances.<code>`. Flag ambiguous predicates for builder
   review instead of inventing a second currency condition language.
+- Convert each authored WR1 social to `kind: social`, normalize its command to
+  lowercase, and map the WR1 five-message positional data into named fields in
+  this exact order: index `0` to `spec.targetless.self`, index `1` to
+  `spec.targetless.others`, index `2` to `spec.targeted.self`, index `3` to
+  `spec.targeted.target`, and index `4` to `spec.targeted.others`. Preserve an
+  authored priority when available. Rewrite legacy Jinja variables
+  `actor_marks` and `target_marks` to the canonical WR2 variables `actor_state`
+  and `target_state`; do not emit the legacy names because WR2 imports reject
+  them. Apply WR2 template and complete-group
+  validation and flag invalid definitions for builder review rather than
+  silently changing their meaning. This converts authored definitions only;
+  never export users, players, mute lists, command history, emitted social
+  events, or any other runtime data.
 
 - WR1 world PvP settings export only as `kind: world`
   `spec.pvp_mode`; do not emit `spec.allow_pvp`. When the source has a valid
@@ -245,6 +259,7 @@ Builder-facing authoring guidance lives in:
 - [docs/guides/currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md)
 - [docs/guides/world-config-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/world-config-builder-guide.md)
 - [docs/guides/trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md)
+- [docs/guides/social-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/social-builder-guide.md)
 - [docs/guides/builder-command-reference.md](/Users/teebes/code/writtenrealms/docs/guides/builder-command-reference.md)
 - [docs/guides/combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md)
 - [docs/guides/leveling-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/leveling-builder-guide.md)
@@ -335,6 +350,7 @@ A new world-level **Edit World** view accepts a YAML manifest textarea.
   - `kind: spawnplan`
   - `kind: ability`
   - `kind: abilities`
+  - `kind: social`
   - `kind: quest`
   - `kind: questarc`
   - `kind: trigger`
@@ -356,6 +372,13 @@ select the single default, inspect deletion blockers, and copy canonical apply
 or delete YAML. Instance currency views are inherited/read-only. The same
 builder services enforce identity, lifecycle, default, starting-balance, and
 deletion rules for REST and manifests.
+
+### 8. Socials Screen
+
+**World > Socials** reads the base world's social catalog. Rank 3+ base-world
+builders can create, edit, and delete definitions there; instance views inherit
+the catalog read-only. Canonical `kind: social` YAML can also be applied through
+**World > Edit World**, and world export emits the same portable contract.
 
 Zone manifests exported by the system include `metadata.ref` in the portable
 form `zone@<relative_id>`. Path manifests use `metadata.ref` in the portable
@@ -577,6 +600,69 @@ metadata:
   world: world.1
   id: 42
 ```
+
+## Social Manifest Shape
+
+Socials use their lowercase command as a portable identity. Canonical detail
+exports also include `metadata.id` and `metadata.key`, but imports can create or
+update by command alone.
+
+```yaml
+kind: social
+metadata:
+  world: world.1
+  command: wave
+spec:
+  priority: 10
+  targetless:
+    self: You wave.
+    others: "{{ Actor }} waves."
+  targeted:
+    self: "You wave at {{ target }}."
+    target: "{{ Actor }} waves at you."
+    others: "{{ Actor }} waves at {{ target }}."
+```
+
+`metadata.command` must match `[a-z][a-z0-9_-]{0,63}` and is unique ignoring
+case within the base world. Applying the same command updates that definition.
+If `metadata.id` or `metadata.key` is included, it must identify the same
+command. Renaming is a create of the new command followed by deletion of the
+old command.
+
+A targetless group is either empty or contains both `self` and `others`. A
+targeted group is either empty or contains `self`, `target`, and `others`. At
+least one complete group is required. Update manifests are partial: omitting a
+group or a field preserves it, while `null` or `{}` clears an entire group.
+
+Messages are sandboxed Jinja templates. Targetless messages can use the actor
+name, title, character state, and pronoun variables. Targeted messages can also
+use the equivalent target variables. Templates are validated and compiled at
+authoring time, and both source templates and rendered messages are limited to 2,000
+characters. Bounded interpolation and conditionals are supported; loops,
+calls, filters, imports, assignments, arithmetic, explicit concatenation, and
+collection literals are rejected.
+`spec.priority` is an integer from `0` through `1,000,000`; exact
+commands always win, while prefix collisions use higher priority and then
+stable lexical/id ordering.
+
+A base world can define at most 512 socials. Imports beyond that bound are
+rejected, and runtime catalog construction remains bounded even if unsupported
+direct database writes bypass normal authoring validation.
+
+Delete by command:
+
+```yaml
+kind: social
+operation: delete
+metadata:
+  world: world.1
+  command: wave
+```
+
+Social definitions can be authored only on the base world by rank 3+ builders.
+Instances inherit the base-world catalog and cannot fork it. See
+[social-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/social-builder-guide.md)
+for message variables, player resolution, mob reactions, and scaling behavior.
 
 ## Room Manifest Shape
 
@@ -889,10 +975,12 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 
 ## Validation Rules (Current)
 
-- `kind` must resolve to `trigger`, `world`, `currency`, `zone`, `room`, `path`, `itemdefinition`, `itembundle`, `merchantprofile`, `faction`, `mobdefinition`, `spawnplan`, `ability`, `abilities`, `quest`, or `questarc`.
-- For update: `metadata.id` or `metadata.key` must reference an existing trigger in the selected world.
-- For create: omit both `metadata.id` and `metadata.key`.
-- For delete: set `operation: delete` and include `metadata.id` or `metadata.key`.
+- `kind` must resolve to `trigger`, `world`, `currency`, `zone`, `room`, `path`, `itemdefinition`, `itembundle`, `merchantprofile`, `faction`, `mobdefinition`, `spawnplan`, `ability`, `abilities`, `social`, `quest`, or `questarc`.
+- For trigger update: `metadata.id` or `metadata.key` must reference an existing
+  trigger in the selected world.
+- For trigger create: omit both `metadata.id` and `metadata.key`.
+- For trigger delete: set `operation: delete` and include `metadata.id` or
+  `metadata.key`.
 - `metadata.world` (if present) must match the selected world.
   - `metadata.world` accepts either integer id (`1`) or key form (`world.1`).
 - `spec.scope`, `spec.kind`, booleans, and integers are validated.
@@ -904,6 +992,9 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   - `spec.event` is required.
   - mob reaction events such as `say` use `scope: world` and a `mobdefinition`
     target.
+  - `event: social` also requires `spec.match`; its literals compare exactly
+    with the resolved social command and run only for a player actor directly
+    targeting the mob.
   - room events such as `after_move_enter`, `after_move_exit`, and
     `after_death_room_enter` use `scope: room` and a `room` target.
 - For `spec.kind: policy`:
@@ -928,6 +1019,11 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 - Currency codes match `[a-z][a-z0-9_-]{0,63}`, are unique ignoring case per
   base world, and cannot be changed after creation. Instance worlds inherit
   currencies and cannot author their own definitions/default/starting balances.
+- Social commands match `[a-z][a-z0-9_-]{0,63}`, are unique ignoring case per
+  base world, and have priority from `0` through `1,000,000`. Targetless and
+  targeted messages must form complete groups, at least one group is required,
+  and message templates use only the supported sandboxed actor/target variables.
+  Instance worlds inherit socials and cannot author their own definitions.
 - `spec.cost` without `spec.currency` resolves the default on item creation and
   stores that concrete relation. `spec.currency` without `spec.cost` is invalid.
 - Mob rewards use `spec.rewards.currencies.<code>`, merchant profiles use
@@ -940,6 +1036,8 @@ Permission checks are applied when editing via manifest:
 - rank 1-2 builders can edit room/zone targets only when assigned
 - rank 1-2 builders cannot edit world-scoped triggers
 - rank 1-2 builders cannot edit world config manifests (`world`)
+- only rank 3+ builders can apply or delete social manifests, and only on the
+  base world
 
 ## Implementation Notes
 
@@ -956,6 +1054,7 @@ Permission checks are applied when editing via manifest:
 - Manifest apply endpoint:
   - `POST /api/v1/builder/worlds/<world_pk>/manifests/apply/`
   - trigger returns `operation: created`, `operation: updated`, or `operation: deleted`
+  - social returns `operation: created`, `operation: updated`, or `operation: deleted`
   - zone returns `operation: created`, `operation: updated`, or `operation: deleted`
   - world config returns `operation: updated`
 

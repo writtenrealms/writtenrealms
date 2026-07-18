@@ -230,7 +230,7 @@ def _build_actor_data(actor):
     }
 
 
-def _build_room_data(room):
+def _build_room_data(room, *, runtime_world=None):
     data = {
         'inventory': [],
         'chars': [],
@@ -243,22 +243,33 @@ def _build_room_data(room):
     data['state'] = get_state_snapshot(STATE_SCOPE_ROOM, room)
     data['zone_state'] = get_state_snapshot(STATE_SCOPE_ZONE, getattr(room, 'zone', None))
 
+    runtime_world_id = getattr(runtime_world, 'pk', None)
+
     room_items = room.inventory.filter(is_pending_deletion=False)
+    if runtime_world_id is not None:
+        room_items = room_items.filter(world_id=runtime_world_id)
     for item in room_items:
         data['inventory'].append(_serialize_item(item))
 
     room_players = room.players.filter(in_game=True)
-    for player in room_players:
+    room_mobs = room.mobs.filter(is_pending_deletion=False)
+    if runtime_world_id is not None:
+        # Authored rooms are shared by parallel runtime worlds. Conditions must
+        # only observe characters in the evaluator's runtime world, otherwise
+        # a player or mob in another party's instance can satisfy the condition.
+        room_players = room_players.filter(world_id=runtime_world_id)
+        room_mobs = room_mobs.filter(world_id=runtime_world_id)
+
+    for player_id in room_players.values_list('id', flat=True):
         data['chars'].append({
-            'key': player.key,
+            'key': f'player.{player_id}',
             'definition_id': None,
         })
 
-    room_mobs = room.mobs.filter(is_pending_deletion=False)
-    for mob in room_mobs:
+    for mob_id, definition_id in room_mobs.values_list('id', 'definition_id'):
         data['chars'].append({
-            'key': mob.key,
-            'definition_id': mob.definition_id,
+            'key': f'mob.{mob_id}',
+            'definition_id': definition_id,
         })
 
     return data
@@ -310,7 +321,11 @@ def evaluate_conditions(
         actor_data = _build_actor_data(actor)
         condition_room = room if room is not None else getattr(actor, 'room', None)
         condition_world = world if world is not None else getattr(actor, 'world', None)
-        room_data = _build_room_data(condition_room)
+        runtime_world = getattr(actor, 'world', None) or condition_world
+        room_data = _build_room_data(
+            condition_room,
+            runtime_world=runtime_world,
+        )
         world_data = _build_world_data(condition_world)
     elif isinstance(actor, World):
         condition_world = world if world is not None else actor

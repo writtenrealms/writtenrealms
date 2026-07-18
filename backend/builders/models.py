@@ -1270,7 +1270,9 @@ class Social(BaseModel):
     world = models.ForeignKey('worlds.World',
                               related_name='socials',
                               on_delete=models.CASCADE)
-    cmd = models.TextField()
+    cmd = models.CharField(
+        max_length=64,
+        validators=[RegexValidator(r'^[a-z][a-z0-9_-]{0,63}$')])
     priority = models.PositiveIntegerField(default=0)
     msg_targetless_self = models.TextField(**optional)
     msg_targetless_other = models.TextField(**optional)
@@ -1279,19 +1281,98 @@ class Social(BaseModel):
     msg_targeted_other = models.TextField(**optional)
 
     class Meta:
-        unique_together = ['world', 'cmd']
+        constraints = [
+            models.UniqueConstraint(
+                models.F('world'),
+                models.functions.Lower('cmd'),
+                name='builders_social_world_cmd_ci_unique'),
+            models.CheckConstraint(
+                condition=models.Q(cmd__regex=r'^[a-z][a-z0-9_-]{0,63}$'),
+                name='builders_social_cmd_valid'),
+            models.CheckConstraint(
+                condition=models.Q(priority__lte=1_000_000),
+                name='builders_social_priority_bounded'),
+        ]
 
-def post_social_save(sender, **kwargs):
-    from spawns.serializers import AnimateWorldSerializer
-    world = kwargs['instance'].world
-    for spawn_world in world.spawned_worlds.filter(
-        lifecycle=api_consts.WORLD_STATE_RUNNING):
-        socials = AnimateWorldSerializer(
-            spawn_world,
-        ).data['socials']
-        spawn_world.game_world.socials = socials
+    def save(self, *args, **kwargs):
+        from django.db import transaction
 
-models.signals.post_save.connect(post_social_save, Social)
+        from core.abilities import definition_world
+        from core.socials import (
+            SOCIAL_CATALOG_MAX_DEFINITIONS,
+            SOCIAL_MESSAGE_FIELDS,
+            SocialDefinitionError,
+            normalize_social_priority,
+            validate_social_command,
+            validate_social_definition,
+        )
+
+        try:
+            self.cmd = validate_social_command(self.cmd, field_name='cmd')
+            self.priority = normalize_social_priority(self.priority)
+            normalized = validate_social_definition({
+                field_name: getattr(self, field_name, '')
+                for field_name in SOCIAL_MESSAGE_FIELDS
+            })
+        except SocialDefinitionError as error:
+            raise ValidationError(str(error))
+        for field_name, value in normalized.items():
+            setattr(self, field_name, value)
+
+        if self.world_id and definition_world(self.world).pk != self.world_id:
+            raise ValidationError({
+                'world': 'Socials must belong to a base world.',
+            })
+        is_create = self._state.adding
+        if not is_create and self.pk:
+            original = type(self).objects.filter(pk=self.pk).values(
+                'cmd', 'world_id').first()
+            if original is not None:
+                if self.cmd != original['cmd']:
+                    raise ValidationError({
+                        'cmd': 'Social commands cannot be changed.',
+                    })
+                if self.world_id != original['world_id']:
+                    raise ValidationError({
+                        'world': 'A social cannot be moved to another world.',
+                    })
+        if is_create and self.world_id:
+            # Serialize the small authoring-only capacity check on the owning
+            # world so concurrent creates cannot leave an unreachable row past
+            # the runtime catalog's hard bound.
+            from worlds.models import World
+
+            with transaction.atomic():
+                World.objects.select_for_update().only('id').get(pk=self.world_id)
+                if type(self).objects.filter(
+                    world_id=self.world_id,
+                ).count() >= SOCIAL_CATALOG_MAX_DEFINITIONS:
+                    raise ValidationError({
+                        'world': (
+                            f'A world can define at most '
+                            f'{SOCIAL_CATALOG_MAX_DEFINITIONS} socials.'
+                        ),
+                    })
+                return super().save(*args, **kwargs)
+        return super().save(*args, **kwargs)
+
+
+def post_social_catalog_invalidate(sender, **kwargs):
+    from spawns.socials import invalidate_social_catalog
+
+    invalidate_social_catalog(kwargs['instance'].world_id)
+
+
+models.signals.post_save.connect(
+    post_social_catalog_invalidate,
+    Social,
+    dispatch_uid='builders.social.catalog.post_save',
+)
+models.signals.post_delete.connect(
+    post_social_catalog_invalidate,
+    Social,
+    dispatch_uid='builders.social.catalog.post_delete',
+)
 
 
 class Currency(BaseModel):

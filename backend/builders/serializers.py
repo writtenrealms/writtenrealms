@@ -17,6 +17,14 @@ from core.scoped_state import (
     STATE_SCOPE_ZONE,
     get_state_snapshot,
 )
+from core.socials import (
+    SOCIAL_CATALOG_MAX_DEFINITIONS,
+    SOCIAL_MESSAGE_FIELDS,
+    SocialDefinitionError,
+    normalize_social_priority,
+    validate_social_command,
+    validate_social_definition,
+)
 
 from rest_framework import serializers
 
@@ -2003,6 +2011,7 @@ def validate_reaction(self, validated_data):
         adv_consts.MOB_REACTION_EVENT_SAYING,
         adv_consts.MOB_REACTION_EVENT_RECEIVE,
         adv_consts.MOB_REACTION_EVENT_PERIODIC,
+        adv_consts.MOB_REACTION_EVENT_SOCIAL,
     )
     if event in events_requiring_match and not match:
 
@@ -2016,6 +2025,9 @@ def validate_reaction(self, validated_data):
 
         elif event == adv_consts.MOB_REACTION_EVENT_PERIODIC:
             msg += "enter the value to match for periodic"
+
+        elif event == adv_consts.MOB_REACTION_EVENT_SOCIAL:
+            msg += "enter the social command to react to"
 
         raise serializers.ValidationError(msg)
 
@@ -2595,6 +2607,9 @@ class BuilderAssignmentSerializer(serializers.ModelSerializer):
 
 class SocialSerializer(serializers.ModelSerializer):
 
+    # Normalize before the model-level lowercase regex is applied on save.
+    cmd = serializers.CharField(max_length=64)
+
     class Meta:
         model = Social
         fields = [
@@ -2608,35 +2623,61 @@ class SocialSerializer(serializers.ModelSerializer):
             'msg_targeted_other',
         ]
 
+    def validate_cmd(self, value):
+        try:
+            command = validate_social_command(value, field_name='cmd')
+        except SocialDefinitionError as error:
+            raise serializers.ValidationError(str(error))
+        if self.instance is not None and command != self.instance.cmd:
+            raise serializers.ValidationError(
+                'Social commands cannot be changed; delete and recreate the social.'
+            )
+        return command
+
+    def validate_priority(self, value):
+        try:
+            return normalize_social_priority(value)
+        except SocialDefinitionError as error:
+            raise serializers.ValidationError(str(error))
+
     def validate(self, data):
-        if self.instance:
-            if Social.objects.filter(
-                world=self.context['world'],
-                cmd=data['cmd']
-                ).exclude(id=self.instance.id).exists():
-                raise serializers.ValidationError("Social already exists.")
-        else:
-            if Social.objects.filter(world=self.context['world'],
-                                     cmd=data['cmd']).exists():
-                raise serializers.ValidationError("Social already exists.")
+        world = self.context['world']
+        if (
+            self.instance is None
+            and Social.objects.filter(world=world).count()
+            >= SOCIAL_CATALOG_MAX_DEFINITIONS
+        ):
+            raise serializers.ValidationError({
+                'world': (
+                    f'A world can define at most '
+                    f'{SOCIAL_CATALOG_MAX_DEFINITIONS} socials.'
+                ),
+            })
+        command = data.get('cmd')
+        if command is None and self.instance is not None:
+            command = self.instance.cmd
+        if command is not None:
+            duplicate_qs = Social.objects.filter(
+                world=world,
+                cmd__iexact=command,
+            )
+            if self.instance is not None:
+                duplicate_qs = duplicate_qs.exclude(id=self.instance.id)
+            if duplicate_qs.exists():
+                raise serializers.ValidationError({'cmd': 'Social already exists.'})
 
-        if (data.get('msg_targetless_self')
-            or data.get('msg_targetless_other')):
-            if (not data.get('msg_targetless_self')
-                or not data.get('msg_targetless_other')):
-                raise serializers.ValidationError(
-                    "If specifying an emote without a target, "
-                    "both Self and Other fields are required.")
-
-        if (data.get('msg_targeted_self')
-            or data.get('msg_targeted_target')
-            or data.get('msg_targeted_other')):
-            if (not data.get('msg_targeted_self')
-                or not data.get('msg_targeted_target')
-                or not data.get('msg_targeted_other')):
-                raise serializers.ValidationError(
-                    "If specifying an emote with a target, "
-                    "all three fields are required (Self, Target, Other).")
+        values = {
+            field_name: data.get(
+                field_name,
+                getattr(self.instance, field_name, '') if self.instance else '',
+            )
+            for field_name in SOCIAL_MESSAGE_FIELDS
+        }
+        try:
+            normalized = validate_social_definition(values)
+        except SocialDefinitionError as error:
+            raise serializers.ValidationError(str(error))
+        data.update(normalized)
         return data
 
 

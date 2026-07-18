@@ -62,6 +62,26 @@ def _resolve_character(actor_ref: str | None) -> Player | Mob | None:
     return Mob.objects.filter(pk=int(mob_id_text)).first()
 
 
+def _target_mob_id_from_event(event_data: dict) -> int | None:
+    target = event_data.get("target")
+    if not isinstance(target, dict):
+        return None
+    target_ref = target.get("key")
+    if target_ref:
+        target_ref = str(target_ref)
+        if not target_ref.startswith("mob."):
+            return None
+        target_id = target_ref.split(".", 1)[1]
+    else:
+        if str(target.get("type") or "mob").lower() != "mob":
+            return None
+        target_id = target.get("id")
+    try:
+        return int(target_id)
+    except (TypeError, ValueError):
+        return None
+
+
 def _on_cmd_say_success(
     event_data: dict,
     actor_key: str | None,
@@ -194,8 +214,32 @@ def _on_affect_death(
     )
 
 
+def _on_affect_social(
+    event_data: dict,
+    actor_key: str | None,
+    connection_id: str | None,
+) -> None:
+    # As in WR1, only a player-originated social aimed directly at a mob can
+    # drive that mob's social reaction. Bystander mobs never scan this event.
+    player = _resolve_player(_extract_actor_key(event_data, actor_key))
+    target_mob_id = _target_mob_id_from_event(event_data)
+    if not player or not player.room_id or target_mob_id is None:
+        return
+
+    execute_mob_event_triggers(
+        event=adv_consts.MOB_REACTION_EVENT_SOCIAL,
+        actor=player,
+        room=player.room_id,
+        match_text=str(event_data.get("social") or ""),
+        connection_id=connection_id,
+        isolate_runtime_world=True,
+        target_mob_id=target_mob_id,
+    )
+
+
 _EVENT_SUBSCRIPTIONS: dict[str, TriggerSubscriptionHandler] = {
     "affect.death": _on_affect_death,
+    "affect.social": _on_affect_social,
     "cmd.say.success": _on_cmd_say_success,
     "cmd.move.success": _on_cmd_move_success,
     "notification./transfer.enter": _on_transfer_enter,

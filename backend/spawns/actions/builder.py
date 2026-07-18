@@ -2189,16 +2189,34 @@ class CmdAction:
             return None
 
         resolved = resolve_text_handler(command_token, include_builder=True)
-        if not resolved:
-            return f"Unknown command: {command_token}"
-
-        resolved_command, handler = resolved
         dispatch_actor_type, dispatch_actor_id = self._dispatch_actor_ref(dispatch_actor)
-        if dispatch_actor_type not in getattr(handler, "supported_actor_types", ("player",)):
-            return f"{dispatch_actor_type.capitalize()}s cannot execute {resolved_command}."
+        resolved_social = None
+        if not resolved:
+            from spawns.socials import resolve_social_for_command
+
+            if dispatch_actor_type in ("player", "mob"):
+                resolved_social = resolve_social_for_command(
+                    runtime_world or getattr(dispatch_actor, "world", None),
+                    command_token,
+                )
+            if resolved_social is None:
+                return f"Unknown command: {command_token}"
+        else:
+            resolved_command, handler = resolved
+            if dispatch_actor_type not in getattr(handler, "supported_actor_types", ("player",)):
+                return f"{dispatch_actor_type.capitalize()}s cannot execute {resolved_command}."
 
         dispatched_messages: list[dict] = []
-        payload: dict[str, object] = {"text": rendered_segment}
+        command_type = "text"
+        if resolved_social is not None:
+            tokens = rendered_segment.split()
+            command_type = "social"
+            payload: dict[str, object] = {
+                "social": resolved_social["command"],
+                "target": tokens[1] if len(tokens) > 1 else None,
+            }
+        else:
+            payload = {"text": rendered_segment}
         if issuer_scope:
             payload["issuer_scope"] = issuer_scope
         if runtime_world:
@@ -2208,7 +2226,7 @@ class CmdAction:
 
         try:
             dispatch_command(
-                command_type="text",
+                command_type=command_type,
                 actor_type=dispatch_actor_type,
                 actor_id=dispatch_actor_id,
                 payload=payload,

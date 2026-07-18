@@ -382,7 +382,6 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
 
     factions = serializers.SerializerMethodField()
     facts = serializers.SerializerMethodField()
-    socials = serializers.SerializerMethodField()
     economy = serializers.SerializerMethodField()
     equipment = serializers.SerializerMethodField()
 
@@ -419,7 +418,6 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
             'facts',
             'classless',
             'tier',
-            'socials',
             'economy',
             'equipment',
             'leader',
@@ -476,23 +474,6 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
             return None
         return instance_context.spawned_worlds.get(
             is_multiplayer=True).key
-
-    def get_socials(self, spawn_world):
-        root_world = spawn_world.context
-        root_world = root_world.instance_of or root_world
-
-        socials = {'cmds': {}, 'order': []}
-        socials_qs = root_world.socials.all().order_by('cmd')
-        for social in socials_qs:
-            socials['cmds'][social.cmd] = [
-                social.msg_targetless_self,
-                social.msg_targetless_other,
-                social.msg_targeted_self,
-                social.msg_targeted_target,
-                social.msg_targeted_other,
-            ]
-            socials['order'].append(social.cmd)
-        return socials
 
     def get_classless(self, spawn_world):
         root_world = spawn_world.context

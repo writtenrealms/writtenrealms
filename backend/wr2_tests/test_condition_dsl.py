@@ -69,6 +69,60 @@ class TestSharedConditionDsl(WorldTestCase):
 
         self.assertTrue(result["result"])
 
+    def test_legacy_room_conditions_isolate_parallel_runtime_world_characters(self):
+        self.player.in_game = False
+        self.player.save(update_fields=["in_game"])
+        evaluator = self.player
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="parallel-sentinel",
+            name="Parallel Sentinel",
+        )
+        other_runtime = self.world.create_spawn_world()
+        foreign_player = self.create_player(
+            "Foreign Player",
+            world=other_runtime,
+            room=self.room,
+        )
+        foreign_player.in_game = True
+        foreign_player.save(update_fields=["in_game"])
+        Mob.objects.create(
+            world=other_runtime,
+            room=self.room,
+            definition=definition,
+            name="Foreign Sentinel",
+        )
+
+        self.assertFalse(evaluate_conditions(evaluator, "player_in_room")["result"])
+        self.assertFalse(
+            evaluate_conditions(
+                evaluator,
+                f"mob_in_room {definition.id}",
+            )["result"]
+        )
+
+        local_player = self.create_player(
+            "Local Player",
+            world=self.spawn_world,
+            room=self.room,
+        )
+        local_player.in_game = True
+        local_player.save(update_fields=["in_game"])
+        Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            definition=definition,
+            name="Local Sentinel",
+        )
+
+        self.assertTrue(evaluate_conditions(evaluator, "player_in_room")["result"])
+        self.assertTrue(
+            evaluate_conditions(
+                evaluator,
+                f"mob_in_room {definition.id}",
+            )["result"]
+        )
+
     def test_quest_predicate_wrapper_uses_shared_context(self):
         self.assertTrue(
             evaluate_quest_condition(

@@ -139,7 +139,8 @@ If neither is present, the manifest creates a new trigger.
 - `kind`: `command`, `policy`, or `event`.
 - `target`: what object the trigger is attached to. In room templates, this
   points at the current room and usually should stay that way.
-- `match`: the authored matcher expression. Required for command triggers.
+- `match`: the authored matcher expression. Required for command triggers and
+  mob `say`, `receive`, `periodic`, and `social` event triggers.
 - `script`: the commands to run when a command or event trigger fires. Policy
   triggers do not run scripts.
 - `conditions`: optional gate. Leave blank for no gate.
@@ -180,6 +181,11 @@ match: touch altar and (pray or kneel)
 
 For room command triggers, matching is phrase-based against the text the player
 typed.
+
+For mob `event: social` triggers, each matcher literal is compared exactly with
+the resolved social command. DSL expressions such as `wave or salute` combine
+exact command names; they do not do phrase or prefix matching. A player may use
+a social abbreviation, but the emitted event carries the resolved full command.
 
 Authoring guidance:
 
@@ -245,6 +251,8 @@ Behavior notes:
 - blank `conditions` means the trigger is always eligible
 - structured conditions can read `actor.*`, `room.*`, `world.*`, and `state.*`
   paths
+- social reaction conditions evaluate the player who directly targeted the
+  mob as `actor`
 - `mob_present: mobdefinition.<slug>` checks for that kind of mob in the
   trigger's context room
 - movement policies and room movement events also receive `event.direction`,
@@ -739,6 +747,38 @@ spec:
   is_active: true
 ```
 
+A social reaction uses the same mob event shape with `event: social`:
+
+```yaml
+kind: trigger
+metadata:
+  world: world.1
+  name: Guard Returns A Salute
+spec:
+  scope: world
+  kind: event
+  target:
+    type: mobdefinition
+    key: mobdefinition.22
+  event: social
+  match: salute
+  script: say Your courtesy is noted.
+  conditions:
+    eq:
+      - actor.archetype
+      - diplomat
+  display_action_in_room: false
+  gate_delay: 5
+  order: 0
+  is_active: true
+```
+
+This event is eligible only when a player uses the matching social directly on
+the mob. Targetless socials, player targets, mob-originated socials, and
+bystander mobs do not run the trigger. Only the targeted mob is queried for
+reaction evaluation. Put conditional logic in the existing
+`spec.conditions` framework; do not add a social-specific predicate format.
+
 For builder work, the important distinction is:
 
 - room actions usually use `kind: command`
@@ -755,6 +795,7 @@ For builder work, the important distinction is:
 - [item-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/item-definition-builder-guide.md)
 - [mob-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-definition-builder-guide.md)
 - [state-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/state-builder-guide.md)
+- [social-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/social-builder-guide.md)
 - [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
 - [trigger-matching-dsl.md](/Users/teebes/code/writtenrealms/docs/architecture/trigger-matching-dsl.md)
 - [trigger-multiline-script-execution.md](/Users/teebes/code/writtenrealms/docs/flows/trigger-multiline-script-execution.md)
