@@ -86,7 +86,6 @@ class TestCombatAbilities(WorldTestCase):
             slug=slug,
             name=name,
             command_verbs=verbs,
-            action_type="primary",
             consumes_primary_action_on_resolve=consumes_primary_action_on_resolve,
             consumes_primary_action_while_casting=consumes_primary_action_while_casting,
             target=target or {

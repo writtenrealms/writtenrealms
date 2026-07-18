@@ -84,7 +84,6 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
             slug=slug,
             name=name,
             command_verbs=verbs or ["focus"],
-            action_type="utility",
             target={
                 "type": "self",
                 "default": "self",

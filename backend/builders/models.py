@@ -1173,7 +1173,6 @@ class AbilityDefinition(BaseModel):
     slug = models.TextField()
     name = models.TextField()
     command_verbs = models.JSONField(default=list)
-    action_type = models.TextField(default='primary', db_index=True)
     consumes_primary_action_on_resolve = models.BooleanField(default=True)
     consumes_primary_action_while_casting = models.BooleanField(default=True)
     target = models.JSONField(default=dict)

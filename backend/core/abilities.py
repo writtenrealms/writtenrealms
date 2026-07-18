@@ -29,7 +29,6 @@ SUPPORTED_ABILITY_VERSION = 1
 DEFAULT_MAX_KNOWN_ABILITIES = 8
 UNCAPPED_MAX_KNOWN_ABILITIES = "uncapped"
 
-ACTION_TYPES = ("primary", "utility")
 TARGET_TYPES = ("hostile", "self", "ally")
 TARGET_DEFAULTS = ("current_target", "self")
 TARGET_RANGES = ("current_room", "adjacent_room", "current_or_adjacent_room")
@@ -101,7 +100,6 @@ STATE_COMPONENT_OPERATIONS = ("set", "increment", "clear")
 ABILITY_DEFINITION_FIELDS = {
     "version",
     "command",
-    "action_type",
     "consumes_primary_action_on_resolve",
     "consumes_primary_action_while_casting",
     "target",
@@ -1193,11 +1191,6 @@ def normalize_ability_definition(
     return {
         "version": version,
         "command": _normalize_command(value.get("command"), slug=slug),
-        "action_type": _coerce_choice(
-            value.get("action_type", "primary"),
-            choices=ACTION_TYPES,
-            field_name="spec.action_type",
-        ),
         "consumes_primary_action_on_resolve": _coerce_bool(
             value.get("consumes_primary_action_on_resolve", True),
             field_name="spec.consumes_primary_action_on_resolve",

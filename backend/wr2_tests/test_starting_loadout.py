@@ -14,7 +14,6 @@ class TestStartingLoadout(WorldTestCase):
             slug=slug,
             name=slug.replace("-", " ").title(),
             command_verbs=[slug.replace("-", "_")],
-            action_type="primary",
             target={
                 "type": "hostile",
                 "default": "current_target",

@@ -1916,7 +1916,6 @@ def ability_to_manifest(ability: AbilityDefinition) -> dict[str, Any]:
         "spec": {
             "version": 1,
             "command": {"verbs": list(ability.command_verbs or [])},
-            "action_type": ability.action_type,
             "consumes_primary_action_on_resolve": bool(
                 ability.consumes_primary_action_on_resolve
             ),
@@ -1959,7 +1958,6 @@ def serialize_ability_payload(ability: AbilityDefinition) -> dict[str, Any]:
         "slug": ability.slug,
         "name": ability.name or "",
         "command_verbs": list(ability.command_verbs or []),
-        "action_type": ability.action_type,
         "consumes_primary_action_on_resolve": bool(
             ability.consumes_primary_action_on_resolve
         ),
@@ -6476,7 +6474,6 @@ def apply_ability_manifest(parsed: ParsedAbilityManifest) -> AbilityDefinition:
         "slug": parsed.slug,
         "name": parsed.name,
         "command_verbs": spec["command"]["verbs"],
-        "action_type": spec["action_type"],
         "consumes_primary_action_on_resolve": spec[
             "consumes_primary_action_on_resolve"
         ],

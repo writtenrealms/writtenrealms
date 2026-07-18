@@ -564,7 +564,6 @@ metadata:
 spec:
   command:
     verbs: [newability]
-  action_type: primary
   target:
     type: hostile
     default: current_target

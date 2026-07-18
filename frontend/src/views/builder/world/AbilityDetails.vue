@@ -15,7 +15,7 @@
           <h2 class="definition-title">{{ ability.name || ability.slug }}</h2>
           <div class="definition-meta-row">
             <div class="definition-meta color-text-60">
-              {{ ability.id }} - {{ ability.slug }} - {{ formatActionType(ability.action_type) }}
+              {{ ability.id }} - {{ ability.slug }}
             </div>
           </div>
           <div v-if="isInstanceWorld" class="inherited-notice">
@@ -64,12 +64,6 @@ const endpoint = computed(() => (
   `/builder/worlds/${route.params.world_id}/abilities/${route.params.ability_id}/`
 ));
 const manifestApplyEndpoint = computed(() => `/builder/worlds/${route.params.world_id}/manifests/apply/`);
-
-const formatActionType = (value) => {
-  return String(value || "")
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-};
 
 const extractError = (error: any, fallbackMessage = "Could not load ability."): string => {
   const data = error?.response?.data;

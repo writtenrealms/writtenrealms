@@ -2364,7 +2364,6 @@ class TestBuilderSetClass(BuilderCommandTestCase):
             slug="power-strike",
             name="Power Strike",
             command_verbs=["strike"],
-            action_type="primary",
             target={"type": "hostile", "default": "current_target", "allow_out_of_combat": False},
             availability={"classes": [], "min_level": 1},
             requirements={},

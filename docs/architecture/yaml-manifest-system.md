@@ -835,6 +835,13 @@ For details, see:
 - [combat-resolution-formulas.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-resolution-formulas.md)
 - [combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md)
 
+Ability manifests do not have an `action_type` field. Targeting, out-of-combat
+availability, component behavior, and primary-action consumption are expressed
+by `target`, `components`, `consumes_primary_action_on_resolve`, and
+`consumes_primary_action_while_casting`. The optional WR1 authored-world
+conversion utility must omit any legacy ability action classification and emit
+those canonical fields directly.
+
 ## `apiVersion`
 
 - `apiVersion` is optional for manifests.

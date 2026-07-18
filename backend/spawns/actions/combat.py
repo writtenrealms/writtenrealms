@@ -2175,7 +2175,6 @@ def _ability_casting_event(
             "ability": {
                 "slug": ability.slug,
                 "name": ability.name,
-                "action_type": ability.action_type,
                 "consumes_primary_action_on_resolve": (
                     _ability_consumes_primary_action_on_resolve(ability)
                 ),
@@ -2210,7 +2209,6 @@ def _mob_ability_casting_event(
             "ability": {
                 "slug": ability.slug,
                 "name": ability.name,
-                "action_type": ability.action_type,
                 "consumes_primary_action_on_resolve": (
                     _ability_consumes_primary_action_on_resolve(ability)
                 ),
@@ -2545,7 +2543,7 @@ def _choose_mob_ability(
     for entry in entries:
         slug = str(entry.get("ability") or "").strip().lower()
         ability = abilities_by_slug.get(slug)
-        if not ability or ability.action_type != "primary":
+        if not ability:
             continue
         if not _mob_loadout_entry_matches(
             entry=entry,

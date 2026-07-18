@@ -35,7 +35,6 @@ class TestAbilityManifests(AuthenticatedBuilderWorldTestCase):
             "slug": "power-strike",
             "name": "Power Strike",
             "command_verbs": ["strike"],
-            "action_type": "primary",
             "consumes_primary_action_on_resolve": True,
             "consumes_primary_action_while_casting": True,
             "target": {"type": "hostile", "default": "current_target"},
@@ -75,7 +74,6 @@ metadata:
 spec:
   command:
     verbs: [strike]
-  action_type: primary
   target:
     type: hostile
     default: current_target
@@ -213,6 +211,28 @@ spec:
 
         self.assertEqual(resp.status_code, 400)
         self.assertIn("consumes_primary_action", str(resp.data))
+
+    def test_apply_ability_manifest_rejects_removed_action_type_field(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: mend
+  name: Mend
+spec:
+  command:
+    verbs: [mend]
+  action_type: utility
+  target:
+    type: self
+  components:
+    - type: healing
+      profile: basic_heal
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("action_type", str(resp.data))
 
     def test_mob_definition_manifest_accepts_combat_ability_loadout(self):
         self._create_ability(
@@ -530,7 +550,6 @@ metadata:
 spec:
   command:
     verbs: [trance]
-  action_type: utility
   target:
     type: self
     default: self
@@ -837,7 +856,8 @@ spec:
         self.assertEqual(ability_data["key"], f"ability.{ability.id}")
         self.assertEqual(ability_data["slug"], "power-strike")
         self.assertEqual(ability_data["command_verbs"], ["strike"])
-        self.assertEqual(ability_data["action_type"], "primary")
+        self.assertNotIn("action_type", ability_data)
+        self.assertNotIn("action_type", ability_data["manifest"]["spec"])
         self.assertTrue(ability_data["consumes_primary_action_on_resolve"])
         self.assertTrue(ability_data["consumes_primary_action_while_casting"])
         self.assertNotIn("consumes_primary_action", ability_data)
@@ -951,7 +971,6 @@ spec:
             slug="mend",
             name="Mend",
             command_verbs=["mend"],
-            action_type="utility",
             target={"type": "self", "default": "self"},
             is_active=False,
             components=[
@@ -963,10 +982,6 @@ spec:
                 },
             ],
         )
-
-        resp = self.client.get(self.list_ep, {"action_type": "utility"})
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual([ability["id"] for ability in resp.data["results"]], [mend.id])
 
         resp = self.client.get(self.list_ep, {"is_active": "false"})
         self.assertEqual(resp.status_code, 200)

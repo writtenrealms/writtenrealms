@@ -110,7 +110,6 @@ def resolve_ability_for_command(world, command: str) -> AbilityDefinition | None
         "name",
         "command_verbs",
         "world_id",
-        "action_type",
         "consumes_primary_action_on_resolve",
         "consumes_primary_action_while_casting",
         "target",
@@ -937,7 +936,6 @@ def _ability_ack(
         "ability": {
             "slug": ability.slug,
             "name": ability.name,
-            "action_type": ability.action_type,
             "consumes_primary_action_on_resolve": bool(
                 ability.consumes_primary_action_on_resolve
             ),

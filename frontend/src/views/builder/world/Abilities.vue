@@ -15,10 +15,8 @@
     v-else
     title="Abilities"
     :schema="listSchema"
-    :filters="listFilters"
     :endpoint="endpoint"
     :resolve_route="resolveRoute"
-    filter-display="dropdown"
     table-variant="data"
     default-sort="slug"
     @add="onClickAdd"
@@ -50,63 +48,16 @@ const resolveRoute = (element) => {
   };
 };
 
-const formatCommands = (value) => {
-  if (!Array.isArray(value)) return "";
-  return value.join(", ");
-};
-
-const formatActionType = (value) => {
-  return String(value || "")
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-};
-
-const formatTarget = (value) => {
-  if (!value || typeof value !== "object") return "";
-  const parts = [value.type, value.default].filter(Boolean);
-  return parts.join(" / ");
-};
-
-const formatStatus = (value) => value ? "Active" : "Inactive";
-const formatComponentCount = (_value, ability) => {
-  const count = Array.isArray(ability.components) ? ability.components.length : 0;
-  return `${count}`;
-};
-
 const listSchema: any[] = [
   { name: "id", label: "ID", sortable: true },
   { name: "name", label: "Name", nowrap: true, sortable: true },
   { name: "slug", label: "Slug", nowrap: true, sortable: true },
-  { name: "command_verbs", label: "Commands", light: true, format: formatCommands },
-  { name: "action_type", label: "Action Type", light: true, sortable: true, format: formatActionType },
-  { name: "target", label: "Target", light: true, format: formatTarget },
-  { name: "components", label: "Components", light: true, format: formatComponentCount },
-  { name: "is_active", label: "Status", light: true, sortable: true, format: formatStatus },
   {
     name: "modified_ts",
     label: "Modified",
     nowrap: true,
     sortable: true,
     format: formatRelativeModifiedDate,
-  },
-];
-
-const listFilters: any[] = [
-  {
-    label: "Action Type",
-    attr: "action_type",
-    filter_options: [
-      { key: "primary", name: "Primary" },
-      { key: "utility", name: "Utility" },
-    ],
-  },
-  {
-    label: "Status",
-    attr: "is_active",
-    filter_options: [
-      { key: "true", name: "Active" },
-      { key: "false", name: "Inactive" },
-    ],
   },
 ];
 

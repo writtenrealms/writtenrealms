@@ -246,7 +246,6 @@ spec:
   command:
     verbs:
       - trance
-  action_type: utility
   target:
     type: self
     default: self

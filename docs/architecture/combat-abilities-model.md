@@ -7,7 +7,7 @@ direction for features that build on it.
 
 The initial runtime is wired: player ability commands can be learned, queued,
 substituted before scheduled resolution, resolved in encounter rounds, and used
-for out-of-combat self utility. The current implementation covers direct
+for out-of-combat self-targeted abilities. The current implementation covers direct
 damage, healing, cast-time windups, stun, damage-over-time, and heal-over-time.
 Multi-participant frays, class grant manifests, feat-style choice slots, and
 richer effect primitives remain roadmap items.
@@ -51,8 +51,8 @@ The current design decisions are:
   the world manifest
 - the runtime supports both one ability per manifest and bundled ability
   manifests; both normalize into the same internal definition shape
-- queued primary abilities replace auto-attacks
-- players may substitute a queued primary ability until the encounter round
+- queued abilities that consume the primary action replace auto-attacks
+- players may substitute a queued ability until the encounter round
   resolves
 - invalid queued abilities fall back to auto-attacks when an auto-attack is
   legal
@@ -142,9 +142,9 @@ WR2 should not keep these constraints:
 
 Each encounter participant gets one primary combat action per round.
 
-If a participant has a queued primary ability, that ability is their primary
-action for the round. If they do not, the engine falls back to their default
-auto-attack.
+If a participant has a queued ability that consumes the primary action, that
+ability is their primary action for the round. If they do not, the engine falls
+back to their default auto-attack.
 
 ```text
 primary_action = queued_ability if present else basic_attack
@@ -315,9 +315,9 @@ For active abilities, the intent should include:
 - client command id or idempotency key
 - snapshot of resolved command arguments
 
-There should be at most one pending primary intent per participant.
+There should be at most one pending ability intent per participant.
 
-If the player queues another primary ability before the round resolves, the new
+If the player queues another ability before the round resolves, the new
 intent replaces the previous one and emits a replacement acknowledgement.
 
 ### Active Effect
@@ -355,7 +355,6 @@ spec:
     verbs:
       - strike
       - powerstrike
-  action_type: primary
   target:
     type: hostile
     default: current_target
@@ -388,7 +387,6 @@ spec:
   abilities:
     - slug: power-strike
       name: Power Strike
-      action_type: primary
       target:
         type: hostile
         default: current_target
@@ -431,7 +429,6 @@ metadata:
   slug: mend
   name: Mend
 spec:
-  action_type: primary
   target:
     type: ally
     default: self
@@ -462,7 +459,6 @@ metadata:
   slug: shield-slam
   name: Shield Slam
 spec:
-  action_type: primary
   target:
     type: hostile
     default: current_target
@@ -654,16 +650,16 @@ This fits WR2's pacing model better than WR1's wall-clock cooldown seconds. The
 same ability should behave consistently whether a world resolves combat every
 0.75 seconds, every 2 seconds, or manually.
 
-Out-of-combat utility abilities may need wall-clock cooldowns later, but those
-should be modeled separately from encounter-bound combat cooldowns.
+Out-of-combat abilities may need wall-clock cooldowns later, but those should be
+modeled separately from encounter-bound combat cooldowns.
 
 Out-of-combat abilities should share the same ability schema. For example, a
 self-heal can use the same `target`, `cost`, `cooldown`, and `components`
 structure whether the actor is in combat or standing alone. The difference is
 execution policy:
 
-- in combat, a primary ability is queued and resolves during an encounter round
-- out of combat, a safe utility ability may resolve immediately through the
+- in combat, an ability is queued and resolves during an encounter round
+- out of combat, an allowed self-targeted ability may resolve immediately through the
   normal command/action/event pipeline
 
 The schema should not fork just because an ability is usable outside combat.
@@ -1012,7 +1008,7 @@ encounter rounds.
 The default action economy should be:
 
 ```text
-queued primary ability replaces auto-attack
+queued ability that consumes the primary action replaces auto-attack
 no queued ability means auto-attack
 status ticks and reactions are explicit extras
 ```

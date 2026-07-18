@@ -9,7 +9,6 @@ class TestStartingAbilities(WorldTestCase):
             slug=slug,
             name=name or slug.replace("-", " ").title(),
             command_verbs=[slug.replace("-", "_")],
-            action_type="primary",
             target={
                 "type": "hostile",
                 "default": "current_target",

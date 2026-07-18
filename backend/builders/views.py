@@ -1557,10 +1557,6 @@ class WorldAbilityViewSet(BaseWorldBuilderViewSet):
 
         qs = AbilityDefinition.objects.filter(world=definition_world(self.world))
 
-        action_type = self.request.query_params.get('action_type')
-        if action_type in ('primary', 'utility'):
-            qs = qs.filter(action_type=action_type)
-
         is_active = self.request.query_params.get('is_active')
         if is_active in ('true', '1'):
             qs = qs.filter(is_active=True)
@@ -1585,7 +1581,6 @@ class WorldAbilityViewSet(BaseWorldBuilderViewSet):
             'id',
             'name',
             'slug',
-            'action_type',
             'is_active',
             'created_ts',
             'modified_ts',

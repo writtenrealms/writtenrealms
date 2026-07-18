@@ -72,7 +72,6 @@ class TestHelpCommands(WorldTestCase):
             slug=slug,
             name=name,
             command_verbs=verbs or [slug.replace("-", "_")],
-            action_type="primary",
             target=target or {
                 "type": "hostile",
                 "default": "current_target",

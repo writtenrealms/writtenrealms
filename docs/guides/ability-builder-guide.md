@@ -5,8 +5,8 @@
 This guide describes the WR2 ability authoring model. Ability manifests are
 wired into the runtime for player commands, encounter-round queueing, direct
 damage, healing, cast times, stun, damage-over-time, heal-over-time, and
-out-of-combat self utility. Mob definitions can also reference active ability
-definitions from combat loadouts. Encounter-scoped effects support resource
+out-of-combat self-targeted abilities. Mob definitions can also reference active
+ability definitions from combat loadouts. Encounter-scoped effects support resource
 change ticks, damage absorption barriers, and `after_damage` procs for bounded
 buff behavior such as energy return on landed attacks. Character-scoped effects
 support outgoing damage and stat modifiers for buffs that can survive into
@@ -45,8 +45,8 @@ If no ability is queued, the actor uses the normal auto-attack.
 If a queued ability becomes invalid before the round resolves, the actor falls
 back to auto-attacking if an auto-attack is legal.
 
-Out of combat, an allowed utility ability, such as a self-heal, uses the same
-schema but may resolve immediately through the command/action/event pipeline.
+Out of combat, an allowed self-targeted ability, such as a self-heal, uses the
+same schema but may resolve immediately through the command/action/event pipeline.
 
 ## Known Ability Limit
 
@@ -131,7 +131,6 @@ spec:
     verbs:
       - strike
       - powerstrike
-  action_type: primary
   consumes_primary_action_on_resolve: true
   consumes_primary_action_while_casting: true
   target:
@@ -204,7 +203,6 @@ metadata:
 spec:
   command:
     verbs: [charge]
-  action_type: primary
   target:
     type: hostile
     default: current_target
@@ -237,7 +235,6 @@ metadata:
 spec:
   command:
     verbs: [cleave]
-  action_type: primary
   consumes_primary_action_on_resolve: false
   target:
     type: hostile
@@ -297,7 +294,6 @@ metadata:
 spec:
   command:
     verbs: [bolt]
-  action_type: primary
   target:
     type: hostile
     default: current_target
@@ -324,8 +320,8 @@ action, so they do not auto-attack during that round.
 Players may replace a queued ability before the first encounter round starts.
 Once the ability is actively charging, it cannot be replaced by another ability.
 
-Out-of-combat utility abilities currently resolve immediately; cast times are
-combat-round behavior.
+Out-of-combat self-targeted abilities currently resolve immediately; cast times
+are combat-round behavior.
 
 ## Primary Action Consumption
 
@@ -359,7 +355,6 @@ metadata:
 spec:
   command:
     verbs: [minorbleed]
-  action_type: primary
   consumes_primary_action_on_resolve: false
   target:
     type: hostile
@@ -418,7 +413,6 @@ metadata:
 spec:
   command:
     verbs: [slash]
-  action_type: primary
   target:
     type: hostile
     default: current_target
@@ -441,7 +435,6 @@ metadata:
 spec:
   command:
     verbs: [spike]
-  action_type: primary
   target:
     type: hostile
     default: current_target
@@ -555,7 +548,6 @@ metadata:
 spec:
   command:
     verbs: [mend]
-  action_type: primary
   target:
     type: ally
     default: self
@@ -589,7 +581,6 @@ metadata:
 spec:
   command:
     verbs: [slam]
-  action_type: primary
   target:
     type: hostile
     default: current_target
@@ -645,7 +636,6 @@ metadata:
 spec:
   command:
     verbs: [bleed]
-  action_type: primary
   target:
     type: hostile
     default: current_target
@@ -698,7 +688,6 @@ metadata:
 spec:
   command:
     verbs: [renew]
-  action_type: primary
   target:
     type: ally
     default: self
@@ -738,7 +727,6 @@ metadata:
 spec:
   command:
     verbs: [renewfocus]
-  action_type: primary
   target:
     type: self
     default: self
@@ -785,7 +773,6 @@ metadata:
 spec:
   command:
     verbs: [shout]
-  action_type: primary
   target:
     type: self
     default: self
@@ -834,7 +821,6 @@ metadata:
 spec:
   command:
     verbs: [shieldwall]
-  action_type: primary
   target:
     type: self
     default: self
@@ -874,7 +860,6 @@ metadata:
 spec:
   command:
     verbs: [ward]
-  action_type: primary
   target:
     type: self
     default: self
@@ -950,7 +935,6 @@ metadata:
 spec:
   command:
     verbs: [energize]
-  action_type: primary
   target:
     type: self
     default: self
@@ -1051,7 +1035,7 @@ requirements:
 
 ## Queueing Behavior
 
-Players can substitute their queued primary ability until the round resolves.
+Players can substitute their queued ability until the round resolves.
 
 Example:
 

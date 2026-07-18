@@ -285,7 +285,6 @@ spec:
       command:
         verbs:
           - bash
-      action_type: primary
       target:
         type: hostile
         default: current_target
@@ -308,7 +307,6 @@ spec:
       command:
         verbs:
           - burn
-      action_type: primary
       target:
         type: hostile
         default: current_target
@@ -344,7 +342,6 @@ spec:
       command:
         verbs:
           - slice
-      action_type: primary
       target:
         type: hostile
         default: current_target
