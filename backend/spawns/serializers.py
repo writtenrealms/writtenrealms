@@ -602,7 +602,7 @@ class AnimateItemSerializer(serializers.ModelSerializer):
         model = Item
         fields = [
             'id', 'key', 'chunk_type',
-            'definition_id', 'definition_slug_snapshot', 'profile_id',
+            'definition_id', 'definition_slug_snapshot',
             'in_container',
             'ground_description', 'keywords', 'label',
             'augment', 'value',
@@ -799,9 +799,6 @@ class AnimateMobSerializer(serializers.ModelSerializer):
             'control_flag', 'flags',
             'is_elite', 'is_invisible',
             'traits',
-
-            #'drops_random_items', 'num_items',
-            #'chance_normal', 'chance_imbued', 'chance_enchanted',
         ]
         for field_name in authored_fields:
             fields[field_name] = serializers.ReadOnlyField()
@@ -1369,45 +1366,6 @@ class LoadDefinitionSerializer(serializers.Serializer):
             return Room.objects.get(pk=room_id)
         except Room.DoesNotExist:
             raise serializers.ValidationError("Invalid Room ID")
-
-
-class GenerateDropSerializer(serializers.Serializer):
-
-    level = serializers.IntegerField()
-    quality = serializers.ChoiceField(adv_consts.ITEM_QUALITIES)
-    # Extraction data for the item that will be the container. This is needed
-    # because if a mob dies, the API will know nothing of the corpse object
-    # to load the random item into.
-    #container_data = serializers.JSONField()
-    world = serializers.IntegerField()
-
-    def validate_world(self, value):
-        try:
-            return World.objects.get(pk=value)
-        except World.DoesNotExist:
-            raise serializers.ValidationError('Invalid world ID')
-
-
-    def create(self, validated_data):
-        from backend.core.drops import generate_equipment
-        level = validated_data['level']
-        quality = validated_data['quality']
-
-        attrs = generate_equipment(
-            level=level,
-            quality=quality)
-
-        # We are creating an item without a container, because the game
-        # engine will then put it in a corpse and if we want the item to
-        # actually be held on to, it will give a proper container then.
-        return Item.objects.create(
-            world=validated_data['world'],
-            quality=quality,
-            level=level,
-            type=adv_consts.ITEM_TYPE_EQUIPPABLE,
-            **attrs)
-
-        return item
 
 
 class WorldCompletionSerializer(serializers.Serializer):

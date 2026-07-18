@@ -51,17 +51,6 @@ class SystemView(APIView):
     )
 
 
-class GenerateDrops(SystemView):
-
-    def post(self, request, format=None):
-        serializer = spawn_serializers.GenerateDropSerializer(
-            data=request.data)
-        serializer.is_valid(raise_exception=True)
-        item = serializer.save()
-
-        return Response([], status=status.HTTP_201_CREATED)
-
-
 class LabelItem(SystemView):
     """
     Note on labels. This is just a quick and dirty view for the game engine

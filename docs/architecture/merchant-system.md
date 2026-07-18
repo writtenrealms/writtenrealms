@@ -75,7 +75,7 @@ combat:
 - Player-owned shops.
 - Haggling or dynamic supply-demand pricing.
 - Arbitrary formula language in merchant stock definitions.
-- Reusing WR1 merchant inventory or random item profile tables.
+- Restoring the removed WR1 merchant inventory or random item profile tables.
 
 ## Authoring Model
 
@@ -152,10 +152,10 @@ Supported first-class slot sources:
 - `item_definition`: fixed stock from a stable or guided-random item definition
 - `item_bundle`: random stock from a weighted bundle of item definitions
 
-Do not support `item_template`, `MerchantInventory`, or `RandomItemProfile` in
-the new merchant authoring shape. If old content needs conversion, convert it
-outside the runtime path into item definitions, item bundles, and merchant
-profiles.
+The legacy `item_template`, `MerchantInventory`, and `RandomItemProfile` models
+are removed from WR2 and are not supported by the merchant authoring shape. If
+old content needs conversion, convert representable authored intent outside the
+runtime path into item definitions, item bundles, and merchant profiles.
 
 ### Fixed Stock
 
@@ -510,7 +510,8 @@ making every shopkeeper an accidental loot container.
 The WR2 merchant system should not be implemented on top of WR1 merchant
 inventory concepts.
 
-Do not build new runtime behavior around:
+The following WR1 concepts are removed from the WR2 merchant runtime and must
+not be restored:
 
 - `MerchantInventory`
 - WR1 `MobTemplate.merchant_inv`

@@ -160,8 +160,6 @@ const determineEndpoint = () => {
     return `builder/worlds/${world_id}/itemdefinitions/`;
   } else if (model_type.value === "mobdefinition" || model_type.value === "mob_definition") {
     return `builder/worlds/${world_id}/mobdefinitions/`;
-  } else if (model_type.value === "transformationtemplate" || model_type.value === "transformation_template") {
-    return `builder/worlds/${world_id}/transformationtemplates/`;
   } else if (model_type.value === "zone") {
     return `builder/worlds/${world_id}/zones/`;
   } else if (model_type.value === "faction") {
@@ -172,8 +170,6 @@ const determineEndpoint = () => {
     return endpoint;
   } else if (model_type.value === "room") {
     return `builder/worlds/${world_id}/rooms/`;
-  } else if (model_type.value === "randomitemprofile" || model_type.value === "random_item_profile") {
-    return `builder/worlds/${world_id}/randomitemprofiles/`;
   } else if (model_type.value === "quest") {
     return `builder/worlds/${world_id}/quests/`;
   } else if (model_type.value === "path") {

@@ -106,6 +106,18 @@ Current required mappings:
 - WR1 `Loader` / `Rule` rows export as `kind: spawnplan` entries. WR2 no longer
   imports or stores loader/rule rows, and runtime item/mob rows no longer keep
   `rule_id` or source-template FKs.
+- WR1 `TransformationTemplate` rows and transformation `Rule` chains do not
+  export as a WR2 model or manifest kind. They only overlaid serialized mob
+  fields and did not mutate canonical runtime state. Exporters must report every
+  use for builder review instead of translating it automatically. If a builder
+  intentionally wants canonical WR2 behavior, they may replace a fixed field
+  variation with a dedicated `kind: mobdefinition` variant or a supported
+  numeric spawn variation with
+  `spec.entries[].traits.guaranteed[].modifiers`. Direct modifiers add and
+  `_multiplier` modifiers multiply, and both mutate persisted runtime state.
+  Report and omit arbitrary strings, unsupported attributes, and every
+  unreviewed or non-equivalent transformation; do not recreate transformation
+  templates, nested rule targets, or arbitrary attribute mutation.
 - WR1 loader reset configuration does not export. WR2 spawn-plan manifests have
   no `spec.reset` key: world/instance lifecycle services perform initial
   population, while `spec.respawn` controls replacement of missing placements
@@ -123,6 +135,19 @@ Current required mappings:
   to `ItemDefinition`.
 - WR1 room or loader-authored room inventory exports as `kind: spawnplan`
   entries targeting WR2 room refs and `itemdefinition` / `itembundle` refs.
+- WR1 `RandomItemProfile` rows do not export as a WR2 model or manifest kind.
+  Rewrite each authored reference into explicit `kind: itemdefinition`
+  documents, using `spec.randomization` only for supported authored attribute
+  ranges, and a `kind: itembundle` when discrete weighted choice is intended.
+  Giver-relative levels (`level: 0`), broad procedural equipment restrictions,
+  and imbued/enchanted chance generation have no semantics-preserving automatic
+  mapping; exporters must flag those references for author review. Never
+  restore a compatibility table or runtime adapter, and never export runtime
+  `Item.profile` provenance.
+- WR1 procedural drop-generation requests and generated runtime items do not
+  export. WR2 has no `/game/system/generate/drops/` endpoint; authored random
+  loot must resolve through item definitions, item bundles, mob loot, merchant
+  profiles, or spawn plans before import.
 - WR1 item template inventory rows do not export as `itemtemplate`
   `spec.inventory`; WR2 no longer has `ItemTemplateInventory`. Nested/container
   contents should target WR2 item definition manifests once a definition-backed

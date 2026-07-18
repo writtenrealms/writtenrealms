@@ -269,8 +269,6 @@ const isWorldQuestRoute = computed(() => {
 });
 const isWorldConfigRoute = computed(() => {
   const routes = [
-    'builder_world_random_profile_list',
-    'builder_world_transformation_template_list',
     'builder_world_fact_list',
     'builder_world_ability_list',
     'builder_world_ability_details',

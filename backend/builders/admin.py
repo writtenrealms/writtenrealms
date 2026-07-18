@@ -23,7 +23,6 @@ from builders.models import (
     MobDefinition,
     Path,
     Procession,
-    RandomItemProfile,
     RoomAction,
     RoomBlock,
     RoomGetTrigger,
@@ -32,7 +31,6 @@ from builders.models import (
     SpawnPlacement,
     SpawnPlan,
     SpawnPlanRun,
-    TransformationTemplate,
     WorldBuilder,
     WorldReview)
 from core.admin import BaseAdmin, DirectRootWorldFilter
@@ -132,10 +130,6 @@ class MobDefinitionAdmin(BaseAdmin):
     list_filter = (DirectRootWorldFilter,)
 
 
-class TransformationTemplateAdmin(BaseAdmin):
-    list_display = ('id', 'transformation_type', 'arg1', 'arg2')
-
-
 class SpawnEntryInline(admin.TabularInline):
     model = SpawnEntry
     extra = 0
@@ -174,11 +168,6 @@ class RoomActionAdmin(BaseAdmin):
     list_display = ['id', room_world, 'name', 'room']
     raw_id_fields = ['room']
 
-
-class RandomItemProfileAdmin(BaseAdmin):
-    list_display = ['id', 'name', 'level', 'restriction']
-    display_as_choicefield = ['restriction']
-    raw_id_fields = ['world']
 
 def num_rooms(obj):
     return obj.rooms.count()
@@ -262,7 +251,6 @@ admin.site.register(ItemBundle, ItemBundleAdmin)
 admin.site.register(MobDefinition, MobDefinitionAdmin)
 admin.site.register(Path, PathAdmin)
 admin.site.register(Procession, ProcessionAdmin)
-admin.site.register(RandomItemProfile, RandomItemProfileAdmin)
 admin.site.register(RoomAction, RoomActionAdmin)
 admin.site.register(RoomBlock, RoomBlockAdmin)
 admin.site.register(RoomGetTrigger, RoomGetTriggerAdmin)
@@ -270,6 +258,5 @@ admin.site.register(Social, SocialAdmin)
 admin.site.register(SpawnPlan, SpawnPlanAdmin)
 admin.site.register(SpawnPlanRun, SpawnPlanRunAdmin)
 admin.site.register(SpawnPlacement, SpawnPlacementAdmin)
-admin.site.register(TransformationTemplate, TransformationTemplateAdmin)
 admin.site.register(WorldBuilder, WorldBuilderAdmin)
 admin.site.register(WorldReview, WorldReviewAdmin)

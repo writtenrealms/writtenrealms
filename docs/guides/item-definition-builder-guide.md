@@ -360,6 +360,11 @@ Item bundles can be used anywhere a loot source accepts `itembundle.<slug>`.
 Use bundles when several mobs or spawn plans should reuse the same weighted item
 choice.
 
+WR2 has no Random Item Profile authoring model. Use a definition's
+`spec.randomization` for bounded attribute rolls and an item bundle for weighted
+choice among explicit definitions. Broad WR1 procedural equipment profiles do
+not have a direct WR2 manifest equivalent.
+
 ## Loading And Granting Item Definitions
 
 After applying an item definition manifest, builders can test it with `/load`:

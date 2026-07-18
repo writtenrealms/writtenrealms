@@ -4,7 +4,6 @@ import yaml
 from rest_framework.reverse import reverse
 
 from builders.currencies import create_currency
-from builders.random_items import generate_item
 from builders.models import (
     ItemBundle,
     ItemDefinition,
@@ -27,17 +26,6 @@ class TestItemDefinitions(WorldTestCase):
             name="Obol",
             plural_name="Obols",
         )
-
-    def test_random_item_materializes_the_world_default_currency(self):
-        item = generate_item(
-            self.player,
-            chance_imbued=0,
-            chance_enchanted=0,
-            specification=adv_consts.ITEM_SPECIFICATION_WEAPON_1H,
-        )
-
-        self.assertIsNotNone(item.cost)
-        self.assertEqual(item.currency, self.default_currency)
 
     def test_spawn_rolls_declared_attributes_and_ignores_stale_keys(self):
         definition = ItemDefinition.objects.create(

@@ -170,14 +170,14 @@ docker compose logs -f celery-beat
 - Multiplayer vs singleplayer worlds
 
 **builders**: World authoring system
-- `ItemTemplate`, `MobTemplate`, `RoomTemplate` - game content templates
+- `ItemDefinition`, `MobDefinition`, `SpawnPlan` - canonical authored content
 - `WorldBuilder` - permissions/assignments for world authors
-- `Loader`, `Factions`, `Quests`, `Transformations` - game mechanics
+- Item bundles, merchant/crafting profiles, factions, quests, and triggers
 - `Path` model: defining room connections and zone organization
 
 **spawns**: Dynamic content generation
-- Celery tasks for spawning mobs, items, rooms
-- Template-based spawning with randomization
+- Runtime players, mobs, items, encounters, and merchant state
+- Spawn-plan reconciliation and definition-backed item randomization
 
 **users**: Authentication & user management
 - Custom User model (email-based, passwordless auth supported)

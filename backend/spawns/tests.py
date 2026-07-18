@@ -3,7 +3,6 @@ import json
 import mock
 
 from config import constants as adv_consts
-from backend.core.drops import generate_equipment
 
 from django.contrib.contenttypes.models import ContentType
 from django.test import override_settings
@@ -707,59 +706,6 @@ class TestGameLookup(WorldTestCase):
         endpoint = reverse('game-lookup', args=['item.dne'])
         resp = self.client.get(endpoint, HTTP_X_PLAYER_ID=self.player.id)
         self.assertEqual(resp.status_code, 404)
-
-
-class TestRandomDrops(WorldTestCase):
-
-    def setUp(self):
-        super().setUp()
-        self.make_system_user()
-        self.client.force_authenticate(self.user)
-        self.spawn_world = self.world.create_spawn_world()
-        self.ep = reverse('generate-drops')
-
-    def test_generate_random_drop(self):
-        # Run through a bunch of generation and make sure nothing errors out
-        eq_types = list(adv_consts.EQUIPMENT_TYPES)
-        eq_types.remove(adv_consts.EQUIPMENT_TYPE_ACCESSORY)
-        for eq_type in eq_types:
-            for level in range(1, 21):
-                for quality in adv_consts.ITEM_QUALITIES:
-                    for i in range(1, 101):
-                        generate_equipment(
-                            level=level,
-                            quality=quality,
-                            eq_type=eq_type)
-
-    def test_failures(self):
-        resp = self.client.post(self.ep, {})
-        self.assertEqual(resp.status_code, 400)
-
-    def test_load_into_dead_mob(self):
-        """
-        When loading an item into a mob, we have to create an item that
-        does not have a container, because the corpse it will be loaded
-        into will not exist at the
-        """
-
-        mob = Mob.objects.create(
-            world=self.spawn_world,
-            room=self.room,
-            name='a soldier')
-
-        resp = self.client.post(self.ep, {
-            'level': 1,
-            'quality': adv_consts.ITEM_QUALITY_IMBUED,
-            'world': mob.world.id,
-        }, format='json')
-        self.assertEqual(resp.status_code, 201)
-
-        data = resp.data
-        self.assertEqual(len(data), 2)
-        self.assertEqual(data[0]['key'], mob.world.key)
-        self.assertIsNone(data[1]['in_container'])
-        self.assertEqual(data[1]['quality'], adv_consts.ITEM_QUALITY_IMBUED)
-        self.assertEqual(data[1]['type'], adv_consts.ITEM_TYPE_EQUIPPABLE)
 
 
 class TestPlayerConfig(WorldTestCase):

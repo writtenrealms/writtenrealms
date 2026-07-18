@@ -59,14 +59,12 @@ from builders.models import (
     ItemDefinition,
     MobDefinition,
     MerchantProfile,
-    TransformationTemplate,
     FACTION_TYPE_CORE,
     FACTION_TYPE_REPUTATION,
     Faction,
     FactionAssignment,
     FactionRank,
     FactSchedule,
-    RandomItemProfile,
     RoomAction,
     Trigger,
     Social,
@@ -2112,17 +2110,6 @@ class MobDefinitionSuggestionSerializer(serializers.Serializer):
     )
 
 
-class RandomItemProfileSerializer(serializers.ModelSerializer):
-
-    class Meta:
-        model = RandomItemProfile
-        fields = [
-            'name', 'level',
-            'chance_imbued', 'chance_enchanted',
-            'restriction'
-        ]
-
-
 # Factions
 
 class FactionRankSerializer(serializers.ModelSerializer):
@@ -2388,29 +2375,6 @@ class ProcessionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Procession
         fields = ['id', 'room', 'faction']
-
-
-class RandomItemProfileSerializer(serializers.ModelSerializer):
-
-    class Meta:
-        model = RandomItemProfile
-        fields = [
-            'id', 'key', 'model_type',
-            'name',
-            'level',
-            'chance_imbued',
-            'chance_enchanted',
-            'restriction',
-        ]
-
-
-class TransformationTemplateSerializer(serializers.ModelSerializer):
-
-    class Meta:
-        model = TransformationTemplate
-        fields = [
-            'id', 'name', 'key', 'model_type', 'transformation_type', 'arg1', 'arg2',
-        ]
 
 
 class WorldBuilderSerializer(serializers.ModelSerializer):

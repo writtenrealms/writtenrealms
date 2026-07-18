@@ -7,6 +7,13 @@ copied from **World > Config**.
 World config manifests are update-only. Applying a `kind: world` document
 updates the selected world; it does not create or delete worlds.
 
+The **World > Config** page also links to related WR2 authoring and operational
+screens. The former **Random Item Profiles** and **Transformations** screens
+have been removed. Use item-definition `spec.randomization` for bounded rolls,
+`kind: itembundle` for weighted item choices, and canonical mob definitions or
+spawn-plan traits for representable spawn variations. There is no
+`randomitemprofile` or `transformation` manifest kind.
+
 ```yaml
 kind: world
 spec:

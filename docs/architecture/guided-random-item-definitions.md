@@ -93,12 +93,14 @@ Remaining gaps before this is builder-complete:
 - no structured item definition editor yet
 - no stale-randomization audit endpoint or management command yet
 
-There is also a WR1-era `RandomItemProfile` path. That system procedurally
-generates equipment from broad categories such as weapon, shield, or armor. It
-is useful reference material only. The WR2 feature should not extend
-`RandomItemProfile`, `drops_random_items`, or merchant inventory's old
-`random_item_profile` shape. Reusing those models would carry forward the wrong
-mental model: broad procedural generation with hard-coded legacy stat names.
+The WR1-era `RandomItemProfile` model, CRUD API, builder screen, procedural
+generation helpers and system endpoint, and runtime item provenance FK have
+been removed from WR2.
+That system generated equipment from broad categories such as weapon, shield,
+or armor and carried hard-coded legacy stat assumptions. It remains an optional
+WR1 exporter input concept only; WR2 imports representable authored intent as
+explicit item definitions and bundles rather than restoring the old runtime
+shape.
 
 ## Recommendation
 
@@ -623,9 +625,11 @@ This phase adds discrete random choice without expanding the stat roll language.
 
 - Add stale randomization audit endpoint or management command.
 - Add manifest validation warnings.
-- Keep WR1-era `RandomItemProfile` outside the new execution path. If content
-  conversion is needed, do it as a one-way manifest/import conversion into
-  `ItemDefinition` and `ItemBundle`, not as a runtime adapter.
+- Done: remove WR1-era `RandomItemProfile` models, APIs, UI, procedural
+  generation paths, and runtime provenance. If content conversion is needed,
+  do it as a one-way manifest conversion into `ItemDefinition` and
+  `ItemBundle`, flagging broad procedural rules that have no
+  semantics-preserving mapping.
 - Done: remove the old item-template implementation from builder/runtime
   surfaces.
 - Remove any remaining fixed primary-stat assumptions from item generation and

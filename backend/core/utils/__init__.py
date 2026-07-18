@@ -79,18 +79,6 @@ def shell(cmd):
         stdout=subprocess.PIPE,
         shell=True).communicate()
 
-def roll_percentage(chance):
-    "Returns True or False based on whether the chance was triggered or not."
-    try:
-        chance = int(chance)
-    except (ValueError, TypeError):
-        chance = 0
-    if chance > 100:
-        chance = 100
-    random_int = random.randrange(1, 101) # Return between 1 and 100
-    return chance >= random_int
-
-
 def roll_probability(probability):
     if probability > 1 or probability < 0:
         raise ValueError("Invalid probability: %s. Should be between 0 and 1." % probability)
@@ -247,19 +235,6 @@ def split_cmd(cmd):
     # Hence why we're using the one above.
     PATTERN = re.compile(r'''((?:[^;"']|"[^"]*"|'[^']*')+)''')
     return PATTERN.split(cmd)[1::2]
-
-
-def roll_variance(value, range, strictly_positive=False):
-    """
-    Vary a value by a % range
-    """
-
-    if strictly_positive:
-        return round(
-            value * (1 + random.randrange(0, range + 1) / 100))
-
-    return round(
-        value * (1 + random.randrange(-range, range + 1) / 100))
 
 
 def format_actor_msg(

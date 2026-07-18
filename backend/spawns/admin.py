@@ -59,7 +59,7 @@ def name(item):
 class ItemAdmin(BaseAdmin):
     list_display = ('id', name, 'world', 'container', 'definition')
     #list_filter = [ContextRootWorldFilter]
-    raw_id_fields = ['world', 'definition', 'profile', 'augment']
+    raw_id_fields = ['world', 'definition', 'augment']
     display_as_choicefield = [
         'type', 'quality', 'armor_class', 'equipment_type'
     ]

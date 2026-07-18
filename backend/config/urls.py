@@ -89,7 +89,6 @@ api_v1_urls = [
 
     # Calls which should only be made by the game engine itself
     path('game/system/load/', system_views.LoadDefinition.as_view(), name='load-definition'),
-    path('game/system/generate/drops/', system_views.GenerateDrops.as_view(), name='generate-drops'),
     #path('game/system/extract/', system_views.Extract.as_view()),
     path('game/system/quit/', system_views.Quit.as_view(), name='system-quit'),
     path('game/system/complete/', system_views.Complete.as_view()),
@@ -218,12 +217,6 @@ api_v1_urls = [
     path('builder/worlds/<world_pk>/questtemplates/<pk>/', quest_views.quest_template_detail, name='builder-quest-template-detail'),
     path('builder/worlds/<world_pk>/questarcs/', quest_views.quest_arc_template_list, name='builder-quest-arc-template-list'),
     path('builder/worlds/<world_pk>/questarcs/<pk>/', quest_views.quest_arc_template_detail, name='builder-quest-arc-template-detail'),
-
-    # World Config
-    path('builder/worlds/<world_pk>/randomitemprofiles/', builder_views.random_item_profile_list, name='builder-random-item-profile-list'),
-    path('builder/worlds/<world_pk>/randomitemprofiles/<pk>/', builder_views.random_item_profile_detail, name='builder-random-item-profile-detail'),
-    path('builder/worlds/<world_pk>/transformationtemplates/', builder_views.transformation_template_list, name='builder-transformation-template-transformation-list'),
-    path('builder/worlds/<world_pk>/transformationtemplates/<pk>/', builder_views.transformation_template_detail, name='builder-transformation-template-detail'),
 
     # Paths
     path('builder/worlds/<world_pk>/paths/<pk>/', builder_views.path_detail, name='builder-path-details'),

@@ -1,22 +1,4 @@
-import math
-
 from config import constants
-from config import game_settings as config
-
-
-def get_slot_constant(eq_type):
-    if eq_type == constants.EQUIPMENT_TYPE_WEAPON_2H:
-        return 2.5
-    elif eq_type in (
-        constants.EQUIPMENT_TYPE_WEAPON_1H,
-        constants.EQUIPMENT_TYPE_SHIELD,
-        constants.EQUIPMENT_TYPE_HEAD,
-        constants.EQUIPMENT_TYPE_BODY,
-        constants.EQUIPMENT_TYPE_LEGS):
-        return 1.25
-    elif eq_type:
-        return 1
-    return 0
 
 
 def type_to_slot(eq_type, has_weapon=False, has_offhand=False, archetype=None):
@@ -33,30 +15,6 @@ def type_to_slot(eq_type, has_weapon=False, has_offhand=False, archetype=None):
     elif eq_type in constants.EQUIPMENT_SLOTS:
         return eq_type
     return None
-
-
-def get_main_primary_stat(stats):
-    "Returns the attribute with the greatest value."
-    max = 0
-    max_stat = None
-    for stat, value in (stats.get("attributes") or {}).items():
-        if max < value:
-            max = value
-            max_stat = stat
-    # The old procedural drop generator still names items before generated
-    # values are folded into world-declared attributes.
-    for stat in constants.PRIMARY_ATTRIBUTES:
-        if max < stats.get(stat, 0):
-            max = stats[stat]
-            max_stat = stat
-    return max_stat
-
-
-def get_item_budget(level, eq_type, enchanted=False):
-    budget = math.ceil(get_slot_constant(eq_type) * config.ILF(level) * 20)
-    if enchanted:
-        budget *= 1.2
-    return budget
 
 
 def calculate_power(item, archetype):
@@ -79,20 +37,3 @@ def calculate_power(item, archetype):
             stat_value = stat_value * weight
             total_value += stat_value
     return total_value
-
-
-def price_item(level, quality, eq_type=None):
-    # Base cost
-    ilf_cost = config.ILF(level)
-
-    # Imbued / Enchanted
-    if quality == constants.ITEM_QUALITY_IMBUED:
-        ilf_cost *= 3
-    elif quality == constants.ITEM_QUALITY_ENCHANTED:
-        ilf_cost *= 5
-
-    # Factor in slot constant
-    if eq_type:
-        ilf_cost *= constants.get_slot_constant(eq_type)
-
-    return round(ilf_cost)

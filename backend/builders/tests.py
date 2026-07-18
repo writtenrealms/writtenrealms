@@ -17,7 +17,6 @@ from builders.models import (
     BuilderAssignment,
     Currency,
     ItemDefinition,
-    TransformationTemplate,
     Path,
     PathRoom,
     Procession,
@@ -27,7 +26,6 @@ from builders.models import (
     FactSchedule,
     RoomAction,
     Trigger,
-    RandomItemProfile,
     WorldBuilder,
     WorldReview)
 from builders import serializers as builder_serializers

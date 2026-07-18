@@ -15,7 +15,6 @@ from config import constants as adv_consts
 from core.computations import compute_stats
 from core.utils import has_number
 from core.utils.items import (
-    get_item_budget,
     type_to_slot,
     calculate_power)
 
@@ -1257,11 +1256,6 @@ class Item(ItemMixin, AdventBaseModel):
                                    **optional)
     definition_slug_snapshot = models.SlugField(max_length=120, blank=True)
     roll_metadata = models.JSONField(default=dict, blank=True)
-
-    # For procedural items
-    profile = models.ForeignKey('builders.RandomItemProfile',
-                                on_delete=models.SET_NULL,
-                                **optional)
 
     container_type = models.ForeignKey(ContentType,
                                        on_delete=models.SET_NULL,

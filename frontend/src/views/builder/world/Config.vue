@@ -190,15 +190,6 @@ const configLinks = computed(() => [
     },
   },
   {
-    title: "Random Item Profiles",
-    description: "Reusable item roll profiles for rewards, merchants, and spawn plans.",
-    rootOnly: true,
-    to: {
-      name: "builder_world_random_profile_list",
-      params: { world_id: route.params.world_id },
-    },
-  },
-  {
     title: "Item Bundles",
     description: "Weighted item definition bundles for random drops, spawn plans, and merchant stock.",
     rootOnly: true,
@@ -240,15 +231,6 @@ const configLinks = computed(() => [
     rootOnly: true,
     to: {
       name: "builder_world_crafting_profile_list",
-      params: { world_id: route.params.world_id },
-    },
-  },
-  {
-    title: "Transformations",
-    description: "One-off template changes applied through spawn-plan entries.",
-    rootOnly: true,
-    to: {
-      name: "builder_world_transformation_template_list",
       params: { world_id: route.params.world_id },
     },
   },

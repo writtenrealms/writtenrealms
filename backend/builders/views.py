@@ -69,8 +69,6 @@ from builders.models import (
     MobDefinition,
     MerchantProfile,
     SpawnPlan,
-    TransformationTemplate,
-    RandomItemProfile,
     RoomAction,
     Trigger,
     Social,
@@ -3360,58 +3358,6 @@ path_room_detail = PathRoomViewSet.as_view({
     'delete': 'destroy',
 })
 
-# World Config
-
-class RandomItemProfileViewSet(BaseWorldBuilderViewSet):
-
-    serializer_class = builder_serializers.RandomItemProfileSerializer
-    pagination_class = None
-
-    def get_queryset(self):
-        qs = self.search_queryset(
-            RandomItemProfile.objects.filter(world=self.world)
-        ).order_by('level')
-        return qs
-
-    def perform_create(self, serializer):
-        serializer.save(world=self.world)
-
-
-random_item_profile_list = RandomItemProfileViewSet.as_view({
-    'get': 'list',
-    'post': 'create',
-})
-random_item_profile_detail = RandomItemProfileViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'update',
-    'delete': 'destroy',
-})
-
-class TransformationTemplateViewSet(BaseWorldBuilderViewSet):
-
-    serializer_class = builder_serializers.TransformationTemplateSerializer
-    pagination_class = None
-    queryset = TransformationTemplate.objects.all()
-
-    def get_queryset(self):
-        qs = TransformationTemplate.objects.filter(world=self.world)
-        qs = self.search_queryset(qs)
-        return qs
-
-    def perform_create(self, serializer):
-        serializer.save(world=self.world)
-
-transformation_template_list = TransformationTemplateViewSet.as_view({
-    'get': 'list',
-    'post': 'create',
-})
-transformation_template_detail = TransformationTemplateViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'update',
-    'delete': 'destroy',
-})
-
-
 class WorldBuilderViewSet(BaseWorldBuilderViewSet):
 
     serializer_class = builder_serializers.WorldBuilderSerializer
@@ -3478,7 +3424,6 @@ class RefLookup(APIView):
             'item_definition': ItemDefinition,
             'item_bundle': ItemBundle,
             'mob_definition': MobDefinition,
-            'transformation_template': TransformationTemplate,
             'room': Room,
             'path': Path,
             'spawn_plan': SpawnPlan,
@@ -3511,8 +3456,7 @@ class RefLookup(APIView):
             elif query:
                 kwargs['name__icontains'] = query
 
-            if resource != 'transformation_template':
-                kwargs['world_id'] = world_id
+            kwargs['world_id'] = world_id
 
             qs = resource_to_model[resource].objects.filter(**kwargs)
 

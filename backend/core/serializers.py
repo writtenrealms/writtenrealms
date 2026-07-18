@@ -8,10 +8,8 @@ from builders.models import (
     ItemBundle,
     ItemDefinition,
     MobDefinition,
-    TransformationTemplate,
     Path,
     Faction,
-    RandomItemProfile,
     WorldBuilder)
 from spawns.models import Mob, Player, Item
 from users.models import User
@@ -92,12 +90,8 @@ class ReferenceField(Field):
                 return ItemDefinition.objects.get(pk=rid)
             elif rtype == 'item_bundle':
                 return ItemBundle.objects.get(pk=rid)
-            elif rtype == 'transformation_template':
-                return TransformationTemplate.objects.get(pk=rid)
             elif rtype == 'faction':
                 return Faction.objects.get(pk=rid)
-            elif rtype == 'random_item_profile':
-                return RandomItemProfile.objects.get(pk=rid)
             elif rtype == 'user':
                 return User.objects.get(pk=rid)
             elif rtype == 'builder_assignment':

@@ -580,32 +580,6 @@ class MobCurrencyReward(AdventBaseModel):
         ]
 
 
-class TransformationTemplate(AdventBaseModel):
-    """
-    Apply a transformation to authored spawn output. Currently only
-    works on mobs. Gets applied at animation time.
-    """
-
-    world = models.ForeignKey('worlds.World',
-                              on_delete=models.CASCADE,
-                              related_name='transformation_templates',
-                              **optional)
-
-    name = models.TextField()
-    transformation_type = models.TextField(
-        choices=list_to_choice(api_consts.TRANSFORMATION_TYPES))
-    arg1 = models.TextField(**optional)
-    arg2 = models.TextField(**optional)
-
-    def apply(self, mob):
-        ret_data = {}
-        if self.transformation_type == api_consts.TRANSFORMATION_TYPE_ATTR:
-            #setattr(mob, self.arg1, self.arg2)
-            #mob.save()
-            ret_data[self.arg1] = self.arg2
-        return ret_data
-
-
 class SpawnPlan(AdventBaseModel):
     world = models.ForeignKey(
         'worlds.World',
@@ -830,43 +804,6 @@ class RoomAction(ActionBase):
     room = models.ForeignKey('worlds.Room',
                          related_name='room_actions',
                          on_delete=models.CASCADE)
-
-
-class RandomItemProfile(AdventBaseModel):
-    """
-    Definition for a random item, as used with random loads, quest rewards,
-    merchant items.
-    """
-
-    world = models.ForeignKey('worlds.World',
-                              on_delete=models.CASCADE,
-                              related_name='random_item_profiles',
-                              **optional)
-
-    name = models.TextField(**optional)
-
-    # 0 means it will look at the quest giver's level
-    level = models.PositiveIntegerField(default=0)
-    chance_imbued = models.PositiveIntegerField(default=20)
-    chance_enchanted = models.PositiveIntegerField(default=5)
-    restriction = models.TextField(
-        choices=list_to_choice(api_consts.RANDOM_ITEM_SPECIFICATIONS),
-        **optional)
-
-    def __str__(self): return self.name
-
-    def generate(self, char, default_level=None, for_archetype=False):
-        from builders.random_items import generate_item
-        item = generate_item(
-            char=char,
-            level=self.level or default_level or 1,
-            specification=self.restriction,
-            chance_imbued=self.chance_imbued,
-            chance_enchanted=self.chance_enchanted,
-            for_archetype=for_archetype)
-        item.profile = self
-        item.save()
-        return item
 
 
 class RoomBlock(BaseModel):

@@ -100,7 +100,3 @@ def ILF(level):
     if level >= 20:
         value *= 1.02
     return value
-
-# When generating stats for procedurally generated items, how much to
-# vary the value by. In percentage points.
-RANDOM_ROLL_VARIANCE = 16
