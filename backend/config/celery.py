@@ -40,6 +40,13 @@ app.conf.beat_schedule = {
         'task': 'spawns.tasks.game_heartbeat',
         'schedule': _heartbeat_interval_seconds(),
     },
+    'run-scheduled-trigger-steps': {
+        'task': 'spawns.tasks.run_scheduled_trigger_steps',
+        'schedule': _heartbeat_interval_seconds(),
+        # A later poll sees every still-due row, so stale poll messages add no
+        # value after broker/worker backpressure and should not pile up.
+        'options': {'expires': _heartbeat_interval_seconds()},
+    },
     'run-world-spawn-plans': {
         'task': 'worlds.tasks.run_world_spawn_plans',
         'schedule': _spawn_plan_interval_seconds(),
@@ -51,6 +58,11 @@ app.conf.beat_schedule = {
     'prune-crafting-action-receipts': {
         'task': 'spawns.tasks.prune_crafting_action_receipts',
         'schedule': crontab(hour='4', minute='20'),
+    },
+    'prune-scheduled-trigger-runs': {
+        'task': 'spawns.tasks.prune_scheduled_trigger_runs',
+        'schedule': crontab(minute='25'),
+        'options': {'expires': 3300},
     },
     'monitor-worlds': {
       'task': 'worlds.tasks.monitor_worlds',

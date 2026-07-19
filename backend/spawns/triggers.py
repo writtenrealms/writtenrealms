@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
 from django.db import connection
-from django.db.models import Q
+from django.db.models import BooleanField, Case, Q, Value, When
 
 from builders.models import ItemDefinition, MobDefinition, Trigger
 from config import constants as adv_consts
@@ -98,6 +98,24 @@ def _split_trigger_script_lines(script: str | None) -> list[list[str]]:
         if line_segments:
             script_lines.append(line_segments)
     return script_lines
+
+
+def _trigger_has_steps(trigger: Trigger | SimpleNamespace) -> bool:
+    marker = getattr(trigger, "cached_has_steps", None)
+    if marker is not None:
+        return bool(marker)
+    return bool(getattr(trigger, "steps", None))
+
+
+def _with_cached_step_marker(queryset):
+    """Avoid loading large typed-step bodies on paths that refetch at start."""
+    return queryset.annotate(
+        cached_has_steps=Case(
+            When(steps=[], then=Value(False)),
+            default=Value(True),
+            output_field=BooleanField(),
+        )
+    ).defer("steps")
 
 
 def _first_token(cmd: str) -> str | None:
@@ -222,11 +240,11 @@ def _get_applicable_command_fallback_triggers(
                 cached_hooks = None
 
     triggers = list(
-        Trigger.objects.filter(
+        _with_cached_step_marker(Trigger.objects.filter(
             world_id=trigger_world.id,
             kind=adv_consts.TRIGGER_KIND_COMMAND,
             is_active=True,
-        )
+        ))
         .filter(scope_filter)
         .order_by("order", "created_ts", "id")
     )
@@ -400,6 +418,7 @@ def _room_hook_cache_key(
 def _serialize_cached_hook(trigger: Trigger) -> dict:
     return {
         "id": trigger.id,
+        "world_id": trigger.world_id,
         "key": trigger.key,
         "name": trigger.name or "",
         "scope": trigger.scope,
@@ -407,6 +426,12 @@ def _serialize_cached_hook(trigger: Trigger) -> dict:
         "event": trigger.event or "",
         "match": trigger.match or "",
         "script": trigger.script or "",
+        # Cached paths only need to choose typed execution. The durable starter
+        # reloads the authoritative Trigger before validating/snapshotting it,
+        # so caching the potentially 256-KiB body would amplify every room
+        # cache miss for no runtime benefit.
+        "steps": _trigger_has_steps(trigger),
+        "on_step_error": trigger.on_step_error or "cancel",
         "conditions": trigger.conditions or "",
         "show_details_on_failure": bool(trigger.show_details_on_failure),
         "failure_message": trigger.failure_message or "",
@@ -434,14 +459,17 @@ def _cached_room_hooks(
         kind=normalized_kind,
         event=normalized_event,
     )
-    cached = cache.get(cache_key)
+    try:
+        cached = cache.get(cache_key)
+    except Exception:
+        cached = None
     if cached is not None:
         return cached
 
     room_ct = _scope_content_types()[Room]
     hooks = [
         _serialize_cached_hook(trigger)
-        for trigger in Trigger.objects.filter(
+        for trigger in _with_cached_step_marker(Trigger.objects.filter(
             world_id=world_id,
             kind=normalized_kind,
             event=normalized_event,
@@ -449,9 +477,21 @@ def _cached_room_hooks(
             target_type=room_ct,
             target_id=room_id,
             is_active=True,
-        ).order_by("order", "created_ts", "id")
+        )).order_by("order", "created_ts", "id")
     ]
-    cache.set(cache_key, hooks, timeout=TRIGGER_HOOK_CACHE_TIMEOUT_SECONDS)
+    if len(hooks) <= COMMAND_TRIGGER_CACHE_MAX_HOOKS:
+        encoded_size = len(
+            json.dumps(hooks, separators=(",", ":")).encode("utf-8")
+        )
+        if encoded_size <= COMMAND_TRIGGER_CACHE_MAX_BYTES:
+            try:
+                cache.set(
+                    cache_key,
+                    hooks,
+                    timeout=TRIGGER_HOOK_CACHE_TIMEOUT_SECONDS,
+                )
+            except Exception:
+                pass
     return hooks
 
 
@@ -657,13 +697,30 @@ def execute_room_event_triggers(
         destination_room=destination_room,
         target_room=resolved_room,
     )
-    scope_key = f"room:{resolved_room.id}"
+    runtime_world_id = getattr(actor, "world_id", None)
+    scope_key = (
+        f"runtime:{runtime_world_id}:room:{resolved_room.id}"
+        if runtime_world_id
+        else f"room:{resolved_room.id}"
+    )
 
     for hook in hooks:
         if not _hook_match_expression_matches(hook.get("match"), direction):
             continue
 
         conditions = hook.get("conditions")
+        if hook.get("steps") and actor:
+            from spawns.trigger_steps import start_trigger_steps
+
+            start_trigger_steps(
+                trigger=SimpleNamespace(**hook),
+                actor=actor,
+                room=resolved_room,
+                event_data=event_data,
+                gate_scope_key=scope_key,
+            )
+            continue
+
         if conditions and actor:
             evaluated = evaluate_conditions(
                 actor,
@@ -678,6 +735,7 @@ def execute_room_event_triggers(
 
         if not _is_cached_gate_allowed(hook, scope_key):
             continue
+
         _consume_cached_gate(hook, scope_key)
 
         script_lines = _split_trigger_script_lines(hook.get("script"))
@@ -743,8 +801,15 @@ def execute_mob_event_triggers(
     if target_mob_id is not None:
         mobs_qs = mobs_qs.filter(pk=target_mob_id)
     actor_world_id = getattr(actor, "world_id", None)
-    if isolate_runtime_world and actor_world_id:
+    # Authored rooms are shared by runtime instances, so a room id alone is
+    # never enough to select live mobs for an actor-caused event. Keep the
+    # explicit flag for compatibility, but always isolate when an actor
+    # provides the authoritative runtime world. An actorless caller that asks
+    # for isolation has no trustworthy runtime-world identity, so fail closed.
+    if actor_world_id:
         mobs_qs = mobs_qs.filter(world_id=actor_world_id)
+    elif isolate_runtime_world:
+        return
     if isinstance(actor, Mob):
         mobs_qs = mobs_qs.exclude(pk=actor.id)
     mobs = list(
@@ -764,12 +829,12 @@ def execute_mob_event_triggers(
             target_filter |= Q(target_type=mob_definition_ct, target_id=mob.definition_id)
 
     triggers = list(
-        Trigger.objects.filter(
+        _with_cached_step_marker(Trigger.objects.filter(
             world_id=trigger_world.id,
             kind=adv_consts.TRIGGER_KIND_EVENT,
             event=normalized_event,
             is_active=True,
-        )
+        ))
         .filter(target_filter)
         .order_by("order", "created_ts", "id")
     )
@@ -802,6 +867,22 @@ def execute_mob_event_triggers(
             ):
                 continue
 
+            scope_key = f"runtime:{mob.world_id}:mob:{mob.id}"
+            if _trigger_has_steps(trigger):
+                from spawns.trigger_steps import start_trigger_steps
+
+                start_trigger_steps(
+                    trigger=trigger,
+                    actor=evaluator,
+                    room=resolved_room,
+                    event_data={
+                        "event": normalized_event,
+                        "match": match_text or "",
+                    },
+                    gate_scope_key=scope_key,
+                )
+                continue
+
             if trigger.conditions:
                 evaluated = evaluate_conditions(
                     evaluator,
@@ -813,9 +894,9 @@ def execute_mob_event_triggers(
                 if not evaluated.get("result"):
                     continue
 
-            scope_key = f"mob:{mob.id}"
             if not _is_gate_allowed(trigger, scope_key):
                 continue
+
             _consume_gate(trigger, scope_key)
 
             script_lines = _split_trigger_script_lines(trigger.script)
@@ -848,14 +929,16 @@ def _trigger_scope_key(
     room: Room | None,
     zone: Zone | None,
     world: World | None,
+    runtime_world_id: int | None = None,
 ) -> str:
+    runtime_prefix = f"runtime:{runtime_world_id}:" if runtime_world_id else ""
     if trigger.scope == adv_consts.TRIGGER_SCOPE_ZONE and zone:
-        return f"zone:{zone.id}"
+        return f"{runtime_prefix}zone:{zone.id}"
     if trigger.scope == adv_consts.TRIGGER_SCOPE_WORLD and world:
-        return f"world:{world.id}"
+        return f"{runtime_prefix}world:{world.id}"
     if room:
-        return f"room:{room.id}"
-    return "unknown"
+        return f"{runtime_prefix}room:{room.id}"
+    return f"{runtime_prefix}unknown"
 
 
 def _trigger_gate_cache_key(trigger: Trigger, scope_key: str) -> str:
@@ -1075,6 +1158,7 @@ def _collect_display_action_labels(
             room=room,
             zone=zone,
             world=world,
+            runtime_world_id=getattr(actor, "world_id", None),
         )
         if not _is_gate_allowed(trigger, scope_key):
             continue
@@ -1194,6 +1278,41 @@ def execute_command_fallback_trigger(
             continue
         matched_any = True
 
+        scope_key = _trigger_scope_key(
+            trigger,
+            room=resolved_room,
+            zone=resolved_zone,
+            world=trigger_world,
+            runtime_world_id=getattr(actor, "world_id", None),
+        )
+
+        if _trigger_has_steps(trigger):
+            from spawns.trigger_steps import start_trigger_steps
+
+            started = start_trigger_steps(
+                trigger=trigger,
+                actor=actor,
+                room=resolved_room,
+                event_data={"command": command_text},
+                gate_scope_key=scope_key,
+            )
+            if started.started:
+                executed_any = True
+            elif started.code == "gated":
+                return TriggerExecutionResult(
+                    handled=True,
+                    feedback=TRIGGER_GATED_TEXT,
+                )
+            elif started.code == "conditions_failed":
+                if trigger.show_details_on_failure and not failure_text:
+                    failure_text = started.feedback
+            elif started.code in {"trigger_missing", "no_steps"}:
+                pass
+            elif started.feedback:
+                script_errors.append(started.feedback)
+                executed_any = True
+            continue
+
         if trigger.conditions:
             evaluated = evaluate_conditions(actor, trigger.conditions)
             if not evaluated.get("result"):
@@ -1205,14 +1324,9 @@ def execute_command_fallback_trigger(
                     )
                 continue
 
-        scope_key = _trigger_scope_key(
-            trigger,
-            room=resolved_room,
-            zone=resolved_zone,
-            world=trigger_world,
-        )
         if not _is_gate_allowed(trigger, scope_key):
             return TriggerExecutionResult(handled=True, feedback=TRIGGER_GATED_TEXT)
+
         _consume_gate(trigger, scope_key)
 
         script_lines = _split_trigger_script_lines(trigger.script)

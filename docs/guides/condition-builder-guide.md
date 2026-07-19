@@ -44,6 +44,7 @@ state-aware content should use the structured format.
 | `lte` | `{lte: [<path>, <value>]}` | Less than or equal. |
 | `in` | `{in: [<path>, [<value>, ...]]}` | Path value is in a list. |
 | `mob_present` | `{mob_present: <mob_definition_ref>}` | A spawned mob from that definition is present in the context room. |
+| `item_present` | `{item_present: {location: room, item: <item_definition_ref>}}` | A live item from that definition is present in the actor's inventory or context room. |
 | `quest_completed` | `{quest_completed: <quest_ref>}` | Player has completed a quest template. |
 | `objective_complete` | `{objective_complete: <objective_id>}` | Current quest objective is complete. |
 
@@ -150,6 +151,31 @@ Use a typed mob-definition ref rather than a spawned mob id. For movement
 hooks, the context room depends on the hook: `before_move_exit` checks the
 origin room, while `before_move_enter` checks the destination room.
 
+Require a barley seed in the triggering actor's inventory:
+
+```yaml
+conditions:
+  item_present:
+    location: actor_inventory
+    item: itemdefinition.barley-seed
+```
+
+Require at least two seedling items in the context room:
+
+```yaml
+conditions:
+  item_present:
+    location: room
+    item: itemdefinition.barley-seedling
+    count: 2
+```
+
+`item_present.location` supports `actor_inventory` and `room`. The optional
+`count` defaults to `1` and must be positive. Equipped items are not part of
+`actor_inventory`. Room checks include only live items in the current runtime
+world, so identical items in another multiplayer or instance run do not count.
+Use a portable `itemdefinition.<slug>` ref rather than a spawned item id.
+
 ## Triggers
 
 Triggers use conditions in `spec.conditions`.
@@ -194,8 +220,8 @@ Movement policy and movement event triggers receive extra event paths:
 
 For `before_move_enter` and `after_move_enter`, `room.*` and `state.room.*`
 refer to the destination room. For `before_move_exit` and `after_move_exit`,
-they refer to the origin room. `mob_present` follows the same context-room
-rule.
+they refer to the origin room. `mob_present` and room-located `item_present`
+follow the same context-room rule.
 
 For example, a movement policy whose condition is `not: {mob_present:
 mobdefinition.guard}` passes while the guard is absent and blocks movement

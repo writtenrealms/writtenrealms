@@ -1,3 +1,4 @@
+import json
 from unittest.mock import patch
 
 import yaml
@@ -7,8 +8,21 @@ from django.core.cache import cache
 
 from rest_framework.reverse import reverse
 
-from builders.models import BuilderAssignment, MobDefinition, Trigger, WorldBuilder
+from builders.models import (
+    BuilderAssignment,
+    ItemDefinition,
+    MobDefinition,
+    Trigger,
+    WorldBuilder,
+)
 from config import constants as adv_consts
+from core.trigger_steps import (
+    MAX_TRIGGER_CONSUME_ITEM_COUNT,
+    MAX_TRIGGER_ECHO_LENGTH,
+    MAX_TRIGGER_STEPS_SERIALIZED_BYTES,
+    TriggerStepSpecError,
+    normalize_trigger_steps,
+)
 from core.trigger_policy_cache import (
     TRIGGER_POLICY_CACHE_VERSION_FLOOR,
     bump_trigger_policy_cache_version,
@@ -16,7 +30,7 @@ from core.trigger_policy_cache import (
     trigger_policy_cache_version_key,
 )
 from tests.base import WorldTestCase
-from worlds.models import Room
+from worlds.models import Room, World, WorldConfig
 
 
 class AuthenticatedBuilderWorldTestCase(WorldTestCase):
@@ -413,6 +427,449 @@ spec:
             ],
         )
 
+    def test_apply_trigger_manifest_supports_typed_scheduled_steps(self):
+        seed = ItemDefinition.objects.create(
+            world=self.world,
+            slug="barley-seed",
+            name="a barley seed",
+        )
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="barley-seedling",
+            name="a barley seedling",
+        )
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="barley-growing",
+            name="a growing barley plant",
+        )
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  conditions:
+    item_present:
+      location: actor_inventory
+      item: {seed.id}
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: consume_item
+          actor: trigger_actor
+          item: itemdefinition.barley-seed
+          count: 1
+        - type: spawn_room_item
+          room: trigger_room
+          item: itemdefinition.barley-seedling
+          bind: crop
+    - after_seconds: 20
+      actions:
+        - type: replace_room_item
+          target: crop
+          with: itemdefinition.barley-growing
+        - type: echo
+          room: trigger_room
+          text: A murmur of growth fills the air.
+  on_step_error: cancel
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.trigger.refresh_from_db()
+        self.assertEqual(self.trigger.script, "")
+        self.assertEqual(self.trigger.on_step_error, "cancel")
+        self.assertEqual(self.trigger.steps[0]["after_seconds"], 0)
+        self.assertEqual(self.trigger.steps[0]["actions"][1]["bind"], "crop")
+        self.assertEqual(
+            self.trigger.steps[1]["actions"][0]["with"],
+            "itemdefinition.barley-growing",
+        )
+        self.assertEqual(
+            yaml.safe_load(self.trigger.conditions)["item_present"]["item"],
+            "itemdefinition.barley-seed",
+        )
+        trigger_payload = resp.data["trigger"]
+        self.assertEqual(trigger_payload["manifest"]["spec"]["steps"], self.trigger.steps)
+        self.assertEqual(trigger_payload["manifest"]["spec"]["on_step_error"], "cancel")
+
+    def test_partial_trigger_patch_preserves_structured_conditions(self):
+        seed = ItemDefinition.objects.create(
+            world=self.world,
+            slug="barley-seed",
+            name="a barley seed",
+        )
+        self.trigger.conditions = json.dumps({
+            "item_present": {
+                "location": "actor_inventory",
+                "item": f"itemdefinition.{seed.slug}",
+            },
+        })
+        self.trigger.save(update_fields=["conditions"])
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  gate_delay: 4
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.trigger.refresh_from_db()
+        self.assertEqual(self.trigger.gate_delay, 4)
+        self.assertEqual(
+            json.loads(self.trigger.conditions),
+            {
+                "item_present": {
+                    "location": "actor_inventory",
+                    "item": "itemdefinition.barley-seed",
+                },
+            },
+        )
+
+    def test_bare_numeric_itemdefinition_ids_normalize_to_portable_slugs(self):
+        seed = ItemDefinition.objects.create(
+            world=self.world,
+            slug="barley-seed",
+            name="a barley seed",
+        )
+        seedling = ItemDefinition.objects.create(
+            world=self.world,
+            slug="barley-seedling",
+            name="a barley seedling",
+        )
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  conditions:
+    item_present:
+      location: actor_inventory
+      item: {seed.id}
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: consume_item
+          actor: trigger_actor
+          item: {seed.id}
+        - type: spawn_room_item
+          room: trigger_room
+          item: {seedling.id}
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.trigger.refresh_from_db()
+        self.assertEqual(
+            json.loads(self.trigger.conditions)["item_present"]["item"],
+            "itemdefinition.barley-seed",
+        )
+        self.assertEqual(
+            self.trigger.steps[0]["actions"][0]["item"],
+            "itemdefinition.barley-seed",
+        )
+        self.assertEqual(
+            self.trigger.steps[0]["actions"][1]["item"],
+            "itemdefinition.barley-seedling",
+        )
+
+    def test_typed_numeric_itemdefinition_slug_is_not_treated_as_a_database_id(self):
+        legacy_id_definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="legacy-id-definition",
+            name="a legacy ID definition",
+        )
+        numeric_slug = str(legacy_id_definition.id)
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug=numeric_slug,
+            name="a numbered seed",
+        )
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  conditions:
+    item_present:
+      location: actor_inventory
+      item: itemdefinition.{numeric_slug}
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: consume_item
+          actor: trigger_actor
+          item: itemdefinition.{numeric_slug}
+        - type: spawn_room_item
+          room: trigger_room
+          item: item_definition.{numeric_slug}
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.trigger.refresh_from_db()
+        expected_ref = f"itemdefinition.{numeric_slug}"
+        self.assertEqual(
+            json.loads(self.trigger.conditions)["item_present"]["item"],
+            expected_ref,
+        )
+        self.assertEqual(
+            self.trigger.steps[0]["actions"][0]["item"],
+            expected_ref,
+        )
+        self.assertEqual(
+            self.trigger.steps[0]["actions"][1]["item"],
+            expected_ref,
+        )
+
+    def test_instance_trigger_steps_resolve_base_world_item_definitions(self):
+        seed = ItemDefinition.objects.create(
+            world=self.world,
+            slug="barley-seed",
+            name="a barley seed",
+        )
+        instance_world = World.objects.new_world(
+            name="Barley Field Instance",
+            author=self.user,
+            config=WorldConfig.objects.create(),
+            instance_of=self.world,
+        )
+        instance_room = instance_world.config.starting_room
+        apply_ep = reverse(
+            "builder-world-manifest-apply",
+            args=[instance_world.id],
+        )
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{instance_world.id}
+  name: Plant Instance Barley
+spec:
+  scope: room
+  kind: command
+  target:
+    type: room
+    key: room.{instance_room.id}
+  match: plant seed
+  conditions:
+    item_present:
+      location: actor_inventory
+      item: {seed.id}
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: consume_item
+          actor: trigger_actor
+          item: {seed.id}
+"""
+
+        resp = self.client.post(apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        trigger = Trigger.objects.get(
+            world=instance_world,
+            name="Plant Instance Barley",
+        )
+        self.assertEqual(
+            json.loads(trigger.conditions)["item_present"]["item"],
+            "itemdefinition.barley-seed",
+        )
+        self.assertEqual(
+            trigger.steps[0]["actions"][0]["item"],
+            "itemdefinition.barley-seed",
+        )
+
+        # Exercise defensive export canonicalization for older/programmatic
+        # rows that still contain numeric refs.
+        trigger.conditions = json.dumps({
+            "item_present": {
+                "location": "actor_inventory",
+                "item": seed.id,
+            },
+        })
+        trigger.steps[0]["actions"][0]["item"] = seed.id
+        trigger.save(update_fields=["conditions", "steps"])
+        export_resp = self.client.get(
+            reverse("builder-world-export", args=[instance_world.id])
+        )
+
+        self.assertEqual(export_resp.status_code, 200, export_resp.data)
+        exported_trigger = next(
+            document
+            for document in yaml.safe_load_all(export_resp.data["yaml"])
+            if document
+            and document.get("kind") == "trigger"
+            and document.get("metadata", {}).get("name") == "Plant Instance Barley"
+        )
+        self.assertEqual(
+            exported_trigger["spec"]["conditions"]["item_present"]["item"],
+            "itemdefinition.barley-seed",
+        )
+        self.assertEqual(
+            exported_trigger["spec"]["steps"][0]["actions"][0]["item"],
+            "itemdefinition.barley-seed",
+        )
+
+    def test_apply_trigger_manifest_rejects_script_with_steps(self):
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="barley-seedling",
+            name="a barley seedling",
+        )
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: /echo -- This conflicts.
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: spawn_room_item
+          room: trigger_room
+          item: itemdefinition.barley-seedling
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("alternatives", str(resp.data))
+
+    def test_apply_trigger_manifest_rejects_invalid_step_timing_and_binding(self):
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="barley-growing",
+            name="a growing barley plant",
+        )
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  steps:
+    - after_seconds: 1
+      actions:
+        - type: replace_room_item
+          target: crop
+          with: itemdefinition.barley-growing
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("after_seconds must be 0", str(resp.data))
+
+    def test_apply_trigger_manifest_rejects_unknown_step_binding(self):
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="barley-growing",
+            name="a growing barley plant",
+        )
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: replace_room_item
+          target: crop
+          with: itemdefinition.barley-growing
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("binding created by an earlier", str(resp.data))
+
+    def test_apply_trigger_manifest_rejects_non_string_echo_and_excessive_item_count(self):
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="barley-seed",
+            name="a barley seed",
+        )
+        invalid_actions = (
+            (
+                """
+        - type: echo
+          room: trigger_room
+          text:
+            unexpected: mapping
+""",
+                "text must be a string",
+            ),
+            (
+                f"""
+        - type: consume_item
+          actor: trigger_actor
+          item: itemdefinition.barley-seed
+          count: {MAX_TRIGGER_CONSUME_ITEM_COUNT + 1}
+""",
+                f"cannot exceed {MAX_TRIGGER_CONSUME_ITEM_COUNT}",
+            ),
+        )
+
+        for action_yaml, expected_error in invalid_actions:
+            with self.subTest(expected_error=expected_error):
+                manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  steps:
+    - after_seconds: 0
+      actions:
+{action_yaml}
+"""
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": manifest},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 400)
+                self.assertIn(expected_error, str(resp.data))
+
+    def test_normalized_trigger_steps_have_a_serialized_size_cap(self):
+        steps = [
+            {
+                "after_seconds": 0 if step_index == 0 else 1,
+                "actions": [
+                    {
+                        "type": "echo",
+                        "room": "trigger_room",
+                        "text": "x" * MAX_TRIGGER_ECHO_LENGTH,
+                    }
+                    for _ in range(16)
+                ],
+            }
+            for step_index in range(5)
+        ]
+
+        with self.assertRaisesRegex(
+            TriggerStepSpecError,
+            f"cannot exceed {MAX_TRIGGER_STEPS_SERIALIZED_BYTES} bytes",
+        ):
+            normalize_trigger_steps(steps)
+
     def test_apply_trigger_manifest_without_api_version(self):
         manifest = f"""
 kind: trigger
@@ -746,7 +1203,6 @@ spec:
             get_trigger_policy_cache_version(self.world.id),
             old_version,
         )
-
         refreshed_hooks = cached_room_hooks(
             world_id=self.world.id,
             room_id=self.room.id,
@@ -754,6 +1210,48 @@ spec:
             event=adv_consts.TRIGGER_EVENT_AFTER_MOVE_ENTER,
         )
         self.assertEqual(refreshed_hooks[0]["script"], new_script)
+
+    def test_cached_room_hook_stores_only_typed_step_marker(self):
+        _, cached_room_hooks, room_hook_cache_key = self._trigger_hook_cache_helpers()
+        room_ct = ContentType.objects.get_for_model(Room)
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=room_ct,
+            target_id=self.room.id,
+            event=adv_consts.TRIGGER_EVENT_AFTER_MOVE_ENTER,
+            script="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "The room changes.",
+                        },
+                    ],
+                },
+            ],
+        )
+        cache_key = room_hook_cache_key(
+            world_id=self.world.id,
+            room_id=self.room.id,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            event=adv_consts.TRIGGER_EVENT_AFTER_MOVE_ENTER,
+        )
+        cache.delete(cache_key)
+
+        hooks = cached_room_hooks(
+            world_id=self.world.id,
+            room_id=self.room.id,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            event=adv_consts.TRIGGER_EVENT_AFTER_MOVE_ENTER,
+        )
+
+        self.assertIs(hooks[0]["steps"], True)
+        self.assertNotIn("actions", hooks[0])
 
     def test_trigger_policy_cache_does_not_reuse_legacy_version_namespace(self):
         cache_key = trigger_policy_cache_version_key(self.world.id)

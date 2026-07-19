@@ -1,7 +1,7 @@
 import json
 
 from builders.currencies import create_currency
-from builders.models import MobDefinition
+from builders.models import ItemDefinition, MobDefinition
 from core.condition_dsl import (
     ConditionContext,
     evaluate_condition,
@@ -11,7 +11,7 @@ from core.condition_dsl import (
 from core.conditions import evaluate_conditions
 from core.scoped_state import STATE_SCOPE_WORLD, set_state_value
 from quests.services.predicates import evaluate_condition as evaluate_quest_condition
-from spawns.models import Mob, PlayerCurrencyBalance
+from spawns.models import Item, Mob, PlayerCurrencyBalance
 from tests.base import WorldTestCase
 
 
@@ -230,6 +230,162 @@ class TestSharedConditionDsl(WorldTestCase):
             {"mob_present": {}},
             {"mob_present": {"ref": "mobdefinition.east-gate-guard", "count": 0}},
             {"mob_present": {"ref": "mobdefinition.east-gate-guard", "count": True}},
+        ):
+            with self.subTest(payload=payload):
+                with self.assertRaises(ValueError):
+                    validate_condition_payload(payload)
+
+    def test_item_present_resolves_portable_actor_inventory_ref(self):
+        definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="barley-seed",
+            name="a barley seed",
+        )
+        definition.spawn(self.player, self.spawn_world)
+        condition = {
+            "item_present": {
+                "location": "actor_inventory",
+                "item": "itemdefinition.barley-seed",
+            },
+        }
+
+        with self.assertNumQueries(1):
+            self.assertTrue(
+                evaluate_condition(condition, context=ConditionContext(actor=self.player))
+            )
+
+        with self.assertNumQueries(1):
+            self.assertTrue(
+                evaluate_conditions(
+                    self.player,
+                    json.dumps(condition),
+                    room=self.room,
+                    world=self.spawn_world,
+                )["result"]
+            )
+
+    def test_item_present_distinguishes_typed_numeric_slugs_from_bare_ids(self):
+        legacy_id_definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="legacy-id-definition",
+            name="a legacy ID definition",
+        )
+        numeric_slug_definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug=str(legacy_id_definition.id),
+            name="a numbered seed",
+        )
+        numeric_slug_definition.spawn(self.player, self.spawn_world)
+        context = ConditionContext(actor=self.player)
+
+        self.assertTrue(
+            evaluate_condition(
+                {
+                    "item_present": {
+                        "location": "actor_inventory",
+                        "item": f"itemdefinition.{legacy_id_definition.id}",
+                    },
+                },
+                context=context,
+            )
+        )
+        self.assertFalse(
+            evaluate_condition(
+                {
+                    "item_present": {
+                        "location": "actor_inventory",
+                        "item": legacy_id_definition.id,
+                    },
+                },
+                context=context,
+            )
+        )
+
+        legacy_id_definition.spawn(self.player, self.spawn_world)
+        self.assertTrue(
+            evaluate_condition(
+                {
+                    "item_present": {
+                        "location": "actor_inventory",
+                        "item": legacy_id_definition.id,
+                    },
+                },
+                context=context,
+            )
+        )
+
+    def test_item_present_isolates_room_items_by_runtime_world_and_live_state(self):
+        definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="barley-seedling",
+            name="a barley seedling",
+        )
+        other_runtime_world = self.world.create_spawn_world()
+        definition.spawn(self.room, other_runtime_world)
+        Item.objects.create(
+            world=self.spawn_world,
+            container=self.room,
+            definition=definition,
+            name="a pending barley seedling",
+            is_pending_deletion=True,
+        )
+        condition = {
+            "item_present": {
+                "location": "room",
+                "item": "itemdefinition.barley-seedling",
+                "count": 2,
+            },
+        }
+        context = ConditionContext(
+            actor=self.player,
+            room=self.room,
+            world=self.spawn_world,
+        )
+
+        self.assertFalse(evaluate_condition(condition, context=context))
+        definition.spawn(self.room, self.spawn_world)
+        self.assertFalse(evaluate_condition(condition, context=context))
+        definition.spawn(self.room, self.spawn_world)
+        self.assertTrue(evaluate_condition(condition, context=context))
+
+    def test_item_present_validation_requires_location_item_and_positive_count(self):
+        validate_condition_payload({
+            "item_present": {
+                "location": "room",
+                "item": "itemdefinition.barley-seedling",
+                "count": 2,
+            },
+        })
+
+        for payload in (
+            {"item_present": "itemdefinition.barley-seedling"},
+            {"item_present": {"location": "room"}},
+            {
+                "item_present": {
+                    "location": "equipment",
+                    "item": "itemdefinition.barley-seedling",
+                },
+            },
+            {
+                "item_present": {
+                    "location": "room",
+                    "item": "mobdefinition.barley-seedling",
+                },
+            },
+            {
+                "item_present": {
+                    "location": "room",
+                    "item": "itemdefinition.barley-seedling",
+                    "count": 0,
+                },
+            },
+            {
+                "item_present": {
+                    "location": "room",
+                    "item": "itemdefinition.barley-seedling",
+                    "count": True,
+                },
+            },
         ):
             with self.subTest(payload=payload):
                 with self.assertRaises(ValueError):

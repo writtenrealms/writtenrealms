@@ -306,6 +306,55 @@ def evaluate_conditions(
 
     structured_condition = structured_condition_payload(text)
 
+    # Presence predicates already evaluate against indexed runtime querysets in
+    # ``condition_dsl``.  Building the legacy actor/room/world dictionaries
+    # first would serialize every item and character in a busy room only to
+    # discard that data, turning a single EXISTS check into work proportional
+    # to room occupancy.  Keep this deliberately narrow: comparison predicates
+    # may depend on legacy-derived fields in those dictionaries and continue
+    # through the compatibility path below.
+    def uses_only_direct_presence_predicates(value):
+        if isinstance(value, bool):
+            return True
+        if isinstance(value, list):
+            return all(uses_only_direct_presence_predicates(child) for child in value)
+        if not isinstance(value, dict) or len(value) != 1:
+            return False
+        operator, operand = next(iter(value.items()))
+        if operator in ("item_present", "mob_present", "always"):
+            return True
+        if operator in ("all", "any"):
+            return isinstance(operand, list) and all(
+                uses_only_direct_presence_predicates(child) for child in operand
+            )
+        if operator == "not":
+            return uses_only_direct_presence_predicates(operand)
+        return False
+
+    if (
+        structured_condition is not None
+        and uses_only_direct_presence_predicates(structured_condition)
+    ):
+        condition_room = room if room is not None else getattr(actor, 'room', None)
+        condition_world = (
+            world
+            if world is not None
+            else actor if isinstance(actor, World) else None
+        )
+        return {
+            'result': evaluate_structured_condition(
+                condition=structured_condition,
+                context=ConditionContext(
+                    actor=actor,
+                    room=condition_room,
+                    zone=zone,
+                    world=condition_world,
+                    event_data=event_data if isinstance(event_data, dict) else {},
+                ),
+            ),
+            'detail': '',
+        }
+
     # We fetch this data up front so that each condition has all of the data it needs.
     actor_data = {}
     room_data = {'inventory': [], 'chars': []}

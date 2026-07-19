@@ -749,6 +749,8 @@ class Trigger(AdventBaseModel):
     name = models.TextField(**optional)
     match = models.TextField(**optional)
     script = models.TextField(**optional)
+    steps = models.JSONField(default=list, blank=True, db_default=[])
+    on_step_error = models.TextField(default='cancel')
     conditions = models.TextField(**optional)
     event = models.TextField(
         choices=list_to_choice(api_consts.TRIGGER_EVENTS),

@@ -1325,6 +1325,8 @@ def _serialize_builder_trigger_response(trigger):
     payload.update({
         "conditions": manifest_spec.get("conditions", ""),
         "script": manifest_spec.get("script", ""),
+        "steps": manifest_spec.get("steps", []),
+        "on_step_error": manifest_spec.get("on_step_error", "cancel"),
         "show_details_on_failure": bool(manifest_spec.get("show_details_on_failure")),
         "failure_message": manifest_spec.get("failure_message", ""),
         "display_action_in_room": bool(manifest_spec.get("display_action_in_room")),

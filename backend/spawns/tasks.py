@@ -53,6 +53,20 @@ def prune_crafting_action_receipts(retention_days: int = 7) -> int:
     return deleted
 
 
+@shared_task(name="spawns.tasks.run_scheduled_trigger_steps", ignore_result=True)
+def run_scheduled_trigger_steps(limit: int = 100):
+    from spawns.trigger_steps import process_due_trigger_runs
+
+    return process_due_trigger_runs(limit=limit)
+
+
+@shared_task(name="spawns.tasks.prune_scheduled_trigger_runs", ignore_result=True)
+def prune_scheduled_trigger_runs(retention_days: int = 7) -> int:
+    from spawns.trigger_steps import prune_terminal_trigger_runs
+
+    return prune_terminal_trigger_runs(retention_days=retention_days)
+
+
 def _notify_world_lifecycle(player: Player, world: World, action: str) -> None:
     if player.is_invisible:
         return

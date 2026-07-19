@@ -102,6 +102,11 @@ from core.stat_system import (
     get_world_stat_system,
     normalize_stat_system,
 )
+from core.trigger_steps import (
+    TriggerStepSpecError,
+    normalize_trigger_step_error_policy,
+    normalize_trigger_steps,
+)
 from core.world_config import (
     INSTANCE_INHERITED_MANIFEST_FIELDS,
     INSTANCE_LOCAL_MANIFEST_FIELDS,
@@ -390,6 +395,8 @@ class ParsedTriggerManifest:
     target_id: int
     match: str
     script: str
+    steps: list[dict[str, Any]]
+    on_step_error: str
     conditions: str
     event: str
     show_details_on_failure: bool
@@ -2128,6 +2135,8 @@ def trigger_to_manifest(trigger: Trigger) -> dict[str, Any]:
             },
             "match": trigger.match or "",
             "script": trigger.script or "",
+            "steps": trigger.steps or [],
+            "on_step_error": trigger.on_step_error or "cancel",
             "conditions": _deserialize_conditions_payload(trigger.conditions),
             "event": trigger.event or "",
             "show_details_on_failure": bool(trigger.show_details_on_failure),
@@ -2171,10 +2180,97 @@ def _deserialize_conditions_payload(raw_conditions: str | None) -> Any:
     return raw_conditions or ""
 
 
-def _coerce_conditions_payload(raw_conditions: Any) -> str:
+def _normalize_trigger_item_definition_ref(
+    *,
+    world: World,
+    value: Any,
+    field_name: str,
+) -> str:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(
+            f"{field_name} must reference an itemdefinition in this world."
+        )
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(f"{field_name} is required.")
+
+    item_definition = None
+    definition_world_id = world.instance_of_id or world.id
+    if isinstance(value, int):
+        item_definition = ItemDefinition.objects.filter(
+            world_id=definition_world_id,
+            pk=value,
+        ).first()
+    else:
+        prefix, separator, raw_value = text.partition(".")
+        if separator:
+            if prefix.strip().lower() not in {
+                "itemdefinition",
+                "item_definition",
+            }:
+                raise serializers.ValidationError(
+                    f"{field_name} must reference an itemdefinition."
+                )
+            text = raw_value.strip()
+            if not text:
+                raise serializers.ValidationError(f"{field_name} is required.")
+            # Typed refs are portable slug refs, including numeric-only slugs.
+            item_definition = ItemDefinition.objects.filter(
+                world_id=definition_world_id,
+                slug=text,
+            ).first()
+        elif text.isdigit():
+            item_definition = ItemDefinition.objects.filter(
+                world_id=definition_world_id,
+                pk=int(text),
+            ).first()
+        else:
+            item_definition = ItemDefinition.objects.filter(
+                world_id=definition_world_id,
+                slug=text,
+            ).first()
+
+    if item_definition is None:
+        raise serializers.ValidationError(
+            f"{field_name} references an unknown item definition in this world."
+        )
+    return f"itemdefinition.{item_definition.slug}"
+
+
+def _normalize_trigger_condition_item_refs(value: Any, *, world: World) -> Any:
+    if isinstance(value, list):
+        return [
+            _normalize_trigger_condition_item_refs(item, world=world)
+            for item in value
+        ]
+    if not isinstance(value, dict):
+        return value
+
+    normalized = dict(value)
+    item_present = normalized.get("item_present")
+    if isinstance(item_present, dict) and "item" in item_present:
+        normalized["item_present"] = {
+            **item_present,
+            "item": _normalize_trigger_item_definition_ref(
+                world=world,
+                value=item_present.get("item"),
+                field_name="spec.conditions.item_present.item",
+            ),
+        }
+    for key, child in list(normalized.items()):
+        if key == "item_present":
+            continue
+        normalized[key] = _normalize_trigger_condition_item_refs(child, world=world)
+    return normalized
+
+
+def _coerce_conditions_payload(raw_conditions: Any, *, world: World) -> str:
+    if isinstance(raw_conditions, str):
+        raw_conditions = _deserialize_conditions_payload(raw_conditions)
     if isinstance(raw_conditions, (dict, list)):
-        builder_serializers.validate_conditions(None, raw_conditions)
-        return json.dumps(raw_conditions)
+        normalized = _normalize_trigger_condition_item_refs(raw_conditions, world=world)
+        builder_serializers.validate_conditions(None, normalized)
+        return json.dumps(normalized)
     conditions = _coerce_text(raw_conditions)
     if conditions:
         builder_serializers.validate_conditions(None, conditions)
@@ -2225,6 +2321,8 @@ def room_trigger_template_manifest(*, world: World, room: Room) -> dict[str, Any
                 "/cmd room -- /echo *CLICK*.\n"
                 "/cmd room -- /echo Something happens.\n"
             ),
+            "steps": [],
+            "on_step_error": "cancel",
             "conditions": "",
             "show_details_on_failure": False,
             "failure_message": "",
@@ -2263,6 +2361,8 @@ def mob_trigger_template_manifest(*, world: World, mob_definition: MobDefinition
             "event": adv_consts.MOB_REACTION_EVENT_SAYING,
             "match": "hello and (traveler or friend)",
             "script": "say Welcome, traveler.",
+            "steps": [],
+            "on_step_error": "cancel",
             "conditions": "",
             "show_details_on_failure": False,
             "failure_message": "",
@@ -2882,6 +2982,7 @@ def parse_trigger_manifest(
 
     conditions = _coerce_conditions_payload(
         spec.get("conditions", trigger.conditions if trigger else ""),
+        world=world,
     )
 
     match = _coerce_text(spec.get("match", trigger.match if trigger else ""))
@@ -2906,6 +3007,39 @@ def parse_trigger_manifest(
     ):
         raise serializers.ValidationError(f"spec.match is required for event '{event}'.")
 
+    script = _coerce_text(spec.get("script", trigger.script if trigger else ""))
+    raw_steps = spec.get("steps", trigger.steps if trigger else [])
+    if "steps" in spec and "script" not in spec and raw_steps:
+        script = ""
+    if "script" in spec and "steps" not in spec and script.strip():
+        raw_steps = []
+    try:
+        steps = normalize_trigger_steps(
+            raw_steps,
+            item_ref_normalizer=lambda value, field_name: (
+                _normalize_trigger_item_definition_ref(
+                    world=world,
+                    value=value,
+                    field_name=field_name,
+                )
+            ),
+        )
+        on_step_error = normalize_trigger_step_error_policy(
+            spec.get(
+                "on_step_error",
+                trigger.on_step_error if trigger else "cancel",
+            )
+        )
+    except TriggerStepSpecError as exc:
+        raise serializers.ValidationError(str(exc))
+
+    if script.strip() and steps:
+        raise serializers.ValidationError(
+            "spec.script and spec.steps are alternatives; only one may be non-empty."
+        )
+    if kind == adv_consts.TRIGGER_KIND_POLICY and steps:
+        raise serializers.ValidationError("Policy triggers cannot define spec.steps.")
+
     return ParsedTriggerManifest(
         world=world,
         trigger=trigger,
@@ -2916,7 +3050,9 @@ def parse_trigger_manifest(
         target_type=target_type,
         target_id=target_id,
         match=match,
-        script=_coerce_text(spec.get("script", trigger.script if trigger else "")),
+        script=script,
+        steps=steps,
+        on_step_error=on_step_error,
         conditions=conditions,
         event=event,
         show_details_on_failure=_coerce_bool(
@@ -6925,6 +7061,8 @@ def apply_trigger_manifest(parsed: ParsedTriggerManifest) -> Trigger:
             target_id=parsed.target_id,
             match=parsed.match,
             script=parsed.script,
+            steps=parsed.steps,
+            on_step_error=parsed.on_step_error,
             conditions=parsed.conditions,
             event=parsed.event,
             show_details_on_failure=parsed.show_details_on_failure,
@@ -6942,6 +7080,8 @@ def apply_trigger_manifest(parsed: ParsedTriggerManifest) -> Trigger:
     trigger.target_id = parsed.target_id
     trigger.match = parsed.match
     trigger.script = parsed.script
+    trigger.steps = parsed.steps
+    trigger.on_step_error = parsed.on_step_error
     trigger.conditions = parsed.conditions
     trigger.event = parsed.event
     trigger.show_details_on_failure = parsed.show_details_on_failure

@@ -2,6 +2,10 @@
 
 This note explains what happens at runtime when a command trigger with a multi-line `spec.script` is invoked.
 
+For builder-authored offsets, transaction-safe item actions, exact item
+bindings, and durable continuation, use typed `spec.steps` instead. See
+[trigger-scheduled-step-execution.md](trigger-scheduled-step-execution.md).
+
 ## Triggering
 
 When a player/mob types a command that matches `trigger.match` and passes conditions:

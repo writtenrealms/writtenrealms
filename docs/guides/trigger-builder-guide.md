@@ -19,7 +19,7 @@ For the shared condition syntax used by triggers, quests, and abilities, read
 A trigger has one of three jobs:
 
 - `command`: watch for player-entered text such as `pull lever`, optionally
-  check conditions, then run a script
+  check conditions, then run a script or typed timed steps
 - `policy`: decide whether a core action may happen, such as entering a room
 - `event`: react after something happened, such as a player entering a room
 
@@ -28,7 +28,7 @@ For room builders, the most common trigger is a room-scoped command trigger:
 - the player types something like `pull lever`
 - the trigger checks `match`
 - the trigger checks `conditions`
-- the trigger runs `script`
+- the trigger runs either `script` or `steps`
 
 Room triggers also support movement policies and post-move room events. Those
 use the same trigger manifest contract and shared condition system. Movement
@@ -96,6 +96,8 @@ spec:
     key: room.10
   match: pull lever
   script: /cmd room -- /echo -- The lever clicks.
+  steps: []
+  on_step_error: cancel
   conditions: ""
   show_details_on_failure: false
   failure_message: ""
@@ -141,8 +143,12 @@ If neither is present, the manifest creates a new trigger.
   points at the current room and usually should stay that way.
 - `match`: the authored matcher expression. Required for command triggers and
   mob `say`, `receive`, `periodic`, and `social` event triggers.
-- `script`: the commands to run when a command or event trigger fires. Policy
-  triggers do not run scripts.
+- `script`: free-form command lines to run when a command or event trigger
+  fires. Use this for immediate command-oriented behavior.
+- `steps`: typed, transaction-safe actions with builder-authored timing. Use
+  this for durable item sequences and other supported timed behavior.
+- `on_step_error`: delayed-step failure policy. The current supported value is
+  `cancel`.
 - `conditions`: optional gate. Leave blank for no gate.
 - `show_details_on_failure`: if `true`, condition failure can send feedback to
   the player.
@@ -269,6 +275,12 @@ For the full operator and path reference, see
 
 `spec.script` is a text command script.
 
+`script` and `steps` are alternatives. A trigger cannot have both non-empty.
+For a partial update, setting non-empty `steps` while omitting `script` clears
+an existing script; setting a non-empty `script` while omitting `steps` clears
+existing steps. When a manifest includes both fields, leave the unused one
+empty.
+
 Each non-empty line is treated as one script line.
 Each line can also contain `&&` to run multiple commands immediately in order.
 
@@ -294,6 +306,8 @@ Practical guidance:
 - use one line when everything should happen immediately
 - use multiple lines when you want a paced reveal
 - prefer simple, explicit commands over one very dense line
+- use `steps` instead when exact item identity, configurable timing, durable
+  continuation, or per-step transactions matter
 
 Common commands you will often use in trigger scripts:
 
@@ -310,7 +324,150 @@ Common commands you will often use in trigger scripts:
 For the full slash command matrix and command-by-command reference, see
 [builder-command-reference.md](/Users/teebes/code/writtenrealms/docs/guides/builder-command-reference.md).
 
-### Writing State
+## Writing `spec.steps`
+
+`spec.steps` is a small typed sequence for effects that unfold over time. Each
+`after_seconds` value is authored by the builder and is measured from the
+previous step. The first step must use `0`; later steps must use a positive
+value.
+
+This is the complete barley-growth sequence:
+
+```yaml
+kind: trigger
+metadata:
+  world: world.1
+  name: Plant Barley
+spec:
+  scope: room
+  kind: command
+  target:
+    type: room
+    key: room.128377
+  match: plant seed
+  script: ""
+  conditions:
+    all:
+      - item_present:
+          location: actor_inventory
+          item: itemdefinition.barley-seed
+      - not:
+          any:
+            - item_present:
+                location: room
+                item: itemdefinition.barley-seedling
+            - item_present:
+                location: room
+                item: itemdefinition.barley-growing
+            - item_present:
+                location: room
+                item: itemdefinition.barley-flowering
+            - item_present:
+                location: room
+                item: itemdefinition.barley-mature
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: consume_item
+          actor: trigger_actor
+          item: itemdefinition.barley-seed
+          count: 1
+        - type: spawn_room_item
+          room: trigger_room
+          item: itemdefinition.barley-seedling
+          bind: crop
+        - type: echo
+          room: trigger_room
+          text: A soft rustle captures your attention as the seedling quivers, beginning its journey to maturity.
+    - after_seconds: 20
+      actions:
+        - type: replace_room_item
+          target: crop
+          with: itemdefinition.barley-growing
+        - type: echo
+          room: trigger_room
+          text: A murmur of growth fills the air as the barley plant stretches skyward, reaching for the sun's nurturing embrace.
+    - after_seconds: 20
+      actions:
+        - type: replace_room_item
+          target: crop
+          with: itemdefinition.barley-flowering
+        - type: echo
+          room: trigger_room
+          text: A burst of floral scent envelops the altar as the barley plant's flowers open, heralding the onset of fruition.
+    - after_seconds: 20
+      actions:
+        - type: replace_room_item
+          target: crop
+          with: itemdefinition.barley-mature
+        - type: echo
+          room: trigger_room
+          text: A rich, grainy aroma fills the air, announcing that the barley has reached its full, harvest-ready splendor.
+  on_step_error: cancel
+  show_details_on_failure: true
+  failure_message: You need a barley seed, and no barley can already be growing here.
+  display_action_in_room: true
+  gate_delay: 0
+  order: 0
+  is_active: true
+```
+
+The example requires five authored item definitions:
+
+- `itemdefinition.barley-seed`
+- `itemdefinition.barley-seedling`
+- `itemdefinition.barley-growing`
+- `itemdefinition.barley-flowering`
+- `itemdefinition.barley-mature`
+
+The initial step checks the trigger conditions, consumes the seed, spawns the
+seedling, records its exact runtime item id as `crop`, and queues the echo in
+one database transaction. If any action fails, none of that step takes effect.
+
+Later steps are durable database work. The offsets above mean `t+0`, `t+20`,
+`t+40`, and `t+60`, even if a worker runs one step late. The sequence remains
+attached to the original runtime world and room if the triggering player moves
+or logs out. A due step normally runs within one game-heartbeat interval; this
+is near-real-time scheduling rather than an exact wall-clock guarantee. After
+worker downtime or backlog, several overdue steps may catch up in one bounded
+worker pass, so their echoes can arrive close together.
+
+### Supported Step Actions
+
+| Type | Required fields | Effect |
+| --- | --- | --- |
+| `consume_item` | `actor: trigger_actor`, `item`, optional `count` | Removes exact-definition items from the triggering actor's inventory. `count` defaults to `1`. |
+| `spawn_room_item` | `room: trigger_room`, `item`, optional `bind` | Spawns an item in the triggering room. `bind` names that exact runtime item for later steps. |
+| `replace_room_item` | `target`, `with` | Replaces the exact bound room item and updates the same binding to the replacement. |
+| `echo` | `room: trigger_room`, `text` | Sends text to players currently in the triggering runtime room. |
+
+Use portable item refs such as `itemdefinition.barley-seed`, not database ids.
+`echo.text` is literal text; unlike `script`, it does not render template
+variables such as `{{ actor_key }}`.
+Binding names use lowercase letters, numbers, and underscores, begin with a
+letter, and are at most 64 characters. A replacement target must refer to a
+binding created by an earlier `spawn_room_item`; `previous_stage` is not an
+implicit target when multiple items could have been spawned.
+
+A trigger may contain at most 32 steps and each step at most 16 actions. Each
+`after_seconds` value and the sum of all `after_seconds` values may be at most
+`31,536,000` (one year). `consume_item.count` may be at most `1,000`, and
+`echo.text` may contain at most 4,000 characters. The complete normalized
+`steps` payload may be at most 256 KiB when serialized as UTF-8 JSON.
+
+One actor can have only one active run of the same trigger in the same runtime
+world and room. Trying that trigger again while its sequence is active returns
+`already_running`; another actor may start an independent run. Completed and
+cancelled runs do not block a new attempt. An actor may have at most 16 active
+typed sequences in one runtime world; another start returns
+`too_many_active_sequences` until one finishes or cancels.
+
+Each step is atomic. With `on_step_error: cancel`, a missing or harvested bound
+item rolls back that entire step and cancels the remaining sequence. Completed
+earlier steps stay completed. Put actions that must succeed or fail together in
+the same step.
+
+## Writing State
 
 Use `/state` when a trigger needs to record runtime facts.
 
@@ -333,7 +490,7 @@ This sets `state.character.pull_lever` on the player who triggered the room
 command. Room-issued trigger scripts should use `{{ actor_key }}` rather than
 `self`, because the issuer is the room.
 
-### Loading And Granting Items
+## Loading And Granting Items
 
 Use `/load` when the issuer itself should receive the item, or when a room
 should place the item on the ground.

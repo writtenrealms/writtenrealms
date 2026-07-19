@@ -718,16 +718,72 @@ def _serialize_social_manifest(social: Social) -> dict[str, Any]:
     )
 
 
+def _build_entity_ref_cache(
+    *,
+    item_definitions: list[ItemDefinition],
+    mob_definitions: list[MobDefinition],
+) -> dict[tuple[str, str, Any], str]:
+    cache: dict[tuple[str, str, Any], str] = {}
+    for entity_type, definitions in (
+        ("itemdefinition", item_definitions),
+        ("mobdefinition", mob_definitions),
+    ):
+        for definition in definitions:
+            if not definition.slug:
+                continue
+            canonical = f"{entity_type}.{definition.slug}"
+            cache[(entity_type, "id", definition.id)] = canonical
+            cache[(entity_type, "slug", definition.slug)] = canonical
+    return cache
+
+
+def _entity_ref_cache_key(
+    value: Any,
+    *,
+    expected_type: str,
+) -> tuple[str, str, Any] | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return expected_type, "id", value
+
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return expected_type, "id", int(text)
+
+    prefix, separator, raw_value = text.partition(".")
+    if separator:
+        if quest_entity_refs.canonical_entity_type(prefix) != expected_type:
+            return None
+        text = raw_value.strip()
+        if not text:
+            return None
+        if text.isdigit() and expected_type != "itemdefinition":
+            return expected_type, "id", int(text)
+        # Typed item refs are canonical slug refs, including numeric-only
+        # slugs. Bare numeric values above remain the legacy id form.
+    return expected_type, "slug", text
+
+
 def _canonicalize_entity_ref(
     value: Any,
     *,
     world: World,
     expected_type: str,
+    entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
 ) -> Any:
     if value in (None, "", [], {}):
         return value
     if quest_entity_refs.is_dynamic_reference(value):
         return value
+
+    if entity_ref_cache is not None:
+        cache_key = _entity_ref_cache_key(value, expected_type=expected_type)
+        if cache_key is None:
+            return value
+        return entity_ref_cache.get(cache_key, value)
 
     entity_id = quest_entity_refs.resolve_entity_ref_id(
         world=world,
@@ -765,6 +821,7 @@ def _canonicalize_condition_refs(
     *,
     world: World,
     event_target_is_room: bool = False,
+    entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
 ) -> Any:
     if condition in (None, {}, []):
         return condition
@@ -774,6 +831,7 @@ def _canonicalize_condition_refs(
                 item,
                 world=world,
                 event_target_is_room=event_target_is_room,
+                entity_ref_cache=entity_ref_cache,
             )
             for item in condition
         ]
@@ -782,24 +840,60 @@ def _canonicalize_condition_refs(
 
     canonical = copy.deepcopy(condition)
 
+    if "mob_present" in canonical:
+        spec = canonical.get("mob_present")
+        if isinstance(spec, dict):
+            canonical["mob_present"] = {
+                **spec,
+                "ref": _canonicalize_entity_ref(
+                    spec.get("ref"),
+                    world=world,
+                    expected_type="mobdefinition",
+                    entity_ref_cache=entity_ref_cache,
+                ),
+            }
+        else:
+            canonical["mob_present"] = _canonicalize_entity_ref(
+                spec,
+                world=world,
+                expected_type="mobdefinition",
+                entity_ref_cache=entity_ref_cache,
+            )
+
+    if "item_present" in canonical:
+        spec = canonical.get("item_present")
+        if isinstance(spec, dict):
+            canonical["item_present"] = {
+                **spec,
+                "item": _canonicalize_entity_ref(
+                    spec.get("item"),
+                    world=world,
+                    expected_type="itemdefinition",
+                    entity_ref_cache=entity_ref_cache,
+                ),
+            }
+
     if "all" in canonical:
         child_conditions = canonical.get("all")
         canonical["all"] = _canonicalize_condition_refs(
             child_conditions,
             world=world,
             event_target_is_room=event_target_is_room or quest_manifests._condition_list_targets_room(child_conditions),
+            entity_ref_cache=entity_ref_cache,
         )
     if "any" in canonical:
         canonical["any"] = _canonicalize_condition_refs(
             canonical.get("any"),
             world=world,
             event_target_is_room=event_target_is_room,
+            entity_ref_cache=entity_ref_cache,
         )
     if "not" in canonical:
         canonical["not"] = _canonicalize_condition_refs(
             canonical.get("not"),
             world=world,
             event_target_is_room=event_target_is_room,
+            entity_ref_cache=entity_ref_cache,
         )
 
     for operator in ("eq", "ne", "gte", "lte", "in"):
@@ -853,17 +947,62 @@ def _canonicalize_condition_refs(
             canonical[operator] = [
                 left_path,
                     [
-                    _canonicalize_entity_ref(candidate, world=world, expected_type=expected_type)
+                    _canonicalize_entity_ref(
+                        candidate,
+                        world=world,
+                        expected_type=expected_type,
+                        entity_ref_cache=entity_ref_cache,
+                    )
                     for candidate in right_value
                 ],
             ]
         else:
             canonical[operator] = [
                 left_path,
-                _canonicalize_entity_ref(right_value, world=world, expected_type=expected_type),
+                _canonicalize_entity_ref(
+                    right_value,
+                    world=world,
+                    expected_type=expected_type,
+                    entity_ref_cache=entity_ref_cache,
+                ),
             ]
 
     return canonical
+
+
+def _canonicalize_trigger_steps(
+    steps: Any,
+    *,
+    world: World,
+    entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
+) -> list[dict[str, Any]]:
+    if not isinstance(steps, list):
+        return []
+    canonical_steps = copy.deepcopy(steps)
+    for step in canonical_steps:
+        if not isinstance(step, dict):
+            continue
+        actions = step.get("actions")
+        if not isinstance(actions, list):
+            continue
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            if "item" in action:
+                action["item"] = _canonicalize_entity_ref(
+                    action.get("item"),
+                    world=world,
+                    expected_type="itemdefinition",
+                    entity_ref_cache=entity_ref_cache,
+                )
+            if "with" in action:
+                action["with"] = _canonicalize_entity_ref(
+                    action.get("with"),
+                    world=world,
+                    expected_type="itemdefinition",
+                    entity_ref_cache=entity_ref_cache,
+                )
+    return canonical_steps
 
 
 def _canonicalize_quest_node(node: Any, *, world: World) -> Any:
@@ -957,7 +1096,21 @@ def _serialize_trigger_target(trigger: Trigger) -> dict[str, Any]:
     return {"type": trigger.target_type.model, "ref": ""}
 
 
-def _serialize_trigger_manifest(trigger: Trigger) -> dict[str, Any]:
+def _serialize_trigger_manifest(
+    trigger: Trigger,
+    *,
+    world: World,
+    entity_ref_cache: dict[tuple[str, str, Any], str],
+) -> dict[str, Any]:
+    conditions = builder_manifests._deserialize_conditions_payload(
+        trigger.conditions,
+    )
+    if isinstance(conditions, (dict, list)):
+        conditions = _canonicalize_condition_refs(
+            conditions,
+            world=world,
+            entity_ref_cache=entity_ref_cache,
+        )
     return {
         "kind": builder_manifests.TRIGGER_MANIFEST_KIND,
         "metadata": {
@@ -969,7 +1122,13 @@ def _serialize_trigger_manifest(trigger: Trigger) -> dict[str, Any]:
             "target": _serialize_trigger_target(trigger),
             "match": trigger.match or "",
             "script": trigger.script or "",
-            "conditions": trigger.conditions or "",
+            "steps": _canonicalize_trigger_steps(
+                copy.deepcopy(trigger.steps or []),
+                world=world,
+                entity_ref_cache=entity_ref_cache,
+            ),
+            "on_step_error": trigger.on_step_error or "cancel",
+            "conditions": conditions,
             "event": trigger.event or "",
             "show_details_on_failure": bool(trigger.show_details_on_failure),
             "failure_message": trigger.failure_message or "",
@@ -994,6 +1153,41 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
     if not world.config:
         raise serializers.ValidationError("World has no config to export.")
 
+    item_definitions = list(
+        world.item_definitions.prefetch_related(
+            Prefetch(
+                "salvage_yields",
+                queryset=ItemSalvageYield.objects.select_related("material"),
+            ),
+        ).order_by("slug", "id")
+    )
+    mob_definitions = list(
+        world.mob_definitions.select_related(
+            "merchant_profile",
+            "crafting_profile",
+        ).prefetch_related("currency_rewards__currency").order_by("slug", "id")
+    )
+    if world.instance_of_id:
+        ref_item_definitions = list(
+            ItemDefinition.objects.filter(world_id=world.instance_of_id).only(
+                "id",
+                "slug",
+            )
+        )
+        ref_mob_definitions = list(
+            MobDefinition.objects.filter(world_id=world.instance_of_id).only(
+                "id",
+                "slug",
+            )
+        )
+    else:
+        ref_item_definitions = item_definitions
+        ref_mob_definitions = mob_definitions
+    entity_ref_cache = _build_entity_ref_cache(
+        item_definitions=ref_item_definitions,
+        mob_definitions=ref_mob_definitions,
+    )
+
     return [
         *[
             _serialize_currency_manifest(currency)
@@ -1005,12 +1199,7 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
         ],
         *[
             _serialize_item_definition_manifest(item_definition)
-            for item_definition in world.item_definitions.prefetch_related(
-                Prefetch(
-                    "salvage_yields",
-                    queryset=ItemSalvageYield.objects.select_related("material"),
-                ),
-            ).order_by("slug", "id")
+            for item_definition in item_definitions
         ],
         *[
             _serialize_item_bundle_manifest(item_bundle)
@@ -1083,10 +1272,7 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
         ],
         *[
             _serialize_mob_definition_manifest(mob_definition)
-            for mob_definition in world.mob_definitions.select_related(
-                "merchant_profile",
-                "crafting_profile",
-            ).prefetch_related("currency_rewards__currency").order_by("slug", "id")
+            for mob_definition in mob_definitions
         ],
         *[
             _serialize_spawn_plan_manifest(spawn_plan)
@@ -1111,8 +1297,14 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             for quest in world.quest_templates.select_related("arc").all().order_by("slug", "id")
         ],
         *[
-            _serialize_trigger_manifest(trigger)
-            for trigger in world.triggers.select_related("target_type").all().order_by(
+            _serialize_trigger_manifest(
+                trigger,
+                world=world,
+                entity_ref_cache=entity_ref_cache,
+            )
+            for trigger in world.triggers.select_related(
+                "target_type"
+            ).prefetch_related("target").order_by(
                 "scope", "order", "created_ts", "id"
             )
         ],

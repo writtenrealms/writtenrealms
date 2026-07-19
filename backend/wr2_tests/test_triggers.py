@@ -422,8 +422,10 @@ class TestCommandFallbackTriggers(WorldTestCase):
             world=self.world,
             name="Sage",
         )
-        mob = self.create_mob(
-            "Sage",
+        mob = Mob.objects.create(
+            name="Sage",
+            world=self.spawn_world,
+            room=self.room,
             definition=mob_definition,
         )
         Trigger.objects.create(
@@ -472,7 +474,7 @@ class TestCommandFallbackTriggers(WorldTestCase):
         )
         mob = Mob.objects.create(
             name="Watcher",
-            world=self.world,
+            world=self.spawn_world,
             room=next_room,
             definition=mob_definition,
         )
@@ -505,8 +507,10 @@ class TestCommandFallbackTriggers(WorldTestCase):
             world=self.world,
             name="Archivist",
         )
-        mob = self.create_mob(
-            "Archivist",
+        mob = Mob.objects.create(
+            name="Archivist",
+            world=self.spawn_world,
+            room=self.room,
             definition=mob_definition,
         )
         Trigger.objects.create(

@@ -931,6 +931,80 @@ class CraftingActionReceipt(AdventBaseModel):
         ]
 
 
+class ScheduledTriggerRun(AdventBaseModel):
+    """Durable runtime cursor for one typed trigger-step sequence."""
+
+    STATUS_ACTIVE = 'active'
+    STATUS_COMPLETED = 'completed'
+    STATUS_CANCELLED = 'cancelled'
+    STATUS_CHOICES = (
+        STATUS_ACTIVE,
+        STATUS_COMPLETED,
+        STATUS_CANCELLED,
+    )
+
+    trigger = models.ForeignKey(
+        'builders.Trigger',
+        on_delete=models.SET_NULL,
+        related_name='scheduled_runs',
+        **optional)
+    runtime_world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='scheduled_trigger_runs')
+    room = models.ForeignKey(
+        'worlds.Room',
+        on_delete=models.CASCADE,
+        related_name='scheduled_trigger_runs')
+
+    actor_type = models.TextField()
+    actor_id = models.PositiveBigIntegerField()
+    actor_key = models.TextField()
+
+    steps = models.JSONField(default=list)
+    bindings = models.JSONField(default=dict, blank=True)
+    next_step_index = models.PositiveIntegerField(default=0)
+    next_run_ts = models.DateTimeField()
+    started_ts = models.DateTimeField(default=timezone.now)
+    status = models.TextField(
+        choices=list_to_choice(STATUS_CHOICES),
+        default=STATUS_ACTIVE)
+    on_step_error = models.TextField(default='cancel')
+    failure_code = models.TextField(blank=True, default='')
+    last_error = models.TextField(blank=True, default='')
+    completed_ts = models.DateTimeField(**optional)
+
+    class Meta(AdventBaseModel.Meta):
+        indexes = [
+            models.Index(
+                fields=['status', 'next_run_ts', 'id'],
+                name='spawn_trigger_run_due_idx',
+            ),
+            models.Index(
+                fields=['status', 'modified_ts', 'id'],
+                name='spawn_trigger_run_prune_idx',
+            ),
+            models.Index(
+                fields=['runtime_world', 'actor_type', 'actor_id'],
+                condition=models.Q(status='active'),
+                name='spawn_trigger_actor_active_idx',
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    'trigger',
+                    'runtime_world',
+                    'room',
+                    'actor_type',
+                    'actor_id',
+                ],
+                condition=models.Q(status='active'),
+                name='spawn_trigger_actor_active_uniq',
+            ),
+        ]
+
+
 class GameEventOutbox(BaseModel):
     """Durable, at-least-once delivery for events produced by committed work."""
 
@@ -1300,6 +1374,11 @@ class Item(ItemMixin, AdventBaseModel):
             models.Index(fields=['container_type']),
             models.Index(fields=['is_persistent']),
             models.Index(fields=['created_ts']),
+            models.Index(
+                fields=['world', 'container_type', 'container_id', 'definition'],
+                condition=models.Q(is_pending_deletion=False),
+                name='spawn_item_live_container_def',
+            ),
         ]
         constraints = [
             models.CheckConstraint(

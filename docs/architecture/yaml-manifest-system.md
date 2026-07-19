@@ -213,12 +213,17 @@ Current required mappings:
     changing WR1's missing-standing behavior.
   - `quest_incomplete <quest_id>` -> `quest_completed: <quest_slug>`.
   - `quest_complete <quest_id>` -> `not: {quest_completed: <quest_slug>}`.
+  - `in_inv <item_template_id>` -> `not: {item_present: {location:
+    actor_inventory, item: itemdefinition.<slug>}}`.
+  - `not_in_inv <item_template_id>` -> `item_present: {location:
+    actor_inventory, item: itemdefinition.<slug>}`.
   Resolve every numeric WR1 id against the source export and emit portable
   slugs/refs. Never copy a numeric definition, quest, or room id into portable
   WR2 YAML.
-- Flag WR1 room-check `in_inv`, `not_in_inv`, `equipped`, `not_equipped`, and
-  `health_below` rows until the structured WR2 condition DSL has equivalent
-  inventory/equipment membership and health-percentage predicates. Also flag
+- Flag WR1 room-check `equipped`, `not_equipped`, and `health_below` rows until
+  the structured WR2 condition DSL has equivalent equipment membership and
+  health-percentage predicates. `in_inv` and `not_in_inv` now map through
+  `item_present` as shown above. Also flag
   `argument2` exemptions and any legacy free-form `conditions` expression that
   cannot be translated with identical polarity. Do not fall back to a new
   room-check vocabulary or silently drop part of a predicate.
@@ -237,6 +242,22 @@ Current required mappings:
 - Room-check conversion belongs in the WR1 manifest exporter, not in a WR2
   database migration. WR2 imports the resulting trigger documents into a fresh
   world and never stores the legacy rows.
+- Deterministic WR1 room-action growth chains may export as typed trigger
+  `spec.steps`. Resolve every numeric item-template id against the source world
+  and emit `itemdefinition.<slug>`. Convert `/take it:<seed> {{ actor }}` to
+  `consume_item`, the first room `/load item <stage>` to `spawn_room_item` with
+  an explicit binding such as `crop`, each exact purge/load stage pair to
+  `replace_room_item` against that binding, and room text to `echo`.
+- WR1 `/delay N` offsets are measured from trigger invocation; WR2
+  `after_seconds` is relative to the preceding step. Group commands with the
+  same WR1 offset, sort the groups, and subtract successive offsets. Thus WR1
+  offsets `0, 20, 40, 60` become WR2 offsets `0, 20, 20, 20`.
+- Convert WR1 action conditions `item_in_inv <id>` and `item_in_room <id>` to
+  `item_present` with `location: actor_inventory` and `location: room`,
+  respectively. Preserve negation and counts. Flag arbitrary or dynamic
+  delayed commands, ambiguous purge selectors, nested delays, and unsupported
+  action types for builder review rather than embedding command strings inside
+  typed actions.
 - WR1 room-action `transfer {{ actor }} <numeric_room_id>` scripts should
   export as `/cmd room -- /transfer {{ actor_key }} room@x,y,z`. Resolve the
   legacy room id to the imported room's coordinates; never copy a WR1 or WR2
@@ -568,9 +589,9 @@ spec:
 
 Runtime behavior details are documented in:
 
-- `docs/trigger-multiline-script-execution.md`
-- `docs/trigger-event-subscriptions.md`
-- `docs/trigger-matching-dsl.md`
+- `docs/flows/trigger-multiline-script-execution.md`
+- `docs/architecture/trigger-event-subscriptions.md`
+- `docs/architecture/trigger-matching-dsl.md`
 
 Execution behavior:
 
@@ -590,6 +611,71 @@ spec:
     /cmd room -- /echo -- Dust falls from the ceiling.
     /cmd room -- /echo -- A hidden door slides open.
 ```
+
+### Typed Scheduled `steps`
+
+Use `spec.steps` when a trigger needs builder-controlled timing and exact,
+transactional item operations. `script` and `steps` cannot both be non-empty.
+
+```yaml
+kind: trigger
+metadata:
+  world: world.1
+  name: Plant Barley
+spec:
+  scope: room
+  kind: command
+  target:
+    type: room
+    key: room.10
+  match: plant seed
+  script: ""
+  conditions:
+    item_present:
+      location: actor_inventory
+      item: itemdefinition.barley-seed
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: consume_item
+          actor: trigger_actor
+          item: itemdefinition.barley-seed
+          count: 1
+        - type: spawn_room_item
+          room: trigger_room
+          item: itemdefinition.barley-seedling
+          bind: crop
+    - after_seconds: 20
+      actions:
+        - type: replace_room_item
+          target: crop
+          with: itemdefinition.barley-growing
+        - type: echo
+          room: trigger_room
+          text: A murmur of growth fills the air.
+  on_step_error: cancel
+```
+
+The first step must have `after_seconds: 0`; later offsets are positive and
+relative to the prior step. Each offset and their cumulative total are capped
+at one year. `consume_item`, `spawn_room_item`,
+`replace_room_item`, and `echo` are the initial action whitelist. Item refs are
+resolved within the authored world and stored portably. Bindings must be
+created before use and identify exact runtime items, not keywords or definition
+matches. Policy triggers cannot define steps.
+
+Step zero rechecks conditions under a runtime-world/room-scoped transaction
+mutex and commits with its actions. Later steps are persisted in a
+`ScheduledTriggerRun` snapshot with cumulative due offsets, original runtime
+world/room context, exact item bindings, and the actor identity. A separate
+bounded Celery beat worker claims due rows through the `(status, next_run_ts)`
+index with `select_for_update(skip_locked=True)`. Celery ETA jobs are not the
+source of truth. Each step and its outbox events share a transaction;
+`on_step_error: cancel` rolls back the failed step and cancels the remainder.
+Only one run of the same trigger may be active for a given runtime world, room,
+and trigger actor; different actors may run concurrently. A runtime actor is
+also limited to 16 active typed sequences in one runtime world.
+See `docs/flows/trigger-scheduled-step-execution.md` for the runtime flow.
 
 ### Delete Trigger
 
@@ -1001,6 +1087,16 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   - `spec.event` is required.
   - `spec.event` must be `before_move_enter` or `before_move_exit`.
   - v1 policy triggers use `scope: room` and a `room` target.
+- `spec.script` and non-empty `spec.steps` are mutually exclusive.
+- `spec.steps[0].after_seconds` must be `0`; later offsets must be positive
+  integers. Every step has a bounded, non-empty `actions` list.
+- Typed step actions reject unknown fields and types. Context refs are limited
+  to `trigger_actor` and `trigger_room`; item refs must resolve to an
+  `itemdefinition` in the selected world.
+- `spawn_room_item.bind` names are unique and must precede any matching
+  `replace_room_item.target`. The current `spec.on_step_error` value is
+  `cancel`.
+- Policy triggers cannot define `spec.steps`.
 - For command triggers, `spec.target` must match scope type (`room`, `zone`, `world`) and exist in world.
 - For event triggers, `spec.target.type` must match the event family and exist in world.
 - structured `conditions` are validated through the shared WR2 condition DSL in

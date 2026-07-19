@@ -1,9 +1,12 @@
+import json
+
 from django.contrib.contenttypes.models import ContentType
 
 import yaml
 
 from rest_framework.reverse import reverse
 
+from builders import world_export as builder_world_export
 from builders.currencies import create_currency, replace_starting_balances
 from builders.models import (
     BuilderAssignment,
@@ -147,6 +150,21 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             item_type=adv_consts.ITEM_TYPE_CONTAINER,
             base_properties={"capacity": 10},
             notes="Used in the harbor office.",
+        )
+        self.barley_seed = ItemDefinition.objects.create(
+            world=self.world,
+            slug="barley-seed",
+            name="a barley seed",
+        )
+        self.barley_seedling = ItemDefinition.objects.create(
+            world=self.world,
+            slug="barley-seedling",
+            name="a barley seedling",
+        )
+        self.barley_growing = ItemDefinition.objects.create(
+            world=self.world,
+            slug="barley-growing",
+            name="a growing barley plant",
         )
 
         Door.objects.create(
@@ -357,6 +375,56 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         )
         Trigger.objects.create(
             world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=room_ct,
+            target_id=self.start_room.id,
+            name="Plant Barley",
+            match="plant seed",
+            script="",
+            conditions=json.dumps({
+                "item_present": {
+                    "location": "actor_inventory",
+                    "item": self.barley_seed.id,
+                },
+            }),
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "consume_item",
+                            "actor": "trigger_actor",
+                            "item": self.barley_seed.id,
+                            "count": 1,
+                        },
+                        {
+                            "type": "spawn_room_item",
+                            "room": "trigger_room",
+                            "item": self.barley_seedling.id,
+                            "bind": "crop",
+                        },
+                    ],
+                },
+                {
+                    "after_seconds": 20,
+                    "actions": [
+                        {
+                            "type": "replace_room_item",
+                            "target": "crop",
+                            "with": self.barley_growing.id,
+                        },
+                    ],
+                },
+            ],
+            on_step_error="cancel",
+            display_action_in_room=True,
+            gate_delay=0,
+            order=3,
+            is_active=True,
+        )
+        Trigger.objects.create(
+            world=self.world,
             scope=adv_consts.TRIGGER_SCOPE_WORLD,
             kind=adv_consts.TRIGGER_KIND_EVENT,
             target_type=mob_ct,
@@ -480,6 +548,129 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(
             tracker_conditions[1]["in"][1],
             [expected_start_ref, expected_harbor_ref],
+        )
+
+    def test_world_export_serializes_portable_refs_inside_trigger_steps(self):
+        resp = self.client.get(self.export_ep)
+        self.assertEqual(resp.status_code, 200)
+
+        exported_docs = [
+            doc for doc in yaml.safe_load_all(resp.data["yaml"])
+            if doc is not None
+        ]
+        trigger = next(
+            doc for doc in exported_docs
+            if doc["kind"] == "trigger" and doc["metadata"]["name"] == "Plant Barley"
+        )
+
+        self.assertEqual(
+            trigger["spec"]["conditions"]["item_present"]["item"],
+            "itemdefinition.barley-seed",
+        )
+        self.assertEqual(
+            trigger["spec"]["steps"][0]["actions"][0]["item"],
+            "itemdefinition.barley-seed",
+        )
+        self.assertEqual(
+            trigger["spec"]["steps"][0]["actions"][1]["item"],
+            "itemdefinition.barley-seedling",
+        )
+        self.assertEqual(
+            trigger["spec"]["steps"][1]["actions"][0]["with"],
+            "itemdefinition.barley-growing",
+        )
+
+    def test_world_export_preserves_typed_numeric_itemdefinition_slugs(self):
+        numeric_slug = str(self.barley_seed.id)
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug=numeric_slug,
+            name="a numbered seed",
+        )
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=self.start_room.id,
+            name="Plant Numbered Seed",
+            match="plant numbered seed",
+            script="",
+            conditions=json.dumps({
+                "item_present": {
+                    "location": "actor_inventory",
+                    "item": f"itemdefinition.{numeric_slug}",
+                },
+            }),
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "consume_item",
+                            "actor": "trigger_actor",
+                            "item": f"itemdefinition.{numeric_slug}",
+                        },
+                    ],
+                },
+            ],
+            display_action_in_room=True,
+            is_active=True,
+        )
+
+        resp = self.client.get(self.export_ep)
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        exported_docs = [
+            doc for doc in yaml.safe_load_all(resp.data["yaml"])
+            if doc is not None
+        ]
+        trigger = next(
+            doc for doc in exported_docs
+            if doc["kind"] == "trigger"
+            and doc["metadata"]["name"] == "Plant Numbered Seed"
+        )
+        expected_ref = f"itemdefinition.{numeric_slug}"
+        self.assertEqual(
+            trigger["spec"]["conditions"]["item_present"]["item"],
+            expected_ref,
+        )
+        self.assertEqual(
+            trigger["spec"]["steps"][0]["actions"][0]["item"],
+            expected_ref,
+        )
+
+    def test_trigger_export_uses_preloaded_refs_without_per_action_queries(self):
+        trigger = (
+            Trigger.objects.select_related("target_type")
+            .get(world=self.world, name="Plant Barley")
+        )
+        # Resolve the generic target before query counting; this test isolates
+        # condition/action reference canonicalization from the older target path.
+        self.assertEqual(trigger.target, self.start_room)
+        entity_ref_cache = builder_world_export._build_entity_ref_cache(
+            item_definitions=[
+                self.barley_seed,
+                self.barley_seedling,
+                self.barley_growing,
+            ],
+            mob_definitions=[self.quartermaster],
+        )
+
+        with self.assertNumQueries(0):
+            manifest = builder_world_export._serialize_trigger_manifest(
+                trigger,
+                world=self.world,
+                entity_ref_cache=entity_ref_cache,
+            )
+
+        self.assertEqual(
+            manifest["spec"]["conditions"]["item_present"]["item"],
+            "itemdefinition.barley-seed",
+        )
+        self.assertEqual(
+            manifest["spec"]["steps"][1]["actions"][0]["with"],
+            "itemdefinition.barley-growing",
         )
 
     def test_zone_detail_returns_apply_and_delete_yaml(self):

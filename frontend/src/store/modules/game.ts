@@ -12,6 +12,44 @@ import router from "@/router";
 // Running one more test
 
 const MESSAGE_LIMIT = 200;
+const TRIGGER_ITEMS_CHANGED_MESSAGE = "notification.trigger.items_changed";
+
+const itemKey = (item: any): string => String(item?.key ?? "");
+
+const removeItemsByKeyInPlace = (inventory: any[], removedItems: any[]) => {
+  const removedKeys = new Set(
+    (Array.isArray(removedItems) ? removedItems : [])
+      .map(itemKey)
+      .filter(Boolean),
+  );
+  if (!removedKeys.size) return;
+
+  for (let index = inventory.length - 1; index >= 0; index -= 1) {
+    if (removedKeys.has(itemKey(inventory[index]))) {
+      inventory.splice(index, 1);
+    }
+  }
+};
+
+const applyItemChangesInPlace = (
+  inventory: any[],
+  removedItems: any[],
+  addedItems: any[],
+) => {
+  removeItemsByKeyInPlace(inventory, removedItems);
+  for (const item of Array.isArray(addedItems) ? addedItems : []) {
+    const key = itemKey(item);
+    if (!key) continue;
+    const existingIndex = inventory.findIndex(
+      existingItem => itemKey(existingItem) === key,
+    );
+    if (existingIndex === -1) {
+      inventory.push(item);
+    } else {
+      inventory.splice(existingIndex, 1, item);
+    }
+  }
+};
 
 interface PlayerEconomyCarrier {
   economy?: PlayerEconomy | null;
@@ -196,6 +234,7 @@ const receiveMessage = async ({
     "player.combat_effects.update",
     "notification.regen",
     "currency.balances_changed",
+    TRIGGER_ITEMS_CHANGED_MESSAGE,
   ];
 
   // Echo received messages unless they are silent state updates.
@@ -314,6 +353,13 @@ const receiveMessage = async ({
     }
   } else if (message_data.type === "cmd.state.sync.error") {
     commit("wallet_sync_requested_clear");
+  }
+
+  if (
+    message_data.type === TRIGGER_ITEMS_CHANGED_MESSAGE &&
+    message_data.data
+  ) {
+    commit("trigger_items_changed_apply", message_data.data);
   }
 
   if (
@@ -489,6 +535,7 @@ const receiveMessage = async ({
 
   // Anything that has an actor who is the connected player
   if (
+    message_data.type !== TRIGGER_ITEMS_CHANGED_MESSAGE &&
     message_data.data["actor"] &&
     state.player &&
     message_data.data["actor"].key === state.player.key
@@ -1142,6 +1189,57 @@ const mutations = {
     });
     // Vue.set(state.player, "inventory", inv);
     state.player['inventory'] = inv;
+  },
+
+  trigger_items_changed_apply: (state, payload) => {
+    if (!payload) return;
+
+    const eventRoomKey = String(payload.room?.key ?? "");
+    const currentRoomKey = String(state.room?.key ?? "");
+    if (eventRoomKey && currentRoomKey === eventRoomKey) {
+      const inventories = new Set<any[]>();
+      const viewedRooms = new Set<any>();
+      const collectRoomInventory = (room, isViewedRoom = false) => {
+        if (
+          room &&
+          String(room.key ?? "") === eventRoomKey &&
+          Array.isArray(room.inventory)
+        ) {
+          inventories.add(room.inventory);
+          if (isViewedRoom) viewedRooms.add(room);
+        }
+      };
+
+      collectRoomInventory(state.room);
+      const viewedData = state.last_viewed_room_message?.data;
+      collectRoomInventory(viewedData?.room, true);
+      collectRoomInventory(viewedData?.target, true);
+
+      for (const inventory of inventories) {
+        applyItemChangesInPlace(
+          inventory,
+          payload.room_items_removed,
+          payload.room_items_added,
+        );
+      }
+      for (const viewedRoom of viewedRooms) {
+        // LookRoom watches the inventory property by reference when rebuilding
+        // its stacked display, so refresh that property after shared in-place
+        // updates.
+        viewedRoom.inventory = [...viewedRoom.inventory];
+      }
+    }
+
+    if (
+      state.player &&
+      String(payload.actor?.key ?? "") === String(state.player.key ?? "") &&
+      Array.isArray(state.player.inventory)
+    ) {
+      removeItemsByKeyInPlace(
+        state.player.inventory,
+        payload.actor_inventory_removed,
+      );
+    }
   },
 
   player_focus_set: (state, focus) => {
