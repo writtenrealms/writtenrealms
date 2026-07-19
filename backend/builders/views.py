@@ -1563,6 +1563,10 @@ class WorldAbilityViewSet(BaseWorldBuilderViewSet):
         elif is_active in ('false', '0'):
             qs = qs.filter(is_active=False)
 
+        class_key = str(self.request.query_params.get('class') or '').strip().lower()
+        if class_key:
+            qs = qs.filter(availability__classes__contains=[class_key])
+
         query = self.request.query_params.get('query')
         if query:
             try:

@@ -998,6 +998,51 @@ spec:
             ["power-strike", "mend"],
         )
 
+    def test_world_ability_list_filters_by_explicit_class_attribution(self):
+        self._create_ability()
+        hoplite_ability = self._create_ability(
+            slug="shield-bash",
+            name="Shield Bash",
+            command_verbs=["shieldbash"],
+            availability={"classes": ["hoplite"], "min_level": 1},
+        )
+        self._create_ability(
+            slug="mystic-bolt",
+            name="Mystic Bolt",
+            command_verbs=["mysticbolt"],
+            availability={"classes": ["mystic"], "min_level": 1},
+        )
+
+        resp = self.client.get(self.list_ep, {"class": "hoplite"})
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            [ability["id"] for ability in resp.data["results"]],
+            [hoplite_ability.id],
+        )
+
+    def test_builder_world_includes_authored_class_filter_options(self):
+        self.world.config.stat_system = {
+            "class_profiles": {
+                "hoplite": {"label": "Hoplite"},
+                "tidecaller": {"label": "Tidecaller"},
+            },
+        }
+        self.world.config.save(update_fields=["stat_system"])
+
+        resp = self.client.get(
+            reverse("builder-world-detail", args=[self.world.pk])
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            resp.data["class_options"],
+            [
+                {"key": "hoplite", "name": "Hoplite"},
+                {"key": "tidecaller", "name": "Tidecaller"},
+            ],
+        )
+
     def test_rank_2_builder_cannot_view_world_ability_list(self):
         builder_user = self.create_user("ability-list-builder@example.com")
         WorldBuilder.objects.create(

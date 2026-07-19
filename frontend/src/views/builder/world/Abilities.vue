@@ -15,8 +15,10 @@
     v-else
     title="Abilities"
     :schema="listSchema"
+    :filters="listFilters"
     :endpoint="endpoint"
     :resolve_route="resolveRoute"
+    filter-display="dropdown"
     table-variant="data"
     default-sort="slug"
     @add="onClickAdd"
@@ -60,6 +62,18 @@ const listSchema: any[] = [
     format: formatRelativeModifiedDate,
   },
 ];
+
+const listFilters = computed(() => {
+  const classOptions = store.state.builder.world?.class_options || [];
+  if (!classOptions.length) return [];
+  return [
+    {
+      label: "Class",
+      attr: "class",
+      filter_options: classOptions,
+    },
+  ];
+});
 
 const onClickAdd = () => {
   router.push({

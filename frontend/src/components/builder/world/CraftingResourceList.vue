@@ -19,7 +19,7 @@
               />
             </div>
             <Pagination
-              v-else-if="totalPages > 1"
+              v-if="totalPages > 1"
               :page-num="pageNum"
               :total-pages="totalPages"
               @set-page="onSetPage"
@@ -76,8 +76,8 @@
 
 <script lang="ts" setup>
 import axios from "axios";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import ElementTable from "@/components/elementlist/ElementTable.vue";
 import Pagination from "@/components/elementlist/Pagination.vue";
 import { craftingApiErrorMessage } from "@/services/crafting";
@@ -105,6 +105,7 @@ const emit = defineEmits<{
 }>();
 
 const router = useRouter();
+const route = useRoute();
 const loading = ref(true);
 const errorMessage = ref("");
 const results = ref<any[]>([]);
@@ -116,8 +117,78 @@ const searchText = ref("");
 const searchInput = ref<HTMLInputElement | null>(null);
 const filterValues = ref<Record<string, string>>({});
 let requestNumber = 0;
+let hasLoaded = false;
 let searchTimeout: ReturnType<typeof setTimeout> | null = null;
 let filterTimeout: ReturnType<typeof setTimeout> | null = null;
+
+const queryValue = (value: unknown): string => {
+  const scalarValue = Array.isArray(value) ? value[0] : value;
+  return typeof scalarValue === "string" ? scalarValue : "";
+};
+
+const filterAttrs = computed(() => props.filters.map(filter => filter.attr));
+
+const allowedSortKeys = computed(() => new Set(
+  props.schema
+    .map(field => field.sortKey || (field.sortable ? field.name : ""))
+    .filter(Boolean),
+));
+
+const normalizedSortValue = (value: string): string => {
+  if (!value) return props.defaultSort;
+  const sortKey = value.startsWith("-") ? value.slice(1) : value;
+  return allowedSortKeys.value.has(sortKey) ? value : props.defaultSort;
+};
+
+const syncStateFromRoute = () => {
+  const parsedPage = Number.parseInt(queryValue(route.query.page), 10);
+  pageNum.value = Number.isInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+  sortBy.value = normalizedSortValue(queryValue(route.query.sort_by));
+
+  const routeSearchText = queryValue(route.query.query);
+  searchText.value = routeSearchText;
+  if (routeSearchText) {
+    showSearch.value = true;
+  }
+
+  const routeFilters: Record<string, string> = {};
+  for (const attr of filterAttrs.value) {
+    const value = queryValue(route.query[attr]);
+    if (value) {
+      routeFilters[attr] = value;
+    }
+  }
+  filterValues.value = routeFilters;
+};
+
+const replaceListQuery = async (updates: Record<string, string | null>) => {
+  const nextQuery = { ...route.query };
+
+  if (searchText.value.trim()) {
+    nextQuery.query = searchText.value;
+  } else {
+    delete nextQuery.query;
+  }
+
+  for (const attr of filterAttrs.value) {
+    const value = filterValues.value[attr] || "";
+    if (value.trim()) {
+      nextQuery[attr] = value;
+    } else {
+      delete nextQuery[attr];
+    }
+  }
+
+  for (const [key, value] of Object.entries(updates)) {
+    if (value) {
+      nextQuery[key] = value;
+    } else {
+      delete nextQuery[key];
+    }
+  }
+
+  await router.replace({ query: nextQuery });
+};
 
 const elements = computed(() => results.value.map((element) => ({
   ...element,
@@ -128,7 +199,9 @@ const totalPages = computed(() => Math.max(1, Math.ceil(resultCount.value / 10))
 
 const fetchData = async () => {
   const activeRequest = ++requestNumber;
-  loading.value = true;
+  if (!hasLoaded) {
+    loading.value = true;
+  }
   errorMessage.value = "";
 
   const params: Record<string, string | number> = { page: pageNum.value };
@@ -150,6 +223,10 @@ const fetchData = async () => {
     resultCount.value = Number(payload.count) || 0;
   } catch (error: unknown) {
     if (activeRequest !== requestNumber) return;
+    if (axios.isAxiosError(error) && error.response?.status === 404 && pageNum.value > 1) {
+      await replaceListQuery({ page: null });
+      return;
+    }
     results.value = [];
     resultCount.value = 0;
     errorMessage.value = craftingApiErrorMessage(
@@ -157,25 +234,30 @@ const fetchData = async () => {
       `Could not load ${props.title.toLowerCase()}.`,
     );
   } finally {
-    if (activeRequest === requestNumber) loading.value = false;
+    if (activeRequest === requestNumber) {
+      hasLoaded = true;
+      loading.value = false;
+    }
   }
 };
 
 const onSetPage = (nextPage: number) => {
-  pageNum.value = nextPage;
-  fetchData();
+  void replaceListQuery({
+    page: nextPage > 1 ? String(nextPage) : null,
+  });
 };
 
 const onSort = (sortKey: string) => {
   if (!sortKey) return;
   const descendingKey = `-${sortKey}`;
+  let nextSort = sortKey;
   if (sortBy.value === sortKey) {
-    sortBy.value = descendingKey;
-  } else {
-    sortBy.value = sortKey;
+    nextSort = descendingKey;
   }
-  pageNum.value = 1;
-  fetchData();
+  void replaceListQuery({
+    sort_by: nextSort === props.defaultSort ? null : nextSort,
+    page: null,
+  });
 };
 
 const onFilterInput = (attr: string, event: Event) => {
@@ -184,40 +266,58 @@ const onFilterInput = (attr: string, event: Event) => {
     ...filterValues.value,
     [attr]: target?.value || "",
   };
+  if (filterTimeout) clearTimeout(filterTimeout);
+  filterTimeout = setTimeout(() => {
+    void replaceListQuery({ page: null });
+  }, 250);
 };
 
 const toggleSearch = async () => {
   showSearch.value = !showSearch.value;
   if (!showSearch.value) {
     searchText.value = "";
+    await replaceListQuery({ query: null, page: null });
     return;
   }
   await nextTick();
   searchInput.value?.focus();
 };
 
-watch(searchText, () => {
+watch(searchText, (value) => {
+  if (value === queryValue(route.query.query)) return;
   if (searchTimeout) clearTimeout(searchTimeout);
   searchTimeout = setTimeout(() => {
-    pageNum.value = 1;
-    fetchData();
+    if (value !== queryValue(route.query.query)) {
+      void replaceListQuery({
+        query: value || null,
+        page: null,
+      });
+    }
   }, 250);
 });
 
-watch(filterValues, () => {
-  if (filterTimeout) clearTimeout(filterTimeout);
-  filterTimeout = setTimeout(() => {
-    pageNum.value = 1;
-    fetchData();
-  }, 250);
-});
-
-watch(() => props.endpoint, () => {
-  pageNum.value = 1;
-  fetchData();
-});
-
-onMounted(fetchData);
+watch(
+  [
+    () => route.query,
+    () => props.endpoint,
+    () => props.defaultSort,
+    () => filterAttrs.value.join("\u0000"),
+    () => [...allowedSortKeys.value].join("\u0000"),
+  ],
+  () => {
+    if (searchTimeout) {
+      clearTimeout(searchTimeout);
+      searchTimeout = null;
+    }
+    if (filterTimeout) {
+      clearTimeout(filterTimeout);
+      filterTimeout = null;
+    }
+    syncStateFromRoute();
+    void fetchData();
+  },
+  { immediate: true },
+);
 
 onBeforeUnmount(() => {
   requestNumber += 1;
@@ -268,6 +368,10 @@ onBeforeUnmount(() => {
 }
 
 .pagination-or-search {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
   min-width: 0;
 
   .form-group {

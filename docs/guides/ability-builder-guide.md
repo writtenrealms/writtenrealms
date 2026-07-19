@@ -992,6 +992,14 @@ spec:
 Worlds without classes can grant abilities through trainers, quests, starting
 loadout, items, or builder tools instead.
 
+On the builder Abilities screen, use the **Class** filter to review the
+abilities explicitly attributed to one authored class. The filtered list only
+includes abilities that name the selected class in `availability.classes`;
+unrestricted abilities whose class list is empty remain visible under **All**.
+The builder stores the selected filters, page, sort order, and search text in the
+list URL, so opening an ability and returning with the browser Back button
+restores the same list context.
+
 ## Ability Trainers
 
 Mob definitions can act as trainers by listing the abilities they teach. If at

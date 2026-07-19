@@ -49,8 +49,8 @@ from core.leveling import (
 from core.economy import MAX_CURRENCY_AMOUNT, economy_world, money_payload
 from core.stat_system import (
     StatSystemValidationError,
+    get_world_stat_system,
     normalize_stat_system,
-    world_uses_classes,
 )
 from core.world_config import (
     INSTANCE_INHERITED_CONFIG_FIELDS,
@@ -235,6 +235,7 @@ class WorldSerializer(serializers.ModelSerializer):
     factions = serializers.SerializerMethodField()
     facts = serializers.SerializerMethodField()
     is_classless = serializers.SerializerMethodField()
+    class_options = serializers.SerializerMethodField()
     instance_of = serializers.SerializerMethodField()
     builder_info = serializers.SerializerMethodField()
     currencies = serializers.SerializerMethodField()
@@ -260,7 +261,7 @@ class WorldSerializer(serializers.ModelSerializer):
         fields = (
             'key', 'id', 'name', 'description', 'motd', 'author', 'created_ts',
             'last_viewed_room', 'short_description', 'state', 'is_multiplayer',
-            'is_public', 'factions', 'facts', 'is_classless',
+            'is_public', 'factions', 'facts', 'is_classless', 'class_options',
             'review', 'maintenance_mode', 'maintenance_msg', 'instance_of',
             'builder_info', 'currencies', 'default_currency',
             'initial_currency_code', 'initial_currency_name',
@@ -279,8 +280,32 @@ class WorldSerializer(serializers.ModelSerializer):
                     "World creation is currently disabled.")
         return super().validate(*args, **kwargs)
 
+    def _get_stat_system(self, world):
+        cache = getattr(self, '_stat_system_cache', None)
+        if cache is None:
+            cache = {}
+            self._stat_system_cache = cache
+        if world.pk not in cache:
+            try:
+                cache[world.pk] = get_world_stat_system(world)
+            except StatSystemValidationError:
+                cache[world.pk] = {}
+        return cache[world.pk]
+
     def get_is_classless(self, world):
-        return not world_uses_classes(world)
+        return not bool(self._get_stat_system(world).get('class_profiles'))
+
+    def get_class_options(self, world):
+        stat_system = self._get_stat_system(world)
+        class_profiles = stat_system.get('class_profiles') or {}
+        class_labels = (stat_system.get('labels') or {}).get('classes') or {}
+        return [
+            {
+                'key': key,
+                'name': class_labels.get(key) or key.replace('-', ' ').replace('_', ' ').title(),
+            }
+            for key in class_profiles
+        ]
 
     def get_last_viewed_room(self, world):
         #from builders.serializers import RoomBuilderSerializer

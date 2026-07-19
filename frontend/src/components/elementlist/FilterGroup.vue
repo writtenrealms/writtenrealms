@@ -10,24 +10,19 @@
 </template>
 
 <script lang='ts' setup>
-import { ref } from "vue";
-
 const props = defineProps<{
   title: string;
   values: Array<any>;
   attr: string;
+  selectedValue?: string;
 }>();
 const emit = defineEmits(['select-filter', 'clear-filter']);
 
-const selectedValue = ref("");
-
 const select = (value: string) => {
-  selectedValue.value = value;
   emit('select-filter', props.attr, value);
 };
 
 const deselect = () => {
-  selectedValue.value = "";
   emit('clear-filter', props.attr);
 };
 </script>

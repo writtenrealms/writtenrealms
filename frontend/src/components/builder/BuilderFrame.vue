@@ -138,7 +138,7 @@
       </div>
 
       <div class="builder-contents">
-        <router-view :key="route.fullPath" v-if="map"></router-view>
+        <router-view :key="builderViewKey" v-if="map"></router-view>
         <div v-else>Loading...</div>
       </div>
     </div>
@@ -156,6 +156,14 @@ import axios from 'axios';
 
 const store = useStore();
 const route = useRoute();
+
+// EditWorld treats its query as a request to initialize a new editor session.
+// Other builder views can react to query changes without being remounted.
+const queryRemountRoutes = new Set(['builder_world_edit']);
+
+const builderViewKey = computed(() => (
+  queryRemountRoutes.has(String(route.name)) ? route.fullPath : route.path
+));
 
 const world = computed(() => store.state.builder.world);
 const worldId = computed(() => route.params.world_id);
