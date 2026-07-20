@@ -1,18 +1,22 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import timedelta
+from threading import Barrier
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
-from django.db import OperationalError
+from django.db import OperationalError, close_old_connections
+from django.test import TransactionTestCase
 from django.utils import timezone
 
 from builders.models import ItemDefinition, MobDefinition, Trigger
 from config import constants as adv_consts
 from core.trigger_steps import TriggerStepSpecError, normalize_trigger_steps
-from spawns.models import GameEventOutbox, Item, Mob, ScheduledTriggerRun
+from spawns.models import GameEventOutbox, Item, Mob, Player, ScheduledTriggerRun
 from spawns.trigger_steps import (
     MAX_ACTIVE_TRIGGER_RUNS_PER_ACTOR,
     process_due_trigger_runs,
@@ -48,6 +52,11 @@ class TestScheduledTriggerSteps(WorldTestCase):
             world=self.world,
             slug="barley-mature",
             name="a mature barley plant",
+        )
+        self.harvested = ItemDefinition.objects.create(
+            world=self.world,
+            slug="harvested-barley",
+            name="a bunch of harvested barley",
         )
 
     def _steps(self):
@@ -142,6 +151,38 @@ class TestScheduledTriggerSteps(WorldTestCase):
             ],
         })
 
+    def _harvest_steps(self):
+        return [
+            {
+                "after_seconds": 0,
+                "actions": [
+                    {
+                        "type": "consume_room_item",
+                        "room": "trigger_room",
+                        "item": "itemdefinition.barley-mature",
+                    },
+                    {
+                        "type": "grant_item",
+                        "actor": "trigger_actor",
+                        "item": "itemdefinition.harvested-barley",
+                    },
+                    {
+                        "type": "echo",
+                        "room": "trigger_room",
+                        "text": "You gather a bunch of harvested barley.",
+                    },
+                ],
+            },
+        ]
+
+    def _harvest_conditions(self):
+        return json.dumps({
+            "item_present": {
+                "location": "room",
+                "item": "itemdefinition.barley-mature",
+            },
+        })
+
     def _create_trigger(
         self,
         *,
@@ -187,9 +228,9 @@ class TestScheduledTriggerSteps(WorldTestCase):
             is_pending_deletion=False,
         )
 
-    def _dispatch(self, player_id):
+    def _dispatch(self, player_id, command="plant seed"):
         with self.captureOnCommitCallbacks(execute=True):
-            dispatch_text_command(player_id, "plant seed")
+            dispatch_text_command(player_id, command)
 
     def _cross_instance_mob_event_fixture(self, *, event, enter_event=False):
         instance_config = WorldConfig.objects.create()
@@ -257,6 +298,324 @@ class TestScheduledTriggerSteps(WorldTestCase):
             actor_runtime_mob=actor_runtime_mob,
             other_runtime_mob=other_runtime_mob,
         )
+
+    def test_harvest_actions_normalize_default_and_explicit_counts(self):
+        normalized = normalize_trigger_steps([
+            {
+                "after_seconds": 0,
+                "actions": [
+                    {
+                        "type": "consume_room_item",
+                        "room": "trigger_room",
+                        "item": "itemdefinition.barley-mature",
+                    },
+                    {
+                        "type": "grant_item",
+                        "actor": "trigger_actor",
+                        "item": "itemdefinition.harvested-barley",
+                        "count": 2,
+                    },
+                ],
+            },
+        ])
+
+        self.assertEqual(
+            normalized[0]["actions"],
+            [
+                {
+                    "type": "consume_room_item",
+                    "room": "trigger_room",
+                    "item": "itemdefinition.barley-mature",
+                    "count": 1,
+                },
+                {
+                    "type": "grant_item",
+                    "actor": "trigger_actor",
+                    "item": "itemdefinition.harvested-barley",
+                    "count": 2,
+                },
+            ],
+        )
+
+    def test_harvest_actions_reject_invalid_fields_and_context_refs(self):
+        invalid_actions = [
+            {
+                "type": "consume_room_item",
+                "item": "itemdefinition.barley-mature",
+            },
+            {
+                "type": "consume_room_item",
+                "room": "some_room",
+                "item": "itemdefinition.barley-mature",
+            },
+            {
+                "type": "consume_room_item",
+                "room": "trigger_room",
+                "item": "itemdefinition.barley-mature",
+                "actor": "trigger_actor",
+            },
+            {
+                "type": "grant_item",
+                "item": "itemdefinition.harvested-barley",
+            },
+            {
+                "type": "grant_item",
+                "actor": "some_actor",
+                "item": "itemdefinition.harvested-barley",
+            },
+            {
+                "type": "grant_item",
+                "actor": "trigger_actor",
+                "item": "itemdefinition.harvested-barley",
+                "count": 0,
+            },
+            {
+                "type": "grant_item",
+                "actor": "trigger_actor",
+                "item": "itemdefinition.harvested-barley",
+                "count": True,
+            },
+            {
+                "type": "grant_item",
+                "actor": "trigger_actor",
+                "item": "mobdefinition.barley",
+            },
+        ]
+
+        for action in invalid_actions:
+            with self.subTest(action=action):
+                with self.assertRaises(TriggerStepSpecError):
+                    normalize_trigger_steps([
+                        {
+                            "after_seconds": 0,
+                            "actions": [action],
+                        },
+                    ])
+
+    def test_grant_item_aggregate_count_per_step_cannot_exceed_32(self):
+        actions = [
+            {
+                "type": "grant_item",
+                "actor": "trigger_actor",
+                "item": "itemdefinition.harvested-barley",
+                "count": count,
+            }
+            for count in (17, 16)
+        ]
+
+        with self.assertRaises(TriggerStepSpecError):
+            normalize_trigger_steps([
+                {
+                    "after_seconds": 0,
+                    "actions": actions,
+                },
+            ])
+
+        actions[0]["count"] = 16
+        normalized = normalize_trigger_steps([
+            {
+                "after_seconds": 0,
+                "actions": actions,
+            },
+        ])
+        self.assertEqual(
+            sum(action["count"] for action in normalized[0]["actions"]),
+            32,
+        )
+
+    def test_harvest_atomically_consumes_room_item_and_grants_inventory_item(self):
+        mature_item = self.mature.spawn(self.room, self.spawn_world)
+        lookalike = self.growing.spawn(self.room, self.spawn_world)
+        lookalike.name = self.mature.name
+        lookalike.save(update_fields=["name"])
+        trigger = self._create_trigger(
+            match="harvest barley",
+            steps=self._harvest_steps(),
+            conditions=self._harvest_conditions(),
+        )
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "harvest barley")
+
+        self.assertFalse(Item.objects.filter(pk=mature_item.id).exists())
+        self.assertTrue(Item.objects.filter(pk=lookalike.id).exists())
+        harvested_item = self.player.inventory.get(definition=self.harvested)
+        run = ScheduledTriggerRun.objects.get(trigger=trigger)
+        self.assertEqual(run.status, ScheduledTriggerRun.STATUS_COMPLETED)
+
+        item_change_messages = [
+            entry["message"]
+            for entry in messages
+            if entry["message"]["type"] == "notification.trigger.items_changed"
+        ]
+        self.assertEqual(len(item_change_messages), 1)
+        item_change_data = item_change_messages[0]["data"]
+        self.assertEqual(item_change_data["room"]["key"], self.room.key)
+        self.assertEqual(
+            item_change_data["room_items_removed"],
+            [{"key": mature_item.key}],
+        )
+        self.assertEqual(item_change_data["room_items_added"], [])
+        self.assertEqual(item_change_data["actor_inventory_removed"], [])
+        self.assertEqual(
+            [item["key"] for item in item_change_data["actor_inventory_added"]],
+            [harvested_item.key],
+        )
+        self.assertEqual(
+            item_change_data["actor_inventory_added"][0]["name"],
+            self.harvested.name,
+        )
+
+    def test_harvest_inventory_delta_is_sent_only_to_the_trigger_actor(self):
+        observer = self.create_player(
+            "Barley Observer",
+            user=self.create_user("barley-observer@example.com"),
+        )
+        observer.in_game = True
+        observer.save(update_fields=["in_game"])
+        mature_item = self.mature.spawn(self.room, self.spawn_world)
+        self._create_trigger(
+            match="harvest barley",
+            steps=self._harvest_steps(),
+            conditions=self._harvest_conditions(),
+        )
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "harvest barley")
+
+        item_change_messages = [
+            entry
+            for entry in messages
+            if entry["message"]["type"] == "notification.trigger.items_changed"
+        ]
+        harvester_message = next(
+            entry["message"]
+            for entry in item_change_messages
+            if entry["player_key"] == self.player.key
+        )
+        observer_message = next(
+            entry["message"]
+            for entry in item_change_messages
+            if entry["player_key"] == observer.key
+        )
+        self.assertEqual(
+            [
+                entry["player_key"]
+                for entry in item_change_messages
+            ],
+            [self.player.key, observer.key],
+        )
+
+        harvester_data = harvester_message["data"]
+        self.assertEqual(
+            harvester_data["room_items_removed"],
+            [{"key": mature_item.key}],
+        )
+        self.assertEqual(len(harvester_data["actor_inventory_added"]), 1)
+
+        observer_data = observer_message["data"]
+        self.assertEqual(
+            observer_data["room_items_removed"],
+            [{"key": mature_item.key}],
+        )
+        self.assertEqual(observer_data["actor_inventory_added"], [])
+
+    def test_same_step_item_add_then_remove_emits_no_ghost_item_delta(self):
+        trigger = self._create_trigger(
+            match="prepare barley",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "grant_item",
+                            "actor": "trigger_actor",
+                            "item": "itemdefinition.harvested-barley",
+                        },
+                        {
+                            "type": "consume_item",
+                            "actor": "trigger_actor",
+                            "item": "itemdefinition.harvested-barley",
+                        },
+                        {
+                            "type": "spawn_room_item",
+                            "room": "trigger_room",
+                            "item": "itemdefinition.barley-mature",
+                        },
+                        {
+                            "type": "consume_room_item",
+                            "room": "trigger_room",
+                            "item": "itemdefinition.barley-mature",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "prepare barley")
+
+        self.assertFalse(self.player.inventory.filter(definition=self.harvested).exists())
+        self.assertFalse(self._room_items(self.mature).exists())
+        run = ScheduledTriggerRun.objects.get(trigger=trigger)
+        self.assertEqual(run.status, ScheduledTriggerRun.STATUS_COMPLETED)
+        self.assertFalse(
+            any(
+                entry["message"]["type"] == "notification.trigger.items_changed"
+                for entry in messages
+            )
+        )
+
+    def test_missing_room_item_rolls_back_an_earlier_grant(self):
+        steps = self._harvest_steps()
+        steps[0]["actions"] = [
+            steps[0]["actions"][1],
+            steps[0]["actions"][0],
+        ]
+        trigger = self._create_trigger(
+            match="harvest barley",
+            steps=steps,
+            conditions="",
+        )
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "harvest barley")
+
+        self.assertFalse(self.player.inventory.filter(definition=self.harvested).exists())
+        self.assertFalse(ScheduledTriggerRun.objects.filter(trigger=trigger).exists())
+        self.assertFalse(GameEventOutbox.objects.exists())
+        self.assertFalse(
+            any(
+                entry["message"]["type"] == "notification.trigger.items_changed"
+                for entry in messages
+            )
+        )
+
+    def test_harvest_room_action_is_visible_only_while_mature_barley_is_present(self):
+        self._create_trigger(
+            match="harvest barley",
+            steps=self._harvest_steps(),
+            conditions=self._harvest_conditions(),
+        )
+
+        def look_actions():
+            with capture_game_messages() as messages:
+                self._dispatch(self.player.id, "look")
+            look_message = next(
+                entry["message"]
+                for entry in messages
+                if entry["message"]["type"] == "cmd.look.success"
+            )
+            return look_message["data"]["target"]["actions"]
+
+        self.assertNotIn("harvest barley", look_actions())
+
+        mature_item = self.mature.spawn(self.room, self.spawn_world)
+        self.assertIn("harvest barley", look_actions())
+
+        mature_item.delete()
+        self.assertNotIn("harvest barley", look_actions())
 
     def test_step_zero_consumes_spawns_binds_echoes_and_persists_due_run(self):
         seed_item = self.seed.spawn(self.player, self.spawn_world)
@@ -1011,3 +1370,132 @@ class TestScheduledTriggerSteps(WorldTestCase):
 
         self.assertEqual(result["processed"], 1)
         self.assertEqual(self._room_items(self.growing).count(), 1)
+
+
+class TestConcurrentHarvestTriggerSteps(TransactionTestCase):
+    def setUp(self):
+        super().setUp()
+        user_model = get_user_model()
+        self.first_user = user_model.objects.create_user(
+            "first-harvester@example.com",
+            "p",
+        )
+        self.second_user = user_model.objects.create_user(
+            "second-harvester@example.com",
+            "p",
+        )
+        config = WorldConfig.objects.create()
+        self.authored_world = World.objects.new_world(
+            name="Concurrent Barley Field",
+            author=self.first_user,
+            config=config,
+        )
+        self.runtime_world = self.authored_world.create_spawn_world()
+        self.room = self.authored_world.zones.first().rooms.first()
+        self.first_player = self._create_player(
+            user=self.first_user,
+            name="First Harvester",
+        )
+        self.second_player = self._create_player(
+            user=self.second_user,
+            name="Second Harvester",
+        )
+        self.mature = ItemDefinition.objects.create(
+            world=self.authored_world,
+            slug="barley-mature",
+            name="a bunch of mature barley plants",
+        )
+        self.harvested = ItemDefinition.objects.create(
+            world=self.authored_world,
+            slug="harvested-barley",
+            name="a bunch of harvested barley",
+        )
+        self.trigger = Trigger.objects.create(
+            world=self.authored_world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=self.room.id,
+            name="Harvest barley",
+            match="harvest barley",
+            script="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "consume_room_item",
+                            "room": "trigger_room",
+                            "item": "itemdefinition.barley-mature",
+                        },
+                        {
+                            "type": "grant_item",
+                            "actor": "trigger_actor",
+                            "item": "itemdefinition.harvested-barley",
+                        },
+                    ],
+                },
+            ],
+            conditions=json.dumps({
+                "item_present": {
+                    "location": "room",
+                    "item": "itemdefinition.barley-mature",
+                },
+            }),
+            display_action_in_room=True,
+        )
+        self.mature.spawn(self.room, self.runtime_world)
+
+    def _create_player(self, *, user, name):
+        return Player.objects.create(
+            user=user,
+            name=name,
+            room=self.room,
+            world=self.runtime_world,
+            in_game=True,
+        )
+
+    def test_two_players_cannot_harvest_the_same_crop(self):
+        barrier = Barrier(2)
+
+        def harvest_once(player_id):
+            close_old_connections()
+            try:
+                actor = Player.objects.get(pk=player_id)
+                room = Room.objects.get(pk=self.room.id)
+                trigger = Trigger.objects.get(pk=self.trigger.id)
+                barrier.wait(timeout=5)
+                result = start_trigger_steps(
+                    trigger=trigger,
+                    actor=actor,
+                    room=room,
+                )
+                return "started" if result.started else result.code
+            finally:
+                close_old_connections()
+
+        with patch("spawns.trigger_steps._flush_queued_events"):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                outcomes = list(executor.map(
+                    harvest_once,
+                    [self.first_player.id, self.second_player.id],
+                ))
+
+        self.assertEqual(sorted(outcomes), ["conditions_failed", "started"])
+        self.assertFalse(
+            Item.objects.filter(
+                world=self.runtime_world,
+                definition=self.mature,
+            ).exists()
+        )
+        self.assertEqual(
+            Item.objects.filter(
+                world=self.runtime_world,
+                definition=self.harvested,
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            ScheduledTriggerRun.objects.filter(trigger=self.trigger).count(),
+            1,
+        )

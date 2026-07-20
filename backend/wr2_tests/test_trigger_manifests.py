@@ -495,6 +495,133 @@ spec:
         self.assertEqual(trigger_payload["manifest"]["spec"]["steps"], self.trigger.steps)
         self.assertEqual(trigger_payload["manifest"]["spec"]["on_step_error"], "cancel")
 
+    def test_apply_trigger_manifest_supports_typed_harvest_actions(self):
+        mature = ItemDefinition.objects.create(
+            world=self.world,
+            slug="barley-mature",
+            name="a bunch of mature barley plants",
+        )
+        harvested = ItemDefinition.objects.create(
+            world=self.world,
+            slug="harvested-barley",
+            name="a bunch of harvested barley",
+        )
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: consume_room_item
+          room: trigger_room
+          item: {mature.id}
+        - type: grant_item
+          actor: trigger_actor
+          item: {harvested.id}
+          count: 2
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.trigger.refresh_from_db()
+        self.assertEqual(
+            self.trigger.steps,
+            [
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "consume_room_item",
+                            "room": "trigger_room",
+                            "item": "itemdefinition.barley-mature",
+                            "count": 1,
+                        },
+                        {
+                            "type": "grant_item",
+                            "actor": "trigger_actor",
+                            "item": "itemdefinition.harvested-barley",
+                            "count": 2,
+                        },
+                    ],
+                },
+            ],
+        )
+        self.assertEqual(
+            resp.data["trigger"]["manifest"]["spec"]["steps"],
+            self.trigger.steps,
+        )
+
+    def test_apply_trigger_manifest_rejects_invalid_harvest_action_fields(self):
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="barley-mature",
+            name="a bunch of mature barley plants",
+        )
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="harvested-barley",
+            name="a bunch of harvested barley",
+        )
+        invalid_actions = (
+            (
+                """
+        - type: consume_room_item
+          room: nearby_room
+          item: itemdefinition.barley-mature
+""",
+                "room must be 'trigger_room'",
+            ),
+            (
+                """
+        - type: grant_item
+          actor: nearby_actor
+          item: itemdefinition.harvested-barley
+""",
+                "actor must be 'trigger_actor'",
+            ),
+            (
+                """
+        - type: grant_item
+          actor: trigger_actor
+          item: itemdefinition.harvested-barley
+          room: trigger_room
+""",
+                "unsupported field(s): room",
+            ),
+        )
+
+        for action_yaml, expected_error in invalid_actions:
+            with self.subTest(expected_error=expected_error):
+                manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  steps:
+    - after_seconds: 0
+      actions:
+{action_yaml}
+"""
+
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": manifest},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 400)
+                self.assertIn(expected_error, str(resp.data))
+
+        self.trigger.refresh_from_db()
+        self.assertEqual(self.trigger.steps, [])
+
     def test_partial_trigger_patch_preserves_structured_conditions(self):
         seed = ItemDefinition.objects.create(
             world=self.world,

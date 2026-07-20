@@ -24,7 +24,9 @@ from builders.models import ItemDefinition, Trigger
 from core.conditions import evaluate_conditions
 from core.trigger_steps import (
     TRIGGER_STEP_ACTION_CONSUME_ITEM,
+    TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM,
     TRIGGER_STEP_ACTION_ECHO,
+    TRIGGER_STEP_ACTION_GRANT_ITEM,
     TRIGGER_STEP_ACTION_REPLACE_ROOM_ITEM,
     TRIGGER_STEP_ACTION_SPAWN_ROOM_ITEM,
     TriggerStepSpecError,
@@ -67,6 +69,7 @@ class TriggerStepStartResult:
 class TriggerItemChanges:
     room_items_added: dict[int, Item] = field(default_factory=dict)
     room_items_removed: list[dict[str, str]] = field(default_factory=list)
+    actor_inventory_added: dict[int, Item] = field(default_factory=dict)
     actor_inventory_removed: list[dict[str, str]] = field(default_factory=list)
 
     @property
@@ -74,6 +77,7 @@ class TriggerItemChanges:
         return bool(
             self.room_items_added
             or self.room_items_removed
+            or self.actor_inventory_added
             or self.actor_inventory_removed
         )
 
@@ -307,14 +311,17 @@ def _consume_item(
     run: ScheduledTriggerRun,
     action: dict[str, Any],
     definition: ItemDefinition,
-) -> list[dict[str, str]]:
+) -> list[tuple[int, str]]:
     actor_model = _actor_model(run.actor_type)
     if actor_model is None:
         raise TriggerStepExecutionError(
             "The trigger actor type cannot hold inventory.",
             code="invalid_actor",
         )
-    actor = actor_model.objects.filter(pk=run.actor_id, world_id=run.runtime_world_id).first()
+    actor = actor_model.objects.select_for_update().filter(
+        pk=run.actor_id,
+        world_id=run.runtime_world_id,
+    ).first()
     if actor is None:
         raise TriggerStepExecutionError(
             "The trigger actor is no longer available.",
@@ -337,9 +344,68 @@ def _consume_item(
             f"The trigger actor does not have {count} required item(s).",
             code="required_item_missing",
         )
-    removed = [{"key": item.key} for item in items]
+    removed = [(item.id, item.key) for item in items]
     Item.objects.filter(pk__in=[item.id for item in items]).delete()
     return removed
+
+
+def _consume_room_item(
+    *,
+    run: ScheduledTriggerRun,
+    action: dict[str, Any],
+    definition: ItemDefinition,
+) -> list[tuple[int, str]]:
+    room_type = ContentType.objects.get_for_model(Room)
+    count = int(action.get("count") or 1)
+    items = list(
+        Item.objects.select_for_update()
+        .filter(
+            world_id=run.runtime_world_id,
+            container_type_id=room_type.id,
+            container_id=run.room_id,
+            definition_id=definition.id,
+            is_pending_deletion=False,
+        )
+        .order_by("id")
+        .only("id")[:count]
+    )
+    if len(items) != count:
+        raise TriggerStepExecutionError(
+            f"The trigger room does not have {count} required item(s).",
+            code="required_room_item_missing",
+        )
+    removed = [(item.id, item.key) for item in items]
+    Item.objects.filter(pk__in=[item.id for item in items]).delete()
+    return removed
+
+
+def _grant_item(
+    *,
+    run: ScheduledTriggerRun,
+    action: dict[str, Any],
+    definition: ItemDefinition,
+    runtime_world: World,
+) -> list[Item]:
+    actor_model = _actor_model(run.actor_type)
+    if actor_model is None:
+        raise TriggerStepExecutionError(
+            "The trigger actor type cannot hold inventory.",
+            code="invalid_actor",
+        )
+    actor = actor_model.objects.select_for_update().filter(
+        pk=run.actor_id,
+        world_id=run.runtime_world_id,
+    ).first()
+    if actor is None:
+        raise TriggerStepExecutionError(
+            "The trigger actor is no longer available.",
+            code="actor_missing",
+        )
+
+    return [
+        definition.spawn(actor, runtime_world)
+        for _index in range(int(action.get("count") or 1))
+    ]
 
 
 def _spawn_room_item(
@@ -414,46 +480,74 @@ def _replace_room_item(
     return removed_item_id, removed_item_key, replacement
 
 
-def _item_changes_event(
+def _item_change_events(
     *,
     run: ScheduledTriggerRun,
     room: Room,
     changes: TriggerItemChanges,
     room_recipient_keys: tuple[str, ...],
-) -> GameEvent | None:
+) -> list[GameEvent]:
     if not changes.changed:
-        return None
+        return []
 
-    recipient_keys = set(room_recipient_keys)
-    if run.actor_type == "player":
-        recipient_keys.add(run.actor_key)
-    if not recipient_keys:
-        return None
-
-    # Deliberately omit a viewer so every recipient gets the same bounded,
-    # non-personalized item payload from this one room fanout event.
+    # Deliberately omit a viewer so each bounded payload is non-personalized.
+    # Actor inventory changes go only to that actor; other room occupants get
+    # room changes without learning what was privately granted or consumed.
     from spawns.state_payloads import serialize_item
 
     added_payloads = [
         serialize_item(item, viewer=None).model_dump()
         for item in changes.room_items_added.values()
     ]
-    return GameEvent(
-        type="notification.trigger.items_changed",
-        recipients=sorted(recipient_keys),
-        data={
+    actor_added_payloads = [
+        serialize_item(item, viewer=None).model_dump()
+        for item in changes.actor_inventory_added.values()
+    ]
+
+    room_changed = bool(changes.room_items_added or changes.room_items_removed)
+    actor_changed = bool(
+        changes.actor_inventory_added or changes.actor_inventory_removed
+    )
+    events: list[GameEvent] = []
+    room_recipients = set(room_recipient_keys)
+    if run.actor_type == "player" and room_changed:
+        # Preserve the initiating player's room delta even if a delayed step
+        # finishes after they have left the trigger room.
+        room_recipients.add(run.actor_key)
+
+    def payload(*, include_room: bool, include_actor: bool) -> dict[str, Any]:
+        return {
             "room": {
                 "id": room.id,
                 "key": room.key,
             },
-            "room_items_added": added_payloads,
-            "room_items_removed": changes.room_items_removed,
-            "actor_inventory_removed": changes.actor_inventory_removed,
+            "room_items_added": added_payloads if include_room else [],
+            "room_items_removed": changes.room_items_removed if include_room else [],
+            "actor_inventory_added": actor_added_payloads if include_actor else [],
+            "actor_inventory_removed": (
+                changes.actor_inventory_removed if include_actor else []
+            ),
             "actor": {
                 "key": run.actor_key,
             },
-        },
-    )
+        }
+
+    if run.actor_type == "player" and actor_changed:
+        events.append(GameEvent(
+            type="notification.trigger.items_changed",
+            recipients=[run.actor_key],
+            data=payload(include_room=room_changed, include_actor=True),
+        ))
+        room_recipients.discard(run.actor_key)
+
+    if room_changed and room_recipients:
+        events.append(GameEvent(
+            type="notification.trigger.items_changed",
+            recipients=sorted(room_recipients),
+            data=payload(include_room=True, include_actor=False),
+        ))
+
+    return events
 
 
 def _echo_event(
@@ -535,13 +629,29 @@ def _execute_current_step(
     for action in step.get("actions") or []:
         action_type = action.get("type")
         if action_type == TRIGGER_STEP_ACTION_CONSUME_ITEM:
-            item_changes.actor_inventory_removed.extend(
-                _consume_item(
-                    run=run,
-                    action=action,
-                    definition=definitions[int(action["item_definition_id"])],
-                )
-            )
+            for removed_id, removed_key in _consume_item(
+                run=run,
+                action=action,
+                definition=definitions[int(action["item_definition_id"])],
+            ):
+                if item_changes.actor_inventory_added.pop(removed_id, None) is None:
+                    item_changes.actor_inventory_removed.append({"key": removed_key})
+        elif action_type == TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM:
+            for removed_id, removed_key in _consume_room_item(
+                run=run,
+                action=action,
+                definition=definitions[int(action["item_definition_id"])],
+            ):
+                if item_changes.room_items_added.pop(removed_id, None) is None:
+                    item_changes.room_items_removed.append({"key": removed_key})
+        elif action_type == TRIGGER_STEP_ACTION_GRANT_ITEM:
+            for granted_item in _grant_item(
+                run=run,
+                action=action,
+                definition=definitions[int(action["item_definition_id"])],
+                runtime_world=runtime_world,
+            ):
+                item_changes.actor_inventory_added[granted_item.id] = granted_item
         elif action_type == TRIGGER_STEP_ACTION_SPAWN_ROOM_ITEM:
             spawned_item = _spawn_room_item(
                 run=run,
@@ -579,14 +689,14 @@ def _execute_current_step(
                 code="unsupported_action",
             )
 
-    item_event = _item_changes_event(
-        run=run,
-        room=room,
-        changes=item_changes,
-        room_recipient_keys=room_recipient_keys,
+    events.extend(
+        _item_change_events(
+            run=run,
+            room=room,
+            changes=item_changes,
+            room_recipient_keys=room_recipient_keys,
+        )
     )
-    if item_event is not None:
-        events.append(item_event)
 
     run.bindings = bindings
     run.next_step_index += 1

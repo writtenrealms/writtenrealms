@@ -9,11 +9,15 @@ TRIGGER_STEP_ERROR_POLICY_CANCEL = "cancel"
 TRIGGER_STEP_ERROR_POLICIES = (TRIGGER_STEP_ERROR_POLICY_CANCEL,)
 
 TRIGGER_STEP_ACTION_CONSUME_ITEM = "consume_item"
+TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM = "consume_room_item"
+TRIGGER_STEP_ACTION_GRANT_ITEM = "grant_item"
 TRIGGER_STEP_ACTION_SPAWN_ROOM_ITEM = "spawn_room_item"
 TRIGGER_STEP_ACTION_REPLACE_ROOM_ITEM = "replace_room_item"
 TRIGGER_STEP_ACTION_ECHO = "echo"
 TRIGGER_STEP_ACTION_TYPES = (
     TRIGGER_STEP_ACTION_CONSUME_ITEM,
+    TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM,
+    TRIGGER_STEP_ACTION_GRANT_ITEM,
     TRIGGER_STEP_ACTION_SPAWN_ROOM_ITEM,
     TRIGGER_STEP_ACTION_REPLACE_ROOM_ITEM,
     TRIGGER_STEP_ACTION_ECHO,
@@ -27,6 +31,8 @@ MAX_TRIGGER_STEP_ACTIONS = 16
 MAX_TRIGGER_STEP_DELAY_SECONDS = 31_536_000
 MAX_TRIGGER_SEQUENCE_DURATION_SECONDS = 31_536_000
 MAX_TRIGGER_CONSUME_ITEM_COUNT = 1_000
+MAX_TRIGGER_GRANT_ITEM_COUNT = 32
+MAX_TRIGGER_GRANT_ITEMS_PER_STEP = 32
 MAX_TRIGGER_ECHO_LENGTH = 4_000
 # Keeps cached hooks and durable run snapshots bounded even when every action
 # uses its maximum field size.
@@ -178,6 +184,60 @@ def _normalize_action(
             ),
         }
 
+    if action_type == TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM:
+        _exact_fields(
+            action,
+            field_name=field_name,
+            required={"type", "room", "item"},
+            optional={"count"},
+        )
+        return {
+            "type": action_type,
+            "room": _context_ref(
+                action.get("room"),
+                field_name=f"{field_name}.room",
+                expected=TRIGGER_ROOM_REF,
+            ),
+            "item": _item_ref(
+                action.get("item"),
+                field_name=f"{field_name}.item",
+                item_ref_normalizer=item_ref_normalizer,
+            ),
+            "count": _integer(
+                action.get("count", 1),
+                field_name=f"{field_name}.count",
+                minimum=1,
+                maximum=MAX_TRIGGER_CONSUME_ITEM_COUNT,
+            ),
+        }
+
+    if action_type == TRIGGER_STEP_ACTION_GRANT_ITEM:
+        _exact_fields(
+            action,
+            field_name=field_name,
+            required={"type", "actor", "item"},
+            optional={"count"},
+        )
+        return {
+            "type": action_type,
+            "actor": _context_ref(
+                action.get("actor"),
+                field_name=f"{field_name}.actor",
+                expected=TRIGGER_ACTOR_REF,
+            ),
+            "item": _item_ref(
+                action.get("item"),
+                field_name=f"{field_name}.item",
+                item_ref_normalizer=item_ref_normalizer,
+            ),
+            "count": _integer(
+                action.get("count", 1),
+                field_name=f"{field_name}.count",
+                minimum=1,
+                maximum=MAX_TRIGGER_GRANT_ITEM_COUNT,
+            ),
+        }
+
     if action_type == TRIGGER_STEP_ACTION_SPAWN_ROOM_ITEM:
         _exact_fields(
             action,
@@ -314,17 +374,28 @@ def normalize_trigger_steps(
                 f"{field_name}.actions cannot contain more than "
                 f"{MAX_TRIGGER_STEP_ACTIONS} actions."
             )
+        normalized_actions = [
+            _normalize_action(
+                action,
+                field_name=f"{field_name}.actions[{action_index}]",
+                bindings=bindings,
+                item_ref_normalizer=item_ref_normalizer,
+            )
+            for action_index, action in enumerate(raw_actions)
+        ]
+        grant_count = sum(
+            int(action.get("count") or 1)
+            for action in normalized_actions
+            if action.get("type") == TRIGGER_STEP_ACTION_GRANT_ITEM
+        )
+        if grant_count > MAX_TRIGGER_GRANT_ITEMS_PER_STEP:
+            raise TriggerStepSpecError(
+                f"{field_name} cannot grant more than "
+                f"{MAX_TRIGGER_GRANT_ITEMS_PER_STEP} items."
+            )
         normalized_steps.append({
             "after_seconds": after_seconds,
-            "actions": [
-                _normalize_action(
-                    action,
-                    field_name=f"{field_name}.actions[{action_index}]",
-                    bindings=bindings,
-                    item_ref_normalizer=item_ref_normalizer,
-                )
-                for action_index, action in enumerate(raw_actions)
-            ],
+            "actions": normalized_actions,
         })
     serialized_size = len(
         json.dumps(

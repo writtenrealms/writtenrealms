@@ -151,22 +151,22 @@ Use a typed mob-definition ref rather than a spawned mob id. For movement
 hooks, the context room depends on the hook: `before_move_exit` checks the
 origin room, while `before_move_enter` checks the destination room.
 
-Require a barley seed in the triggering actor's inventory:
+Require a packet of barley seeds in the triggering actor's inventory:
 
 ```yaml
 conditions:
   item_present:
     location: actor_inventory
-    item: itemdefinition.barley-seed
+    item: itemdefinition.barley-seeds
 ```
 
-Require at least two seedling items in the context room:
+Require at least two barley-seedling patches in the context room:
 
 ```yaml
 conditions:
   item_present:
     location: room
-    item: itemdefinition.barley-seedling
+    item: itemdefinition.barley-seedlings
     count: 2
 ```
 

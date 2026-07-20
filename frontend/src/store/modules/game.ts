@@ -1235,9 +1235,10 @@ const mutations = {
       String(payload.actor?.key ?? "") === String(state.player.key ?? "") &&
       Array.isArray(state.player.inventory)
     ) {
-      removeItemsByKeyInPlace(
+      applyItemChangesInPlace(
         state.player.inventory,
         payload.actor_inventory_removed,
+        payload.actor_inventory_added,
       );
     }
   },

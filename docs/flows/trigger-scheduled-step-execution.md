@@ -65,6 +65,10 @@ countdown/ETA is not used as durable state.
 Every action in one step shares a transaction:
 
 - `consume_item` locks exact live items in the original actor's inventory.
+- `consume_room_item` locks exact-definition live items in the original runtime
+  room and removes the requested count.
+- `grant_item` locks and revalidates the original actor, then spawns the
+  requested exact-definition items into that actor's inventory.
 - `spawn_room_item` spawns into the original runtime world and room and can bind
   the exact new item id.
 - `replace_room_item` locks that bound id, verifies its exact world and room,
@@ -74,10 +78,13 @@ Every action in one step shares a transaction:
 Events are written to `GameEventOutbox` before commit and published afterward.
 A process failure before commit leaves the run due and changes nothing. A
 failure after commit cannot lose the event because the outbox remains durable.
-Room-item additions and removals, plus consumed items from the triggering
-player's inventory, are sent as one non-personalized room delta. This keeps the
-fanout bounded. Viewer-specific custom item actions are refreshed the next time
-the client receives a full room view, such as after `look`.
+Room-item additions and removals use a room-scoped delta. Inventory additions
+or removals use a private delta sent only to the triggering player; when that
+player also needs the room delta, the two changes share one private payload.
+This keeps fanout bounded to at most two events per step without disclosing an
+inventory grant to other occupants. Viewer-specific custom item actions are
+refreshed the next time the client receives a full room view, such as after
+`look`; a scheduled item delta does not force a look or recompute those actions.
 
 After success, the cursor advances and `next_run_ts` is calculated as
 `started_ts + cumulative_offset`. Worker lateness therefore does not stretch
@@ -86,8 +93,9 @@ may claim it again immediately.
 
 ## Failure And Completion
 
-Expected semantic failures—missing inventory, a harvested/moved bound item, or
-a deleted definition—roll back the current step. With
+Expected semantic failures—missing actor inventory, missing room items, a
+harvested/moved bound item, a missing actor for a grant, or a deleted
+definition—roll back the current step. With
 `on_step_error: cancel`, the run records the error and becomes `cancelled`.
 Earlier committed steps remain intact; later steps do not run.
 

@@ -258,6 +258,18 @@ Current required mappings:
   delayed commands, ambiguous purge selectors, nested delays, and unsupported
   action types for builder review rather than embedding command strings inside
   typed actions.
+- A deterministic WR1 harvest item action attached to the mature stage may
+  export as a separate room-scoped command trigger. Preserve its authored
+  command match, set `display_action_in_room: true`, and add an `item_present`
+  room condition for the mature definition so the action is listed only while
+  a harvest is available. Convert an exact mature-stage purge to
+  `consume_room_item`, the load-and-give of a fixed harvested definition to
+  `grant_item` for `trigger_actor`, and room text to `echo`, all in one
+  `after_seconds: 0` step. This makes the availability check, removal, grant,
+  and notification atomic. Resolve both numeric WR1 item-template ids to
+  portable `itemdefinition.<slug>` refs. Do not emit a forced `look`: scheduled
+  room-item deltas do not recompute viewer-specific actions, and the maturity
+  message can direct the player to refresh the room normally.
 - WR1 room-action `transfer {{ actor }} <numeric_room_id>` scripts should
   export as `/cmd room -- /transfer {{ actor_key }} room@x,y,z`. Resolve the
   legacy room id to the imported room's coordinates; never copy a WR1 or WR2
@@ -628,28 +640,28 @@ spec:
   target:
     type: room
     key: room.10
-  match: plant seed
+  match: plant seeds
   script: ""
   conditions:
     item_present:
       location: actor_inventory
-      item: itemdefinition.barley-seed
+      item: itemdefinition.barley-seeds
   steps:
     - after_seconds: 0
       actions:
         - type: consume_item
           actor: trigger_actor
-          item: itemdefinition.barley-seed
+          item: itemdefinition.barley-seeds
           count: 1
         - type: spawn_room_item
           room: trigger_room
-          item: itemdefinition.barley-seedling
+          item: itemdefinition.barley-seedlings
           bind: crop
     - after_seconds: 20
       actions:
         - type: replace_room_item
           target: crop
-          with: itemdefinition.barley-growing
+          with: itemdefinition.barley-growing-plants
         - type: echo
           room: trigger_room
           text: A murmur of growth fills the air.
@@ -658,11 +670,11 @@ spec:
 
 The first step must have `after_seconds: 0`; later offsets are positive and
 relative to the prior step. Each offset and their cumulative total are capped
-at one year. `consume_item`, `spawn_room_item`,
-`replace_room_item`, and `echo` are the initial action whitelist. Item refs are
-resolved within the authored world and stored portably. Bindings must be
-created before use and identify exact runtime items, not keywords or definition
-matches. Policy triggers cannot define steps.
+at one year. `consume_item`, `consume_room_item`, `grant_item`,
+`spawn_room_item`, `replace_room_item`, and `echo` are the action whitelist.
+Item refs are resolved within the authored world and stored portably. Bindings
+must be created before use and identify exact runtime items, not keywords or
+definition matches. Policy triggers cannot define steps.
 
 Step zero rechecks conditions under a runtime-world/room-scoped transaction
 mutex and commits with its actions. Later steps are persisted in a

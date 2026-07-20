@@ -331,7 +331,8 @@ For the full slash command matrix and command-by-command reference, see
 previous step. The first step must use `0`; later steps must use a positive
 value.
 
-This is the complete barley-growth sequence:
+This is the complete barley-growth sequence. Its portable slugs mirror the
+plural quantities represented by each definition:
 
 ```yaml
 kind: trigger
@@ -344,81 +345,125 @@ spec:
   target:
     type: room
     key: room.128377
-  match: plant seed
+  match: plant seeds
   script: ""
   conditions:
     all:
       - item_present:
           location: actor_inventory
-          item: itemdefinition.barley-seed
+          item: itemdefinition.barley-seeds
       - not:
           any:
             - item_present:
                 location: room
-                item: itemdefinition.barley-seedling
+                item: itemdefinition.barley-seedlings
             - item_present:
                 location: room
-                item: itemdefinition.barley-growing
+                item: itemdefinition.barley-growing-plants
             - item_present:
                 location: room
-                item: itemdefinition.barley-flowering
+                item: itemdefinition.barley-flowering-plants
             - item_present:
                 location: room
-                item: itemdefinition.barley-mature
+                item: itemdefinition.barley-mature-plants
   steps:
     - after_seconds: 0
       actions:
         - type: consume_item
           actor: trigger_actor
-          item: itemdefinition.barley-seed
+          item: itemdefinition.barley-seeds
           count: 1
         - type: spawn_room_item
           room: trigger_room
-          item: itemdefinition.barley-seedling
+          item: itemdefinition.barley-seedlings
           bind: crop
         - type: echo
           room: trigger_room
-          text: A soft rustle captures your attention as the seedling quivers, beginning its journey to maturity.
+          text: A soft rustle captures your attention as barley seedlings push through the soil, beginning their journey to maturity.
     - after_seconds: 20
       actions:
         - type: replace_room_item
           target: crop
-          with: itemdefinition.barley-growing
+          with: itemdefinition.barley-growing-plants
         - type: echo
           room: trigger_room
-          text: A murmur of growth fills the air as the barley plant stretches skyward, reaching for the sun's nurturing embrace.
+          text: A murmur of growth fills the air as the young barley plants stretch skyward, reaching for the sun's nurturing embrace.
     - after_seconds: 20
       actions:
         - type: replace_room_item
           target: crop
-          with: itemdefinition.barley-flowering
+          with: itemdefinition.barley-flowering-plants
         - type: echo
           room: trigger_room
-          text: A burst of floral scent envelops the altar as the barley plant's flowers open, heralding the onset of fruition.
+          text: A burst of floral scent envelops the altar as flowers open across the barley plants, heralding the onset of fruition.
     - after_seconds: 20
       actions:
         - type: replace_room_item
           target: crop
-          with: itemdefinition.barley-mature
+          with: itemdefinition.barley-mature-plants
         - type: echo
           room: trigger_room
-          text: A rich, grainy aroma fills the air, announcing that the barley has reached its full, harvest-ready splendor.
+          text: A rich, grainy aroma fills the air, announcing that the bunch of barley plants has reached its full, harvest-ready splendor.
   on_step_error: cancel
   show_details_on_failure: true
-  failure_message: You need a barley seed, and no barley can already be growing here.
+  failure_message: You need a packet of barley seeds, and no barley plants can already be growing here.
   display_action_in_room: true
   gate_delay: 0
   order: 0
   is_active: true
 ```
 
-The example requires five authored item definitions:
+Pair it with a second room trigger for harvesting:
 
-- `itemdefinition.barley-seed`
-- `itemdefinition.barley-seedling`
-- `itemdefinition.barley-growing`
-- `itemdefinition.barley-flowering`
-- `itemdefinition.barley-mature`
+```yaml
+kind: trigger
+metadata:
+  world: world.1
+  name: Harvest Barley
+spec:
+  scope: room
+  kind: command
+  target:
+    type: room
+    key: room.128377
+  match: harvest
+  script: ""
+  conditions:
+    item_present:
+      location: room
+      item: itemdefinition.barley-mature-plants
+      count: 1
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: consume_room_item
+          room: trigger_room
+          item: itemdefinition.barley-mature-plants
+          count: 1
+        - type: grant_item
+          actor: trigger_actor
+          item: itemdefinition.harvested-barley
+          count: 1
+        - type: echo
+          room: trigger_room
+          text: The ripe barley is severed with a clean cut and gathered together. The air takes on the rich aroma of grain as a harvested bunch is made ready for further use.
+  on_step_error: cancel
+  show_details_on_failure: true
+  failure_message: There is no mature barley ready to harvest here.
+  display_action_in_room: true
+  gate_delay: 0
+  order: 1
+  is_active: true
+```
+
+The complete interaction requires six authored item definitions:
+
+- `itemdefinition.barley-seeds`
+- `itemdefinition.barley-seedlings`
+- `itemdefinition.barley-growing-plants`
+- `itemdefinition.barley-flowering-plants`
+- `itemdefinition.barley-mature-plants`
+- `itemdefinition.harvested-barley`
 
 The initial step checks the trigger conditions, consumes the seed, spawns the
 seedling, records its exact runtime item id as `crop`, and queues the echo in
@@ -432,16 +477,25 @@ is near-real-time scheduling rather than an exact wall-clock guarantee. After
 worker downtime or backlog, several overdue steps may catch up in one bounded
 worker pass, so their echoes can arrive close together.
 
+The `harvest` room action is visible on a full room view only while mature
+barley is present. Scheduled item deltas do not recompute viewer-specific room
+actions, so a player can use `look` after the clear maturity message to see the
+new action. The growth sequence does not force a look. The harvest trigger
+rechecks its condition and executes all three actions in one transaction, so
+concurrent attempts cannot grant two harvested bunches from one mature bunch.
+
 ### Supported Step Actions
 
 | Type | Required fields | Effect |
 | --- | --- | --- |
 | `consume_item` | `actor: trigger_actor`, `item`, optional `count` | Removes exact-definition items from the triggering actor's inventory. `count` defaults to `1`. |
+| `consume_room_item` | `room: trigger_room`, `item`, optional `count` | Removes exact-definition items from the triggering room. `count` defaults to `1`. |
+| `grant_item` | `actor: trigger_actor`, `item`, optional `count` | Spawns exact-definition items directly into the triggering actor's inventory. `count` defaults to `1`. |
 | `spawn_room_item` | `room: trigger_room`, `item`, optional `bind` | Spawns an item in the triggering room. `bind` names that exact runtime item for later steps. |
 | `replace_room_item` | `target`, `with` | Replaces the exact bound room item and updates the same binding to the replacement. |
 | `echo` | `room: trigger_room`, `text` | Sends text to players currently in the triggering runtime room. |
 
-Use portable item refs such as `itemdefinition.barley-seed`, not database ids.
+Use portable item refs such as `itemdefinition.barley-seeds`, not database ids.
 `echo.text` is literal text; unlike `script`, it does not render template
 variables such as `{{ actor_key }}`.
 Binding names use lowercase letters, numbers, and underscores, begin with a
@@ -451,9 +505,12 @@ implicit target when multiple items could have been spawned.
 
 A trigger may contain at most 32 steps and each step at most 16 actions. Each
 `after_seconds` value and the sum of all `after_seconds` values may be at most
-`31,536,000` (one year). `consume_item.count` may be at most `1,000`, and
-`echo.text` may contain at most 4,000 characters. The complete normalized
-`steps` payload may be at most 256 KiB when serialized as UTF-8 JSON.
+`31,536,000` (one year). `consume_item.count` and
+`consume_room_item.count` may each be at most `1,000`;
+`grant_item.count` and the sum of all granted items in one step may be at most
+`32`. `echo.text` may contain at most 4,000 characters. The complete
+normalized `steps` payload may be at most 256 KiB when serialized as UTF-8
+JSON.
 
 One actor can have only one active run of the same trigger in the same runtime
 world and room. Trying that trigger again while its sequence is active returns
