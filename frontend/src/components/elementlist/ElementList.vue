@@ -38,7 +38,11 @@
           </div>
         </div>
 
-        <div v-if="filters?.length && filterDisplay === 'dropdown'" class="resource-filter-bar">
+        <div
+          v-if="filters?.length && filterDisplay === 'dropdown'"
+          class="resource-filter-bar"
+          :class="{ 'mobile-filter-row': mobileFilterRow }"
+        >
           <div
             v-for="filter_group in filters"
             :key="filter_group.attr"
@@ -109,10 +113,12 @@ const props = withDefaults(defineProps<{
   resolve_route: Function;
   exclude_add?: boolean;
   filterDisplay?: "sidebar" | "dropdown";
+  mobileFilterRow?: boolean;
   tableVariant?: "default" | "data";
   defaultSort?: string;
 }>(), {
   filterDisplay: "dropdown",
+  mobileFilterRow: false,
   tableVariant: "data",
   defaultSort: "",
 });
@@ -534,6 +540,17 @@ onBeforeUnmount(() => {
         flex-basis: auto;
         min-width: 0;
         width: 100%;
+      }
+
+      &.mobile-filter-row {
+        flex-direction: row;
+        flex-wrap: nowrap;
+        gap: 0.5rem;
+
+        .resource-filter-select {
+          flex: 1 1 0;
+          width: auto;
+        }
       }
     }
   }

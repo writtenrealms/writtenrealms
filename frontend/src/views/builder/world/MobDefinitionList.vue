@@ -143,6 +143,7 @@
       :endpoint="endpoint"
       :resolve_route="resolveRoute"
       filter-display="dropdown"
+      mobile-filter-row
       table-variant="data"
       default-sort="-modified_ts"
       @add="onClickAdd"
@@ -152,7 +153,7 @@
 
 <script lang="ts" setup>
 import axios from "axios";
-import { onUnmounted, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useStore } from "vuex";
 import ElementList from "@/components/elementlist/ElementList.vue";
@@ -235,13 +236,28 @@ const listSchema: any[] = [
   },
 ];
 
-const listFilters: any[] = [
+const coreFactionOptions = computed(() => {
+  const factions = store.state.builder.world?.factions;
+  if (!Array.isArray(factions)) return [];
+
+  return factions
+    .filter(faction => faction.type === "core" || faction.is_core)
+    .map(faction => ({ key: faction.code, name: faction.name }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+});
+
+const listFilters = computed(() => [
   {
     label: "Type",
     attr: "type",
     filter_options: mobTypeOptions,
   },
-];
+  {
+    label: "Faction",
+    attr: "faction",
+    filter_options: coreFactionOptions.value,
+  },
+]);
 
 const suggestionStorageKey = () => {
   return `wr:mob-definition-suggestion:${route.params.world_id}`;

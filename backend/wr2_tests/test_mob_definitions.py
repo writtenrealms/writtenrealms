@@ -3,7 +3,14 @@ import yaml
 
 from rest_framework.reverse import reverse
 
-from builders.models import AbilityDefinition, ItemDefinition, MobDefinition
+from builders.models import (
+    AbilityDefinition,
+    FACTION_TYPE_CORE,
+    FACTION_TYPE_REPUTATION,
+    Faction,
+    ItemDefinition,
+    MobDefinition,
+)
 from config import constants as adv_consts
 from spawns.serializers import LoadDefinitionSerializer
 from tests.base import WorldTestCase
@@ -467,6 +474,68 @@ class TestMobDefinitionBuilderEndpoints(WorldTestCase):
         )
         self.assertTrue(resp.data["results"][0]["randomized"])
         self.assertEqual(resp.data["results"][0]["type"], adv_consts.MOB_TYPE_HUMANOID)
+
+    def test_list_filters_by_type_and_core_faction(self):
+        human = Faction.objects.create(
+            world=self.world,
+            code="human",
+            name="Human",
+            type=FACTION_TYPE_CORE,
+        )
+        orc = Faction.objects.create(
+            world=self.world,
+            code="orc",
+            name="Orc",
+            type=FACTION_TYPE_CORE,
+        )
+        town_watch = Faction.objects.create(
+            world=self.world,
+            code="town-watch",
+            name="Town Watch",
+            type=FACTION_TYPE_REPUTATION,
+        )
+        human_bandit = MobDefinition.objects.create(
+            world=self.world,
+            slug="human-bandit",
+            name="a human bandit",
+            mob_type=adv_consts.MOB_TYPE_HUMANOID,
+        )
+        human_boar = MobDefinition.objects.create(
+            world=self.world,
+            slug="human-boar",
+            name="a human boar",
+            mob_type=adv_consts.MOB_TYPE_BEAST,
+        )
+        orc_bandit = MobDefinition.objects.create(
+            world=self.world,
+            slug="orc-bandit",
+            name="an orc bandit",
+            mob_type=adv_consts.MOB_TYPE_HUMANOID,
+        )
+        human_bandit.faction_assignments.create(faction=human)
+        human_bandit.faction_assignments.create(faction=town_watch, value=50)
+        human_boar.faction_assignments.create(faction=human)
+        orc_bandit.faction_assignments.create(faction=orc)
+
+        resp = self.client.get(
+            self.list_ep,
+            {
+                "type": adv_consts.MOB_TYPE_HUMANOID,
+                "faction": human.code,
+                "sort_by": "slug",
+            },
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data["count"], 1)
+        self.assertEqual(resp.data["results"][0]["slug"], human_bandit.slug)
+
+        reputation_resp = self.client.get(
+            self.list_ep,
+            {"faction": town_watch.code},
+        )
+        self.assertEqual(reputation_resp.status_code, 200, reputation_resp.data)
+        self.assertEqual(reputation_resp.data["count"], 0)
 
     def test_retrieve_mob_definition_includes_yaml(self):
         definition = MobDefinition.objects.create(

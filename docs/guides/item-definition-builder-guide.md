@@ -2,7 +2,9 @@
 
 Item definitions are the WR2 item authoring path. Builders create them with
 YAML in **World > Edit**. The **World > Items** screen lists item definitions and
-can copy or prefill the YAML for a definition.
+can copy or prefill the YAML for a definition. Its Type and Equipment Type
+filters can be combined to narrow the list to a specific equipment slot or
+weapon category. Both filters remain side by side at mobile widths.
 
 Use `kind: itemdefinition` for one authored item. Use `kind: itembundle` when a
 mob, merchant, or spawn plan should choose from a weighted set of item definitions.

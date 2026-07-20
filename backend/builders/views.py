@@ -78,6 +78,7 @@ from builders.models import (
     FactionAssignment,
     Faction,
     FactionRank,
+    FACTION_TYPE_CORE,
     FactSchedule,
     WorldBuilder,
     WorldReview)
@@ -3031,6 +3032,10 @@ class ItemDefinitionViewSet(BaseWorldBuilderViewSet):
         if item_type in adv_consts.ITEM_TYPES:
             qs = qs.filter(item_type=item_type)
 
+        equipment_type = self.request.query_params.get('equipment_type')
+        if equipment_type in adv_consts.EQUIPMENT_TYPES:
+            qs = qs.filter(base_properties__equipment_type=equipment_type)
+
         return self.search_queryset(qs)
 
     def retrieve(self, request, *args, **kwargs):
@@ -3107,6 +3112,14 @@ class MobDefinitionViewSet(BaseWorldBuilderViewSet):
         mob_type = self.request.query_params.get('type')
         if mob_type in adv_consts.MOB_TYPES:
             qs = qs.filter(mob_type=mob_type)
+
+        faction = self.request.query_params.get('faction')
+        if faction:
+            qs = qs.filter(
+                faction_assignments__faction__world=context,
+                faction_assignments__faction__code=faction,
+                faction_assignments__faction__type=FACTION_TYPE_CORE,
+            )
 
         randomized = self.request.query_params.get('randomized')
         if randomized == 'true':

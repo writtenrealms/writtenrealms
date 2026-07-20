@@ -19,6 +19,7 @@
     :endpoint="endpoint"
     :resolve_route="resolveRoute"
     filter-display="dropdown"
+    mobile-filter-row
     table-variant="data"
     default-sort="-modified_ts"
     @add="onClickAdd"
@@ -80,6 +81,23 @@ const listFilters: any[] = [
       { key: "quest", name: "Quest" },
       { key: "ammunition", name: "Ammunition" },
       { key: "augment", name: "Augment" },
+    ],
+  },
+  {
+    label: "Equipment Type",
+    attr: "equipment_type",
+    filter_options: [
+      { key: "weapon_1h", name: "One-Handed Weapon" },
+      { key: "weapon_2h", name: "Two-Handed Weapon" },
+      { key: "shield", name: "Shield" },
+      { key: "head", name: "Head" },
+      { key: "body", name: "Body" },
+      { key: "arms", name: "Arms" },
+      { key: "hands", name: "Hands" },
+      { key: "waist", name: "Waist" },
+      { key: "legs", name: "Legs" },
+      { key: "feet", name: "Feet" },
+      { key: "accessory", name: "Accessory" },
     ],
   },
 ];

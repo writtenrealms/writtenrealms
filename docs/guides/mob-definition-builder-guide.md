@@ -2,7 +2,8 @@
 
 Mob definitions are the WR2 mob authoring path. Builders create them with YAML
 in **World > Edit**. The **World > Mobs** screen lists mob definitions and can
-copy or prefill the YAML for a definition.
+copy or prefill the YAML for a definition. Its Type and Faction filters can be
+combined; Faction lists the world's core factions.
 
 Use `kind: mobdefinition` for one authored mob. WR2 no longer exposes the legacy
 `MobTemplate` editor or manifest kind.

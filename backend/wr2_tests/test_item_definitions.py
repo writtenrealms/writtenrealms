@@ -445,6 +445,45 @@ class TestItemDefinitionBuilderEndpoints(WorldTestCase):
         self.assertTrue(resp.data["results"][0]["randomized"])
         self.assertEqual(resp.data["results"][0]["type"], adv_consts.ITEM_TYPE_EQUIPPABLE)
 
+    def test_list_filters_by_item_and_equipment_type(self):
+        sword = ItemDefinition.objects.create(
+            world=self.world,
+            slug="bronze-sword",
+            name="a bronze sword",
+            item_type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            base_properties={
+                "equipment_type": adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
+            },
+        )
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="greatsword",
+            name="a greatsword",
+            item_type=adv_consts.ITEM_TYPE_EQUIPPABLE,
+            base_properties={
+                "equipment_type": adv_consts.EQUIPMENT_TYPE_WEAPON_2H,
+            },
+        )
+        ItemDefinition.objects.create(
+            world=self.world,
+            slug="ration",
+            name="a ration",
+            item_type=adv_consts.ITEM_TYPE_FOOD,
+        )
+
+        resp = self.client.get(
+            self.list_ep,
+            {
+                "item_type": adv_consts.ITEM_TYPE_EQUIPPABLE,
+                "equipment_type": adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
+                "sort_by": "slug",
+            },
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data["count"], 1)
+        self.assertEqual(resp.data["results"][0]["slug"], sword.slug)
+
     def test_retrieve_item_definition_includes_yaml(self):
         definition = ItemDefinition.objects.create(
             world=self.world,
