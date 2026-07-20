@@ -61,6 +61,28 @@ That is by design: quests watch canonical game events. The player should
 complete quests by doing something in the world, not by firing a generic
 out-of-band completion verb.
 
+## Quest Log
+
+The player-facing Quest Log projects quest history into three groups:
+
+- **Active Quests** shows current runs.
+- **Repeatable Quests** shows the latest non-abandoned run of each quest whose
+  current template mode is `always` or `cooldown`. Cooldown entries show either
+  `Ready to repeat in ...` or `Ready to repeat`.
+- **Resolved Quests** shows the latest non-abandoned run of each quest whose
+  current template mode is `never`.
+
+An active run takes precedence over that template's completion history, and
+abandoned runs do not appear. The log keeps one card per completed quest
+template rather than listing every repetition. It uses the template's current
+repeatability mode, cooldown, and status, so a builder edit reclassifies the
+card immediately without rewriting old quest instances. A repeatable template
+that is currently `draft` or `archived` remains visible as unavailable.
+
+For scalability, each group is bounded to its most recent entries. If a world
+exceeds a group limit, the Quest Log says how many recent quests it is showing
+instead of silently omitting older entries.
+
 ## What `!` And `?` Mean
 
 - `[ ! ]` means this mob currently has a visible `npc_dialogue` opportunity the
@@ -168,6 +190,16 @@ does not count as a completed run for repeatability.
 - Abandoned quests are not shown in the player-facing resolved quest list.
 - A non-repeatable quest becomes available again after abandon if its discovery
 conditions still match.
+- Repeatability is evaluated from the quest template's current manifest, not
+  copied permanently onto each completed run. Changing `never` to `always`
+  makes a previously completed quest immediately repeatable; changing it to
+  `cooldown` measures the new duration from the player's latest non-abandoned
+  completion. Changing `always` or `cooldown` to `never` makes any prior
+  non-abandoned completion final. Existing active runs are allowed to finish.
+- On a partial update, explicitly changing `repeatability.mode` to `never` or
+  `always` automatically clears an inherited `cooldown_seconds`. If a manifest
+  explicitly supplies a nonzero cooldown with either mode, validation still
+  rejects it. Changing to `cooldown` must supply the desired duration.
 
 ### `spec.discovery`
 

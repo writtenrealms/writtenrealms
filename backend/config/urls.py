@@ -82,6 +82,7 @@ api_v1_urls = [
     path('game/quests/opportunities/<slug:slug>/accept/', quest_views.quest_opportunity_accept, name='game-quest-opportunity-accept'),
     path('game/quests/active/', quest_views.quest_active_list, name='game-quest-active-list'),
     path('game/quests/resolved/', quest_views.quest_resolved_list, name='game-quest-resolved-list'),
+    path('game/quests/log/', quest_views.quest_log, name='game-quest-log'),
     path('game/quests/instances/<instance_id>/info/', quest_views.quest_instance_info, name='game-quest-instance-info'),
     path('game/quests/instances/<instance_id>/abandon/', quest_views.quest_instance_abandon, name='game-quest-instance-abandon'),
     path('game/quests/instances/<instance_id>/choose/', quest_views.quest_instance_choose, name='game-quest-instance-choose'),

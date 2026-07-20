@@ -21,6 +21,7 @@ from quests.services.engine import (
     list_resolved_instances,
     resolve_template_for_player,
 )
+from quests.services.quest_log import build_quest_log
 from quests.models import QuestArcTemplate, QuestTemplate
 from spawns.events import publish_events
 
@@ -135,6 +136,11 @@ class QuestResolvedListView(QuestRuntimeView):
         return Response({"quests": list_resolved_instances(request.player)})
 
 
+class QuestLogView(QuestRuntimeView):
+    def get(self, request, format=None):
+        return Response(build_quest_log(request.player))
+
+
 class QuestInstanceInfoView(QuestRuntimeView):
     def get(self, request, instance_id, format=None):
         payload, info_text = info_for_player(request.player, str(instance_id))
@@ -166,6 +172,7 @@ class QuestInstanceChooseView(QuestRuntimeView):
 quest_opportunity_accept = QuestOpportunityAcceptView.as_view()
 quest_active_list = QuestActiveListView.as_view()
 quest_resolved_list = QuestResolvedListView.as_view()
+quest_log = QuestLogView.as_view()
 quest_instance_info = QuestInstanceInfoView.as_view()
 quest_instance_abandon = QuestInstanceAbandonView.as_view()
 quest_instance_choose = QuestInstanceChooseView.as_view()

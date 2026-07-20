@@ -707,6 +707,101 @@ spec:
         self.assertEqual(len(quest.graph["steps"]), 2)
         self.assertEqual(quest.graph["steps"][0]["id"], "offer")
 
+    def test_partial_repeatability_mode_update_clears_inherited_cooldown(self):
+        for mode in ("never", "always"):
+            with self.subTest(mode=mode):
+                quest = QuestTemplate.objects.create(
+                    world=self.world,
+                    slug=f"cooldown_to_{mode}",
+                    name=f"Cooldown to {mode.title()}",
+                    repeatability_mode="cooldown",
+                    repeatability_cooldown_seconds=1200,
+                    graph={"steps": [{"id": "resolved", "kind": "resolution"}]},
+                )
+                manifest = f"""
+kind: quest
+metadata:
+  world: world.{self.world.id}
+  slug: {quest.slug}
+spec:
+  repeatability:
+    mode: {mode}
+"""
+
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": manifest},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 200)
+                quest.refresh_from_db()
+                self.assertEqual(quest.repeatability_mode, mode)
+                self.assertEqual(quest.repeatability_cooldown_seconds, 0)
+
+    def test_partial_repeatability_mode_update_rejects_explicit_nonzero_cooldown(self):
+        quest = QuestTemplate.objects.create(
+            world=self.world,
+            slug="invalid_repeatability_update",
+            name="Invalid Repeatability Update",
+            repeatability_mode="cooldown",
+            repeatability_cooldown_seconds=1200,
+            graph={"steps": [{"id": "resolved", "kind": "resolution"}]},
+        )
+        manifest = f"""
+kind: quest
+metadata:
+  world: world.{self.world.id}
+  slug: {quest.slug}
+spec:
+  repeatability:
+    mode: never
+    cooldown_seconds: 60
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("only valid when mode is 'cooldown'", str(resp.data))
+        quest.refresh_from_db()
+        self.assertEqual(quest.repeatability_mode, "cooldown")
+        self.assertEqual(quest.repeatability_cooldown_seconds, 1200)
+
+    def test_partial_repeatability_update_can_enable_cooldown(self):
+        quest = QuestTemplate.objects.create(
+            world=self.world,
+            slug="enable_repeatability_cooldown",
+            name="Enable Repeatability Cooldown",
+            repeatability_mode="never",
+            repeatability_cooldown_seconds=0,
+            graph={"steps": [{"id": "resolved", "kind": "resolution"}]},
+        )
+        manifest = f"""
+kind: quest
+metadata:
+  world: world.{self.world.id}
+  slug: {quest.slug}
+spec:
+  repeatability:
+    mode: cooldown
+    cooldown_seconds: 1200
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        quest.refresh_from_db()
+        self.assertEqual(quest.repeatability_mode, "cooldown")
+        self.assertEqual(quest.repeatability_cooldown_seconds, 1200)
+
     def test_apply_quest_manifest_can_delete_quest_template(self):
         quest = QuestTemplate.objects.create(
             world=self.world,

@@ -247,6 +247,7 @@ def format_actor_msg(
     zone=None,
     world=None,
     extra_context=None,
+    state_context=None,
 ):
     """
     Careful accessing 'actor' attributes here, as this can be called
@@ -263,14 +264,15 @@ def format_actor_msg(
         keywords = getattr(actor, 'keywords', '') or getattr(actor, 'name', '') or actor.key
         name = str(keywords).split(' ')[0]
 
-    state_context = build_state_context(
-        actor=actor,
-        world=world,
-        zone=zone,
-        room=room,
-        character=character,
-        quest_instance=quest_instance,
-    )
+    if state_context is None:
+        state_context = build_state_context(
+            actor=actor,
+            world=world,
+            zone=zone,
+            room=room,
+            character=character,
+            quest_instance=quest_instance,
+        )
     character_state = state_context.get('character') or {}
 
     message_data = {

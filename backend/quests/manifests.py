@@ -1217,6 +1217,18 @@ def parse_quest_manifest(*, world: World, manifest: dict[str, Any]) -> ParsedQue
         base_spec = quest_template_to_manifest(quest)["spec"]
     merged_spec = _deep_merge(base_spec, spec_patch)
 
+    repeatability_patch = spec_patch.get("repeatability")
+    if isinstance(repeatability_patch, dict):
+        patched_mode = repeatability_patch.get("mode")
+        if (
+            patched_mode in {"never", "always"}
+            and "cooldown_seconds" not in repeatability_patch
+        ):
+            # A mode change supersedes the inherited cooldown value. Builders
+            # can therefore update just the mode without having to know that a
+            # previous cooldown quest stored a nonzero duration.
+            merged_spec["repeatability"]["cooldown_seconds"] = 0
+
     try:
         validated_spec = QuestSpec.model_validate(merged_spec)
     except ValidationError as exc:

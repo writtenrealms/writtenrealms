@@ -167,6 +167,10 @@ class QuestInstance(AdventBaseModel):
             models.Index(fields=['player', 'status']),
             models.Index(fields=['template', 'status']),
             models.Index(fields=['world', 'status']),
+            models.Index(
+                fields=['player', 'template', 'status', 'resolved_at'],
+                name='quests_qi_player_template_log',
+            ),
         ]
 
 

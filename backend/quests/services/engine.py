@@ -94,8 +94,11 @@ def _render_quest_string(
     *,
     player,
     quest_instance=None,
+    state_context=None,
 ) -> Any:
     if not isinstance(value, str):
+        return value
+    if "{{" not in value and "{%" not in value:
         return value
     return str(
         format_actor_msg(
@@ -103,6 +106,7 @@ def _render_quest_string(
             player,
             character=player,
             quest_instance=quest_instance,
+            state_context=state_context,
         )
         or value
     )
@@ -113,6 +117,7 @@ def _render_text_mapping(
     *,
     player,
     quest_instance=None,
+    state_context=None,
 ) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
@@ -123,6 +128,7 @@ def _render_text_mapping(
                 value,
                 player=player,
                 quest_instance=quest_instance,
+                state_context=state_context,
             )
         else:
             rendered[key] = value
@@ -134,6 +140,7 @@ def serialize_choice(
     *,
     player,
     quest_instance,
+    state_context=None,
 ) -> dict[str, Any]:
     return {
         "id": str(choice.get("id") or "").strip(),
@@ -141,12 +148,19 @@ def serialize_choice(
             str(choice.get("text") or "").strip(),
             player=player,
             quest_instance=quest_instance,
+            state_context=state_context,
         ),
         "goto": str(choice.get("goto") or "").strip(),
     }
 
 
-def visible_choices(step: dict[str, Any], *, player, quest_instance) -> list[dict[str, Any]]:
+def visible_choices(
+    step: dict[str, Any],
+    *,
+    player,
+    quest_instance,
+    state_context=None,
+) -> list[dict[str, Any]]:
     template = quest_instance.template if quest_instance else None
     visible: list[dict[str, Any]] = []
     for choice in step.get("choices") or []:
@@ -162,7 +176,12 @@ def visible_choices(step: dict[str, Any], *, player, quest_instance) -> list[dic
         ):
             continue
         visible.append(
-            serialize_choice(choice, player=player, quest_instance=quest_instance)
+            serialize_choice(
+                choice,
+                player=player,
+                quest_instance=quest_instance,
+                state_context=state_context,
+            )
         )
     return visible
 
@@ -259,17 +278,32 @@ def _build_player_event(
     )
 
 
-def _build_step_payload(quest_instance: QuestInstance, *, player) -> dict[str, Any]:
+def _build_step_payload(
+    quest_instance: QuestInstance,
+    *,
+    player,
+    state_context=None,
+) -> dict[str, Any]:
     step = get_step(quest_instance.template, quest_instance.current_step_id) or {}
+    prefetched_objective_states = getattr(
+        quest_instance,
+        "_serialization_objective_states",
+        None,
+    )
+    if prefetched_objective_states is None:
+        objective_states_qs = quest_instance.objective_states.all().order_by("created_ts")
+    else:
+        objective_states_qs = prefetched_objective_states
     objective_states = [
         serialize_objective_state(state)
-        for state in quest_instance.objective_states.all().order_by("created_ts")
+        for state in objective_states_qs
     ]
     for objective_state in objective_states:
         objective_state["text"] = _render_quest_string(
             objective_state.get("text") or "",
             player=player,
             quest_instance=quest_instance,
+            state_context=state_context,
         )
     return {
         "id": str(step.get("id") or ""),
@@ -278,13 +312,20 @@ def _build_step_payload(quest_instance: QuestInstance, *, player) -> dict[str, A
             str(step.get("recap") or ""),
             player=player,
             quest_instance=quest_instance,
+            state_context=state_context,
         ),
         "text": _render_text_mapping(
             step.get("text") or {},
             player=player,
             quest_instance=quest_instance,
+            state_context=state_context,
         ),
-        "choices": visible_choices(step, player=player, quest_instance=quest_instance),
+        "choices": visible_choices(
+            step,
+            player=player,
+            quest_instance=quest_instance,
+            state_context=state_context,
+        ),
         "objectives": objective_states,
     }
 
@@ -309,9 +350,26 @@ def serialize_opportunity(template: QuestTemplate, *, player) -> dict[str, Any]:
     }
 
 
-def serialize_instance(quest_instance: QuestInstance, *, player) -> dict[str, Any]:
-    latest_entry = quest_instance.journal_entries.order_by("-created_ts").first()
-    payload = _build_step_payload(quest_instance, player=player)
+def serialize_instance(
+    quest_instance: QuestInstance,
+    *,
+    player,
+    state_context=None,
+) -> dict[str, Any]:
+    prefetched_latest_entries = getattr(
+        quest_instance,
+        "_serialization_latest_journal_entries",
+        None,
+    )
+    if prefetched_latest_entries is None:
+        latest_entry = quest_instance.journal_entries.order_by("-created_ts").first()
+    else:
+        latest_entry = prefetched_latest_entries[0] if prefetched_latest_entries else None
+    payload = _build_step_payload(
+        quest_instance,
+        player=player,
+        state_context=state_context,
+    )
     return {
         "id": quest_instance.id,
         "key": quest_instance.key,
@@ -592,12 +650,27 @@ def enter_step(
     )
 
 
+@transaction.atomic
 def start_quest_instance(
     player,
     template: QuestTemplate,
     *,
     reason: str,
 ) -> QuestTransitionResult:
+    # Quest acceptance can arrive concurrently through HTTP, commands, or
+    # auto-start discovery. Serialize mutations for this player before the
+    # authoritative eligibility check so a cooldown/non-repeatable quest
+    # cannot be accepted twice from the same stale opportunity state.
+    player = type(player).objects.select_for_update().get(pk=player.pk)
+    discovery = template.discovery_policy or {}
+    if not evaluate_condition(
+        discovery.get("accept_if"),
+        player=player,
+        template=template,
+        quest_instance=None,
+        event_data=None,
+    ):
+        raise QuestRuntimeError("Quest cannot be accepted right now.", code="cannot_accept")
     if not can_start_template(player, template):
         raise QuestRuntimeError("Quest cannot be started right now.", code="cannot_start")
 
@@ -630,15 +703,6 @@ def start_quest_instance(
 
 
 def accept_template(player, template: QuestTemplate) -> QuestTransitionResult:
-    discovery = template.discovery_policy or {}
-    if not evaluate_condition(
-        discovery.get("accept_if"),
-        player=player,
-        template=template,
-        quest_instance=None,
-        event_data=None,
-    ):
-        raise QuestRuntimeError("Quest cannot be accepted right now.", code="cannot_accept")
     return start_quest_instance(player, template, reason="started")
 
 
