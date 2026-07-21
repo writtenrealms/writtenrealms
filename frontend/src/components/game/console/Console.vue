@@ -230,6 +230,7 @@ const onScroll = _.debounce(updateScroll, 250);
       &.notification\.cmd\.chat\.success,
       &.notification\.tell,
       &.notification\.cmd\.emote\.success,
+      &.notification\.\/echo,
       &.notification\.decay {
         margin-top: 1rem;
       }
