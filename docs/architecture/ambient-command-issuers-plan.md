@@ -45,6 +45,10 @@ This plan remains directional, but several pieces are now implemented:
 - `/echo` and `/state` support room, zone, and world actors.
 - `/setclass` supports a room actor with an explicit player target, preserving
   trigger patterns such as `/cmd room -- /setclass {{ actor_key }} tidecaller`.
+- `/set` supports direct builder players plus script-gated room issuers. Room
+  issuers resolve one player or mob in the issuer room and live runtime world,
+  lock only that target row, and mutate the runtime character rather than its
+  authored definition.
 - Direct scheduled room dispatch should include `world_id` or
   `runtime_world_id` in the payload when the command needs live-instance
   context. `/cmd room` carries this from the originating character
@@ -295,6 +299,8 @@ Status: partially implemented for scoped builder primitives.
    rewards and starter-equipment scripts.
 6. Support `/transfer` as a runtime-isolated forced-movement primitive for room
    and mob scripts, without treating ambient issuers as physical movers.
+7. Support `/set` as a room-script primitive with room-local, runtime-isolated
+   character targeting and target-row locking.
 
 Exit criteria:
 - A room issuer can produce visible room/zone/world outputs through standard publish paths.
@@ -385,6 +391,9 @@ The first compatibility slice is:
    exit/enter flow plus a transfer-state snapshot for player targets, runs
    runtime-isolated destination mob reactions, and terminates active combat
    with bulk cleanup queries.
+8. `/set <target> <field> <value>` under a room actor changes one supported
+   runtime player or mob field after local target resolution and a target-only
+   row lock; player targets receive a state-updating notification.
 
 This delivers immediate value for WR1-style content migration while validating
 ambient actor dispatch before the broader issuer/subject refactor.

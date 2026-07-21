@@ -56,6 +56,14 @@ Common direct mob fields include `level`, `exp_worth`, `health_max`,
 `resilience`, `aggression`, `target_priority`, `fights_back`, `roam_chance`, and
 `is_invisible`.
 
+The definition's `metadata.name`, `spec.room_description`, and
+`spec.description` are the authored defaults for each spawned copy. A Trigger
+can temporarily override those fields on one runtime mob with room-issued
+`/set`, for example `/cmd room -- /set guard room_description -- The guard
+stands at attention.` See the [`/set` command reference](builder-command-reference.md#set).
+The override does not edit this definition; fresh spawns retain the authored
+text, and a later definition resync can replace the runtime value.
+
 ## Currency Rewards
 
 Use a code-to-amount mapping under `rewards.currencies`; mobs do not have a

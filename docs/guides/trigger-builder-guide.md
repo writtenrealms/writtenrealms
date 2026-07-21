@@ -316,6 +316,7 @@ Common commands you will often use in trigger scripts:
 - `/echo -- ...`
 - `/cmd room -- /echo -- ...`
 - `/cmd room -- /send {{ actor_key }} -- <private message>`
+- `/cmd room -- /set <target> <field> <value>`
 - `/cmd room -- /load item <item_slug>`
 - `/cmd room -- /grantitem {{ actor_key }} <item_slug>`
 - `/cmd room -- /kill {{ actor_key }} -- <private death message>`
@@ -546,6 +547,52 @@ script: /cmd room -- /state set character {{ actor_key }} pull_lever true
 This sets `state.character.pull_lever` on the player who triggered the room
 command. Room-issued trigger scripts should use `{{ actor_key }}` rather than
 `self`, because the issuer is the room.
+
+## Changing Runtime Character Fields
+
+Use room-issued `/set` when a Trigger needs to change a supported field on one
+runtime player or mob in its room:
+
+```yaml
+script: /cmd room -- /set guard aggression normal
+```
+
+Mob presentation fields can be changed the same way. Use `--` before a
+multiword value:
+
+```yaml
+script: >-
+  /cmd room -- /set guard name -- the awakened guard &&
+  /cmd room -- /set guard room_description -- The awakened guard watches the archway. &&
+  /cmd room -- /set guard description -- Old scars cross the guard's weathered face.
+```
+
+Repeat `/cmd room --` for every `&&` segment. The changed name,
+`room_description`, and `description` are visible on the next `look`. Changing
+the name does not change the mob's keywords, so the later segments above can
+continue to target the stable `guard` keyword.
+
+Ending a description command at the delimiter clears that runtime override:
+
+```yaml
+script: /cmd room -- /set guard description --
+```
+
+The next `look` then falls back to the mob definition's authored description
+(or generated room text when no authored room description exists). Mob names
+cannot be blank.
+
+The target must resolve to exactly one character in the Trigger room. A typed
+runtime key such as `mob.456` is accepted only while that mob is in the same
+room and live runtime world; use a distinctive mob keyword when the script must
+remain portable across exports. `self` refers to no physical character for a
+room issuer and is rejected.
+
+This mutates the spawned runtime mob, not its `kind: mobdefinition` document. A
+fresh spawn still uses the definition's authored values, and a later definition
+resync can replace the runtime override. Changing `aggression` does not
+immediately create a combat encounter; the new value applies when the runtime
+next evaluates mob aggression.
 
 ## Loading And Granting Items
 

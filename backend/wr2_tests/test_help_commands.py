@@ -18,6 +18,9 @@ EXPECTED_SET_PLAYER_FIELDS = (
     "glory",
 )
 EXPECTED_SET_MOB_FIELDS = (
+    "name",
+    "room_description",
+    "description",
     "level",
     "experience",
     "health",

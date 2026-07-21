@@ -135,6 +135,23 @@ class TestBuilderCommandPermissions(WorldTestCase):
         self.assertIsNotNone(message)
         self.assertIn("permission", message.get("text", "").lower())
 
+    def test_script_source_requires_room_issuer_for_set(self):
+        original_glory = self.player.glory
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                payload={"text": "/set self glory 7"},
+                script_source=True,
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.glory, original_glory)
+        message = self._message_by_type(messages, "cmd./set.error")
+        self.assertIsNotNone(message)
+        self.assertIn("permission", message.get("text", "").lower())
+
     def test_script_source_does_not_allow_player_state_commands(self):
         with capture_game_messages() as messages:
             dispatch_command(
@@ -2653,6 +2670,363 @@ class TestBuilderStatsAndSet(BuilderCommandTestCase):
         self.assertEqual(
             message["data"]["target"]["aggression"],
             api_consts.MOB_AGGRESSION_ALL,
+        )
+
+    def test_room_actor_set_updates_room_mob_aggression(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Training Guard",
+            keywords="training guard",
+            aggression=api_consts.MOB_AGGRESSION_PASSIVE,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="room",
+                actor_id=self.room.id,
+                payload={
+                    "text": "/set guard aggression normal",
+                    "world_id": self.spawn_world.id,
+                },
+                script_source=True,
+            )
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.aggression, api_consts.MOB_AGGRESSION_NORMAL)
+        message = self._message_by_type(messages, "cmd./set.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["actor"]["char_type"], "room")
+        self.assertEqual(message["data"]["room"]["id"], self.room.id)
+        self.assertEqual(message["data"]["target"]["key"], mob.key)
+        self.assertEqual(
+            message["data"]["previous_value"],
+            api_consts.MOB_AGGRESSION_PASSIVE,
+        )
+        self.assertEqual(
+            message["data"]["new_value"],
+            api_consts.MOB_AGGRESSION_NORMAL,
+        )
+
+    def test_room_actor_set_updates_room_mob_text_fields(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Training Guard",
+            keywords="training guard",
+            room_description="A training guard waits here.",
+            description="The guard's uniform is immaculate.",
+        )
+        updates = (
+            ("name", "The Awakened Guard"),
+            (
+                "room_description",
+                "The awakened guard watches from beneath the archway.",
+            ),
+            (
+                "description",
+                "Old scars cross the awakened guard's weathered face.",
+            ),
+        )
+
+        for field_name, value in updates:
+            with self.subTest(field=field_name), capture_game_messages() as messages:
+                dispatch_command(
+                    command_type="text",
+                    actor_type="room",
+                    actor_id=self.room.id,
+                    payload={
+                        "text": f"/set guard {field_name} -- {value}",
+                        "world_id": self.spawn_world.id,
+                    },
+                    script_source=True,
+                )
+
+            mob.refresh_from_db()
+            self.assertEqual(getattr(mob, field_name), value)
+            message = self._message_by_type(messages, "cmd./set.success")
+            self.assertIsNotNone(message)
+            self.assertEqual(message["data"]["target"]["key"], mob.key)
+            self.assertEqual(message["data"]["field"], field_name)
+            self.assertEqual(message["data"]["new_value"], value)
+
+    def test_room_actor_set_rejects_invalid_mob_names(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Training Guard",
+            keywords="training guard",
+        )
+        invalid_names = ("", "x" * 256)
+
+        for invalid_name in invalid_names:
+            with self.subTest(length=len(invalid_name)), capture_game_messages() as messages:
+                dispatch_command(
+                    command_type="text",
+                    actor_type="room",
+                    actor_id=self.room.id,
+                    payload={
+                        "text": f"/set guard name -- {invalid_name}",
+                        "world_id": self.spawn_world.id,
+                    },
+                    script_source=True,
+                )
+
+            mob.refresh_from_db()
+            self.assertEqual(mob.name, "Training Guard")
+            message = self._message_by_type(messages, "cmd./set.error")
+            self.assertIsNotNone(message)
+            self.assertEqual(message["data"]["code"], "invalid_value")
+
+    def test_room_actor_set_preserves_scalar_looking_description_text(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Training Guard",
+            keywords="training guard",
+        )
+        descriptions = (
+            "true",
+            "null",
+            '{"state":"watchful"}',
+        )
+
+        for description in descriptions:
+            with self.subTest(description=description), capture_game_messages() as messages:
+                dispatch_command(
+                    command_type="text",
+                    actor_type="room",
+                    actor_id=self.room.id,
+                    payload={
+                        "text": f"/set guard description -- {description}",
+                        "world_id": self.spawn_world.id,
+                    },
+                    script_source=True,
+                )
+
+            mob.refresh_from_db()
+            self.assertEqual(mob.description, description)
+            message = self._message_by_type(messages, "cmd./set.success")
+            self.assertIsNotNone(message)
+            self.assertEqual(message["data"]["new_value"], description)
+
+    def test_room_actor_set_cannot_rename_player(self):
+        target = self.create_player("Target", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="room",
+                actor_id=self.room.id,
+                payload={
+                    "text": f"/set {target.key} name -- Renamed Player",
+                    "world_id": self.spawn_world.id,
+                },
+                script_source=True,
+            )
+
+        target.refresh_from_db()
+        self.assertEqual(target.name, "Target")
+        message = self._message_by_type(messages, "cmd./set.error")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["code"], "invalid_field")
+
+    def test_room_actor_set_requires_local_unambiguous_target(self):
+        first_guard = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="First Guard",
+            keywords="guard",
+            aggression=api_consts.MOB_AGGRESSION_PASSIVE,
+        )
+        second_guard = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Second Guard",
+            keywords="guard",
+            aggression=api_consts.MOB_AGGRESSION_PASSIVE,
+        )
+        far_room = self.room.create_at("east")
+        far_guard = Mob.objects.create(
+            world=self.spawn_world,
+            room=far_room,
+            name="Far Guard",
+            keywords="far guard",
+            aggression=api_consts.MOB_AGGRESSION_PASSIVE,
+        )
+
+        with capture_game_messages() as ambiguous_messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="room",
+                actor_id=self.room.id,
+                payload={
+                    "text": "/set guard aggression normal",
+                    "world_id": self.spawn_world.id,
+                },
+                script_source=True,
+            )
+
+        ambiguous_error = self._message_by_type(ambiguous_messages, "cmd./set.error")
+        self.assertIsNotNone(ambiguous_error)
+        self.assertEqual(ambiguous_error["data"]["code"], "ambiguous_target")
+
+        with capture_game_messages() as self_messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="room",
+                actor_id=self.room.id,
+                payload={
+                    "text": "/set self aggression normal",
+                    "world_id": self.spawn_world.id,
+                },
+                script_source=True,
+            )
+
+        self_error = self._message_by_type(self_messages, "cmd./set.error")
+        self.assertIsNotNone(self_error)
+        self.assertEqual(self_error["data"]["code"], "invalid_target")
+
+        with capture_game_messages() as remote_messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="room",
+                actor_id=self.room.id,
+                payload={
+                    "text": f"/set {far_guard.key} aggression normal",
+                    "world_id": self.spawn_world.id,
+                },
+                script_source=True,
+            )
+
+        remote_error = self._message_by_type(remote_messages, "cmd./set.error")
+        self.assertIsNotNone(remote_error)
+        self.assertEqual(remote_error["data"]["code"], "invalid_target")
+
+        for guard in (first_guard, second_guard, far_guard):
+            guard.refresh_from_db()
+            self.assertEqual(guard.aggression, api_consts.MOB_AGGRESSION_PASSIVE)
+
+    def test_room_actor_set_requires_script_source(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Training Guard",
+            keywords="training guard",
+            aggression=api_consts.MOB_AGGRESSION_PASSIVE,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="room",
+                actor_id=self.room.id,
+                payload={
+                    "text": "/set guard aggression normal",
+                    "world_id": self.spawn_world.id,
+                },
+            )
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.aggression, api_consts.MOB_AGGRESSION_PASSIVE)
+        message = self._message_by_type(messages, "cmd./set.error")
+        self.assertIsNotNone(message)
+        self.assertIn("permission", message.get("text", "").lower())
+
+    def test_room_actor_set_rejects_unrelated_runtime_context(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Training Guard",
+            keywords="training guard",
+            aggression=api_consts.MOB_AGGRESSION_PASSIVE,
+        )
+        unrelated_config = WorldConfig.objects.create()
+        unrelated_world = World.objects.new_world(
+            name="Unrelated set world",
+            author=self.user,
+            config=unrelated_config,
+        )
+        unrelated_runtime = unrelated_world.create_spawn_world()
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="room",
+                actor_id=self.room.id,
+                payload={
+                    "text": "/set guard aggression normal",
+                    "world_id": unrelated_runtime.id,
+                },
+                script_source=True,
+            )
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.aggression, api_consts.MOB_AGGRESSION_PASSIVE)
+        message = self._message_by_type(messages, "cmd./set.error")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["code"], "invalid_world_context")
+
+    def test_room_actor_set_notifies_player_target(self):
+        target = self.create_player("Target", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="room",
+                actor_id=self.room.id,
+                payload={
+                    "text": f"/set {target.key} glory 7",
+                    "world_id": self.spawn_world.id,
+                },
+                script_source=True,
+            )
+
+        target.refresh_from_db()
+        self.assertEqual(target.glory, 7)
+        notification = next(
+            (
+                msg["message"]
+                for msg in messages
+                if (
+                    msg["player_key"] == target.key
+                    and msg["message"].get("type") == "notification./set"
+                )
+            ),
+            None,
+        )
+        self.assertIsNotNone(notification)
+        self.assertEqual(notification["data"]["actor"]["key"], target.key)
+        self.assertEqual(notification["data"]["issuer"]["char_type"], "room")
+        self.assertEqual(notification["data"]["field"], "glory")
+        self.assertEqual(notification["data"]["new_value"], 7)
+
+    def test_room_actor_set_aggression_does_not_start_combat(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Training Guard",
+            keywords="training guard",
+            aggression=api_consts.MOB_AGGRESSION_PASSIVE,
+        )
+
+        with capture_game_messages():
+            dispatch_command(
+                command_type="text",
+                actor_type="room",
+                actor_id=self.room.id,
+                payload={
+                    "text": "/set guard aggression players",
+                    "world_id": self.spawn_world.id,
+                },
+                script_source=True,
+            )
+
+        mob.refresh_from_db()
+        self.assertEqual(mob.aggression, api_consts.MOB_AGGRESSION_PLAYERS)
+        self.assertFalse(
+            CombatEncounter.objects.filter(mob=mob).exists(),
         )
 
     def test_builder_set_rejects_unknown_mob_aggression(self):

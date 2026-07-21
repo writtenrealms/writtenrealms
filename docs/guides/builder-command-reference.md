@@ -57,7 +57,7 @@ Legend:
 | `/state` | Direct | No | Script | Script | Script | Script |
 | `/stats` | Direct | No | No | No | No | No |
 | `/regen` | Direct | No | Mob | No | No | No |
-| `/set` | Direct | No | No | No | No | No |
+| `/set` | Direct | No | No | Script | No | No |
 | `/setlevel` | Direct | No | No | No | No | No |
 | `/setclass` | Direct | Script | No | Script | No | No |
 | `/cmd`, `/force`, `/rcmd`, `/zcmd`, `/wcmd` | Direct | Script | Script | Script | Script | Script |
@@ -405,9 +405,15 @@ Format:
 /set <target> <field> -- <value>
 ```
 
-Sets a persisted stat field on a player or mob. Targets can be players or mobs
-in the builder's current room, or keyed characters anywhere in the current
-runtime world.
+Sets a persisted stat field on a player or mob. Direct builders can target
+players or mobs in their current room, or keyed characters anywhere in the
+current runtime world.
+
+A trusted room script can also use `/set`. Room issuers must specify one
+unambiguous player or mob in that room; `self` and targets elsewhere in the
+runtime world are rejected. Wrap Trigger usage in `/cmd room --` so the room,
+not the triggering player, is the issuer. Player-backed scripts cannot invoke
+`/set` directly.
 
 For player targets, direct combat ratings such as `attack_power`, `armor`,
 `crit`, `dodge`, and resource maximums are computed by the world stat system.
@@ -422,14 +428,16 @@ level, experience, health, energy, stamina, attributes, glory
 Supported mob fields:
 
 ```text
-level, experience, health, energy, stamina, attributes, aggression, exp_worth,
-health_max, health_regen, energy_max, energy_regen, stamina_max,
-stamina_regen, armor, dodge, crit, resilience, attack_power, ability_power
+name, room_description, description, level, experience, health, energy, stamina,
+attributes, aggression, exp_worth, health_max, health_regen, energy_max,
+energy_regen, stamina_max, stamina_regen, armor, dodge, crit, resilience,
+attack_power, ability_power
 ```
 
 Use `attribute.<key>`, `attributes.<key>`, or `attr.<key>` to change one
 attribute value. Use `attributes -- {...}` to replace the whole attribute
-object.
+object. Use the `--` form for multiword mob names and descriptions so the full
+text is treated as one value.
 
 Examples:
 
@@ -439,7 +447,23 @@ Examples:
 /set aria health 10
 /set player.456 attribute.strength 5
 /set mob.123 attributes -- {"strength": 4}
+/cmd room -- /set guard aggression normal
+/cmd room -- /set guard name -- the awakened guard
+/cmd room -- /set guard room_description -- The awakened guard watches the archway.
+/cmd room -- /set guard description -- Old scars cross the guard's weathered face.
 ```
+
+Room-issued `/set` changes the selected runtime character row. It does not edit
+the mob definition, so a fresh spawn retains the definition's authored values;
+a later definition resync can also replace the runtime override. Changes to
+`name`, `room_description`, and `description` appear the next time a player
+looks at the room or mob. Changing a mob's `name` does not rewrite its keywords,
+so later commands can continue to use a stable authored keyword. Changing a
+description field to an empty value with a trailing `--` clears the runtime
+override, so display falls back to the definition's authored text or generated
+room text. A mob's `name` cannot be blank. Changing `aggression` does not itself
+start combat. The new setting is used the next time normal aggression
+evaluation runs.
 
 ### `/setlevel`
 

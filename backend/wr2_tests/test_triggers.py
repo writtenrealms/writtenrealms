@@ -266,6 +266,197 @@ class TestCommandFallbackTriggers(WorldTestCase):
             self.player.key,
         )
 
+    def test_room_trigger_sets_runtime_mob_aggression(self):
+        guard_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="training-guard",
+            name="Training Guard",
+            keywords="training guard",
+            base_properties={
+                "aggression": adv_consts.MOB_AGGRESSION_PASSIVE,
+            },
+        )
+        local_guard = guard_definition.spawn(self.room, self.spawn_world)
+        parallel_world = self.world.create_spawn_world()
+        parallel_guard = guard_definition.spawn(self.room, parallel_world)
+        self._create_room_trigger(
+            script="/cmd room -- /set guard aggression normal",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "touch altar")
+
+        local_guard.refresh_from_db()
+        parallel_guard.refresh_from_db()
+        self.assertEqual(
+            local_guard.aggression,
+            adv_consts.MOB_AGGRESSION_NORMAL,
+        )
+        self.assertEqual(
+            parallel_guard.aggression,
+            adv_consts.MOB_AGGRESSION_PASSIVE,
+        )
+        set_message = self._message_by_type(messages, "cmd./set.success")
+        self.assertIsNotNone(set_message)
+        self.assertEqual(set_message["data"]["actor"]["char_type"], "room")
+        self.assertEqual(set_message["data"]["target"]["key"], local_guard.key)
+
+        fresh_room = self.room.create_at("east")
+        fresh_guard = guard_definition.spawn(fresh_room, self.spawn_world)
+        self.assertEqual(
+            fresh_guard.aggression,
+            adv_consts.MOB_AGGRESSION_PASSIVE,
+        )
+
+    def test_room_trigger_sets_runtime_mob_text_fields(self):
+        guard_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="sleeping-guard",
+            name="Sleeping Guard",
+            keywords="sleeping guard",
+            description="The guard sleeps with one hand on a battered shield.",
+            room_description="A sleeping guard slumps against the wall.",
+        )
+        guard = guard_definition.spawn(self.room, self.spawn_world)
+        runtime_name = "The Awakened Guard"
+        runtime_room_description = (
+            "The awakened guard watches from beneath the archway."
+        )
+        runtime_description = (
+            "Old scars cross the awakened guard's weathered face."
+        )
+        self._create_room_trigger(
+            script=(
+                f"/cmd room -- /set guard name -- {runtime_name} && "
+                "/cmd room -- /set guard room_description -- "
+                f"{runtime_room_description} && "
+                "/cmd room -- /set guard description -- "
+                f"{runtime_description}"
+            ),
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "touch altar")
+
+        guard.refresh_from_db()
+        self.assertEqual(guard.name, runtime_name)
+        self.assertEqual(guard.room_description, runtime_room_description)
+        self.assertEqual(guard.description, runtime_description)
+        self.assertEqual(guard.keywords, guard_definition.keywords)
+        set_messages = [
+            msg["message"]
+            for msg in messages
+            if msg["message"].get("type") == "cmd./set.success"
+        ]
+        self.assertEqual(
+            [message["data"]["field"] for message in set_messages],
+            ["name", "room_description", "description"],
+        )
+
+        guard_definition.refresh_from_db()
+        self.assertEqual(guard_definition.name, "Sleeping Guard")
+        self.assertEqual(
+            guard_definition.room_description,
+            "A sleeping guard slumps against the wall.",
+        )
+        self.assertEqual(
+            guard_definition.description,
+            "The guard sleeps with one hand on a battered shield.",
+        )
+
+        fresh_room = self.room.create_at("east")
+        fresh_guard = guard_definition.spawn(fresh_room, self.spawn_world)
+        self.assertEqual(fresh_guard.name, guard_definition.name)
+        self.assertEqual(
+            fresh_guard.room_description,
+            guard_definition.room_description,
+        )
+        self.assertEqual(fresh_guard.description, guard_definition.description)
+
+        with capture_game_messages() as look_messages:
+            dispatch_command(
+                command_type="look",
+                player_id=self.player.id,
+                payload={},
+            )
+
+        look_message = self._message_by_type(look_messages, "cmd.look.success")
+        self.assertIsNotNone(look_message)
+        room_guard = next(
+            char
+            for char in look_message["data"]["target"]["chars"]
+            if char["key"] == guard.key
+        )
+        self.assertEqual(room_guard["name"], runtime_name)
+        self.assertEqual(room_guard["room_description"], runtime_room_description)
+        self.assertEqual(room_guard["description"], runtime_description)
+        self.assertIn(runtime_room_description, look_message.get("text", ""))
+        self.assertNotIn(runtime_description, look_message.get("text", ""))
+
+        with capture_game_messages() as target_look_messages:
+            dispatch_text_command(self.player.id, f"look {guard.key}")
+
+        target_look_message = self._message_by_type(
+            target_look_messages,
+            "cmd.look.success",
+        )
+        self.assertIsNotNone(target_look_message)
+        self.assertEqual(target_look_message["data"]["target_type"], "char")
+        target_guard = target_look_message["data"]["target"]
+        self.assertEqual(target_guard["char_type"], "mob")
+        self.assertEqual(target_guard["name"], runtime_name)
+        self.assertEqual(
+            target_guard["room_description"],
+            runtime_room_description,
+        )
+        self.assertEqual(target_guard["description"], runtime_description)
+        self.assertIn(runtime_name, target_look_message.get("text", ""))
+        self.assertIn(runtime_description, target_look_message.get("text", ""))
+
+    def test_room_trigger_clears_runtime_mob_description_overrides(self):
+        guard_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="authored-guard",
+            name="Authored Guard",
+            keywords="authored guard",
+            description="The authored guard studies every visitor.",
+            room_description="An authored guard stands watch here.",
+        )
+        guard = guard_definition.spawn(self.room, self.spawn_world)
+        self._create_room_trigger(
+            script=(
+                "/cmd room -- /set guard room_description -- && "
+                "/cmd room -- /set guard description --"
+            ),
+        )
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "touch altar")
+
+        guard.refresh_from_db()
+        self.assertEqual(guard.room_description, "")
+        self.assertEqual(guard.description, "")
+
+        with capture_game_messages() as look_messages:
+            dispatch_command(
+                command_type="look",
+                player_id=self.player.id,
+                payload={},
+            )
+
+        look_message = self._message_by_type(look_messages, "cmd.look.success")
+        self.assertIsNotNone(look_message)
+        room_guard = next(
+            char
+            for char in look_message["data"]["target"]["chars"]
+            if char["key"] == guard.key
+        )
+        self.assertEqual(room_guard["description"], guard_definition.description)
+        self.assertEqual(
+            room_guard["room_description"],
+            guard_definition.room_description,
+        )
+
     def test_room_trigger_transfers_triggering_player_in_runtime_world(self):
         self.player.in_game = True
         self.player.save(update_fields=["in_game"])

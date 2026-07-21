@@ -105,6 +105,9 @@ PLAYER_SET_FIELD_CHOICES = (
 )
 PLAYER_SET_FIELDS = set(PLAYER_SET_FIELD_CHOICES)
 MOB_SET_FIELD_CHOICES = (
+    "name",
+    "room_description",
+    "description",
     "level",
     "experience",
     "health",
@@ -301,7 +304,9 @@ def _collect_room_mob_targets(room: Room, selector: str, *, world: World | None 
     if not normalized:
         return []
 
-    room_mobs_qs = room.mobs.select_related("definition")
+    room_mobs_qs = room.mobs.filter(
+        is_pending_deletion=False,
+    ).select_related("definition")
     if world is not None:
         room_mobs_qs = room_mobs_qs.filter(world=world)
 
@@ -845,13 +850,14 @@ def _normalize_set_field(field_name: str) -> tuple[str, str | None]:
 
 
 def _coerce_model_field_value(target: Player | Mob, field_name: str, raw_value: object) -> object:
-    value = coerce_state_command_value(raw_value)
     try:
         model_field = target._meta.get_field(field_name)
     except Exception as exc:
         raise ActionError(f"Unknown field '{field_name}'.", code="invalid_field") from exc
 
+    internal_type = model_field.get_internal_type()
     if isinstance(target, Mob) and field_name == "aggression":
+        value = coerce_state_command_value(raw_value)
         aggression = adv_consts.canonical_mob_aggression(value)
         if aggression not in adv_consts.MOB_AGGRESSION_OPTIONS:
             raise ActionError(
@@ -861,7 +867,19 @@ def _coerce_model_field_value(target: Player | Mob, field_name: str, raw_value: 
             )
         return aggression
 
-    internal_type = model_field.get_internal_type()
+    if internal_type in {"CharField", "TextField"}:
+        coerced = str(raw_value)
+        max_length = getattr(model_field, "max_length", None)
+        if max_length is not None and len(coerced) > max_length:
+            raise ActionError(
+                f"{field_name} cannot exceed {max_length} characters.",
+                code="invalid_value",
+            )
+        if not getattr(model_field, "blank", True) and not coerced.strip():
+            raise ActionError(f"{field_name} cannot be blank.", code="invalid_value")
+        return coerced
+
+    value = coerce_state_command_value(raw_value)
     if internal_type in {"IntegerField", "PositiveIntegerField", "PositiveSmallIntegerField"}:
         try:
             coerced = int(value)
@@ -1004,9 +1022,11 @@ def _set_character_stat_value(
                 },
             )
 
-    setattr(target, normalized_field, new_value)
+    update_fields = []
+    if previous_value != new_value:
+        setattr(target, normalized_field, new_value)
+        update_fields.append(normalized_field)
 
-    update_fields = [normalized_field]
     current_field = RESOURCE_MAX_TO_CURRENT.get(normalized_field)
     if current_field:
         current_value = int(getattr(target, current_field, 0) or 0)
@@ -1014,7 +1034,8 @@ def _set_character_stat_value(
             setattr(target, current_field, int(new_value))
             update_fields.append(current_field)
 
-    target.save(update_fields=update_fields)
+    if update_fields:
+        target.save(update_fields=update_fields)
     return previous_value, new_value, normalized_field
 
 
@@ -1880,19 +1901,58 @@ class SetStatAction:
     def execute(
         self,
         *,
-        actor: Player,
+        actor: Player | Room,
         target_selector: str,
         field_name: str,
         value: object,
         runtime_world: World | None = None,
     ) -> ActionResult:
         with transaction.atomic():
-            target = _resolve_builder_character_target(
-                actor=actor,
-                target_selector=target_selector,
-                runtime_world=runtime_world,
-                allow_self=True,
-            )
+            if isinstance(actor, Room):
+                if runtime_world is None:
+                    raise ActionError(
+                        "No runtime world is available for room-issued set commands.",
+                        code="no_world",
+                    )
+                authored_world_id = runtime_world.context_id or runtime_world.id
+                if actor.world_id != authored_world_id:
+                    raise ActionError(
+                        "The issuer room is not part of this runtime world.",
+                        code="invalid_world_context",
+                    )
+                target = _resolve_room_character_target(
+                    actor=actor,
+                    target_selector=target_selector,
+                    runtime_world=runtime_world,
+                    allow_self=True,
+                )
+            else:
+                target = _resolve_builder_character_target(
+                    actor=actor,
+                    target_selector=target_selector,
+                    runtime_world=runtime_world,
+                    allow_self=True,
+                )
+
+            target_model = Player if isinstance(target, Player) else Mob
+            target_queryset = target_model.objects.select_for_update(
+                of=("self",),
+            ).select_related("world", "world__config")
+            target_world = _actor_world(actor, runtime_world=runtime_world)
+            if target_world is not None:
+                target_queryset = target_queryset.filter(world_id=target_world.id)
+            if isinstance(actor, Room):
+                target_queryset = target_queryset.filter(room_id=actor.id)
+            if target_model is Mob:
+                target_queryset = target_queryset.filter(is_pending_deletion=False)
+            target = target_queryset.filter(pk=target.pk).first()
+            if target is None:
+                if isinstance(actor, Room):
+                    message = "Target is no longer in this room."
+                else:
+                    message = "Target is no longer in this runtime world."
+                raise ActionError(message, code="invalid_target")
+
             previous_value, new_value, normalized_field = _set_character_stat_value(
                 target=target,
                 field_name=field_name,
@@ -1900,9 +1960,6 @@ class SetStatAction:
             )
 
         target_payload, target_type = _serialize_builder_stats_target(target)
-        updated_actor = get_player_with_related(actor.id)
-        actor_payload = serialize_actor(updated_actor, updated_actor.room)
-        room_payload = _get_single_room_payload(updated_actor)
         target_name = str(target_payload.get("name") or "target")
         rendered_value = (
             json.dumps(new_value, sort_keys=True)
@@ -1911,23 +1968,57 @@ class SetStatAction:
         )
         text = f"Set {target_name}'s {normalized_field} to {rendered_value}."
 
-        return ActionResult(
-            events=[
+        if isinstance(actor, Player):
+            updated_actor = get_player_with_related(actor.id)
+            actor_payload = serialize_actor(updated_actor, updated_actor.room).model_dump()
+            room_payload = _get_single_room_payload(updated_actor).model_dump()
+            recipient_key = updated_actor.key
+        else:
+            actor_payload = _actor_summary(actor)
+            room_payload = {
+                "id": actor.id,
+                "key": actor.key,
+                "name": actor.name,
+            }
+            recipient_key = actor.key
+
+        data = {
+            "actor": actor_payload,
+            "room": room_payload,
+            "target": target_payload,
+            "target_type": target_type,
+            "field": normalized_field,
+            "previous_value": previous_value,
+            "new_value": new_value,
+        }
+        events = [
+            GameEvent(
+                type="cmd./set.success",
+                recipients=[recipient_key],
+                data=data,
+                text=text,
+            )
+        ]
+        if isinstance(target, Player) and target.key != recipient_key:
+            events.append(
                 GameEvent(
-                    type="cmd./set.success",
-                    recipients=[updated_actor.key],
+                    type="notification./set",
+                    recipients=[target.key],
                     data={
-                        "actor": actor_payload.model_dump(),
-                        "room": room_payload.model_dump(),
+                        "actor": target_payload,
+                        "issuer": actor_payload,
                         "target": target_payload,
-                        "target_type": target_type,
+                        "target_type": "player",
                         "field": normalized_field,
                         "previous_value": previous_value,
                         "new_value": new_value,
                     },
-                    text=text,
+                    text=f"Your {normalized_field} was set to {rendered_value}.",
                 )
-            ]
+            )
+
+        return ActionResult(
+            events=events,
         )
 
 

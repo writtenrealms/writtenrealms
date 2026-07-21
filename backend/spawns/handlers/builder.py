@@ -54,6 +54,8 @@ SCOPED_CMD_ALIASES = {
 SET_STAT_HELP_DETAILS = [
     f"Player fields: {', '.join(PLAYER_SET_FIELD_CHOICES)}.",
     f"Mob fields: {', '.join(MOB_SET_FIELD_CHOICES)}.",
+    "Room script issuers must specify one unambiguous target in the issuer room.",
+    "Room-issued changes affect the runtime character, not its authored definition.",
     "Attribute keys can be set with attribute.<key>, attributes.<key>, or attr.<key>.",
     "Use attributes -- <json object> to replace the full attributes map.",
     "Current resources cannot exceed their max; set the max first when raising both.",
@@ -986,6 +988,8 @@ class SetStatHandler(CommandHandler):
     command_type = "/set"
     text_commands = ("/set",)
     builder_only = True
+    allow_script_source = True
+    supported_actor_types = ("player", "room")
     help = {
         "name": "Set Stat",
         "format": "/set <target|player.<id>|mob.<id>> <field|attributes.key> <value>",
@@ -1000,11 +1004,22 @@ class SetStatHandler(CommandHandler):
             "/set aria health 10",
             "/set player.456 attribute.strength 5",
             "/set mob.123 attributes -- {\"strength\": 4}",
+            "/cmd room -- /set guard aggression normal",
+            "/cmd room -- /set guard room_description -- A guard watches here.",
         ],
     }
 
+    def _can_execute_set_command(self, ctx: CommandContext) -> bool:
+        if has_builder_access(ctx.player):
+            return True
+        return bool(
+            ctx.script_source
+            and self.allow_script_source
+            and ctx.actor_type == "room"
+        )
+
     def handle(self, ctx: CommandContext) -> None:
-        if not can_execute_builder_command(ctx, self):
+        if not self._can_execute_set_command(ctx):
             ctx.publish(builder_permission_error(self.command_type))
             return
 
@@ -1021,7 +1036,7 @@ class SetStatHandler(CommandHandler):
 
         try:
             result = SetStatAction().execute(
-                actor=ctx.player,
+                actor=ctx.actor,
                 target_selector=target,
                 field_name=field_name,
                 value=value,
@@ -1039,7 +1054,7 @@ class SetStatHandler(CommandHandler):
 
         publish_events(
             result.events,
-            actor_key=ctx.player.key,
+            actor_key=ctx.actor_key,
             connection_id=ctx.connection_id,
         )
 
