@@ -1,7 +1,7 @@
 from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
 from django.db import connection
-from django.db.models import Q, Count, Subquery, OuterRef, IntegerField
+from django.db.models import F, Q, Count, Subquery, OuterRef, IntegerField
 from django.utils import timezone
 
 
@@ -502,7 +502,10 @@ class WorldCharacters(WorldLobbyBase,
             user=self.request.user,
             pending_deletion_ts__isnull=True,
             world__context_id=self.world.pk,
-        ).order_by('-last_connection_ts')
+        ).order_by(
+            F('last_connection_ts').desc(nulls_last=True),
+            '-id',
+        )
 
     def perform_create(self, serializer):
         # Create a new spawn world, or get one if it's a multiplayer world

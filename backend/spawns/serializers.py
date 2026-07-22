@@ -323,24 +323,6 @@ class PlayerConfigSerializer(serializers.ModelSerializer):
             'mobile_map_width',
         ]
 
-    def create(self, validated_data):
-        return super().create(validated_data)
-
-    def save(self, *args, **kwargs):
-        instance = super().save(*args, **kwargs)
-
-        # Process the idle logout attribute, update in game if applicable
-        if 'idle_logout' in self.validated_data:
-            player = instance.players.first()
-            try:
-                player.game_player.idle_logout = bool(
-                    self.validated_data['idle_logout'])
-            except AttributeError:
-                pass
-
-        return instance
-
-
 # ==== Animation Serializers ====
 
 class AnimateWorldSerializer(serializers.ModelSerializer):

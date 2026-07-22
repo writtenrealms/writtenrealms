@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 
 from spawns.models import Player, Mob
-from worlds.models import World, Zone, Room, WorldConfig
+from worlds.models import World, WorldConfig
 
 User = get_user_model()
 
@@ -40,18 +40,6 @@ class WorldTestCase(APITestCase):
         world = world or self.spawn_world
         room = room or self.room
         return Player.objects.create(name=name, room=room, user=user, world=world)
-
-    def create_instance(self):
-        super().setUp()
-        self.instance_config = WorldConfig.objects.create()
-        self.instance_context = World.objects.new_world(
-            name='An Island Instance',
-            author=self.user,
-            config=self.instance_config,
-            instance_of=self.world)
-        self.instance_room = self.instance_context.rooms.all().first()
-        #self.instance_spawn_world = self.instance_context.create_spawn_world()
-        return self.instance_context
 
     def create_mob(self, name, **kwargs):
         return Mob.objects.create(

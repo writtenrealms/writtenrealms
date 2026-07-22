@@ -536,7 +536,7 @@ manifest says `traits` will create unnecessary translation overhead.
 
 ## Testing Requirements
 
-Tests should live under `backend/wr2_tests/`.
+Tests should live under `backend/tests/`.
 
 Minimum coverage:
 

@@ -609,7 +609,7 @@ It should not shape WR2 storage, serializers, APIs, or runtime behavior.
 
 ## Testing Targets
 
-WR2 tests should cover:
+Backend tests should cover:
 
 - faction manifest create/update/delete
 - uniqueness of faction code per world
@@ -623,7 +623,7 @@ WR2 tests should cover:
 - `adjust_reputation` quest effects
 - language filtering for `say` and `yell` when enabled
 
-Place new WR2 tests under `backend/wr2_tests/`.
+Place new tests under `backend/tests/`.
 
 Advent adapter tests should cover the translation table above without requiring
 WR2 to accept Advent field names directly.

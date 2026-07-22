@@ -2208,16 +2208,22 @@ class FactionSerializer(serializers.ModelSerializer):
             ).update(is_default=False)
 
     def _normalize_type_fields(self, validated_data):
-        if 'is_core' in validated_data:
+        initial_data = getattr(self, 'initial_data', {})
+        if 'type' in initial_data:
+            validated_data.pop('is_core', None)
+        elif 'is_core' in validated_data:
             validated_data['type'] = (
                 FACTION_TYPE_CORE
                 if validated_data.pop('is_core')
                 else FACTION_TYPE_REPUTATION
             )
-        if 'is_selectable' in validated_data:
+        if 'playable' in initial_data:
+            validated_data.pop('is_selectable', None)
+        elif 'is_selectable' in validated_data:
             validated_data['playable'] = validated_data['is_selectable']
         if validated_data.get('type') == FACTION_TYPE_REPUTATION:
             validated_data['playable'] = False
+            validated_data['is_core'] = False
             validated_data['is_selectable'] = False
             validated_data['is_default'] = False
         elif validated_data.get('type') == FACTION_TYPE_CORE:
@@ -2245,27 +2251,46 @@ class FactionSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         faction = self.instance
+        initial_data = getattr(self, 'initial_data', {})
+        normalized_data = self._normalize_type_fields(dict(data))
 
-        # Can't be default and unselected
-        if 'is_selectable' in data and 'is_default' in data:
-            if data['is_default'] and not data['is_selectable']:
-                raise serializers.ValidationError(
-                    'Cannot set default faction to be unselectable')
-        if self.instance:
-            if (self.instance.is_default
-                and data.get('is_selectable') == False):
-                raise serializers.ValidationError(
-                    'Cannot set default faction to be unselectable')
+        type_was_submitted = (
+            'type' in initial_data or 'is_core' in initial_data)
+        if type_was_submitted or not faction:
+            target_type = normalized_data.get(
+                'type', FACTION_TYPE_REPUTATION)
+        else:
+            target_type = faction.type
 
-        # Can't be core and default
-        if 'is_core' in data and 'is_default' in data:
-            if not data['is_core'] and data['is_default']:
+        playable_was_submitted = (
+            'playable' in initial_data or 'is_selectable' in initial_data)
+        if playable_was_submitted or not faction:
+            target_playable = normalized_data.get('playable', False)
+        else:
+            target_playable = faction.playable
+
+        default_was_submitted = 'is_default' in initial_data
+        if default_was_submitted or not faction:
+            target_default = normalized_data.get('is_default', False)
+        else:
+            target_default = faction.is_default
+
+        # Reputation factions cannot be defaults. Changing an existing default
+        # core faction to reputation clears its default status, but explicitly
+        # requesting both states is invalid.
+        if target_type == FACTION_TYPE_REPUTATION:
+            if default_was_submitted and data.get('is_default'):
                 raise serializers.ValidationError(
                     'Cannot set non-core faction to be default.')
-        if self.instance:
-            if (not self.instance.is_core and data['is_default']):
-                raise serializers.ValidationError(
-                    'Cannot set non-core faction to be default.')
+            target_default = False
+            target_playable = False
+
+        if target_default and target_type != FACTION_TYPE_CORE:
+            raise serializers.ValidationError(
+                'Cannot set non-core faction to be default.')
+        if target_default and not target_playable:
+            raise serializers.ValidationError(
+                'Cannot set default faction to be unselectable')
 
         if (self.instance
             and data.get('code') and data['code'] != self.instance.code):
@@ -2296,9 +2321,8 @@ class FactionSerializer(serializers.ModelSerializer):
         # Can't switch from reputation to core if a char has that faction assigned
         # as well as a core faction already.
         if (faction
-            and not faction.is_core
-            and 'is_core' in data
-            and data['is_core']):
+            and faction.type != FACTION_TYPE_CORE
+            and target_type == FACTION_TYPE_CORE):
             # If we're switching the faction from reputation to core
 
             error = ('Cannot change to core faction when characters with '

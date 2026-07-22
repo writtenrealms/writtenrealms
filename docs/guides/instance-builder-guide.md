@@ -600,7 +600,7 @@ the clear objective.
 
 ## Testing Expectations
 
-New instance runtime behavior should be covered under `backend/wr2_tests/`.
+New instance runtime behavior should be covered under `backend/tests/`.
 
 Important cases:
 

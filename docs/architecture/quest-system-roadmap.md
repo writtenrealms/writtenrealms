@@ -122,8 +122,8 @@ Implemented so far:
 - sidebar/mobile quest log integration:
   - uses the WR2 active/resolved quest instance endpoints
 - automated tests:
-  - `backend/wr2_tests/test_quest_manifests.py`
-  - `backend/wr2_tests/test_quest_runtime.py`
+  - `backend/tests/test_quest_manifests.py`
+  - `backend/tests/test_quest_runtime.py`
 
 Deliberate Phase 1 deviation from the ideal end-state:
 
@@ -391,8 +391,8 @@ Implementation map:
   - `backend/quests/services/effects.py`
   - `backend/quests/services/engine.py`
 - reference tests:
-  - `backend/wr2_tests/test_quest_manifests.py`
-  - `backend/wr2_tests/test_quest_runtime.py`
+  - `backend/tests/test_quest_manifests.py`
+  - `backend/tests/test_quest_runtime.py`
 
 ### `QuestObjectiveState`
 
@@ -711,14 +711,14 @@ Validation:
 
 Recommended tests:
 
-- `backend/wr2_tests/test_quest_manifests.py`
-- builder permission tests in `backend/builders/tests.py`
+- `backend/tests/test_quest_manifests.py`
+- builder permission tests in `backend/tests/test_builders.py`
 
 Current verification:
 
-- `wr2_tests.test_quest_manifests`
-- `wr2_tests.test_trigger_manifests`
-- `wr2_tests.test_world_config_manifests`
+- `tests.test_quest_manifests`
+- `tests.test_trigger_manifests`
+- `tests.test_world_config_manifests`
 - manual playground verification:
   - `template`
   - `list`
@@ -730,9 +730,9 @@ Verified command:
 ```bash
 COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
   python manage.py test \
-    wr2_tests.test_quest_manifests \
-    wr2_tests.test_trigger_manifests \
-    wr2_tests.test_world_config_manifests \
+    tests.test_quest_manifests \
+    tests.test_trigger_manifests \
+    tests.test_world_config_manifests \
     --settings=config.settings.testing
 ```
 
@@ -834,29 +834,29 @@ Validation:
 
 Recommended tests:
 
-- `backend/wr2_tests/test_quest_discovery.py`
-- `backend/wr2_tests/test_quest_engine.py`
-- `backend/wr2_tests/test_quest_journal.py`
-- `backend/wr2_tests/test_quest_event_subscriptions.py`
+- `backend/tests/test_quest_discovery.py`
+- `backend/tests/test_quest_engine.py`
+- `backend/tests/test_quest_journal.py`
+- `backend/tests/test_quest_event_subscriptions.py`
 
 Current verification:
 
-- `wr2_tests.test_quest_runtime`
-- `wr2_tests.test_quest_manifests`
-- `wr2_tests.test_information`
-- `wr2_tests.test_movement`
-- `wr2_tests.test_triggers`
+- `tests.test_quest_runtime`
+- `tests.test_quest_manifests`
+- `tests.test_information`
+- `tests.test_movement`
+- `tests.test_triggers`
 
 Verified command:
 
 ```bash
 COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
   python manage.py test \
-    wr2_tests.test_quest_runtime \
-    wr2_tests.test_quest_manifests \
-    wr2_tests.test_information \
-    wr2_tests.test_movement \
-    wr2_tests.test_triggers \
+    tests.test_quest_runtime \
+    tests.test_quest_manifests \
+    tests.test_information \
+    tests.test_movement \
+    tests.test_triggers \
     --settings=config.settings.testing
 ```
 
@@ -913,18 +913,18 @@ Validation:
 
 Current verification:
 
-- `wr2_tests.test_items`
-- `wr2_tests.test_communication`
-- `wr2_tests.test_quest_runtime`
+- `tests.test_items`
+- `tests.test_communication`
+- `tests.test_quest_runtime`
 
 Verified command:
 
 ```bash
 COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
   python manage.py test \
-    wr2_tests.test_items \
-    wr2_tests.test_communication \
-    wr2_tests.test_quest_runtime \
+    tests.test_items \
+    tests.test_communication \
+    tests.test_quest_runtime \
     --settings=config.settings.testing
 ```
 
@@ -1096,8 +1096,8 @@ Frontend:
 
 Tests:
 
-- builder manifest/permission tests in `backend/builders/tests.py`
-- WR2 runtime tests in `backend/wr2_tests/`
+- builder manifest/permission tests in `backend/tests/test_builders.py`
+- runtime tests in `backend/tests/`
 
 ## Recommended Next Deliverable
 

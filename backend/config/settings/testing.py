@@ -33,7 +33,14 @@ PRINT_UNSENT_EMAIL = False
 
 RAVEN_CONFIG = {}
 
+# Password hashing strength is irrelevant to test behavior and the production
+# hashers make fixture creation dominate the backend suite runtime.
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.MD5PasswordHasher',
+]
+
 MIGRATION_MODULES = {
+    'admin': None,
     'auth': None,
     'contenttypes': None,
     'default': None,

@@ -1044,7 +1044,7 @@ Gaps to close:
 
 - Centralize recursive item world migration.
 - Use the same migration path for enter and leave.
-- Add WR2 tests for nested inventory/equipment transfer.
+- Add backend tests for nested inventory/equipment transfer.
 - Preserve existing `World.instance_for()` behavior while wrapping it in a
   service boundary.
 
@@ -1096,7 +1096,7 @@ Gaps to close:
 
 ## Test Plan
 
-New automated tests should live under `backend/wr2_tests/`.
+New automated tests should live under `backend/tests/`.
 
 Recommended coverage:
 

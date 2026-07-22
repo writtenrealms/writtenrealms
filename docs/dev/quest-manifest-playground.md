@@ -41,7 +41,7 @@ The current Phase 1 implementation consists of:
 - manifest parsing and application in `backend/quests/manifests.py`
 - builder/world manifest integration in `backend/builders/views.py`
 - read endpoints in `backend/quests/views.py`
-- tests in `backend/wr2_tests/test_quest_manifests.py`
+- tests in `backend/tests/test_quest_manifests.py`
 - this script:
   - `backend/scripts/quest_manifest_playground.py`
 
@@ -568,9 +568,9 @@ If you want to run the automated authoring tests:
 ```bash
 COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
   python manage.py test \
-    wr2_tests.test_quest_manifests \
-    wr2_tests.test_trigger_manifests \
-    wr2_tests.test_world_config_manifests \
+    tests.test_quest_manifests \
+    tests.test_trigger_manifests \
+    tests.test_world_config_manifests \
     --settings=config.settings.testing
 ```
 

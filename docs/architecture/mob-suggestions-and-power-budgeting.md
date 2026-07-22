@@ -578,7 +578,7 @@ impossible.
 - Add a plain service that suggests direct mob stats.
 - Add a non-persistent builder endpoint.
 - Return manifest object, YAML, stats, preview, and diagnostics.
-- Add WR2 tests under `backend/wr2_tests/`.
+- Add backend tests under `backend/tests/`.
 
 ### Phase 2: Mobs Add Flow
 

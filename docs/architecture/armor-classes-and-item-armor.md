@@ -393,7 +393,7 @@ data. Until that is available, the frontend should avoid hard-coding
   shared equipment policy helper.
 - Keep existing slot resolution rules for one-handed, two-handed, shield, and
   dual-wield behavior.
-- Add runtime tests under `backend/wr2_tests/` for allowed and denied armor
+- Add runtime tests under `backend/tests/` for allowed and denied armor
   class equips.
 - Update frontend item inspection to display policy results from backend data
   instead of hard-coded class checks.
@@ -404,7 +404,7 @@ data. Until that is available, the frontend should avoid hard-coding
 - Add a builder endpoint that returns item-definition manifest YAML, summary,
   and diagnostics.
 - Add the **Items > Add** form that preloads generated YAML into **Edit World**.
-- Cover builder endpoint behavior with builder app tests.
+- Cover builder endpoint behavior in `backend/tests/test_builders.py`.
 - Add documentation examples to the item-definition builder guide after the
   endpoint shape settles.
 
@@ -429,8 +429,8 @@ data. Until that is available, the frontend should avoid hard-coding
 
 Project placement should follow current conventions:
 
-- Builder endpoint and permission tests live with builder app tests.
-- Runtime equip behavior tests live in `backend/wr2_tests/`.
+- Builder endpoint and permission tests live in `backend/tests/test_builders.py`.
+- Runtime equip behavior tests live in `backend/tests/`.
 
 ## Open Questions
 

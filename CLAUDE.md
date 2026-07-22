@@ -111,20 +111,17 @@ docker compose exec backend python manage.py createcachetable
 
 **Django/Backend Tests:**
 ```bash
-# ALWAYS use testing settings when running Django tests
-docker compose exec backend python manage.py test <test_path> --settings=config.settings.testing
-
-# WR2 tests specifically
-docker compose exec backend python manage.py test wr2_tests --settings=config.settings.testing
-
-# Or via Makefile (requires local virtualenv)
-make test-wr2-docker
-```
-
-**Legacy Advent Tests:**
-```bash
-# Requires local virtualenv
+# Run the complete backend suite in Docker with the testing settings
 make test
+
+# Run serially when debugging process isolation or ordering
+make test-serial
+
+# Reuse local test databases (recreate them after model changes)
+make test-keepdb
+
+# Run a focused test label when needed
+docker compose exec backend python manage.py test tests.test_module --settings=config.settings.testing
 ```
 
 ### Frontend Development
@@ -159,7 +156,7 @@ docker compose logs -f celery-beat
 - `system/` - site-wide configuration, policies
 - `users/` - user accounts, authentication
 - `worlds/` - world instances, rooms, world lifecycle management
-- `wr2_tests/` - WR2 architecture tests
+- `tests/` - backend test suite and shared test helpers
 
 ### Key Django Apps
 
@@ -209,7 +206,7 @@ docker compose logs -f celery-beat
 ## Testing Conventions
 
 - Django tests: Use `--settings=config.settings.testing` to disable migrations and use in-memory cache
-- Test files: `tests.py` per app in `backend/`, plus WR2-focused coverage in `backend/wr2_tests/`
+- Test files: `test_*.py` modules under `backend/tests/`
 - Frontend: Include screenshots in PRs when touching UI
 
 ## Django Settings

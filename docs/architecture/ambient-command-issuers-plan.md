@@ -274,7 +274,7 @@ Status: partially implemented through the existing actor compatibility model.
    operations can target the correct spawn world.
 
 Exit criteria:
-- Existing WR2 tests pass without behavior regressions.
+- Existing backend tests pass without behavior regressions.
 
 ### Phase 2: Capability-based handlers
 

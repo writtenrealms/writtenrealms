@@ -43,23 +43,24 @@
 ## Coding Style & Naming Conventions
 
 - Python uses 4-space indentation and `snake_case` for functions and modules.
-- Django apps live under `backend/` and typically use `tests.py` per app.
-- WR2 tests live under `backend/wr2_tests/`.
+- Django apps live under `backend/`; backend tests live under `backend/tests/`
+  and use `test_*.py` module names.
 - Vue components are `PascalCase.vue` in `frontend/src/components/`; TypeScript uses `camelCase`.
 - No repo-wide formatter is enforced; match the style in the surrounding files.
 
 ## Testing Guidelines
 
-- `make test` runs Django tests in the backend container.
-- `make test-wr2` runs WR2-focused tests in `backend/wr2_tests`.
-- `tox` runs WR2 Django tests (`tox.ini`).
-- When running tests for this project, always use Docker and the testing settings, e.g. `docker compose exec backend python manage.py test <test> --settings=config.settings.testing`.
+- `make test` is the canonical backend test command. It runs full Django test
+  discovery with four workers in the backend container using the testing
+  settings. Use `make test-serial` when debugging process isolation or test
+  ordering. `make test-keepdb` is an opt-in local shortcut; recreate the test
+  databases after model changes to avoid a stale schema.
+- When running a focused backend test, always use Docker and the testing
+  settings, e.g. `docker compose exec backend python manage.py test tests.test_module --settings=config.settings.testing`.
 - When adding or changing features, update the relevant builder/player guide docs as part of the same workflow. Treat guide documentation updates as automatic and required, on the same level as adding and running tests.
 - When touching frontend UI, add or update unit tests if they exist and include a screenshot in the PR.
-- WR2 transition override: place all new automated tests under `backend/wr2_tests/` (including builder-facing WR2 Trigger coverage).
-- Test placement convention:
-  - Builder/editor endpoint and permission tests live with app tests (for example `backend/builders/tests.py`).
-  - WR2 runtime/engine behavior tests live in `backend/wr2_tests/`.
+- Place all new backend automated tests under `backend/tests/`, including
+  builder/editor endpoint, permission, Trigger, and runtime/engine coverage.
 
 ## Commit & Pull Request Guidelines
 
@@ -86,8 +87,7 @@ For fast iteration with bind-mounted source code (no rebuild needed after edits)
 
 ### Running tests
 
-- WR2 tests (primary): `sudo docker compose exec backend python manage.py test wr2_tests --settings=config.settings.testing`
-- Full Django tests: `sudo docker compose exec backend python manage.py test --settings=config.settings.testing` (some legacy tests have pre-existing failures related to the WR1→WR2 transition)
+- Backend tests: `sudo make test`
 - Frontend type check: `sudo docker compose exec frontend npx vue-tsc --noEmit`
 - Frontend build: `sudo docker compose exec frontend npm run build`
 

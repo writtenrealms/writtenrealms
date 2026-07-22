@@ -4,8 +4,8 @@
 if [ -n "$RUN_TESTS" ]; then
     echo "Running tests..."
     case $RUN_TESTS in
-        wr2|backend|forge|all)
-            (cd backend && python manage.py test wr2_tests --settings=config.settings.testing)
+        backend|forge|all)
+            (cd backend && python manage.py test --settings=config.settings.testing)
             ;;
         *)
             # Optionally handle unknown values

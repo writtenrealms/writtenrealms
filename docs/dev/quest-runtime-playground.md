@@ -811,8 +811,8 @@ Focused Phase 2 runtime tests:
 ```bash
 COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
   python manage.py test \
-    wr2_tests.test_quest_runtime \
-    wr2_tests.test_quest_manifests \
+    tests.test_quest_runtime \
+    tests.test_quest_manifests \
     --settings=config.settings.testing
 ```
 
@@ -821,11 +821,11 @@ Broader regression run used for this pass:
 ```bash
 COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml docker compose exec backend \
   python manage.py test \
-    wr2_tests.test_quest_runtime \
-    wr2_tests.test_quest_manifests \
-    wr2_tests.test_information \
-    wr2_tests.test_movement \
-    wr2_tests.test_triggers \
+    tests.test_quest_runtime \
+    tests.test_quest_manifests \
+    tests.test_information \
+    tests.test_movement \
+    tests.test_triggers \
     --settings=config.settings.testing
 ```
 

@@ -71,13 +71,19 @@ install:
 	if [ ! -d ve ] ; then virtualenv ve -p python3 ; fi
 	ve/bin/pip install -r requirements.txt
 
+TEST_PARALLEL ?= 4
+DJANGO_TEST = docker compose exec backend python manage.py test --settings=config.settings.testing --noinput
+
 test:
-	docker compose exec backend python manage.py test --settings=config.settings.testing
+	$(DJANGO_TEST) --parallel $(TEST_PARALLEL) --buffer
 
-test-wr2:
-	docker compose exec backend python manage.py test wr2_tests --settings=config.settings.testing
+test-serial:
+	$(DJANGO_TEST)
 
-.PHONY: docker-up docker-up-mount docker-restart docker-restart-mount reset-dev-db reset-dev-db-mount
+test-keepdb:
+	$(DJANGO_TEST) --parallel $(TEST_PARALLEL) --buffer --keepdb
+
+.PHONY: test test-serial test-keepdb docker-up docker-up-mount docker-restart docker-restart-mount reset-dev-db reset-dev-db-mount
 
 docker-up:
 	docker compose up -d --build

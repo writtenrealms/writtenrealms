@@ -581,7 +581,7 @@ giving builders feedback when they are editing authored content.
 - Done: call the service from `spawn_item_from_definition`.
 - Done: store rolled attributes in JSON and let stat computation ignore
   stale or undeclared keys.
-- Done: add WR2 tests for rolls, stale keys, persistence, manifests, export, and
+- Done: add backend tests for rolls, stale keys, persistence, manifests, export, and
   `/load item` support.
 
 This phase proves the clean model without touching merchants, bundles, or the

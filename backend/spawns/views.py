@@ -4,6 +4,7 @@ import uuid
 from config import constants as adv_consts
 
 from django.contrib.auth import get_user_model
+from django.db import transaction
 
 from rest_framework import (
     status,
@@ -140,18 +141,37 @@ class Lookup(GameView):
 class PlayerConfigView(GameView):
 
     def post(self, request, format=None):
-        player = request.player
-        config = player.config
-
-        # If the player is referencing the first config, create a new one.
-        if config.id == 1:
-            config = PlayerConfig.objects.create()
-            player.config = config
-            player.save(update_fields=['config'])
-
         serializer = spawn_serializers.PlayerConfigSerializer(
             data=request.data,
-            instance=config)
+            instance=request.player.config)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+
+        with transaction.atomic():
+            # Serialize edits for this player so simultaneous first edits
+            # cannot create unreferenced config copies.
+            player = (
+                Player.objects.select_related('config')
+                .select_for_update(of=('self',))
+                .get(pk=request.player.pk)
+            )
+            config = player.config
+
+            # Players initially share the oldest config as an immutable
+            # default. Copy it on first edit without assuming its primary key
+            # is 1.
+            default_config_id = PlayerConfig.objects.order_by(
+                'created_ts', 'pk').values_list('pk', flat=True).first()
+            if config.pk == default_config_id:
+                config.pk = None
+                config._state.adding = True
+                config.save()
+                player.config = config
+                player.save(update_fields=['config'])
+
+            # Validation intentionally happens before the transaction mutates
+            # anything. Rebind the validated serializer to the config selected
+            # under the player lock before saving.
+            serializer.instance = config
+            serializer.save()
+
         return Response(serializer.data, status=status.HTTP_201_CREATED)
