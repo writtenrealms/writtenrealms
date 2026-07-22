@@ -3,7 +3,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from builders.currencies import create_currency
-from builders.models import MobDefinition, Trigger
+from builders.models import AbilityDefinition, MobDefinition, Trigger
 from config import constants as adv_consts
 from core.combat_formulas import (
     combatant_snapshot,
@@ -184,6 +184,40 @@ class TestCombatFlee(WorldTestCase):
             },
             is_hostile=True,
             next_tick_ts=timezone.now() - timedelta(seconds=1),
+        )
+
+    def _prevent_flee_effect(
+        self,
+        *,
+        encounter,
+        scope=ActiveEffect.SCOPE_CHARACTER,
+        remaining_rounds=1,
+        effect="silken-bind",
+        label="Silken Bind",
+        started_round=0,
+        started_round_id="",
+    ):
+        return ActiveEffect.objects.create(
+            world=self.spawn_world,
+            encounter=encounter,
+            target_player=self.player,
+            scope=scope,
+            effect=effect,
+            category="debuff",
+            label=label,
+            remaining_rounds=remaining_rounds,
+            duration_rounds=remaining_rounds,
+            started_round=started_round,
+            started_round_id=started_round_id,
+            primitives=[
+                {
+                    "type": "action_rule",
+                    "phase": "before_action",
+                    "rule": "prevent",
+                    "actions": ["flee"],
+                    "reason": "rooted",
+                }
+            ],
         )
 
     def test_player_dot_survives_flee_and_awards_remote_kill_credit(self):
@@ -461,6 +495,228 @@ class TestCombatFlee(WorldTestCase):
         character_effect.refresh_from_db()
         self.assertIsNone(character_effect.encounter_id)
         self.assertFalse(ActiveEffect.objects.filter(pk=encounter_effect.id).exists())
+
+    def test_fresh_flee_is_blocked_before_route_or_state_mutation(self):
+        primary_encounter = self._active_encounter(self._mob())
+        secondary_encounter = self._active_encounter(self._mob())
+        primary_encounter.pending_player_ability = {"ability": "held-player-cast"}
+        primary_encounter.pending_mob_ability = {"ability": "held-mob-cast"}
+        primary_encounter.save(
+            update_fields=["pending_player_ability", "pending_mob_ability"]
+        )
+        effect = self._prevent_flee_effect(
+            encounter=secondary_encounter,
+            scope=ActiveEffect.SCOPE_ENCOUNTER,
+            remaining_rounds=2,
+            effect="silken-bind",
+            label="Silken Bind",
+        )
+        starting_stamina = self.player.stamina
+
+        with patch("spawns.actions.combat._choose_flee_destination") as choose:
+            with capture_game_messages() as messages:
+                dispatch_text_command(self.player.id, "flee")
+
+        choose.assert_not_called()
+        primary_encounter.refresh_from_db()
+        secondary_encounter.refresh_from_db()
+        self.player.refresh_from_db()
+        effect.refresh_from_db()
+        error = self._messages_by_type(messages, "cmd.flee.error")[0]
+        self.assertEqual(error["text"], "Silken Bind prevents you from fleeing.")
+        self.assertEqual(error["data"]["code"], "action_prevented")
+        self.assertEqual(error["data"]["action"], "flee")
+        self.assertEqual(error["data"]["effect"], "silken-bind")
+        self.assertEqual(error["data"]["effect_id"], effect.id)
+        self.assertEqual(error["data"]["effect_label"], "Silken Bind")
+        self.assertEqual(
+            error["data"]["effect_scope"],
+            ActiveEffect.SCOPE_ENCOUNTER,
+        )
+        self.assertEqual(error["data"]["effect_remaining_rounds"], 2)
+        self.assertEqual(error["data"]["effect_duration_rounds"], 2)
+        self.assertEqual(error["data"]["reason"], "rooted")
+        self.assertEqual(error["data"]["phase"], "before_action")
+        self.assertEqual(primary_encounter.pending_flee, {})
+        self.assertEqual(
+            primary_encounter.pending_player_ability,
+            {"ability": "held-player-cast"},
+        )
+        self.assertEqual(
+            primary_encounter.pending_mob_ability,
+            {"ability": "held-mob-cast"},
+        )
+        self.assertEqual(secondary_encounter.pending_flee, {})
+        self.assertEqual(self.player.stamina, starting_stamina)
+        self.assertEqual(self.player.room_id, self.room.id)
+        self.assertEqual(effect.remaining_rounds, 2)
+
+    def test_manual_ready_flee_block_consumes_turn_and_expires_effect(self):
+        self.world.config.combat_resolution_interval = -1
+        self.world.config.save(update_fields=["combat_resolution_interval"])
+        mob = self._mob()
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            resolution_interval=-1,
+        )
+
+        dispatch_text_command(self.player.id, "flee")
+
+        encounter.refresh_from_db()
+        self.player.refresh_from_db()
+        mob.refresh_from_db()
+        self.assertEqual(encounter.pending_flee["status"], "ready")
+        ready_round = encounter.round_number
+        health_before_completion = self.player.health
+        mob_health_before_completion = mob.health
+        effect = self._prevent_flee_effect(
+            encounter=encounter,
+            remaining_rounds=1,
+            started_round=ready_round,
+            started_round_id=f"encounter:{encounter.id}:{ready_round}",
+        )
+        AbilityDefinition.objects.create(
+            world=self.world,
+            slug="snare-counter",
+            name="Snare Counter",
+            command_verbs=["snarecounter"],
+            target={
+                "type": "hostile",
+                "default": "current_target",
+                "allow_out_of_combat": False,
+            },
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 2},
+                    "text": {"label": "Snare Counter"},
+                }
+            ],
+        )
+        encounter.pending_player_ability = {"ability": "held-player-cast"}
+        encounter.pending_mob_ability = {
+            "ability": "snare-counter",
+            "command": "snare-counter",
+            "target": {"type": "player", "id": self.player.id},
+            "queued_round": ready_round,
+        }
+        encounter.save(
+            update_fields=["pending_player_ability", "pending_mob_ability"]
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "flee")
+
+        encounter.refresh_from_db()
+        self.player.refresh_from_db()
+        mob.refresh_from_db()
+        error = self._messages_by_type(messages, "cmd.flee.error")[0]
+        self.assertEqual(error["data"]["code"], "action_prevented")
+        self.assertEqual(error["data"]["action"], "flee")
+        self.assertEqual(error["data"]["effect_id"], effect.id)
+        self.assertEqual(
+            error["data"]["round_id"],
+            f"encounter:{encounter.id}:{ready_round + 1}",
+        )
+        mob_attacks = [
+            message
+            for message in self._messages_by_type(
+                messages,
+                "notification.combat.attack",
+            )
+            if message["data"]["actor"]["key"] == mob.key
+        ]
+        self.assertEqual(len(mob_attacks), 1)
+        self.assertEqual(mob_attacks[0]["data"]["attack"], "snare-counter")
+        self.assertEqual(encounter.round_number, ready_round + 1)
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
+        self.assertEqual(encounter.pending_flee, {})
+        self.assertEqual(encounter.pending_player_ability, {})
+        self.assertEqual(encounter.pending_mob_ability, {})
+        self.assertEqual(self.player.room_id, self.room.id)
+        self.assertEqual(self.player.stamina, self.stats["stamina_max"])
+        self.assertLess(self.player.health, health_before_completion)
+        self.assertEqual(mob.health, mob_health_before_completion)
+        self.assertFalse(ActiveEffect.objects.filter(pk=effect.id).exists())
+        self.assertFalse(
+            self._messages_by_type(messages, "cmd.flee.success")
+        )
+
+    def test_scheduled_ready_flee_block_continues_full_round_pipeline(self):
+        self.world.config.combat_resolution_interval = 1.5
+        self.world.config.save(update_fields=["combat_resolution_interval"])
+        mob = self._mob()
+        encounter = self._active_encounter(mob)
+
+        dispatch_text_command(self.player.id, "flee")
+        encounter.next_resolution_ts = timezone.now()
+        encounter.save(update_fields=["next_resolution_ts"])
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            resolve_combat_encounter(encounter.id)
+
+        encounter.refresh_from_db()
+        self.player.refresh_from_db()
+        mob.refresh_from_db()
+        self.assertEqual(encounter.pending_flee["status"], "ready")
+        ready_round = encounter.round_number
+        root_effect = self._prevent_flee_effect(
+            encounter=encounter,
+            remaining_rounds=2,
+            started_round=ready_round,
+            started_round_id=f"encounter:{encounter.id}:{ready_round}",
+        )
+        damage_effect = self._periodic_effect(
+            source=mob,
+            target=self.player,
+            remaining_rounds=2,
+        )
+        self.player.ability_cooldowns = {"cooling-ability": 2}
+        self.player.save(update_fields=["ability_cooldowns"])
+        encounter.pending_player_ability = {"ability": "held-player-cast"}
+        encounter.next_resolution_ts = timezone.now()
+        encounter.save(
+            update_fields=["pending_player_ability", "next_resolution_ts"]
+        )
+        health_before_completion = self.player.health
+        mob_health_before_completion = mob.health
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with capture_game_messages() as messages:
+                resolve_combat_encounter(encounter.id)
+
+        encounter.refresh_from_db()
+        self.player.refresh_from_db()
+        mob.refresh_from_db()
+        root_effect.refresh_from_db()
+        damage_effect.refresh_from_db()
+        error = self._messages_by_type(messages, "cmd.flee.error")[0]
+        self.assertEqual(error["data"]["code"], "action_prevented")
+        self.assertEqual(
+            error["data"]["round_id"],
+            f"encounter:{encounter.id}:{ready_round + 1}",
+        )
+        self.assertEqual(encounter.round_number, ready_round + 1)
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
+        self.assertEqual(encounter.pending_flee, {})
+        self.assertEqual(encounter.pending_player_ability, {})
+        self.assertEqual(self.player.room_id, self.room.id)
+        self.assertEqual(self.player.stamina, self.stats["stamina_max"])
+        self.assertEqual(self.player.ability_cooldowns, {"cooling-ability": 1})
+        self.assertEqual(root_effect.remaining_rounds, 1)
+        self.assertEqual(damage_effect.remaining_rounds, 1)
+        self.assertLess(self.player.health, health_before_completion)
+        self.assertEqual(mob.health, mob_health_before_completion)
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertTrue(
+            any(attack["data"]["label"] == "Burning Curse" for attack in attacks)
+        )
+        self.assertTrue(
+            any(attack["data"]["actor"]["key"] == mob.key for attack in attacks)
+        )
 
     def test_scheduled_flee_skips_one_player_round_then_exits_before_damage(self):
         self.world.config.combat_resolution_interval = 1.5

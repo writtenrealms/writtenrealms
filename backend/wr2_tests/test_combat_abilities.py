@@ -9,7 +9,7 @@ from core.computations import compute_stats
 from core.scoped_state import STATE_SCOPE_CHARACTER, get_state_value
 from django.utils import timezone
 from spawns.actions.movement_costs import movement_cost
-from spawns.models import CombatEncounter, Item, Mob, Player
+from spawns.models import ActiveEffect, CombatEncounter, Item, Mob, Player
 from spawns.tasks import resolve_combat_encounter
 from tests.base import WorldTestCase
 from wr2_tests.utils import (
@@ -415,6 +415,134 @@ class TestCombatAbilities(WorldTestCase):
             "player.combat_effects.update",
         )
         self.assertEqual(combat_effect_updates[-1]["data"]["active_effects"], [])
+
+    def test_mob_cast_pipeline_applies_root_and_blocks_flee(self):
+        self._ability(
+            slug="mob-leg-irons",
+            name="Leg Irons",
+            verbs=["graspingroots"],
+            cast_time={"rounds": 1},
+            cooldown={"rounds": 7},
+            consumes_primary_action_on_resolve=False,
+            consumes_primary_action_while_casting=True,
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "root",
+                    "scope": "encounter",
+                    "category": "debuff",
+                    "target": "ability.target",
+                    "duration": {"rounds": 4},
+                    "apply": "on_resolve",
+                    "primitives": [
+                        {
+                            "type": "action_rule",
+                            "phase": "before_action",
+                            "rule": "prevent",
+                            "actions": ["flee"],
+                            "reason": "rooted",
+                        }
+                    ],
+                    "text": {"label": "Rooted"},
+                }
+            ],
+        )
+        mob_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="briar-witch",
+            name="a briar witch",
+            keywords="briar witch",
+            base_properties={
+                "level": 1,
+                "health_max": 200,
+                "attack_power": 7,
+                "weapon_damage": 0,
+                "fights_back": True,
+            },
+            combat_abilities=[{"ability": "mob-leg-irons", "weight": 1}],
+        )
+        mob = mob_definition.spawn(self.room, self.spawn_world)
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            initiative_order=self._player_first_initiative(mob),
+        )
+        escape_room = self.room.create_at(adv_consts.DIRECTION_EAST)
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with patch("spawns.actions.combat.random.randint", return_value=1):
+                resolve_combat_encounter(encounter.id)
+
+        encounter.refresh_from_db()
+        mob.refresh_from_db()
+        self.assertEqual(
+            encounter.pending_mob_ability,
+            {
+                "ability": "mob-leg-irons",
+                "command": "mob-leg-irons",
+                "target": {"type": "player", "id": self.player.id},
+                "queued_round": 1,
+                "status": "casting",
+                "cast_rounds_remaining": 0,
+            },
+        )
+        self.assertEqual(mob.ability_cooldowns, {})
+        self.assertFalse(
+            ActiveEffect.objects.filter(
+                encounter=encounter,
+                target_player=self.player,
+                effect="root",
+            ).exists()
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with patch("spawns.actions.combat.random.randint", return_value=1):
+                resolve_combat_encounter(encounter.id)
+
+        encounter.refresh_from_db()
+        mob.refresh_from_db()
+        root_effect = ActiveEffect.objects.get(
+            encounter=encounter,
+            target_player=self.player,
+            source_mob=mob,
+            effect="root",
+        )
+        self.assertEqual(root_effect.scope, ActiveEffect.SCOPE_ENCOUNTER)
+        self.assertEqual(root_effect.remaining_rounds, 4)
+        self.assertEqual(root_effect.duration_rounds, 4)
+        self.assertEqual(
+            root_effect.primitives,
+            [
+                {
+                    "type": "action_rule",
+                    "phase": "before_action",
+                    "rule": "prevent",
+                    "actions": ["flee"],
+                    "reason": "rooted",
+                }
+            ],
+        )
+        self.assertEqual(encounter.pending_mob_ability, {})
+        self.assertEqual(mob.ability_cooldowns, {"mob-leg-irons": 7})
+
+        starting_stamina = self.player.stamina
+        with capture_game_messages() as flee_messages:
+            dispatch_text_command(self.player.id, "flee")
+
+        self.player.refresh_from_db()
+        encounter.refresh_from_db()
+        flee_errors = self._messages_by_type(flee_messages, "cmd.flee.error")
+        self.assertEqual(len(flee_errors), 1)
+        self.assertEqual(flee_errors[0]["text"], "Rooted prevents you from fleeing.")
+        self.assertEqual(flee_errors[0]["data"]["code"], "action_prevented")
+        self.assertEqual(flee_errors[0]["data"]["effect_id"], root_effect.id)
+        self.assertEqual(flee_errors[0]["data"]["reason"], "rooted")
+        self.assertEqual(self.player.room_id, self.room.id)
+        self.assertNotEqual(self.player.room_id, escape_room.id)
+        self.assertEqual(self.player.stamina, starting_stamina)
+        self.assertEqual(encounter.pending_flee, {})
 
     def test_mob_ability_chance_failure_falls_back_to_basic_attack(self):
         self._ability(

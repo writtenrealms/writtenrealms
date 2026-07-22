@@ -134,13 +134,22 @@ Examples:
 Intents are submitted between combat steps and become eligible for resolution on
 the appropriate future step.
 
-Flee is a delayed combat intent in WR2. Submitting `flee` chooses a valid random
-adjacent room that the player has enough stamina to enter, spends that
-destination room's normal movement cost, and stores a pending flee intent. On
-the next combat step, the player spends the round looking for an opening and
-takes no primary action. On the following combat step, flee resolves at the top
-of the step before effect ticks, attacks, or other damage can occur; the
-encounter finishes and the player moves to the chosen room.
+Flee is a delayed combat intent in WR2. Submitting `flee` first checks the
+actor's active-effect `before_action` rules. A root prevents the attempt before
+route selection, stamina reservation, or intent storage. Otherwise, submission
+chooses a valid random adjacent room that the player has enough stamina to
+enter, spends that destination room's normal movement cost, and stores a pending
+flee intent. On the next combat step, the player spends the round looking for an
+opening and takes no primary action. On the following combat step, flee resolves
+at the top of the step before effect ticks, attacks, or other damage can occur;
+the encounter finishes and the player moves to the chosen room.
+
+Completion rechecks the same action rule before route-policy revalidation and
+movement. This is necessary because a root can land after preparation starts.
+If the rule now prevents `flee`, the resolver clears the pending intent, refunds
+the reserved movement cost, consumes the player's primary action, and keeps the
+player in the encounter while the rest of the round resolves. The mechanic comes
+from an explicit effect primitive rather than a hard-coded `root` effect name.
 
 Finishing the encounter ends spatial engagement and all encounter-scoped
 effects. It does not remove character-scoped effects. Lingering DOTs, HOTs,

@@ -109,6 +109,73 @@ def active_combat_effects(player: Player) -> list[dict[str, Any]]:
     ]
 
 
+def preventing_action_effect(
+    actor: Player | Mob,
+    action: str,
+    *,
+    phase: str = "before_action",
+) -> dict[str, Any] | None:
+    """Return the first live effect whose normalized rule prevents ``action``."""
+    if not getattr(actor, "id", None):
+        return None
+    action_key = str(action or "").strip().lower()
+    phase_key = str(phase or "").strip().lower()
+    if not action_key or not phase_key:
+        return None
+
+    rows = (
+        _actor_effect_queryset(actor)
+        .filter(remaining_rounds__gt=0)
+        .filter(
+            Q(scope=ActiveEffect.SCOPE_CHARACTER)
+            | Q(
+                scope=ActiveEffect.SCOPE_ENCOUNTER,
+                encounter__status=CombatEncounter.STATUS_ACTIVE,
+            )
+        )
+        .values(
+            "id",
+            "effect",
+            "label",
+            "scope",
+            "remaining_rounds",
+            "duration_rounds",
+            "primitives",
+        )
+        .order_by("created_ts", "id")
+    )
+    for effect in rows:
+        primitives = effect.get("primitives")
+        if not isinstance(primitives, list):
+            continue
+        for primitive in primitives:
+            if not isinstance(primitive, dict):
+                continue
+            if str(primitive.get("type") or "").strip().lower() != "action_rule":
+                continue
+            if str(primitive.get("phase") or "").strip().lower() != phase_key:
+                continue
+            if str(primitive.get("rule") or "").strip().lower() != "prevent":
+                continue
+            actions = primitive.get("actions")
+            if not isinstance(actions, list) or action_key not in {
+                item.strip().lower()
+                for item in actions
+                if isinstance(item, str)
+            }:
+                continue
+            return {
+                "id": effect["id"],
+                "effect": effect["effect"],
+                "label": effect["label"],
+                "scope": effect["scope"],
+                "remaining_rounds": effect["remaining_rounds"],
+                "duration_rounds": effect["duration_rounds"],
+                "primitive": deepcopy(primitive),
+            }
+    return None
+
+
 def encounter_effects(encounter: CombatEncounter) -> list[ActiveEffect]:
     return list(
         ActiveEffect.objects.filter(

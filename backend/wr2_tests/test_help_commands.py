@@ -248,6 +248,49 @@ class TestHelpCommands(WorldTestCase):
         )
         self.assertEqual(message["data"]["ability"]["help_source"], "generated")
 
+    def test_help_known_ability_describes_flee_prevention_action_rule(self):
+        self._ability(
+            slug="mob-leg-irons",
+            name="Leg Irons",
+            verbs=["graspingroots"],
+            cast_time={"rounds": 1},
+            cooldown={"rounds": 7},
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "root",
+                    "category": "debuff",
+                    "target": "ability.target",
+                    "duration": {"rounds": 4},
+                    "apply": "on_resolve",
+                    "primitives": [
+                        {
+                            "type": "action_rule",
+                            "phase": "before_action",
+                            "rule": "prevent",
+                            "actions": ["flee"],
+                            "reason": "rooted",
+                        },
+                    ],
+                    "text": {"label": "Rooted"},
+                },
+            ],
+        )
+        self.player.known_abilities = ["mob-leg-irons"]
+        self.player.save(update_fields=["known_abilities"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "help graspingroots")
+
+        message = self._message_by_type(messages, "cmd.help.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(
+            message.get("text"),
+            "Leg Irons - 1 round cast, 7 round cooldown, prevents the target "
+            "from fleeing for 4 rounds.",
+        )
+        self.assertEqual(message["data"]["ability"]["help_source"], "generated")
+
     def test_help_learnable_ability_generates_damage_and_cost_text_with_name(self):
         stat_system = deepcopy(BASIC_TEST_STAT_SYSTEM)
         stat_system.setdefault("labels", {}).setdefault("resources", {})["energy"] = "Ichor"

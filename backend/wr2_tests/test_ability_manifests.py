@@ -3,8 +3,15 @@ import yaml
 from rest_framework.reverse import reverse
 
 from builders.models import AbilityDefinition, MobDefinition, WorldBuilder
+from spawns.actions.effects import (
+    build_character_effect,
+    preventing_action_effect,
+    refresh_or_add_character_effect,
+)
+from spawns.models import ActiveEffect, CombatEncounter, Mob
 from tests.base import WorldTestCase
 from worlds.models import World, WorldConfig
+from wr2_tests.utils import create_active_effect
 
 
 class AuthenticatedBuilderWorldTestCase(WorldTestCase):
@@ -783,6 +790,136 @@ spec:
             },
         )
 
+    def test_apply_ability_manifest_accepts_action_rule_effects(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: entangling-roots
+  name: Entangling Roots
+spec:
+  command:
+    verbs: [entangle]
+  components:
+    - type: effect
+      effect: entangling-roots
+      category: debuff
+      duration:
+        rounds: 2
+      primitives:
+        - type: action_rule
+          phase: before_action
+          rule: prevent
+          actions: [flee, flee]
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        ability = AbilityDefinition.objects.get(
+            world=self.world,
+            slug="entangling-roots",
+        )
+        self.assertEqual(
+            ability.components[0]["primitives"],
+            [
+                {
+                    "type": "action_rule",
+                    "phase": "before_action",
+                    "rule": "prevent",
+                    "actions": ["flee"],
+                    "reason": "action-prevented",
+                }
+            ],
+        )
+
+    def test_apply_ability_manifest_rejects_invalid_action_rule_fields(self):
+        cases = (
+            (
+                "unknown_field",
+                {
+                    "type": "action_rule",
+                    "phase": "before_action",
+                    "rule": "prevent",
+                    "actions": ["flee"],
+                    "predicate": "flee",
+                },
+                "unsupported field(s): predicate",
+            ),
+            (
+                "actions_type",
+                {
+                    "type": "action_rule",
+                    "phase": "before_action",
+                    "rule": "prevent",
+                    "actions": "flee",
+                },
+                "actions must be a non-empty list",
+            ),
+            (
+                "unsupported_action",
+                {
+                    "type": "action_rule",
+                    "phase": "before_action",
+                    "rule": "prevent",
+                    "actions": ["move"],
+                },
+                "actions[0] must be one of: flee",
+            ),
+            (
+                "phase_type",
+                {
+                    "type": "action_rule",
+                    "phase": True,
+                    "rule": "prevent",
+                    "actions": ["flee"],
+                },
+                "phase must be a string",
+            ),
+            (
+                "reason_type",
+                {
+                    "type": "action_rule",
+                    "phase": "before_action",
+                    "rule": "prevent",
+                    "actions": ["flee"],
+                    "reason": True,
+                },
+                "reason must be a string",
+            ),
+        )
+        for case_name, primitive, expected_error in cases:
+            with self.subTest(case=case_name):
+                manifest = yaml.safe_dump(
+                    {
+                        "kind": "ability",
+                        "metadata": {
+                            "world": f"world.{self.world.id}",
+                            "slug": f"action-rule-{case_name.replace('_', '-')}",
+                            "name": f"Action Rule {case_name}",
+                        },
+                        "spec": {
+                            "command": {"verbs": [f"rule_{case_name}"]},
+                            "components": [
+                                {
+                                    "type": "effect",
+                                    "effect": "test-restraint",
+                                    "duration": {"rounds": 1},
+                                    "primitives": [primitive],
+                                }
+                            ],
+                        },
+                    }
+                )
+
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": manifest},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 400, resp.data)
+                self.assertIn(expected_error, str(resp.data))
+
     def test_world_manifest_accepts_ability_progression(self):
         manifest = f"""
 kind: world
@@ -1054,3 +1191,157 @@ spec:
 
         resp = self.client.get(self.list_ep)
         self.assertEqual(resp.status_code, 403)
+
+
+class TestActionRuleEffectLookup(WorldTestCase):
+    def _mob(self, name="Wolf"):
+        return Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name=name,
+            keywords=name.lower(),
+            health=10,
+            health_max=10,
+        )
+
+    def test_character_effect_persists_rule_and_prevents_mob_action(self):
+        mob = self._mob()
+        primitive = {
+            "type": "action_rule",
+            "phase": "before_action",
+            "rule": "prevent",
+            "actions": ["flee"],
+            "reason": "entangled",
+        }
+        effect = build_character_effect(
+            component={
+                "type": "effect",
+                "effect": "tangling-vines",
+                "category": "debuff",
+                "duration": {"rounds": 3},
+                "primitives": [primitive],
+                "text": {"label": "Tangling Vines"},
+            },
+            source=self.player,
+            target=mob,
+        )
+
+        action = refresh_or_add_character_effect(
+            mob,
+            effect,
+            source=self.player,
+        )
+
+        self.assertEqual(action, "applied")
+        persisted = ActiveEffect.objects.get(target_mob=mob)
+        self.assertEqual(persisted.primitives, [primitive])
+        with self.assertNumQueries(1):
+            preventing = preventing_action_effect(mob, "flee")
+        self.assertEqual(
+            preventing,
+            {
+                "id": persisted.id,
+                "effect": "tangling-vines",
+                "label": "Tangling Vines",
+                "scope": ActiveEffect.SCOPE_CHARACTER,
+                "remaining_rounds": 3,
+                "duration_rounds": 3,
+                "primitive": primitive,
+            },
+        )
+
+    def test_lookup_does_not_infer_prevention_from_root_effect_name(self):
+        mob = self._mob()
+        create_active_effect(
+            target=self.player,
+            source=mob,
+            payload={
+                "effect": "root",
+                "label": "Cosmetic Roots",
+                "remaining_rounds": 2,
+                "duration_rounds": 2,
+                "primitives": [],
+            },
+        )
+
+        with self.assertNumQueries(1):
+            preventing = preventing_action_effect(self.player, "flee")
+
+        self.assertIsNone(preventing)
+
+    def test_lookup_uses_first_matching_effect_from_any_active_encounter(self):
+        ally = self.create_player(
+            "Ally",
+            user=self.create_user("ally@example.com"),
+        )
+        mob = self._mob("Spider")
+        finished_encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=ally,
+            mob=mob,
+            status=CombatEncounter.STATUS_FINISHED,
+        )
+        active_encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=ally,
+            mob=mob,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        base_payload = {
+            "category": "debuff",
+            "remaining_rounds": 2,
+            "duration_rounds": 4,
+            "primitives": [
+                {
+                    "type": "action_rule",
+                    "phase": "before_action",
+                    "rule": "prevent",
+                    "actions": ["flee"],
+                    "reason": "webbed",
+                }
+            ],
+        }
+        create_active_effect(
+            target=self.player,
+            source=mob,
+            encounter=finished_encounter,
+            scope=ActiveEffect.SCOPE_ENCOUNTER,
+            payload={
+                **base_payload,
+                "effect": "old-web",
+                "label": "Old Web",
+            },
+        )
+        first_live = create_active_effect(
+            target=self.player,
+            source=mob,
+            encounter=active_encounter,
+            scope=ActiveEffect.SCOPE_ENCOUNTER,
+            payload={
+                **base_payload,
+                "effect": "silken-web",
+                "label": "Silken Web",
+            },
+        )
+        create_active_effect(
+            target=self.player,
+            source=mob,
+            encounter=active_encounter,
+            scope=ActiveEffect.SCOPE_ENCOUNTER,
+            payload={
+                **base_payload,
+                "effect": "snare-wire",
+                "label": "Snare Wire",
+            },
+        )
+
+        with self.assertNumQueries(1):
+            preventing = preventing_action_effect(self.player, "flee")
+
+        self.assertEqual(preventing["id"], first_live.id)
+        self.assertEqual(preventing["effect"], "silken-web")
+        self.assertEqual(preventing["remaining_rounds"], 2)
+        self.assertEqual(preventing["duration_rounds"], 4)
+        self.assertEqual(preventing["primitive"]["reason"], "webbed")

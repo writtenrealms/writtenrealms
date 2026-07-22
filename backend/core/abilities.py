@@ -57,8 +57,13 @@ EFFECT_PRIMITIVE_TYPES = (
     "damage_absorb",
     "combat_modifier",
     "stat_modifier",
+    "action_rule",
 )
 EFFECT_PROC_PHASES = ("after_damage",)
+ACTION_RULE_PHASES = ("before_action",)
+ACTION_RULE_RULES = ("prevent",)
+ACTION_RULE_ACTIONS = ("flee",)
+DEFAULT_ACTION_RULE_REASON = "action-prevented"
 EFFECT_STACKING_POLICIES = ("refresh", "independent")
 COMBAT_MODIFIER_PHASES = ("outgoing_damage", "attack_routine")
 ATTACK_ROUTINE_WEAPON_SLOTS = ("weapon", "offhand")
@@ -821,7 +826,70 @@ def _normalize_effect_primitive(value: Any, *, field_name: str) -> dict[str, Any
         return _normalize_combat_modifier_primitive(value, field_name=field_name)
     if primitive_type == "stat_modifier":
         return _normalize_stat_modifier_primitive(value, field_name=field_name)
+    if primitive_type == "action_rule":
+        return _normalize_action_rule_primitive(value, field_name=field_name)
     return _normalize_proc_primitive(value, field_name=field_name)
+
+
+def _normalize_action_rule_primitive(
+    value: dict[str, Any],
+    *,
+    field_name: str,
+) -> dict[str, Any]:
+    unknown_fields = sorted(
+        set(value.keys()) - {"type", "phase", "rule", "actions", "reason"}
+    )
+    if unknown_fields:
+        raise AbilityValidationError(
+            f"{field_name} has unsupported field(s): {', '.join(unknown_fields)}."
+        )
+
+    phase = value.get("phase")
+    if not isinstance(phase, str):
+        raise AbilityValidationError(f"{field_name}.phase must be a string.")
+    rule = value.get("rule")
+    if not isinstance(rule, str):
+        raise AbilityValidationError(f"{field_name}.rule must be a string.")
+
+    actions = value.get("actions")
+    if not isinstance(actions, list) or not actions:
+        raise AbilityValidationError(f"{field_name}.actions must be a non-empty list.")
+    normalized_actions: list[str] = []
+    for index, action in enumerate(actions):
+        if not isinstance(action, str):
+            raise AbilityValidationError(
+                f"{field_name}.actions[{index}] must be a string."
+            )
+        normalized_action = _coerce_choice(
+            action,
+            choices=ACTION_RULE_ACTIONS,
+            field_name=f"{field_name}.actions[{index}]",
+        )
+        if normalized_action not in normalized_actions:
+            normalized_actions.append(normalized_action)
+
+    reason = value.get("reason", DEFAULT_ACTION_RULE_REASON)
+    if not isinstance(reason, str):
+        raise AbilityValidationError(f"{field_name}.reason must be a string.")
+    return {
+        "type": "action_rule",
+        "phase": _coerce_choice(
+            phase,
+            choices=ACTION_RULE_PHASES,
+            field_name=f"{field_name}.phase",
+        ),
+        "rule": _coerce_choice(
+            rule,
+            choices=ACTION_RULE_RULES,
+            field_name=f"{field_name}.rule",
+        ),
+        "actions": normalized_actions,
+        "reason": _coerce_slug(
+            reason,
+            field_name=f"{field_name}.reason",
+            allow_hyphen=True,
+        ),
+    }
 
 
 def _normalize_combat_modifier_primitive(value: dict[str, Any], *, field_name: str) -> dict[str, Any]:

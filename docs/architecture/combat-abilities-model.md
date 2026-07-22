@@ -8,7 +8,8 @@ direction for features that build on it.
 The initial runtime is wired: player ability commands can be learned, queued,
 substituted before scheduled resolution, resolved in encounter rounds, and used
 for out-of-combat self-targeted abilities. The current implementation covers direct
-damage, healing, cast-time windups, stun, damage-over-time, and heal-over-time.
+damage, healing, cast-time windups, stun, damage-over-time, heal-over-time, and
+root effects whose action rules prevent fleeing.
 Multi-participant frays, class grant manifests, feat-style choice slots, and
 richer effect primitives remain roadmap items.
 
@@ -63,8 +64,8 @@ The current design decisions are:
 - normal contact rolls a stable encounter initiative order once and stores it on
   the encounter; charge, ambush, and prepared attacks can override the first
   primary action through opener priority
-- the first persistent effect primitives should include stun, damage-over-time,
-  and heal-over-time
+- the implemented persistent effect primitives include stun, damage-over-time,
+  heal-over-time, and root-style action rules that prevent fleeing
 
 ## WR1 Reference
 
@@ -708,6 +709,7 @@ Useful hook phases:
 
 - `on_apply`
 - `round_start`
+- `before_action`
 - `before_primary_action`
 - `before_damage`
 - `after_damage`
@@ -718,6 +720,7 @@ Useful hook phases:
 Effects should modify combat through explicit primitives, such as:
 
 - prevent primary action
+- prevent a named action such as `flee`
 - prevent dodge
 - modify a combat profile field
 - add or subtract a stat modifier
@@ -730,15 +733,22 @@ Effects should modify combat through explicit primitives, such as:
 Effects should not be arbitrary code in authored YAML. If a new behavior is
 needed, the engine should add a new validated primitive that builders can use.
 
-The first playable effect set should include:
+The playable effect set includes:
 
 - `stun`: prevents the target's primary action for a number of rounds
 - `dot`: applies periodic damage during encounter rounds
 - `hot`: applies periodic healing during encounter rounds
+- `root`: carries a `before_action`/`prevent` rule for the `flee` action
 
-Those three are important enough to design early. They also exercise the main
+Those four are implemented. They exercise the main
 runtime problems: action prevention, repeated effect ticks, expiration, and
 clear combat messages.
+
+Root behavior comes from the effect's validated `action_rule` primitive, not
+from its slug. The flee path evaluates the rule before queueing and again when
+the delayed escape completes. A root that lands during preparation cancels the
+pending flee, refunds its reserved movement cost, and leaves the actor in the
+encounter.
 
 Other primitives, such as absorbs, buffs, debuffs, taunts, silences, dispels,
 and expire-on-damage behavior, should be deferred until the first effect runtime
@@ -947,7 +957,7 @@ Skip channels, reactions, bonus actions, and complex effects.
 
 - persist the unified active effect runtime schema as canonical rows
 - implement simple effect primitives
-- support stun, dot, and hot
+- support stun, dot, hot, and root action rules that prevent `flee`
 - route target-owned effect advancement through encounter rounds while engaged
   and bounded actor pulses while detached
 - retain effect source attribution for remote death and reward resolution

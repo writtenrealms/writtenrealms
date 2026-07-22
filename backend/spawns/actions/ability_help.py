@@ -72,6 +72,26 @@ def _output_component_phrase(ability: AbilityDefinition, component: dict[str, An
     return f"inflicts {multiplier_text}{output} on {target}".strip()
 
 
+def _effect_prevents_action(component: dict[str, Any], action: str) -> bool:
+    for primitive in component.get("primitives") or []:
+        if not isinstance(primitive, dict):
+            continue
+        if str(primitive.get("type") or "").strip().lower() != "action_rule":
+            continue
+        if str(primitive.get("phase") or "").strip().lower() != "before_action":
+            continue
+        if str(primitive.get("rule") or "").strip().lower() != "prevent":
+            continue
+        actions = primitive.get("actions") or []
+        if isinstance(actions, str):
+            actions = [actions]
+        if not isinstance(actions, list):
+            continue
+        if action in {str(value).strip().lower() for value in actions}:
+            return True
+    return False
+
+
 def _effect_component_phrase(ability: AbilityDefinition, component: dict[str, Any]) -> str:
     effect = str(component.get("effect") or "").strip().lower()
     target = _target_phrase(ability, component)
@@ -82,6 +102,9 @@ def _effect_component_phrase(ability: AbilityDefinition, component: dict[str, An
         rounds = 0
     duration_text = f" for {_rounds_phrase(rounds, '')}".rstrip() if rounds > 0 else ""
     landed_text = " if it lands" if component.get("apply") == "on_hit" else ""
+    if _effect_prevents_action(component, "flee"):
+        target = "you" if target == "yourself" else target
+        return f"prevents {target} from fleeing{duration_text}{landed_text}"
     if effect == "stun":
         return f"stuns {target}{duration_text}{landed_text}"
     if effect == "dot":

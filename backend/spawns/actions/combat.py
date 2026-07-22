@@ -40,6 +40,7 @@ from spawns.actions.effects import (
     component_targets_character_effect,
     encounter_effects,
     next_character_effect_tick_ts,
+    preventing_action_effect,
     refresh_or_add_character_effect,
 )
 from spawns.actions.movement_costs import movement_cost
@@ -341,6 +342,13 @@ class FleeRouteContext:
     door_states: dict[str, str]
     viewed_room_ids: set[int]
     movement_budget: int
+
+
+@dataclass(frozen=True)
+class FleeCompletionOutcome:
+    terminal_result: CombatStepResult | None
+    events: list[GameEvent]
+    player_primary_consumed: bool = False
 
 
 def _player_combat_stats(player: Player) -> CombatStats:
@@ -1662,6 +1670,35 @@ def _flee_completion_error_event(
     )
 
 
+def _action_prevention_data(prevention: dict, *, action: str) -> dict:
+    primitive = prevention.get("primitive") or {}
+    data = {
+        "action": action,
+        "effect": prevention.get("effect"),
+        "effect_id": prevention.get("id"),
+        "effect_label": prevention.get("label"),
+        "effect_scope": prevention.get("scope"),
+        "effect_remaining_rounds": prevention.get("remaining_rounds"),
+        "effect_duration_rounds": prevention.get("duration_rounds"),
+    }
+    reason = str(primitive.get("reason") or "").strip()
+    if reason:
+        data["reason"] = reason
+    phase = str(primitive.get("phase") or "").strip()
+    if phase:
+        data["phase"] = phase
+    return data
+
+
+def _action_prevention_message(prevention: dict, *, action: str) -> str:
+    label = str(
+        prevention.get("label")
+        or prevention.get("effect")
+        or "An effect"
+    ).strip()
+    return f"{label} prevents you from {action}ing."
+
+
 def _reconciled_flee_stamina(
     player: Player,
     *,
@@ -1676,12 +1713,48 @@ def _reconciled_flee_stamina(
     return min(reconciled, stamina_max) if stamina_max > 0 else reconciled
 
 
+def _cancel_prevented_flee_completion(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    reserved_cost: int,
+    round_id: str,
+    message: str,
+    code: str,
+    data: dict | None = None,
+) -> FleeCompletionOutcome:
+    encounter.pending_flee = {}
+    encounter.pending_player_ability = {}
+    if not encounter._state.adding:
+        encounter.save(update_fields=["pending_flee", "pending_player_ability"])
+
+    player.stamina = _reconciled_flee_stamina(
+        player,
+        reserved_cost=reserved_cost,
+        replacement_cost=0,
+    )
+    player.save(update_fields=["stamina"])
+    return FleeCompletionOutcome(
+        terminal_result=None,
+        events=[
+            _flee_completion_error_event(
+                player,
+                message=message,
+                code=code,
+                round_id=round_id,
+                data=data,
+            )
+        ],
+        player_primary_consumed=True,
+    )
+
+
 def _complete_flee(
     *,
     encounter: CombatEncounter,
     player: Player,
     round_id: str,
-) -> CombatStepResult:
+) -> FleeCompletionOutcome:
     pending = encounter.pending_flee or {}
     destination_room_id = int(pending.get("destination_room_id") or 0)
     direction = str(pending.get("direction") or "").strip()
@@ -1689,19 +1762,38 @@ def _complete_flee(
         encounter.pending_flee = {}
         if not encounter._state.adding:
             encounter.save(update_fields=["pending_flee"])
-        return CombatStepResult(
-            actor_key=player.key,
-            events=[
-                _combat_failure_event(
-                    player,
-                    "You lose your chance to flee.",
-                    code="flee_invalid",
-                )
-            ],
-            encounter_active=True,
+        return FleeCompletionOutcome(
+            terminal_result=CombatStepResult(
+                actor_key=player.key,
+                events=[
+                    _combat_failure_event(
+                        player,
+                        "You lose your chance to flee.",
+                        code="flee_invalid",
+                    )
+                ],
+                encounter_active=True,
+            ),
+            events=[],
         )
 
     reserved_cost = max(0, int(pending.get("movement_cost") or 0))
+    prevention = preventing_action_effect(
+        player,
+        "flee",
+        phase="before_action",
+    )
+    if prevention:
+        return _cancel_prevented_flee_completion(
+            encounter=encounter,
+            player=player,
+            reserved_cost=reserved_cost,
+            round_id=round_id,
+            message=_action_prevention_message(prevention, action="flee"),
+            code="action_prevented",
+            data=_action_prevention_data(prevention, action="flee"),
+        )
+
     route_context = _flee_route_context(
         player,
         movement_budget=int(player.stamina or 0) + reserved_cost,
@@ -1740,18 +1832,21 @@ def _complete_flee(
                 replacement_cost=0,
             )
             player.save(update_fields=["stamina"])
-            return CombatStepResult(
-                actor_key=player.key,
-                events=[
-                    _flee_completion_error_event(
-                        player,
-                        message=err.message,
-                        code=err.code,
-                        round_id=round_id,
-                        data=err.data,
-                    )
-                ],
-                encounter_active=True,
+            return FleeCompletionOutcome(
+                terminal_result=CombatStepResult(
+                    actor_key=player.key,
+                    events=[
+                        _flee_completion_error_event(
+                            player,
+                            message=err.message,
+                            code=err.code,
+                            round_id=round_id,
+                            data=err.data,
+                        )
+                    ],
+                    encounter_active=True,
+                ),
+                events=[],
             )
 
     route_changed = (
@@ -1822,22 +1917,25 @@ def _complete_flee(
     encounter.status = CombatEncounter.STATUS_FINISHED
     encounter.next_resolution_ts = None
 
-    return CombatStepResult(
-        actor_key=player.key,
-        events=_flee_success_events(
-            player=player,
-            origin_room_id=origin_room_id,
-            destination_room_id=destination_room_id,
-            direction=direction,
-            movement_cost=destination.movement_cost,
-            round_id=round_id,
+    return FleeCompletionOutcome(
+        terminal_result=CombatStepResult(
+            actor_key=player.key,
+            events=_flee_success_events(
+                player=player,
+                origin_room_id=origin_room_id,
+                destination_room_id=destination_room_id,
+                direction=direction,
+                movement_cost=destination.movement_cost,
+                round_id=round_id,
+            ),
+            encounter_active=False,
+            tracker_chase=(
+                tracker_plan.action_payload()
+                if tracker_plan.tracker_mob_ids
+                else None
+            ),
         ),
-        encounter_active=False,
-        tracker_chase=(
-            tracker_plan.action_payload()
-            if tracker_plan.tracker_mob_ids
-            else None
-        ),
+        events=[],
     )
 
 
@@ -4789,9 +4887,18 @@ def _apply_encounter_round(
     events: list[GameEvent] = []
     cooldown_exclude: str | None = None
     mob_cooldown_exclude: str | None = None
+    flee_completion_consumed_primary = False
 
     if (encounter.pending_flee or {}).get("status") == "ready":
-        return _complete_flee(encounter=encounter, player=player, round_id=round_id)
+        flee_outcome = _complete_flee(
+            encounter=encounter,
+            player=player,
+            round_id=round_id,
+        )
+        if flee_outcome.terminal_result is not None:
+            return flee_outcome.terminal_result
+        events.extend(flee_outcome.events)
+        flee_completion_consumed_primary = flee_outcome.player_primary_consumed
 
     effect_outcome = _advance_character_periodic_effects(
         target_player=player,
@@ -4865,7 +4972,10 @@ def _apply_encounter_round(
                 round_id=round_id,
                 player_health_max=stats.player_health_max,
                 allow_basic_attack=player_primary_enabled,
-                skip_turn=bool(flee_preparation_events),
+                skip_turn=(
+                    bool(flee_preparation_events)
+                    or flee_completion_consumed_primary
+                ),
             )
             events.extend(player_turn.events)
             cooldown_exclude = player_turn.cooldown_exclude or cooldown_exclude
@@ -5222,6 +5332,18 @@ class FleeAction:
                             text="You are already trying to flee.",
                         )
                     ]
+                )
+
+            prevention = preventing_action_effect(
+                player,
+                "flee",
+                phase="before_action",
+            )
+            if prevention:
+                raise ActionError(
+                    _action_prevention_message(prevention, action="flee"),
+                    code="action_prevented",
+                    data=_action_prevention_data(prevention, action="flee"),
                 )
 
             destination = _choose_flee_destination(player)

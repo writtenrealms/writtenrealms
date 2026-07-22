@@ -8,9 +8,10 @@ damage, healing, cast times, stun, damage-over-time, heal-over-time, and
 out-of-combat self-targeted abilities. Mob definitions can also reference active
 ability definitions from combat loadouts. Encounter-scoped effects support resource
 change ticks, damage absorption barriers, and `after_damage` procs for bounded
-buff behavior such as energy return on landed attacks. Character-scoped effects
-support outgoing damage and stat modifiers for buffs that can survive into
-combat after out-of-combat use.
+buff behavior such as energy return on landed attacks. Effects can also carry a
+validated `action_rule`; the implemented `flee` rule supports roots that stop a
+character from escaping. Character-scoped effects support outgoing damage and
+stat modifiers for buffs that can survive into combat after out-of-combat use.
 
 Ability `requirements` use the shared WR2 condition DSL. For condition
 operators and paths, read
@@ -28,6 +29,7 @@ An ability is an authored command that resolves one or more components:
 - resource-changing ticks
 - damage absorption barriers
 - resource-changing damage procs
+- flee-preventing roots
 
 In combat, an ability is queued for the next encounter round. By default, it
 consumes the actor's primary action while casting and when it resolves,
@@ -175,9 +177,9 @@ help:
 
 When `spec.help.text` is absent, the runtime generates a plain text line from
 the ability definition. Generated help includes cast rounds, cooldown rounds,
-damage or healing components, stun/dot/hot effects, state updates, and costs.
-Cost resources use the world's configured player-facing labels, while damage
-wording comes from the combat profile damage type.
+damage or healing components, stun/dot/hot effects, flee-preventing action rules,
+state updates, and costs. Cost resources use the world's configured player-facing
+labels, while damage wording comes from the combat profile damage type.
 
 ## Targeting And Openers
 
@@ -605,6 +607,67 @@ spec:
 
 Stun prevents the target's primary action while it is active.
 
+## Root
+
+Use **root** for the mechanic and **Rooted** for the visible status. Ability and
+effect labels may still use setting-specific words such as snare, entangle, or
+web. A trap is usually the source that applies an effect, rather than the name
+of this action restriction.
+
+A root is an effect with an explicit `action_rule`; the runtime does not infer
+behavior from the `effect` slug. This example is the Phalanx mob ability
+`Leg Irons`:
+
+```yaml
+kind: ability
+metadata:
+  slug: mob-leg-irons
+  name: Leg Irons
+spec:
+  command:
+    verbs: [graspingroots]
+  consumes_primary_action_on_resolve: false
+  consumes_primary_action_while_casting: true
+  target:
+    type: hostile
+    default: current_target
+  cast_time:
+    rounds: 1
+  cooldown:
+    rounds: 7
+  components:
+    - type: effect
+      effect: root
+      category: debuff
+      target: ability.target
+      duration:
+        rounds: 4
+      apply: on_resolve
+      primitives:
+        - type: action_rule
+          phase: before_action
+          rule: prevent
+          actions: [flee]
+          reason: rooted
+      text:
+        label: Rooted
+```
+
+The supported contract is exactly `phase: before_action`, `rule: prevent`, and
+an `actions` list containing `flee`. `reason: rooted` supplies the stable,
+machine-readable reason, while `text.label: Rooted` names the effect in the
+player-facing failure. Keep the primitive even when the effect is named `webbed`
+or `entangled`; arbitrary effect slugs are descriptive, not mechanical switches.
+
+Root prevents the `flee` combat action. It does not independently block ordinary
+direction movement, so the normal round-zero and combat movement rules still
+apply. When a rooted character enters `flee`, the command fails before the game
+chooses a route, reserves stamina, or stores a pending flee. Because fleeing has
+a preparation window, the same action rule is checked again at completion. If a
+root lands during that window, the pending flee is cleared, its reserved stamina
+is refunded, and the character remains in combat. The blocked completion consumes
+the character's primary action while the rest of that combat round still resolves.
+
 ## Effect Scope
 
 Active effects declare whether their lifetime belongs to one fight or follows
@@ -617,7 +680,7 @@ scope: character  # or encounter
 `character` effects follow either a player or mob across encounter boundaries.
 `encounter` effects are removed when their owning fight ends. When `scope` is
 omitted, DOTs, HOTs, ticking effects, room-wide player effects, and stat or
-combat modifiers default to `character`; other effects such as stun and
+combat modifiers default to `character`; other effects such as stun, root, and
 fight-specific barriers default to `encounter`.
 
 Use `character` for poison, bleeding, curses, regeneration, and other effects
@@ -1086,12 +1149,12 @@ Recommended first-pass order:
 2. Add one damage ability that replaces an auto-attack.
 3. Give it a round cooldown.
 4. Add one healing ability.
-5. Add one stun or dot/hot ability.
+5. Add one stun, root, or dot/hot ability.
 6. Test the same fight with several queued substitutions.
 
 Avoid making every ability a high-multiplier damage ability. If an ability has
-stun, dot, hot, or unusual targeting, lower its direct damage first and tune up
-only after the combat log feels clear.
+stun, root, dot, hot, or unusual targeting, lower its direct damage first and
+tune up only after the combat log feels clear.
 
 ## Performance Notes
 
@@ -1099,6 +1162,7 @@ Ability authoring should stay declarative. Do not expect custom script code to
 run every round.
 
 At runtime, WR2 uses normalized definitions, known ability sets, cooldown
-state, and active effect state that can be loaded in bounded queries. Builder
-configuration should describe behavior through known primitives, not through
-free-form per-round logic.
+state, and active effect state that can be loaded in bounded queries. Action
+rules are evaluated only for the acting character's active effects; they do not
+scan every effect in a world. Builder configuration should describe behavior
+through known primitives, not through free-form per-round logic.

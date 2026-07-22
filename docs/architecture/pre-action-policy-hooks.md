@@ -32,7 +32,10 @@ Flee is a delayed combat action. Its candidate directions use the movement
 policies when the player starts preparing, and the chosen direction is
 revalidated when the flee completes. This prevents a route from remaining
 usable when a door, guard mob, or other authored condition changes during the
-preparation delay.
+preparation delay. Before either route-policy pass, flee also checks the actor's
+active-effect action rules. A root therefore blocks the action without scanning
+candidate routes, and the completion check catches roots applied after
+preparation begins.
 
 WR2 has no `RoomCheck`, `RoomCommandCheck`, or `RoomCommandCheckState` model,
 runtime payload, API, or builder screen. The former **Rooms > Checks** slot is
@@ -62,6 +65,12 @@ The authoring distinction is:
 
 - policy hooks answer "may this happen?"
 - event triggers answer "what happens after this happened?"
+
+Active-effect `action_rule` primitives are a separate mechanical precondition.
+They answer whether the affected actor may attempt a named action, regardless of
+which room or route is involved. For example, a root uses `phase:
+before_action`, `rule: prevent`, `actions: [flee]`, and `reason: rooted`. Room
+policies still decide whether each otherwise-available exit may be traversed.
 
 ## Policy Contract
 
@@ -238,17 +247,24 @@ published, and trigger-side failures should not undo the movement.
 Flee uses the movement policy layer without turning every combat round into a
 policy scan:
 
-1. Build the mechanically available flee destinations.
-2. Evaluate both `before_move_exit` and `before_move_enter` for each candidate.
-3. Randomly choose from the candidates that remain and begin flee preparation.
-4. When the delayed flee completes, revalidate only the stored direction.
-5. If it is now blocked, rebuild the candidate list and choose another eligible
+1. Evaluate the actor's active-effect `before_action` rules for `flee`. If a
+   rule prevents it, fail before choosing a route or reserving stamina.
+2. Build the mechanically available flee destinations.
+3. Evaluate both `before_move_exit` and `before_move_enter` for each candidate.
+4. Randomly choose from the candidates that remain, reserve the movement cost,
+   and begin flee preparation.
+5. When the delayed flee completes, evaluate the `flee` action rule again. If a
+   root landed during preparation, clear the pending flee, refund the reserved
+   movement cost, and keep the player in combat.
+6. If the action is still allowed, revalidate only the stored direction.
+7. If it is now blocked, rebuild the candidate list and choose another eligible
    exit when possible.
-6. If no eligible exit remains, fail the flee without moving the player.
+8. If no eligible exit remains, fail the flee without moving the player.
 
 The completion-time check is required because authored state can change after
-the initial choice. A guard can enter, a door can close, or a state-backed
-policy can change while the player prepares.
+the initial choice. A root can land, a guard can enter, a door can close, or a
+state-backed policy can change while the player prepares. Action-rule failure is
+not a route failure, so it does not try to reroute around the effect.
 
 ## Policy Evaluation Context
 
@@ -289,6 +305,8 @@ Required performance design:
 - cache active policy and room-event lookups by world, room, event, and kind
 - cache negative lookups, meaning "there are no active hooks here"
 - avoid database queries in the common no-policy movement path
+- query only the acting character's indexed active-effect rows for action rules,
+  and stop before route-policy work when `flee` is prevented
 - keep the flee completion fast path to revalidating only its stored direction
 - rebuild all flee candidates only when that stored direction becomes invalid
 - compile or normalize policy condition payloads before or during cache fill

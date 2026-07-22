@@ -17,6 +17,8 @@ This is an architecture target. The current runtime covers the first playable
 encounter-scoped effect primitives: stun, damage-over-time, heal-over-time,
 resource changes, damage absorption, and `after_damage` procs. It also supports
 character-scoped outgoing damage modifiers for refreshable room-wide buffs.
+Both effect scopes can carry `before_action` rules that prevent `flee` while a
+character is rooted.
 
 Related documents:
 
@@ -39,6 +41,7 @@ Examples:
 - a stun is an active effect
 - a poison dot is an active effect
 - a regeneration buff is an active effect
+- a root is an active effect with an action rule that prevents fleeing
 - an armor debuff is an active effect
 - invisibility is an active effect
 - an "energized strikes" buff that restores energy after attacks land is an
@@ -395,6 +398,9 @@ Examples:
 - `taunted`
 
 These should use `status_flag` or a more specific primitive when one exists.
+`rooted` is implemented through the more specific `action_rule` primitive because
+its current behavior is to prevent the `flee` action. The runtime does not treat
+the effect slug `root` as a magic flag.
 
 Invisibility is important enough to document explicitly. It should not be just
 a text label on an effect. It affects:
@@ -441,6 +447,7 @@ These should be modeled as `proc` primitives that subscribe to known hook
 phases. Useful hook phases include:
 
 - `round_start`
+- `before_action`
 - `before_primary_action`
 - `before_attack_roll`
 - `after_attack_roll`
@@ -498,24 +505,43 @@ Examples:
 
 - stun prevents the primary action
 - silence prevents abilities tagged as verbal, magical, or configured types
-- root prevents flee or movement
+- root prevents flee
 - haste grants a configured bonus action or changes cooldown behavior
 - taunt restricts target selection
 
-Recommended shape:
+The implemented root shape is:
 
 ```yaml
-primitives:
-  - type: action_rule
-    phase: before_primary_action
-    rule: prevent
-    actions:
-      - primary
-    reason: stunned
+components:
+  - type: effect
+    effect: root
+    category: debuff
+    target: ability.target
+    duration:
+      rounds: 4
+    primitives:
+      - type: action_rule
+        phase: before_action
+        rule: prevent
+        actions:
+          - flee
+        reason: rooted
 ```
 
-This lets the encounter pipeline ask active effects for action rules at known
-phases without hard-coding every effect name into the round resolver.
+The validated v1 contract uses `phase: before_action`, `rule: prevent`, and the
+allowlisted `flee` action. `reason: rooted` supplies the stable machine-readable
+blocked reason, while the effect label names the block in player-facing text.
+The `effect` value and visible label remain authorable, so an ability can present
+this as a web, snare, or entanglement without coupling runtime behavior to that
+name. Root currently prevents only `flee`; ordinary direction movement remains
+under the encounter and movement-policy rules.
+
+Flee checks this rule both when the command is queued and when its delayed
+completion runs. The queue-time check happens before route selection or stamina
+reservation. The completion check handles a root applied during preparation: it
+clears the pending flee, refunds the reserved movement cost, and leaves the actor
+in combat. This lets the action pipeline ask active effects for rules at known
+phases without hard-coding every effect name into the flee resolver.
 
 ## Stacking And Refresh
 
@@ -740,6 +766,8 @@ Implementation requirements:
 - avoid parsing YAML during encounter resolution
 - load effect primitives with participant state
 - process hook phases with already-loaded effect records
+- evaluate flee action rules from the acting character's bounded active-effect
+  set before doing route-policy work
 - batch resource, stat, stack, and expiration writes where practical
 - emit events after state mutation
 - include query-count tests for effect-heavy rounds
@@ -765,9 +793,10 @@ Implementation requirements:
 
 ### Phase 3: Special Status Effects
 
+- root-style `action_rule` prevention for `flee` is implemented
 - add `status_flag`
 - implement invisibility as a real visibility primitive
-- add silence, root, or other high-value flags as needed
+- add silence or other high-value flags as needed
 - ensure state sync and combat events expose active effect state
 
 ### Phase 4: Hooks And Procs
