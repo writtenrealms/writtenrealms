@@ -66,6 +66,105 @@ spec:
         self.assertEqual(entry.target["room"], f"room@{self.room.x},{self.room.y},{self.room.z}")
         self.assertEqual(entry.count, 1)
 
+    def test_apply_spawn_plan_manifest_rejects_invalid_respawn_policies(self):
+        invalid_policies = (
+            (
+                "  respawn:\n    mode: never",
+                "spec.respawn.mode must be one of",
+            ),
+            (
+                "  respawn: never",
+                "spec.respawn must be a mapping",
+            ),
+            (
+                "  respawn:\n    mode: fixed\n    seconds: -1",
+                "spec.respawn.seconds must be a non-negative integer",
+            ),
+            (
+                "  respawn:\n    mode: fixed\n    seconds: 1.5",
+                "spec.respawn.seconds must be a non-negative integer",
+            ),
+            (
+                "  respawn:\n    mode: none\n    seconds: 60",
+                "spec.respawn.seconds is not supported when mode is none",
+            ),
+            (
+                "  respawn:\n    mode: fixed\n    delay: 60",
+                "spec.respawn has unsupported field",
+            ),
+        )
+
+        for index, (respawn_yaml, expected_error) in enumerate(
+            invalid_policies,
+        ):
+            slug = f"invalid-respawn-{index}"
+            manifest = f"""
+kind: spawnplan
+metadata:
+  slug: {slug}
+spec:
+  zone: zone@{self.zone.relative_id}
+{respawn_yaml}
+  entries:
+    - slug: practice-dummy
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+"""
+
+            with self.subTest(respawn_yaml=respawn_yaml):
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": manifest},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 400, resp.data)
+                self.assertIn(expected_error, str(resp.data))
+                self.assertFalse(
+                    SpawnPlan.objects.filter(
+                        world=self.world,
+                        slug=slug,
+                    ).exists()
+                )
+
+    def test_apply_spawn_plan_manifest_canonicalizes_respawn_policy(self):
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: inherited-respawn
+spec:
+  zone: zone@{self.zone.relative_id}
+  respawn:
+    mode: " InHeRiT_ZoNe "
+    seconds: "300"
+  entries:
+    - slug: practice-dummy
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        plan = SpawnPlan.objects.get(
+            world=self.world,
+            slug="inherited-respawn",
+        )
+        self.assertEqual(
+            plan.respawn_policy,
+            {"mode": "inherit_zone", "seconds": 300},
+        )
+        self.assertEqual(
+            resp.data["spawn_plan"]["manifest"]["spec"]["respawn"],
+            {"mode": "inherit_zone", "seconds": 300},
+        )
+
     def test_spawn_entry_initial_state_round_trips_for_mobs(self):
         manifest = f"""
 kind: spawnplan
@@ -1122,6 +1221,34 @@ class TestSpawnPlanRuntime(WorldTestCase):
             1,
         )
         self.assertEqual(SpawnPlacement.objects.filter(run__plan=self.plan).count(), 1)
+
+    def test_unknown_persisted_respawn_mode_does_not_refill_missing_spawn(self):
+        self.plan.respawn_policy = {"mode": "never"}
+        self.plan.save(update_fields=["respawn_policy"])
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        Mob.objects.get(world=spawn_world, definition=self.mob_definition).delete()
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 0)
+        self.assertFalse(
+            Mob.objects.filter(world=spawn_world, definition=self.mob_definition).exists()
+        )
+
+    def test_non_mapping_persisted_respawn_policy_does_not_refill_missing_spawn(self):
+        self.plan.respawn_policy = "fixed"
+        self.plan.save(update_fields=["respawn_policy"])
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        Mob.objects.get(world=spawn_world, definition=self.mob_definition).delete()
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 0)
+        self.assertFalse(
+            Mob.objects.filter(world=spawn_world, definition=self.mob_definition).exists()
+        )
 
     def test_running_world_hot_loads_added_entry_without_duplicate(self):
         self.plan.respawn_policy = {"mode": "fixed", "seconds": 3600}

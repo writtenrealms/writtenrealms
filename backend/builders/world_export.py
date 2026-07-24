@@ -1760,6 +1760,74 @@ def _normalize_spawn_count(value: Any, *, field_name: str) -> Any:
     raise serializers.ValidationError(f"{field_name} must be an integer or a min/max mapping.")
 
 
+def _normalize_spawn_respawn_policy(
+    value: Any,
+    *,
+    field_name: str = "spec.respawn",
+) -> dict[str, Any]:
+    from spawns.spawn_plans import (
+        RESPAWN_MODE_FIXED,
+        RESPAWN_MODE_INHERIT_ZONE,
+        RESPAWN_MODE_NONE,
+        RESPAWN_MODES,
+    )
+
+    if value in (None, ""):
+        value = {}
+    if not isinstance(value, dict):
+        raise serializers.ValidationError(f"{field_name} must be a mapping.")
+
+    unsupported = sorted(set(value) - {"mode", "seconds"})
+    if unsupported:
+        raise serializers.ValidationError(
+            f"{field_name} has unsupported field(s): {', '.join(unsupported)}."
+        )
+
+    raw_mode = value.get("mode", RESPAWN_MODE_FIXED)
+    if not isinstance(raw_mode, str):
+        raise serializers.ValidationError(f"{field_name}.mode must be a string.")
+    mode = raw_mode.strip().lower()
+    if mode not in RESPAWN_MODES:
+        raise serializers.ValidationError(
+            f"{field_name}.mode must be one of: "
+            f"{', '.join(sorted(RESPAWN_MODES))}."
+        )
+
+    if mode == RESPAWN_MODE_NONE:
+        if value.get("seconds") not in (None, ""):
+            raise serializers.ValidationError(
+                f"{field_name}.seconds is not supported when mode is none."
+            )
+        return {"mode": RESPAWN_MODE_NONE}
+
+    normalized: dict[str, Any] = {"mode": mode}
+    raw_seconds = value.get("seconds")
+    if raw_seconds in (None, ""):
+        if mode == RESPAWN_MODE_FIXED:
+            normalized["seconds"] = 0
+        return normalized
+    if isinstance(raw_seconds, bool):
+        raise serializers.ValidationError(
+            f"{field_name}.seconds must be a non-negative integer."
+        )
+    if not isinstance(raw_seconds, (int, str)):
+        raise serializers.ValidationError(
+            f"{field_name}.seconds must be a non-negative integer."
+        )
+    try:
+        seconds = int(raw_seconds)
+    except (TypeError, ValueError):
+        raise serializers.ValidationError(
+            f"{field_name}.seconds must be a non-negative integer."
+        )
+    if seconds < 0:
+        raise serializers.ValidationError(
+            f"{field_name}.seconds must be a non-negative integer."
+        )
+    normalized["seconds"] = seconds
+    return normalized
+
+
 def _normalize_spawn_traits(value: Any, *, field_name: str) -> dict[str, Any]:
     try:
         return normalize_trait_table(value, field_name=field_name)
@@ -2512,6 +2580,7 @@ def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tupl
             raise serializers.ValidationError("spec.zone_ref must match spec.zone when provided.")
     conditions = copy.deepcopy(spec.get("conditions") or {})
     _validate_condition_payload_or_error(conditions, field_name="spec.conditions")
+    respawn_policy = _normalize_spawn_respawn_policy(spec.get("respawn"))
 
     entries = spec.get("entries") or []
     if not isinstance(entries, list):
@@ -2599,7 +2668,7 @@ def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tupl
         spawn_plan.notes = str(spec.get("notes") or "")
         spawn_plan.order = int(spec.get("order", spawn_plan.order or 0) or 0)
         spawn_plan.is_active = bool(spec.get("is_active", True))
-        spawn_plan.respawn_policy = copy.deepcopy(spec.get("respawn") or {})
+        spawn_plan.respawn_policy = respawn_policy
         spawn_plan.randomization = copy.deepcopy(spec.get("randomization") or {})
         spawn_plan.conditions = conditions
         spawn_plan.save()

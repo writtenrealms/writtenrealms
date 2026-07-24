@@ -47,6 +47,14 @@ SOURCE_MODELS = {
 INHERITED_INSTANCE_SOURCE_MODELS = {ItemBundle, ItemDefinition, MobDefinition}
 COHORT_RESPAWN_REFILL_MISSING = "refill_missing"
 COHORT_RESPAWN_POLICIES = {COHORT_RESPAWN_REFILL_MISSING}
+RESPAWN_MODE_FIXED = "fixed"
+RESPAWN_MODE_INHERIT_ZONE = "inherit_zone"
+RESPAWN_MODE_NONE = "none"
+RESPAWN_MODES = {
+    RESPAWN_MODE_FIXED,
+    RESPAWN_MODE_INHERIT_ZONE,
+    RESPAWN_MODE_NONE,
+}
 
 
 @dataclass
@@ -1606,19 +1614,45 @@ def _materialize_placement(
 def _plan_is_due(*, run: SpawnPlanRun, initial: bool, repopulate: bool) -> bool:
     if initial or repopulate or run.last_reconciled_at is None:
         return True
-    policy = run.plan.respawn_policy or {}
-    mode = str(policy.get("mode") or "fixed").strip().lower()
-    if mode == "none":
+    policy = run.plan.respawn_policy
+    if not isinstance(policy, dict):
         return False
-    seconds = policy.get("seconds")
-    if seconds in (None, "") and mode == "inherit_zone":
-        seconds = run.plan.zone.respawn_wait
-    seconds = int(seconds or 0)
+    if "mode" not in policy:
+        mode = RESPAWN_MODE_FIXED
+    else:
+        stored_mode = policy["mode"]
+        if not isinstance(stored_mode, str):
+            return False
+        mode = stored_mode.strip().lower()
+    if mode not in RESPAWN_MODES:
+        return False
+    if mode == RESPAWN_MODE_NONE:
+        return False
+    if "seconds" not in policy:
+        seconds = (
+            run.plan.zone.respawn_wait
+            if mode == RESPAWN_MODE_INHERIT_ZONE
+            else 0
+        )
+    else:
+        seconds = policy["seconds"]
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, str)):
+            return False
+    try:
+        seconds = int(seconds)
+    except (TypeError, ValueError, OverflowError):
+        return False
     if seconds == -1:
+        return False
+    if seconds < 0:
         return False
     if seconds == 0:
         return True
-    return timezone.now() >= run.last_reconciled_at + timedelta(seconds=seconds)
+    try:
+        deadline = run.last_reconciled_at + timedelta(seconds=seconds)
+    except (OverflowError, TypeError):
+        return False
+    return timezone.now() >= deadline
 
 
 def reconcile_spawn_plan(

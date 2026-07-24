@@ -378,12 +378,18 @@ respawn:
 
 Supported modes:
 
-- `fixed`: use `seconds`.
+- `fixed`: use the non-negative integer in `seconds`; an omitted value is
+  normalized to `0`.
 - `inherit_zone`: use the zone respawn time when `seconds` is omitted.
 - `none`: do not refill missing copies during ordinary spawn-plan reconciliation.
 
 `seconds: 0` means a missing copy can be replaced on every reconciliation. Use
-that only for content that should always be present.
+that only for content that should always be present. `none` must not include a
+`seconds` value.
+
+These mode names are strict. `never` is not an alias for `none`, and malformed
+policies, unknown modes, unsupported fields, non-integer seconds, and negative
+seconds are rejected when the manifest is saved.
 
 ### Editing A Running World
 
