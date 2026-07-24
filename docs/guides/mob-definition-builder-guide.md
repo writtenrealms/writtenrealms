@@ -11,8 +11,8 @@ Use `kind: mobdefinition` for one authored mob. WR2 no longer exposes the legacy
 ## Add Mob Suggestions
 
 Use **World > Mobs > Add** to open the Add Mob modal. The form accepts name,
-slug, type, level, and optional target percentages for `crit`, `resilience`,
-`armor`, and `dodge`.
+slug, type, level, an optional core faction, and optional target percentages
+for `crit`, `resilience`, `armor`, and `dodge`.
 
 When a percentage is supplied, the suggestion endpoint converts it into the
 direct rating needed at the entered level using the world's combat rating

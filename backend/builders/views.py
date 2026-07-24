@@ -3543,6 +3543,7 @@ class MobDefinitionSuggestion(BaseWorldBuilderView):
     def post(self, request, world_pk, format=None):
         serializer = builder_serializers.MobDefinitionSuggestionSerializer(
             data=request.data,
+            context={"world": self.world},
         )
         serializer.is_valid(raise_exception=True)
         try:
@@ -3552,6 +3553,7 @@ class MobDefinitionSuggestion(BaseWorldBuilderView):
                 slug=serializer.validated_data["slug"],
                 mob_type=serializer.validated_data["type"],
                 level=serializer.validated_data["level"],
+                faction=serializer.validated_data.get("faction"),
                 rating_percents={
                     "crit": serializer.validated_data.get("crit_percent"),
                     "resilience": serializer.validated_data.get("resilience_percent"),

@@ -47,14 +47,10 @@ const resolveRoute = element => {
   };
 };
 
-const formatBoolean = value => value ? "Yes" : "No";
-
 const listSchema: any[] = [
   { name: "id", label: "ID", sortable: true },
   { name: "name", label: "Name", nowrap: true, sortable: true },
   { name: "slug", label: "Slug", nowrap: true, sortable: true },
-  { name: "type", label: "Type", light: true, sortable: true, sortKey: "item_type" },
-  { name: "randomized", label: "Randomized", light: true, format: formatBoolean },
   {
     name: "modified_ts",
     label: "Modified",

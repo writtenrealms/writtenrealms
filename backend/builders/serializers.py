@@ -47,6 +47,7 @@ from core.leveling import (
     validate_leveling_config,
 )
 from core.economy import MAX_CURRENCY_AMOUNT, economy_world, money_payload
+from core.factions import normalize_faction_code
 from core.stat_system import (
     StatSystemValidationError,
     get_world_stat_system,
@@ -2132,6 +2133,7 @@ class MobDefinitionSuggestionSerializer(serializers.Serializer):
         default=adv_consts.MOB_TYPE_HUMANOID,
     )
     level = serializers.IntegerField(default=1, min_value=1)
+    faction = serializers.CharField(required=False, allow_blank=True)
     crit_percent = serializers.FloatField(
         required=False,
         allow_null=True,
@@ -2156,6 +2158,29 @@ class MobDefinitionSuggestionSerializer(serializers.Serializer):
         min_value=0,
         max_value=100,
     )
+
+    def validate_faction(self, value):
+        if not value:
+            return value
+        world = self.context["world"]
+        context_world = world.instance_of or world
+        faction = (
+            Faction.objects
+            .filter(world=context_world, code=value)
+            .filter(Q(type=FACTION_TYPE_CORE) | Q(is_core=True))
+            .first()
+        )
+        if not faction:
+            raise serializers.ValidationError(
+                "Faction must reference a core faction in this world."
+            )
+        canonical_code = normalize_faction_code(
+            faction.code,
+            field_name="faction",
+        )
+        if faction.code == canonical_code:
+            return faction.code
+        return f"faction.{faction.pk}"
 
 
 # Factions

@@ -255,6 +255,7 @@ def suggest_mob_definition_manifest(
     slug: str,
     mob_type: str,
     level: int,
+    faction: str | None = None,
     rating_percents: dict[str, float | int | None] | None = None,
 ) -> dict[str, Any]:
     context_world = _context_world(world)
@@ -302,6 +303,10 @@ def suggest_mob_definition_manifest(
             "attributes": [],
         },
     }
+    if faction:
+        spec["factions"] = {
+            "core": faction,
+        }
     manifest = {
         "kind": builder_manifests.MOB_DEFINITION_MANIFEST_KIND,
         "metadata": {

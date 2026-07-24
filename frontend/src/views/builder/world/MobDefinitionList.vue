@@ -122,6 +122,15 @@
                 {{ ratingDefaultLabel('dodge') }}
               </div>
             </div>
+            <div class="form-group">
+              <label for="mob-suggestion-faction">Faction</label>
+              <select id="mob-suggestion-faction" v-model="addForm.faction">
+                <option value="">None</option>
+                <option v-for="option in coreFactionOptions" :key="option.key" :value="option.key">
+                  {{ option.name }}
+                </option>
+              </select>
+            </div>
           </div>
           <div v-if="addError" class="mob-suggestion-error">{{ addError }}</div>
           <div class="mob-suggestion-actions">
@@ -193,6 +202,7 @@ const addForm = ref({
   slug: "new-mob",
   type: "humanoid",
   level: 1,
+  faction: "",
   critPercent: null as number | null,
   resiliencePercent: null as number | null,
   armorPercent: null as number | null,
@@ -219,14 +229,10 @@ const resolveRoute = element => {
   };
 };
 
-const formatBoolean = value => value ? "Yes" : "No";
-
 const listSchema: any[] = [
   { name: "id", label: "ID", sortable: true },
   { name: "name", label: "Name", nowrap: true, sortable: true },
   { name: "slug", label: "Slug", nowrap: true, sortable: true },
-  { name: "type", label: "Type", light: true, sortable: true, sortKey: "mob_type" },
-  { name: "randomized", label: "Randomized", light: true, format: formatBoolean },
   {
     name: "modified_ts",
     label: "Modified",
@@ -312,6 +318,9 @@ const createSuggestedMob = async () => {
       type: addForm.value.type,
       level: Number(addForm.value.level || 1),
     };
+    if (addForm.value.faction) {
+      payload.faction = addForm.value.faction;
+    }
     addRatingPercent(payload, "crit_percent", addForm.value.critPercent);
     addRatingPercent(payload, "resilience_percent", addForm.value.resiliencePercent);
     addRatingPercent(payload, "armor_percent", addForm.value.armorPercent);

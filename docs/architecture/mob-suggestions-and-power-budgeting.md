@@ -144,6 +144,7 @@ Initial fields:
 - mob slug
 - mob type
 - mob level
+- core faction (optional)
 
 Optional later fields:
 
@@ -224,7 +225,8 @@ Request:
   "name": "a cave wolf",
   "slug": "cave-wolf",
   "type": "beast",
-  "level": 4
+  "level": 4,
+  "faction": "wildlife"
 }
 ```
 
@@ -241,6 +243,9 @@ Response:
     "spec": {
       "type": "beast",
       "level": 4,
+      "factions": {
+        "core": "wildlife"
+      },
       "health_max": 46,
       "attack_power": 8
     }

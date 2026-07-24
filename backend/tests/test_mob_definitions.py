@@ -630,6 +630,105 @@ class TestMobDefinitionBuilderEndpoints(WorldTestCase):
         self.assertAlmostEqual(preview["same_level_crit_chance"], 0.05, delta=0.01)
         self.assertAlmostEqual(preview["same_level_resilience_mitigation"], 0.03, delta=0.01)
 
+    def test_suggest_mob_definition_includes_selected_core_faction(self):
+        faction = Faction.objects.create(
+            world=self.world,
+            code="town_watch",
+            name="Town Watch",
+            type=FACTION_TYPE_CORE,
+        )
+
+        resp = self.client.post(
+            self.suggestion_ep,
+            {
+                "name": "a guard",
+                "slug": "guard",
+                "type": adv_consts.MOB_TYPE_HUMANOID,
+                "level": 4,
+                "faction": faction.code,
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(
+            resp.data["manifest"]["spec"]["factions"],
+            {"core": faction.code},
+        )
+
+        apply_resp = self.client.post(
+            self.apply_ep,
+            {"manifest": resp.data["yaml"]},
+            format="json",
+        )
+
+        self.assertEqual(apply_resp.status_code, 201, apply_resp.data)
+        definition = MobDefinition.objects.get(world=self.world, slug="guard")
+        self.assertTrue(
+            definition.faction_assignments.filter(faction=faction).exists()
+        )
+
+    def test_suggest_mob_definition_rejects_non_core_faction(self):
+        faction = Faction.objects.create(
+            world=self.world,
+            code="town_watch",
+            name="Town Watch",
+            type=FACTION_TYPE_REPUTATION,
+        )
+
+        resp = self.client.post(
+            self.suggestion_ep,
+            {
+                "name": "a guard",
+                "slug": "guard",
+                "type": adv_consts.MOB_TYPE_HUMANOID,
+                "level": 4,
+                "faction": faction.code,
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400, resp.data)
+        self.assertIn("faction", resp.data)
+
+    def test_suggest_mob_definition_supports_hyphenated_faction_code(self):
+        faction = Faction.objects.create(
+            world=self.world,
+            code="town-watch",
+            name="Town Watch",
+            type=FACTION_TYPE_CORE,
+        )
+
+        resp = self.client.post(
+            self.suggestion_ep,
+            {
+                "name": "a guard",
+                "slug": "guard",
+                "type": adv_consts.MOB_TYPE_HUMANOID,
+                "level": 4,
+                "faction": faction.code,
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(
+            resp.data["manifest"]["spec"]["factions"],
+            {"core": f"faction.{faction.pk}"},
+        )
+
+        apply_resp = self.client.post(
+            self.apply_ep,
+            {"manifest": resp.data["yaml"]},
+            format="json",
+        )
+
+        self.assertEqual(apply_resp.status_code, 201, apply_resp.data)
+        definition = MobDefinition.objects.get(world=self.world, slug="guard")
+        self.assertTrue(
+            definition.faction_assignments.filter(faction=faction).exists()
+        )
+
     def test_suggest_mob_definition_gives_beasts_more_armor_than_humanoids(self):
         humanoid_resp = self.client.post(
             self.suggestion_ep,
