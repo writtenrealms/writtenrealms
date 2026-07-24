@@ -260,7 +260,8 @@ Behavior notes:
 - social reaction conditions evaluate the player who directly targeted the
   mob as `actor`
 - `mob_present: mobdefinition.<slug>` checks for that kind of mob in the
-  trigger's context room
+  trigger's context room; its expanded `where` form can require state or other
+  properties on the same spawned mob
 - movement policies and room movement events also receive `event.direction`,
   `event.origin_room`, and `event.destination_room`
 - if conditions fail and `show_details_on_failure` is `false`, the trigger
@@ -494,6 +495,7 @@ concurrent attempts cannot grant two harvested bunches from one mature bunch.
 | `grant_item` | `actor: trigger_actor`, `item`, optional `count` | Spawns exact-definition items directly into the triggering actor's inventory. `count` defaults to `1`. |
 | `spawn_room_item` | `room: trigger_room`, `item`, optional `bind` | Spawns an item in the triggering room. `bind` names that exact runtime item for later steps. |
 | `replace_room_item` | `target`, `with` | Replaces the exact bound room item and updates the same binding to the replacement. |
+| `set_mob` | `room: trigger_room`, `mob`, `fields`; optional `where`, `state` | Finds exactly one live mob from the definition in the triggering runtime room, updates supported runtime fields, and writes character state. |
 | `echo` | `room: trigger_room`, `text` | Sends text to players currently in the triggering runtime room. |
 
 Use portable item refs such as `itemdefinition.barley-seeds`, not database ids.
@@ -524,6 +526,45 @@ Each step is atomic. With `on_step_error: cancel`, a missing or harvested bound
 item rolls back that entire step and cancels the remaining sequence. Completed
 earlier steps stay completed. Put actions that must succeed or fail together in
 the same step.
+
+`set_mob.mob` uses a portable `mobdefinition.<slug>` ref. Its optional `where`
+uses the query-free candidate subset of the shared condition DSL, evaluated
+against each candidate mob. It supports Boolean composition and comparisons,
+but not presence or quest operators. Put those query-backed checks in the
+trigger's outer conditions. Candidate comparisons may use
+`state.character.*`, supported direct `actor.*` fields, and
+`player.id`/`player.key`; relationship paths and typed definition-ref
+resolution are intentionally excluded. The action fails if zero or more than
+one candidate matches. Supported `fields` are `name`, `room_description`,
+`description`, and `attackable`; `state` is merged into that mob's mutable
+character state.
+Because step zero is atomic, a `set_mob` and `consume_item` in the same step
+either both commit or both roll back.
+
+For example, this consumes one key, changes a uniquely matching captive, and
+prevents the same mob from satisfying the captive condition again:
+
+```yaml
+steps:
+  - after_seconds: 0
+    actions:
+      - type: set_mob
+        room: trigger_room
+        mob: mobdefinition.greek-captive-commander
+        where:
+          eq:
+            - state.character.captive
+            - true
+        fields:
+          name: a freed Greek commander
+          attackable: true
+        state:
+          captive: false
+      - type: consume_item
+        actor: trigger_actor
+        item: itemdefinition.persian-outpost-iron-cage-key
+        count: 1
+```
 
 ## Writing State
 
@@ -587,6 +628,9 @@ runtime key such as `mob.456` is accepted only while that mob is in the same
 room and live runtime world; use a distinctive mob keyword when the script must
 remain portable across exports. `self` refers to no physical character for a
 room issuer and is rejected.
+
+`attackable` accepts `true` or `false` and controls whether players can select
+the mob as an ordinary combat target.
 
 This mutates the spawned runtime mob, not its `kind: mobdefinition` document. A
 fresh spawn still uses the definition's authored values, and a later definition

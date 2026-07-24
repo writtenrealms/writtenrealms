@@ -759,10 +759,15 @@ spec:
 The first step must have `after_seconds: 0`; later offsets are positive and
 relative to the prior step. Each offset and their cumulative total are capped
 at one year. `consume_item`, `consume_room_item`, `grant_item`,
-`spawn_room_item`, `replace_room_item`, and `echo` are the action whitelist.
-Item refs are resolved within the authored world and stored portably. Bindings
-must be created before use and identify exact runtime items, not keywords or
-definition matches. Policy triggers cannot define steps.
+`spawn_room_item`, `replace_room_item`, `set_mob`, and `echo` are the action
+whitelist. Item and mob-definition refs are resolved within the authored world
+and stored portably. Bindings must be created before use and identify exact
+runtime items, not keywords or definition matches. `set_mob` resolves exactly
+one live candidate in the current runtime room, may filter it through the
+query-free Boolean/comparison subset of shared `where` conditions, and can
+atomically update its supported runtime fields and character state. Query-backed
+presence and quest operators belong in the trigger's outer conditions. Policy
+triggers cannot define steps.
 
 Step zero rechecks conditions under a runtime-world/room-scoped transaction
 mutex and commits with its actions. Later steps are persisted in a

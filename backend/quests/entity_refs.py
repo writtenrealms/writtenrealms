@@ -72,9 +72,12 @@ def resolve_entity_ref_id(
         canonical_prefix = canonical_entity_type(prefix)
         if not canonical_prefix or canonical_prefix != expected:
             return None
-        if raw.isdigit():
-            return int(raw)
-        text = raw
+        text = raw.strip()
+        if not text:
+            return None
+        # Explicitly typed definition references are portable slug refs, even
+        # when the slug contains digits only. Bare numeric values above retain
+        # the legacy database-id meaning.
 
     if not world:
         return None

@@ -768,10 +768,9 @@ def _entity_ref_cache_key(
         text = raw_value.strip()
         if not text:
             return None
-        if text.isdigit() and expected_type != "itemdefinition":
-            return expected_type, "id", int(text)
-        # Typed item refs are canonical slug refs, including numeric-only
-        # slugs. Bare numeric values above remain the legacy id form.
+        # Explicitly typed definition refs are canonical slug refs, including
+        # numeric-only slugs. Bare numeric values above remain the legacy id
+        # form.
     return expected_type, "slug", text
 
 
@@ -851,7 +850,7 @@ def _canonicalize_condition_refs(
     if "mob_present" in canonical:
         spec = canonical.get("mob_present")
         if isinstance(spec, dict):
-            canonical["mob_present"] = {
+            canonical_spec = {
                 **spec,
                 "ref": _canonicalize_entity_ref(
                     spec.get("ref"),
@@ -860,6 +859,14 @@ def _canonicalize_condition_refs(
                     entity_ref_cache=entity_ref_cache,
                 ),
             }
+            if "where" in spec:
+                canonical_spec["where"] = _canonicalize_condition_refs(
+                    spec.get("where"),
+                    world=world,
+                    event_target_is_room=event_target_is_room,
+                    entity_ref_cache=entity_ref_cache,
+                )
+            canonical["mob_present"] = canonical_spec
         else:
             canonical["mob_present"] = _canonicalize_entity_ref(
                 spec,
@@ -1008,6 +1015,19 @@ def _canonicalize_trigger_steps(
                     action.get("with"),
                     world=world,
                     expected_type="itemdefinition",
+                    entity_ref_cache=entity_ref_cache,
+                )
+            if "mob" in action:
+                action["mob"] = _canonicalize_entity_ref(
+                    action.get("mob"),
+                    world=world,
+                    expected_type="mobdefinition",
+                    entity_ref_cache=entity_ref_cache,
+                )
+            if "where" in action:
+                action["where"] = _canonicalize_condition_refs(
+                    action.get("where"),
+                    world=world,
                     entity_ref_cache=entity_ref_cache,
                 )
     return canonical_steps

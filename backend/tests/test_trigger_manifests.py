@@ -556,6 +556,169 @@ spec:
             self.trigger.steps,
         )
 
+    def test_apply_trigger_manifest_normalizes_set_mob_definition_ref(self):
+        commander = MobDefinition.objects.create(
+            world=self.world,
+            slug="captive-commander",
+            name="a captive commander",
+        )
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: set_mob
+          room: trigger_room
+          mob: {commander.id}
+          where:
+            eq:
+              - state.character.captive
+              - true
+          fields:
+            name: a freed Greek commander
+            room_description: A freed commander stands here.
+            description: The commander studies the camp.
+            attackable: true
+          state:
+            captive: false
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.trigger.refresh_from_db()
+        self.assertEqual(
+            self.trigger.steps,
+            [
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "set_mob",
+                            "room": "trigger_room",
+                            "mob": "mobdefinition.captive-commander",
+                            "where": {
+                                "eq": [
+                                    "state.character.captive",
+                                    True,
+                                ],
+                            },
+                            "fields": {
+                                "name": "a freed Greek commander",
+                                "room_description": (
+                                    "A freed commander stands here."
+                                ),
+                                "description": (
+                                    "The commander studies the camp."
+                                ),
+                                "attackable": True,
+                            },
+                            "state": {
+                                "captive": False,
+                            },
+                        },
+                    ],
+                },
+            ],
+        )
+        self.assertEqual(
+            resp.data["trigger"]["manifest"]["spec"]["steps"],
+            self.trigger.steps,
+        )
+
+    def test_apply_trigger_manifest_rejects_unknown_set_mob_definition(self):
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: set_mob
+          room: trigger_room
+          mob: mobdefinition.missing-commander
+          fields:
+            attackable: true
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("unknown mob definition", str(resp.data))
+
+    def test_apply_trigger_manifest_normalizes_outer_refs_for_set_mob_trigger(self):
+        commander = MobDefinition.objects.create(
+            world=self.world,
+            slug="guarded-commander",
+            name="a guarded commander",
+        )
+        key = ItemDefinition.objects.create(
+            world=self.world,
+            slug="cage-key",
+            name="an iron cage key",
+        )
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  conditions:
+    all:
+      - mob_present:
+          ref: {commander.id}
+      - item_present:
+          location: actor_inventory
+          item: {key.id}
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: set_mob
+          room: trigger_room
+          mob: {commander.id}
+          where:
+            eq:
+              - state.character.captive
+              - true
+          fields:
+            attackable: true
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.trigger.refresh_from_db()
+        conditions = json.loads(self.trigger.conditions)
+        self.assertEqual(
+            conditions["all"][0]["mob_present"]["ref"],
+            "mobdefinition.guarded-commander",
+        )
+        self.assertEqual(
+            conditions["all"][1]["item_present"]["item"],
+            "itemdefinition.cage-key",
+        )
+
     def test_apply_trigger_manifest_rejects_invalid_harvest_action_fields(self):
         ItemDefinition.objects.create(
             world=self.world,
@@ -757,6 +920,44 @@ spec:
         self.assertEqual(
             self.trigger.steps[0]["actions"][1]["item"],
             expected_ref,
+        )
+
+    def test_typed_numeric_mobdefinition_slug_is_not_treated_as_a_database_id(self):
+        legacy_id_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="legacy-mob-id-definition",
+            name="a legacy mob ID definition",
+        )
+        numeric_slug = str(legacy_id_definition.id)
+        MobDefinition.objects.create(
+            world=self.world,
+            slug=numeric_slug,
+            name="a numbered commander",
+        )
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: set_mob
+          room: trigger_room
+          mob: mob_definition.{numeric_slug}
+          fields:
+            attackable: true
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.trigger.refresh_from_db()
+        self.assertEqual(
+            self.trigger.steps[0]["actions"][0]["mob"],
+            f"mobdefinition.{numeric_slug}",
         )
 
     def test_instance_trigger_steps_resolve_base_world_item_definitions(self):

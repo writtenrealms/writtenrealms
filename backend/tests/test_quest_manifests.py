@@ -1,8 +1,11 @@
 import yaml
 
+from rest_framework import serializers
 from rest_framework.reverse import reverse
 
 from builders.models import ItemDefinition, MobDefinition, WorldBuilder
+from quests import manifests as quest_manifests
+from quests.entity_refs import resolve_entity_ref_id
 from quests.models import QuestArcTemplate, QuestTemplate
 from tests.base import WorldTestCase
 
@@ -55,6 +58,57 @@ class TestQuestManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(mob_two.slug, "quartermaster-2")
         self.assertEqual(item_one.slug, "wolf-pelt")
         self.assertEqual(item_two.slug, "wolf-pelt-2")
+
+    def test_typed_numeric_definition_refs_are_slugs_but_bare_numerics_are_ids(self):
+        legacy_id_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="legacy-quest-id-definition",
+            name="a legacy quest ID definition",
+        )
+        numeric_slug_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug=str(legacy_id_definition.id),
+            name="a numbered quest commander",
+        )
+
+        self.assertEqual(
+            resolve_entity_ref_id(
+                world=self.world,
+                value=f"mobdefinition.{legacy_id_definition.id}",
+                expected_type="mobdefinition",
+            ),
+            numeric_slug_definition.id,
+        )
+        self.assertEqual(
+            resolve_entity_ref_id(
+                world=self.world,
+                value=legacy_id_definition.id,
+                expected_type="mobdefinition",
+            ),
+            legacy_id_definition.id,
+        )
+        quest_manifests._validate_entity_ref(
+            self.world,
+            f"mobdefinition.{legacy_id_definition.id}",
+            "mobdefinition",
+            "mob_definition",
+        )
+        with self.assertRaisesRegex(
+            serializers.ValidationError,
+            "references an unknown mobdefinition",
+        ):
+            quest_manifests._validate_entity_ref(
+                self.world,
+                f"mobdefinition.{numeric_slug_definition.id}",
+                "mobdefinition",
+                "mob_definition",
+            )
+        quest_manifests._validate_entity_ref(
+            self.world,
+            numeric_slug_definition.id,
+            "mobdefinition",
+            "mob_definition",
+        )
 
     def test_apply_quest_manifest_can_create_quest_template(self):
         quartermaster = MobDefinition.objects.create(
@@ -651,6 +705,11 @@ spec:
         self.assertIn("no longer supported", str(resp.data).lower())
 
     def test_apply_quest_manifest_supports_partial_nested_update(self):
+        mob_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="partial-update-quartermaster",
+            name="a partial-update quartermaster",
+        )
         quest = QuestTemplate.objects.create(
             world=self.world,
             slug="bitter_well",
@@ -659,7 +718,12 @@ spec:
             scope="player",
             status="draft",
             discovery_policy={
-                "sources": [{"type": "npc_dialogue", "mob_definition": "mobdefinition.12"}],
+                "sources": [
+                    {
+                        "type": "npc_dialogue",
+                        "mob_definition": f"mobdefinition.{mob_definition.slug}",
+                    },
+                ],
                 "visible_if": {},
                 "accept_if": {},
                 "salience": 10,

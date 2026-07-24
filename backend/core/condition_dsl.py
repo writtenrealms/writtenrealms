@@ -21,6 +21,37 @@ STRUCTURED_CONDITION_OPERATORS = (
     "in",
 )
 
+MAX_CONDITION_NESTING_DEPTH = 16
+MAX_CONDITION_NODE_COUNT = 256
+_CANDIDATE_CONDITION_OPERATORS = {
+    "always",
+    "all",
+    "any",
+    "not",
+    *COMPARISON_OPERATORS,
+    "in",
+}
+_CANDIDATE_DIRECT_PATHS = {
+    "actor.id",
+    "actor.key",
+    "actor.name",
+    "actor.room_description",
+    "actor.description",
+    "actor.attackable",
+    "actor.keywords",
+    "actor.title",
+    "actor.level",
+    "actor.health",
+    "actor.health_max",
+    "actor.energy",
+    "actor.gender",
+    "actor.archetype",
+    "actor.is_elite",
+    "actor.is_invisible",
+    "player.id",
+    "player.key",
+}
+
 
 @dataclass(frozen=True)
 class ConditionContext:
@@ -69,14 +100,39 @@ def is_structured_condition_mapping(value: Any) -> bool:
     )
 
 
-def validate_condition_payload(condition: Any, *, field_name: str = "condition") -> None:
+def validate_condition_payload(
+    condition: Any,
+    *,
+    field_name: str = "condition",
+    _depth: int = 0,
+    _budget: dict[str, int] | None = None,
+) -> None:
+    if _depth > MAX_CONDITION_NESTING_DEPTH:
+        raise ValueError(
+            f"{field_name} exceeds the maximum condition nesting depth of "
+            f"{MAX_CONDITION_NESTING_DEPTH}."
+        )
+    if _budget is None:
+        _budget = {"nodes": 0}
+    _budget["nodes"] += 1
+    if _budget["nodes"] > MAX_CONDITION_NODE_COUNT:
+        raise ValueError(
+            f"{field_name} exceeds the maximum condition size of "
+            f"{MAX_CONDITION_NODE_COUNT} nodes."
+        )
+
     if condition in (None, {}, []):
         return
     if isinstance(condition, bool):
         return
     if isinstance(condition, list):
         for index, item in enumerate(condition):
-            validate_condition_payload(item, field_name=f"{field_name}[{index}]")
+            validate_condition_payload(
+                item,
+                field_name=f"{field_name}[{index}]",
+                _depth=_depth + 1,
+                _budget=_budget,
+            )
         return
     if not isinstance(condition, dict):
         return
@@ -93,17 +149,32 @@ def validate_condition_payload(condition: Any, *, field_name: str = "condition")
         if not isinstance(children, list):
             raise ValueError(f"{field_name}.all must be a list.")
         for index, item in enumerate(children):
-            validate_condition_payload(item, field_name=f"{field_name}.all[{index}]")
+            validate_condition_payload(
+                item,
+                field_name=f"{field_name}.all[{index}]",
+                _depth=_depth + 1,
+                _budget=_budget,
+            )
 
     if "any" in condition:
         children = condition.get("any")
         if not isinstance(children, list):
             raise ValueError(f"{field_name}.any must be a list.")
         for index, item in enumerate(children):
-            validate_condition_payload(item, field_name=f"{field_name}.any[{index}]")
+            validate_condition_payload(
+                item,
+                field_name=f"{field_name}.any[{index}]",
+                _depth=_depth + 1,
+                _budget=_budget,
+            )
 
     if "not" in condition:
-        validate_condition_payload(condition.get("not"), field_name=f"{field_name}.not")
+        validate_condition_payload(
+            condition.get("not"),
+            field_name=f"{field_name}.not",
+            _depth=_depth + 1,
+            _budget=_budget,
+        )
 
     if "mob_present" in condition:
         spec = condition.get("mob_present")
@@ -111,7 +182,7 @@ def validate_condition_payload(condition: Any, *, field_name: str = "condition")
         if isinstance(spec, dict):
             if not str(ref or "").strip():
                 raise ValueError(f"{field_name}.mob_present.ref is required.")
-            unsupported_keys = sorted(set(spec) - {"ref", "count"})
+            unsupported_keys = sorted(set(spec) - {"ref", "count", "where"})
             if unsupported_keys:
                 raise ValueError(
                     f"{field_name}.mob_present has unsupported field(s): "
@@ -121,6 +192,19 @@ def validate_condition_payload(condition: Any, *, field_name: str = "condition")
             if isinstance(count, bool) or not isinstance(count, int) or count < 1:
                 raise ValueError(
                     f"{field_name}.mob_present.count must be a positive integer."
+                )
+            if "where" in spec:
+                where = spec.get("where")
+                if not isinstance(where, (bool, dict, list)):
+                    raise ValueError(
+                        f"{field_name}.mob_present.where must be a structured "
+                        "condition."
+                    )
+                validate_candidate_condition_payload(
+                    where,
+                    field_name=f"{field_name}.mob_present.where",
+                    _depth=_depth + 1,
+                    _budget=_budget,
                 )
         elif (
             isinstance(spec, bool)
@@ -184,6 +268,100 @@ def validate_condition_payload(condition: Any, *, field_name: str = "condition")
         raw_args = condition.get(operator)
         if not isinstance(raw_args, (list, tuple)) or len(raw_args) != 2:
             raise ValueError(f"{field_name}.{operator} must be a two-item list.")
+
+
+def validate_candidate_condition_payload(
+    condition: Any,
+    *,
+    field_name: str = "condition",
+    _depth: int = 0,
+    _budget: dict[str, int] | None = None,
+) -> None:
+    """Validate the query-free condition subset used to filter mob candidates."""
+    validate_condition_payload(
+        condition,
+        field_name=field_name,
+        _depth=_depth,
+        _budget=_budget,
+    )
+
+    def validate_candidate_path(value: Any, path: str) -> None:
+        normalized = str(value or "").strip()
+        if (
+            normalized.startswith("state.character.")
+            and len(normalized) > len("state.character.")
+        ):
+            return
+        if normalized in _CANDIDATE_DIRECT_PATHS:
+            return
+        raise ValueError(
+            f"{path} must use state.character.*, a supported direct actor "
+            "field, or player.id/player.key while filtering mob candidates."
+        )
+
+    def validate_candidate_operand(value: Any, path: str) -> None:
+        if isinstance(value, list):
+            for index, child in enumerate(value):
+                validate_candidate_operand(child, f"{path}[{index}]")
+            return
+        if not isinstance(value, str):
+            return
+        text = value.strip()
+        if text.startswith("{") and text.endswith("}") and len(text) >= 3:
+            validate_candidate_path(text[1:-1], path)
+            return
+        prefix, separator, _ = text.partition(".")
+        if not separator:
+            return
+        from quests.entity_refs import canonical_entity_type
+
+        if canonical_entity_type(prefix):
+            raise ValueError(
+                f"{path} cannot resolve typed definition references while "
+                "filtering mob candidates."
+            )
+
+    def reject_query_backed_operators(value: Any, path: str) -> None:
+        if isinstance(value, bool):
+            return
+        if isinstance(value, list):
+            for index, child in enumerate(value):
+                reject_query_backed_operators(child, f"{path}[{index}]")
+            return
+        if not isinstance(value, dict):
+            raise ValueError(f"{path} must be a structured condition.")
+        for operator in STRUCTURED_CONDITION_OPERATORS:
+            if operator not in value:
+                continue
+            if operator not in _CANDIDATE_CONDITION_OPERATORS:
+                raise ValueError(
+                    f"{path} cannot use '{operator}' while filtering mob "
+                    "candidates."
+                )
+            if operator in {"all", "any"}:
+                reject_query_backed_operators(
+                    value.get(operator),
+                    f"{path}.{operator}",
+                )
+            elif operator == "not":
+                reject_query_backed_operators(
+                    value.get(operator),
+                    f"{path}.not",
+                )
+            elif operator in {*COMPARISON_OPERATORS, "in"}:
+                raw_args = value.get(operator)
+                if not isinstance(raw_args, (list, tuple)) or len(raw_args) != 2:
+                    continue
+                validate_candidate_path(
+                    raw_args[0],
+                    f"{path}.{operator}[0]",
+                )
+                validate_candidate_operand(
+                    raw_args[1],
+                    f"{path}.{operator}[1]",
+                )
+
+    reject_query_backed_operators(condition, field_name)
 
 
 def _walk_value(value: Any, segments: list[str]) -> Any:
@@ -342,7 +520,13 @@ def resolve_path(path: Any, context: ConditionContext) -> Any:
                 balance_owner,
                 segments[1],
             )
-        return _walk_context_value(context.actor_data, actor, segments)
+        path_owner = player if root == "player" else actor
+        actor_data = (
+            context.actor_data
+            if root == "actor" or path_owner is actor
+            else None
+        )
+        return _walk_context_value(actor_data, path_owner, segments)
     if normalized.startswith("room."):
         segments = normalized.split(".")[1:]
         return _walk_context_value(context.room_data, room, segments)
@@ -429,14 +613,14 @@ def _path_uses_room_ref(
 
 
 def _resolve_comparison_value(path: str, value: Any, context: ConditionContext) -> Any:
-    world = _condition_ref_world(context)
     expected_type = _definition_ref_type_for_path(path, value)
-    if expected_type and world:
+    if expected_type:
+        world = _condition_ref_world(context)
         try:
             from quests.entity_refs import resolve_entity_ref_id
         except Exception:
             resolve_entity_ref_id = None
-        if resolve_entity_ref_id:
+        if world and resolve_entity_ref_id:
             resolved_id = resolve_entity_ref_id(
                 world=world,
                 value=value,
@@ -444,12 +628,13 @@ def _resolve_comparison_value(path: str, value: Any, context: ConditionContext) 
             )
             if resolved_id is not None:
                 return resolved_id
-    if world and _path_uses_room_ref(path, value, event_data=context.event_data):
+    if _path_uses_room_ref(path, value, event_data=context.event_data):
+        world = _condition_ref_world(context)
         try:
             from quests.entity_refs import resolve_room_ref_id
         except Exception:
             resolve_room_ref_id = None
-        if resolve_room_ref_id:
+        if world and resolve_room_ref_id:
             resolved_room_id = resolve_room_ref_id(world=world, value=value)
             if resolved_room_id is not None:
                 return resolved_room_id
@@ -507,8 +692,9 @@ def _mob_definition_filter(value: Any) -> dict[str, Any] | None:
         text = raw_value.strip()
         if not text:
             return None
-        if text.isdigit():
-            return {"definition_id": int(text)}
+        # A typed mob reference is always a portable slug reference, even
+        # when that slug contains digits only. Bare numeric values retain the
+        # legacy database-id meaning.
 
     return {"definition__slug": text}
 
@@ -519,6 +705,7 @@ def _mob_present(value: Any, context: ConditionContext) -> bool:
         resolve_value(spec.get("ref"), context)
     )
     count = spec.get("count", 1)
+    where = spec.get("where")
     if (
         not definition_filter
         or isinstance(count, bool)
@@ -568,6 +755,72 @@ def _mob_present(value: Any, context: ConditionContext) -> bool:
         is_pending_deletion=False,
         **definition_filter,
     ).filter(definition_world_scope)
+    if where not in (None, {}, []):
+        matched = 0
+        player = _context_player(context)
+        zone = _context_zone(context)
+        world = _context_world(context)
+        # State rows are sparse, but the reverse one-to-one join lets each
+        # candidate carry its character-state snapshot without a query per
+        # mob. Iterate in bounded chunks and stop as soon as ``count`` matches.
+        candidates = mobs.select_related(
+            "character_state_record",
+            "definition",
+            "world",
+            "world__context",
+            "world__context__instance_of",
+        ).order_by("id")
+        invariant_state_cache = {
+            scope: snapshot
+            for scope, snapshot in context.state_cache.items()
+            if scope != "character"
+        }
+        for candidate in candidates.iterator(chunk_size=64):
+            state_record = candidate._state.fields_cache.get(
+                "character_state_record"
+            )
+            candidate_state_cache = {
+                **invariant_state_cache,
+                "character": (
+                    dict(state_record.data or {})
+                    if state_record is not None
+                    else {}
+                ),
+            }
+            candidate_context = ConditionContext(
+                actor=candidate,
+                player=player,
+                room=room,
+                zone=zone,
+                world=world,
+                template=context.template,
+                quest_instance=context.quest_instance,
+                event_data=context.event_data,
+                objective_state_map=context.objective_state_map,
+                ability=context.ability,
+                actor_data=None,
+                room_data=context.room_data,
+                world_data=context.world_data,
+                # Character state belongs to this candidate. Other state
+                # scopes are invariant for the room evaluation and are reused
+                # so a predicate such as state.player.* stays O(1) queries.
+                state_cache=candidate_state_cache,
+            )
+            candidate_matches = evaluate_condition(
+                where,
+                context=candidate_context,
+            )
+            for scope, snapshot in candidate_state_cache.items():
+                if scope == "character":
+                    continue
+                invariant_state_cache[scope] = snapshot
+                context.state_cache.setdefault(scope, snapshot)
+            if not candidate_matches:
+                continue
+            matched += 1
+            if matched >= count:
+                return True
+        return False
     if count == 1:
         return mobs.exists()
     return mobs.count() >= count

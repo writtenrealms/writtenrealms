@@ -20,14 +20,20 @@ from django.db import (
 from django.db.models import Q
 from django.utils import timezone
 
-from builders.models import ItemDefinition, Trigger
+from builders.models import ItemDefinition, MobDefinition, Trigger
+from core.condition_dsl import ConditionContext, evaluate_condition
 from core.conditions import evaluate_conditions
+from core.scoped_state import (
+    STATE_SCOPE_CHARACTER,
+    normalize_state_snapshot,
+)
 from core.trigger_steps import (
     TRIGGER_STEP_ACTION_CONSUME_ITEM,
     TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM,
     TRIGGER_STEP_ACTION_ECHO,
     TRIGGER_STEP_ACTION_GRANT_ITEM,
     TRIGGER_STEP_ACTION_REPLACE_ROOM_ITEM,
+    TRIGGER_STEP_ACTION_SET_MOB,
     TRIGGER_STEP_ACTION_SPAWN_ROOM_ITEM,
     TriggerStepSpecError,
     normalize_trigger_step_error_policy,
@@ -39,7 +45,7 @@ from spawns.events import (
     flush_game_event_outbox,
     publish_events,
 )
-from spawns.models import Item, Mob, Player, ScheduledTriggerRun
+from spawns.models import Item, Mob, MobState, Player, ScheduledTriggerRun
 from worlds.models import Room, World
 
 
@@ -80,6 +86,21 @@ class TriggerItemChanges:
             or self.actor_inventory_added
             or self.actor_inventory_removed
         )
+
+
+@dataclass
+class TriggerMobChange:
+    mob: Mob
+    fields: set[str] = field(default_factory=set)
+
+
+@dataclass
+class TriggerMobChanges:
+    updated: dict[int, TriggerMobChange] = field(default_factory=dict)
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.updated)
 
 
 def _flush_queued_events() -> None:
@@ -233,18 +254,55 @@ def _definition_ref_parts(value: Any) -> tuple[str, int | str]:
     return "slug", text
 
 
+def _mob_definition_ref_parts(value: Any) -> tuple[str, int | str]:
+    if isinstance(value, bool):
+        raise TriggerStepExecutionError(
+            "Mob definition reference is invalid.",
+            code="invalid_mob_definition",
+        )
+    if isinstance(value, int):
+        return "id", value
+    text = str(value or "").strip()
+    if not text:
+        raise TriggerStepExecutionError(
+            "Mob definition reference is missing.",
+            code="invalid_mob_definition",
+        )
+    prefix, separator, raw_value = text.partition(".")
+    if separator:
+        if prefix.strip().lower() not in {"mobdefinition", "mob_definition"}:
+            raise TriggerStepExecutionError(
+                "Mob reference must name a mobdefinition.",
+                code="invalid_mob_definition",
+            )
+        text = raw_value.strip()
+    if not text:
+        raise TriggerStepExecutionError(
+            "Mob definition reference is missing.",
+            code="invalid_mob_definition",
+        )
+    if separator:
+        return "slug", text
+    if text.isdigit():
+        return "id", int(text)
+    return "slug", text
+
+
 def _snapshot_steps_with_definition_ids(
     steps: list[dict[str, Any]],
     *,
     authored_world_id: int,
 ) -> list[dict[str, Any]]:
     refs: set[tuple[str, int | str]] = set()
+    mob_refs: set[tuple[str, int | str]] = set()
     for step in steps:
         for action in step.get("actions") or []:
             if "item" in action:
                 refs.add(_definition_ref_parts(action.get("item")))
             if "with" in action:
                 refs.add(_definition_ref_parts(action.get("with")))
+            if action.get("type") == TRIGGER_STEP_ACTION_SET_MOB:
+                mob_refs.add(_mob_definition_ref_parts(action.get("mob")))
 
     ids = [value for ref_type, value in refs if ref_type == "id"]
     slugs = [value for ref_type, value in refs if ref_type == "slug"]
@@ -266,6 +324,30 @@ def _snapshot_steps_with_definition_ids(
             )
         resolved[ref] = definition
 
+    mob_ids = [value for ref_type, value in mob_refs if ref_type == "id"]
+    mob_slugs = [value for ref_type, value in mob_refs if ref_type == "slug"]
+    mob_definitions = list(
+        MobDefinition.objects.filter(world_id=authored_world_id)
+        .filter(Q(pk__in=mob_ids) | Q(slug__in=mob_slugs))
+        .only("id", "slug")
+    )
+    mobs_by_id = {definition.id: definition for definition in mob_definitions}
+    mobs_by_slug = {definition.slug: definition for definition in mob_definitions}
+    resolved_mobs: dict[tuple[str, int | str], MobDefinition] = {}
+    for ref in mob_refs:
+        ref_type, value = ref
+        definition = (
+            mobs_by_id.get(value)
+            if ref_type == "id"
+            else mobs_by_slug.get(value)
+        )
+        if definition is None:
+            raise TriggerStepExecutionError(
+                f"Mob definition '{value}' is unavailable in the trigger world.",
+                code="mob_definition_missing",
+            )
+        resolved_mobs[ref] = definition
+
     cumulative_seconds = 0
     snapshot = deepcopy(steps)
     for step in snapshot:
@@ -280,6 +362,12 @@ def _snapshot_steps_with_definition_ids(
                 definition = resolved[_definition_ref_parts(action.get("with"))]
                 action["with_item_definition_id"] = definition.id
                 action["with"] = f"itemdefinition.{definition.slug}"
+            if action.get("type") == TRIGGER_STEP_ACTION_SET_MOB:
+                definition = resolved_mobs[
+                    _mob_definition_ref_parts(action.get("mob"))
+                ]
+                action["mob_definition_id"] = definition.id
+                action["mob"] = f"mobdefinition.{definition.slug}"
     return snapshot
 
 
@@ -480,6 +568,231 @@ def _replace_room_item(
     return removed_item_id, removed_item_key, replacement
 
 
+def _load_trigger_actor(run: ScheduledTriggerRun) -> Player | Mob | None:
+    actor_model = _actor_model(run.actor_type)
+    if actor_model is None:
+        return None
+    queryset = actor_model.objects.filter(
+        pk=run.actor_id,
+        world_id=run.runtime_world_id,
+    )
+    if actor_model is Mob:
+        queryset = queryset.filter(is_pending_deletion=False)
+    return queryset.first()
+
+
+def _set_mob_context(
+    *,
+    mob: Mob,
+    trigger_actor: Player | Mob | None,
+    room: Room,
+    runtime_world: World,
+    state_snapshot: dict[str, Any] | None = None,
+    invariant_state_cache: dict[str, dict[str, Any]] | None = None,
+) -> ConditionContext:
+    if state_snapshot is None:
+        state_record = mob._state.fields_cache.get("character_state_record")
+        state_snapshot = dict(getattr(state_record, "data", {}) or {})
+    state_cache = dict(invariant_state_cache or {})
+    state_cache[STATE_SCOPE_CHARACTER] = state_snapshot
+    return ConditionContext(
+        actor=mob,
+        player=trigger_actor if isinstance(trigger_actor, Player) else None,
+        room=room,
+        zone=room.zone,
+        world=runtime_world,
+        state_cache=state_cache,
+    )
+
+
+def _matches_set_mob_where(
+    where: Any,
+    *,
+    mob: Mob,
+    trigger_actor: Player | Mob | None,
+    room: Room,
+    runtime_world: World,
+    invariant_state_cache: dict[str, dict[str, Any]],
+    state_snapshot: dict[str, Any] | None = None,
+) -> bool:
+    context = _set_mob_context(
+        mob=mob,
+        trigger_actor=trigger_actor,
+        room=room,
+        runtime_world=runtime_world,
+        state_snapshot=state_snapshot,
+        invariant_state_cache=invariant_state_cache,
+    )
+    matches = evaluate_condition(where, context=context)
+    for scope, snapshot in context.state_cache.items():
+        if scope != STATE_SCOPE_CHARACTER:
+            invariant_state_cache[scope] = snapshot
+    return matches
+
+
+def _lock_or_create_mob_state(mob: Mob) -> tuple[MobState, bool]:
+    state_record = (
+        MobState.objects.select_for_update()
+        .filter(mob_id=mob.id)
+        .first()
+    )
+    if state_record is not None:
+        return state_record, False
+
+    try:
+        with transaction.atomic():
+            state_record = MobState.objects.create(
+                mob=mob,
+                data={},
+                version=0,
+            )
+        return state_record, True
+    except IntegrityError:
+        # A state writer may have created the one-to-one row after the
+        # initial lookup. Lock its row before rechecking the predicate.
+        return (
+            MobState.objects.select_for_update().get(mob_id=mob.id),
+            False,
+        )
+
+
+def _set_mob(
+    *,
+    run: ScheduledTriggerRun,
+    action: dict[str, Any],
+    room: Room,
+    runtime_world: World,
+    trigger_actor: Player | Mob | None,
+) -> Mob:
+    try:
+        definition_id = int(action["mob_definition_id"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise TriggerStepExecutionError(
+            "The set_mob action has no valid mob definition.",
+            code="invalid_mob_definition",
+        ) from exc
+
+    where = action.get("where")
+    matches: list[Mob] = []
+    candidates = (
+        Mob.objects.select_for_update(of=("self",))
+        .select_related(
+            "definition",
+            "character_state_record",
+            "world",
+            "world__context",
+            "world__context__instance_of",
+        )
+        .filter(
+            world_id=run.runtime_world_id,
+            room_id=run.room_id,
+            definition_id=definition_id,
+            is_pending_deletion=False,
+        )
+        .order_by("id")
+    )
+    # The iterator keeps memory bounded in unusually crowded rooms. Stop after
+    # two matches because the action requires exactly one and no further row
+    # can change the result from ambiguous.
+    invariant_state_cache: dict[str, dict[str, Any]] = {}
+    for candidate in candidates.iterator(chunk_size=32):
+        if where not in (None, {}, []) and not _matches_set_mob_where(
+            where,
+            mob=candidate,
+            trigger_actor=trigger_actor,
+            room=room,
+            runtime_world=runtime_world,
+            invariant_state_cache=invariant_state_cache,
+        ):
+            continue
+        matches.append(candidate)
+        if len(matches) == 2:
+            break
+
+    if not matches:
+        raise TriggerStepExecutionError(
+            "No matching mob is available in the trigger room.",
+            code="set_mob_not_found",
+        )
+    if len(matches) > 1:
+        raise TriggerStepExecutionError(
+            "More than one mob matches the set_mob action.",
+            code="set_mob_ambiguous",
+        )
+
+    mob = matches[0]
+    state_record, state_record_created = _lock_or_create_mob_state(mob)
+    locked_state = dict(state_record.data or {})
+    if where not in (None, {}, []) and not _matches_set_mob_where(
+        where,
+        mob=mob,
+        trigger_actor=trigger_actor,
+        room=room,
+        runtime_world=runtime_world,
+        state_snapshot=locked_state,
+        invariant_state_cache=invariant_state_cache,
+    ):
+        raise TriggerStepExecutionError(
+            "No matching mob is available in the trigger room.",
+            code="set_mob_not_found",
+        )
+
+    fields = action.get("fields")
+    if not isinstance(fields, dict) or not fields:
+        raise TriggerStepExecutionError(
+            "The set_mob action has no fields to update.",
+            code="invalid_set_mob_fields",
+        )
+    update_fields: list[str] = []
+    for field_name, value in fields.items():
+        if field_name not in {
+            "name",
+            "room_description",
+            "description",
+            "attackable",
+        }:
+            raise TriggerStepExecutionError(
+                f"The set_mob field '{field_name}' is unsupported.",
+                code="invalid_set_mob_field",
+            )
+        setattr(mob, field_name, value)
+        update_fields.append(field_name)
+    if update_fields:
+        mob.save(update_fields=[*update_fields, "modified_ts"])
+
+    state = action.get("state")
+    if state is not None:
+        try:
+            normalized_state = normalize_state_snapshot(
+                state,
+                field_name="set_mob.state",
+            )
+        except ValueError as exc:
+            raise TriggerStepExecutionError(
+                str(exc),
+                code="invalid_set_mob_state",
+            ) from exc
+        if normalized_state:
+            state_record.data = normalize_state_snapshot(
+                {
+                    **locked_state,
+                    **normalized_state,
+                },
+                field_name="character.state",
+            )
+            state_record.version = int(state_record.version or 0) + 1
+            state_record.save(
+                update_fields=["data", "version", "modified_ts"],
+            )
+    if state_record_created and not state_record.data:
+        # Character-state rows are deliberately sparse. The temporary row
+        # exists only to serialize predicate rechecks against concurrent state
+        # writers; remove it when this action did not persist any state.
+        state_record.delete()
+
+    return mob
+
+
 def _item_change_events(
     *,
     run: ScheduledTriggerRun,
@@ -550,6 +863,65 @@ def _item_change_events(
     return events
 
 
+def _mob_change_events(
+    *,
+    run: ScheduledTriggerRun,
+    room: Room,
+    changes: TriggerMobChanges,
+    room_recipient_keys: tuple[str, ...],
+) -> list[GameEvent]:
+    if not changes.changed or not room_recipient_keys:
+        return []
+
+    from spawns.state_payloads import room_payload_key_for, safe_capitalize
+
+    mobs: list[dict[str, Any]] = []
+    for change in changes.updated.values():
+        mob = change.mob
+        definition = mob.definition
+        name = (
+            mob.name
+            or (definition.name if definition else "")
+            or "Unnamed Mob"
+        )
+        field_values = {
+            "name": name,
+            "room_description": safe_capitalize(
+                mob.room_description
+                or (definition.room_description if definition else "")
+                or f"{name} is here."
+            ),
+            "description": (
+                mob.description
+                or (definition.description if definition else None)
+            ),
+            "attackable": mob.attackable,
+        }
+        mobs.append({
+            "key": mob.key,
+            **{
+                field_name: field_values[field_name]
+                for field_name in sorted(change.fields)
+            },
+        })
+    return [
+        GameEvent(
+            type="notification.trigger.mobs_changed",
+            recipients=room_recipient_keys,
+            data={
+                "room": {
+                    "id": room.id,
+                    "key": room_payload_key_for(room),
+                },
+                "mobs": mobs,
+                "actor": {
+                    "key": run.actor_key,
+                },
+            },
+        ),
+    ]
+
+
 def _echo_event(
     *,
     run: ScheduledTriggerRun,
@@ -598,6 +970,7 @@ def _execute_current_step(
     *,
     runtime_world: World | None = None,
     room: Room | None = None,
+    trigger_actor: Player | Mob | None = None,
 ) -> list[GameEvent]:
     steps = run.steps if isinstance(run.steps, list) else []
     if run.next_step_index >= len(steps):
@@ -618,12 +991,13 @@ def _execute_current_step(
             "context__instance_of",
         ).get(pk=run.runtime_world_id)
     if room is None:
-        room = Room.objects.get(pk=run.room_id)
+        room = Room.objects.select_related("zone").get(pk=run.room_id)
     definition_world_id = _definition_world_id(runtime_world)
     definitions = _step_definitions(step, authored_world_id=definition_world_id)
     bindings = deepcopy(run.bindings or {})
     events: list[GameEvent] = []
     item_changes = TriggerItemChanges()
+    mob_changes = TriggerMobChanges()
     room_recipient_keys = _room_recipient_keys(run)
 
     for action in step.get("actions") or []:
@@ -674,6 +1048,22 @@ def _execute_current_step(
             if item_changes.room_items_added.pop(removed_id, None) is None:
                 item_changes.room_items_removed.append({"key": removed_key})
             item_changes.room_items_added[replacement.id] = replacement
+        elif action_type == TRIGGER_STEP_ACTION_SET_MOB:
+            if trigger_actor is None:
+                trigger_actor = _load_trigger_actor(run)
+            updated_mob = _set_mob(
+                run=run,
+                action=action,
+                room=room,
+                runtime_world=runtime_world,
+                trigger_actor=trigger_actor,
+            )
+            change = mob_changes.updated.setdefault(
+                updated_mob.id,
+                TriggerMobChange(mob=updated_mob),
+            )
+            change.mob = updated_mob
+            change.fields.update(action["fields"])
         elif action_type == TRIGGER_STEP_ACTION_ECHO:
             event = _echo_event(
                 run=run,
@@ -694,6 +1084,14 @@ def _execute_current_step(
             run=run,
             room=room,
             changes=item_changes,
+            room_recipient_keys=room_recipient_keys,
+        )
+    )
+    events.extend(
+        _mob_change_events(
+            run=run,
+            room=room,
+            changes=mob_changes,
             room_recipient_keys=room_recipient_keys,
         )
     )
@@ -885,6 +1283,7 @@ def start_trigger_steps(
                     run,
                     runtime_world=runtime_world,
                     room=room,
+                    trigger_actor=locked_actor,
                 )
                 queued_event_count = enqueue_game_events(events)
                 if queued_event_count:
@@ -940,6 +1339,7 @@ def _advance_one_due_run(*, due_at) -> str | None:
             ScheduledTriggerRun.objects.select_related(
                 "runtime_world__context__instance_of",
                 "room",
+                "room__zone",
             )
             .select_for_update(skip_locked=True, of=("self",))
             .filter(

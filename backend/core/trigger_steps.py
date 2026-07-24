@@ -13,6 +13,7 @@ TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM = "consume_room_item"
 TRIGGER_STEP_ACTION_GRANT_ITEM = "grant_item"
 TRIGGER_STEP_ACTION_SPAWN_ROOM_ITEM = "spawn_room_item"
 TRIGGER_STEP_ACTION_REPLACE_ROOM_ITEM = "replace_room_item"
+TRIGGER_STEP_ACTION_SET_MOB = "set_mob"
 TRIGGER_STEP_ACTION_ECHO = "echo"
 TRIGGER_STEP_ACTION_TYPES = (
     TRIGGER_STEP_ACTION_CONSUME_ITEM,
@@ -20,8 +21,17 @@ TRIGGER_STEP_ACTION_TYPES = (
     TRIGGER_STEP_ACTION_GRANT_ITEM,
     TRIGGER_STEP_ACTION_SPAWN_ROOM_ITEM,
     TRIGGER_STEP_ACTION_REPLACE_ROOM_ITEM,
+    TRIGGER_STEP_ACTION_SET_MOB,
     TRIGGER_STEP_ACTION_ECHO,
 )
+
+TRIGGER_STEP_SET_MOB_FIELD_TYPES = {
+    "name": str,
+    "room_description": str,
+    "description": str,
+    "attackable": bool,
+}
+TRIGGER_STEP_SET_MOB_NAME_MAX_LENGTH = 255
 
 TRIGGER_ACTOR_REF = "trigger_actor"
 TRIGGER_ROOM_REF = "trigger_room"
@@ -46,6 +56,8 @@ class TriggerStepSpecError(ValueError):
 
 
 ItemRefNormalizer = Callable[[Any, str], str]
+MobRefNormalizer = Callable[[Any, str], str]
+ConditionNormalizer = Callable[[Any, str], Any]
 
 
 def normalize_trigger_step_error_policy(value: Any) -> str:
@@ -132,6 +144,107 @@ def _item_ref(
     return normalized
 
 
+def _mob_ref(
+    value: Any,
+    *,
+    field_name: str,
+    mob_ref_normalizer: MobRefNormalizer | None,
+) -> str:
+    if mob_ref_normalizer is not None:
+        return mob_ref_normalizer(value, field_name)
+    if isinstance(value, bool):
+        raise TriggerStepSpecError(
+            f"{field_name} must reference a mobdefinition."
+        )
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise TriggerStepSpecError(f"{field_name} is required.")
+    prefix, separator, _ = normalized.partition(".")
+    if separator and prefix.strip().lower() not in {
+        "mobdefinition",
+        "mob_definition",
+    }:
+        raise TriggerStepSpecError(
+            f"{field_name} must reference a mobdefinition."
+        )
+    return normalized
+
+
+def _normalize_state_mapping(value: Any, *, field_name: str) -> dict[str, Any]:
+    mapping = _mapping(value, field_name=field_name)
+    try:
+        from core.scoped_state import normalize_state_snapshot
+
+        return normalize_state_snapshot(mapping, field_name=field_name)
+    except ValueError as exc:
+        raise TriggerStepSpecError(str(exc)) from exc
+
+
+def _normalize_set_mob_fields(
+    value: Any,
+    *,
+    field_name: str,
+) -> dict[str, Any]:
+    fields = _mapping(value, field_name=field_name)
+    if not fields:
+        raise TriggerStepSpecError(f"{field_name} must not be empty.")
+    unsupported = sorted(set(fields) - set(TRIGGER_STEP_SET_MOB_FIELD_TYPES))
+    if unsupported:
+        raise TriggerStepSpecError(
+            f"{field_name} has unsupported field(s): {', '.join(unsupported)}."
+        )
+
+    normalized: dict[str, Any] = {}
+    for key, expected_type in TRIGGER_STEP_SET_MOB_FIELD_TYPES.items():
+        if key not in fields:
+            continue
+        raw_value = fields[key]
+        if expected_type is bool:
+            if not isinstance(raw_value, bool):
+                raise TriggerStepSpecError(f"{field_name}.{key} must be a boolean.")
+        elif not isinstance(raw_value, expected_type):
+            raise TriggerStepSpecError(f"{field_name}.{key} must be a string.")
+        if key == "name" and not raw_value.strip():
+            raise TriggerStepSpecError(f"{field_name}.name cannot be blank.")
+        if (
+            key == "name"
+            and len(raw_value) > TRIGGER_STEP_SET_MOB_NAME_MAX_LENGTH
+        ):
+            raise TriggerStepSpecError(
+                f"{field_name}.name cannot exceed "
+                f"{TRIGGER_STEP_SET_MOB_NAME_MAX_LENGTH} characters."
+            )
+        normalized[key] = raw_value
+    return normalized
+
+
+def _normalize_condition(
+    value: Any,
+    *,
+    field_name: str,
+    condition_normalizer: ConditionNormalizer | None,
+) -> Any:
+    if not isinstance(value, (bool, dict, list)):
+        raise TriggerStepSpecError(
+            f"{field_name} must be a structured condition."
+        )
+    if condition_normalizer is not None:
+        value = condition_normalizer(value, field_name)
+    try:
+        normalized = json.loads(json.dumps(value))
+    except (TypeError, ValueError) as exc:
+        raise TriggerStepSpecError(
+            f"{field_name} must contain a JSON-compatible condition."
+        ) from exc
+    try:
+        from core.condition_dsl import validate_candidate_condition_payload
+
+        validate_candidate_condition_payload(normalized, field_name=field_name)
+    except ValueError as exc:
+        raise TriggerStepSpecError(str(exc)) from exc
+    return normalized
+
+
 def _binding(value: Any, *, field_name: str) -> str:
     normalized = str(value or "").strip().lower()
     if not _BINDING_RE.fullmatch(normalized):
@@ -148,6 +261,8 @@ def _normalize_action(
     field_name: str,
     bindings: set[str],
     item_ref_normalizer: ItemRefNormalizer | None,
+    mob_ref_normalizer: MobRefNormalizer | None,
+    condition_normalizer: ConditionNormalizer | None,
 ) -> dict[str, Any]:
     action = _mapping(value, field_name=field_name)
     action_type = str(action.get("type") or "").strip().lower()
@@ -290,6 +405,43 @@ def _normalize_action(
             ),
         }
 
+    if action_type == TRIGGER_STEP_ACTION_SET_MOB:
+        _exact_fields(
+            action,
+            field_name=field_name,
+            required={"type", "room", "mob", "fields"},
+            optional={"where", "state"},
+        )
+        normalized = {
+            "type": action_type,
+            "room": _context_ref(
+                action.get("room"),
+                field_name=f"{field_name}.room",
+                expected=TRIGGER_ROOM_REF,
+            ),
+            "mob": _mob_ref(
+                action.get("mob"),
+                field_name=f"{field_name}.mob",
+                mob_ref_normalizer=mob_ref_normalizer,
+            ),
+            "fields": _normalize_set_mob_fields(
+                action.get("fields"),
+                field_name=f"{field_name}.fields",
+            ),
+        }
+        if "where" in action:
+            normalized["where"] = _normalize_condition(
+                action.get("where"),
+                field_name=f"{field_name}.where",
+                condition_normalizer=condition_normalizer,
+            )
+        if "state" in action:
+            normalized["state"] = _normalize_state_mapping(
+                action.get("state"),
+                field_name=f"{field_name}.state",
+            )
+        return normalized
+
     _exact_fields(
         action,
         field_name=field_name,
@@ -320,6 +472,8 @@ def normalize_trigger_steps(
     value: Any,
     *,
     item_ref_normalizer: ItemRefNormalizer | None = None,
+    mob_ref_normalizer: MobRefNormalizer | None = None,
+    condition_normalizer: ConditionNormalizer | None = None,
 ) -> list[dict[str, Any]]:
     if value in (None, ""):
         return []
@@ -380,6 +534,8 @@ def normalize_trigger_steps(
                 field_name=f"{field_name}.actions[{action_index}]",
                 bindings=bindings,
                 item_ref_normalizer=item_ref_normalizer,
+                mob_ref_normalizer=mob_ref_normalizer,
+                condition_normalizer=condition_normalizer,
             )
             for action_index, action in enumerate(raw_actions)
         ]

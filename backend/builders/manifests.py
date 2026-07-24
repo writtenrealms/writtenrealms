@@ -2248,16 +2248,88 @@ def _normalize_trigger_item_definition_ref(
     return f"itemdefinition.{item_definition.slug}"
 
 
-def _normalize_trigger_condition_item_refs(value: Any, *, world: World) -> Any:
+def _normalize_trigger_mob_definition_ref(
+    *,
+    world: World,
+    value: Any,
+    field_name: str,
+) -> str:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(
+            f"{field_name} must reference a mobdefinition in this world."
+        )
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(f"{field_name} is required.")
+
+    mob_definition = None
+    definition_world_id = world.instance_of_id or world.id
+    if isinstance(value, int):
+        mob_definition = MobDefinition.objects.filter(
+            world_id=definition_world_id,
+            pk=value,
+        ).first()
+    else:
+        prefix, separator, raw_value = text.partition(".")
+        if separator:
+            if prefix.strip().lower() not in {
+                "mobdefinition",
+                "mob_definition",
+            }:
+                raise serializers.ValidationError(
+                    f"{field_name} must reference a mobdefinition."
+                )
+            text = raw_value.strip()
+            if not text:
+                raise serializers.ValidationError(f"{field_name} is required.")
+            mob_definition = MobDefinition.objects.filter(
+                world_id=definition_world_id,
+                slug=text,
+            ).first()
+        elif text.isdigit():
+            mob_definition = MobDefinition.objects.filter(
+                world_id=definition_world_id,
+                pk=int(text),
+            ).first()
+        else:
+            mob_definition = MobDefinition.objects.filter(
+                world_id=definition_world_id,
+                slug=text,
+            ).first()
+
+    if mob_definition is None:
+        raise serializers.ValidationError(
+            f"{field_name} references an unknown mob definition in this world."
+        )
+    return f"mobdefinition.{mob_definition.slug}"
+
+
+def _normalize_trigger_condition_refs(value: Any, *, world: World) -> Any:
     if isinstance(value, list):
         return [
-            _normalize_trigger_condition_item_refs(item, world=world)
+            _normalize_trigger_condition_refs(item, world=world)
             for item in value
         ]
     if not isinstance(value, dict):
         return value
 
     normalized = dict(value)
+    mob_present = normalized.get("mob_present")
+    if isinstance(mob_present, dict) and "ref" in mob_present:
+        normalized["mob_present"] = {
+            **mob_present,
+            "ref": _normalize_trigger_mob_definition_ref(
+                world=world,
+                value=mob_present.get("ref"),
+                field_name="spec.conditions.mob_present.ref",
+            ),
+        }
+    elif mob_present not in (None, ""):
+        normalized["mob_present"] = _normalize_trigger_mob_definition_ref(
+            world=world,
+            value=mob_present,
+            field_name="spec.conditions.mob_present",
+        )
     item_present = normalized.get("item_present")
     if isinstance(item_present, dict) and "item" in item_present:
         normalized["item_present"] = {
@@ -2269,9 +2341,17 @@ def _normalize_trigger_condition_item_refs(value: Any, *, world: World) -> Any:
             ),
         }
     for key, child in list(normalized.items()):
-        if key == "item_present":
+        if key in {"item_present", "mob_present"}:
+            if key == "mob_present" and isinstance(child, dict) and "where" in child:
+                normalized[key] = {
+                    **child,
+                    "where": _normalize_trigger_condition_refs(
+                        child.get("where"),
+                        world=world,
+                    ),
+                }
             continue
-        normalized[key] = _normalize_trigger_condition_item_refs(child, world=world)
+        normalized[key] = _normalize_trigger_condition_refs(child, world=world)
     return normalized
 
 
@@ -2279,7 +2359,7 @@ def _coerce_conditions_payload(raw_conditions: Any, *, world: World) -> str:
     if isinstance(raw_conditions, str):
         raw_conditions = _deserialize_conditions_payload(raw_conditions)
     if isinstance(raw_conditions, (dict, list)):
-        normalized = _normalize_trigger_condition_item_refs(raw_conditions, world=world)
+        normalized = _normalize_trigger_condition_refs(raw_conditions, world=world)
         builder_serializers.validate_conditions(None, normalized)
         return json.dumps(normalized)
     conditions = _coerce_text(raw_conditions)
@@ -3033,6 +3113,16 @@ def parse_trigger_manifest(
                     value=value,
                     field_name=field_name,
                 )
+            ),
+            mob_ref_normalizer=lambda value, field_name: (
+                _normalize_trigger_mob_definition_ref(
+                    world=world,
+                    value=value,
+                    field_name=field_name,
+                )
+            ),
+            condition_normalizer=lambda value, _field_name: (
+                _normalize_trigger_condition_refs(value, world=world)
             ),
         )
         on_step_error = normalize_trigger_step_error_policy(

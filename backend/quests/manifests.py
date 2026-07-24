@@ -199,8 +199,9 @@ def _manifest_spec_for_quest_type(quest_type: str) -> dict[str, Any]:
 
 def _entity_ref_error(expected_type: str, field_name: str) -> str:
     return (
-        f"{field_name} must be an integer id, a '{expected_type}.<id>' key, "
-        f"a '{expected_type}.<slug>' key, or a bare slug."
+        f"{field_name} must be a bare integer id, a "
+        f"'{expected_type}.<slug>' key (including a numeric slug), "
+        "or a bare slug."
     )
 
 
@@ -222,8 +223,6 @@ def _validate_entity_ref(world: World, value: Any, expected_type: str, field_nam
         canonical_prefix = canonical_entity_type(prefix)
         if not canonical_prefix or canonical_prefix != expected:
             raise serializers.ValidationError(_entity_ref_error(expected, field_name))
-        if raw.isdigit():
-            return
 
     resolved_id = resolve_entity_ref_id(
         world=world,

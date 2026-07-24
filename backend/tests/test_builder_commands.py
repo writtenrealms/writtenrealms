@@ -2493,6 +2493,58 @@ class TestBuilderStatsAndSet(BuilderCommandTestCase):
         self.assertEqual(message["data"]["new_value"], 11)
         self.assertEqual(message["data"]["room"]["id"], self.room.id)
 
+    def test_builder_set_updates_room_mob_attackable(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Training Guard",
+            keywords="training guard",
+            attackable=True,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/set guard attackable false")
+
+        mob.refresh_from_db()
+        self.assertFalse(mob.attackable)
+        message = self._message_by_type(messages, "cmd./set.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target"]["key"], mob.key)
+        self.assertEqual(message["data"]["field"], "attackable")
+        self.assertIs(message["data"]["previous_value"], True)
+        self.assertIs(message["data"]["new_value"], False)
+
+    def test_room_actor_set_updates_room_mob_attackable(self):
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Training Guard",
+            keywords="training guard",
+            attackable=False,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="room",
+                actor_id=self.room.id,
+                payload={
+                    "text": "/set guard attackable true",
+                    "world_id": self.spawn_world.id,
+                },
+                script_source=True,
+            )
+
+        mob.refresh_from_db()
+        self.assertTrue(mob.attackable)
+        message = self._message_by_type(messages, "cmd./set.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["actor"]["char_type"], "room")
+        self.assertEqual(message["data"]["target"]["key"], mob.key)
+        self.assertEqual(message["data"]["field"], "attackable")
+        self.assertIs(message["data"]["previous_value"], False)
+        self.assertIs(message["data"]["new_value"], True)
+
     def test_builder_set_rejects_mob_current_resource_above_max(self):
         mob = Mob.objects.create(
             world=self.spawn_world,

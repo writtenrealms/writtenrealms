@@ -15,10 +15,21 @@ from django.utils import timezone
 
 from builders.models import ItemDefinition, MobDefinition, Trigger
 from config import constants as adv_consts
+from core.scoped_state import STATE_SCOPE_CHARACTER, get_state_snapshot
 from core.trigger_steps import TriggerStepSpecError, normalize_trigger_steps
-from spawns.models import GameEventOutbox, Item, Mob, Player, ScheduledTriggerRun
+from spawns.models import (
+    GameEventOutbox,
+    Item,
+    Mob,
+    MobState,
+    Player,
+    ScheduledTriggerRun,
+)
 from spawns.trigger_steps import (
     MAX_ACTIVE_TRIGGER_RUNS_PER_ACTOR,
+    TriggerMobChange,
+    TriggerMobChanges,
+    _mob_change_events,
     process_due_trigger_runs,
     prune_terminal_trigger_runs,
     start_trigger_steps,
@@ -337,6 +348,165 @@ class TestScheduledTriggerSteps(WorldTestCase):
             ],
         )
 
+    def test_set_mob_action_normalizes_fields_where_and_state(self):
+        normalized = normalize_trigger_steps([
+            {
+                "after_seconds": 0,
+                "actions": [
+                    {
+                        "type": "set_mob",
+                        "room": "trigger_room",
+                        "mob": "mobdefinition.captive-commander",
+                        "where": {
+                            "eq": ["state.character.captive", True],
+                        },
+                        "fields": {
+                            "name": "a freed Greek commander",
+                            "room_description": "A freed commander stands here.",
+                            "description": "The commander studies the camp.",
+                            "attackable": True,
+                        },
+                        "state": {
+                            "captive": False,
+                        },
+                    },
+                ],
+            },
+        ])
+
+        self.assertEqual(
+            normalized[0]["actions"][0],
+            {
+                "type": "set_mob",
+                "room": "trigger_room",
+                "mob": "mobdefinition.captive-commander",
+                "where": {
+                    "eq": ["state.character.captive", True],
+                },
+                "fields": {
+                    "name": "a freed Greek commander",
+                    "room_description": "A freed commander stands here.",
+                    "description": "The commander studies the camp.",
+                    "attackable": True,
+                },
+                "state": {
+                    "captive": False,
+                },
+            },
+        )
+
+    def test_set_mob_action_rejects_invalid_fields_and_context(self):
+        invalid_actions = [
+            {
+                "type": "set_mob",
+                "room": "other_room",
+                "mob": "mobdefinition.commander",
+                "fields": {"attackable": True},
+            },
+            {
+                "type": "set_mob",
+                "room": "trigger_room",
+                "mob": "itemdefinition.commander",
+                "fields": {"attackable": True},
+            },
+            {
+                "type": "set_mob",
+                "room": "trigger_room",
+                "mob": "mobdefinition.commander",
+                "fields": {},
+            },
+            {
+                "type": "set_mob",
+                "room": "trigger_room",
+                "mob": "mobdefinition.commander",
+                "fields": {"attackable": "yes"},
+            },
+            {
+                "type": "set_mob",
+                "room": "trigger_room",
+                "mob": "mobdefinition.commander",
+                "fields": {"name": "   "},
+            },
+            {
+                "type": "set_mob",
+                "room": "trigger_room",
+                "mob": "mobdefinition.commander",
+                "fields": {"keywords": "commander"},
+            },
+            {
+                "type": "set_mob",
+                "room": "trigger_room",
+                "mob": "mobdefinition.commander",
+                "where": {"unknown_operator": True},
+                "fields": {"attackable": True},
+            },
+            {
+                "type": "set_mob",
+                "room": "trigger_room",
+                "mob": "mobdefinition.commander",
+                "where": "state.character.captive",
+                "fields": {"attackable": True},
+            },
+            {
+                "type": "set_mob",
+                "room": "trigger_room",
+                "mob": "mobdefinition.commander",
+                "where": {"all": ["state.character.captive"]},
+                "fields": {"attackable": True},
+            },
+            {
+                "type": "set_mob",
+                "room": "trigger_room",
+                "mob": "mobdefinition.commander",
+                "where": {
+                    "mob_present": "mobdefinition.other-commander",
+                },
+                "fields": {"attackable": True},
+            },
+            {
+                "type": "set_mob",
+                "room": "trigger_room",
+                "mob": "mobdefinition.commander",
+                "where": {"eq": ["state.room.cage_open", False]},
+                "fields": {"attackable": True},
+            },
+            {
+                "type": "set_mob",
+                "room": "trigger_room",
+                "mob": "mobdefinition.commander",
+                "where": {
+                    "eq": [
+                        "actor.name",
+                        "mobdefinition.other-commander",
+                    ],
+                },
+                "fields": {"attackable": True},
+            },
+            {
+                "type": "set_mob",
+                "room": "trigger_room",
+                "mob": "mobdefinition.commander",
+                "fields": {"name": "x" * 256},
+            },
+            {
+                "type": "set_mob",
+                "room": "trigger_room",
+                "mob": "mobdefinition.commander",
+                "fields": {"attackable": True},
+                "state": {"   ": False},
+            },
+        ]
+
+        for action in invalid_actions:
+            with self.subTest(action=action):
+                with self.assertRaises(TriggerStepSpecError):
+                    normalize_trigger_steps([
+                        {
+                            "after_seconds": 0,
+                            "actions": [action],
+                        },
+                    ])
+
     def test_harvest_actions_reject_invalid_fields_and_context_refs(self):
         invalid_actions = [
             {
@@ -391,6 +561,372 @@ class TestScheduledTriggerSteps(WorldTestCase):
                             "actions": [action],
                         },
                     ])
+
+    def test_set_mob_atomically_updates_runtime_mob_state_and_consumes_item(self):
+        self.room.relative_id = self.room.id + 5000
+        self.room.save(update_fields=["relative_id"])
+        commander_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="captive-commander",
+            name="a captive Greek commander",
+            room_description="A captive commander sits in a cage.",
+            description="Ropes bind the commander's wrists.",
+            initial_state={
+                "captive": True,
+                "rank": "commander",
+            },
+            attackable=False,
+        )
+        commander = commander_definition.spawn(self.room, self.spawn_world)
+        key = self.seed.spawn(self.player, self.spawn_world)
+        trigger = self._create_trigger(
+            match="open cage",
+            conditions=self._inventory_condition(),
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "consume_item",
+                            "actor": "trigger_actor",
+                            "item": "itemdefinition.barley-seed",
+                        },
+                        {
+                            "type": "set_mob",
+                            "room": "trigger_room",
+                            "mob": "mobdefinition.captive-commander",
+                            "where": {
+                                "all": [
+                                    {
+                                        "eq": [
+                                            "state.character.captive",
+                                            True,
+                                        ],
+                                    },
+                                    {
+                                        "eq": [
+                                            "player.id",
+                                            self.player.id,
+                                        ],
+                                    },
+                                ],
+                            },
+                            "fields": {
+                                "name": "a freed Greek commander",
+                                "room_description": "A freed commander stands here.",
+                                "description": "The commander studies the camp.",
+                                "attackable": True,
+                            },
+                            "state": {
+                                "captive": False,
+                            },
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "open cage")
+
+        self.assertFalse(Item.objects.filter(pk=key.id).exists())
+        commander.refresh_from_db()
+        self.assertEqual(commander.name, "a freed Greek commander")
+        self.assertEqual(
+            commander.room_description,
+            "A freed commander stands here.",
+        )
+        self.assertEqual(
+            commander.description,
+            "The commander studies the camp.",
+        )
+        self.assertTrue(commander.attackable)
+        self.assertFalse(
+            get_state_snapshot(STATE_SCOPE_CHARACTER, commander)["captive"]
+        )
+        self.assertEqual(
+            get_state_snapshot(STATE_SCOPE_CHARACTER, commander)["rank"],
+            "commander",
+        )
+        run = ScheduledTriggerRun.objects.get(trigger=trigger)
+        self.assertEqual(run.status, ScheduledTriggerRun.STATUS_COMPLETED)
+        self.assertEqual(
+            run.steps[0]["actions"][1]["mob_definition_id"],
+            commander_definition.id,
+        )
+        mob_change = next(
+            entry["message"]
+            for entry in messages
+            if entry["message"]["type"] == "notification.trigger.mobs_changed"
+        )
+        self.assertNotEqual(self.room.relative_id, self.room.id)
+        self.assertEqual(
+            mob_change["data"]["room"]["key"],
+            f"room.{self.room.relative_id}",
+        )
+        self.assertEqual(
+            mob_change["data"]["mobs"][0]["key"],
+            commander.key,
+        )
+        self.assertEqual(
+            mob_change["data"]["mobs"][0]["name"],
+            "a freed Greek commander",
+        )
+        self.assertTrue(mob_change["data"]["mobs"][0]["attackable"])
+        self.assertNotIn("actions", mob_change["data"]["mobs"][0])
+        self.assertNotIn("quest_indicator", mob_change["data"]["mobs"][0])
+
+    def test_set_mob_field_only_update_keeps_character_state_sparse(self):
+        commander_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="stateless-commander",
+            name="a quiet commander",
+        )
+        commander = commander_definition.spawn(self.room, self.spawn_world)
+        self.assertFalse(MobState.objects.filter(mob=commander).exists())
+        self._create_trigger(
+            match="name commander",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "set_mob",
+                            "room": "trigger_room",
+                            "mob": "mobdefinition.stateless-commander",
+                            "fields": {
+                                "name": "a named commander",
+                            },
+                        },
+                    ],
+                },
+            ],
+        )
+
+        self._dispatch(self.player.id, "name commander")
+
+        commander.refresh_from_db()
+        self.assertEqual(commander.name, "a named commander")
+        self.assertFalse(MobState.objects.filter(mob=commander).exists())
+
+    def test_set_mob_unions_partial_event_fields_for_repeated_updates(self):
+        commander_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="twice-updated-commander",
+            name="a captive commander",
+            attackable=False,
+        )
+        commander = commander_definition.spawn(self.room, self.spawn_world)
+        self._create_trigger(
+            match="update commander twice",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "set_mob",
+                            "room": "trigger_room",
+                            "mob": "mobdefinition.twice-updated-commander",
+                            "fields": {
+                                "name": "a freed commander",
+                            },
+                        },
+                        {
+                            "type": "set_mob",
+                            "room": "trigger_room",
+                            "mob": "mobdefinition.twice-updated-commander",
+                            "fields": {
+                                "attackable": True,
+                            },
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "update commander twice")
+
+        mob_change = next(
+            entry["message"]
+            for entry in messages
+            if entry["message"]["type"] == "notification.trigger.mobs_changed"
+        )
+        self.assertEqual(len(mob_change["data"]["mobs"]), 1)
+        self.assertEqual(
+            mob_change["data"]["mobs"][0],
+            {
+                "key": commander.key,
+                "name": "a freed commander",
+                "attackable": True,
+            },
+        )
+
+    def test_mob_change_event_builds_canonical_delta_without_queries(self):
+        commander_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="event-commander",
+            name="a definition commander",
+            room_description="a definition commander waits here.",
+            description="Definition description.",
+            attackable=False,
+        )
+        commander = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            definition=commander_definition,
+            name="",
+            room_description="",
+            description="",
+            attackable=True,
+        )
+        commander = Mob.objects.select_related("definition").get(
+            pk=commander.id,
+        )
+        changes = TriggerMobChanges(updated={
+            commander.id: TriggerMobChange(
+                mob=commander,
+                fields={
+                    "name",
+                    "room_description",
+                    "description",
+                    "attackable",
+                },
+            ),
+        })
+
+        with self.assertNumQueries(0):
+            events = _mob_change_events(
+                run=SimpleNamespace(actor_key=self.player.key),
+                room=self.room,
+                changes=changes,
+                room_recipient_keys=(self.player.key,),
+            )
+
+        self.assertEqual(
+            events[0].data["mobs"][0],
+            {
+                "key": commander.key,
+                "name": "a definition commander",
+                "room_description": "A definition commander waits here.",
+                "description": "Definition description.",
+                "attackable": True,
+            },
+        )
+
+    def test_set_mob_zero_match_rolls_back_item_consumption(self):
+        commander_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="freed-commander",
+            name="a freed commander",
+            initial_state={"captive": False},
+        )
+        commander = commander_definition.spawn(self.room, self.spawn_world)
+        key = self.seed.spawn(self.player, self.spawn_world)
+        self._create_trigger(
+            match="open empty cage",
+            conditions=self._inventory_condition(),
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "consume_item",
+                            "actor": "trigger_actor",
+                            "item": "itemdefinition.barley-seed",
+                        },
+                        {
+                            "type": "set_mob",
+                            "room": "trigger_room",
+                            "mob": "mobdefinition.freed-commander",
+                            "where": {
+                                "eq": [
+                                    "state.character.captive",
+                                    True,
+                                ],
+                            },
+                            "fields": {
+                                "name": "should not change",
+                            },
+                        },
+                    ],
+                },
+            ],
+        )
+
+        self._dispatch(self.player.id, "open empty cage")
+
+        self.assertTrue(Item.objects.filter(pk=key.id).exists())
+        commander.refresh_from_db()
+        self.assertEqual(commander.name, "a freed commander")
+        self.assertFalse(ScheduledTriggerRun.objects.exists())
+
+    def test_set_mob_ambiguous_match_rolls_back_every_action(self):
+        commander_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="two-captive-commanders",
+            name="a captive commander",
+            initial_state={"captive": True},
+        )
+        commanders = [
+            commander_definition.spawn(self.room, self.spawn_world)
+            for _ in range(2)
+        ]
+        key = self.seed.spawn(self.player, self.spawn_world)
+        self._create_trigger(
+            match="open crowded cage",
+            conditions=self._inventory_condition(),
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "consume_item",
+                            "actor": "trigger_actor",
+                            "item": "itemdefinition.barley-seed",
+                        },
+                        {
+                            "type": "set_mob",
+                            "room": "trigger_room",
+                            "mob": "mobdefinition.two-captive-commanders",
+                            "where": {
+                                "eq": [
+                                    "state.character.captive",
+                                    True,
+                                ],
+                            },
+                            "fields": {
+                                "name": "should not change",
+                            },
+                            "state": {
+                                "captive": False,
+                            },
+                        },
+                    ],
+                },
+            ],
+        )
+
+        self._dispatch(self.player.id, "open crowded cage")
+
+        self.assertTrue(Item.objects.filter(pk=key.id).exists())
+        self.assertEqual(
+            list(
+                Mob.objects.filter(pk__in=[mob.id for mob in commanders])
+                .order_by("id")
+                .values_list("name", flat=True)
+            ),
+            ["a captive commander", "a captive commander"],
+        )
+        self.assertTrue(
+            all(
+                get_state_snapshot(STATE_SCOPE_CHARACTER, mob)["captive"]
+                for mob in commanders
+            )
+        )
+        self.assertFalse(ScheduledTriggerRun.objects.exists())
 
     def test_grant_item_aggregate_count_per_step_cannot_exceed_32(self):
         actions = [
@@ -954,6 +1490,103 @@ class TestScheduledTriggerSteps(WorldTestCase):
         )
         run = ScheduledTriggerRun.objects.get(trigger=trigger)
         self.assertEqual(run.runtime_world_id, instance_runtime.id)
+
+    def test_set_mob_resolves_base_definition_and_isolates_instance_runtime(self):
+        commander_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="instance-captive-commander",
+            name="a captive commander",
+            initial_state={"captive": True},
+            attackable=False,
+        )
+        instance_template = World.objects.new_world(
+            name="Commander Cage",
+            author=self.user,
+            config=WorldConfig.objects.create(),
+            instance_of=self.world,
+        )
+        instance_room = instance_template.config.starting_room
+        local_runtime = instance_template.create_spawn_world(
+            instance_ref="local-run",
+        )
+        parallel_runtime = instance_template.create_spawn_world(
+            instance_ref="parallel-run",
+        )
+        local_commander = commander_definition.spawn(
+            instance_room,
+            local_runtime,
+        )
+        parallel_commander = commander_definition.spawn(
+            instance_room,
+            parallel_runtime,
+        )
+        self.player.world = local_runtime
+        self.player.room = instance_room
+        self.player.save(update_fields=["world", "room"])
+        trigger = self._create_trigger(
+            world=instance_template,
+            room=instance_room,
+            match="free commander",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "set_mob",
+                            "room": "trigger_room",
+                            "mob": (
+                                "mobdefinition."
+                                "instance-captive-commander"
+                            ),
+                            "where": {
+                                "eq": [
+                                    "state.character.captive",
+                                    True,
+                                ],
+                            },
+                            "fields": {
+                                "name": "a freed commander",
+                                "attackable": True,
+                            },
+                            "state": {
+                                "captive": False,
+                            },
+                        },
+                    ],
+                },
+            ],
+        )
+
+        self._dispatch(self.player.id, "free commander")
+
+        local_commander.refresh_from_db()
+        parallel_commander.refresh_from_db()
+        self.assertEqual(local_commander.name, "a freed commander")
+        self.assertTrue(local_commander.attackable)
+        self.assertFalse(
+            get_state_snapshot(
+                STATE_SCOPE_CHARACTER,
+                local_commander,
+            )["captive"]
+        )
+        self.assertEqual(
+            parallel_commander.name,
+            "a captive commander",
+        )
+        self.assertFalse(parallel_commander.attackable)
+        self.assertTrue(
+            get_state_snapshot(
+                STATE_SCOPE_CHARACTER,
+                parallel_commander,
+            )["captive"]
+        )
+        run = ScheduledTriggerRun.objects.get(trigger=trigger)
+        self.assertEqual(run.runtime_world_id, local_runtime.id)
+        self.assertEqual(
+            run.steps[0]["actions"][0]["mob_definition_id"],
+            commander_definition.id,
+        )
 
     def test_mob_typed_event_uses_event_actor_as_trigger_actor(self):
         import spawns.handlers  # noqa: F401

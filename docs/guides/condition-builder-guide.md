@@ -43,7 +43,7 @@ state-aware content should use the structured format.
 | `gte` | `{gte: [<path>, <value>]}` | Greater than or equal. |
 | `lte` | `{lte: [<path>, <value>]}` | Less than or equal. |
 | `in` | `{in: [<path>, [<value>, ...]]}` | Path value is in a list. |
-| `mob_present` | `{mob_present: <mob_definition_ref>}` | A spawned mob from that definition is present in the context room. |
+| `mob_present` | `{mob_present: <mob_definition_ref>}` or `{mob_present: {ref: ..., where: ...}}` | A spawned mob from that definition, optionally matching a nested condition, is present in the context room. |
 | `item_present` | `{item_present: {location: room, item: <item_definition_ref>}}` | A live item from that definition is present in the actor's inventory or context room. |
 | `quest_completed` | `{quest_completed: <quest_ref>}` | Player has completed a quest template. |
 | `objective_complete` | `{objective_complete: <objective_id>}` | Current quest objective is complete. |
@@ -146,6 +146,34 @@ conditions:
     ref: mobdefinition.guard
     count: 2
 ```
+
+Use `where` when the spawned mob must also satisfy another shared condition.
+The nested condition evaluates with each candidate mob as
+`state.character`/`actor`, while `player.*` continues to refer to the player
+whose action is being checked:
+
+```yaml
+conditions:
+  mob_present:
+    ref: mobdefinition.greek-captive-commander
+    where:
+      eq:
+        - state.character.captive
+        - true
+```
+
+When `count` and `where` are both present, only candidates satisfying `where`
+count toward the requested total. Candidate filters intentionally use the
+query-free subset of the shared DSL: `always`, `all`, `any`, `not`, `eq`,
+`ne`, `gte`, `lte`, and `in`. Presence and quest operators are not allowed
+inside `where`; keep those as sibling conditions in an outer `all`. Comparison
+paths may read `state.character.*`, direct candidate fields such as
+`actor.name` or `actor.attackable`, and `player.id`/`player.key`. Other scoped
+state, relationship traversal, and typed definition-ref resolution stay in
+the outer condition so candidate scans remain query-free.
+
+Structured conditions are limited to 16 levels of nesting and 256 condition
+nodes so authored content cannot create unbounded recursive work.
 
 Use a typed mob-definition ref rather than a spawned mob id. For movement
 hooks, the context room depends on the hook: `before_move_exit` checks the

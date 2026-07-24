@@ -108,6 +108,7 @@ MOB_SET_FIELD_CHOICES = (
     "name",
     "room_description",
     "description",
+    "attackable",
     "level",
     "experience",
     "health",

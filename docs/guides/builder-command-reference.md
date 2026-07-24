@@ -436,10 +436,10 @@ level, experience, health, energy, stamina, attributes, glory
 Supported mob fields:
 
 ```text
-name, room_description, description, level, experience, health, energy, stamina,
-attributes, aggression, exp_worth, health_max, health_regen, energy_max,
-energy_regen, stamina_max, stamina_regen, armor, dodge, crit, resilience,
-attack_power, ability_power
+name, room_description, description, attackable, level, experience, health,
+energy, stamina, attributes, aggression, exp_worth, health_max, health_regen,
+energy_max, energy_regen, stamina_max, stamina_regen, armor, dodge, crit,
+resilience, attack_power, ability_power
 ```
 
 Use `attribute.<key>`, `attributes.<key>`, or `attr.<key>` to change one
@@ -459,6 +459,7 @@ Examples:
 /cmd room -- /set guard name -- the awakened guard
 /cmd room -- /set guard room_description -- The awakened guard watches the archway.
 /cmd room -- /set guard description -- Old scars cross the guard's weathered face.
+/cmd room -- /set guard attackable true
 ```
 
 Room-issued `/set` changes the selected runtime character row. It does not edit
@@ -469,9 +470,9 @@ looks at the room or mob. Changing a mob's `name` does not rewrite its keywords,
 so later commands can continue to use a stable authored keyword. Changing a
 description field to an empty value with a trailing `--` clears the runtime
 override, so display falls back to the definition's authored text or generated
-room text. A mob's `name` cannot be blank. Changing `aggression` does not itself
-start combat. The new setting is used the next time normal aggression
-evaluation runs.
+room text. A mob's `name` cannot be blank. `attackable` accepts `true` or
+`false`. Changing `aggression` does not itself start combat. The new setting is
+used the next time normal aggression evaluation runs.
 
 ### `/setlevel`
 

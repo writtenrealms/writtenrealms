@@ -222,7 +222,7 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
                 "sources": [
                     {
                         "type": "npc_dialogue",
-                        "mob_definition": f"mobdefinition.{self.quartermaster.id}",
+                        "mob_definition": self.quartermaster.id,
                     }
                 ],
                 "visible_if": {},
@@ -248,13 +248,13 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
                                             {
                                                 "eq": [
                                                     "event.target.definition_id",
-                                                    f"mobdefinition.{self.quartermaster.id}",
+                                                    self.quartermaster.id,
                                                 ]
                                             },
                                             {
                                                 "eq": [
                                                     "event.item.definition_id",
-                                                    f"itemdefinition.{self.brass_key.id}",
+                                                    self.brass_key.id,
                                                 ]
                                             },
                                         ]
@@ -284,7 +284,7 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
                 "complete": [
                     {
                         "type": "mob_command",
-                        "mob_definition": f"mobdefinition.{self.quartermaster.id}",
+                        "mob_definition": self.quartermaster.id,
                         "command": "say Delivery received.",
                     }
                 ],
@@ -617,6 +617,55 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             "itemdefinition.barley-growing",
         )
 
+    def test_world_export_canonicalizes_refs_inside_mob_present_where(self):
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=self.start_room.id,
+            name="Question Quartermaster",
+            match="question quartermaster",
+            conditions=json.dumps({
+                "mob_present": {
+                    "ref": self.quartermaster.id,
+                    "where": {
+                        "eq": [
+                            "actor.definition_id",
+                            self.quartermaster.id,
+                        ],
+                    },
+                },
+            }),
+            display_action_in_room=True,
+            is_active=True,
+        )
+
+        resp = self.client.get(self.export_ep)
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        exported_docs = [
+            doc for doc in yaml.safe_load_all(resp.data["yaml"])
+            if doc is not None
+        ]
+        trigger = next(
+            doc for doc in exported_docs
+            if doc["kind"] == "trigger"
+            and doc["metadata"]["name"] == "Question Quartermaster"
+        )
+        self.assertEqual(
+            trigger["spec"]["conditions"]["mob_present"],
+            {
+                "ref": "mobdefinition.quartermaster",
+                "where": {
+                    "eq": [
+                        "actor.definition_id",
+                        "mobdefinition.quartermaster",
+                    ],
+                },
+            },
+        )
+
     def test_world_export_preserves_typed_numeric_itemdefinition_slugs(self):
         numeric_slug = str(self.barley_seed.id)
         ItemDefinition.objects.create(
@@ -674,6 +723,85 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         )
         self.assertEqual(
             trigger["spec"]["steps"][0]["actions"][0]["item"],
+            expected_ref,
+        )
+
+    def test_world_export_preserves_typed_numeric_mobdefinition_slugs(self):
+        legacy_id_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="legacy-export-id-definition",
+            name="a legacy export ID definition",
+        )
+        numeric_slug = str(legacy_id_definition.id)
+        MobDefinition.objects.create(
+            world=self.world,
+            slug=numeric_slug,
+            name="a numbered export commander",
+        )
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=self.start_room.id,
+            name="Free Numbered Commander",
+            match="free numbered commander",
+            script="",
+            conditions=json.dumps({
+                "mob_present": {
+                    "ref": f"mobdefinition.{numeric_slug}",
+                    "where": {
+                        "eq": [
+                            "actor.definition_id",
+                            f"mobdefinition.{numeric_slug}",
+                        ],
+                    },
+                },
+            }),
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "set_mob",
+                            "room": "trigger_room",
+                            "mob": f"mobdefinition.{numeric_slug}",
+                            "fields": {"attackable": True},
+                        },
+                    ],
+                },
+            ],
+            display_action_in_room=True,
+            is_active=True,
+        )
+
+        resp = self.client.get(self.export_ep)
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        exported_docs = [
+            doc for doc in yaml.safe_load_all(resp.data["yaml"])
+            if doc is not None
+        ]
+        trigger = next(
+            doc for doc in exported_docs
+            if doc["kind"] == "trigger"
+            and doc["metadata"]["name"] == "Free Numbered Commander"
+        )
+        expected_ref = f"mobdefinition.{numeric_slug}"
+        self.assertEqual(
+            trigger["spec"]["conditions"]["mob_present"],
+            {
+                "ref": expected_ref,
+                "where": {
+                    "eq": [
+                        "actor.definition_id",
+                        expected_ref,
+                    ],
+                },
+            },
+        )
+        self.assertEqual(
+            trigger["spec"]["steps"][0]["actions"][0]["mob"],
             expected_ref,
         )
 

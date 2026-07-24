@@ -13,6 +13,7 @@ import router from "@/router";
 
 const MESSAGE_LIMIT = 200;
 const TRIGGER_ITEMS_CHANGED_MESSAGE = "notification.trigger.items_changed";
+const TRIGGER_MOBS_CHANGED_MESSAGE = "notification.trigger.mobs_changed";
 
 const itemKey = (item: any): string => String(item?.key ?? "");
 
@@ -107,6 +108,19 @@ const replaceRoomChars = (state, chars) => {
   if (state.room) {
     state.room.chars = chars;
   }
+};
+
+const applyRoomCharChanges = (chars: any[], changedChars: any[]) => {
+  const updates = new Map(
+    (Array.isArray(changedChars) ? changedChars : [])
+      .filter(char => char && char.key)
+      .map(char => [String(char.key), char]),
+  );
+  if (!updates.size) return chars;
+  return (Array.isArray(chars) ? chars : []).map(char => {
+    const update = updates.get(String(char?.key ?? ""));
+    return update ? cloneRoomChar({ ...char, ...update }) : char;
+  });
 };
 
 const set_initial_state = () => {
@@ -235,6 +249,7 @@ const receiveMessage = async ({
     "notification.regen",
     "currency.balances_changed",
     TRIGGER_ITEMS_CHANGED_MESSAGE,
+    TRIGGER_MOBS_CHANGED_MESSAGE,
   ];
 
   // Echo received messages unless they are silent state updates.
@@ -360,6 +375,12 @@ const receiveMessage = async ({
     message_data.data
   ) {
     commit("trigger_items_changed_apply", message_data.data);
+  }
+  if (
+    message_data.type === TRIGGER_MOBS_CHANGED_MESSAGE &&
+    message_data.data
+  ) {
+    commit("trigger_mobs_changed_apply", message_data.data);
   }
 
   if (
@@ -536,6 +557,7 @@ const receiveMessage = async ({
   // Anything that has an actor who is the connected player
   if (
     message_data.type !== TRIGGER_ITEMS_CHANGED_MESSAGE &&
+    message_data.type !== TRIGGER_MOBS_CHANGED_MESSAGE &&
     message_data.data["actor"] &&
     state.player &&
     message_data.data["actor"].key === state.player.key
@@ -1240,6 +1262,46 @@ const mutations = {
         payload.actor_inventory_removed,
         payload.actor_inventory_added,
       );
+    }
+  },
+
+  trigger_mobs_changed_apply: (state, payload) => {
+    if (!payload || !Array.isArray(payload.mobs)) return;
+
+    const eventRoomKey = String(payload.room?.key ?? "");
+    const currentRoomKey = String(state.room?.key ?? "");
+    if (!eventRoomKey || currentRoomKey !== eventRoomKey) return;
+
+    replaceRoomChars(
+      state,
+      applyRoomCharChanges(state.room_chars, payload.mobs),
+    );
+
+    if (state.player_target) {
+      [state.player_target] = applyRoomCharChanges(
+        [state.player_target],
+        payload.mobs,
+      );
+    }
+    if (state.focus_data?.key) {
+      [state.focus_data] = applyRoomCharChanges(
+        [state.focus_data],
+        payload.mobs,
+      );
+    }
+
+    const viewedData = state.last_viewed_room_message?.data;
+    for (const viewedRoom of [viewedData?.room, viewedData?.target]) {
+      if (
+        viewedRoom &&
+        String(viewedRoom.key ?? "") === eventRoomKey &&
+        Array.isArray(viewedRoom.chars)
+      ) {
+        viewedRoom.chars = applyRoomCharChanges(
+          viewedRoom.chars,
+          payload.mobs,
+        );
+      }
     }
   },
 
