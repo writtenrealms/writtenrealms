@@ -252,16 +252,13 @@ const receiveMessage = async ({
     TRIGGER_MOBS_CHANGED_MESSAGE,
   ];
 
-  // Echo received messages unless they are silent state updates.
-  if (skip_messages.indexOf(message_data.type) == -1) {
-    const cloned_message_data = _.cloneDeep(message_data);
-    console.log(`RECV ${cloned_message_data.type}`);
-    console.log(cloned_message_data);
-  }
-
-  // Add visible messages to the console history.
+  // Add visible messages to the console history. message_add establishes the
+  // immutable snapshot boundary before live state processing begins.
   if (skip_messages.indexOf(message_data.type) == -1) {
     commit("message_add", message_data);
+    const historyMessage = state.messages[state.messages.length - 1];
+    console.log(`RECV ${historyMessage.type}`);
+    console.log(historyMessage);
   }
 
 
@@ -1080,16 +1077,19 @@ const combatRoundGroup = (message) => {
 
 const mutations = {
   message_add: (state, message) => {
-    message.receive_ts = new Date().getTime();
-    message.message_id = uuidv4();
-    if (!message.group) {
-      const group = combatRoundGroup(message);
+    // Console entries are terminal-style snapshots. Never retain references
+    // to the live payload objects that the rest of the store may update.
+    const historyMessage = _.cloneDeep(message);
+    historyMessage.receive_ts = new Date().getTime();
+    historyMessage.message_id = uuidv4();
+    if (!historyMessage.group) {
+      const group = combatRoundGroup(historyMessage);
       if (group) {
-        message.group = group;
+        historyMessage.group = group;
       }
     }
 
-    state.messages.push(message);
+    state.messages.push(historyMessage);
     const messages_length = state.messages.length;
     if (messages_length > MESSAGE_LIMIT) {
       state.messages = state.messages.slice(
@@ -1100,12 +1100,21 @@ const mutations = {
   },
 
   last_viewed_room_message_set: (state, message) => {
-    state.last_viewed_room_message = message;
+    const latestHistoryMessage = state.messages[state.messages.length - 1];
+    state.last_viewed_room_message = (
+      latestHistoryMessage?.type === message?.type
+        ? latestHistoryMessage
+        : _.cloneDeep(message)
+    );
   },
 
   last_message_set: (state, message) => {
-    // Vue.set(state.last_message, message.type, message);
-    state.last_message[message.type] = message;
+    const latestHistoryMessage = state.messages[state.messages.length - 1];
+    state.last_message[message.type] = (
+      latestHistoryMessage?.type === message?.type
+        ? latestHistoryMessage
+        : message
+    );
   },
 
   messages_clear: (state) => {
@@ -1219,36 +1228,12 @@ const mutations = {
     const eventRoomKey = String(payload.room?.key ?? "");
     const currentRoomKey = String(state.room?.key ?? "");
     if (eventRoomKey && currentRoomKey === eventRoomKey) {
-      const inventories = new Set<any[]>();
-      const viewedRooms = new Set<any>();
-      const collectRoomInventory = (room, isViewedRoom = false) => {
-        if (
-          room &&
-          String(room.key ?? "") === eventRoomKey &&
-          Array.isArray(room.inventory)
-        ) {
-          inventories.add(room.inventory);
-          if (isViewedRoom) viewedRooms.add(room);
-        }
-      };
-
-      collectRoomInventory(state.room);
-      const viewedData = state.last_viewed_room_message?.data;
-      collectRoomInventory(viewedData?.room, true);
-      collectRoomInventory(viewedData?.target, true);
-
-      for (const inventory of inventories) {
+      if (Array.isArray(state.room?.inventory)) {
         applyItemChangesInPlace(
-          inventory,
+          state.room.inventory,
           payload.room_items_removed,
           payload.room_items_added,
         );
-      }
-      for (const viewedRoom of viewedRooms) {
-        // LookRoom watches the inventory property by reference when rebuilding
-        // its stacked display, so refresh that property after shared in-place
-        // updates.
-        viewedRoom.inventory = [...viewedRoom.inventory];
       }
     }
 
@@ -1288,20 +1273,6 @@ const mutations = {
         [state.focus_data],
         payload.mobs,
       );
-    }
-
-    const viewedData = state.last_viewed_room_message?.data;
-    for (const viewedRoom of [viewedData?.room, viewedData?.target]) {
-      if (
-        viewedRoom &&
-        String(viewedRoom.key ?? "") === eventRoomKey &&
-        Array.isArray(viewedRoom.chars)
-      ) {
-        viewedRoom.chars = applyRoomCharChanges(
-          viewedRoom.chars,
-          payload.mobs,
-        );
-      }
     }
   },
 
