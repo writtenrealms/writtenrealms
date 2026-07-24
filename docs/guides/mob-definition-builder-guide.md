@@ -83,11 +83,14 @@ spec:
       obol: 3
 ```
 
-Each code must belong to the base world's currency catalog and each reward must
-be a positive whole number no greater than `9,007,199,254,740,991`. A kill
-credits all configured currency rewards as one wallet batch. Applying
-`rewards.currencies` replaces the complete currency-reward mapping for that mob
-definition.
+Each code must belong to the base world's currency catalog and each amount must
+be a whole number from `0` through `9,007,199,254,740,991`. A positive amount
+creates a reward. Set an amount to `0` when the manifest should explicitly
+remove or omit that currency reward; zero entries are not stored and canonical
+exports omit them. Negative amounts are invalid. A kill credits all configured
+currency rewards as one wallet batch. Applying `rewards.currencies` replaces
+the complete currency-reward mapping for that mob definition. Omit the entire
+`rewards` patch when an update should preserve the existing mapping.
 
 See [currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md)
 for defining currencies and choosing a default.

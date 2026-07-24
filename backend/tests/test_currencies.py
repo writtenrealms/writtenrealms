@@ -473,6 +473,86 @@ spec:
         mob.refresh_from_db()
         self.assertEqual(mob.currency_reward_snapshot, {"obol": 7})
 
+        clear_manifest = """
+kind: mobdefinition
+metadata:
+  slug: guard
+spec:
+  rewards:
+    currencies:
+      obol: 0
+"""
+        with patch(
+            "builders.mob_definitions.sync_spawned_mobs_from_definition",
+            wraps=sync_spawned_mobs_from_definition,
+        ) as clear_sync_mock:
+            response = self.client.post(
+                reverse("builder-world-manifest-apply", args=[self.world.pk]),
+                {"manifest": clear_manifest},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(clear_sync_mock.call_count, 1)
+        self.assertFalse(definition.currency_rewards.exists())
+        mob.refresh_from_db()
+        self.assertEqual(mob.currency_reward_snapshot, {})
+
+    def test_mob_currency_reward_manifest_accepts_zero_and_omits_reward(self):
+        create_currency(world=self.world, code="obol", name="Obol")
+        manifest = """
+kind: mobdefinition
+metadata:
+  slug: guard
+  name: a guard
+spec:
+  rewards:
+    currencies:
+      obol: 0
+"""
+
+        response = self.client.post(
+            reverse("builder-world-manifest-apply", args=[self.world.pk]),
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        definition = MobDefinition.objects.get(world=self.world, slug="guard")
+        self.assertFalse(definition.currency_rewards.exists())
+        self.assertNotIn(
+            "rewards",
+            response.data["mob_definition"]["manifest"]["spec"],
+        )
+
+    def test_mob_currency_reward_manifest_still_rejects_negative_amount(self):
+        create_currency(world=self.world, code="obol", name="Obol")
+        manifest = """
+kind: mobdefinition
+metadata:
+  slug: guard
+  name: a guard
+spec:
+  rewards:
+    currencies:
+      obol: -1
+"""
+
+        response = self.client.post(
+            reverse("builder-world-manifest-apply", args=[self.world.pk]),
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(
+            response.data["spec.rewards.currencies.obol"],
+            ["Must be at least 0."],
+        )
+        self.assertFalse(
+            MobDefinition.objects.filter(world=self.world, slug="guard").exists()
+        )
+
 
 class WalletTests(CurrencyTestCase):
     def setUp(self):

@@ -57,7 +57,8 @@ Current required mappings:
   to `death_mode: lose_currency` plus `death_currency` and
   `death_currency_penalty`, and quest `grant_gold` to `grant_currency` with an
   explicit `currency: gold`. Canonical WR2 imports do not accept the old Gold
-  fields or effects as aliases.
+  fields or effects as aliases. A zero-valued mob currency reward is accepted
+  as an explicit absence and normalized away; canonical exports omit it.
 - Normalize only the known WR1 item-currency enum value `medal` to the built-in
   code `medals`; do not rename an unrelated authored custom code by guesswork.
 - Convert representable legacy currency conditions to the existing structured
@@ -960,6 +961,12 @@ spec:
       obol: 4
 ```
 
+`rewards.currencies` is an exact replacement mapping. Positive entries become
+mob rewards. Explicit zero entries and omitted codes both mean no reward in
+that currency, and canonical export omits them. Negative amounts remain
+invalid. Omit the entire `rewards` patch when an update should preserve the
+existing reward mapping.
+
 See [currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md)
 for currency deletion, item, merchant, quest, death-policy, and condition
 examples.
@@ -1243,9 +1250,11 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   Instance worlds inherit socials and cannot author their own definitions.
 - `spec.cost` without `spec.currency` resolves the default on item creation and
   stores that concrete relation. `spec.currency` without `spec.cost` is invalid.
-- Mob rewards use `spec.rewards.currencies.<code>`, merchant profiles use
-  `spec.settlement_currency`, and quest rewards use `type: grant_currency` with
-  explicit `currency` and `amount`.
+- Mob rewards use `spec.rewards.currencies.<code>`. Their replacement mapping
+  accepts zero as an explicit absence, stores only positive rows, and rejects
+  negative amounts. Merchant profiles use `spec.settlement_currency`, and
+  quest rewards use `type: grant_currency` with explicit `currency` and
+  `amount`.
 
 Permission checks are applied when editing via manifest:
 

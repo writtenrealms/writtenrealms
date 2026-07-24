@@ -83,8 +83,9 @@ merchant profiles, rewards, or policies.
 
 All canonical money amounts are whole numbers from `0` through
 `9,007,199,254,740,991`. Negative values, fractions, booleans, and larger
-numbers are rejected. Quest and mob grants must be positive where a zero reward
-would have no meaning.
+numbers are rejected. Quest grants must be positive. Mob reward manifests
+accept zero as an explicit absence and normalize it away, while stored and
+runtime mob rewards remain positive.
 
 ## Item Values
 
@@ -184,8 +185,10 @@ spec:
 ```
 
 Applying `rewards.currencies` replaces the mob definition's complete currency
-reward mapping. Omit the entire `rewards` patch when an update should preserve
-existing rewards.
+reward mapping. Positive amounts create rewards; a zero amount explicitly
+omits or removes that currency reward and is not stored or exported. Negative
+amounts are invalid. Omit the entire `rewards` patch when an update should
+preserve existing rewards.
 
 ## Quest Rewards
 

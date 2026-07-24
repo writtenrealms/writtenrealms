@@ -4997,12 +4997,13 @@ def parse_mob_definition_manifest(
                 try:
                     amount = validate_currency_amount(
                         raw_amount,
-                        allow_zero=False,
+                        allow_zero=True,
                         field_name=f"spec.rewards.currencies.{reference}",
                     )
                 except ValidationError as exc:
                     raise serializers.ValidationError(exc.message_dict)
-                currency_rewards[currency] = amount
+                if amount:
+                    currency_rewards[currency] = amount
     except ItemDefinitionError as exc:
         raise serializers.ValidationError(str(exc))
     fields["slug"] = slug
