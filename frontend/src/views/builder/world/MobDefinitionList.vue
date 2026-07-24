@@ -53,6 +53,15 @@
               </select>
             </div>
             <div class="form-group">
+              <label for="mob-suggestion-faction">Faction</label>
+              <select id="mob-suggestion-faction" v-model="addForm.faction">
+                <option value="">None</option>
+                <option v-for="option in coreFactionOptions" :key="option.key" :value="option.key">
+                  {{ option.name }}
+                </option>
+              </select>
+            </div>
+            <div class="form-group">
               <label for="mob-suggestion-level">Mob level</label>
               <input
                 id="mob-suggestion-level"
@@ -61,6 +70,48 @@
                 min="1"
                 required
               />
+            </div>
+            <div class="form-group">
+              <label for="mob-suggestion-health-max">Health max</label>
+              <input
+                id="mob-suggestion-health-max"
+                v-model.number="addForm.healthMax"
+                type="number"
+                min="1"
+                step="1"
+                :placeholder="directStatPlaceholder('health_max')"
+              />
+              <div v-if="directStatDefaultLabel('health_max')" class="mob-suggestion-default">
+                {{ directStatDefaultLabel('health_max') }}
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="mob-suggestion-weapon-damage">Weapon damage</label>
+              <input
+                id="mob-suggestion-weapon-damage"
+                v-model.number="addForm.weaponDamage"
+                type="number"
+                min="0"
+                step="0.01"
+                :placeholder="directStatPlaceholder('weapon_damage')"
+              />
+              <div v-if="directStatDefaultLabel('weapon_damage')" class="mob-suggestion-default">
+                {{ directStatDefaultLabel('weapon_damage') }}
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="mob-suggestion-attack-power">Attack power</label>
+              <input
+                id="mob-suggestion-attack-power"
+                v-model.number="addForm.attackPower"
+                type="number"
+                min="0"
+                step="1"
+                :placeholder="directStatPlaceholder('attack_power')"
+              />
+              <div v-if="directStatDefaultLabel('attack_power')" class="mob-suggestion-default">
+                {{ directStatDefaultLabel('attack_power') }}
+              </div>
             </div>
             <div class="form-group">
               <label for="mob-suggestion-crit">Crit %</label>
@@ -73,7 +124,7 @@
                 step="0.01"
                 :placeholder="ratingPlaceholder('crit')"
               />
-              <div v-if="ratingDefaultLabel('crit')" class="mob-rating-default">
+              <div v-if="ratingDefaultLabel('crit')" class="mob-suggestion-default">
                 {{ ratingDefaultLabel('crit') }}
               </div>
             </div>
@@ -88,7 +139,7 @@
                 step="0.01"
                 :placeholder="ratingPlaceholder('resilience')"
               />
-              <div v-if="ratingDefaultLabel('resilience')" class="mob-rating-default">
+              <div v-if="ratingDefaultLabel('resilience')" class="mob-suggestion-default">
                 {{ ratingDefaultLabel('resilience') }}
               </div>
             </div>
@@ -103,7 +154,7 @@
                 step="0.01"
                 :placeholder="ratingPlaceholder('armor')"
               />
-              <div v-if="ratingDefaultLabel('armor')" class="mob-rating-default">
+              <div v-if="ratingDefaultLabel('armor')" class="mob-suggestion-default">
                 {{ ratingDefaultLabel('armor') }}
               </div>
             </div>
@@ -118,18 +169,9 @@
                 step="0.01"
                 :placeholder="ratingPlaceholder('dodge')"
               />
-              <div v-if="ratingDefaultLabel('dodge')" class="mob-rating-default">
+              <div v-if="ratingDefaultLabel('dodge')" class="mob-suggestion-default">
                 {{ ratingDefaultLabel('dodge') }}
               </div>
-            </div>
-            <div class="form-group">
-              <label for="mob-suggestion-faction">Faction</label>
-              <select id="mob-suggestion-faction" v-model="addForm.faction">
-                <option value="">None</option>
-                <option v-for="option in coreFactionOptions" :key="option.key" :value="option.key">
-                  {{ option.name }}
-                </option>
-              </select>
             </div>
           </div>
           <div v-if="addError" class="mob-suggestion-error">{{ addError }}</div>
@@ -197,11 +239,15 @@ const isSuggesting = ref(false);
 const addError = ref("");
 const slugWasEdited = ref(false);
 const defaultRatingPercents = ref<Record<string, number>>({});
+const defaultDirectStats = ref<Record<string, number>>({});
 const addForm = ref({
   name: "a new mob",
   slug: "new-mob",
   type: "humanoid",
   level: 1,
+  healthMax: null as number | null,
+  weaponDamage: null as number | null,
+  attackPower: null as number | null,
   faction: "",
   critPercent: null as number | null,
   resiliencePercent: null as number | null,
@@ -209,8 +255,8 @@ const addForm = ref({
   dodgePercent: null as number | null,
 });
 
-let ratingPreviewTimeout: ReturnType<typeof setTimeout> | null = null;
-let ratingPreviewRequestId = 0;
+let defaultPreviewTimeout: ReturnType<typeof setTimeout> | null = null;
+let defaultPreviewRequestId = 0;
 
 const ratingPreviewKeys = {
   armor: "same_level_armor_mitigation",
@@ -218,6 +264,12 @@ const ratingPreviewKeys = {
   dodge: "same_level_dodge_chance",
   resilience: "same_level_resilience_mitigation",
 };
+
+const directStatKeys = [
+  "health_max",
+  "weapon_damage",
+  "attack_power",
+];
 
 const resolveRoute = element => {
   return {
@@ -318,13 +370,16 @@ const createSuggestedMob = async () => {
       type: addForm.value.type,
       level: Number(addForm.value.level || 1),
     };
+    addNumericField(payload, "health_max", addForm.value.healthMax);
+    addNumericField(payload, "weapon_damage", addForm.value.weaponDamage);
+    addNumericField(payload, "attack_power", addForm.value.attackPower);
     if (addForm.value.faction) {
       payload.faction = addForm.value.faction;
     }
-    addRatingPercent(payload, "crit_percent", addForm.value.critPercent);
-    addRatingPercent(payload, "resilience_percent", addForm.value.resiliencePercent);
-    addRatingPercent(payload, "armor_percent", addForm.value.armorPercent);
-    addRatingPercent(payload, "dodge_percent", addForm.value.dodgePercent);
+    addNumericField(payload, "crit_percent", addForm.value.critPercent);
+    addNumericField(payload, "resilience_percent", addForm.value.resiliencePercent);
+    addNumericField(payload, "armor_percent", addForm.value.armorPercent);
+    addNumericField(payload, "dodge_percent", addForm.value.dodgePercent);
 
     const resp = await axios.post(suggestionEndpoint, payload);
     const yaml = resp.data?.yaml || "";
@@ -347,7 +402,7 @@ const createSuggestedMob = async () => {
   }
 };
 
-const addRatingPercent = (payload: Record<string, any>, key: string, value: unknown) => {
+const addNumericField = (payload: Record<string, any>, key: string, value: unknown) => {
   if (value === "" || value === null || value === undefined) return;
   const numericValue = Number(value);
   if (Number.isFinite(numericValue)) {
@@ -366,14 +421,24 @@ const ratingDefaultLabel = (ratingKey: string) => {
   return value ? `Default ${value}%` : "";
 };
 
+const directStatPlaceholder = (statKey: string) => {
+  const value = defaultDirectStats.value[statKey];
+  return value === undefined ? "" : String(value);
+};
+
+const directStatDefaultLabel = (statKey: string) => {
+  const value = directStatPlaceholder(statKey);
+  return value ? `Default ${value}` : "";
+};
+
 const previewPercent = (value: unknown) => {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) return undefined;
   return numericValue * 100;
 };
 
-const fetchDefaultRatingPreview = async () => {
-  const requestId = ++ratingPreviewRequestId;
+const fetchDefaultPreview = async () => {
+  const requestId = ++defaultPreviewRequestId;
   try {
     const resp = await axios.post(suggestionEndpoint, {
       name: "a preview mob",
@@ -383,9 +448,10 @@ const fetchDefaultRatingPreview = async () => {
     }, {
       validateStatus: () => true,
     });
-    if (requestId !== ratingPreviewRequestId) return;
+    if (requestId !== defaultPreviewRequestId) return;
     if (resp.status >= 400) {
       defaultRatingPercents.value = {};
+      defaultDirectStats.value = {};
       return;
     }
 
@@ -398,21 +464,32 @@ const fetchDefaultRatingPreview = async () => {
       }
     }
     defaultRatingPercents.value = percents;
+
+    const suggestedStats = resp.data?.suggested_stats || {};
+    const directStats: Record<string, number> = {};
+    for (const statKey of directStatKeys) {
+      const value = Number(suggestedStats[statKey]);
+      if (Number.isFinite(value)) {
+        directStats[statKey] = value;
+      }
+    }
+    defaultDirectStats.value = directStats;
   } catch {
-    if (requestId === ratingPreviewRequestId) {
+    if (requestId === defaultPreviewRequestId) {
       defaultRatingPercents.value = {};
+      defaultDirectStats.value = {};
     }
   }
 };
 
-const scheduleDefaultRatingPreview = () => {
-  if (ratingPreviewTimeout) {
-    clearTimeout(ratingPreviewTimeout);
+const scheduleDefaultPreview = () => {
+  if (defaultPreviewTimeout) {
+    clearTimeout(defaultPreviewTimeout);
   }
   if (!showAddForm.value) return;
 
-  ratingPreviewTimeout = setTimeout(() => {
-    fetchDefaultRatingPreview();
+  defaultPreviewTimeout = setTimeout(() => {
+    fetchDefaultPreview();
   }, 250);
 };
 
@@ -421,21 +498,22 @@ watch(
   ([isOpen]) => {
     if (!isOpen) {
       defaultRatingPercents.value = {};
-      ratingPreviewRequestId += 1;
-      if (ratingPreviewTimeout) {
-        clearTimeout(ratingPreviewTimeout);
-        ratingPreviewTimeout = null;
+      defaultDirectStats.value = {};
+      defaultPreviewRequestId += 1;
+      if (defaultPreviewTimeout) {
+        clearTimeout(defaultPreviewTimeout);
+        defaultPreviewTimeout = null;
       }
       return;
     }
-    scheduleDefaultRatingPreview();
+    scheduleDefaultPreview();
   }
 );
 
 onUnmounted(() => {
-  ratingPreviewRequestId += 1;
-  if (ratingPreviewTimeout) {
-    clearTimeout(ratingPreviewTimeout);
+  defaultPreviewRequestId += 1;
+  if (defaultPreviewTimeout) {
+    clearTimeout(defaultPreviewTimeout);
   }
 });
 </script>
@@ -497,7 +575,7 @@ onUnmounted(() => {
   margin-top: 1rem;
 }
 
-.mob-rating-default {
+.mob-suggestion-default {
   color: $color-text-hex-60;
   font-size: 0.8rem;
   line-height: 1.2;

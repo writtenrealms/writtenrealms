@@ -2133,6 +2133,21 @@ class MobDefinitionSuggestionSerializer(serializers.Serializer):
         default=adv_consts.MOB_TYPE_HUMANOID,
     )
     level = serializers.IntegerField(default=1, min_value=1)
+    health_max = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        min_value=1,
+    )
+    weapon_damage = serializers.FloatField(
+        required=False,
+        allow_null=True,
+        min_value=0,
+    )
+    attack_power = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        min_value=0,
+    )
     faction = serializers.CharField(required=False, allow_blank=True)
     crit_percent = serializers.FloatField(
         required=False,

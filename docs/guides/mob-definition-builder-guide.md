@@ -11,16 +11,18 @@ Use `kind: mobdefinition` for one authored mob. WR2 no longer exposes the legacy
 ## Add Mob Suggestions
 
 Use **World > Mobs > Add** to open the Add Mob modal. The form accepts name,
-slug, type, level, an optional core faction, and optional target percentages
-for `crit`, `resilience`, `armor`, and `dodge`.
+slug, type, level, optional direct overrides for `health_max`,
+`weapon_damage`, and `attack_power`, an optional core faction, and optional
+target percentages for `crit`, `resilience`, `armor`, and `dodge`.
 
 When a percentage is supplied, the suggestion endpoint converts it into the
 direct rating needed at the entered level using the world's combat rating
-curves. Empty percentage fields keep the normal suggested rating defaults. The
-modal shows those defaults as same-level percentages for the selected level and
-type. The generated YAML still opens in **World > Edit** for review before
-applying. New suggestions explicitly use `aggression: normal`, so mobs follow
-their faction relationships by default instead of remaining passive.
+curves. Supplied direct-stat values replace the corresponding generated stats.
+Empty direct-stat and percentage fields keep the normal suggested defaults. The
+modal shows those defaults for the selected level and type. The generated YAML
+still opens in **World > Edit** for review before applying. New suggestions
+explicitly use `aggression: normal`, so mobs follow their faction relationships
+by default instead of remaining passive.
 
 Standard humanoid suggestions target `8%` armor, `7%` dodge, `5%` crit, and
 `3%` resilience before converting those targets into level-appropriate ratings.

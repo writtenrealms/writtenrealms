@@ -3554,6 +3554,11 @@ class MobDefinitionSuggestion(BaseWorldBuilderView):
                 mob_type=serializer.validated_data["type"],
                 level=serializer.validated_data["level"],
                 faction=serializer.validated_data.get("faction"),
+                stat_overrides={
+                    "health_max": serializer.validated_data.get("health_max"),
+                    "weapon_damage": serializer.validated_data.get("weapon_damage"),
+                    "attack_power": serializer.validated_data.get("attack_power"),
+                },
                 rating_percents={
                     "crit": serializer.validated_data.get("crit_percent"),
                     "resilience": serializer.validated_data.get("resilience_percent"),

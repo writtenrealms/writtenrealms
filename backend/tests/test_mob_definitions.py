@@ -630,6 +630,71 @@ class TestMobDefinitionBuilderEndpoints(WorldTestCase):
         self.assertAlmostEqual(preview["same_level_crit_chance"], 0.05, delta=0.01)
         self.assertAlmostEqual(preview["same_level_resilience_mitigation"], 0.03, delta=0.01)
 
+    def test_suggest_mob_definition_overrides_direct_stats(self):
+        resp = self.client.post(
+            self.suggestion_ep,
+            {
+                "name": "a guard",
+                "slug": "guard",
+                "type": adv_consts.MOB_TYPE_HUMANOID,
+                "level": 4,
+                "health_max": 123,
+                "weapon_damage": 12.5,
+                "attack_power": 0,
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        expected_stats = {
+            "health_max": 123,
+            "weapon_damage": 12.5,
+            "attack_power": 0,
+        }
+        for stat_key, expected_value in expected_stats.items():
+            self.assertEqual(
+                resp.data["manifest"]["spec"][stat_key],
+                expected_value,
+            )
+            self.assertEqual(
+                resp.data["suggested_stats"][stat_key],
+                expected_value,
+            )
+
+        apply_resp = self.client.post(
+            self.apply_ep,
+            {"manifest": resp.data["yaml"]},
+            format="json",
+        )
+
+        self.assertEqual(apply_resp.status_code, 201, apply_resp.data)
+        definition = MobDefinition.objects.get(world=self.world, slug="guard")
+        for stat_key, expected_value in expected_stats.items():
+            self.assertEqual(
+                definition.base_properties[stat_key],
+                expected_value,
+            )
+
+    def test_suggest_mob_definition_validates_direct_stat_overrides(self):
+        resp = self.client.post(
+            self.suggestion_ep,
+            {
+                "name": "a guard",
+                "slug": "guard",
+                "type": adv_consts.MOB_TYPE_HUMANOID,
+                "level": 4,
+                "health_max": 0,
+                "weapon_damage": -0.01,
+                "attack_power": -1,
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400, resp.data)
+        self.assertIn("health_max", resp.data)
+        self.assertIn("weapon_damage", resp.data)
+        self.assertIn("attack_power", resp.data)
+
     def test_suggest_mob_definition_includes_selected_core_faction(self):
         faction = Faction.objects.create(
             world=self.world,

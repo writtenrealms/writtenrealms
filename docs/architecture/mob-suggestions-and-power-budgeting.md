@@ -144,6 +144,9 @@ Initial fields:
 - mob slug
 - mob type
 - mob level
+- health max (optional override)
+- weapon damage (optional override)
+- attack power (optional override)
 - core faction (optional)
 
 Optional later fields:
@@ -226,6 +229,9 @@ Request:
   "slug": "cave-wolf",
   "type": "beast",
   "level": 4,
+  "health_max": 46,
+  "weapon_damage": 10.5,
+  "attack_power": 8,
   "faction": "wildlife"
 }
 ```
@@ -243,11 +249,12 @@ Response:
     "spec": {
       "type": "beast",
       "level": 4,
+      "health_max": 46,
+      "weapon_damage": 10.5,
+      "attack_power": 8,
       "factions": {
         "core": "wildlife"
-      },
-      "health_max": 46,
-      "attack_power": 8
+      }
     }
   },
   "yaml": "kind: mobdefinition\nmetadata:\n  slug: cave-wolf\n...",

@@ -101,7 +101,12 @@ def _fallback_experience(level: int, scale: float) -> int:
     return _ceil_stat(scale * max(1, level) * 4, minimum=1)
 
 
-def _basic_attack_base(*, level: int, stats: dict[str, int], combat_system: dict[str, Any]) -> int:
+def _basic_attack_base(
+    *,
+    level: int,
+    stats: dict[str, int | float],
+    combat_system: dict[str, Any],
+) -> int:
     profiles = combat_system.get("profiles") or {}
     profile_key = combat_system.get("default_attack_profile")
     profile = profiles.get(profile_key) or {}
@@ -248,6 +253,19 @@ def _suggest_direct_stats(*, level: int, mob_type: str, scale: float) -> dict[st
     }
 
 
+def _apply_stat_overrides(
+    *,
+    stats: dict[str, int | float],
+    stat_overrides: dict[str, int | float | None] | None,
+) -> None:
+    if not stat_overrides:
+        return
+    for stat_key in ("health_max", "weapon_damage", "attack_power"):
+        value = stat_overrides.get(stat_key)
+        if value is not None:
+            stats[stat_key] = value
+
+
 def suggest_mob_definition_manifest(
     world,
     *,
@@ -256,6 +274,7 @@ def suggest_mob_definition_manifest(
     mob_type: str,
     level: int,
     faction: str | None = None,
+    stat_overrides: dict[str, int | float | None] | None = None,
     rating_percents: dict[str, float | int | None] | None = None,
 ) -> dict[str, Any]:
     context_world = _context_world(world)
@@ -279,6 +298,10 @@ def suggest_mob_definition_manifest(
         rating_percents=rating_percents,
         level=normalized_level,
         combat_system=combat_system,
+    )
+    _apply_stat_overrides(
+        stats=stats,
+        stat_overrides=stat_overrides,
     )
     keywords = _slug_keywords(slug)
     room_description = f"{_capitalize_sentence(name)} is here." if name else ""
