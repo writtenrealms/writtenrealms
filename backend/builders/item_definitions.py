@@ -202,7 +202,7 @@ def item_definition_property_fields() -> tuple[str, ...]:
     excluded = {
         "name",
         "description",
-        "ground_description",
+        "room_description",
         "keywords",
         "attributes",
         "type",
@@ -231,7 +231,7 @@ def _item_fields_from_definition(definition, attributes: dict[str, float]) -> di
 
     fields["name"] = definition.name or fields.get("name") or "Unnamed Item"
     fields["description"] = definition.description or None
-    fields["ground_description"] = definition.ground_description or None
+    fields["room_description"] = definition.room_description or None
     fields["keywords"] = definition.keywords or None
     fields["type"] = definition.item_type or fields.get("type")
 

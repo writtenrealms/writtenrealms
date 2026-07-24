@@ -728,7 +728,16 @@ class QuestRoomItemSpec(BaseModel):
     id: str
     room: Any
     item_definition: Any
-    ground_description: str = ""
+    room_description: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_removed_fields(cls, data):
+        if isinstance(data, dict) and "ground_description" in data:
+            raise ValueError(
+                "ground_description has been renamed to room_description"
+            )
+        return data
 
     @model_validator(mode="after")
     def validate_values(self):

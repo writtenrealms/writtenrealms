@@ -1146,7 +1146,7 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
         return Item.objects.create(
             name='the corpse of %s' % name,
             keywords='corpse',
-            ground_description='The corpse of {} is lying here.'.format(name),
+            room_description='The corpse of {} is lying here.'.format(name),
             type=adv_consts.ITEM_TYPE_CORPSE,
             world=self.world,
             level=self.level,

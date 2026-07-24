@@ -901,7 +901,7 @@ def _create_player_corpse(player: Player, room: Room | None) -> Item | None:
     return Item.objects.create(
         name=f"the corpse of {player.name}",
         keywords=f"corpse {player.name}",
-        ground_description=f"The corpse of {player.name} is lying here.",
+        room_description=f"The corpse of {player.name} is lying here.",
         type=adv_consts.ITEM_TYPE_CORPSE,
         world=player.world,
         level=player.level,

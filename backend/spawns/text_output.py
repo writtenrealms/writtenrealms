@@ -40,7 +40,7 @@ def _render_room_lines(
     lines.append(_room_exit_line(room))
 
     for item in room.get("inventory") or []:
-        line = item.get("ground_description")
+        line = item.get("room_description")
         if not line:
             item_name = item.get("name") or "item"
             line = "{} lies here.".format(_capfirst(item_name))

@@ -496,7 +496,7 @@ spec:
         - id: saloon_keg
           room: room@1,0,0
           item_definition: saloon_keg
-          ground_description: A full saloon keg rests here.
+          room_description: A full saloon keg rests here.
       objectives:
         - id: deliver_keg
           text: Bring the saloon keg to the bartender.
@@ -536,7 +536,9 @@ Notes:
 - `saloon_bartender` is a mob definition slug reference.
 - `saloon_keg` is an item definition slug reference.
 - `room_items` belongs on the active step, not in discovery. It makes the keg
-visible in the back room with `[ * ]` and lets the player use normal `get keg`.
+  visible in the back room with `[ * ]` and lets the player use normal
+  `get keg`. Its optional `room_description` overrides the item definition's
+  room look line for that quest step.
 - Step room items only accept item definitions of type `quest`.
 - The quest pitch text lives in the first step’s `text.body`.
 - The player still accepts explicitly with `quest accept saloon_keg_run`.

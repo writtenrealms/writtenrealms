@@ -123,7 +123,7 @@ class ItemDefinition(AdventBaseModel):
     slug = models.SlugField(max_length=120, blank=True)
     name = models.TextField(default='Unnamed Item')
     description = models.TextField(**optional)
-    ground_description = models.TextField(**optional)
+    room_description = models.TextField(**optional)
     keywords = models.TextField(**optional)
     notes = models.TextField(**optional)
     item_type = models.TextField(

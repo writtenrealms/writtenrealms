@@ -934,7 +934,7 @@ class TestQuestRoomItemsRuntime(QuestRuntimeTestCase):
                             "id": "saloon_keg",
                             "room": f"room.{self.back_room.id}",
                             "item_definition": self.keg_template.slug,
-                            "ground_description": "A full saloon keg rests here.",
+                            "room_description": "A full saloon keg rests here.",
                         }
                     ],
                 },
@@ -963,6 +963,11 @@ class TestQuestRoomItemsRuntime(QuestRuntimeTestCase):
         keg_entry = next((entry for entry in room_inventory if entry["name"] == "Saloon Keg"), None)
         self.assertIsNotNone(keg_entry)
         self.assertEqual(keg_entry["indicator"], "*")
+        self.assertEqual(
+            keg_entry["room_description"],
+            "A full saloon keg rests here.",
+        )
+        self.assertNotIn("ground_description", keg_entry)
         self.assertIn("[ * ]", move_message["text"])
 
         with capture_game_messages() as get_messages:

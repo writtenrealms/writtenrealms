@@ -62,6 +62,24 @@ class TestItemDefinitions(WorldTestCase):
         self.assertEqual(item.roll_metadata["ignored_attributes"], ["luck"])
         self.assertTrue(item.roll_metadata["randomized"])
 
+    def test_spawn_copies_room_description_to_runtime_payload(self):
+        definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="iron-ration",
+            name="an iron ration",
+            room_description="An iron ration lies here.",
+        )
+
+        item = definition.spawn(self.room, self.spawn_world)
+        payload = serialize_item(item).model_dump()
+
+        self.assertEqual(item.room_description, definition.room_description)
+        self.assertEqual(
+            payload["room_description"],
+            "An iron ration lies here.",
+        )
+        self.assertNotIn("ground_description", payload)
+
     def test_payload_marks_stable_definitions_stackable_and_randomized_items_unique(self):
         stable_definition = ItemDefinition.objects.create(
             world=self.world,
@@ -99,6 +117,7 @@ class TestItemDefinitions(WorldTestCase):
             world=self.world,
             slug="training-sword",
             name="a training sword",
+            room_description="A training sword lies here.",
             item_type=adv_consts.ITEM_TYPE_EQUIPPABLE,
             base_properties={
                 "equipment_type": adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
@@ -109,6 +128,7 @@ class TestItemDefinitions(WorldTestCase):
         item = definition.spawn(self.player, self.spawn_world)
 
         definition.name = "a sharpened training sword"
+        definition.room_description = "A sharpened training sword lies here."
         definition.base_properties = {
             "equipment_type": adv_consts.EQUIPMENT_TYPE_WEAPON_1H,
             "weapon_damage": 5,
@@ -120,6 +140,10 @@ class TestItemDefinitions(WorldTestCase):
         later_item = definition.spawn(self.player, self.spawn_world)
 
         self.assertEqual(item.name, "a sharpened training sword")
+        self.assertEqual(
+            item.room_description,
+            "A sharpened training sword lies here.",
+        )
         self.assertEqual(item.weapon_damage, 5)
         self.assertEqual(item.attributes, {"brawn": 4})
         self.assertEqual(item.roll_metadata["randomized"], False)
@@ -208,6 +232,7 @@ metadata:
   name: a bronze sword
 spec:
   description: A practical blade.
+  room_description: A bronze sword lies here.
   type: equippable
   equipment_type: weapon_1h
   weapon_damage: 8
@@ -230,6 +255,10 @@ spec:
 
         definition = ItemDefinition.objects.get(world=self.world, slug="bronze-sword")
         self.assertEqual(definition.name, "a bronze sword")
+        self.assertEqual(
+            definition.room_description,
+            "A bronze sword lies here.",
+        )
         self.assertEqual(definition.item_type, adv_consts.ITEM_TYPE_EQUIPPABLE)
         self.assertEqual(definition.base_properties["equipment_type"], "weapon_1h")
         self.assertEqual(definition.base_properties["weapon_damage"], 8)
@@ -238,6 +267,27 @@ spec:
         self.assertEqual(definition.currency, self.default_currency)
         self.assertEqual(definition.attributes, {"brawn": 2})
         self.assertEqual(definition.randomization["attributes"][0]["mode"], "favor_high")
+
+    def test_apply_item_definition_manifest_rejects_removed_ground_description(self):
+        manifest = f"""
+kind: itemdefinition
+metadata:
+  world: world.{self.world.id}
+  slug: iron-ration
+  name: an iron ration
+spec:
+  ground_description: An iron ration lies here.
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("Unsupported spec field", str(resp.data))
+        self.assertIn("ground_description", str(resp.data))
 
     def test_item_money_patch_rejects_currency_without_cost(self):
         drachma = create_currency(
@@ -377,6 +427,7 @@ spec:
             world=self.world,
             slug="bronze-sword",
             name="a bronze sword",
+            room_description="A bronze sword lies here.",
             item_type=adv_consts.ITEM_TYPE_EQUIPPABLE,
             base_properties={"weapon_damage": 8},
             randomization={
@@ -401,6 +452,11 @@ spec:
 
         item_doc = next(doc for doc in docs if doc["kind"] == "itemdefinition")
         self.assertEqual(item_doc["metadata"]["slug"], "bronze-sword")
+        self.assertEqual(
+            item_doc["spec"]["room_description"],
+            "A bronze sword lies here.",
+        )
+        self.assertNotIn("ground_description", item_doc["spec"])
         self.assertEqual(item_doc["spec"]["weapon_damage"], 8)
 
         bundle_doc = next(doc for doc in docs if doc["kind"] == "itembundle")
@@ -489,6 +545,7 @@ class TestItemDefinitionBuilderEndpoints(WorldTestCase):
             world=self.world,
             slug="bronze-sword",
             name="a bronze sword",
+            room_description="A bronze sword lies here.",
             item_type=adv_consts.ITEM_TYPE_EQUIPPABLE,
             attributes={"brawn": 2},
         )
@@ -499,8 +556,17 @@ class TestItemDefinitionBuilderEndpoints(WorldTestCase):
 
         self.assertEqual(resp.status_code, 200, resp.data)
         self.assertEqual(resp.data["slug"], "bronze-sword")
+        self.assertEqual(
+            resp.data["room_description"],
+            "A bronze sword lies here.",
+        )
+        self.assertNotIn("ground_description", resp.data)
         self.assertEqual(resp.data["attributes"], {"brawn": 2})
         self.assertIn("kind: itemdefinition", resp.data["yaml"])
+        self.assertEqual(
+            resp.data["manifest"]["spec"]["room_description"],
+            "A bronze sword lies here.",
+        )
         self.assertEqual(resp.data["manifest"]["kind"], "itemdefinition")
 
 

@@ -147,11 +147,17 @@ class TestCorpseSpawnSerialization(WorldTestCase):
         item = Item.objects.create(
             name='the corpse of a spider',
             type='corpse',
+            room_description='The corpse of a spider is lying here.',
             world=spawn_world,
             container=self.room)
 
         data = spawns_serializers.AnimateItemSerializer(item).data
         self.assertEqual(data['name'], 'the corpse of a spider')
+        self.assertEqual(
+            data['room_description'],
+            'The corpse of a spider is lying here.',
+        )
+        self.assertNotIn('ground_description', data)
 
 
 class TestOneButtonPlay(WorldTestCase):

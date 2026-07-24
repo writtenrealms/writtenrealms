@@ -336,7 +336,7 @@ def _canonical_trigger_entity_target_type(value: Any) -> str:
 _ITEM_DEFINITION_BASE_PROPERTY_FIELDS = item_definition_property_fields()
 _ITEM_DEFINITION_SPEC_FIELDS = (
     "description",
-    "ground_description",
+    "room_description",
     "notes",
     "keywords",
     "type",
@@ -1211,7 +1211,7 @@ def _serialize_currency_reference(currency: Currency | None) -> str:
 def _item_definition_spec_from_instance(item_definition: ItemDefinition) -> dict[str, Any]:
     spec = {
         "description": item_definition.description or "",
-        "ground_description": item_definition.ground_description or "",
+        "room_description": item_definition.room_description or "",
         "notes": item_definition.notes or "",
         "keywords": item_definition.keywords or "",
         "type": item_definition.item_type or adv_consts.ITEM_TYPE_INERT,
@@ -1301,7 +1301,7 @@ def serialize_item_definition_payload(item_definition: ItemDefinition) -> dict[s
         "slug": item_definition.slug,
         "name": item_definition.name or "",
         "description": item_definition.description or "",
-        "ground_description": item_definition.ground_description or "",
+        "room_description": item_definition.room_description or "",
         "keywords": item_definition.keywords or "",
         "notes": item_definition.notes or "",
         "type": item_definition.item_type,
@@ -3808,10 +3808,10 @@ def _coerce_item_definition_fields(*, world: World, spec_patch: dict[str, Any], 
                 existing.description if existing else "",
             )
         ),
-        "ground_description": _coerce_text(
+        "room_description": _coerce_text(
             spec_patch.get(
-                "ground_description",
-                existing.ground_description if existing else "",
+                "room_description",
+                existing.room_description if existing else "",
             )
         ),
         "notes": _coerce_text(

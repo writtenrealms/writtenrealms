@@ -27,7 +27,7 @@ class QuestRoomItemProjection:
     item_definition_slug: str
     name: str
     description: str
-    ground_description: str
+    room_description: str
     keywords: str
     keyword: str | None
     claim_item_ids: list[int]
@@ -51,7 +51,7 @@ class QuestRoomItemProjection:
             "cf_name": _capfirst(self.name),
             "type": adv_consts.ITEM_TYPE_QUEST,
             "description": self.description,
-            "ground_description": self.ground_description,
+            "room_description": self.room_description,
             "definition": self.item_definition_slug,
             # Keep step-authored quest pickups unstacked even when several
             # specs point at the same item definition.
@@ -158,13 +158,13 @@ def _room_item_projection(
     room_id: int,
     definition: ItemDefinition,
     claim_item_ids: list[int],
-    ground_description: str | None = None,
+    room_description: str | None = None,
 ) -> QuestRoomItemProjection:
     name = str(definition.name or definition.slug or "Quest item").strip()
     keywords = str(definition.keywords or name.lower()).strip()
-    rendered_ground_description = str(
-        ground_description
-        or definition.ground_description
+    rendered_room_description = str(
+        room_description
+        or definition.room_description
         or f"{_capfirst(name)} lies here."
     ).strip()
     return QuestRoomItemProjection(
@@ -176,7 +176,7 @@ def _room_item_projection(
         item_definition_slug=definition.slug,
         name=name,
         description=str(definition.description or "").strip(),
-        ground_description=rendered_ground_description,
+        room_description=rendered_room_description,
         keywords=keywords,
         keyword=_first_keyword(keywords, name),
         claim_item_ids=claim_item_ids,
@@ -232,7 +232,7 @@ def _projection_from_spec(
         room_id=room_id,
         definition=definition,
         claim_item_ids=claim_item_ids,
-        ground_description=room_item_spec.get("ground_description"),
+        room_description=room_item_spec.get("room_description"),
     )
 
 

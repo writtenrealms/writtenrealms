@@ -42,7 +42,7 @@ class Item(BaseModel):
     type: Optional[str] = None  # "equippable", "container", "food", etc.
     armor_class: Optional[str] = None  # "light", "heavy"
     description: Optional[str] = None
-    ground_description: Optional[str] = None
+    room_description: Optional[str] = None
     level: int = 1
     quality: str = "normal"  # "normal", "imbued", "enchanted", "epic", "legendary"
     is_magic: bool = False
@@ -646,7 +646,7 @@ def build_mock_state_sync(
         level=1,
         quality="normal",
         description="A red potion that restores health when consumed.",
-        ground_description="A red potion lies here.",
+        room_description="A red potion lies here.",
         keywords="health potion red",
         keyword="potion",
         is_pickable=True,
@@ -711,7 +711,7 @@ def build_mock_state_sync(
         level=1,
         quality="normal",
         description="A fresh loaf of bread.",
-        ground_description="A loaf of bread lies here.",
+        room_description="A loaf of bread lies here.",
         keywords="loaf bread food",
         keyword="bread",
         is_pickable=True,
@@ -969,7 +969,7 @@ def build_mock_state_sync(
                 is_container=True,
                 is_pickable=False,
                 description="A sturdy wooden crate, slightly open.",
-                ground_description="A wooden crate sits against the wall.",
+                room_description="A wooden crate sits against the wall.",
                 keywords="wooden crate container",
                 keyword="crate",
             ),

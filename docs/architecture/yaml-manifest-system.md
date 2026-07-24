@@ -89,7 +89,8 @@ Current required mappings:
 - Quest NPC dialogue sources use `mob_definition` / `mob_definition_id`, not
   `mob_template`.
 - Quest room pickups and item grant/spawn effects use `item_definition` /
-  `item_definition_id`, not `item_template`.
+  `item_definition_id`, not `item_template`. Authored room-pickup description
+  overrides use `room_description`, never `ground_description`.
 - WR1 `Quest`, `Objective`, and `Reward` rows should export into `kind: quest`
   manifests when they can be represented by the WR2 graph/effect model; WR2 no
   longer has legacy quest CRUD models, serializers, views, or frontend screens.
@@ -105,6 +106,10 @@ Current required mappings:
   `StartingEq` model.
 - WR1 `ItemTemplate` rows export as `kind: itemdefinition`; WR2 no longer has an
   `ItemTemplate` model, manifest kind, API endpoint, or runtime item FK.
+- WR1 `ItemTemplate.ground_description` exports as `kind: itemdefinition`
+  `spec.room_description`. Do not emit `spec.ground_description`; it is not
+  part of the canonical WR2 contract. Preserve explicitly authored blank values
+  as `""` when the conversion needs to clear an existing description.
 - WR1 `ItemTemplate.hit_msg_first` and `ItemTemplate.hit_msg_third` export to
   `kind: itemdefinition` fields `spec.hit_msg_first` and
   `spec.hit_msg_third`. Preserve non-empty multiword phrases as authored. Emit

@@ -355,9 +355,9 @@ def serialize_item(
         type=item_type,
         armor_class=item.armor_class,
         description=description,
-        ground_description=(
-            item.ground_description
-            or (item.definition.ground_description if item.definition else None)
+        room_description=(
+            item.room_description
+            or (item.definition.room_description if item.definition else None)
         ),
         level=item.level,
         quality=item.quality,

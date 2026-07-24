@@ -405,7 +405,7 @@ metadata:
   name: a new item
 spec:
   description: ''
-  ground_description: A new item lies here.
+  room_description: A new item lies here.
   notes: ''
   keywords: item
   type: inert

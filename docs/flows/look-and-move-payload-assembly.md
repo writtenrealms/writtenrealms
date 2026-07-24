@@ -129,7 +129,8 @@ Human-readable console text is generated server-side in `backend/spawns/text_out
 
 - `cmd.look.success` text uses the `target` room payload.
 - `cmd.move.success` text uses the `room` payload.
-- Room item lines come from each item's `ground_description` when present, else a fallback line is generated.
+- Room item lines come from each item's `room_description` when present, else a
+  fallback line is generated.
 
 This keeps textual output deterministic and aligned with structured payload data.
 

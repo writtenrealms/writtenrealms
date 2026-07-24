@@ -555,7 +555,7 @@ class AnimateRoomDetailSerializer(serializers.ModelSerializer):
 class AnimateItemSerializer(serializers.ModelSerializer):
     #in_container = KeyField(source='container')
     chunk_type = serializers.SerializerMethodField()
-    ground_description = serializers.SerializerMethodField()
+    room_description = serializers.SerializerMethodField()
     keywords = serializers.SerializerMethodField()
     in_container = serializers.SerializerMethodField()
     augment = KeyField()
@@ -567,7 +567,7 @@ class AnimateItemSerializer(serializers.ModelSerializer):
             'id', 'key', 'chunk_type',
             'definition_id', 'definition_slug_snapshot',
             'in_container',
-            'ground_description', 'keywords', 'label',
+            'room_description', 'keywords', 'label',
             'augment', 'value',
         ]
 
@@ -606,9 +606,9 @@ class AnimateItemSerializer(serializers.ModelSerializer):
             return container.char.key
         return container.key
 
-    def get_ground_description(self, item):
-        if item.ground_description:
-            return item.ground_description
+    def get_room_description(self, item):
+        if item.room_description:
+            return item.room_description
 
         name = item.name
         verb = 'lies'

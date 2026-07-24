@@ -65,14 +65,14 @@
         <template v-if="isLastMessage">
           <span v-interactive="{ target: item }" class="interactive" :class="[item.quality]"
             @click="onItemClick(item)">
-            {{ itemGroundDescription(item) }}
+            {{ itemRoomDescription(item) }}
             <span v-if="item.indicator" class="quest-indicator-wrapper">[ <span class="quest-indicator">{{ item.indicator }}</span> ]</span>
             <template v-if="item.count && item.count > 1">[{{ item.count }}]</template>
           </span>
         </template>
         <template v-else>
           <span>
-            {{ itemGroundDescription(item) }}
+            {{ itemRoomDescription(item) }}
             <span v-if="item.indicator" class="quest-indicator-wrapper">[ <span class="quest-indicator">{{ item.indicator }}</span> ]</span>
             <template v-if="item.count && item.count > 1">[{{ item.count }}]</template>
           </span>
@@ -230,9 +230,9 @@ const chars = computed(() => {
 const player = computed(() => store.state.game.player);
 const is_mobile = computed(() => store.state.game.is_mobile);
 
-const itemGroundDescription = (item) => {
-  if (item && item.ground_description) {
-    return item.ground_description;
+const itemRoomDescription = (item) => {
+  if (item && item.room_description) {
+    return item.room_description;
   }
   const name = item && item.name ? item.name : "item";
   return `${name.charAt(0).toUpperCase()}${name.slice(1)} lies here.`;

@@ -1893,7 +1893,7 @@ class ItemDefinitionSerializer(serializers.ModelSerializer):
         model = ItemDefinition
         fields = [
             'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
-            'description', 'ground_description', 'notes', 'keywords',
+            'description', 'room_description', 'notes', 'keywords',
             'type', 'base_properties', 'attributes', 'randomization',
             'randomized', 'cost', 'currency',
         ]

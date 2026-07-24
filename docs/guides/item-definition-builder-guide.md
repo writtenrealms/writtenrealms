@@ -22,10 +22,13 @@ metadata:
 spec:
   type: food
   description: A compact ration wrapped in waxed cloth.
-  ground_description: An iron ration lies here.
+  room_description: An iron ration lies here.
   keywords: ration food
   food_value: 10
 ```
+
+`room_description` is the line shown for the item in room look output, matching
+the field name used by mob definitions.
 
 This is the right shape for coins, rations, keys, ammunition, simple quest
 objects, and any other item where every copy should be identical.
@@ -47,7 +50,7 @@ metadata:
 spec:
   type: equippable
   description: A practical bronze blade.
-  ground_description: A bronze sword lies here.
+  room_description: A bronze sword lies here.
   keywords: bronze sword blade weapon
   equipment_type: weapon_1h
   weapon_damage: 4
@@ -281,7 +284,7 @@ metadata:
 spec:
   type: equippable
   description: A blade assembled from mismatched salvage.
-  ground_description: A scavenged sword lies here.
+  room_description: A scavenged sword lies here.
   keywords: scavenged sword blade weapon
   equipment_type: weapon_1h
   weapon_damage: 4

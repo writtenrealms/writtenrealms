@@ -54,6 +54,34 @@ class TestLookCommandText(WorldTestCase):
         self.assertEqual(mob_payload["room_description"], "A rat is here.")
         self.assertIn("A rat is here.", message["text"])
 
+    def test_look_uses_item_room_description(self):
+        definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="iron-ration",
+            name="an iron ration",
+            room_description="An iron ration lies here.",
+            keywords="ration",
+        )
+        item = definition.spawn(self.room, self.spawn_world)
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="look",
+                player_id=self.player.id,
+                payload={},
+            )
+
+        message = self._message_by_type(messages, "cmd.look.success")
+        self.assertIsNotNone(message)
+        room_inventory = message["data"]["target"]["inventory"]
+        item_payload = next(entry for entry in room_inventory if entry["key"] == item.key)
+        self.assertEqual(
+            item_payload["room_description"],
+            "An iron ration lies here.",
+        )
+        self.assertNotIn("ground_description", item_payload)
+        self.assertIn("An iron ration lies here.", message["text"])
+
     def test_look_target_mob_returns_char_payload(self):
         mob = self.create_mob(
             "Sam",

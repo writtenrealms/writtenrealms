@@ -140,7 +140,7 @@ class ItemDefinition(models.Model):
     slug = models.SlugField(max_length=120)
     name = models.TextField()
     description = models.TextField(blank=True)
-    ground_description = models.TextField(blank=True)
+    room_description = models.TextField(blank=True)
     keywords = models.TextField(blank=True)
     notes = models.TextField(blank=True)
     item_type = models.TextField()
@@ -528,7 +528,7 @@ metadata:
   name: a bronze sword
 spec:
   description: A practical blade with a simple leather grip.
-  ground_description: A bronze sword lies here.
+  room_description: A bronze sword lies here.
   keywords: bronze sword blade
   type: equippable
   equipment_type: weapon_1h

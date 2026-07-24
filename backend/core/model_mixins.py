@@ -273,7 +273,7 @@ class ItemMixin(models.Model):
     name = models.TextField(default='Unnamed Item')
     description = models.TextField(**optional)
 
-    ground_description = models.TextField(**optional)
+    room_description = models.TextField(**optional)
 
     keywords = models.TextField(**optional)
 

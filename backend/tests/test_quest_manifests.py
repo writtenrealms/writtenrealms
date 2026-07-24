@@ -295,7 +295,7 @@ spec:
         - id: saloon_keg
           room: room.{self.room.id}
           item_definition: {quest_item.slug}
-          ground_description: A full saloon keg rests here.
+          room_description: A full saloon keg rests here.
     - id: resolved
       kind: resolution
       recap: Done.
@@ -317,6 +317,59 @@ spec:
         self.assertEqual(room_item["id"], "saloon_keg")
         self.assertEqual(room_item["item_definition"], quest_item.slug)
         self.assertEqual(room_item["room"], f"room.{self.room.id}")
+        self.assertEqual(
+            room_item["room_description"],
+            "A full saloon keg rests here.",
+        )
+        self.assertNotIn("ground_description", room_item)
+
+    def test_apply_quest_manifest_rejects_removed_ground_description(self):
+        quest_item = ItemDefinition.objects.create(
+            world=self.world,
+            name="Saloon Keg",
+            slug="saloon_keg",
+            item_type="quest",
+        )
+        manifest = f"""
+kind: quest
+metadata:
+  world: world.{self.world.id}
+  slug: old_room_item_description
+  name: Old Room Item Description
+spec:
+  type: quest
+  scope: player
+  status: active
+  repeatability:
+    mode: never
+    cooldown_seconds: 0
+  max_active: 1
+  discovery:
+    sources: []
+  slots: {{}}
+  steps:
+    - id: fetch
+      kind: objective
+      room_items:
+        - id: saloon_keg
+          room: room.{self.room.id}
+          item_definition: {quest_item.slug}
+          ground_description: A full saloon keg rests here.
+  rewards:
+    complete: []
+    compromised: []
+    failed_forward: []
+    expired: []
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("renamed to room_description", str(resp.data))
 
     def test_apply_quest_manifest_rejects_non_quest_step_room_item_definitions(self):
         inert_item = ItemDefinition.objects.create(
