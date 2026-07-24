@@ -19,7 +19,12 @@ from builders.models import (
     WorldBuilder,
 )
 from config import constants as adv_consts
-from core.scoped_state import STATE_SCOPE_ZONE, replace_state_snapshot
+from core.scoped_state import (
+    STATE_SCOPE_ROOM,
+    STATE_SCOPE_WORLD,
+    STATE_SCOPE_ZONE,
+    replace_initial_state_snapshot,
+)
 from quests.models import QuestArcTemplate, QuestTemplate
 from tests.base import WorldTestCase
 from worlds.models import Door, Room, RoomDetail, RoomFlag, WorldConfig, Zone
@@ -57,6 +62,11 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         self.world.motd = "Welcome to the harbor."
         self.world.is_public = True
         self.world.save()
+        replace_initial_state_snapshot(
+            STATE_SCOPE_WORLD,
+            self.world,
+            {"weather": "windy"},
+        )
 
         self.start_room = self.room
         self.start_zone = self.zone
@@ -71,6 +81,11 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         self.start_room.note = "The stone is worn smooth."
         self.start_room.color = "#998877"
         self.start_room.save()
+        replace_initial_state_snapshot(
+            STATE_SCOPE_ROOM,
+            self.start_room,
+            {"gate_open": False},
+        )
 
         RoomFlag.objects.create(room=self.start_room, code=adv_consts.ROOM_FLAG_DARK)
         RoomDetail.objects.create(
@@ -88,7 +103,7 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             respawn_wait=120,
             pvp_zone=False,
         )
-        replace_state_snapshot(
+        replace_initial_state_snapshot(
             STATE_SCOPE_ZONE,
             self.harbor_zone,
             {"fog_level": 2, "harbor_weather": "windy"},
@@ -479,11 +494,33 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         )
         for zone_doc in zone_docs:
             self.assertNotIn("is_warzone", zone_doc["spec"])
+        harbor_zone_doc = next(
+            doc
+            for doc in zone_docs
+            if doc["metadata"]["name"] == self.harbor_zone.name
+        )
+        self.assertEqual(
+            harbor_zone_doc["spec"]["initial_state"],
+            {"fog_level": 2, "harbor_weather": "windy"},
+        )
         room_doc = next(
             doc for doc in exported_docs
             if doc["kind"] == "room" and doc["metadata"]["ref"] == f"room@{self.harbor_room.x},{self.harbor_room.y},{self.harbor_room.z}"
         )
         self.assertEqual(room_doc["spec"]["zone"], f"zone@{self.harbor_zone.relative_id}")
+        world_doc = exported_docs[-1]
+        self.assertEqual(world_doc["spec"]["initial_state"], {"weather": "windy"})
+        start_room_doc = next(
+            doc
+            for doc in exported_docs
+            if doc["kind"] == "room"
+            and doc["metadata"]["ref"]
+            == f"room@{self.start_room.x},{self.start_room.y},{self.start_room.z}"
+        )
+        self.assertEqual(
+            start_room_doc["spec"]["initial_state"],
+            {"gate_open": False},
+        )
 
         path_doc = next(doc for doc in exported_docs if doc["kind"] == "path")
         self.assertEqual(path_doc["metadata"]["ref"], f"path@{self.patrol_path.relative_id}")

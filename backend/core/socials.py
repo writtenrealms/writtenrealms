@@ -278,12 +278,19 @@ def _character_state(character: Any) -> dict[str, Any]:
     if character is None:
         return {}
     model_meta = getattr(character, "_meta", None)
-    if getattr(model_meta, "label_lower", "") != "spawns.player":
+    if getattr(model_meta, "label_lower", "") not in {
+        "spawns.player",
+        "spawns.mob",
+    }:
         return {}
 
     from core.scoped_state import STATE_SCOPE_CHARACTER, get_state_snapshot
 
-    return get_state_snapshot(STATE_SCOPE_CHARACTER, character)
+    return get_state_snapshot(
+        STATE_SCOPE_CHARACTER,
+        character,
+        runtime_world=getattr(character, "world", None),
+    )
 
 
 def _add_character_context(

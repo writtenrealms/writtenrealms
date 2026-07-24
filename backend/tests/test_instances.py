@@ -17,6 +17,7 @@ from core.scoped_state import (
     STATE_SCOPE_WORLD,
     STATE_SCOPE_ZONE,
     get_state_snapshot,
+    replace_initial_state_snapshot,
     replace_state_snapshot,
 )
 from spawns.models import CombatEncounter, Item, Mob
@@ -29,6 +30,7 @@ from worlds.models import (
     WorldConfig,
 )
 from worlds.tasks import monitor_worlds
+from worlds.instances import reset_instance
 from tests.utils import apply_basic_stat_system, capture_game_messages, dispatch_text_command
 
 
@@ -558,8 +560,18 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
             mob=initial_guard,
         )
         replace_state_snapshot(STATE_SCOPE_WORLD, spawned_instance, {"lever_pulled": True})
-        replace_state_snapshot(STATE_SCOPE_ZONE, self.instance_room.zone, {"fog": True})
-        replace_state_snapshot(STATE_SCOPE_ROOM, self.instance_room, {"door_opened": True})
+        replace_state_snapshot(
+            STATE_SCOPE_ZONE,
+            self.instance_room.zone,
+            {"fog": True},
+            runtime_world=spawned_instance,
+        )
+        replace_state_snapshot(
+            STATE_SCOPE_ROOM,
+            self.instance_room,
+            {"door_opened": True},
+            runtime_world=spawned_instance,
+        )
         self.player.room = side_room
         self.player.save(update_fields=["room"])
 
@@ -573,7 +585,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
 
         self.assertIsNotNone(reset_message)
         self.assertEqual(reset_message["data"]["reset_scope"], "instance")
-        self.assertTrue(reset_message["data"]["template_scoped_state_reset"])
+        self.assertTrue(reset_message["data"]["runtime_scoped_state_reset"])
         self.assertIsNotNone(state_message)
         self.assertEqual(self.player.world, spawned_instance)
         self.assertEqual(self.player.room, self.instance_room)
@@ -586,8 +598,22 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self.assertTrue(Item.objects.filter(pk=nested_item.pk).exists())
         self.assertFalse(CombatEncounter.objects.filter(world=spawned_instance).exists())
         self.assertEqual(get_state_snapshot(STATE_SCOPE_WORLD, spawned_instance), {})
-        self.assertEqual(get_state_snapshot(STATE_SCOPE_ZONE, self.instance_room.zone), {})
-        self.assertEqual(get_state_snapshot(STATE_SCOPE_ROOM, self.instance_room), {})
+        self.assertEqual(
+            get_state_snapshot(
+                STATE_SCOPE_ZONE,
+                self.instance_room.zone,
+                runtime_world=spawned_instance,
+            ),
+            {},
+        )
+        self.assertEqual(
+            get_state_snapshot(
+                STATE_SCOPE_ROOM,
+                self.instance_room,
+                runtime_world=spawned_instance,
+            ),
+            {},
+        )
         self.assertEqual(
             SpawnPlanRun.objects.filter(
                 spawn_world=spawned_instance,
@@ -601,6 +627,92 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
                 status=SpawnPlanRun.STATUS_ACTIVE,
             ).count(),
             1,
+        )
+
+    def test_parallel_instance_runs_isolate_and_reset_scoped_state(self):
+        replace_initial_state_snapshot(
+            STATE_SCOPE_WORLD,
+            self.instance_template,
+            {"phase": "initial"},
+        )
+        replace_initial_state_snapshot(
+            STATE_SCOPE_ZONE,
+            self.instance_room.zone,
+            {"alarm": 0},
+        )
+        replace_initial_state_snapshot(
+            STATE_SCOPE_ROOM,
+            self.instance_room,
+            {"gate_open": False},
+        )
+        second_player = self.create_player("Second Leader")
+
+        first_runtime = self._enter(player=self.player)
+        second_runtime = self._enter(player=second_player)
+        self.assertNotEqual(first_runtime.pk, second_runtime.pk)
+
+        replace_state_snapshot(
+            STATE_SCOPE_WORLD,
+            first_runtime,
+            {"phase": "first-live"},
+        )
+        replace_state_snapshot(
+            STATE_SCOPE_ZONE,
+            self.instance_room.zone,
+            {"alarm": 1},
+            runtime_world=first_runtime,
+        )
+        replace_state_snapshot(
+            STATE_SCOPE_ROOM,
+            self.instance_room,
+            {"gate_open": True},
+            runtime_world=first_runtime,
+        )
+        replace_state_snapshot(
+            STATE_SCOPE_WORLD,
+            second_runtime,
+            {"phase": "second-live"},
+        )
+        replace_state_snapshot(
+            STATE_SCOPE_ZONE,
+            self.instance_room.zone,
+            {"alarm": 2},
+            runtime_world=second_runtime,
+        )
+
+        reset_instance(player=self.player)
+
+        self.assertEqual(
+            get_state_snapshot(STATE_SCOPE_WORLD, first_runtime),
+            {"phase": "initial"},
+        )
+        self.assertEqual(
+            get_state_snapshot(
+                STATE_SCOPE_ZONE,
+                self.instance_room.zone,
+                runtime_world=first_runtime,
+            ),
+            {"alarm": 0},
+        )
+        self.assertEqual(
+            get_state_snapshot(
+                STATE_SCOPE_ROOM,
+                self.instance_room,
+                runtime_world=first_runtime,
+            ),
+            {"gate_open": False},
+        )
+        self.assertEqual(
+            get_state_snapshot(STATE_SCOPE_WORLD, second_runtime),
+            {"phase": "second-live"},
+        )
+        self.assertEqual(
+            get_state_snapshot(
+                STATE_SCOPE_ZONE,
+                self.instance_room.zone,
+                runtime_world=second_runtime,
+            ),
+            {"alarm": 2},
         )
 
     def test_instance_command_reports_entrance_or_active_run(self):

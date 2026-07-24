@@ -3264,7 +3264,7 @@ class TestBuilderState(BuilderCommandTestCase):
         self.assertIn("character <target>", error_messages[0]["message"].get("text", ""))
         self.assertNotIn("pull_lever", get_state_snapshot(STATE_SCOPE_CHARACTER, self.player))
 
-    def test_state_target_rejects_mob_character_state(self):
+    def test_state_target_supports_mob_character_state(self):
         mob = Mob.objects.create(
             world=self.spawn_world,
             room=self.room,
@@ -3273,11 +3273,29 @@ class TestBuilderState(BuilderCommandTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, f"/state set character {mob.key} pull_lever true")
+            dispatch_text_command(
+                self.player.id,
+                f"/state set character {mob.key} captive true",
+            )
+            dispatch_text_command(
+                self.player.id,
+                f"/state add character {mob.key} escape_attempts 2",
+            )
+            dispatch_text_command(
+                self.player.id,
+                f"/state get character {mob.key} captive",
+            )
 
-        error_messages = self._messages_by_type(messages, "cmd./state.error")
-        self.assertEqual(len(error_messages), 1)
-        self.assertIn("players", error_messages[0]["message"].get("text", ""))
+        success_messages = self._messages_by_type(messages, "cmd./state.success")
+        self.assertEqual(len(success_messages), 3)
+        self.assertEqual(
+            get_state_snapshot(STATE_SCOPE_CHARACTER, mob),
+            {"captive": True, "escape_attempts": 2},
+        )
+        self.assertIn(
+            "character.captive = true",
+            success_messages[-1]["message"].get("text", ""),
+        )
 
     def test_echo_renders_state_template(self):
         dispatch_text_command(self.player.id, "/state set world weather -- windy")

@@ -108,8 +108,9 @@ def _spec_digest(value: Any) -> str:
 def _plan_spec_hash(plan: SpawnPlan, *, entries: list[SpawnEntry] | None = None) -> str:
     if entries is None:
         entries = list(plan.entries.all().order_by("order", "created_ts", "id"))
-    entries = [
-        {
+    hashed_entries = []
+    for entry in entries:
+        entry_payload = {
             "slug": entry.slug,
             "order": entry.order,
             "is_active": entry.is_active,
@@ -121,15 +122,16 @@ def _plan_spec_hash(plan: SpawnPlan, *, entries: list[SpawnEntry] | None = None)
             "loot": entry.loot,
             "conditions": entry.conditions,
         }
-        for entry in entries
-    ]
+        if entry.initial_state:
+            entry_payload["initial_state"] = entry.initial_state
+        hashed_entries.append(entry_payload)
     payload = {
         "slug": plan.slug,
         "zone_id": plan.zone_id,
         "respawn_policy": plan.respawn_policy,
         "randomization": plan.randomization,
         "conditions": plan.conditions,
-        "entries": entries,
+        "entries": hashed_entries,
     }
     return _spec_digest(payload)
 
@@ -178,7 +180,7 @@ def _entry_spec_hashes(
         "target": hashes["target"],
         "placement": hashes["placement"],
     })
-    hashes["materialization"] = _spec_digest({
+    materialization = {
         key: hashes[key]
         for key in (
             "source",
@@ -188,7 +190,11 @@ def _entry_spec_hashes(
             "loot",
             "conditions",
         )
-    })
+    }
+    if entry.initial_state:
+        hashes["initial_state"] = _spec_digest(entry.initial_state)
+        materialization["initial_state"] = hashes["initial_state"]
+    hashes["materialization"] = _spec_digest(materialization)
     return hashes
 
 
@@ -1539,6 +1545,8 @@ def _materialize_placement(
         }
         if placement.source_type == "mobdefinition":
             spawn_kwargs["rng"] = _rng_for_placement(placement)
+            if entry is not None:
+                spawn_kwargs["initial_state"] = entry.initial_state
         spawned = source.spawn(**spawn_kwargs)
         spawned.spawn_placement = placement
         group_id = _placement_group_id(placement)

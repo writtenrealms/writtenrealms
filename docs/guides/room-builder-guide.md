@@ -36,6 +36,8 @@ spec:
   type: road
   color: "#8a8175"
   is_landmark: true
+  initial_state:
+    gate_alarm_raised: false
   exits:
     north: room@10,5,0
     east: null
@@ -87,6 +89,7 @@ room rather than using a database id or a possibly duplicated zone name.
 | `spec.type` | Terrain/type used by movement and room presentation. |
 | `spec.color` | Optional builder-map display color. |
 | `spec.is_landmark` | Whether the room is marked as a landmark. |
+| `spec.initial_state` | State defaults copied into this room for each new runtime world. |
 | `spec.exits` | Direction-to-room mappings. |
 | `spec.flags` | Complete set of room behavior flags. |
 | `spec.details` | Complete set of inspectable room details. |
@@ -94,6 +97,13 @@ room rather than using a database id or a possibly duplicated zone name.
 
 Supported room types are `road`, `city`, `indoor`, `field`, `mountain`,
 `forest`, `desert`, `water`, `shallow`, and `trail`.
+
+`initial_state` is authored seed data, not the room's current live state. Use
+it for resettable values such as `gate_alarm_raised: false`. At runtime,
+`state.room.gate_alarm_raised` belongs to the exact current runtime world, so
+parallel instance runs that use this room never share the value. Edit live
+state with `/state`; edit the manifest when future runs should start
+differently.
 
 ## Exits
 

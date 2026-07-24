@@ -65,6 +65,7 @@ INSTANCE_LOCAL_MANIFEST_FIELDS = {
     "death_route",
     "description",
     "is_public",
+    "initial_state",
     "large_background",
     "motd",
     "name",

@@ -199,9 +199,27 @@ def spawn_mob_from_definition(
     rng=None,
     roams=None,
     rule=None,
+    initial_state=None,
 ):
+    from core.scoped_state import (
+        initialize_character_state,
+        normalize_state_snapshot,
+    )
     from core.stat_system import get_world_stat_system
     from spawns.models import Mob
+
+    definition_initial_state = normalize_state_snapshot(
+        definition.initial_state,
+        field_name="MobDefinition.initial_state",
+    )
+    entry_initial_state = normalize_state_snapshot(
+        initial_state,
+        field_name="SpawnEntry.initial_state",
+    )
+    merged_initial_state = {
+        **definition_initial_state,
+        **entry_initial_state,
+    }
 
     roll_result = roll_mob_randomization(
         definition,
@@ -258,6 +276,8 @@ def spawn_mob_from_definition(
     ])))
     mob.create_corpse()
     _copy_definition_faction_assignments(mob, definition)
+    if merged_initial_state:
+        initialize_character_state(mob, merged_initial_state)
     if definition.merchant_profile_id:
         from spawns.merchants import create_or_update_merchant_runtime
 

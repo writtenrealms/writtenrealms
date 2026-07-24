@@ -265,13 +265,21 @@ def format_actor_msg(
         name = str(keywords).split(' ')[0]
 
     if state_context is None:
+        actor_class_name = getattr(getattr(actor, '__class__', None), '__name__', '')
+        if actor_class_name in {'Player', 'Mob'}:
+            runtime_state_world = getattr(actor, 'world', None) or world
+        else:
+            runtime_state_world = world or getattr(actor, 'world', None)
+            if runtime_state_world is None and actor_class_name == 'World':
+                runtime_state_world = actor
         state_context = build_state_context(
             actor=actor,
-            world=world,
+            world=runtime_state_world,
             zone=zone,
             room=room,
             character=character,
             quest_instance=quest_instance,
+            runtime_world=runtime_state_world,
         )
     character_state = state_context.get('character') or {}
 

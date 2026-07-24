@@ -416,7 +416,13 @@ def apply_quest_effects(
                 quest_instance=quest_instance,
             )
             if owner is not None:
-                set_state_value(normalized_scope, owner, key, resolved_value)
+                set_state_value(
+                    normalized_scope,
+                    owner,
+                    key,
+                    resolved_value,
+                    runtime_world=getattr(player, "world", None),
+                )
             continue
 
         if effect_type == "increment_state":
@@ -453,7 +459,13 @@ def apply_quest_effects(
                 quest_instance=quest_instance,
             )
             if owner is not None:
-                increment_state_value(normalized_scope, owner, key, amount)
+                increment_state_value(
+                    normalized_scope,
+                    owner,
+                    key,
+                    amount,
+                    runtime_world=getattr(player, "world", None),
+                )
             continue
 
         if effect_type == "clear_state":
@@ -477,7 +489,12 @@ def apply_quest_effects(
                 quest_instance=quest_instance,
             )
             if owner is not None:
-                clear_state_value(normalized_scope, owner, key)
+                clear_state_value(
+                    normalized_scope,
+                    owner,
+                    key,
+                    runtime_world=getattr(player, "world", None),
+                )
             continue
 
         if effect_type == "grant_currency":

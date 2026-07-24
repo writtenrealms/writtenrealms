@@ -66,6 +66,65 @@ spec:
         self.assertEqual(entry.target["room"], f"room@{self.room.x},{self.room.y},{self.room.z}")
         self.assertEqual(entry.count, 1)
 
+    def test_spawn_entry_initial_state_round_trips_for_mobs(self):
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: captive-camp
+  name: Captive Camp
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: greek-commander
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+      count: 1
+      initial_state:
+        captive: true
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        plan = SpawnPlan.objects.get(world=self.world, slug="captive-camp")
+        entry = plan.entries.get(slug="greek-commander")
+        self.assertEqual(entry.initial_state, {"captive": True})
+        detail_ep = reverse(
+            "builder-zone-spawn-plan-detail",
+            args=[self.world.pk, self.zone.pk, plan.pk],
+        )
+        exported = yaml.safe_load(self.client.get(detail_ep).data["yaml"])
+        self.assertEqual(
+            exported["spec"]["entries"][0]["initial_state"],
+            {"captive": True},
+        )
+
+    def test_spawn_entry_initial_state_rejects_item_sources(self):
+        item = ItemDefinition.objects.create(
+            world=self.world,
+            slug="iron-key",
+            name="Iron Key",
+        )
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: invalid-item-state
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: iron-key
+      source: itemdefinition.{item.slug}
+      target:
+        room: room@{self.room.x},{self.room.y},{self.room.z}
+      initial_state: {{}}
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("only supported", str(resp.data))
+
     def test_apply_spawn_plan_manifest_ignores_legacy_reset_key(self):
         manifest = f"""
 kind: spawnplan

@@ -512,6 +512,7 @@ class MobDefinition(AdventBaseModel):
     base_properties = models.JSONField(default=dict, blank=True)
     attributes = models.JSONField(default=dict, blank=True)
     randomization = models.JSONField(default=dict, blank=True)
+    initial_state = models.JSONField(default=dict, blank=True)
     traits = models.JSONField(default=list, blank=True)
     loot = models.JSONField(default=dict, blank=True)
     combat_abilities = models.JSONField(default=list, blank=True)
@@ -544,6 +545,7 @@ class MobDefinition(AdventBaseModel):
     def save(self, *args, **kwargs):
         sync_spawned = kwargs.pop("sync_spawned", True)
         is_create = self._state.adding
+        requested_update_fields = set(kwargs.get("update_fields") or ())
         if not self.slug:
             self.slug = _generate_unique_world_slug(
                 self,
@@ -555,12 +557,23 @@ class MobDefinition(AdventBaseModel):
                 "modified_ts",
             ]))
         super().save(*args, **kwargs)
-        if not is_create and sync_spawned:
+        initial_state_only = bool(requested_update_fields) and (
+            requested_update_fields <= {"initial_state", "modified_ts"}
+        )
+        if not is_create and sync_spawned and not initial_state_only:
             from builders.mob_definitions import sync_spawned_mobs_from_definition
 
             sync_spawned_mobs_from_definition(self)
 
-    def spawn(self, target, spawn_world, roams=None, rule=None, rng=None):
+    def spawn(
+        self,
+        target,
+        spawn_world,
+        roams=None,
+        rule=None,
+        rng=None,
+        initial_state=None,
+    ):
         from builders.mob_definitions import spawn_mob_from_definition
 
         return spawn_mob_from_definition(
@@ -570,6 +583,7 @@ class MobDefinition(AdventBaseModel):
             rng=rng,
             roams=roams,
             rule=rule,
+            initial_state=initial_state,
         )
 
 
@@ -641,6 +655,7 @@ class SpawnEntry(AdventBaseModel):
     target = models.JSONField(default=dict, blank=True)
     count = models.JSONField(default=dict, blank=True)
     placement = models.JSONField(default=dict, blank=True)
+    initial_state = models.JSONField(default=dict, blank=True)
     traits = models.JSONField(default=dict, blank=True)
     loot = models.JSONField(default=dict, blank=True)
     conditions = models.JSONField(default=dict, blank=True)

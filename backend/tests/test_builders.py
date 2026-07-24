@@ -10,7 +10,11 @@ from rest_framework.reverse import reverse
 
 from config import constants as adv_consts
 
-from core.scoped_state import STATE_SCOPE_WORLD, replace_state_snapshot
+from core.scoped_state import (
+    STATE_SCOPE_WORLD,
+    replace_initial_state_snapshot,
+    replace_state_snapshot,
+)
 
 from config import constants as api_consts
 from builders.models import (
@@ -185,7 +189,7 @@ class TestWorldAdminInstanceEndpoint(BuilderTestCase):
     def test_returns_wr2_spawn_dashboard_metrics(self):
         now = timezone.now()
 
-        replace_state_snapshot(
+        replace_initial_state_snapshot(
             STATE_SCOPE_WORLD,
             self.world,
             {'weather': 'template-sunny'},

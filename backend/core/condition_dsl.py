@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from core.scoped_state import resolve_state_path
@@ -37,6 +37,11 @@ class ConditionContext:
     actor_data: dict[str, Any] | None = None
     room_data: dict[str, Any] | None = None
     world_data: dict[str, Any] | None = None
+    state_cache: dict[str, dict[str, Any]] = field(
+        default_factory=dict,
+        compare=False,
+        repr=False,
+    )
 
 
 def structured_condition_payload(value: Any) -> Any:
@@ -222,6 +227,14 @@ def _context_player(context: ConditionContext) -> Any:
     return None
 
 
+def _context_character(context: ConditionContext) -> Any:
+    actor = _context_actor(context)
+    actor_class_name = getattr(getattr(actor, "__class__", None), "__name__", "")
+    if actor_class_name in {"Player", "Mob"}:
+        return actor
+    return _context_player(context)
+
+
 def _context_room(context: ConditionContext) -> Any:
     actor = _context_actor(context)
     return context.room or getattr(actor, "room", None)
@@ -241,13 +254,19 @@ def _context_world(context: ConditionContext) -> Any:
     actor = _context_actor(context)
     room = _context_room(context)
     zone = _context_zone(context)
+    actor_world = getattr(actor, "world", None)
+    if (
+        actor_world is None
+        and getattr(getattr(actor, "__class__", None), "__name__", "") == "World"
+    ):
+        actor_world = actor
     return (
-        context.world
+        actor_world
+        or context.world
         or getattr(context.template, "world", None)
         or getattr(context.ability, "world", None)
         or getattr(room, "world", None)
         or getattr(zone, "world", None)
-        or getattr(actor, "world", None)
     )
 
 
@@ -296,6 +315,7 @@ def resolve_path(path: Any, context: ConditionContext) -> Any:
 
     actor = _context_actor(context)
     player = _context_player(context)
+    character = _context_character(context)
     room = _context_room(context)
     zone = _context_zone(context)
     world = _context_world(context)
@@ -304,11 +324,13 @@ def resolve_path(path: Any, context: ConditionContext) -> Any:
         return resolve_state_path(
             normalized,
             actor=actor,
-            character=player,
+            character=character,
             world=world,
             zone=zone,
             room=room,
             quest_instance=context.quest_instance,
+            runtime_world=world,
+            snapshot_cache=context.state_cache,
         )
     if normalized.startswith("player.") or normalized.startswith("actor."):
         root, _, _remainder = normalized.partition(".")

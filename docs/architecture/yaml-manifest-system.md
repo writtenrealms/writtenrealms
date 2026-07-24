@@ -125,6 +125,16 @@ Current required mappings:
 - WR1 `Loader` / `Rule` rows export as `kind: spawnplan` entries. WR2 no longer
   imports or stores loader/rule rows, and runtime item/mob rows no longer keep
   `rule_id` or source-template FKs.
+- Map WR1 authored default world facts to `kind: world`
+  `spec.initial_state` and authored zone defaults to `kind: zone`
+  `spec.initial_state` only when the converter can distinguish authored seed
+  data from live runtime mutations. Ambiguous values must be reported for
+  builder review, not silently exported as defaults. Never export live player
+  marks, current facts/zone data, runtime room state, or runtime mob state.
+- A WR1 loader/rule may emit `spec.entries[].initial_state` only when it contains
+  an explicit authored constant for a mob placement with equivalent mutable
+  state semantics. Never infer mob initial state by inspecting a live WR1 mob,
+  and never attach initial state to item or mixed-source entries.
 - WR1 `TransformationTemplate` rows and transformation `Rule` chains do not
   export as a WR2 model or manifest kind. They only overlaid serialized mob
   fields and did not mutate canonical runtime state. Exporters must report every
@@ -361,8 +371,8 @@ Room **Spawn Plans** is a read-only view of spawn plans targeting that room.
 - Zone API responses expose both `relative_id` and `manifest_ref`; manifests
   should use the `manifest_ref` value, such as `zone@1`.
 - Zone detail screens expose copy actions for the zone apply YAML and delete
-  YAML. Use the apply YAML to edit fields such as `metadata.name`, then paste
-  it into **World > Edit World**.
+  YAML. Use the apply YAML to edit fields such as `metadata.name` and
+  `spec.initial_state`, then paste it into **World > Edit World**.
 - Path API responses also expose `relative_id` and `manifest_ref`; spawn-plan
   path targets should use `path@<relative_id>`, not path names.
 
@@ -480,6 +490,79 @@ Builder-facing attack routine and dual-wielding authoring guidance lives in:
 Builder-facing mob trait authoring guidance lives in:
 
 - [docs/guides/mob-trait-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-trait-builder-guide.md)
+
+## Initial State Manifest Shape
+
+Authored base worlds and instance templates expose seed state under
+`spec.initial_state` on world, zone, and room documents:
+
+```yaml
+kind: world
+spec:
+  initial_state:
+    weather: clear
+---
+kind: zone
+metadata:
+  ref: zone@1
+  name: Harbor District
+spec:
+  initial_state:
+    fog_level: 2
+---
+kind: room
+metadata:
+  ref: room@4,2,0
+  name: Prison Cell
+spec:
+  zone: zone@1
+  initial_state:
+    cell_door_open: false
+```
+
+`initial_state` must be a mapping. It is copied into a newly spawned runtime
+world and reseeded during an instance reset. Applying an authored manifest does
+not overwrite a running world's current state.
+
+An instance template owns its defaults independently. Its world, zone, and room
+defaults do not merge with live base-world state, and parallel runs receive
+separate runtime copies.
+
+Mob definitions may seed every newly spawned copy:
+
+```yaml
+kind: mobdefinition
+metadata:
+  slug: greek-captive-commander
+  name: a Greek commander
+spec:
+  initial_state:
+    captive: true
+```
+
+Mob entries in `kind: spawnplan` may add or override values for one placement:
+
+```yaml
+kind: spawnplan
+metadata:
+  slug: camp-spawns
+  name: Camp Spawns
+spec:
+  zone: zone@3
+  entries:
+    - slug: greek-commander
+      source: mobdefinition.greek-captive-commander
+      target:
+        room: room@4,2,0
+      count: 1
+      initial_state:
+        captive: true
+```
+
+Every possible source for such an entry must be a mob definition. Each newly
+materialized mob receives a copy. Definition values are merged first and entry
+values override matching keys. Editing either manifest never overwrites the
+current state of a surviving mob.
 
 ## Trigger Manifest Shapes
 
@@ -784,6 +867,8 @@ spec:
   type: road
   color: "#8a8175"
   is_landmark: true
+  initial_state:
+    gate_alarm_raised: false
   exits:
     north: room@10,5,0
     east: null
@@ -889,6 +974,9 @@ spec:
   description: Long world description
   motd: Questions? Join Discord.
   is_public: true
+  initial_state:
+    weather: clear
+    invasion_active: false
   default_currency: crowns
   starting_balances:
     crowns: 0
@@ -1122,6 +1210,8 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 - For world config manifests:
   - only `operation: apply` is supported
   - `spec` fields are validated against the world schema
+  - `initial_state`, when present, must be a mapping and replaces the authored
+    seed without mutating an existing runtime world
   - room references (`starting_room`, `death_room`) must resolve to rooms in the selected world
   - `default_currency`, `starting_balances`, `death_currency`, and
     `clan_registration_currency` resolve against the base-world catalog
@@ -1129,6 +1219,15 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
     `9,007,199,254,740,991`
   - `pvp_mode` is the canonical PvP field; legacy `allow_pvp` is accepted only
     as an import alias and must not conflict when both fields are present
+- Zone and room `initial_state`, when present, must be mappings. The zone
+  importer accepts legacy `spec.state` / `spec.zone_data` only as aliases for
+  authored initial state; they never address a live runtime row. New manifests
+  must emit `spec.initial_state`. Runtime world/zone/room state is not accepted
+  as manifest input.
+- Spawn-plan entry `initial_state`, when present, must be a mapping and every
+  possible source for that entry must be a mob definition.
+- Mob-definition `initial_state`, when present, must be a mapping. It seeds new
+  mobs and is not reapplied during definition resync.
 - Currency codes match `[a-z][a-z0-9_-]{0,63}`, are unique ignoring case per
   base world, and cannot be changed after creation. Instance worlds inherit
   currencies and cannot author their own definitions/default/starting balances.

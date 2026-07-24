@@ -88,6 +88,11 @@ from core.leveling import (
     normalize_leveling_curve,
     validate_leveling_config,
 )
+from core.scoped_state import (
+    STATE_SCOPE_WORLD,
+    normalize_state_snapshot,
+    replace_initial_state_snapshot,
+)
 from core.mob_traits import normalize_trait_list
 from core.socials import (
     SOCIAL_CATALOG_MAX_DEFINITIONS,
@@ -358,6 +363,7 @@ _MOB_DEFINITION_SPEC_FIELDS = (
     "assists",
     "attributes",
     "randomization",
+    "initial_state",
     "traits",
     "loot",
     "rewards",
@@ -422,6 +428,7 @@ class ParsedWorldConfigManifest:
     default_currency: Currency | None = None
     update_default_currency: bool = False
     starting_balances: dict[Currency, int] | None = None
+    initial_state: dict[str, Any] | None = None
 
 
 @dataclass
@@ -1038,6 +1045,7 @@ def world_config_to_manifest(
         "built_by": config.built_by or "",
         "small_background": config.small_background or "",
         "large_background": config.large_background or "",
+        "initial_state": dict(world.initial_state or {}),
     }
     if not is_instance_world:
         spec.update(
@@ -1490,6 +1498,8 @@ def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[st
         spec["trainer"] = mob_definition.trainer or {}
     spec["attributes"] = mob_definition.attributes or {}
     spec["randomization"] = mob_definition.randomization or {}
+    if mob_definition.initial_state:
+        spec["initial_state"] = mob_definition.initial_state or {}
     if mob_definition.traits:
         spec["traits"] = mob_definition.traits or []
     if mob_definition.loot:
@@ -1557,6 +1567,7 @@ def serialize_mob_definition_payload(mob_definition: MobDefinition) -> dict[str,
         "base_properties": mob_definition.base_properties or {},
         "attributes": mob_definition.attributes or {},
         "randomization": mob_definition.randomization or {},
+        "initial_state": mob_definition.initial_state or {},
         "loot": mob_definition.loot or {},
         "factions": faction_assignments_to_manifest_spec(mob_definition),
         "combat_abilities": mob_definition.combat_abilities or [],
@@ -4173,6 +4184,17 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         if "randomization" in spec_patch
         else dict(existing.randomization or {}) if existing else {}
     )
+    try:
+        initial_state = (
+            normalize_state_snapshot(
+                spec_patch.get("initial_state"),
+                field_name="spec.initial_state",
+            )
+            if "initial_state" in spec_patch
+            else dict(existing.initial_state or {}) if existing else {}
+        )
+    except ValueError as exc:
+        raise serializers.ValidationError(str(exc))
     trainer = _coerce_trainer_config(
         world=world,
         spec_patch=spec_patch,
@@ -4235,6 +4257,7 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         "base_properties": base_properties,
         "attributes": attributes,
         "randomization": randomization,
+        "initial_state": initial_state,
         "traits": traits,
         "loot": loot,
         "combat_abilities": combat_abilities,
@@ -6396,6 +6419,7 @@ def parse_world_config_manifest(
     allowed_fields.add(_WORLD_CONFIG_ABILITY_PROGRESS_FIELD)
     allowed_fields.add(_WORLD_CONFIG_PLAYER_CREATION_FIELD)
     allowed_fields.add(_WORLD_CONFIG_STARTING_EQUIPMENT_FIELD)
+    allowed_fields.add("initial_state")
     allowed_fields.update({
         "default_currency",
         "starting_balances",
@@ -6440,6 +6464,16 @@ def parse_world_config_manifest(
                 spec.get(field_name),
                 f"spec.{field_name}",
             )
+
+    initial_state = None
+    if "initial_state" in spec:
+        try:
+            initial_state = normalize_state_snapshot(
+                spec.get("initial_state"),
+                field_name="spec.initial_state",
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
     config_updates: dict[str, Any] = {}
     base_world = economy_world(world)
@@ -6707,6 +6741,7 @@ def parse_world_config_manifest(
         default_currency=selected_default_currency,
         update_default_currency=update_default_currency,
         starting_balances=starting_balances,
+        initial_state=initial_state,
     )
 
 
@@ -6717,6 +6752,12 @@ def apply_world_config_manifest(parsed: ParsedWorldConfigManifest):
         raise serializers.ValidationError("Selected world has no world config.")
 
     with transaction.atomic():
+        if parsed.initial_state is not None:
+            replace_initial_state_snapshot(
+                STATE_SCOPE_WORLD,
+                world,
+                parsed.initial_state,
+            )
         if parsed.update_default_currency:
             from builders.currencies import select_default_currency
 
@@ -6785,10 +6826,16 @@ def apply_item_definition_manifest(parsed: ParsedItemDefinitionManifest) -> Item
 def apply_mob_definition_manifest(parsed: ParsedMobDefinitionManifest) -> MobDefinition:
     with transaction.atomic():
         was_existing = parsed.mob_definition is not None
+        sync_spawned = False
         if parsed.mob_definition is None:
             mob_definition = MobDefinition.objects.create(world=parsed.world, **parsed.fields)
         else:
             mob_definition = parsed.mob_definition
+            sync_spawned = any(
+                field_name != "initial_state"
+                and getattr(mob_definition, field_name) != value
+                for field_name, value in parsed.fields.items()
+            )
             for field_name, value in parsed.fields.items():
                 setattr(mob_definition, field_name, value)
             mob_definition.save(
@@ -6813,7 +6860,11 @@ def apply_mob_definition_manifest(parsed: ParsedMobDefinitionManifest) -> MobDef
                 )
                 for currency, amount in parsed.currency_rewards.items()
             ])
-        if was_existing:
+        sync_spawned = sync_spawned or (
+            parsed.factions is not None
+            or parsed.currency_rewards is not None
+        )
+        if was_existing and sync_spawned:
             from builders.mob_definitions import sync_spawned_mobs_from_definition
 
             sync_spawned_mobs_from_definition(mob_definition)

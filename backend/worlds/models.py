@@ -83,6 +83,9 @@ class World(AdventBaseModel):
     full_map = models.TextField(**optional)
 
     facts = models.TextField(**optional)
+    # Authored defaults copied into each spawned runtime world. Live state is
+    # stored in WorldState and never written back to this definition field.
+    initial_state = models.JSONField(default=dict, blank=True)
 
     # References
 
@@ -559,6 +562,9 @@ class World(AdventBaseModel):
             is_clean=True,
             **kwargs)
         WorldLocks.objects.create(world=spawn_world)
+        from core.scoped_state import initialize_runtime_state
+
+        initialize_runtime_state(spawn_world)
         return spawn_world
 
     def instance_for(self, player, transfer_from=None, ref=None, member_ids=None, **kwargs):
@@ -1127,6 +1133,8 @@ class Zone(AdventWorldBaseModel):
     notes = models.TextField(**optional)
 
     zone_data = models.TextField(default="{}", blank=True)
+    # Authored defaults copied into per-runtime ZoneState rows.
+    initial_state = models.JSONField(default=dict, blank=True)
 
     respawn_wait = models.IntegerField(default=300)
     last_respawn_ts = models.DateTimeField(**optional)
@@ -1163,16 +1171,27 @@ class Zone(AdventWorldBaseModel):
 
 class ZoneState(BaseModel):
 
-    zone = models.OneToOneField(
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='zone_state_records',
+    )
+    zone = models.ForeignKey(
         'worlds.Zone',
         on_delete=models.CASCADE,
-        related_name='scoped_state',
+        related_name='runtime_state_records',
     )
     data = models.JSONField(default=dict)
     version = models.BigIntegerField(default=0)
 
     class Meta(BaseModel.Meta):
-        ordering = ['zone_id']
+        ordering = ['world_id', 'zone_id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['world', 'zone'],
+                name='worlds_zone_state_runtime_owner',
+            ),
+        ]
 
 
 class RoomFlag(BaseModel):
@@ -1211,6 +1230,8 @@ class Room(AdventWorldBaseModel):
                             default=adv_consts.ROOM_TYPE_INDOOR)
 
     color = models.TextField(**optional)
+    # Authored defaults copied into per-runtime RoomState rows.
+    initial_state = models.JSONField(default=dict, blank=True)
 
     x = models.IntegerField()
     y = models.IntegerField()
@@ -1368,16 +1389,27 @@ class Room(AdventWorldBaseModel):
 
 class RoomState(BaseModel):
 
-    room = models.OneToOneField(
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='room_state_records',
+    )
+    room = models.ForeignKey(
         'worlds.Room',
         on_delete=models.CASCADE,
-        related_name='scoped_state',
+        related_name='runtime_state_records',
     )
     data = models.JSONField(default=dict)
     version = models.BigIntegerField(default=0)
 
     class Meta(BaseModel.Meta):
-        ordering = ['room_id']
+        ordering = ['world_id', 'room_id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['world', 'room'],
+                name='worlds_room_state_runtime_owner',
+            ),
+        ]
 
 
 # On room save, empty out the world's full map

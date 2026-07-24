@@ -82,6 +82,46 @@ source_pool:
 Weights are relative. A weight of `70` is not a percent by itself; it means
 that entry is 70 parts of the total pool weight.
 
+## Initial Mob State
+
+Use `entries[].initial_state` when every mob created for that placement should
+begin with mutable character state. Put `spec.initial_state` on the mob
+definition instead when every copy of the definition should use the values.
+
+```yaml
+kind: spawnplan
+metadata:
+  slug: camp-spawns
+  name: Camp Spawns
+spec:
+  zone: zone@3
+  respawn:
+    mode: none
+  entries:
+    - slug: greek-commander
+      source: mobdefinition.greek-captive-commander
+      target:
+        room: room@4,2,0
+      count: 1
+      initial_state:
+        captive: true
+```
+
+`initial_state` is accepted only when every possible source for the entry is a
+mob definition. It is rejected for item definitions, item bundles, and mixed
+source pools.
+
+Each newly materialized or respawned mob receives its own copy. The state can
+then change through `/state`, triggers, quests, abilities, or other typed state
+effects. Definition state is merged first and the spawn entry overrides
+matching keys. Editing or reapplying a spawn plan never overwrites the current
+state of a surviving mob.
+
+Use state for mutable facts such as `captive`, `alerted`, or
+`conversation_stage`. Use traits for authored capabilities, modifiers, and
+placement identity. A state key is not a substitute for a stable trait, and a
+trait should not be used merely to hold a mutable boolean.
+
 ## Spawn-Specific Loot
 
 Mob definitions can define loot that applies to every copy of that mob. A
@@ -361,7 +401,7 @@ Live edits are rolling and non-destructive:
   Existing randomized slots retain their source, room, and traits when only the
   count changes.
 - Existing logical slots keep their placement identity and live output. Editing
-  a source, target, traits, or loot does not kill or move a mob
+  a source, target, traits, initial state, or loot does not kill or move a mob
   in combat and does not delete an item a player may be carrying. The new
   settings take effect when that slot next needs to be materialized.
 - Cohort membership metadata is refreshed during reconciliation so newly added
@@ -432,7 +472,8 @@ Random streams are independent by entry, slot, and dimension. Editing a count
 does not reroll existing sources, rooms, or traits, and editing one entry does
 not perturb the rolls of another. Changing the corresponding source, target,
 traits, or randomization configuration intentionally produces a new roll for
-that dimension.
+that dimension. Changing `initial_state` changes the seed used by a future
+materialization; it does not reroll anything or mutate a surviving mob.
 
 Traits are stored on the generated placement and copied to spawned mobs in
 `trait_instances` and `roll_metadata.spawn_plan`.

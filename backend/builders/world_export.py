@@ -37,7 +37,13 @@ from builders.loot_tables import normalize_loot_table
 from config import constants as adv_consts
 from core.condition_dsl import validate_condition_payload
 from core.mob_traits import normalize_trait_table
-from core.scoped_state import STATE_SCOPE_ZONE, get_state_snapshot, replace_state_snapshot
+from core.scoped_state import (
+    STATE_SCOPE_ROOM,
+    STATE_SCOPE_ZONE,
+    get_initial_state_snapshot,
+    normalize_state_snapshot,
+    replace_initial_state_snapshot,
+)
 from quests import entity_refs as quest_entity_refs
 from quests import manifests as quest_manifests
 from quests.models import QuestArcTemplate, QuestTemplate
@@ -312,23 +318,22 @@ def _parse_json_text(value: str) -> Any:
         return text
 
 
-def _coerce_zone_state(value: Any) -> dict[str, Any]:
-    if value in (None, ""):
-        return {}
-    if isinstance(value, dict):
-        return dict(value)
+def _coerce_initial_state(value: Any, *, field_name: str) -> dict[str, Any]:
     if isinstance(value, str):
         text = value.strip()
         if not text:
-            return {}
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            raise serializers.ValidationError("spec.state must be a JSON object.")
-        if isinstance(parsed, dict):
-            return parsed
-        raise serializers.ValidationError("spec.state must be a JSON object.")
-    raise serializers.ValidationError("spec.state must be a JSON object.")
+            value = {}
+        else:
+            try:
+                value = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise serializers.ValidationError(
+                    f"{field_name} must be a JSON object."
+                ) from exc
+    try:
+        return normalize_state_snapshot(value, field_name=field_name)
+    except ValueError as exc:
+        raise serializers.ValidationError(str(exc)) from exc
 
 
 def _manifest_metadata(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -369,7 +374,7 @@ def _serialize_zone_manifest(zone: Zone) -> dict[str, Any]:
         "spec": {
             "description": zone.description or "",
             "notes": zone.notes or "",
-            "state": get_state_snapshot(STATE_SCOPE_ZONE, zone),
+            "initial_state": get_initial_state_snapshot(STATE_SCOPE_ZONE, zone),
             "respawn_wait": int(zone.respawn_wait),
             "pvp_zone": bool(zone.pvp_zone),
             "center": _room_ref(zone.center),
@@ -434,6 +439,7 @@ def _serialize_room_manifest(room: Room) -> dict[str, Any]:
             "note": room.note or "",
             "type": room.type,
             "color": room.color or "",
+            "initial_state": get_initial_state_snapshot(STATE_SCOPE_ROOM, room),
             "is_landmark": bool(room.is_landmark),
             "exits": {
                 direction: _room_ref(getattr(room, direction, None))
@@ -625,6 +631,8 @@ def _serialize_spawn_entry(entry: SpawnEntry) -> dict[str, Any]:
         data["placement"] = placement
     if entry.traits:
         data["traits"] = copy.deepcopy(entry.traits)
+    if entry.initial_state:
+        data["initial_state"] = copy.deepcopy(entry.initial_state)
     if entry.loot:
         data["loot"] = copy.deepcopy(entry.loot)
     if entry.conditions:
@@ -1398,7 +1406,7 @@ def _find_placeholder_zone(world: World) -> Zone | None:
         return None
     if int(zone.respawn_wait) != 300:
         return None
-    if get_state_snapshot(STATE_SCOPE_ZONE, zone):
+    if get_initial_state_snapshot(STATE_SCOPE_ZONE, zone):
         return None
     return zone
 
@@ -1670,12 +1678,20 @@ def _spawn_source_refs(source: Any) -> list[Any]:
     return [source]
 
 
-def _validate_spawn_source(*, world: World, source: Any, field_name: str) -> None:
+def _validate_spawn_source(*, world: World, source: Any, field_name: str) -> list[Any]:
     from spawns.spawn_plans import resolve_source
 
+    resolved_sources = []
     for index, source_ref in enumerate(_spawn_source_refs(source)):
         ref_field = f"{field_name}[{index}]" if isinstance(source, dict) and "pool" in source else field_name
-        resolve_source(world=world, source_spec=source_ref, field_name=ref_field)
+        resolved_sources.append(
+            resolve_source(
+                world=world,
+                source_spec=source_ref,
+                field_name=ref_field,
+            )
+        )
+    return resolved_sources
 
 
 def _normalize_spawn_count(value: Any, *, field_name: str) -> Any:
@@ -1971,18 +1987,28 @@ def apply_zone_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Zone
             zone.pvp_zone = bool(spec.get("pvp_zone", zone.pvp_zone if existing else False))
         zone.save()
 
-        if "state" in spec or "zone_data" in spec or created:
-            replace_state_snapshot(
+        if (
+            "initial_state" in spec
+            or "state" in spec
+            or "zone_data" in spec
+            or created
+        ):
+            replace_initial_state_snapshot(
                 STATE_SCOPE_ZONE,
                 zone,
-                _coerce_zone_state(
+                _coerce_initial_state(
                     spec.get(
-                        "state",
+                        "initial_state",
                         spec.get(
-                            "zone_data",
-                            get_state_snapshot(STATE_SCOPE_ZONE, zone) if existing else {},
+                            "state",
+                            spec.get(
+                                "zone_data",
+                                get_initial_state_snapshot(STATE_SCOPE_ZONE, zone)
+                                if existing else {},
+                            ),
                         ),
-                    )
+                    ),
+                    field_name="spec.initial_state",
                 ),
             )
 
@@ -2090,6 +2116,20 @@ def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room
         if update_crafting:
             room.crafting_profile = crafting_profile
         room.save()
+
+        if "initial_state" in spec or created:
+            replace_initial_state_snapshot(
+                STATE_SCOPE_ROOM,
+                room,
+                _coerce_initial_state(
+                    spec.get(
+                        "initial_state",
+                        get_initial_state_snapshot(STATE_SCOPE_ROOM, room)
+                        if existing else {},
+                    ),
+                    field_name="spec.initial_state",
+                ),
+            )
 
         exits = spec.get("exits")
         if exits is not None:
@@ -2476,7 +2516,26 @@ def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tupl
             f"{entry_field}.slug",
         )
         source = _normalize_spawn_source(entry_spec, field_name=entry_field)
-        _validate_spawn_source(world=world, source=source, field_name=f"{entry_field}.source")
+        resolved_sources = _validate_spawn_source(
+            world=world,
+            source=source,
+            field_name=f"{entry_field}.source",
+        )
+        try:
+            initial_state = normalize_state_snapshot(
+                entry_spec.get("initial_state"),
+                field_name=f"{entry_field}.initial_state",
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc))
+        if "initial_state" in entry_spec and any(
+            resolved.source_type != "mobdefinition"
+            for resolved in resolved_sources
+        ):
+            raise serializers.ValidationError(
+                f"{entry_field}.initial_state is only supported when every "
+                "source is a mob definition."
+            )
         target = _validate_spawn_target(
             world=world,
             target=entry_spec.get("target"),
@@ -2494,6 +2553,7 @@ def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tupl
             "target": target,
             "count": _normalize_spawn_count(entry_spec.get("count", 1), field_name=f"{entry_field}.count"),
             "placement": _normalize_spawn_cohort(entry_spec, field_name=entry_field),
+            "initial_state": initial_state,
             "traits": _normalize_spawn_traits(
                 _entry_traits_spec(entry_spec, field_name=entry_field),
                 field_name=f"{entry_field}.traits",
@@ -2538,6 +2598,7 @@ def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tupl
                 "target",
                 "count",
                 "placement",
+                "initial_state",
                 "traits",
                 "loot",
                 "conditions",

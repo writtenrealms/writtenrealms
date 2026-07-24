@@ -260,5 +260,10 @@ Use spawn-plan traits for variety:
 - a dungeon reset rolls a different mix of `armored`, `resilient`, and
   `enraged` mobs
 
+Do not use a trait merely to store a mutable fact such as `captive: true`.
+Put that value in mob-definition or spawn-entry `initial_state`, then change
+the live mob through the scoped state system. See
+[state-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/state-builder-guide.md).
+
 Numeric modifiers and `tracker` are covered by the current runtime. Other
 behavior keys remain metadata until their dedicated handlers are implemented.

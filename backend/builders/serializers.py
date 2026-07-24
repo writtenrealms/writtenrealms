@@ -263,11 +263,13 @@ class WorldSerializer(serializers.ModelSerializer):
             'key', 'id', 'name', 'description', 'motd', 'author', 'created_ts',
             'last_viewed_room', 'short_description', 'state', 'is_multiplayer',
             'is_public', 'factions', 'facts', 'is_classless', 'class_options',
+            'initial_state',
             'review', 'maintenance_mode', 'maintenance_msg', 'instance_of',
             'builder_info', 'currencies', 'default_currency',
             'initial_currency_code', 'initial_currency_name',
             'initial_currency_plural_name',
         )
+        read_only_fields = ('initial_state',)
 
     def validate(self, *args, **kwargs):
         request = self.context['request']
@@ -1149,13 +1151,20 @@ class ZoneBuilderSerializer(serializers.ModelSerializer):
             'num_rooms',
             'center',
             'zone_data',
+            'initial_state',
             'respawn_wait',
             'pvp_zone',
             'has_assignment',
             'yaml',
             'delete_yaml',
         )
-        read_only_fields = ('relative_id', 'manifest_ref', 'yaml', 'delete_yaml')
+        read_only_fields = (
+            'relative_id',
+            'manifest_ref',
+            'initial_state',
+            'yaml',
+            'delete_yaml',
+        )
 
     def get_num_rooms(self, zone):
         return zone.rooms.count()
@@ -1312,11 +1321,13 @@ class RoomBuilderSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'key', 'model_type', 'name',
             'type', 'description', 'note', 'color',
+            'initial_state',
             'x', 'y', 'z',
             'zone',
             'num_actions', 'num_triggers', 'num_spawn_plan_entries', 'details', 'doors',
             'has_assignment',
         ] + list(adv_consts.DIRECTIONS)
+        read_only_fields = ('initial_state',)
 
     def validate_color(self, color):
         if color and re.search('[^a-zA-Z0-9#\s]', color):
@@ -1929,7 +1940,8 @@ class MobDefinitionSerializer(serializers.ModelSerializer):
             'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
             'description', 'room_description', 'notes', 'keywords',
             'type', 'assists', 'base_properties', 'attributes',
-            'randomization', 'randomized', 'traits', 'loot', 'combat_abilities',
+            'randomization', 'randomized', 'initial_state', 'traits', 'loot',
+            'combat_abilities',
             'trainer',
         ]
 

@@ -23,7 +23,7 @@ class InstanceResetResult:
     items_deleted: int
     combat_encounters_deleted: int
     spawn_plan_runs_reset: int
-    template_scoped_state_reset: bool
+    runtime_scoped_state_reset: bool
 
 
 def _normalize_member_ids(member_ids):
@@ -407,26 +407,6 @@ def _reset_spawn_plan_runs(spawned_world):
     )
 
 
-def _has_other_active_template_runs(run):
-    return InstanceRun.objects.filter(
-        template_world=run.template_world,
-        status__in=InstanceRun.ACTIVE_STATUSES,
-    ).exclude(pk=run.pk).exists()
-
-
-def _reset_template_scoped_state(run):
-    from core.scoped_state import (
-        STATE_SCOPE_ROOM,
-        STATE_SCOPE_ZONE,
-        replace_state_snapshot,
-    )
-
-    for zone in run.template_world.zones.all():
-        replace_state_snapshot(STATE_SCOPE_ZONE, zone, {})
-    for room in run.template_world.rooms.all():
-        replace_state_snapshot(STATE_SCOPE_ROOM, room, {})
-
-
 def reset_instance(*, player) -> InstanceResetResult:
     """
     Rebuild the player's active spawned instance world in place.
@@ -435,7 +415,7 @@ def reset_instance(*, player) -> InstanceResetResult:
     population, combat, door overrides, and runtime state are reset before
     initial spawn plans run again.
     """
-    from core.scoped_state import STATE_SCOPE_WORLD, replace_state_snapshot
+    from core.scoped_state import reset_runtime_state
     from spawns.loading import run_spawn_plans_for_world
     from spawns.models import (
         CombatEncounter,
@@ -443,8 +423,6 @@ def reset_instance(*, player) -> InstanceResetResult:
         Item,
         Mob,
     )
-    from worlds.models import WorldState
-
     with transaction.atomic():
         player = player.__class__.objects.select_for_update().get(pk=player.pk)
         spawned_world = World.objects.select_for_update().get(pk=player.world_id)
@@ -484,12 +462,7 @@ def reset_instance(*, player) -> InstanceResetResult:
         mobs_qs.delete()
 
         DoorState.objects.filter(world=spawned_world).delete()
-        WorldState.objects.filter(world=spawned_world).delete()
-        replace_state_snapshot(STATE_SCOPE_WORLD, spawned_world, {})
-        template_scoped_state_reset = False
-        if not _has_other_active_template_runs(run):
-            _reset_template_scoped_state(run)
-            template_scoped_state_reset = True
+        reset_runtime_state(spawned_world)
 
         spawn_plan_runs_reset = _reset_spawn_plan_runs(spawned_world)
 
@@ -519,7 +492,7 @@ def reset_instance(*, player) -> InstanceResetResult:
         items_deleted=items_deleted,
         combat_encounters_deleted=combat_encounters_deleted,
         spawn_plan_runs_reset=spawn_plan_runs_reset,
-        template_scoped_state_reset=template_scoped_state_reset,
+        runtime_scoped_state_reset=True,
     )
 
 

@@ -506,7 +506,7 @@ def _render_command_segment(
     segment: str,
     *,
     actor: BuilderCommandActor,
-    character: Player | None = None,
+    character: Player | Mob | None = None,
     quest_instance=None,
 ) -> str:
     if not isinstance(actor, (Player, Mob)):
@@ -640,7 +640,7 @@ def _resolve_world_character_key(
         )
     return (
         Mob.objects.select_related("world", "room", "definition", "equipment")
-        .filter(pk=actor_id, world=world)
+        .filter(pk=actor_id, world=world, is_pending_deletion=False)
         .first()
     )
 
@@ -1532,7 +1532,7 @@ class StateAction:
         actor: BuilderCommandActor,
         target_selector: str | None,
         runtime_world: World | None,
-    ) -> Player | None:
+    ) -> Player | Mob:
         if not target_selector:
             raise ActionError(
                 "Character state commands require a target.",
@@ -1545,11 +1545,6 @@ class StateAction:
             runtime_world=runtime_world,
             allow_self=True,
         )
-        if not isinstance(target, Player):
-            raise ActionError(
-                "Character state targets must be players.",
-                code="invalid_target",
-            )
         return target
 
     def execute(
@@ -1578,10 +1573,11 @@ class StateAction:
                 target_selector=target_selector,
                 runtime_world=runtime_world,
             )
+        state_runtime_world = _actor_world(actor, runtime_world=runtime_world)
         owner = resolve_scope_owner(
             normalized_scope,
             actor=actor,
-            world=_actor_world(actor, runtime_world=runtime_world),
+            world=state_runtime_world,
             zone=_actor_zone(actor),
             room=_actor_room(actor),
             character=character,
@@ -1602,13 +1598,22 @@ class StateAction:
         text = None
 
         if normalized_operation == "show":
-            snapshot = get_state_snapshot(normalized_scope, owner)
+            snapshot = get_state_snapshot(
+                normalized_scope,
+                owner,
+                runtime_world=state_runtime_world,
+            )
             data["state"] = snapshot
             text = json.dumps(snapshot, sort_keys=True)
         elif normalized_operation == "get":
             if not key:
                 raise ActionError("Usage: /state get <scope> <key>", code="invalid_args")
-            current_value = get_state_value(normalized_scope, owner, key)
+            current_value = get_state_value(
+                normalized_scope,
+                owner,
+                key,
+                runtime_world=state_runtime_world,
+            )
             data["key"] = key
             data["value"] = current_value
             rendered_value = json.dumps(current_value) if isinstance(current_value, (dict, list, bool, type(None))) else str(current_value)
@@ -1624,6 +1629,7 @@ class StateAction:
                 owner,
                 key,
                 coerce_state_command_value(value),
+                runtime_world=state_runtime_world,
             )
             data["key"] = key
             data["value"] = new_value
@@ -1632,7 +1638,12 @@ class StateAction:
         elif normalized_operation == "clear":
             if not key:
                 raise ActionError("Usage: /state clear <scope> <key>", code="invalid_args")
-            cleared = clear_state_value(normalized_scope, owner, key)
+            cleared = clear_state_value(
+                normalized_scope,
+                owner,
+                key,
+                runtime_world=state_runtime_world,
+            )
             data["key"] = key
             data["cleared"] = bool(cleared)
             text = (
@@ -1651,6 +1662,7 @@ class StateAction:
                 owner,
                 key,
                 coerce_state_command_value(amount) if amount is not None else 1,
+                runtime_world=state_runtime_world,
             )
             data["key"] = key
             data["value"] = new_value

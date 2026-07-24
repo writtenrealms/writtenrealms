@@ -646,6 +646,20 @@ class CharacterState(BaseModel):
         ordering = ['player_id']
 
 
+class MobState(BaseModel):
+
+    mob = models.OneToOneField(
+        'spawns.Mob',
+        on_delete=models.CASCADE,
+        related_name='character_state_record',
+    )
+    data = models.JSONField(default=dict)
+    version = models.BigIntegerField(default=0)
+
+    class Meta(BaseModel.Meta):
+        ordering = ['mob_id']
+
+
 class CombatEncounter(BaseModel):
     STATUS_ACTIVE = "active"
     STATUS_FINISHED = "finished"

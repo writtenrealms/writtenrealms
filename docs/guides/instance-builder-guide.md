@@ -35,6 +35,8 @@ The foundation exists now:
 - players can use `enter`, `enter <instance_ref>`, `leave`, and `instance`
   from the game command input
 - builder/admin payloads expose run state and participant counts
+- world, zone, and room state is isolated per active run
+- `/reset` reseeds only the current run from the template's authored defaults
 
 Goal, timer, clear-time, and leaderboard evaluation are the next layer. The
 manifest examples in this guide describe the target authoring shape. They are
@@ -77,6 +79,7 @@ An instance template owns its own playable space and run policy:
 - rooms
 - paths
 - room flags and details
+- authored world, zone, and room `initial_state`
 - local room/zone/world triggers
 - spawn plans
 - entry room
@@ -87,6 +90,50 @@ An instance template owns its own playable space and run policy:
 The death room for an instance should be inside the instance template. A player
 who dies inside an instance should not be sent to the base world's death room
 unless the instance explicitly closes or ejects them.
+
+## State And Instance Boundaries
+
+An instance template authors defaults, while each instance run owns mutable
+state. Put seed values under `spec.initial_state` in the template's world,
+zone, and room manifests:
+
+```yaml
+kind: world
+spec:
+  initial_state:
+    alarm_raised: false
+---
+kind: zone
+metadata:
+  ref: zone@1
+  name: Prison Camp
+spec:
+  initial_state:
+    prisoners_freed: 0
+---
+kind: room
+metadata:
+  ref: room@4,2,0
+  name: Command Tent
+spec:
+  zone: zone@1
+  initial_state:
+    map_taken: false
+```
+
+When a run starts, WR2 copies those values into that run's runtime world. A
+second run receives a different copy. Commands, conditions, and templates such
+as `state.world.alarm_raised` always resolve against the exact current run.
+
+The base world's live state is not an implicit parent state for an instance.
+Likewise, editing template defaults does not overwrite an active run. Use an
+explicit future shared-state feature if gameplay ever needs cross-run mutable
+state; do not rely on hidden base-world fallback.
+
+Player character state follows the player into and out of instances. Mob
+character state belongs to the spawned mob. A mob definition may seed every
+copy, and a spawn entry may add or override `initial_state` for one placement.
+That state is removed when the mob is removed.
 
 ## Creating An Instance Template
 
@@ -124,11 +171,12 @@ supported death mode, but every currency reference still resolves against the
 base-world catalog.
 
 Instance world config manifests only accept local fields: identity text,
-visibility, starting/death rooms, death mode, death route, death currency and
-penalty, PvP policy, builder credit, and background art. Player-creation and
-global policy fields such as default currency, starting balances, title rules,
-naming rules, globals, class selection, starting equipment, leveling, stats,
-equipment, combat, and abilities belong to the base world.
+visibility, starting/death rooms, initial state, death mode, death route, death
+currency and penalty, PvP policy, builder credit, and background art.
+Player-creation and global policy fields such as default currency, starting
+balances, title rules, naming rules, globals, class selection, starting
+equipment, leveling, stats, equipment, combat, and abilities belong to the
+base world.
 
 Learned player abilities also resolve through the base world while the player is
 inside a spawned instance. Ability definitions cannot be authored on instance
@@ -175,9 +223,10 @@ instance, WR2 reports that they are not in an instance.
 Builders inside an instance can type `/reset` to rebuild that active run in
 place. The Instance ID and active participants are kept, player inventory and
 equipment are preserved, active participants are moved to the instance starting
-room, and the instance reruns its initial spawn plans. Room and
-zone scoped state reset when no other active run shares the same instance
-template; otherwise WR2 leaves that shared template-scoped state untouched.
+room, world/zone/room state is reseeded from the template's `initial_state`,
+and the instance reruns its initial spawn plans. Player character state is
+preserved. The reset affects only that run; other active runs of the same
+template keep their state.
 
 ## Group Play
 

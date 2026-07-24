@@ -419,7 +419,7 @@ def ability_component_overrides(
 def _state_owner_for_ability_component(
     *,
     component: dict,
-    player: Player,
+    player: Player | Mob,
     room: Room | None,
 ):
     scope = str(component.get("scope") or "character").strip().lower()
@@ -457,7 +457,7 @@ def _clamp_state_component_value(value: Any, component: dict) -> Any:
 def execute_state_component(
     *,
     component: dict,
-    player: Player,
+    player: Player | Mob,
     ability: AbilityDefinition,
     room: Room | None = None,
     hit_landed: bool = False,
@@ -488,17 +488,41 @@ def execute_state_component(
     if round_id:
         data["round_id"] = round_id
 
+    runtime_world = getattr(player, "world", None)
     if operation == "clear":
-        data["cleared"] = clear_state_value(scope, owner, key)
+        data["cleared"] = clear_state_value(
+            scope,
+            owner,
+            key,
+            runtime_world=runtime_world,
+        )
         text = f"{ability.name} clears {scope}.{key}."
     elif operation == "set":
-        data["value"] = set_state_value(scope, owner, key, component.get("value"))
+        data["value"] = set_state_value(
+            scope,
+            owner,
+            key,
+            component.get("value"),
+            runtime_world=runtime_world,
+        )
         text = f"{ability.name} sets {scope}.{key}."
     else:
-        value = increment_state_value(scope, owner, key, component.get("amount", 1))
+        value = increment_state_value(
+            scope,
+            owner,
+            key,
+            component.get("amount", 1),
+            runtime_world=runtime_world,
+        )
         clamped = _clamp_state_component_value(value, component)
         if clamped != value:
-            value = set_state_value(scope, owner, key, clamped)
+            value = set_state_value(
+                scope,
+                owner,
+                key,
+                clamped,
+                runtime_world=runtime_world,
+            )
         data["value"] = value
         text = f"{ability.name} updates {scope}.{key}."
 

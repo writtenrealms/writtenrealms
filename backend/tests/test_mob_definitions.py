@@ -176,6 +176,59 @@ spec:
         self.assertEqual(definition.attributes, {"brawn": 2})
         self.assertEqual(definition.randomization["attributes"][0]["mode"], "favor_high")
 
+    def test_mob_definition_initial_state_round_trips_and_partial_updates_preserve_it(self):
+        create_manifest = f"""
+kind: mobdefinition
+metadata:
+  world: world.{self.world.id}
+  slug: captive-commander
+  name: a captive commander
+spec:
+  type: humanoid
+  initial_state:
+    captive: true
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": create_manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201, resp.data)
+        definition = MobDefinition.objects.get(
+            world=self.world,
+            slug="captive-commander",
+        )
+        self.assertEqual(definition.initial_state, {"captive": True})
+
+        partial_manifest = f"""
+kind: mobdefinition
+metadata:
+  world: world.{self.world.id}
+  slug: captive-commander
+spec:
+  description: Still held in the enemy camp.
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": partial_manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200, resp.data)
+        definition.refresh_from_db()
+        self.assertEqual(definition.initial_state, {"captive": True})
+
+        detail_resp = self.client.get(
+            reverse(
+                "builder-mob-definition-detail",
+                args=[self.world.pk, definition.pk],
+            )
+        )
+        self.assertEqual(detail_resp.status_code, 200, detail_resp.data)
+        self.assertEqual(
+            detail_resp.data["manifest"]["spec"]["initial_state"],
+            {"captive": True},
+        )
+
     def test_apply_mob_definition_manifest_accepts_structured_traits(self):
         manifest = f"""
 kind: mobdefinition

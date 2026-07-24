@@ -316,9 +316,10 @@ Room, zone, and world issuers should use scopes they actually own. A room issuer
 can mutate room, zone, or world state. A zone issuer can mutate zone or world
 state. A world issuer can mutate world state.
 
-For `character` state, always provide the player target. Use `self` for the
-issuing player, or a player name/key such as `joe` or `player.123`. Room-issued
-trigger scripts should use `{{ actor_key }}` for the triggering player.
+For `character` state, always provide the target. Use `self` for the issuing
+player, or a player or mob name/key such as `joe`, `player.123`, or `mob.456`.
+Room-issued trigger scripts should use `{{ actor_key }}` for the triggering
+character.
 
 Examples:
 
@@ -329,9 +330,16 @@ Examples:
 /state set world weather -- stormy
 /state add character self favor 1
 /state set character joe pull_lever true
+/state set character mob.456 captive false
 /state clear room lever_pulled
 /cmd room -- /state set character {{ actor_key }} pull_lever true
 ```
+
+World, zone, and room commands always address state in the exact current
+runtime world. Inside an instance they address only that run; they do not
+mutate the instance template, the base world's live state, or another run.
+Player state follows the player between worlds. Mob state belongs to the
+spawned mob and is removed with it.
 
 For state authoring guidance, see
 [state-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/state-builder-guide.md).
@@ -663,13 +671,13 @@ only available to builder characters and only works while the builder is inside
 an instance.
 
 Reset keeps the same active run and Instance ID, moves active participants to
-the instance starting room, clears spawned mobs, ground items, combat, door
-overrides, and instance world state, and then reruns the instance's initial
-spawn plans. Player inventory and equipment are preserved.
+the instance starting room, clears spawned mobs, ground items, combat, and door
+overrides, then reseeds world, zone, and room state from the instance
+template's `initial_state` and reruns the initial spawn plans. Player inventory,
+equipment, and character state are preserved.
 
-Room and zone scoped state are cleared when no other active run is using the
-same instance template. If another run is active, WR2 leaves that shared
-template-scoped state alone to avoid changing the other run.
+The reset changes only the current runtime world. Other active runs of the same
+instance template keep their own world, zone, and room state.
 
 Examples:
 

@@ -176,6 +176,42 @@ concrete assignments copied from the definition.
 For faction documents and player creation policy, see
 [faction-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/faction-builder-guide.md).
 
+## Initial State
+
+Use `spec.initial_state` when every newly spawned copy should begin with the
+same mutable character state:
+
+```yaml
+kind: mobdefinition
+metadata:
+  slug: persian-jailer
+  name: a Persian jailer
+spec:
+  type: humanoid
+  initial_state:
+    captive_count: 1
+    alarmed: false
+```
+
+Each mob gets its own copy. Runtime commands, conditions, and templates access
+it through `state.character.*`. Deleting the mob deletes its state, and a new
+spawn begins from the definition seed again.
+
+A spawn-plan entry may provide its own `initial_state`. WR2 merges the
+definition mapping first and the entry mapping second, so entry keys override
+definition keys for that placement:
+
+```yaml
+entries:
+  - slug: captive-commander
+    source: mobdefinition.greek-commander
+    initial_state:
+      captive: true
+```
+
+Editing a definition or spawn plan does not overwrite a surviving mob's current
+state. Use `/state` or a typed effect to change the live mob.
+
 ## Traits
 
 Use `traits` when a mob should spawn with structured modifiers or behavior
@@ -391,6 +427,9 @@ that definition are resynced to the new definition values.
 Randomized mobs keep their rolled attributes. They still receive current
 authored properties such as name, descriptions, level, and combat stats when the
 definition changes.
+
+Definition resync does not reset live character state. Updated
+`spec.initial_state` applies only to mobs spawned afterward.
 
 ## Loading Mobs
 

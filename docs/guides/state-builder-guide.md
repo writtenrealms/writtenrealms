@@ -18,10 +18,10 @@ State is sparse key/value data attached to a scope.
 
 Supported builder-facing scopes today:
 
-- `world`: shared across the current running world instance
-- `zone`: shared across the current zone
-- `room`: shared across the current room
-- `character`: stored on the current player character
+- `world`: shared across the exact current runtime world
+- `zone`: shared across the current zone in that runtime world
+- `room`: shared across the current room in that runtime world
+- `character`: stored on the current player or mob
 - `quest`: quest-local state inside an active quest instance
 
 Examples:
@@ -30,6 +30,22 @@ Examples:
 - `state.room.lever_pulled = true`
 - `state.character.met_quartermaster = true`
 - `state.quest.delivery_count = 2`
+
+Authored worlds, zones, and rooms hold `initial_state`, which is a seed for a
+new runtime world. It is not the live value. `/state`, conditions, and
+`{{ state.* }}` templates always read the current runtime copy.
+
+That distinction is especially important for instances:
+
+- a base world and an instance template each author their own defaults
+- each active instance run gets its own world, zone, and room state
+- two runs of the same template never share mutable state
+- instance state does not implicitly read or write base-world runtime state
+- resetting an instance reseeds only that run from the template defaults
+
+Player character state follows the player between the base world and
+instances. Mob character state belongs to one spawned mob and is deleted with
+that mob.
 
 ## Key Rules
 
@@ -57,12 +73,23 @@ Examples:
 Supported command scopes are `world`, `zone`, `room`, and `character`.
 
 For `character` state, always provide the target. Use `self` for your own
-player character, or use a player name/key to edit another player. Scripted room
-triggers should use `{{ actor_key }}` for the triggering player:
+player character, or use a player or mob name/key. Scripted room triggers
+should use `{{ actor_key }}` for the triggering character:
 
 ```text
 /cmd room -- /state set character {{ actor_key }} pull_lever true
 ```
+
+For example, a builder can inspect or change a mob in the current runtime
+world:
+
+```text
+/state show character greek-commander
+/state set character mob.42 captive true
+```
+
+The command changes only that spawned mob. It does not change the mob
+definition or future copies.
 
 ## Output Templates
 
@@ -258,16 +285,28 @@ components:
 See [ability-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/ability-builder-guide.md)
 for full examples and ordering notes.
 
-## Zone Manifests
+## Initial State In Manifests
 
-Zone manifests now use `spec.state` for zone-scoped mutable state.
+Use `spec.initial_state` on authored world, zone, and room manifests. These
+values seed new runtime worlds; they are not a way to edit a running world's
+current state.
 
 Creating a zone with **World > Zones > Add** assigns the next available
 world-relative zone ID. The resulting `zone@<relative_id>` manifest reference
 is independent of the zone's database ID and remains stable when copied
 between environments.
 
-Example:
+World example:
+
+```yaml
+kind: world
+spec:
+  initial_state:
+    weather: clear
+    invasion_active: false
+```
+
+Zone example:
 
 ```yaml
 kind: zone
@@ -275,23 +314,82 @@ metadata:
   ref: zone@1
   name: Harbor District
 spec:
-  state:
+  initial_state:
     fog_level: 2
     harbor_weather: windy
 ```
 
-The zone detail screen has copy actions for the full zone apply YAML and delete
-YAML. Zone manifests do not include the removed legacy `is_warzone` field.
+Room example:
 
-`spec.zone_data` is accepted as a legacy import alias, but new authored content
-should use `spec.state`.
+```yaml
+kind: room
+metadata:
+  ref: room@4,2,0
+  name: Prison Cell
+spec:
+  zone: zone@1
+  initial_state:
+    cell_door_open: false
+```
+
+Applying an `initial_state` edit does not overwrite live state. A base world
+uses it when a new runtime world is created. An instance template uses it for
+new runs and when an authorized builder resets a run. Ordinary stop/start of
+an existing runtime preserves that runtime's current state.
+
+Use `spec.initial_state` on a mob definition when every newly spawned copy
+should begin with the values:
+
+```yaml
+kind: mobdefinition
+metadata:
+  slug: greek-captive-commander
+  name: a Greek commander
+spec:
+  initial_state:
+    captive: true
+```
+
+Spawn-plan mob entries can add or override seed values for one placement:
+
+```yaml
+kind: spawnplan
+metadata:
+  slug: camp-spawns
+  name: Camp Spawns
+spec:
+  zone: zone@3
+  respawn:
+    mode: none
+  entries:
+    - slug: greek-commander
+      source: mobdefinition.greek-captive-commander
+      target:
+        room: room@4,2,0
+      count: 1
+      initial_state:
+        captive: true
+```
+
+`entries[].initial_state` is valid only for mob sources. Each new or respawned
+mob receives a separate copy. Definition values are merged first and entry
+values override matching keys. Reapplying the definition or plan does not
+overwrite a surviving mob's current state.
+
+Do not use a trait for an ordinary mutable condition such as `captive`.
+Traits describe intrinsic or placement-time capabilities and modifiers; state
+records a value that gameplay can change.
 
 ## Legacy Notes
 
-Legacy names still map internally:
+Legacy concepts have clear WR2 conversion targets, not new authoring names:
 
-- world facts -> `state.world`
-- player marks -> `state.character`
-- zone_data -> `state.zone`
+- authored world facts -> world `initial_state`
+- authored zone data -> zone `initial_state`
+- player marks conceptually correspond to `state.character`, but the optional
+  authored-world converter never exports player runtime data
 
-But new builder-facing content should use only `state`.
+The optional WR1 authored-world converter may map authored default facts and
+zone data into `initial_state`. It must not import live player marks or other
+runtime state. New builder-facing content should use only `state` and
+`initial_state`.

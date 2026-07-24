@@ -1,331 +1,329 @@
-# WR2 Scoped State System (World / Zone / Room / Character)
+# WR2 Scoped State System
 
 ## Purpose
 
-This document describes the desired replacement for WR1-era mutable local data
-concepts such as:
+Scoped state is the canonical WR2 concept for sparse, mutable gameplay values
+owned by a world, zone, room, or character.
 
-- world `facts`
-- player `marks`
-- zone `zone_data`
+It replaces the conceptual role of WR1 world `facts`, player `marks`, and zone
+`zone_data` without carrying those separate nouns into new systems. It is
+implemented across runtime commands, conditions, templates, effects, manifests,
+spawn plans, and instance resets.
 
-The goal is to define a single WR2 concept that can cover local mutable state
-at multiple scopes without inventing a different noun for each scope.
+Related docs:
 
-This is a future architecture target. It is intentionally directional and
-replacement-oriented. It does not require immediate implementation.
+- [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
+- [instance-system.md](/Users/teebes/code/writtenrealms/docs/architecture/instance-system.md)
+- [state-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/state-builder-guide.md)
+- [ambient-command-issuers-plan.md](/Users/teebes/code/writtenrealms/docs/architecture/ambient-command-issuers-plan.md)
 
-Reference docs:
+## Core Model
 
-- `.codex/skills/wr-transition/wr2-architecture.md`
-- `docs/architecture/ambient-command-issuers-plan.md`
-- `docs/quest-system-roadmap.md`
-- `docs/quest-system-endstate.md`
-- `docs/yaml-manifest-system.md`
+State has three parts:
 
-## Current Problem
+- a scope, which says who owns the value
+- a key, which identifies the value
+- a JSON-compatible value
 
-Today the repository uses different words for the same general pattern:
+The builder-facing scopes are:
 
-- `World.facts` stores sparse world-level key/value state
-- `spawns.Mark` stores sparse player-level key/value state
-- `Zone.zone_data` stores sparse zone-level key/value state
-- room `flags` store a separate set of enumerated room tags
-
-This creates several problems:
-
-- the vocabulary is inconsistent
-- the names do not scale cleanly to more scopes
-- new systems have to guess whether to invent more nouns or reuse legacy ones
-- authoring and runtime code are forced to carry WR1 terminology forward
-- the difference between "facts" and "marks" is mostly scope, not data shape
-
-WR2 should fix this by making scope explicit and reducing the number of nouns.
-
-## Recommendation
-
-Use one term: `state`.
-
-Preferred umbrella term:
-
-- `scoped state`
-
-Preferred scoped names:
-
-- `world state`
-- `zone state`
-- `room state`
-- `character state`
-
-Do not add two new nouns to sit beside `facts` and `marks`.
-
-Do not keep expanding the legacy pattern into something like:
-
-- facts
-- marks
-- zone data
-- room data
-
-That would preserve the current inconsistency instead of removing it.
-
-## Core Mental Model
-
-Mutable local state should be modeled as:
-
-- one shared concept
-- explicit scope
-- sparse key/value entries
-- typed operations
-- clear ownership and lifetime rules
-
-In other words:
-
-- scope answers "who owns this state?"
-- key answers "which piece of state?"
-- value answers "what is its current value?"
-
-The noun should not encode the scope.
-
-## Scope Definitions
-
-### World Scope
-
-State shared across the current world runtime context.
+| Scope | Owner | Lifetime |
+| --- | --- | --- |
+| `world` | One exact runtime world | Until that runtime world is deleted or reset |
+| `zone` | A zone inside one exact runtime world | Until that runtime world is deleted or reset |
+| `room` | A room inside one exact runtime world | Until that runtime world is deleted or reset |
+| `character` for a player | The player | Follows the player across base worlds and instance runs |
+| `character` for a mob | The spawned mob | Deleted with that mob |
+| `quest` | One active quest instance | Owned by the quest runtime |
 
 Examples:
 
-- `season = "winter"`
-- `invasion_active = true`
-- `bridge_status = "raised"`
+- `state.world.season = "winter"`
+- `state.zone.north_control = "orc"`
+- `state.room.lever_pulled = true`
+- `state.character.met_king = true`
 
-### Zone Scope
+The public scope is `character` for both players and mobs. Builders and content
+do not need a second `mob_state` vocabulary.
 
-State shared across a zone within a world context.
+## Authored Defaults And Live State
 
-Examples:
+Authored content stores `initial_state`. A running game stores current `state`.
+They are deliberately different surfaces.
 
-- `north_control = "orc"`
-- `fog_level = 3`
-- `boss_cycle = "cooldown"`
-
-### Room Scope
-
-State local to one room within a world context.
-
-Examples:
-
-- `lever_pulled = true`
-- `altar_charged = 2`
-- `hidden_door_revealed = true`
-
-### Character Scope
-
-State local to a specific character.
-
-Use `character` as the future-facing term so the concept is not locked to the
-legacy `mark` noun. If later implementation needs a narrower scope such as
-`player`, that should be an explicit scope choice, not a return to `mark`.
-
-Examples:
-
-- `met_king = true`
-- `visited_castle = true`
-- `guild_warning_count = 2`
-
-## What This System Is For
-
-Use scoped state for mutable gameplay state that is:
-
-- sparse
-- local to a specific scope
-- not well represented as dedicated relational columns
-- important enough to preserve as canonical game state
-
-Typical uses:
-
-- quest or contract progression helpers
-- world event toggles
-- zone control or conflict status
-- room interaction state
-- character-local discovery or conversation memory
-
-## What This System Is Not For
-
-Scoped state should not absorb every other kind of data.
-
-Do not use scoped state for:
-
-- authored content definitions
-- stable canonical fields that deserve explicit columns
-- rebuildable runtime caches
-- broad payload serialization buckets
-- enumerated flags or tags
-
-Examples that should stay separate:
-
-- room flags such as peaceful or no_roam
-- world config values
-- trigger definitions
-- derived caches in runtime tables
-
-## Flags Remain Separate
-
-`flags` and `state` are different concepts and should remain different.
-
-Use `flags` when the value is:
-
-- enumerated
-- from a fixed allowlist
-- tag-like
-- typically boolean-by-presence
-
-Use `state` when the value is:
-
-- arbitrary within a supported type system
-- mutable over time
-- scoped and sparse
-- not naturally modeled as a fixed tag
-
-Examples:
-
-- `room flag: peaceful` should stay a flag
-- `room state: lever_pulled = true` should be state
-- `zone flag: pvp_zone` should stay a flag or column
-- `zone state: north_control = "orc"` should be state
-
-## Scope Is Not Lifetime
-
-Scope and lifetime are related but different.
-
-Scope answers ownership:
-
-- world
-- zone
-- room
-- character
-
-Lifetime answers reset behavior:
-
-- survives reconnect
-- survives world reload
-- survives instance teardown
-- resets on repop
-- resets on script or quest reset
-
-WR2 should not hide lifetime inside the noun. A future implementation should
-track reset or persistence behavior explicitly.
-
-Initial rule of thumb:
-
-- world, zone, and room state are usually runtime-local to a world or instance
-- character state often persists longer than room or zone state
-- exceptional persistence behavior should be explicit, not implied
-
-## Authoring Direction
-
-New WR2 authoring should talk about `state`, not `facts` and `marks`.
-
-This matters for:
-
-- quest manifests
-- trigger manifests
-- builder tooling
-- future automation or scheduler systems
-- typed predicates and effects
-
-New authored content should not introduce additional legacy-shaped surfaces
-such as:
-
-- `fact_check`
-- `marked`
-- `set fact`
-- `set mark`
-- raw Python-like WR1 loader condition expressions over ad hoc bags
-
-Those can be adapted internally during migration, but they should not be the
-target authoring model.
-
-## Preferred Operation Shape
-
-The runtime and authoring layers should use typed operations around a common
-shape:
+Use `spec.initial_state` on `kind: world`, `kind: zone`, and `kind: room`:
 
 ```yaml
-scope: room
-target: room.current
-key: lever_pulled
-op: equals
-value: true
+kind: world
+spec:
+  initial_state:
+    weather: clear
+    invasion_active: false
+---
+kind: zone
+metadata:
+  ref: zone@1
+  name: Harbor District
+spec:
+  initial_state:
+    fog_level: 2
+---
+kind: room
+metadata:
+  ref: room@4,2,0
+  name: Prison Cell
+spec:
+  zone: zone@1
+  initial_state:
+    cell_door_open: false
 ```
 
-Example predicate:
+These mappings are seeds:
+
+- creating a runtime world copies the authored defaults into runtime state
+- applying a manifest changes future seeds, not current live values
+- an instance reset discards the run's world/zone/room values and reseeds them
+- missing keys are absent; the runtime does not dynamically fall through to
+  an authored row
+
+Copying the seed gives a runtime a stable snapshot. A builder can edit a
+template without silently changing a playthrough already in progress.
+
+## Base Worlds, Instance Templates, And Runs
+
+WR2 distinguishes three concepts:
+
+| Concept | State responsibility |
+| --- | --- |
+| Authored base world | Owns defaults for ordinary runtime worlds |
+| Authored instance template | Owns its own defaults for instance runs |
+| Spawned runtime world | Owns the live world, zone, and room values for one running context |
+
+`/state world`, `state.world.*`, and the equivalent zone/room surfaces always
+resolve from the exact current runtime world.
+
+Inside an instance:
+
+- `state.world.*` is instance-run-local
+- zone and room values are also instance-run-local
+- two parallel runs of one template never share mutable values
+- the base world's live values are not an implicit parent or fallback
+- the template's defaults are not a hidden live scope
+
+An instance template does not inherit the base world's `initial_state`.
+Builders author any initial values required by the instance explicitly. If WR2
+later needs mutable values shared across every run, that should be a new,
+explicitly named scope with explicit access rules. It must not be implemented
+as an invisible base-world lookup.
+
+## Character Ownership
+
+Player and mob state intentionally have different persistence while sharing one
+builder-facing scope.
+
+Player state:
+
+- belongs to the player aggregate
+- follows that player into and out of instances
+- survives ordinary runtime-world teardown
+- is preserved by an instance reset
+
+Mob state:
+
+- belongs to one spawned mob
+- can be read as `state.character.*` when that mob is the actor or target
+- is deleted when the mob is deleted
+- is freshly seeded when a new mob materializes
+
+This lets a trigger treat players and mobs uniformly without making mob state
+accidentally permanent.
+
+## Mob Initial State
+
+A mob definition may seed every new copy:
 
 ```yaml
-type: state
-scope: zone
-target: zone.current
-key: north_control
-op: equals
-value: orc
+kind: mobdefinition
+metadata:
+  slug: greek-captive-commander
+  name: a Greek commander
+spec:
+  initial_state:
+    captive: true
 ```
 
-Example effect:
+A spawn entry may add or override values for a particular placement:
 
 ```yaml
-type: set_state
-scope: room
-target: room.current
-key: lever_pulled
-value: true
+kind: spawnplan
+metadata:
+  slug: camp-spawns
+  name: Camp Spawns
+spec:
+  zone: zone@3
+  respawn:
+    mode: none
+  entries:
+    - slug: greek-commander
+      source: mobdefinition.greek-captive-commander
+      target:
+        room: room@4,2,0
+      count: 1
+      initial_state:
+        captive: true
 ```
 
-Example numeric mutation:
+The mapping is valid only when every source the entry can select is a mob
+definition. Item entries and mixed mob/item pools cannot have character state.
+
+Materialization rules:
+
+- each new mob receives an independent copy
+- definition values are merged first and entry values override matching keys
+- a respawned mob receives the seed again because it is a new mob
+- reconciliation never overwrites a surviving mob's current state
+- editing definition or entry `initial_state` affects future materializations,
+  not live mobs
+- resetting an instance deletes its mobs, reruns initial population, and
+  therefore gives replacement mobs their authored initial state
+
+## Runtime Access
+
+The state service is the single storage boundary for reads and mutations. It
+resolves public scope plus owner into the appropriate per-scope table and keeps
+runtime-world context explicit for zone and room operations.
+
+Supported operations include:
+
+- read one key
+- snapshot one owner's mapping
+- set or replace a value
+- clear a key
+- increment a numeric value
+
+Mutations lock the one owner row involved. Callers should not manipulate state
+JSON directly because that would bypass ownership resolution, versioning, and
+concurrency rules.
+
+Builder commands use the same service:
+
+```text
+/state show world
+/state set room lever_pulled true
+/state add character self warning_count 1
+/state set character mob.42 captive false
+```
+
+Room, zone, and world ambient issuers are limited to scopes they own. Character
+targets may be a player or mob resolvable in the current runtime context.
+
+## Conditions And Templates
+
+The shared condition DSL exposes state paths:
 
 ```yaml
-type: increment_state
-scope: character
-target: actor
-key: guild_warning_count
-amount: 1
+conditions:
+  all:
+    - eq: [state.world.weather, stormy]
+    - eq: [state.room.lever_pulled, true]
+    - ne: [state.character.captive, true]
 ```
 
-The exact manifest syntax can evolve later, but the important constraints are:
+The same ownership rules apply while rendering:
 
-- state operations are typed
-- scope is explicit
-- target resolution is explicit
-- the noun is always `state`
-
-## Recommended Runtime API
-
-A future implementation should provide one service layer rather than exposing
-ad hoc reads and writes in many subsystems.
-
-Example service surface:
-
-```python
-state_service.get(scope, owner_ref, key)
-state_service.set(scope, owner_ref, key, value)
-state_service.clear(scope, owner_ref, key)
-state_service.increment(scope, owner_ref, key, amount=1)
-state_service.snapshot(scope, owner_ref)
+```text
+The weather is {{ state.world.weather }}.
+The lever is {{ state.room.lever_pulled }}.
 ```
 
-Optional but likely useful:
+If the actor is a mob, `state.character` resolves to that mob. If the actor is a
+player, it resolves to the player. Zone and room resolution carries the current
+runtime world so two instance runs cannot see each other's rows.
 
-```python
-state_service.exists(scope, owner_ref, key)
-state_service.compare(scope, owner_ref, key, op, value)
-```
+Quest-local `state.quest` remains owned by the quest runtime. It participates
+in the same condition and effect vocabulary but is not stored in the
+world/zone/room/character tables.
 
-This keeps quests, triggers, spawn plans, and command handlers from each inventing
-their own storage rules.
+## Storage
 
-## Value Types
+State uses dedicated per-scope tables rather than one generic polymorphic
+table:
 
-The value model should be simple and predictable.
+- `World.initial_state`, `Zone.initial_state`, and `Room.initial_state`: authored
+  seed mappings
+- `WorldState`: one live mapping for a spawned runtime world
+- `ZoneState`: one mapping for `(runtime_world, authored_zone)`
+- `RoomState`: one mapping for `(runtime_world, authored_room)`
+- `CharacterState`: one mapping for a player
+- `MobState`: one mapping for a mob
 
-Preferred initial support:
+Authored seed values do not live in the runtime tables. This keeps the template
+and live concepts visibly separate in both the model layer and service API.
+
+The composite zone and room ownership is essential. Authored zone and room rows
+can be reused by multiple spawned worlds, so a state row keyed only by zone or
+room would leak values between ordinary worlds or parallel instance runs.
+
+Each row contains:
+
+- owner foreign key or keys
+- a sparse JSON mapping
+- a monotonically increasing version
+- an update timestamp
+
+Foreign-key deletion gives the desired lifetime:
+
+- deleting a runtime world deletes its world/zone/room state
+- deleting a mob deletes its mob state
+- deleting a player deletes its player state
+
+## Performance And Concurrency
+
+The common access pattern is one owner lookup, not a global query by arbitrary
+key. The implementation therefore favors:
+
+- sparse rows, created only when an owner has state
+- composite uniqueness and lookup indexes for `(world, zone)` and
+  `(world, room)`
+- bounded seed copying when a runtime world starts
+- row-level locking for mutations
+- no per-read fallback query into authored defaults
+- no eager loading of state for every room, mob, or player when a command does
+  not need it
+
+State should not become an entity-attribute-value query system. If gameplay
+needs a globally searchable hot field, use a dedicated indexed column or
+projection rather than scanning JSON state under concurrent load.
+
+## State Versus Other Systems
+
+Use state for mutable, sparse gameplay values:
+
+- a lever has been pulled
+- a captive has been freed
+- an invasion is active
+- a character remembers a conversation
+
+Do not use state for:
+
+- stable canonical fields that deserve relational columns
+- authored definitions
+- room flags such as `peaceful` or `no_roam`
+- derived caches or broad serialization buckets
+- active combat effects with duration and stacking semantics
+- currency balances
+
+Traits and state are also distinct:
+
+- a trait describes authored identity, capability, behavior, or a modifier
+- state records a mutable value that gameplay may change
+
+For example, a placement trait such as `boss` can identify a completion cohort.
+`captive: true` should be state because freeing the mob changes it.
+
+## Values And Keys
+
+State values must be JSON-compatible and should remain small. Prefer scalars:
 
 - boolean
 - integer
@@ -333,268 +331,70 @@ Preferred initial support:
 - string
 - null
 
-Optional later support:
+Small lists or mappings are available when a concrete system needs them, but a
+large or frequently queried structure usually deserves its own model.
 
-- small JSON objects
-- small JSON arrays
-
-Recommendation:
-
-- start with JSON scalar values
-- only add structured object values when a concrete use case justifies them
-
-This keeps predicates, migrations, and builder tooling much simpler.
-
-## Key Conventions
-
-State keys should be:
-
-- stable
-- lowercase
-- snake_case
-- semantically specific
-
-Good examples:
+Keys should be stable lowercase `snake_case`:
 
 - `north_control`
 - `met_king`
 - `lever_pulled`
 - `invasion_active`
 
-Avoid vague keys such as:
+Avoid vague keys such as `data1`, `status`, or `value`.
 
-- `data1`
-- `status`
-- `value`
+## Compatibility And WR1 Conversion
 
-If namespacing becomes necessary later, add it deliberately. Do not let the
-system drift into uncontrolled key sprawl.
+Legacy concepts have these conversion targets:
 
-## Storage Direction
+- authored world facts -> world `initial_state`
+- authored zone data -> zone `initial_state`
+- player marks conceptually correspond to player character state, but are not
+  part of authored-world conversion
 
-The new scoped state system should be canonical game state, not a rebuildable
-cache.
+New code and authored content use only `state` and `initial_state`.
 
-That means:
+The optional WR1 authored-world converter may translate authored default world
+facts and zone data into the corresponding manifest `initial_state` mappings
+when their semantics are clear. It must not export:
 
-- do not hide it inside runtime cache blobs
-- do not continue storing it on unrelated legacy text fields
-- do not spread the same concept across unrelated models
+- player marks
+- current live facts
+- current live zone or room mutations
+- runtime mobs or their state
+- quest progress or any other runtime record
 
-Preferred storage direction:
+WR2 launches with a clean database, so this compatibility direction is for
+optional authored-content conversion, not production runtime migration or
+dual-write support.
 
-- dedicated per-scope state tables
-- one sparse JSONB bucket per owning aggregate
-- explicit foreign keys to the owning entity
+## Reset Invariants
 
-Illustrative shape:
+An instance reset:
 
-```python
-class WorldState(models.Model):
-    world = models.OneToOneField(World, on_delete=models.CASCADE)
-    data = models.JSONField(default=dict)
-    version = models.BigIntegerField(default=0)
-    updated_at = models.DateTimeField(auto_now=True)
+1. keeps the same run and active participants
+2. preserves player inventory, equipment, and player character state
+3. clears only that runtime world's world/zone/room state
+4. reseeds those scopes from the instance template's `initial_state`
+5. deletes and rematerializes spawned mobs, so mob state starts from the spawn
+   entry seed
+6. leaves every other active run unchanged
 
-
-class ZoneState(models.Model):
-    world = models.ForeignKey(World, on_delete=models.CASCADE)
-    zone = models.OneToOneField(Zone, on_delete=models.CASCADE)
-    data = models.JSONField(default=dict)
-    version = models.BigIntegerField(default=0)
-    updated_at = models.DateTimeField(auto_now=True)
-
-
-class RoomState(models.Model):
-    world = models.ForeignKey(World, on_delete=models.CASCADE)
-    room = models.OneToOneField(Room, on_delete=models.CASCADE)
-    data = models.JSONField(default=dict)
-    version = models.BigIntegerField(default=0)
-    updated_at = models.DateTimeField(auto_now=True)
-
-
-class CharacterState(models.Model):
-    character = models.OneToOneField(Character, on_delete=models.CASCADE)
-    data = models.JSONField(default=dict)
-    version = models.BigIntegerField(default=0)
-    updated_at = models.DateTimeField(auto_now=True)
-```
-
-This is illustrative, not final.
-
-The names `World`, `Zone`, `Room`, and `Character` in the example above mean
-"the owning WR2 aggregate rows". They are not a requirement to reuse today's
-exact model boundaries if WR2 runtime ownership lands on instance-specific
-tables or a different aggregate split.
-
-The important design choices are:
-
-- state lives in dedicated tables
-- state is sparse
-- state is JSONB, not text blobs
-- state rows can participate cleanly in aggregate locking
-
-## Why Per-Scope Tables Instead Of One Generic Table
-
-Prefer per-scope tables over a single polymorphic `ScopedState` table.
-
-Reasons:
-
-- foreign keys stay explicit
-- aggregate locking is easier to reason about
-- deletion semantics are cleaner
-- joins stay straightforward
-- code remains aligned with world / zone / room / character aggregates
-
-A generic service API can still sit on top of per-scope storage.
-
-## Querying Guidance
-
-Do not over-design the storage around arbitrary global queries on state keys.
-
-Assume the common operations are:
-
-- load one owner's state
-- read or mutate one key
-- evaluate predicates during command, trigger, or quest execution
-
-If later we need fast global queries over specific keys, solve that with one of:
-
-- dedicated indexes for known hot keys
-- projection tables
-- explicit relational columns for truly canonical fields
-
-Do not force the base design into EAV complexity prematurely.
-
-## Eventing Guidance
-
-State mutation should be observable.
-
-A future implementation should emit structured events when state changes,
-for example:
-
-- `world.state.changed`
-- `zone.state.changed`
-- `room.state.changed`
-- `character.state.changed`
-
-Payload should include at least:
-
-- scope
-- owner reference
-- key
-- old value
-- new value
-- source or cause if known
-
-This is useful for:
-
-- debugging
-- quest progression
-- trigger chaining
-- audit visibility
-- frontend refresh decisions
-
-## Compatibility Rules
-
-During migration, legacy names can survive as adapters only.
-
-Compatibility mapping:
-
-- `world facts` -> world state
-- `player marks` -> character state
-- `zone_data` -> zone state
-
-Rules:
-
-- new systems author against `state`
-- old systems may read or write through compatibility adapters temporarily
-- compatibility names should not expand to new scopes
-- builder UI should eventually stop teaching `facts` and `marks` as the main
-  model
-
-## Suggested Migration Sequence
-
-### Phase 1: Introduce the abstraction
-
-- add scoped state terminology to docs and design discussions
-- define the service interface
-- define the typed predicate and effect shapes
-
-Exit criteria:
-
-- new design work talks about state, not facts and marks
-
-### Phase 2: Add storage and service layer
-
-- add dedicated state tables
-- add read/write service methods
-- add state change events
-
-Exit criteria:
-
-- backend code can load and mutate scoped state without touching legacy fields
-
-### Phase 3: Add compatibility adapters
-
-- world facts read through world state adapter
-- player marks read through character state adapter
-- zone data read through zone state adapter
-
-Exit criteria:
-
-- old systems continue to function while storage has a clear new home
-
-### Phase 4: Move authored systems
-
-- quests use typed state predicates and effects
-- triggers use typed state operations where appropriate
-- spawn-plan behavior stops depending on legacy fact vocabulary
-
-Exit criteria:
-
-- new WR2 authoring no longer depends on fact or mark language
-
-### Phase 5: Update builder UX
-
-- rename world facts screens to world state
-- add zone and room state surfaces if needed
-- expose character state through the appropriate builder or admin tools
-
-Exit criteria:
-
-- builders learn one coherent model
-
-### Phase 6: Remove legacy vocabulary from internals
-
-- retire direct dependency on `World.facts`
-- retire `spawns.Mark` as the canonical home of character-local state
-- retire `Zone.zone_data` as the canonical home of zone-local state
-
-Exit criteria:
-
-- facts and marks are legacy aliases at most, or fully removed
+These invariants are part of the ownership model, not a best-effort cleanup
+optimization.
 
 ## Design Constraints
 
-When this is implemented later, preserve these constraints:
+Future state work must preserve these rules:
 
-- one noun for the system: `state`
-- explicit scope instead of separate nouns per scope
-- flags remain separate from state
-- typed operations instead of string DSL expansion
-- canonical persistence instead of cache-only storage
-- compatibility paths are temporary
-
-## Short Version
-
-The future system should be:
-
-- one WR2 concept called `scoped state`
-- available at `world`, `zone`, `room`, and `character` scope
-- stored in dedicated canonical state tables
-- accessed through typed predicates, effects, and service methods
-- clearly separated from flags, config, and caches
-
-`facts`, `marks`, and `zone_data` should be treated as legacy storage and
-legacy vocabulary, not as the long-term conceptual model.
+- one public noun: `state`
+- explicit owner scope
+- authored `initial_state` distinct from current runtime values
+- exact runtime-world ownership for world, zone, and room
+- player state follows the player
+- mob state dies with the mob
+- no implicit base-world shared state inside instances
+- typed conditions and effects through the shared WR2 condition framework
+- per-scope relational ownership rather than a generic polymorphic owner
+- bounded, indexed access suitable for hundreds or thousands of concurrent
+  players

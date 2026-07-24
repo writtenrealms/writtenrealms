@@ -240,8 +240,16 @@ def _build_room_data(room, *, runtime_world=None):
     if not room:
         return data
 
-    data['state'] = get_state_snapshot(STATE_SCOPE_ROOM, room)
-    data['zone_state'] = get_state_snapshot(STATE_SCOPE_ZONE, getattr(room, 'zone', None))
+    data['state'] = get_state_snapshot(
+        STATE_SCOPE_ROOM,
+        room,
+        runtime_world=runtime_world,
+    )
+    data['zone_state'] = get_state_snapshot(
+        STATE_SCOPE_ZONE,
+        getattr(room, 'zone', None),
+        runtime_world=runtime_world,
+    )
 
     runtime_world_id = getattr(runtime_world, 'pk', None)
 
@@ -337,9 +345,9 @@ def evaluate_conditions(
     ):
         condition_room = room if room is not None else getattr(actor, 'room', None)
         condition_world = (
-            world
-            if world is not None
-            else actor if isinstance(actor, World) else None
+            getattr(actor, 'world', None)
+            or (actor if isinstance(actor, World) else None)
+            or world
         )
         return {
             'result': evaluate_structured_condition(
@@ -369,22 +377,22 @@ def evaluate_conditions(
     if Player and Mob and (isinstance(actor, Player) or isinstance(actor, Mob)):
         actor_data = _build_actor_data(actor)
         condition_room = room if room is not None else getattr(actor, 'room', None)
-        condition_world = world if world is not None else getattr(actor, 'world', None)
-        runtime_world = getattr(actor, 'world', None) or condition_world
+        condition_world = getattr(actor, 'world', None) or world
+        runtime_world = condition_world
         room_data = _build_room_data(
             condition_room,
             runtime_world=runtime_world,
         )
         world_data = _build_world_data(condition_world)
     elif isinstance(actor, World):
-        condition_world = world if world is not None else actor
+        condition_world = actor
         world_data = _build_world_data(condition_world)
     else:
         # We can't test for an API world object as the legacy game module doesn't
         # have access to the API. So we just make sure that the model's name is
         # correct and then make the assumption it's an API world.
         if actor.__class__.__name__ == 'World':
-            condition_world = world if world is not None else actor
+            condition_world = actor
             world_data = _build_world_data(condition_world)
 
     if structured_condition is not None:
@@ -395,9 +403,9 @@ def evaluate_conditions(
             else getattr(condition_room, 'zone', None)
         )
         condition_world = (
-            world
-            if world is not None
-            else getattr(actor, 'world', actor if isinstance(actor, World) else None)
+            getattr(actor, 'world', None)
+            or (actor if isinstance(actor, World) else None)
+            or world
         )
         return {
             'result': evaluate_structured_condition(

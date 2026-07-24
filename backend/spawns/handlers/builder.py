@@ -813,7 +813,7 @@ class StateHandler(CommandHandler):
         "format": "/state <show|get|set|clear|add> <world|zone|room> [key] [-- value] | /state <show|get|set|clear|add> character <target> [key] [-- value]",
         "description": (
             "Inspect or mutate scoped state in the current world, zone, room, or character context. "
-            "Character state always requires an explicit target. "
+            "Character state always requires an explicit player or mob target. "
             "Use -- when the value contains spaces."
         ),
         "examples": [
@@ -823,6 +823,7 @@ class StateHandler(CommandHandler):
             "/state set room lever_pulled true",
             "/state add character self rumor_count 1",
             "/state set character aria pull_lever true",
+            "/state set character mob.42 captive false",
             "/state clear room lever_pulled",
         ],
     }
@@ -1532,7 +1533,7 @@ class ResetInstanceHandler(CommandHandler):
                     "items_deleted": result.items_deleted,
                     "combat_encounters_deleted": result.combat_encounters_deleted,
                     "spawn_plan_runs_reset": result.spawn_plan_runs_reset,
-                    "template_scoped_state_reset": result.template_scoped_state_reset,
+                    "runtime_scoped_state_reset": result.runtime_scoped_state_reset,
                 },
                 text="Instance reset.",
             )

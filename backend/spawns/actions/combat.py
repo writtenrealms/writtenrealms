@@ -4464,8 +4464,16 @@ def _execute_pending_mob_ability(
             continue
 
         if component_type == "state":
-            # Character-scoped state is currently player-backed; skip state
-            # components for mob actors until mob runtime state lands.
+            state_event = execute_state_component(
+                component=component,
+                player=target_mob,
+                ability=ability,
+                room=room,
+                hit_landed=hit_landed,
+                round_id=round_id,
+            )
+            if state_event:
+                events.append(state_event)
             continue
 
         if component_type != "effect":

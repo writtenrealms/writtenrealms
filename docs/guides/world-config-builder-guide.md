@@ -22,6 +22,9 @@ spec:
   description: A long world description.
   motd: Questions? Join Discord.
   is_public: true
+  initial_state:
+    weather: clear
+    invasion_active: false
   starting_room: room@0,0,0
   death_room: room@0,0,0
   default_currency: crowns
@@ -85,9 +88,16 @@ portable across databases.
 | --- | --- | --- | --- |
 | `starting_room` | room ref | first room | Required by runtime world entry. |
 | `death_room` | room ref | first room | Used by death handling when death routing resolves here. |
+| `initial_state` | mapping | `{}` | Seed state copied into each new runtime world; it is not live runtime state. |
 
 `exits_to` exists on `WorldConfig` for instance transfer behavior, but it is not
 currently authored through `kind: world` manifests.
+
+`initial_state` contains authored defaults for `state.world.*`. Applying a
+manifest changes the seed for future runtime worlds; it does not overwrite a
+currently running world's state. On an instance template, these defaults seed
+each new run and each builder reset. They are local to the template and are not
+merged with the base world's runtime state.
 
 ### Character Creation And Progression
 

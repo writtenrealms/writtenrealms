@@ -118,7 +118,7 @@ These should be authored on the instance template:
 | Layout | Zones, rooms, exits, paths, room flags/details | The instance is its own physical space. |
 | Entry config | Entry room, death room, fallback exit room | Room references must point at instance-template rooms. |
 | Spawn mechanics | Spawn plans, spawn entries, respawn policy, guided randomization | Plans reference inherited mob/item definitions but run locally. |
-| Room and zone state | Local mutable state | State is per run, not shared with the base world. |
+| World, room, and zone initial state | `spec.initial_state` seeds | Each run gets an independent copy; live state is never shared with the base world or another run. |
 | Local triggers | Room/zone/world triggers that refer to instance layout | Definition-attached inherited triggers need an explicit policy, described below. |
 | Instance goal | Optional completion policy and objectives | Owned by the template and evaluated by each run. |
 | Timer policy | Time limit, clear-time tracking, start moment | Owned by the template. |
@@ -269,6 +269,15 @@ The spawned world remains the owner of concrete runtime objects:
 
 `InstanceRun` owns lifecycle and history.
 
+The authored instance template owns only state seeds. At runtime, zone and room
+state is keyed by both the spawned world and the authored zone/room. That
+composite ownership prevents parallel runs, which reuse the same template
+layout rows, from observing or overwriting each other's state.
+
+Player character state remains player-owned and follows the player through
+entry and leave. Mob character state belongs to a spawned mob and is deleted
+with that mob.
+
 ### Status Values
 
 Recommended run statuses:
@@ -312,9 +321,12 @@ Implemented player commands:
 - `leave`
 - `instance`
 
+Implemented authorized builder commands:
+
+- `/reset` while inside an instance
+
 Future authorized system/builder/admin commands:
 
-- `reset instance` for authorized builders/admins
 - `close instance` for authorized systems/builders/admins
 
 Recommended actions:
@@ -351,8 +363,9 @@ Entry should:
 3. create or update the participant row
 4. move the player into the run's spawned world and entry room
 5. recursively migrate carried/equipped item rows to the spawned world
-6. emit `instance.entered`
-7. emit normal room look/enter events
+6. seed world/zone/room state if this is a newly created runtime world
+7. emit `instance.entered`
+8. emit normal room look/enter events
 
 The item migration must be recursive. Containers inside containers should not
 be left in the base spawned world.
@@ -448,14 +461,17 @@ Useful paths:
 | `instance.participant_count` | Active participants currently in the run. |
 | `instance.objectives.<id>.count` | Current objective count. |
 | `instance.objectives.<id>.complete` | Whether an objective is complete. |
-| `state.world.<key>` | Instance-local world state because the spawned world is the run world. |
-| `state.instance.<key>` | Optional future alias for instance-run state if added. |
+| `state.world.<key>` | Instance-run-local world state because the spawned world is the run world. |
+| `state.zone.<key>` | Instance-run-local state for the actor's current zone. |
+| `state.room.<key>` | Instance-run-local state for the actor's current room. |
+| `state.character.<key>` | Player- or mob-owned state for the current character. |
 | `event.*` | Event payload for the event that caused evaluation. |
 
-`state.world.*` is already a good fit for run-local state because each run has
-its own spawned world. A future `state.instance.*` alias may make builder
-authoring clearer, but it should map to the same underlying runtime ownership
-or to an explicit `InstanceRunState` row.
+`state.world.*` is the run-local world scope because each run has its own
+spawned world. WR2 does not expose an implicit `state.instance` alias or a
+fallback into base-world state. A future cross-run or template-wide mutable
+scope would need an explicit name and access policy rather than changing these
+ownership rules.
 
 ### Event Subscription
 
@@ -737,6 +753,12 @@ Rules:
 - Cleanup must happen after clear records and outcome summaries are written.
 - A run can be closed to new entry before it is cleaned.
 
+An in-place builder reset is separate from lifecycle cleanup. It keeps the run
+and participants, preserves player inventory/equipment/character state,
+reseeds only that runtime world's world/zone/room state from the template's
+`initial_state`, and rematerializes mobs from spawn plans. Other active runs
+are unchanged.
+
 This gives players room to disconnect/reconnect and gives completed groups time
 to loot or read completion output if the instance rules allow it.
 
@@ -930,6 +952,26 @@ Short term, `kind: world` can remain the storage/editing primitive. The builder
 can still expose instance metadata through `kind: instance` later without
 changing the underlying fact that an instance template has rooms/zones/plans.
 
+The current `kind: world`, `kind: zone`, and `kind: room` documents expose
+`spec.initial_state` on the instance template. These are seeds for new runs and
+builder resets, not live template-wide values:
+
+```yaml
+kind: world
+spec:
+  initial_state:
+    alarm_raised: false
+---
+kind: room
+metadata:
+  ref: room@4,2,0
+  name: Prison Cell
+spec:
+  zone: zone@1
+  initial_state:
+    cell_door_open: false
+```
+
 ## Spawn Plan Integration
 
 Instance population should use spawn plans.
@@ -1119,11 +1161,13 @@ Recommended coverage:
 - clear time is computed from server timestamps
 - builder command/admin mutation invalidates leaderboard eligibility when
   configured
+- two parallel runs of one template have isolated world, zone, and room state
+- resetting one run reseeds that run without changing another run
+- player character state survives instance entry, leave, and reset
+- mob character state is deleted and reseeded with the replacement mob
 
 ## Open Questions
 
-- Should `state.instance.*` be a real new scope or a builder-facing alias for
-  `state.world.*` inside spawned instance worlds?
 - Should instance templates be exported as `kind: instance` only, or should
   `kind: world` remain the canonical manifest with an instance flag?
 - Which base-world global triggers should be inheritable, and how should
