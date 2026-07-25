@@ -74,6 +74,7 @@ class Item(BaseModel):
     # Properties
     is_container: bool = False
     is_pickable: bool = True
+    is_salvageable: bool = False
     value: Optional[Money] = None
 
     # Identifiers

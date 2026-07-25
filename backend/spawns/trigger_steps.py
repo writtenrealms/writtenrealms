@@ -806,15 +806,21 @@ def _item_change_events(
     # Deliberately omit a viewer so each bounded payload is non-personalized.
     # Actor inventory changes go only to that actor; other room occupants get
     # room changes without learning what was privately granted or consumed.
-    from spawns.state_payloads import serialize_item
+    from spawns.state_payloads import serialize_inventory
 
     added_payloads = [
-        serialize_item(item, viewer=None).model_dump()
-        for item in changes.room_items_added.values()
+        payload.model_dump()
+        for payload in serialize_inventory(
+            changes.room_items_added.values(),
+            viewer=None,
+        )
     ]
     actor_added_payloads = [
-        serialize_item(item, viewer=None).model_dump()
-        for item in changes.actor_inventory_added.values()
+        payload.model_dump()
+        for payload in serialize_inventory(
+            changes.actor_inventory_added.values(),
+            viewer=None,
+        )
     ]
 
     room_changed = bool(changes.room_items_added or changes.room_items_removed)

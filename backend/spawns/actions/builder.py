@@ -57,7 +57,7 @@ from spawns.state_payloads import (
     serialize_actor,
     serialize_char_from_mob,
     serialize_char_from_player,
-    serialize_item,
+    serialize_inventory,
     serialize_room,
     serialize_world,
 )
@@ -1209,13 +1209,17 @@ class GrantItemAction:
             return definition.name
         return "item"
 
-    def _loaded_item_payload(self, item: Item, target: Player | Mob) -> dict[str, object]:
+    def _loaded_item_payload(
+        self,
+        item: Item,
+        item_payload: dict,
+    ) -> dict[str, object]:
         loaded_name = self._loaded_item_name(item)
         return {
             "type": "item",
             "key": item.key,
             "name": loaded_name,
-            "item": serialize_item(item, viewer=target).model_dump(),
+            "item": item_payload,
         }
 
     def execute(
@@ -1272,9 +1276,13 @@ class GrantItemAction:
                 definition.spawn(target, spawn_world)
                 for definition in definitions
             ]
+            serialized_items = serialize_inventory(
+                spawned_items,
+                viewer=target,
+            )
             loaded_items = [
-                self._loaded_item_payload(item, target)
-                for item in spawned_items
+                self._loaded_item_payload(item, payload.model_dump())
+                for item, payload in zip(spawned_items, serialized_items)
             ]
             target_payload, target_key = self._target_payload(target)
 

@@ -2,11 +2,15 @@ import json
 from datetime import timedelta
 
 from django.contrib.contenttypes.models import ContentType
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from builders.models import (
     AbilityDefinition,
+    CraftMaterial,
     ItemDefinition,
+    ItemSalvageYield,
     MobDefinition,
     Trigger,
 )
@@ -17,6 +21,7 @@ from core.scoped_state import (
     STATE_SCOPE_WORLD,
     get_state_snapshot,
 )
+from spawns.actions.builder import GrantItemAction
 from spawns.handlers import dispatch_command, get_registered_handlers
 from spawns.models import ActiveEffect, CombatEncounter, Item, Mob
 from tests.base import WorldTestCase
@@ -630,6 +635,54 @@ class TestBuilderGrantItem(BuilderCommandTestCase):
         self.assertIn(
             loaded_helm.key,
             [item["key"] for item in notification["data"]["actor"]["inventory"]],
+        )
+
+    def test_builder_grantitem_salvageability_queries_are_bounded(self):
+        definitions = [
+            self._item_definition(
+                slug=f"query-grant-{index}",
+                name=f"a query grant item {index}",
+            )
+            for index in range(12)
+        ]
+        material = CraftMaterial.objects.create(
+            world=self.world,
+            slug="query-grant-material",
+            name="Query Grant Material",
+        )
+        ItemSalvageYield.objects.create(
+            item_definition=definitions[0],
+            material=material,
+            quantity=1,
+        )
+        target = self.create_player("Target", room=self.room)
+
+        with CaptureQueriesContext(connection) as queries:
+            result = GrantItemAction().execute_many(
+                actor=self.player,
+                target_selector=target.key,
+                item_ids=[definition.slug for definition in definitions],
+            )
+
+        loaded_items = result.events[0].data["loaded_items"]
+        self.assertEqual(len(loaded_items), len(definitions))
+        self.assertEqual(
+            [
+                loaded_item["item"]["is_salvageable"]
+                for loaded_item in loaded_items
+            ],
+            [True] + [False] * (len(definitions) - 1),
+        )
+        salvage_table = ItemSalvageYield._meta.db_table.lower()
+        salvage_queries = [
+            query["sql"]
+            for query in queries
+            if salvage_table in query["sql"].lower()
+        ]
+        self.assertLessEqual(
+            len(salvage_queries),
+            3,
+            "Bulk grants must not query salvage yields once per item.",
         )
 
     def test_builder_grantitem_batch_supports_multi_word_target(self):

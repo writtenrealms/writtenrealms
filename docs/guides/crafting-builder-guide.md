@@ -128,9 +128,10 @@ spec:
     profile: craftingprofile.town-forge
 ```
 
-A direct room attachment automatically exposes a `craft` action in the room
-display. Builders do not need to create a duplicate room action or command
-trigger for workshop discoverability.
+A direct room attachment automatically exposes `craft` and `salvage` actions
+in the room display. The `salvage` action opens the same read-only list as the
+bare command; it does not make salvage workshop-only. Builders do not need to
+create duplicate room actions or command triggers for workshop discoverability.
 
 Or attach it to a mob definition when that NPC's presence should control
 access:
@@ -161,8 +162,14 @@ spec:
 Omitting `salvage` preserves an existing specification during a patch. An
 explicit empty or null salvage value clears it.
 
-Any directly carried item with at least one yield appears in the player's bare
-`salvage` list and can be selected by its displayed number or name.
+An item created from a definition with at least one authored yield displays a
+**SALVAGEABLE** indicator in item look and lookup views. The indicator describes
+the definition's salvage capability, not the item's immediate command
+eligibility.
+
+Any directly carried, otherwise eligible item with at least one yield appears
+in the player's bare `salvage` list and can be selected by its displayed number
+or name. Quest items and nonempty containers are excluded.
 
 Use `only: true` for captured spoils. Salvage-only definitions must be inert,
 must have at least one yield, cannot be equipped, are selected by `salvage

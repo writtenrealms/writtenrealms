@@ -40,22 +40,55 @@ def _serialized_item_payload(item: Item, *, viewer: Player) -> dict:
     return serialize_item(item, viewer=viewer).model_dump()
 
 
-def _serialize_stock_entry(entry: MerchantStockEntry, *, viewer: Player) -> dict:
+def _serialize_stock_entry(
+    entry: MerchantStockEntry,
+    *,
+    viewer: Player,
+    item_payload: dict | None = None,
+) -> dict:
     return {
         "id": entry.id,
         "key": f"merchant_stock_entry.{entry.id}",
         "price": money_payload(int(entry.price or 0), entry.currency),
-        "item": _serialized_item_payload(entry.item, viewer=viewer),
+        "item": (
+            item_payload
+            if item_payload is not None
+            else _serialized_item_payload(entry.item, viewer=viewer)
+        ),
         "source_slot": entry.stock_slot.key if entry.stock_slot else "",
     }
 
 
-def _serialize_buyback_entry(entry: MerchantBuybackEntry, *, viewer: Player) -> dict:
+def _serialize_buyback_entry(
+    entry: MerchantBuybackEntry,
+    *,
+    viewer: Player,
+    item_payload: dict | None = None,
+) -> dict:
     return {
         "id": entry.id,
         "key": f"merchant_buyback_entry.{entry.id}",
         "price": money_payload(int(entry.buyback_price or 0), entry.currency),
-        "item": _serialized_item_payload(entry.item, viewer=viewer),
+        "item": (
+            item_payload
+            if item_payload is not None
+            else _serialized_item_payload(entry.item, viewer=viewer)
+        ),
+    }
+
+
+def _serialized_item_payload_map(
+    items: Iterable[Item],
+    *,
+    viewer: Player,
+) -> dict[int, dict]:
+    from spawns.state_payloads import serialize_inventory
+
+    item_list = list(items)
+    payloads = serialize_inventory(item_list, viewer=viewer)
+    return {
+        item.id: payload.model_dump()
+        for item, payload in zip(item_list, payloads)
     }
 
 
@@ -326,11 +359,15 @@ def resolve_merchant_runtime(player: Player, selector: str | None) -> MerchantRu
 
 def list_merchant_stock(player: Player, merchant_selector: str | None) -> dict:
     runtime = resolve_merchant_runtime(player, merchant_selector)
-    entries = (
+    entries = list(
         runtime.stock_entries
         .filter(status=MerchantStockEntry.STATUS_AVAILABLE, item__is_pending_deletion=False)
         .select_related("item", "item__definition", "item__currency", "stock_slot", "currency")
         .order_by("stock_slot__created_ts", "stock_slot__id", "id")
+    )
+    item_payloads = _serialized_item_payload_map(
+        (entry.item for entry in entries),
+        viewer=player,
     )
     return {
         "merchant": {
@@ -338,7 +375,14 @@ def list_merchant_stock(player: Player, merchant_selector: str | None) -> dict:
             "key": runtime.mob.key,
             "name": runtime.mob.name,
         },
-        "stock": [_serialize_stock_entry(entry, viewer=player) for entry in entries],
+        "stock": [
+            _serialize_stock_entry(
+                entry,
+                viewer=player,
+                item_payload=item_payloads[entry.item_id],
+            )
+            for entry in entries
+        ],
         "funds": {
             "mode": runtime.profile.funds_mode,
             "remaining_purchase_budget": runtime.remaining_purchase_budget,
@@ -533,15 +577,26 @@ def sell_item(player: Player, merchant_selector: str | None, item_selector: str 
 
 def list_buyback(player: Player, merchant_selector: str | None) -> dict:
     runtime = resolve_merchant_runtime(player, merchant_selector)
-    entries = (
+    entries = list(
         runtime.buyback_entries
         .filter(player=player, status=MerchantBuybackEntry.STATUS_ACTIVE, item__is_pending_deletion=False)
         .select_related("item", "item__definition", "item__currency", "currency")
         .order_by("-created_ts", "-id")
     )
+    item_payloads = _serialized_item_payload_map(
+        (entry.item for entry in entries),
+        viewer=player,
+    )
     return {
         "merchant": {"id": runtime.mob_id, "key": runtime.mob.key, "name": runtime.mob.name},
-        "buyback": [_serialize_buyback_entry(entry, viewer=player) for entry in entries],
+        "buyback": [
+            _serialize_buyback_entry(
+                entry,
+                viewer=player,
+                item_payload=item_payloads[entry.item_id],
+            )
+            for entry in entries
+        ],
     }
 
 

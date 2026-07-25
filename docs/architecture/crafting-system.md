@@ -122,15 +122,18 @@ appropriate place to atomically count and consume ingredients.
 The initial crafting loop is:
 
 1. Enemies drop physical equipment and salvage-only spoils.
-2. The player picks up and inspects those items normally.
+2. The player picks up and inspects those items normally. Item look and lookup
+   views mark definitions with authored salvage yields as **SALVAGEABLE**; this
+   describes salvage capability rather than immediate command eligibility.
 3. Bare `salvage` lists eligible items; `salvage <number>`, `salvage <item>`,
    or `salvage spoils` destroys selected items and credits crafting materials.
 4. `materials` shows the player's current material balances from anywhere.
 5. At a workshop, `recipes`, bare `recipe`, or bare `craft` shows the numbered
    recipe catalog.
-   A room with a direct crafting profile also derives a query-free `craft`
-   room action from its loaded profile foreign-key id; this is not separately
-   authored trigger data.
+   A room with a direct crafting profile also derives query-free `craft` and
+   `salvage` room actions from its loaded profile foreign-key id; these are not
+   separately authored trigger data. The `salvage` action opens the same
+   read-only list as the bare command, which remains available anywhere.
 6. `recipe <number>` or `recipe <item>` shows the output range,
    owned/required materials, and any currency fee.
 7. `craft <number>` or `craft <item>` atomically spends materials and the
@@ -344,6 +347,11 @@ may correctly be named `a reinforced helm`, while the player types
 `reinforced helm`.
 
 ### `salvage`, `salvage <number>`, and `salvage <item>`
+
+Item look and lookup views display **SALVAGEABLE** when an item's definition
+has at least one authored salvage yield. This is an intrinsic capability
+indicator, not a promise that the item is currently eligible: the command
+still enforces ownership, equipment, container, quest, and selection rules.
 
 Bare `salvage` is a read-only inventory view. It lists only directly carried
 items that are currently eligible for ordinary salvage, in item-id order, and

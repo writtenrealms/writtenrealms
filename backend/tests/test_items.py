@@ -1,5 +1,8 @@
 from config import constants as adv_consts
-from builders.models import ItemDefinition
+from builders.models import CraftMaterial, ItemDefinition, ItemSalvageYield
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
+from spawns.actions.items import EquipAction
 from spawns.handlers import dispatch_command
 from spawns.models import Item
 from tests.base import WorldTestCase
@@ -459,6 +462,55 @@ class TestEquipmentCommands(WorldTestCase):
         self.assertIsNotNone(message)
         self.assertEqual(message["data"]["actor"]["equipment"]["head"]["key"], helmet.key)
         self.assertIn("You wear Iron Helmet on your head.", message.get("text", ""))
+
+    def test_equip_all_salvageability_queries_are_bounded(self):
+        equipment_types = (
+            adv_consts.EQUIPMENT_TYPE_HEAD,
+            adv_consts.EQUIPMENT_TYPE_BODY,
+            adv_consts.EQUIPMENT_TYPE_ARMS,
+            adv_consts.EQUIPMENT_TYPE_HANDS,
+            adv_consts.EQUIPMENT_TYPE_WAIST,
+            adv_consts.EQUIPMENT_TYPE_LEGS,
+            adv_consts.EQUIPMENT_TYPE_FEET,
+        )
+        items = [
+            self._make_equipment_item(
+                f"Query Armor {index}",
+                equipment_type,
+            )
+            for index, equipment_type in enumerate(equipment_types)
+        ]
+        material = CraftMaterial.objects.create(
+            world=self.world,
+            slug="query-salvage-material",
+            name="Query Salvage Material",
+        )
+        ItemSalvageYield.objects.create(
+            item_definition=items[0].definition,
+            material=material,
+            quantity=1,
+        )
+
+        with CaptureQueriesContext(connection) as queries:
+            result = EquipAction().execute(self.player.id, "all.armor")
+
+        payloads = result.events[0].data["items"]
+        self.assertEqual(len(payloads), len(items))
+        self.assertEqual(
+            [payload["is_salvageable"] for payload in payloads],
+            [True] + [False] * (len(items) - 1),
+        )
+        salvage_table = ItemSalvageYield._meta.db_table.lower()
+        salvage_queries = [
+            query["sql"]
+            for query in queries
+            if salvage_table in query["sql"].lower()
+        ]
+        self.assertLessEqual(
+            len(salvage_queries),
+            4,
+            "Bulk equip payloads must not query salvage yields once per item.",
+        )
 
     def test_authored_heavy_armor_can_be_equipped_by_hoplite_and_warlord(self):
         self._configure_authored_armor_classes()

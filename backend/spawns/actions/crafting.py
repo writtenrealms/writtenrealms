@@ -789,10 +789,10 @@ def _salvage_candidate_queryset(player: Player):
         player.inventory.filter(is_pending_deletion=False)
         .exclude(type=adv_consts.ITEM_TYPE_QUEST)
         .annotate(
-            has_salvage_yield=Exists(salvage_yield_exists),
+            _payload_is_salvageable=Exists(salvage_yield_exists),
             has_contents=Exists(child_item_exists),
         )
-        .filter(has_salvage_yield=True, has_contents=False)
+        .filter(_payload_is_salvageable=True, has_contents=False)
         .select_related("definition", "currency")
         .order_by("id")
     )

@@ -1186,12 +1186,11 @@ def get_room_action_labels_for_actor(actor: Player | Mob | None, room: Room | No
 
     # Built-in room capabilities use already-loaded FK ids so serializing a
     # busy room does not add a database query per look.
-    if (
-        isinstance(actor, Player)
-        and room.crafting_profile_id
-        and not any(label.casefold() == "craft" for label in labels)
-    ):
-        labels.append("craft")
+    if isinstance(actor, Player) and room.crafting_profile_id:
+        normalized_labels = {label.casefold() for label in labels}
+        for action_label in ("craft", "salvage"):
+            if action_label not in normalized_labels:
+                labels.append(action_label)
 
     # Room.transfer_to is the authored base-room -> instance-room link.
     if isinstance(actor, Player) and room.transfer_to_id and "enter" not in labels:

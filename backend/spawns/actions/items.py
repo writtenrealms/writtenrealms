@@ -28,6 +28,7 @@ from spawns.state_payloads import (
     serialize_actor,
     serialize_char_from_mob,
     serialize_char_from_player,
+    serialize_inventory,
     serialize_item,
     serialize_room,
 )
@@ -394,7 +395,10 @@ class DropAction:
             {},
             viewer=updated_player,
         )
-        item_payloads = [serialize_item(item).model_dump() for item in items]
+        item_payloads = [
+            payload.model_dump()
+            for payload in serialize_inventory(items)
+        ]
 
         data = {
             "actor": actor_payload.model_dump(),
@@ -550,8 +554,30 @@ class EquipAction:
             viewer=updated_player,
         )
 
+        payload_item_ids = {
+            item.id
+            for item in [
+                *equipped_items,
+                *(swap["equipped"] for swap in swapped_items),
+                *(swap["removed"] for swap in swapped_items),
+                *unequippable_items,
+                *removed_items,
+            ]
+        }
+        payload_items = list(
+            Item.objects.filter(id__in=payload_item_ids)
+            .select_related("definition", "currency")
+        )
+        item_payloads = {
+            item.id: payload.model_dump()
+            for item, payload in zip(
+                payload_items,
+                serialize_inventory(payload_items),
+            )
+        }
+
         def item_payload(item: Item) -> dict:
-            return serialize_item(item).model_dump()
+            return item_payloads[item.id]
 
         data = {
             "actor": actor_payload.model_dump(),
@@ -644,7 +670,10 @@ class RemoveEquipmentAction:
             {},
             viewer=updated_player,
         )
-        item_payloads = [serialize_item(item).model_dump() for item in removed_items]
+        item_payloads = [
+            payload.model_dump()
+            for payload in serialize_inventory(removed_items)
+        ]
         data = {
             "actor": actor_payload.model_dump(),
             "items": item_payloads,
@@ -780,8 +809,8 @@ class GetAction:
             viewer=updated_player,
         )
         item_payloads = [
-            serialize_item(item).model_dump()
-            for item in [*moved_items, *claimed_items]
+            payload.model_dump()
+            for payload in serialize_inventory([*moved_items, *claimed_items])
         ]
 
         data = {
@@ -814,7 +843,10 @@ class GetAction:
                 .values_list("id", flat=True)
             )
             if recipients:
-                moved_item_payloads = [serialize_item(item).model_dump() for item in moved_items]
+                moved_item_payloads = [
+                    payload.model_dump()
+                    for payload in serialize_inventory(moved_items)
+                ]
                 notify_data = {
                     "actor": serialize_char_from_player(updated_player).model_dump(),
                     "items": moved_item_payloads,
@@ -912,7 +944,10 @@ class PutAction:
             {},
             viewer=updated_player,
         )
-        item_payloads = [serialize_item(item).model_dump() for item in moved_items]
+        item_payloads = [
+            payload.model_dump()
+            for payload in serialize_inventory(moved_items)
+        ]
         target_payload = serialize_item(target_container).model_dump()
 
         data = {
@@ -1013,7 +1048,10 @@ class GiveAction:
             {},
             viewer=updated_player,
         )
-        item_payloads = [serialize_item(item).model_dump() for item in moved_items]
+        item_payloads = [
+            payload.model_dump()
+            for payload in serialize_inventory(moved_items)
+        ]
         target_payload = serialize_char_from_mob(refreshed_target_mob, viewer=updated_player).model_dump()
 
         data = {

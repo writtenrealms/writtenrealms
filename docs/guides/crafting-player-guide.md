@@ -13,8 +13,10 @@ is created.
   `weapons`, and `ready`. A recipe's currency fee and any missing amount appear
   alongside its material readiness.
 - Bare `recipe` and bare `craft` show that same numbered catalog.
-- Rooms configured as workshops display a **CRAFT** room action. Selecting it
-  runs bare `craft` and opens the same numbered catalog.
+- Rooms configured as workshops display **CRAFT** and **SALVAGE** room actions.
+  **CRAFT** runs bare `craft` and opens the same numbered recipe catalog.
+  **SALVAGE** runs bare `salvage` and opens the read-only numbered list of
+  currently eligible carried items.
 - `recipe <number>` shows the corresponding output's fixed values, stat ranges,
   material requirements, currency fee, owned quantities, and anything missing.
   Item names still work.
@@ -28,9 +30,15 @@ is created.
   such as `salvage 2.helm` remain available when useful.
 - `salvage spoils` processes up to 100 carried items explicitly marked as
   salvage-only and reports if more remain.
+- Looking at an item, including through the item lookup window, displays
+  **SALVAGEABLE** when its definition has authored salvage yields. This marks
+  the item's salvage capability, not whether it is immediately eligible for
+  the `salvage` command.
 
 Crafting requires a workshop in the current room or an available crafting NPC.
-`materials` and ordinary salvage do not require one.
+`materials` and ordinary salvage do not require one. The workshop
+**SALVAGE** action is a convenience; the `salvage` command remains available
+anywhere.
 
 Recipe numbers follow the authored order across all local workshops. Filters
 and workshop-specific views retain those canonical numbers, so a narrowed list

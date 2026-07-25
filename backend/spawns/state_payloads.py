@@ -12,7 +12,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from django.db.models import Prefetch
 from django.utils import timezone
 
-from builders.models import AbilityDefinition, CraftMaterial
+from builders.models import AbilityDefinition, CraftMaterial, ItemSalvageYield
 from config import constants as adv_consts
 from core.abilities import definition_world
 from core.combat_formulas import get_world_combat_system, rating_display_percent
@@ -32,6 +32,7 @@ from core.stat_system import (
 from quests.services.interactions import room_mob_quest_indicator_map, room_quest_callouts
 from quests.services.room_items import serialized_quest_room_items_for_room
 from spawns.actions.effects import active_character_effects, active_combat_effects
+from spawns.item_querysets import with_item_salvageability
 from spawns.models import (
     DoorState,
     Item,
@@ -62,6 +63,7 @@ from worlds.models import Door, Room, World
 
 
 _CORE_FACTION_UNSET = object()
+_SALVAGEABILITY_UNSET = object()
 
 
 # ---- Utilities ----
@@ -218,7 +220,9 @@ def get_player_with_related(player_id: int) -> Player:
     Reload the player with the relations we need for serialization to keep
     query counts low.
     """
-    inventory_qs = Item.objects.select_related("definition", "currency")
+    inventory_qs = with_item_salvageability(
+        Item.objects.select_related("definition", "currency")
+    )
     material_balance_qs = PlayerMaterialBalance.objects.select_related(
         "material"
     ).filter(quantity__gt=0).order_by(
@@ -313,6 +317,7 @@ def serialize_item(
     *,
     viewer: Player | Mob | None = None,
     include_inventory: bool = False,
+    salvageable_definition_ids: set[int] | None = None,
 ) -> ItemSchema:
     """Serialize an item into the WR2 Item schema."""
     from spawns.triggers import get_item_action_labels_for_actor
@@ -334,6 +339,23 @@ def serialize_item(
         item.definition.item_type if item.definition else None
     )
     stack_key = item_stack_key(item, item_type=item_type)
+    if salvageable_definition_ids is None:
+        annotated_salvageability = getattr(
+            item,
+            "_payload_is_salvageable",
+            _SALVAGEABILITY_UNSET,
+        )
+        if annotated_salvageability is _SALVAGEABILITY_UNSET:
+            is_salvageable = bool(
+                item.definition_id
+                and ItemSalvageYield.objects.filter(
+                    item_definition_id=item.definition_id,
+                ).exists()
+            )
+        else:
+            is_salvageable = bool(annotated_salvageability)
+    else:
+        is_salvageable = item.definition_id in salvageable_definition_ids
     inventory = []
     if include_inventory and item_type in (
         adv_consts.ITEM_TYPE_CONTAINER,
@@ -341,9 +363,10 @@ def serialize_item(
         adv_consts.ITEM_TYPE_TRASH,
     ):
         inventory = serialize_inventory(
-            item.inventory.filter(is_pending_deletion=False)
-            .select_related("definition", "currency")
-            .order_by("id"),
+            with_item_salvageability(
+                item.inventory.filter(is_pending_deletion=False)
+                .select_related("definition", "currency")
+            ).order_by("id"),
             viewer=viewer,
             include_inventory=True,
         )
@@ -386,6 +409,7 @@ def serialize_item(
         stamina_max=item.stamina_max,
         stamina_regen=item.stamina_regen,
         is_pickable=item.is_pickable,
+        is_salvageable=is_salvageable,
         value=(
             money_payload(int(item.cost), item.currency)
             if item.cost is not None and item.currency is not None
@@ -411,13 +435,37 @@ def serialize_inventory(
     viewer: Player | Mob | None = None,
     include_inventory: bool = False,
 ) -> List[ItemSchema]:
+    item_list = list(items)
+    salvageable_definition_ids: set[int] = set()
+    unresolved_definition_ids: set[int] = set()
+    for item in item_list:
+        if not item.definition_id:
+            continue
+        annotated_salvageability = getattr(
+            item,
+            "_payload_is_salvageable",
+            _SALVAGEABILITY_UNSET,
+        )
+        if annotated_salvageability is _SALVAGEABILITY_UNSET:
+            unresolved_definition_ids.add(item.definition_id)
+        elif annotated_salvageability:
+            salvageable_definition_ids.add(item.definition_id)
+
+    if unresolved_definition_ids:
+        salvageable_definition_ids.update(
+            ItemSalvageYield.objects.filter(
+                item_definition_id__in=unresolved_definition_ids,
+            ).values_list("item_definition_id", flat=True)
+        )
+
     return [
         serialize_item(
             item,
             viewer=viewer,
             include_inventory=include_inventory,
+            salvageable_definition_ids=salvageable_definition_ids,
         )
-        for item in items
+        for item in item_list
     ]
 
 
@@ -425,22 +473,39 @@ def serialize_equipment(equipment, *, viewer: Player | Mob | None = None) -> Equ
     if not equipment:
         return EquipmentSchema()
 
-    slots = {}
-    for slot in (
-        "weapon",
-        "offhand",
-        "head",
-        "body",
-        "arms",
-        "hands",
-        "waist",
-        "legs",
-        "feet",
-        "accessory",
-    ):
-        eq_item = getattr(equipment, slot, None)
-        if eq_item:
-            slots[slot] = serialize_item(eq_item, viewer=viewer)
+    slot_items = [
+        (slot, eq_item)
+        for slot in (
+            "weapon",
+            "offhand",
+            "head",
+            "body",
+            "arms",
+            "hands",
+            "waist",
+            "legs",
+            "feet",
+            "accessory",
+        )
+        if (eq_item := getattr(equipment, slot, None))
+    ]
+    salvageable_definition_ids = set(
+        ItemSalvageYield.objects.filter(
+            item_definition_id__in={
+                item.definition_id
+                for _, item in slot_items
+                if item.definition_id
+            },
+        ).values_list("item_definition_id", flat=True)
+    )
+    slots = {
+        slot: serialize_item(
+            item,
+            viewer=viewer,
+            salvageable_definition_ids=salvageable_definition_ids,
+        )
+        for slot, item in slot_items
+    }
     return EquipmentSchema(**slots)
 
 
@@ -723,9 +788,11 @@ def serialize_room(
             description="Room data is unavailable.",
         )
 
-    room_inventory_qs = room.inventory.filter(
-        is_pending_deletion=False,
-    ).select_related("definition", "currency")
+    room_inventory_qs = with_item_salvageability(
+        room.inventory.filter(
+            is_pending_deletion=False,
+        ).select_related("definition", "currency")
+    )
     if runtime_world is not None:
         room_inventory_qs = room_inventory_qs.filter(world=runtime_world)
     room_inventory = serialize_inventory(room_inventory_qs, viewer=viewer)

@@ -235,37 +235,45 @@ class CraftingRuntimeTestCase(WorldTestCase):
 
 
 class TestCraftingReadCommands(CraftingRuntimeTestCase):
-    def test_workshop_room_look_exposes_craft_action(self):
+    def test_workshop_room_look_exposes_craft_and_salvage_actions(self):
         messages = self._dispatch_text("look")
 
         message = self._message(messages, "cmd.look.success")
         self.assertIsNotNone(message)
-        self.assertIn("craft", message["data"]["target"]["actions"])
-        self.assertIn("Action available: craft", message["text"])
+        actions = message["data"]["target"]["actions"]
+        self.assertEqual(actions.count("craft"), 1)
+        self.assertEqual(actions.count("salvage"), 1)
+        self.assertLess(actions.index("craft"), actions.index("salvage"))
+        self.assertIn("Actions:", message["text"])
+        self.assertIn("craft", message["text"])
+        self.assertIn("salvage", message["text"])
 
-    def test_workshop_craft_action_deduplicates_trigger_label(self):
-        Trigger.objects.create(
-            world=self.world,
-            scope=adv_consts.TRIGGER_SCOPE_ROOM,
-            kind=adv_consts.TRIGGER_KIND_COMMAND,
-            target_type=ContentType.objects.get_for_model(Room),
-            target_id=self.room.id,
-            match="Craft",
-            script="/echo -- The forge is ready.",
-            display_action_in_room=True,
-        )
+    def test_workshop_actions_deduplicate_trigger_labels(self):
+        target_type = ContentType.objects.get_for_model(Room)
+        for match in ("Craft", "Salvage"):
+            Trigger.objects.create(
+                world=self.world,
+                scope=adv_consts.TRIGGER_SCOPE_ROOM,
+                kind=adv_consts.TRIGGER_KIND_COMMAND,
+                target_type=target_type,
+                target_id=self.room.id,
+                match=match,
+                script="/echo -- The forge is ready.",
+                display_action_in_room=True,
+            )
 
         messages = self._dispatch_text("look")
 
         message = self._message(messages, "cmd.look.success")
         self.assertIsNotNone(message)
         actions = message["data"]["target"]["actions"]
-        self.assertEqual(
-            sum(action.casefold() == "craft" for action in actions),
-            1,
-        )
+        for expected_action in ("craft", "salvage"):
+            self.assertEqual(
+                sum(action.casefold() == expected_action for action in actions),
+                1,
+            )
 
-    def test_room_without_crafting_profile_has_no_automatic_craft_action(self):
+    def test_room_without_crafting_profile_has_no_automatic_workshop_actions(self):
         self.room.crafting_profile = None
         self.room.save(update_fields=["crafting_profile"])
 
@@ -274,6 +282,74 @@ class TestCraftingReadCommands(CraftingRuntimeTestCase):
         message = self._message(messages, "cmd.look.success")
         self.assertIsNotNone(message)
         self.assertNotIn("craft", message["data"]["target"]["actions"])
+        self.assertNotIn("salvage", message["data"]["target"]["actions"])
+
+    def test_look_payload_marks_items_with_authored_salvage_yields(self):
+        salvage_definition = self._persian_definition()
+        carried_salvage = salvage_definition.spawn(
+            self.player,
+            self.spawn_world,
+        )
+        carried_ordinary = self.helm_definition.spawn(
+            self.player,
+            self.spawn_world,
+        )
+        room_salvage = salvage_definition.spawn(self.room, self.spawn_world)
+        room_ordinary = self.helm_definition.spawn(self.room, self.spawn_world)
+
+        messages = self._dispatch_text("look")
+
+        message = self._message(messages, "cmd.look.success")
+        actor_items = {
+            item["key"]: item
+            for item in message["data"]["actor"]["inventory"]
+        }
+        room_items = {
+            item["key"]: item
+            for item in message["data"]["target"]["inventory"]
+        }
+        self.assertTrue(actor_items[carried_salvage.key]["is_salvageable"])
+        self.assertFalse(actor_items[carried_ordinary.key]["is_salvageable"])
+        self.assertTrue(room_items[room_salvage.key]["is_salvageable"])
+        self.assertFalse(room_items[room_ordinary.key]["is_salvageable"])
+
+        messages = self._dispatch_text("look persian")
+        message = self._message(messages, "cmd.look.success")
+        self.assertEqual(message["data"]["target"]["key"], room_salvage.key)
+        self.assertTrue(message["data"]["target"]["is_salvageable"])
+
+    def test_look_salvageability_queries_are_bounded_across_item_counts(self):
+        for index in range(30):
+            salvage_definition = self._persian_definition(
+                slug=f"persian-scale-coat-{index}",
+            )
+            salvage_definition.spawn(self.player, self.spawn_world)
+            salvage_definition.spawn(self.room, self.spawn_world)
+
+        with CaptureQueriesContext(connection) as queries:
+            messages = self._dispatch_text("look")
+
+        message = self._message(messages, "cmd.look.success")
+        self.assertEqual(len(message["data"]["actor"]["inventory"]), 30)
+        self.assertEqual(len(message["data"]["target"]["inventory"]), 30)
+        self.assertTrue(all(
+            item["is_salvageable"]
+            for item in message["data"]["actor"]["inventory"]
+        ))
+        self.assertTrue(all(
+            item["is_salvageable"]
+            for item in message["data"]["target"]["inventory"]
+        ))
+        salvage_queries = [
+            query["sql"]
+            for query in queries
+            if "builders_itemsalvageyield" in query["sql"].lower()
+        ]
+        self.assertLessEqual(
+            len(salvage_queries),
+            2,
+            "Item look payloads must not query salvage yields once per item.",
+        )
 
     def test_materials_lists_positive_balances_in_authored_order(self):
         self._balance(self.leather, 6)

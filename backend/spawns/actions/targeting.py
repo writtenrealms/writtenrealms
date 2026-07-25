@@ -6,6 +6,7 @@ from typing import TypeVar
 
 from config import constants as adv_consts
 from spawns.actions.base import ActionError
+from spawns.item_querysets import with_item_salvageability
 from spawns.models import Item, Mob, Player
 from worlds.models import Room, World
 
@@ -213,21 +214,24 @@ def find_accessible_item_target(
         return None
 
     room_items = list(
-        room.inventory.filter(is_pending_deletion=False)
-        .select_related("definition", "currency")
-        .order_by("id")
+        with_item_salvageability(
+            room.inventory.filter(is_pending_deletion=False)
+            .select_related("definition", "currency")
+        ).order_by("id")
     )
     carried_items = list(
-        player.inventory.filter(is_pending_deletion=False)
-        .select_related("definition", "currency")
-        .order_by("id")
+        with_item_salvageability(
+            player.inventory.filter(is_pending_deletion=False)
+            .select_related("definition", "currency")
+        ).order_by("id")
     )
     equipped_items = []
     if getattr(player, "equipment", None):
         equipped_items = list(
-            player.equipment.inventory.filter(is_pending_deletion=False)
-            .select_related("definition", "currency")
-            .order_by("id")
+            with_item_salvageability(
+                player.equipment.inventory.filter(is_pending_deletion=False)
+                .select_related("definition", "currency")
+            ).order_by("id")
         )
 
     items = [*room_items, *carried_items, *equipped_items]

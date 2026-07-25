@@ -6,7 +6,13 @@
         [ {{ item.definition_id }} ]
       </span>
     </div>
-    <div class="summary">{{ summary }}</div>
+    <div class="summary">
+      {{ summary }}
+      <span
+        v-if="item.is_salvageable"
+        class="salvageable-indicator color-secondary font-text-light"
+      >[ SALVAGEABLE ]</span>
+    </div>
 
     <div
       class="cannot-eq-heavy-armor"
@@ -431,6 +437,13 @@ const cannot_wear_heavy_armor = computed(() => {
 .level-too-high,
 .cannot-eq-heavy-armor {
   color: $color-red;
+}
+
+.salvageable-indicator {
+  margin-left: 0.5rem;
+  font-size: 0.85em;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
 }
 
 .description {
