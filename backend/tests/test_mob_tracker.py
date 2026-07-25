@@ -138,6 +138,31 @@ class TestMobTracker(WorldTestCase):
             self._player_messages_by_type(messages, "cmd.kill.success")
         )
 
+    def test_pre_lock_move_clears_prepared_ability_without_a_tracker(self):
+        ordinary_mob = self._mob("an ordinary guard", tracker=False)
+        encounter = self._encounter(ordinary_mob)
+        encounter.pending_player_ability = {
+            "ability": "bash",
+            "status": "queued",
+        }
+        encounter.save(update_fields=["pending_player_ability"])
+
+        with capture_game_messages() as messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                dispatch_text_command(self.player.id, "east")
+
+        encounter.refresh_from_db()
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
+        self.assertEqual(encounter.pending_player_ability, {})
+        preparation_updates = self._player_messages_by_type(
+            messages,
+            "player.ability_preparations.update",
+        )
+        self.assertEqual(
+            [update["data"]["abilities"] for update in preparation_updates],
+            [[]],
+        )
+
     def test_move_snapshot_precedes_tracker_arrival_at_real_commit_timing(self):
         tracker = self._mob()
         resident = self._mob("a resident guard", tracker=False)
@@ -610,6 +635,11 @@ class TestMobTracker(WorldTestCase):
     def test_failed_reengagement_rolls_back_movement_and_can_retry(self):
         tracker = self._mob()
         origin_encounter = self._encounter(tracker)
+        origin_encounter.pending_player_ability = {
+            "ability": "bash",
+            "status": "queued",
+        }
+        origin_encounter.save(update_fields=["pending_player_ability"])
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with capture_game_messages() as messages:
@@ -635,6 +665,18 @@ class TestMobTracker(WorldTestCase):
                     tracker.trait_instances[0]
                     .get("runtime", {})
                     .get("processed_chase_keys")
+                )
+
+                preparation_updates = self._player_messages_by_type(
+                    messages,
+                    "player.ability_preparations.update",
+                )
+                self.assertEqual(
+                    [
+                        update["data"]["abilities"]
+                        for update in preparation_updates
+                    ],
+                    [[]],
                 )
 
                 callbacks[0]()

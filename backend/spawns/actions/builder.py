@@ -40,6 +40,10 @@ from spawns.actions.combat import apply_player_death
 from spawns.actions.effects import active_combat_effects
 from spawns.actions.information import LookAction
 from spawns.actions.targeting import find_room_char_target
+from spawns.ability_prepare_state import (
+    ability_prepare_state_event,
+    ability_prepare_state_events_for_players,
+)
 from spawns.events import GameEvent
 from spawns.handlers.base import ChoiceResolutionError, resolve_unambiguous_choice
 from spawns.handlers.registry import (
@@ -272,6 +276,20 @@ def _purge_mob_cleanly(*, mob: Mob) -> None:
         Item.objects.filter(id__in=item_ids).delete()
 
     Mob.objects.filter(pk=mob.id).delete()
+
+
+def _active_encounter_player_ids_for_mobs(mobs: list[Mob]) -> set[int]:
+    mob_ids = [mob.id for mob in mobs if mob.id]
+    if not mob_ids:
+        return set()
+    return set(
+        CombatEncounter.objects.select_for_update()
+        .filter(
+            mob_id__in=mob_ids,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        .values_list("player_id", flat=True)
+    )
 
 
 def _split_chained_commands(cmd: str) -> list[str]:
@@ -1362,9 +1380,11 @@ class PurgeAction:
                 raise ActionError("You are nowhere. Cannot purge.", code="no_room")
 
             room = player.room
+            affected_player_ids: set[int] = set()
             if not normalized_target or normalized_target == "all":
                 items = list(room.inventory.filter(is_pending_deletion=False))
                 mobs = list(room.mobs.all())
+                affected_player_ids = _active_encounter_player_ids_for_mobs(mobs)
 
                 for item in items:
                     item.delete()
@@ -1381,6 +1401,7 @@ class PurgeAction:
 
             elif normalized_target == "mobs":
                 mobs = list(room.mobs.all())
+                affected_player_ids = _active_encounter_player_ids_for_mobs(mobs)
                 for mob in mobs:
                     _purge_mob_cleanly(mob=mob)
                 out_text = "You purge all mobs in the room."
@@ -1390,6 +1411,9 @@ class PurgeAction:
                 if not targets:
                     raise ActionError("Incorrect purge target.", code="invalid_target")
 
+                affected_player_ids = _active_encounter_player_ids_for_mobs(
+                    [entity for entity in targets if isinstance(entity, Mob)]
+                )
                 lines = []
                 for entity in targets:
                     lines.append(f"You purge {_entity_name(entity)} from this world.")
@@ -1409,16 +1433,15 @@ class PurgeAction:
             "target": normalized_target or "all",
         }
 
-        return ActionResult(
-            events=[
-                GameEvent(
-                    type="cmd./purge.success",
-                    recipients=[updated_player.key],
-                    data=data,
-                    text=out_text,
-                )
-            ]
-        )
+        return ActionResult(events=[
+            GameEvent(
+                type="cmd./purge.success",
+                recipients=[updated_player.key],
+                data=data,
+                text=out_text,
+            ),
+            *ability_prepare_state_events_for_players(affected_player_ids),
+        ])
 
 
 class EchoAction:
@@ -2232,25 +2255,24 @@ class SetClassAction:
             room_payload = {"key": actor.key, "name": actor.name}
             recipient_key = actor.key
 
-        return ActionResult(
-            events=[
-                GameEvent(
-                    type="cmd./setclass.success",
-                    recipients=[recipient_key],
-                    data={
-                        "actor": actor_payload,
-                        "room": room_payload,
-                        "target": target_payload.model_dump(),
-                        "target_type": "player",
-                        "previous_class": previous_class,
-                        "new_class": new_class,
-                        "class_label": class_label,
-                        "unlearned_abilities": previous_abilities,
-                    },
-                    text=text,
-                )
-            ]
-        )
+        return ActionResult(events=[
+            GameEvent(
+                type="cmd./setclass.success",
+                recipients=[recipient_key],
+                data={
+                    "actor": actor_payload,
+                    "room": room_payload,
+                    "target": target_payload.model_dump(),
+                    "target_type": "player",
+                    "previous_class": previous_class,
+                    "new_class": new_class,
+                    "class_label": class_label,
+                    "unlearned_abilities": previous_abilities,
+                },
+                text=text,
+            ),
+            ability_prepare_state_event(updated_target),
+        ])
 
 
 class CmdAction:
@@ -2790,6 +2812,7 @@ class TransferAction:
 
                 finished_encounter_ids: list[int] = []
                 combat_effect_events: list[GameEvent] = []
+                ability_prepare_events: list[GameEvent] = []
                 if moved:
                     finished_encounter_ids = self._finish_active_encounters(
                         active_encounters,
@@ -2801,6 +2824,10 @@ class TransferAction:
                         target.viewed_rooms.add(destination.id)
                     combat_effect_events = self._combat_effect_state_events(
                         active_encounters,
+                    )
+                    ability_prepare_events = ability_prepare_state_events_for_players(
+                        encounter.player_id
+                        for encounter in active_encounters
                     )
                 elif isinstance(target, Player):
                     target.viewed_rooms.add(destination.id)
@@ -2923,6 +2950,7 @@ class TransferAction:
             )
         events.extend(target_state_events)
         events.extend(combat_effect_events)
+        events.extend(ability_prepare_events)
         if moved:
             events.append(
                 GameEvent(
@@ -3038,6 +3066,7 @@ class JumpAction:
                 ),
             )
         )
+        events.append(ability_prepare_state_event(updated_player))
 
         if destination_recipients:
             events.append(

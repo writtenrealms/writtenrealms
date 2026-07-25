@@ -11,6 +11,9 @@ from django.utils import timezone
 
 from config import constants as adv_consts
 from core.condition_dsl import ConditionContext, evaluate_condition
+from spawns.ability_prepare_state import (
+    ability_prepare_state_events_for_players,
+)
 from spawns.actions.base import ActionResult
 from spawns.events import GameEvent
 from spawns.models import ActiveEffect, CombatEncounter, Mob, Player
@@ -458,6 +461,9 @@ class ResolveTrackerChaseAction:
         if not chase_key:
             return ActionResult(data={"moved_mob_ids": []})
 
+        preparation_events: list[GameEvent] = []
+        prepared_state_changed = False
+
         # Encounter cleanup has its own lock-only transaction. Keeping those
         # locks out of the Player -> Mob transition below avoids the resolver's
         # Encounter -> Player lock cycle.
@@ -479,6 +485,16 @@ class ResolveTrackerChaseAction:
                     for encounter in escaped_encounters
                     if encounter.status == CombatEncounter.STATUS_ACTIVE
                 ]
+                prepared_state_changed = any(
+                    encounter.status == CombatEncounter.STATUS_ACTIVE
+                    and isinstance(encounter.pending_player_ability, dict)
+                    and bool(
+                        str(
+                            encounter.pending_player_ability.get("ability") or ""
+                        ).strip()
+                    )
+                    for encounter in escaped_encounters
+                )
                 if active_encounter_ids:
                     ActiveEffect.objects.filter(
                         encounter_id__in=active_encounter_ids,
@@ -494,8 +510,16 @@ class ResolveTrackerChaseAction:
                         pending_mob_ability={},
                     )
 
+        if prepared_state_changed:
+            preparation_events = ability_prepare_state_events_for_players(
+                [player_id]
+            )
+
         if not normalized_mob_ids:
-            return ActionResult(data={"moved_mob_ids": []})
+            return ActionResult(
+                events=preparation_events,
+                data={"moved_mob_ids": []},
+            )
 
         moved_mob_ids: list[int] = []
         destination_room_snapshot: dict | None = None
@@ -530,7 +554,10 @@ class ResolveTrackerChaseAction:
                 and not _tracker_chase_was_processed(mob, chase_key)
             ]
             if not unprocessed_mobs:
-                return ActionResult(data={"moved_mob_ids": []})
+                return ActionResult(
+                    events=preparation_events,
+                    data={"moved_mob_ids": []},
+                )
 
             origin_room, destination_room = _load_tracker_rooms(
                 origin_room_id,
@@ -711,11 +738,15 @@ class ResolveTrackerChaseAction:
 
         if not moved_mob_ids:
             return ActionResult(
-                events=movement_events,
+                events=[*preparation_events, *movement_events],
                 data={"moved_mob_ids": []},
             )
         return ActionResult(
-            events=[*movement_events, *engagement_events],
+            events=[
+                *preparation_events,
+                *movement_events,
+                *engagement_events,
+            ],
             data={
                 "moved_mob_ids": moved_mob_ids,
                 "destination_room_snapshot": destination_room_snapshot,

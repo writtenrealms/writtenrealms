@@ -32,6 +32,7 @@ from core.stat_system import (
 from quests.services.interactions import room_mob_quest_indicator_map, room_quest_callouts
 from quests.services.room_items import serialized_quest_room_items_for_room
 from spawns.actions.effects import active_character_effects, active_combat_effects
+from spawns.ability_prepare_state import active_prepared_ability_slugs
 from spawns.item_querysets import with_item_salvageability
 from spawns.models import (
     DoorState,
@@ -1115,4 +1116,5 @@ def build_state_sync(player: Player) -> StateSyncData:
         room=room_payload,
         world=world_payload,
         who_list=who_list,
+        prepared_abilities=active_prepared_ability_slugs(player),
     )

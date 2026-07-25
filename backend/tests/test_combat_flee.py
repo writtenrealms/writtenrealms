@@ -15,6 +15,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
 from spawns.actions.movement_costs import movement_cost
 from spawns.actions.combat import (
+    FleeAction,
     resolve_combat_encounter_step,
     resolve_due_character_effects,
 )
@@ -726,15 +727,22 @@ class TestCombatFlee(WorldTestCase):
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with self.captureOnCommitCallbacks(execute=True):
                 dispatch_text_command(self.player.id, "kill rat")
+            encounter = CombatEncounter.objects.get(
+                player=self.player,
+                mob=mob,
+                status=CombatEncounter.STATUS_ACTIVE,
+            )
+            encounter.pending_player_ability = {
+                "ability": "held-player-cast",
+                "status": "casting",
+            }
+            encounter.save(update_fields=["pending_player_ability"])
             with capture_game_messages() as flee_messages:
                 dispatch_text_command(self.player.id, "flee")
 
-        encounter = CombatEncounter.objects.get(
-            player=self.player,
-            mob=mob,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
+        encounter.refresh_from_db()
         self.assertEqual(encounter.pending_flee["status"], "preparing")
+        self.assertEqual(encounter.pending_player_ability, {})
         self.assertEqual(
             encounter.pending_flee["movement_cost"],
             movement_cost(self.escape_room),
@@ -747,6 +755,14 @@ class TestCombatFlee(WorldTestCase):
         self.assertEqual(
             self._messages_by_type(flee_messages, "cmd.flee.success")[0]["text"],
             "You prepare to flee.",
+        )
+        preparation_updates = self._messages_by_type(
+            flee_messages,
+            "player.ability_preparations.update",
+        )
+        self.assertEqual(
+            [update["data"]["abilities"] for update in preparation_updates],
+            [[]],
         )
 
         encounter.next_resolution_ts = timezone.now()
@@ -1022,10 +1038,15 @@ class TestCombatFlee(WorldTestCase):
             mob=archer,
             status=CombatEncounter.STATUS_ACTIVE,
             resolution_interval=-1,
+            pending_player_ability={
+                "ability": "held-secondary-cast",
+                "status": "casting",
+            },
         )
 
         dispatch_text_command(self.player.id, "flee")
-        dispatch_text_command(self.player.id, "flee")
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "flee")
 
         primary_encounter.refresh_from_db()
         secondary_encounter.refresh_from_db()
@@ -1033,6 +1054,14 @@ class TestCombatFlee(WorldTestCase):
         self.assertEqual(primary_encounter.status, CombatEncounter.STATUS_FINISHED)
         self.assertEqual(secondary_encounter.status, CombatEncounter.STATUS_FINISHED)
         self.assertEqual(self.player.room_id, self.escape_room.id)
+        preparation_updates = self._messages_by_type(
+            messages,
+            "player.ability_preparations.update",
+        )
+        self.assertEqual(
+            [update["data"]["abilities"] for update in preparation_updates],
+            [[]],
+        )
 
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "scan west")
@@ -1046,6 +1075,37 @@ class TestCombatFlee(WorldTestCase):
         self.assertTrue(
             all(char.get("target") is None for char in scan_message["data"]["chars"])
         )
+
+    def test_stale_room_flee_finishes_charge_and_emits_clear_state(self):
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=self._mob(),
+            pending_player_ability={
+                "ability": "held-player-cast",
+                "status": "casting",
+            },
+        )
+        self.player.room = self.escape_room
+        self.player.save(update_fields=["room"])
+
+        with patch(
+            "spawns.actions.combat.primary_active_encounter_for_player",
+            return_value=encounter,
+        ):
+            result = FleeAction().execute(self.player.id)
+
+        encounter.refresh_from_db()
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
+        error = next(event for event in result.events if event.type == "cmd.flee.error")
+        self.assertEqual(error.data["code"], "combat_ended")
+        preparation_state = next(
+            event
+            for event in result.events
+            if event.type == "player.ability_preparations.update"
+        )
+        self.assertEqual(preparation_state.data["abilities"], [])
 
     def test_flee_requires_active_combat_and_an_exit(self):
         with capture_game_messages() as messages:

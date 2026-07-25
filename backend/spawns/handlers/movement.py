@@ -140,6 +140,15 @@ class MoveHandler(CommandHandler):
                             "Failed to resolve tracker chase %s.",
                             tracker_plan.chase_key,
                         )
+                        from spawns.ability_prepare_state import (
+                            ability_prepare_state_events_for_players,
+                        )
+
+                        resolved_events.extend(
+                            ability_prepare_state_events_for_players(
+                                [ctx.player.id]
+                            )
+                        )
                     else:
                         resolved_events.extend(tracker_result.events)
                         snapshot = tracker_result.data.get(

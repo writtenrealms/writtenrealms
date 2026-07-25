@@ -47,6 +47,10 @@ from spawns.actions.movement import (
 )
 from spawns.actions.player_state import stand_player
 from spawns.actions.targeting import resolve_room_mob_target
+from spawns.ability_prepare_state import (
+    active_prepared_ability_slugs,
+    ability_prepare_state_event,
+)
 from spawns.events import GameEvent
 from spawns.models import CombatEncounter, Mob, Player
 from spawns.state_payloads import serialize_char_from_mob, serialize_char_from_player
@@ -985,7 +989,8 @@ def _ability_ack(
             "consumes_primary_action_while_casting": bool(
                 ability.consumes_primary_action_while_casting
             ),
-        }
+        },
+        "prepared_abilities": active_prepared_ability_slugs(player),
     }
     if isinstance(target, Mob):
         data["target"] = serialize_char_from_mob(target).model_dump()
@@ -1212,6 +1217,7 @@ class LearnAbilityAction:
 
 class UnlearnAbilityAction:
     def execute(self, player_id: int, selector: str | None) -> ActionResult:
+        cleared_prepared_ability = False
         with transaction.atomic():
             player = Player.objects.select_for_update().select_related("world").get(pk=player_id)
             ability = resolve_ability_for_selector(player.world, selector)
@@ -1235,14 +1241,16 @@ class UnlearnAbilityAction:
                 if hotkey_removed:
                     update_fields.append("ability_hotkeys")
                 player.save(update_fields=update_fields)
-                CombatEncounter.objects.filter(
+                pending_encounters = CombatEncounter.objects.filter(
                     player=player,
                     status=CombatEncounter.STATUS_ACTIVE,
                     pending_player_ability__ability=ability.slug,
-                ).update(pending_player_ability={})
+                )
+                cleared_prepared_ability = pending_encounters.exists()
+                pending_encounters.update(pending_player_ability={})
                 text = f"You unlearn {ability.name}."
 
-        return ActionResult(events=[
+        events = [
             GameEvent(
                 type="cmd.ability.unlearn.success",
                 recipients=[player.key],
@@ -1256,7 +1264,10 @@ class UnlearnAbilityAction:
                 },
                 text=text,
             )
-        ])
+        ]
+        if cleared_prepared_ability:
+            events.append(ability_prepare_state_event(player))
+        return ActionResult(events=events)
 
 
 class SetAbilityHotkeyAction:
@@ -1421,9 +1432,7 @@ class AbilityAction:
     ) -> ActionResult:
         from spawns.actions import combat as combat_actions
 
-        events: list[GameEvent] = [
-            _ability_ack(player=player, ability=ability, replaced=False, target=target_mob)
-        ]
+        events: list[GameEvent] = []
         room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
         encounter = CombatEncounter.objects.create(
             world=player.world,
@@ -1441,6 +1450,15 @@ class AbilityAction:
             ),
             opening_priority=opening_priority or [],
         )
+        events.append(
+            _ability_ack(
+                player=player,
+                ability=ability,
+                replaced=False,
+                target=target_mob,
+            )
+        )
+        previous_prepared_slug = combat_actions._prepared_player_ability_slug(encounter)
         combat_actions.ensure_encounter_initiative_order(
             encounter,
             player=player,
@@ -1453,7 +1471,15 @@ class AbilityAction:
                 target_mob=target_mob,
                 config=config,
             )
+            current_prepared_slug = combat_actions._prepared_player_ability_slug(encounter)
+            step = combat_actions._with_ability_prepare_transition(
+                step,
+                player=player,
+                previous_slug=previous_prepared_slug,
+                current_slug=current_prepared_slug,
+            )
             events.extend(step.events)
+            previous_prepared_slug = current_prepared_slug
             if not step.encounter_active:
                 return ActionResult(events=events)
             target_mob.refresh_from_db()
@@ -1613,6 +1639,12 @@ class AbilityAction:
             player=player,
             target_mob=target_mob,
         )
+        ability_ack = _ability_ack(
+            player=player,
+            ability=ability,
+            replaced=False,
+            target=target_mob,
+        )
 
         step = combat_actions.resolve_combat_encounter_step(
             encounter.id,
@@ -1621,7 +1653,7 @@ class AbilityAction:
         aggro_result = ScanRoomAggroAction().execute(player.id)
         return ActionResult(events=[
             *move_events,
-            _ability_ack(player=player, ability=ability, replaced=False, target=target_mob),
+            ability_ack,
             *step.events,
             *aggro_result.events,
         ])
@@ -1673,17 +1705,21 @@ class AbilityAction:
                         queued_round=active_encounter.round_number,
                     )
                     active_encounter.save(update_fields=["pending_player_ability"])
+                    ability_ack = _ability_ack(
+                        player=player,
+                        ability=ability,
+                        replaced=replaced,
+                        target=player,
+                    )
                     if active_encounter.resolution_interval == -1:
                         from spawns.actions.combat import resolve_combat_encounter_step
 
                         step = resolve_combat_encounter_step(active_encounter.id, auto_advance=False)
                         return ActionResult(events=[
-                            _ability_ack(player=player, ability=ability, replaced=replaced, target=player),
+                            ability_ack,
                             *step.events,
                         ])
-                    return ActionResult(events=[
-                        _ability_ack(player=player, ability=ability, replaced=replaced, target=player)
-                    ])
+                    return ActionResult(events=[ability_ack])
 
                 if not (ability.target or {}).get("allow_out_of_combat", True):
                     raise ActionError(f"{ability.name} can only be used in combat.", code="combat_required")
@@ -1737,17 +1773,21 @@ class AbilityAction:
                     queued_round=selected_encounter.round_number,
                 )
                 selected_encounter.save(update_fields=["pending_player_ability"])
+                ability_ack = _ability_ack(
+                    player=player,
+                    ability=ability,
+                    replaced=replaced,
+                    target=target_mob,
+                )
                 if selected_encounter.resolution_interval == -1:
                     from spawns.actions.combat import resolve_combat_encounter_step
 
                     step = resolve_combat_encounter_step(selected_encounter.id, auto_advance=False)
                     return ActionResult(events=[
-                        _ability_ack(player=player, ability=ability, replaced=replaced, target=target_mob),
+                        ability_ack,
                         *step.events,
                     ])
-                return ActionResult(events=[
-                    _ability_ack(player=player, ability=ability, replaced=replaced, target=target_mob)
-                ])
+                return ActionResult(events=[ability_ack])
 
             target_ref = resolve_room_mob_target(
                 room,
@@ -1815,19 +1855,23 @@ class AbilityAction:
                 player=player,
                 target_mob=target_mob,
             )
+            ability_ack = _ability_ack(
+                player=player,
+                ability=ability,
+                replaced=False,
+                target=target_mob,
+            )
 
             if interval == -1:
                 from spawns.actions.combat import resolve_combat_encounter_step
 
                 step = resolve_combat_encounter_step(encounter.id, auto_advance=False)
                 return ActionResult(events=[
-                    _ability_ack(player=player, ability=ability, replaced=False, target=target_mob),
+                    ability_ack,
                     *step.events,
                 ])
 
             from spawns.actions.combat import _schedule_encounter_resolution
 
             _schedule_encounter_resolution(encounter.id, interval)
-            return ActionResult(events=[
-                _ability_ack(player=player, ability=ability, replaced=False, target=target_mob)
-            ])
+            return ActionResult(events=[ability_ack])

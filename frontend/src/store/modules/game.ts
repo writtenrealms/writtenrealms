@@ -14,6 +14,7 @@ import router from "@/router";
 const MESSAGE_LIMIT = 200;
 const TRIGGER_ITEMS_CHANGED_MESSAGE = "notification.trigger.items_changed";
 const TRIGGER_MOBS_CHANGED_MESSAGE = "notification.trigger.mobs_changed";
+const ABILITY_PREPARATIONS_UPDATE_MESSAGE = "player.ability_preparations.update";
 
 const itemKey = (item: any): string => String(item?.key ?? "");
 
@@ -166,6 +167,9 @@ const set_initial_state = () => {
     // assassins
     player_stance: "",
 
+    // Slugs of abilities currently prepared for an encounter round.
+    prepared_abilities: [],
+
     // The player target is set by a kill command going through, or by
     // a notification.attack command being received, at which point
     // we look at the player.targer variable. The distinction is important
@@ -245,6 +249,7 @@ const receiveMessage = async ({
     "notification.longtic",
     "notification.who",
     "player.abilities.update",
+    ABILITY_PREPARATIONS_UPDATE_MESSAGE,
     "player.combat_effects.update",
     "notification.regen",
     "currency.balances_changed",
@@ -309,6 +314,7 @@ const receiveMessage = async ({
     };
     commit("world_set", world_data);
     commit("player_set", message_data.data.actor);
+    commit("prepared_abilities_set", message_data.data.prepared_abilities);
     commit("wallet_sync_requested_clear");
     commit("who_list_set", message_data.data.who_list);
     commit("full_screen_message_clear");
@@ -400,6 +406,17 @@ const receiveMessage = async ({
     Array.isArray(message_data.data.active_effects)
   ) {
     commit("player_combat_effects_set", message_data.data.active_effects);
+  }
+
+  if (
+    message_data.type === "cmd.ability.success" &&
+    Array.isArray(message_data.data?.prepared_abilities)
+  ) {
+    commit("prepared_abilities_set", message_data.data.prepared_abilities);
+  }
+
+  if (message_data.type === ABILITY_PREPARATIONS_UPDATE_MESSAGE) {
+    commit("prepared_abilities_set", message_data.data?.abilities);
   }
 
   // Disconection
@@ -1156,6 +1173,17 @@ const mutations = {
     if (player.level && player.level != state.player_level) {
       state.player_level = player.level;
     }
+  },
+
+  prepared_abilities_set: (state, abilities) => {
+    state.prepared_abilities = Array.isArray(abilities)
+      ? [...new Set(
+          abilities
+            .filter(ability => typeof ability === "string")
+            .map(ability => ability.trim().toLowerCase())
+            .filter(Boolean),
+        )]
+      : [];
   },
 
   player_wallet_changes_apply: (state, payload: CurrencyBalancesChangedData) => {

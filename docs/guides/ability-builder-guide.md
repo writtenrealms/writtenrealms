@@ -319,6 +319,11 @@ next encounter round is spent charging, and the ability resolves on the
 following encounter round. The charging round consumes the player's primary
 action, so they do not auto-attack during that round.
 
+As soon as the player prepares a hotkeyed ability, its assigned Combat hotkey
+uses the primary-color background. The highlight persists through the queued
+and charging states and clears when the ability resolves, is replaced, or is
+canceled.
+
 Players may replace a queued ability before the first encounter round starts.
 Once the ability is actively charging, it cannot be replaced by another ability.
 

@@ -10,6 +10,7 @@
                 disabled: item.isDisabled,
                 cooldown: item.cooldownRemaining > 0,
                 'cooldown-disabled': item.cooldownRemaining > 0,
+                prepared: item.isPrepared,
               }"
               v-for="item in row"
               :key="item.key"
@@ -47,6 +48,7 @@ interface ActionBarItem {
   cmd: string;
   hotKey: string | null;
   isDisabled: boolean;
+  isPrepared: boolean;
   cooldownRemaining: number;
   cooldownLabel: string;
   overlayStyle: Record<string, string>;
@@ -107,6 +109,11 @@ const abilityCooldowns = computed<Record<string, number>>(() => {
   return player.value.ability_cooldowns || {};
 });
 
+const preparedAbilitySlugs = computed<Set<string>>(() => {
+  const slugs = store.state.game.prepared_abilities;
+  return new Set(Array.isArray(slugs) ? slugs : []);
+});
+
 const commandForAbility = (ability: any, hotKey: string | null) => {
   if (hotKey) return hotKey;
   const verbs = Array.isArray(ability.command_verbs) ? ability.command_verbs : [];
@@ -129,6 +136,7 @@ const abilityItem = (slug: string, hotKey: string | null): ActionBarItem | null 
     cmd: commandForAbility(ability, hotKey),
     hotKey,
     isDisabled: remaining > 0,
+    isPrepared: Boolean(hotKey) && preparedAbilitySlugs.value.has(slug),
     cooldownRemaining: remaining,
     cooldownLabel: remaining > 0 ? `${remaining} ${remaining === 1 ? "rd" : "rds"}` : "",
     overlayStyle: { height: remaining > 0 ? `${cooldownPercent}%` : "0" },
@@ -265,6 +273,10 @@ const abilityBoxStyle = computed(() => ({
         > .box-name {
           color: white;
         }
+      }
+
+      &.prepared {
+        background: $color-primary;
       }
 
       .box-name {

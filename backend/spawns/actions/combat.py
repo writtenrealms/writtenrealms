@@ -45,6 +45,10 @@ from spawns.actions.effects import (
 )
 from spawns.actions.movement_costs import movement_cost
 from spawns.actions.targeting import resolve_room_mob_target
+from spawns.ability_prepare_state import (
+    ability_prepare_state_event,
+    ability_prepare_state_events_for_players,
+)
 from spawns.events import GameEvent, enqueue_game_events
 from spawns.models import (
     ActiveEffect,
@@ -264,6 +268,43 @@ class CombatStepResult:
     events: list[GameEvent]
     encounter_active: bool
     tracker_chase: dict | None = None
+
+
+def _prepared_player_ability_slug(
+    encounter: CombatEncounter | None,
+) -> str | None:
+    if not encounter or encounter.status != CombatEncounter.STATUS_ACTIVE:
+        return None
+    pending = encounter.pending_player_ability
+    if not isinstance(pending, dict):
+        return None
+    return str(pending.get("ability") or "").strip().lower() or None
+
+
+def _with_ability_prepare_transition(
+    result: CombatStepResult,
+    *,
+    player: Player,
+    previous_slug: str | None,
+    current_slug: str | None,
+) -> CombatStepResult:
+    if previous_slug == current_slug:
+        return result
+    state_event = ability_prepare_state_event(player)
+    if any(
+        event.type == state_event.type
+        and player.key in event.recipients
+        and event.data == state_event.data
+        for event in result.events
+    ):
+        return result
+    return replace(
+        result,
+        events=[
+            *result.events,
+            state_event,
+        ],
+    )
 
 
 @dataclass(frozen=True)
@@ -1073,7 +1114,8 @@ def apply_player_death(
             recipients=[updated_player.key],
             data=affect_data,
             text=target_text or "You have been slain.",
-        )
+        ),
+        ability_prepare_state_event(updated_player),
     ]
 
     if room_text and not updated_player.is_invisible:
@@ -1920,14 +1962,17 @@ def _complete_flee(
     return FleeCompletionOutcome(
         terminal_result=CombatStepResult(
             actor_key=player.key,
-            events=_flee_success_events(
-                player=player,
-                origin_room_id=origin_room_id,
-                destination_room_id=destination_room_id,
-                direction=direction,
-                movement_cost=destination.movement_cost,
-                round_id=round_id,
-            ),
+            events=[
+                *_flee_success_events(
+                    player=player,
+                    origin_room_id=origin_room_id,
+                    destination_room_id=destination_room_id,
+                    direction=direction,
+                    movement_cost=destination.movement_cost,
+                    round_id=round_id,
+                ),
+                ability_prepare_state_event(player),
+            ],
             encounter_active=False,
             tracker_chase=(
                 tracker_plan.action_payload()
@@ -2000,8 +2045,15 @@ def _append_mob_defeat_events(
     )
     if finished_encounter_ids:
         active_encounters = active_encounters.exclude(pk__in=finished_encounter_ids)
-    for active_encounter in active_encounters:
+    other_active_encounters = list(active_encounters)
+    for active_encounter in other_active_encounters:
         _finish_encounter(active_encounter)
+    events.extend(
+        ability_prepare_state_events_for_players(
+            active_encounter.player_id
+            for active_encounter in other_active_encounters
+        )
+    )
 
     from spawns.merchants import deactivate_merchant_runtime
 
@@ -2138,11 +2190,20 @@ def _append_uncredited_mob_defeat_events(
     """Finalize a snapshot-attributed kill when no live player can be rewarded."""
     corpse_id = _ensure_corpse(target_mob)
     deceased_payload = serialize_char_from_mob(target_mob).model_dump()
-    for active_encounter in CombatEncounter.objects.select_for_update().filter(
-        mob=target_mob,
-        status=CombatEncounter.STATUS_ACTIVE,
-    ):
+    active_encounters = list(
+        CombatEncounter.objects.select_for_update().filter(
+            mob=target_mob,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+    )
+    for active_encounter in active_encounters:
         _finish_encounter(active_encounter)
+    events.extend(
+        ability_prepare_state_events_for_players(
+            active_encounter.player_id
+            for active_encounter in active_encounters
+        )
+    )
 
     from spawns.merchants import deactivate_merchant_runtime
 
@@ -5055,6 +5116,7 @@ def resolve_combat_encounter_step(
         if not encounter or encounter.status != CombatEncounter.STATUS_ACTIVE:
             return CombatStepResult(actor_key=None, events=[], encounter_active=False)
 
+        previous_prepared_slug = _prepared_player_ability_slug(encounter)
         now = timezone.now()
         if auto_advance and encounter.next_resolution_ts and encounter.next_resolution_ts > now:
             return CombatStepResult(
@@ -5091,18 +5153,28 @@ def resolve_combat_encounter_step(
         )
         if not target_mob:
             _finish_encounter(encounter)
-            return CombatStepResult(
-                actor_key=player.key,
-                events=[_combat_effect_state_event(player)],
-                encounter_active=False,
+            return _with_ability_prepare_transition(
+                CombatStepResult(
+                    actor_key=player.key,
+                    events=[_combat_effect_state_event(player)],
+                    encounter_active=False,
+                ),
+                player=player,
+                previous_slug=previous_prepared_slug,
+                current_slug=None,
             )
 
         if player.room_id != encounter.room_id or target_mob.room_id != encounter.room_id:
             _finish_encounter(encounter)
-            return CombatStepResult(
-                actor_key=player.key,
-                events=[_combat_effect_state_event(player)],
-                encounter_active=False,
+            return _with_ability_prepare_transition(
+                CombatStepResult(
+                    actor_key=player.key,
+                    events=[_combat_effect_state_event(player)],
+                    encounter_active=False,
+                ),
+                player=player,
+                previous_slug=previous_prepared_slug,
+                current_slug=None,
             )
 
         config = player.world.effective_config
@@ -5131,6 +5203,12 @@ def resolve_combat_encounter_step(
         result = replace(
             result,
             events=[*result.events, _combat_effect_state_event(player)],
+        )
+        result = _with_ability_prepare_transition(
+            result,
+            player=player,
+            previous_slug=previous_prepared_slug,
+            current_slug=_prepared_player_ability_slug(encounter),
         )
 
     if result.tracker_chase:
@@ -5324,7 +5402,16 @@ class FleeAction:
 
             if player.room_id != encounter.room_id:
                 _finish_encounter(encounter)
-                raise ActionError("You are no longer in that fight.", code="combat_ended")
+                message = "You are no longer in that fight."
+                return ActionResult(events=[
+                    GameEvent(
+                        type="cmd.flee.error",
+                        recipients=[player.key],
+                        data={"error": message, "code": "combat_ended"},
+                        text=message,
+                    ),
+                    ability_prepare_state_event(player),
+                ])
 
             pending = encounter.pending_flee or {}
             if pending.get("status") == "ready" and encounter.resolution_interval == -1:
@@ -5357,6 +5444,7 @@ class FleeAction:
             destination = _choose_flee_destination(player)
             player.stamina = max(0, int(player.stamina or 0) - destination.movement_cost)
             player.save(update_fields=["stamina"])
+            prepared_ability_slug = _prepared_player_ability_slug(encounter)
             encounter.pending_flee = {
                 "status": "preparing",
                 "queued_round": int(encounter.round_number or 0),
@@ -5380,6 +5468,8 @@ class FleeAction:
                     text="You prepare to flee.",
                 )
             ]
+            if prepared_ability_slug:
+                events.append(ability_prepare_state_event(player))
 
             if encounter.resolution_interval == -1:
                 step = resolve_combat_encounter_step(encounter.id, auto_advance=False)

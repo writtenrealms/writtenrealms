@@ -558,6 +558,7 @@ class StateSyncData(BaseModel):
     room: Room
     world: World
     who_list: List[WhoListEntry] = Field(default_factory=list)
+    prepared_abilities: List[str] = Field(default_factory=list)
 
 
 # Enable forward references

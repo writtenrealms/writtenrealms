@@ -129,6 +129,16 @@ class TestKillCommand(WorldTestCase):
             name="Ogre",
             keywords="ogre",
         )
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            pending_player_ability={
+                "ability": "last-stand",
+                "status": "casting",
+            },
+        )
 
         updated_player, events = apply_player_death(
             player=self.player,
@@ -138,15 +148,23 @@ class TestKillCommand(WorldTestCase):
 
         updated_player.refresh_from_db()
         updated_player.equipment.refresh_from_db()
+        encounter.refresh_from_db()
         self.assertIsNone(updated_player.equipment.weapon)
         self.assertFalse(Item.objects.filter(pk=sword.pk).exists())
         self.assertEqual(Item.objects.get(pk=ration.pk).container, updated_player)
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
 
         death_affect = self._death_event_by_type(events, "affect.death")
         self.assertIsNotNone(death_affect)
         self.assertIsNone(death_affect.data["penalty"])
         self.assertEqual(death_affect.data["penalty_text"], "Your equipment is destroyed.")
         self.assertEqual(death_affect.data["actor"]["equipment"]["weapon"], None)
+        preparation_state = self._death_event_by_type(
+            events,
+            "player.ability_preparations.update",
+        )
+        self.assertIsNotNone(preparation_state)
+        self.assertEqual(preparation_state.data["abilities"], [])
 
     def test_player_death_destroy_all_destroys_equipment_and_inventory(self):
         self._set_death_mode(adv_consts.DEATH_MODE_DESTROY_ALL)

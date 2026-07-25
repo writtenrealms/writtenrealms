@@ -1114,17 +1114,35 @@ class TestBuilderPurge(BuilderCommandTestCase):
             name="Guard",
             keywords="guard",
         )
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            pending_player_ability={
+                "ability": "power-strike",
+                "status": "casting",
+            },
+        )
 
-        with capture_game_messages():
+        with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "/purge mobs")
 
+        encounter.refresh_from_db()
         self.assertFalse(Mob.objects.filter(pk=mob.pk).exists())
+        self.assertIsNone(encounter.mob_id)
         self.assertFalse(
             self.room.inventory.filter(
                 world=self.spawn_world,
                 type=api_consts.ITEM_TYPE_CORPSE,
             ).exists()
         )
+        preparation_state = self._message_by_type(
+            messages,
+            "player.ability_preparations.update",
+        )
+        self.assertIsNotNone(preparation_state)
+        self.assertEqual(preparation_state["data"]["abilities"], [])
 
     def test_purge_target_can_remove_inventory_item(self):
         item = create_definition_item(
@@ -1632,7 +1650,10 @@ class TestBuilderTransfer(BuilderCommandTestCase):
             room=self.room,
             player=target,
             mob=opponent,
-            pending_player_ability={"ability": "strike"},
+            pending_player_ability={
+                "ability": "strike",
+                "status": "casting",
+            },
             pending_mob_ability={"ability": "bite"},
             pending_flee={"direction": "east"},
         )
@@ -1673,6 +1694,12 @@ class TestBuilderTransfer(BuilderCommandTestCase):
         )
         self.assertIsNotNone(effect_state)
         self.assertEqual(effect_state["data"]["active_effects"], [])
+        preparation_state = self._message_by_type(
+            messages,
+            "player.ability_preparations.update",
+        )
+        self.assertIsNotNone(preparation_state)
+        self.assertEqual(preparation_state["data"]["abilities"], [])
 
     def test_transfer_finishes_mob_combat_and_refreshes_opponent_effects(self):
         destination = self.room.create_at("east")
@@ -2022,9 +2049,25 @@ class TestBuilderJump(BuilderCommandTestCase):
 
     def test_jump_moves_player_to_target_room(self):
         target_room = self.room.create_at("east")
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Guard",
+            keywords="guard",
+        )
+        CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            pending_player_ability={
+                "ability": "power-strike",
+                "status": "casting",
+            },
+        )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, f"/jump {target_room.relative_id}")
+            dispatch_text_command(self.player.id, f"/jump {target_room.id}")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.room_id, target_room.id)
@@ -2035,6 +2078,12 @@ class TestBuilderJump(BuilderCommandTestCase):
         self.assertEqual(message["data"]["target"]["id"], target_room.id)
         self.assertEqual(message["data"]["target"]["key"], f"room.{target_room.relative_id}")
         self.assertIn("satisfying thump", message.get("text", "").lower())
+        preparation_state = self._message_by_type(
+            messages,
+            "player.ability_preparations.update",
+        )
+        self.assertIsNotNone(preparation_state)
+        self.assertEqual(preparation_state["data"]["abilities"], [])
 
     def test_jump_moves_player_by_direction(self):
         target_room = self.room.create_at(api_consts.DIRECTION_EAST)
@@ -2374,7 +2423,10 @@ class TestBuilderSetClass(BuilderCommandTestCase):
             world=self.spawn_world,
             room=self.room,
             player=target,
-            pending_player_ability={"ability": "power-strike"},
+            pending_player_ability={
+                "ability": "power-strike",
+                "status": "casting",
+            },
         )
 
         with capture_game_messages() as messages:
@@ -2391,6 +2443,12 @@ class TestBuilderSetClass(BuilderCommandTestCase):
         self.assertEqual(message["data"]["unlearned_abilities"], ["power-strike"])
         self.assertEqual(message["data"]["target"]["known_abilities"], [])
         self.assertEqual(message["data"]["target"]["ability_hotkeys"], {})
+        preparation_state = self._message_by_type(
+            messages,
+            "player.ability_preparations.update",
+        )
+        self.assertIsNotNone(preparation_state)
+        self.assertEqual(preparation_state["data"]["abilities"], [])
 
     def test_setclass_rejects_spoofed_trigger_source(self):
         other_user = self.create_user("trigger-setclass@example.com")

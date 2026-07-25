@@ -8,7 +8,12 @@ from core.combat_formulas import CombatAttackResult, normalize_combat_system, re
 from core.computations import compute_stats
 from core.scoped_state import STATE_SCOPE_CHARACTER, get_state_value
 from django.utils import timezone
+from spawns.actions.combat import (
+    CombatStepResult,
+    _with_ability_prepare_transition,
+)
 from spawns.actions.movement_costs import movement_cost
+from spawns.events import GameEvent
 from spawns.models import ActiveEffect, CombatEncounter, Item, Mob, Player
 from spawns.tasks import resolve_combat_encounter
 from tests.base import WorldTestCase
@@ -972,25 +977,57 @@ class TestCombatAbilities(WorldTestCase):
         self.player.known_abilities = ["power-strike"]
         self.player.ability_hotkeys = {"1": "power-strike"}
         self.player.save(update_fields=["known_abilities", "ability_hotkeys"])
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=self._mob(),
+            pending_player_ability={
+                "ability": "power-strike",
+                "status": "queued",
+            },
+        )
 
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "unlearn power strike")
 
         self.player.refresh_from_db()
+        encounter.refresh_from_db()
         self.assertEqual(self.player.known_abilities, ["power-strike"])
         self.assertEqual(self.player.ability_hotkeys, {"1": "power-strike"})
+        self.assertEqual(
+            encounter.pending_player_ability["status"],
+            "queued",
+        )
         errors = self._messages_by_type(messages, "cmd.ability.unlearn.error")
         self.assertEqual(errors[0]["data"]["code"], "ability_trainer_required")
+        self.assertEqual(
+            self._messages_by_type(
+                messages,
+                "player.ability_preparations.update",
+            ),
+            [],
+        )
 
         trainer_definition.spawn(self.room, self.spawn_world)
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "unlearn power strike")
 
         self.player.refresh_from_db()
+        encounter.refresh_from_db()
         self.assertEqual(self.player.known_abilities, [])
         self.assertEqual(self.player.ability_hotkeys, {})
+        self.assertEqual(encounter.pending_player_ability, {})
         success = self._messages_by_type(messages, "cmd.ability.unlearn.success")[0]
         self.assertEqual(success["data"]["trainer"]["name"], "an arms trainer")
+        preparation_updates = self._messages_by_type(
+            messages,
+            "player.ability_preparations.update",
+        )
+        self.assertEqual(
+            [update["data"]["abilities"] for update in preparation_updates],
+            [[]],
+        )
 
     def test_learning_ability_checks_condition_requirements(self):
         self._ability(
@@ -1172,6 +1209,68 @@ class TestCombatAbilities(WorldTestCase):
                 "consumes_primary_action_while_casting"
             ]
         )
+        self.assertEqual(payload["prepared_abilities"], [])
+
+    def test_state_sync_includes_active_prepared_abilities(self):
+        from spawns.state_payloads import build_state_sync
+
+        mob = self._mob()
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            pending_player_ability={
+                "ability": "charged-strike",
+                "status": "queued",
+                "cast_rounds_remaining": 1,
+            },
+        )
+        second_encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=self._mob(),
+            pending_player_ability={
+                "ability": "charged-mark",
+                "status": "casting",
+                "cast_rounds_remaining": 1,
+            },
+        )
+
+        payload = build_state_sync(self.player).model_dump()
+
+        self.assertEqual(
+            payload["prepared_abilities"],
+            ["charged-strike", "charged-mark"],
+        )
+
+        encounter.pending_player_ability = {
+            "ability": "charged-strike",
+            "command": "charged-strike",
+        }
+        encounter.save(update_fields=["pending_player_ability"])
+
+        payload = build_state_sync(self.player).model_dump()
+
+        self.assertEqual(
+            payload["prepared_abilities"],
+            ["charged-strike", "charged-mark"],
+        )
+
+        encounter.pending_player_ability = {}
+        encounter.save(update_fields=["pending_player_ability"])
+
+        payload = build_state_sync(self.player).model_dump()
+
+        self.assertEqual(payload["prepared_abilities"], ["charged-mark"])
+
+        second_encounter.pending_player_ability = {}
+        second_encounter.save(update_fields=["pending_player_ability"])
+
+        payload = build_state_sync(self.player).model_dump()
+
+        self.assertEqual(payload["prepared_abilities"], [])
 
     def test_state_sync_includes_active_player_combat_effects(self):
         from spawns.state_payloads import build_state_sync
@@ -1234,6 +1333,84 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(len(attacks), 1)
         self.assertEqual(attacks[0]["data"]["attack"], "power-strike")
         self.assertEqual(attacks[0]["data"]["damage_taken"], self.stats["attack_power"] * 2)
+
+    def test_immediate_resolution_prepares_then_clears_ability_state(self):
+        self.world.config.combat_resolution_interval = 0
+        self.world.config.save(update_fields=["combat_resolution_interval"])
+        self._ability(
+            slug="power-strike",
+            name="Power Strike",
+            verbs=["strike"],
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 2},
+                    "text": {"label": "Power Strike"},
+                }
+            ],
+        )
+        self.player.known_abilities = ["power-strike"]
+        self.player.save(update_fields=["known_abilities"])
+        self._mob(health=self.stats["attack_power"] * 4)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "strike rat")
+
+        prepared = self._messages_by_type(messages, "cmd.ability.success")[0]
+        self.assertEqual(
+            prepared["data"]["prepared_abilities"],
+            ["power-strike"],
+        )
+        preparation_updates = self._messages_by_type(
+            messages,
+            "player.ability_preparations.update",
+        )
+        self.assertEqual(
+            [update["data"]["abilities"] for update in preparation_updates],
+            [[]],
+        )
+
+    def test_prepare_transition_keeps_authoritative_clear_after_stale_update(self):
+        stale_event = GameEvent(
+            type="player.ability_preparations.update",
+            recipients=[self.player.key],
+            data={"abilities": ["power-strike"]},
+        )
+        result = CombatStepResult(
+            actor_key=self.player.key,
+            events=[stale_event],
+            encounter_active=True,
+        )
+
+        transitioned = _with_ability_prepare_transition(
+            result,
+            player=self.player,
+            previous_slug="power-strike",
+            current_slug=None,
+        )
+
+        self.assertEqual(
+            [
+                event.data["abilities"]
+                for event in transitioned.events
+                if event.type == "player.ability_preparations.update"
+            ],
+            [["power-strike"], []],
+        )
+
+        already_current = CombatStepResult(
+            actor_key=self.player.key,
+            events=[transitioned.events[-1]],
+            encounter_active=True,
+        )
+        deduplicated = _with_ability_prepare_transition(
+            already_current,
+            player=self.player,
+            previous_slug="power-strike",
+            current_slug=None,
+        )
+        self.assertEqual(deduplicated.events, already_current.events)
 
     def test_charge_moves_to_adjacent_room_and_attacks_with_opener_priority(self):
         self.world.config.combat_resolution_interval = 1.5
@@ -1566,6 +1743,17 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(len(casts), 1)
         self.assertEqual(casts[0]["data"]["ability"]["slug"], "charged-strike")
         self.assertEqual(casts[0]["data"]["rounds_remaining"], 0)
+        prepared = self._messages_by_type(messages, "cmd.ability.success")[0]
+        self.assertEqual(prepared["text"], "You prepare Charged Strike.")
+        self.assertEqual(
+            prepared["data"]["prepared_abilities"],
+            ["charged-strike"],
+        )
+        preparation_updates = self._messages_by_type(
+            messages,
+            "player.ability_preparations.update",
+        )
+        self.assertEqual(preparation_updates, [])
         attacks = self._messages_by_type(messages, "notification.combat.attack")
         self.assertEqual(attacks, [])
 
@@ -1582,6 +1770,75 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(len(attacks), 1)
         self.assertEqual(attacks[0]["data"]["attack"], "charged-strike")
         self.assertEqual(attacks[0]["data"]["damage_taken"], self.stats["attack_power"] * 2)
+        preparation_updates = self._messages_by_type(
+            messages,
+            "player.ability_preparations.update",
+        )
+        self.assertEqual(
+            [update["data"]["abilities"] for update in preparation_updates],
+            [[]],
+        )
+
+    def test_resolving_one_charge_preserves_other_encounter_preparation_state(self):
+        for slug, name in (
+            ("charged-strike", "Charged Strike"),
+            ("charged-mark", "Charged Mark"),
+        ):
+            self._ability(
+                slug=slug,
+                name=name,
+                verbs=[slug],
+                cast_time={"rounds": 1},
+                components=[
+                    {
+                        "type": "damage",
+                        "profile": "basic_physical",
+                        "text": {"label": name},
+                    }
+                ],
+            )
+        self.player.known_abilities = ["charged-strike", "charged-mark"]
+        self.player.save(update_fields=["known_abilities"])
+        first_mob = self._mob()
+        first_encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=first_mob,
+            pending_player_ability={
+                "ability": "charged-strike",
+                "status": "casting",
+                "cast_rounds_remaining": 0,
+            },
+        )
+        second_encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=self._mob(),
+            pending_player_ability={
+                "ability": "charged-mark",
+                "status": "casting",
+                "cast_rounds_remaining": 1,
+            },
+        )
+
+        with capture_game_messages() as messages:
+            resolve_combat_encounter(first_encounter.id)
+
+        second_encounter.refresh_from_db()
+        self.assertEqual(
+            second_encounter.pending_player_ability["status"],
+            "casting",
+        )
+        preparation_updates = self._messages_by_type(
+            messages,
+            "player.ability_preparations.update",
+        )
+        self.assertEqual(
+            [update["data"]["abilities"] for update in preparation_updates],
+            [["charged-mark"]],
+        )
 
     def test_cast_time_can_allow_basic_attack_while_charging(self):
         self._ability(
@@ -1670,6 +1927,7 @@ class TestCombatAbilities(WorldTestCase):
             slug="power-strike",
             name="Power Strike",
             verbs=["strike"],
+            cast_time={"rounds": 1},
             components=[{"type": "damage", "profile": "basic_physical", "overrides": {"multiplier": 2}, "text": {"label": "Power Strike"}}],
         )
         self._ability(
@@ -1683,14 +1941,35 @@ class TestCombatAbilities(WorldTestCase):
         mob = self._mob(health=self.stats["attack_power"] * 5)
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
-            with self.captureOnCommitCallbacks(execute=True):
-                dispatch_text_command(self.player.id, "strike rat")
+            with capture_game_messages() as prepared_messages:
+                with self.captureOnCommitCallbacks(execute=True):
+                    dispatch_text_command(self.player.id, "strike rat")
+            encounter = CombatEncounter.objects.get(
+                player=self.player,
+                mob=mob,
+                status=CombatEncounter.STATUS_ACTIVE,
+            )
+            self.assertEqual(encounter.pending_player_ability["status"], "queued")
             with capture_game_messages() as messages:
                 dispatch_text_command(self.player.id, "jab rat")
 
-        encounter = CombatEncounter.objects.get(player=self.player, mob=mob, status=CombatEncounter.STATUS_ACTIVE)
+        encounter.refresh_from_db()
         self.assertEqual(encounter.pending_player_ability["ability"], "quick-jab")
-        self.assertEqual(self._messages_by_type(messages, "cmd.ability.success")[0]["text"], "You switch to Quick Jab.")
+        prepared = self._messages_by_type(
+            prepared_messages,
+            "cmd.ability.success",
+        )[0]
+        self.assertEqual(prepared["text"], "You prepare Power Strike.")
+        self.assertEqual(
+            prepared["data"]["prepared_abilities"],
+            ["power-strike"],
+        )
+        switched = self._messages_by_type(messages, "cmd.ability.success")[0]
+        self.assertEqual(switched["text"], "You switch to Quick Jab.")
+        self.assertEqual(
+            switched["data"]["prepared_abilities"],
+            ["quick-jab"],
+        )
         encounter.next_resolution_ts = timezone.now()
         encounter.save(update_fields=["next_resolution_ts"])
 

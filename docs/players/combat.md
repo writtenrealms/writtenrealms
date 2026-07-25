@@ -49,6 +49,10 @@ your normal auto-attack to happen in the same round. If you have not queued an
 ability, you use your normal auto-attack when your turn in the encounter order
 comes up.
 
+When you prepare a hotkeyed ability, its button in the Combat panel uses the
+primary-color background. It remains highlighted while queued and charging,
+then returns to normal when the ability resolves, is replaced, or is canceled.
+
 Some effects can change what happens on a turn. For example, stun can prevent a
 combatant from taking their primary action, while Rooted prevents a character
 from fleeing.
