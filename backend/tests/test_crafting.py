@@ -1343,6 +1343,27 @@ class TestSalvageRuntime(CraftingRuntimeTestCase):
             PlayerMaterialBalance.objects.filter(player=self.player).exists()
         )
 
+    def test_structured_salvage_accepts_item_key_payload(self):
+        item = self._persian_definition().spawn(
+            self.player,
+            self.spawn_world,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="salvage",
+                player_id=self.player.id,
+                payload={"item": {"key": item.key}},
+            )
+
+        message = self._message(
+            [entry["message"] for entry in messages],
+            "cmd.salvage.success",
+        )
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["items"][0]["key"], item.key)
+        self.assertFalse(Item.objects.filter(pk=item.id).exists())
+
     def test_bare_salvage_has_an_explicit_empty_state(self):
         messages = self._dispatch_text("salvage")
 

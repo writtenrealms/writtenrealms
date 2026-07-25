@@ -92,6 +92,12 @@ This document describes the WR2 flow from a player entering a command in the in-
    - Commits `message_add` for most message types (some periodic/utility types are skipped).
    - Updates live state slices (room, map, player, effects, targeting, etc.) based on message `type`.
    - Stores `last_message` and specific tracking pointers like `last_viewed_room_message`.
+   - Console renderers use those tracking pointers to make item names
+     interactive only in the current output for each view. Clicking an active
+     item runs the same primary action shown in its hover lookup; superseded
+     output remains readable but inert. Renderers also compare each item
+     against the live room, inventory, or equipment context so a moved item
+     cannot acquire a different action inside an older snapshot.
 
 ## 8) Console rendering
 

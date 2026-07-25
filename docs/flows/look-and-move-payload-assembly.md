@@ -167,6 +167,11 @@ This keeps textual output deterministic and aligned with structured payload data
 - `cmd.state.sync.success` -> `LookRoom.vue`
 
 `LookRoom.vue` then renders room name/description/exits/chars/inventory from the message payload and current game state.
+Only the output referenced by `last_viewed_room_message` makes those room item
+names interactive. Clicking one runs the primary action from its hover lookup;
+older room snapshots remain visible without retaining stale action handlers.
+If an item leaves the room, its line in the current snapshot also becomes
+inert instead of being reinterpreted as an inventory item.
 
 ## Why This Design Matters
 

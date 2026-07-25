@@ -17,8 +17,12 @@
             <div v-for="item in message.data[selectedSlot]" :key="item.key">
               <span v-if="isEquipped(item, selectedSlot)">*</span>
               <span
-                v-if="isLastMessage"
-                v-interactive="{target: item}"
+                v-if="isLastMessage && isCurrentItem(item)"
+                v-interactive="{
+                  target: item,
+                  primaryAction: true,
+                  actionContext: actionContextFor(item),
+                }"
                 class='interactive'
                 :class="[item.quality]"
                 :key="item.key + '-interactive'"
@@ -42,11 +46,37 @@
 import { computed, ref } from "vue";
 import { useStore } from "vuex";
 import { EQUIPMENT_SLOT_LIST } from "@/constants.ts";
+import { getItemActionContextSnapshot } from "@/core/itemActions";
 
 const store = useStore();
 const props = defineProps<{ message: any }>();
 
 const selectedSlot = ref("weapon");
+
+const originContextByKey = getItemActionContextSnapshot(
+  props.message,
+  store.state.game,
+);
+const actionContextFor = (item: any) => originContextByKey.get(item.key);
+
+const currentInventoryKeys = computed(() => new Set(
+  (store.state.game.player?.inventory || []).map((item: any) => item.key),
+));
+const currentEquipmentKeys = computed(() => new Set(
+  Object.values(store.state.game.player?.equipment || {})
+    .filter(Boolean)
+    .map((item: any) => item.key),
+));
+const isCurrentItem = (item: any) => {
+  const context = actionContextFor(item);
+  if (context === "inventory") {
+    return currentInventoryKeys.value.has(item.key);
+  }
+  if (context === "equipment") {
+    return currentEquipmentKeys.value.has(item.key);
+  }
+  return false;
+};
 
 const isLastMessage = computed(() => {
   return store.state.game.last_message[props.message.type] == props.message;

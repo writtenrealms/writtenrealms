@@ -246,6 +246,11 @@ class SalvageHandler(CommandHandler):
         selector_value = ctx.payload.get("item")
         if selector_value is None:
             selector_value = ctx.payload.get("selector")
+        if isinstance(selector_value, dict):
+            selector_value = (
+                selector_value.get("key")
+                or selector_value.get("name")
+            )
         if selector_value is None:
             selector_value = _args_text(ctx)
         selector = "" if selector_value is None else str(selector_value).strip()

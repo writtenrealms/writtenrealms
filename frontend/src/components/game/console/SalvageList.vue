@@ -11,8 +11,12 @@
           class="inventory-item"
         >
           <span
-            v-if="isLastMessage"
-            v-interactive="{ target: item }"
+            v-if="isLastMessage && isCurrentInventoryItem(item)"
+            v-interactive="{
+              target: item,
+              primaryAction: true,
+              actionContext: 'inventory',
+            }"
             class="interactive"
             :class="[item.quality]"
           >{{ item.name }}</span>
@@ -35,6 +39,12 @@ const store = useStore();
 const props = defineProps<{ message: any }>();
 
 const items = computed(() => props.message.data.items || []);
+const currentInventoryKeys = computed(() => new Set(
+  (store.state.game.player?.inventory || []).map((item: any) => item.key),
+));
+const isCurrentInventoryItem = (item: any) => (
+  currentInventoryKeys.value.has(item.key)
+);
 const isLastMessage = computed(
   () => store.state.game.last_message[props.message.type] == props.message,
 );

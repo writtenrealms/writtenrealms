@@ -6,12 +6,15 @@
           <td class="eq_slot">{{ slotData.slotName }}</td>
           <td class="eq-item">
             <span
-              v-interactive="{target: slotData.slotItem}"
+              v-interactive="{
+                target: slotData.slotItem,
+                primaryAction: true,
+                actionContext: 'equipment',
+              }"
               class="interactive"
               :class="[slotData.slotItemQuality, slotData.slotItemKey ? 'interactive' : '']"
               :key="slotData.slotItemKey"
               :keyword="slotData.slotItemKeyword"
-              @click="onItemClick(slotData.slotItem)"
             >{{ slotData.slotItemName }}</span>
           </td>
         </tr>
@@ -24,7 +27,6 @@
 import { computed } from "vue";
 import { useStore } from 'vuex';
 import { EQUIPMENT_SLOT_LIST } from "@/constants";
-import { getTargetInGroup } from "@/core/utils";
 
 const store = useStore();
 
@@ -55,21 +57,6 @@ const slots: any = computed(() => {
   }
   return slots;
 });
-
-const onItemClick = (item) => {
-  if (!item) return;
-  if (store.state.game.is_mobile) return;
-
-  let items: {}[] = [];
-  for (let slotName of EQUIPMENT_SLOT_LIST) {
-    const slotItem = playerEq.value[slotName];
-    if (slotItem) {
-      items.push(slotItem);
-    }
-  }
-  const target = getTargetInGroup(item, items);
-  store.dispatch("game/cmd", `remove ${target}`);
-};
 </script>
 
 <style lang="scss" scoped>

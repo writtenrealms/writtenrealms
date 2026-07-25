@@ -23,10 +23,16 @@
       <div>{{ capfirst(char.name) }} is using:</div>
       <div v-for="slot in slots" :key="slot.slotItem.key">
         <span class="font-text-regular">{{ slot.slotName }}</span>:
-        <span v-if="isLastMessage"
+        <span v-if="isLastMessage && slot.slotItemIsCurrent"
           :class="{ ['color-secondary']: slot.slotItemIsMagic }"
           class='interactive'
-          v-interactive="{target: slot.slotItem}"
+          v-interactive="{
+            target: slot.slotItem,
+            primaryAction: slot.slotItemIsPlayerOwned,
+            actionContext: slot.slotItemIsPlayerOwned
+              ? 'equipment'
+              : undefined,
+          }"
         >{{ slot.slotItemName }}</span>
         <span v-else :class="{ ['color-secondary']: slot.slotItemIsMagic }">{{ slot.slotItemName }}</span>
       </div>
@@ -48,6 +54,15 @@ const props = defineProps<{
 
 const store = useStore();
 
+const playerEquipmentKeys = computed(() => new Set(
+  Object.values(store.state.game.player?.equipment || {})
+    .filter(Boolean)
+    .map((item: any) => item.key),
+));
+const isPlayerChar = computed(
+  () => props.char.key === store.state.game.player?.key,
+);
+
 const slots = computed(() => {
   const slots: any[] = [];
   for (const slot of EQUIPMENT_SLOT_LIST) {
@@ -58,6 +73,11 @@ const slots = computed(() => {
         slotItemName: eq[slot].name,
         slotItemIsMagic: eq[slot].is_magic,
         slotItem: eq[slot],
+        slotItemIsPlayerOwned: playerEquipmentKeys.value.has(eq[slot].key),
+        slotItemIsCurrent: (
+          !isPlayerChar.value ||
+          playerEquipmentKeys.value.has(eq[slot].key)
+        ),
       });
     }
   }

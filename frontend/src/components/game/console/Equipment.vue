@@ -8,12 +8,15 @@
 
           <td class="eq-item">
             <span
-              v-if="isLastMessage"
-              v-interactive="{target: slot.slotItem}"
+              v-if="isLastMessage && isCurrentEquipmentItem(slot.slotItem)"
+              v-interactive="{
+                target: slot.slotItem,
+                primaryAction: true,
+                actionContext: 'equipment',
+              }"
               :key="slot.slotItem.key + 'interactive'"
               class='interactive'
               :class="[slot.slotItemQuality]"
-              @click="isLastMessage && onItemClick(slot.slotItem)"
             >{{ slot.slotItemName }}</span>
             <span v-else
               :key="slot.slotItem.key"
@@ -30,24 +33,18 @@
 import { computed } from "vue";
 import { useStore } from "vuex";
 import { EQUIPMENT_SLOT_LIST } from "@/constants.ts";
-import { getTargetInGroup } from "@/core/utils.ts";
 
 const store = useStore();
 const props = defineProps<{message: any}>();
 
-
-const onItemClick = (item) => {
-  if (store.state.game.is_mobile) return;
-  let items: {}[] = [];
-  for (let slotName of EQUIPMENT_SLOT_LIST) {
-    const slotItem = props.message.data.equipment[slotName];
-    if (slotItem) {
-      items.push(slotItem);
-    }
-  }
-  const target = getTargetInGroup(item, items);
-  store.dispatch("game/cmd", `remove ${target}`);
-}
+const currentEquipmentKeys = computed(() => new Set(
+  Object.values(store.state.game.player?.equipment || {})
+    .filter(Boolean)
+    .map((item: any) => item.key),
+));
+const isCurrentEquipmentItem = (item: any) => (
+  currentEquipmentKeys.value.has(item.key)
+);
 
 const isLastMessage = computed(() => store.state.game.last_message[props.message.type] == props.message);
 

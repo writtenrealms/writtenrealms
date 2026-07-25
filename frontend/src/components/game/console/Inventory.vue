@@ -7,11 +7,14 @@
     <ul class="list">
       <li v-for="item in inventoryStack" :key="item.display_key" class="inventory-item">
         <span
-          v-if="isLastMessage"
-          v-interactive="{target: item}"
+          v-if="isLastMessage && isCurrentInventoryItem(item)"
+          v-interactive="{
+            target: item,
+            primaryAction: true,
+            actionContext: 'inventory',
+          }"
           class='interactive'
           :class="[item.quality]"
-          @click="isLastMessage && onItemClick(item)"
         >{{ item.name }}</span>
         <span v-else
           :class="[item.quality]"
@@ -34,7 +37,7 @@
 import { computed } from "vue";
 import { useStore } from "vuex";
 import { walletBalanceEntries } from "@/core/economy.ts";
-import { stackedInventory, getTargetInGroup } from "@/core/utils.ts";
+import { stackedInventory } from "@/core/utils.ts";
 
 const store = useStore();
 
@@ -46,17 +49,17 @@ const actor = computed(() => props.message?.data?.actor || {});
 const world = computed(() => props.message?.data?.world || store.state.game.world || {});
 const inventory = computed(() => actor.value.inventory || []);
 const inventoryStack = computed(() => stackedInventory(inventory.value));
+const currentInventoryKeys = computed(() => new Set(
+  (store.state.game.player?.inventory || []).map((item: any) => item.key),
+));
+const isCurrentInventoryItem = (item: any) => (
+  currentInventoryKeys.value.has(item.key)
+);
 const walletEntries = computed(() => walletBalanceEntries(
   world.value?.economy,
   actor.value?.economy,
 ));
 const isLastMessage = computed(() => store.state.game.last_message[props.message.type] == props.message);
-
-const onItemClick = (item) => {
-  if (store.state.game.is_mobile) return;
-  const target = getTargetInGroup(item, inventory.value);
-  store.dispatch("game/cmd", `drop ${target}`);
-}
 </script>
 
 <style lang="scss" scoped>

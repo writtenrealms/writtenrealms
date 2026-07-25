@@ -62,9 +62,16 @@
 
     <div class="room-inventory">
       <div class="room-item" v-for="item in inventoryStack" :key="item.key">
-        <template v-if="isLastMessage">
-          <span v-interactive="{ target: item }" class="interactive" :class="[item.quality]"
-            @click="onItemClick(item)">
+        <template v-if="isLastMessage && isCurrentRoomItem(item)">
+          <span
+            v-interactive="{
+              target: item,
+              primaryAction: true,
+              actionContext: 'room',
+            }"
+            class="interactive"
+            :class="[item.quality]"
+          >
             {{ itemRoomDescription(item) }}
             <span v-if="item.indicator" class="quest-indicator-wrapper">[ <span class="quest-indicator">{{ item.indicator }}</span> ]</span>
             <template v-if="item.count && item.count > 1">[{{ item.count }}]</template>
@@ -172,6 +179,12 @@ if (props.message.type === "cmd.look.success" || props.message.type === "cmd./ju
 const isLastMessage = computed(() => {
   return props.message === store.state.game.last_viewed_room_message;
 });
+const currentRoomItemKeys = computed(() => new Set(
+  (store.state.game.room?.inventory || []).map((item: any) => item.key),
+));
+const isCurrentRoomItem = (item: any) => (
+  currentRoomItemKeys.value.has(item.key)
+);
 
 const isStateSnapshot = computed(() => {
   if (props.message.type === "cmd.state.sync.success") {
@@ -242,16 +255,6 @@ const onCharClick = (char) => {
   if (is_mobile.value || !isLastMessage.value) return;
   const target = getTargetInGroup(char, room.value.chars, player.value);
   store.dispatch("game/cmd", `look ${target}`);
-}
-
-const onItemClick = (item) => {
-  if (store.state.game.is_mobile) return;
-  const target = getTargetInGroup(item, room.value.inventory);
-  if (item.is_container && !item.is_pickable) {
-    store.dispatch("game/cmd", `get all ${target}`);
-  } else {
-    store.dispatch("game/cmd", `get ${target}`);
-  }
 }
 
 const onClickDetail = (word) => {

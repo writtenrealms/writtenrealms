@@ -34,6 +34,14 @@ is created.
   **SALVAGEABLE** when its definition has authored salvage yields. This marks
   the item's salvage capability, not whether it is immediately eligible for
   the `salvage` command.
+- Hovering over an eligible, directly carried **SALVAGEABLE** item makes
+  **SALVAGE** the primary lookup action and **DROP** the secondary action.
+  Clicking that item name runs the primary **SALVAGE** action directly.
+- Item names in the console are interactive only in the current output. When a
+  newer output of the same view replaces it, names in the older output no
+  longer open lookups or run actions. An item also becomes inert in that
+  output as soon as it leaves the displayed room, inventory, or equipment
+  context.
 
 Crafting requires a workshop in the current room or an available crafting NPC.
 `materials` and ordinary salvage do not require one. The workshop

@@ -118,6 +118,27 @@ class TestDropCommand(WorldTestCase):
         self.assertIsNotNone(self._message_by_type(messages, "cmd.drop.success"))
         self.assertIsNotNone(self._message_by_type(messages, "notification.cmd.drop.success"))
 
+    def test_structured_drop_accepts_item_key_payload(self):
+        item = create_test_item(
+            self.world,
+            self.spawn_world,
+            self.player,
+            "Lantern",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="drop",
+                player_id=self.player.id,
+                payload={"item": {"key": item.key}},
+            )
+
+        item.refresh_from_db()
+        self.assertEqual(item.container_id, self.room.id)
+        self.assertIsNotNone(
+            self._message_by_type(messages, "cmd.drop.success"),
+        )
+
     def test_drop_success_room_key_matches_actor_room_key(self):
         self.player.in_game = True
         self.player.save(update_fields=["in_game"])
@@ -180,6 +201,27 @@ class TestGetCommand(WorldTestCase):
         self.assertIsNotNone(self._message_by_type(messages, "notification.cmd.get.success"))
         self.assertEqual(message["data"]["room"]["key"], message["data"]["actor"]["room"]["key"])
 
+    def test_structured_get_accepts_item_key_payload(self):
+        item = create_test_item(
+            self.world,
+            self.spawn_world,
+            self.room,
+            "Packet of Barley Seeds",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="get",
+                player_id=self.player.id,
+                payload={"item": {"key": item.key}},
+            )
+
+        item.refresh_from_db()
+        self.assertEqual(item.container_id, self.player.id)
+        self.assertIsNotNone(
+            self._message_by_type(messages, "cmd.get.success"),
+        )
+
     def test_get_from_room_container(self):
         chest = create_test_item(
             self.world,
@@ -201,6 +243,51 @@ class TestGetCommand(WorldTestCase):
         message = self._message_by_type(messages, "cmd.get.success")
         self.assertIsNotNone(message)
         self.assertEqual(message["data"]["source"]["key"], chest.key)
+
+    def test_structured_get_all_accepts_item_and_from_payloads(self):
+        chest = create_test_item(
+            self.world,
+            self.spawn_world,
+            self.room,
+            "Chest",
+            item_type=adv_consts.ITEM_TYPE_CONTAINER,
+            is_pickable=False,
+        )
+        apple = create_test_item(
+            self.world,
+            self.spawn_world,
+            chest,
+            "Apple",
+        )
+        coin = create_test_item(
+            self.world,
+            self.spawn_world,
+            chest,
+            "Coin",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="get",
+                player_id=self.player.id,
+                payload={
+                    "item": {"name": "all"},
+                    "from": {"key": chest.key},
+                },
+            )
+
+        apple.refresh_from_db()
+        coin.refresh_from_db()
+        self.assertEqual(apple.container_id, self.player.id)
+        self.assertEqual(coin.container_id, self.player.id)
+
+        message = self._message_by_type(messages, "cmd.get.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["source"]["key"], chest.key)
+        self.assertEqual(
+            {item["key"] for item in message["data"]["items"]},
+            {apple.key, coin.key},
+        )
 
     def test_loot_gets_all_pickable_items_from_corpse(self):
         corpse = create_test_item(

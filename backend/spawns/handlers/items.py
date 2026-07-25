@@ -16,20 +16,29 @@ from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.registry import register_handler
 
 
+def _selector_value(value: object) -> str | None:
+    if isinstance(value, dict):
+        value = value.get("key") or value.get("name")
+
+    if value is None:
+        return None
+
+    selector = str(value).strip()
+    return selector or None
+
+
 def _selector_from_payload(ctx: CommandContext) -> str | None:
-    selector = ctx.payload.get("selector")
-    if not selector:
-        selector = ctx.payload.get("item")
+    selector = (
+        _selector_value(ctx.payload.get("selector"))
+        or _selector_value(ctx.payload.get("item"))
+    )
 
-    if isinstance(selector, dict):
-        selector = selector.get("key") or selector.get("name")
-
-    if not selector:
+    if selector is None:
         args = ctx.payload.get("args", [])
         if args:
             selector = " ".join(args)
 
-    return str(selector).strip() if selector else None
+    return _selector_value(selector)
 
 
 @register_handler
@@ -47,11 +56,7 @@ class DropHandler(CommandHandler):
     }
 
     def handle(self, ctx: CommandContext) -> None:
-        selector = ctx.payload.get("item")
-        if not selector:
-            args = ctx.payload.get("args", [])
-            if args:
-                selector = " ".join(args)
+        selector = _selector_from_payload(ctx)
 
         if not selector:
             ctx.publish(
@@ -269,8 +274,14 @@ class GetHandler(CommandHandler):
     }
 
     def handle(self, ctx: CommandContext) -> None:
-        selector = ctx.payload.get("selector")
-        source = ctx.payload.get("source")
+        selector = (
+            _selector_value(ctx.payload.get("selector"))
+            or _selector_value(ctx.payload.get("item"))
+        )
+        source = (
+            _selector_value(ctx.payload.get("source"))
+            or _selector_value(ctx.payload.get("from"))
+        )
         args = ctx.payload.get("args", [])
 
         if ctx.payload.get("command") == "loot":

@@ -6,7 +6,10 @@
         <li v-for="entry in entries" :key="entry.key || entry.id" class="inventory-item">
           <span
             v-if="isLastMessage"
-            v-interactive="{ target: interactiveItem(entry) }"
+            v-interactive="{
+              target: interactiveItem(entry),
+              primaryAction: true,
+            }"
             class="interactive"
             :class="[entry.item?.quality]"
           >{{ entry.item?.name || "item" }}</span>

@@ -76,13 +76,18 @@
                 :class="{ [contained_item.quality]: true}"
                 class="contained-item interactive"
                 @click="onClickContainedItem(contained_item)"
-                v-if="!from_lookup"
+                v-if="contentsInteractive && !from_lookup"
                 v-interactive="{target: contained_item}"
+              >{{ contained_item.name }}</span>
+              <span
+                v-else-if="contentsInteractive"
+                :class="{ [contained_item.quality]: true}"
+                @click="onClickContainedItem(contained_item)"
+                class="contained-item"
               >{{ contained_item.name }}</span>
               <span
                 v-else
                 :class="{ [contained_item.quality]: true}"
-                @click="onClickContainedItem(contained_item)"
                 class="contained-item"
               >{{ contained_item.name }}</span>
               <span class="item-count" v-if="contained_item.count && contained_item.count > 1">&nbsp;[{{contained_item.count}}]</span>
@@ -122,6 +127,10 @@ const props = defineProps({
   from_lookup: {
     type: Boolean,
     default: false
+  },
+  contentsInteractive: {
+    type: Boolean,
+    default: true
   }
 });
 
@@ -390,6 +399,9 @@ const is_eq_item_too_high_level = computed(() => {
 });
 
 const onClickContainedItem = (contained_item) => {
+  // Mobile taps open the lookup modal through v-interactive.
+  if (store.state.game.is_mobile && !props.from_lookup) return;
+
   // Get the selection string for the item we're getting
   const target = getTargetInGroup(contained_item, props.item.inventory);
   if (!target) return;
