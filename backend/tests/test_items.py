@@ -199,6 +199,96 @@ class TestGetCommand(WorldTestCase):
         self.assertIsNotNone(message)
         self.assertEqual(message["data"]["source"]["key"], chest.key)
 
+    def test_loot_gets_all_pickable_items_from_corpse(self):
+        corpse = create_test_item(
+            self.world,
+            self.spawn_world,
+            self.room,
+            "Fallen Raider",
+            item_type=adv_consts.ITEM_TYPE_CORPSE,
+            is_pickable=False,
+        )
+        coin = create_test_item(
+            self.world,
+            self.spawn_world,
+            corpse,
+            "Silver Coin",
+        )
+        dagger = create_test_item(
+            self.world,
+            self.spawn_world,
+            corpse,
+            "Rusty Dagger",
+        )
+        lantern = create_test_item(
+            self.world,
+            self.spawn_world,
+            self.room,
+            "Lantern",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "loot")
+
+        coin.refresh_from_db()
+        dagger.refresh_from_db()
+        lantern.refresh_from_db()
+        corpse.refresh_from_db()
+        self.assertEqual(coin.container_id, self.player.id)
+        self.assertEqual(dagger.container_id, self.player.id)
+        self.assertEqual(lantern.container_id, self.room.id)
+        self.assertEqual(corpse.container_id, self.room.id)
+
+        message = self._message_by_type(messages, "cmd.get.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["source"]["key"], corpse.key)
+        self.assertEqual(
+            {item["key"] for item in message["data"]["items"]},
+            {coin.key, dagger.key},
+        )
+
+    def test_loot_accepts_a_specific_corpse_selector(self):
+        first_corpse = create_test_item(
+            self.world,
+            self.spawn_world,
+            self.room,
+            "First Fallen Raider",
+            item_type=adv_consts.ITEM_TYPE_CORPSE,
+            is_pickable=False,
+        )
+        second_corpse = create_test_item(
+            self.world,
+            self.spawn_world,
+            self.room,
+            "Second Fallen Raider",
+            item_type=adv_consts.ITEM_TYPE_CORPSE,
+            is_pickable=False,
+        )
+        first_coin = create_test_item(
+            self.world,
+            self.spawn_world,
+            first_corpse,
+            "First Silver Coin",
+        )
+        second_coin = create_test_item(
+            self.world,
+            self.spawn_world,
+            second_corpse,
+            "Second Silver Coin",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "loot 2.corpse")
+
+        first_coin.refresh_from_db()
+        second_coin.refresh_from_db()
+        self.assertEqual(first_coin.container_id, first_corpse.id)
+        self.assertEqual(second_coin.container_id, self.player.id)
+
+        message = self._message_by_type(messages, "cmd.get.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["source"]["key"], second_corpse.key)
+
 
 class TestPutCommand(WorldTestCase):
     def _message_by_type(self, messages, message_type):

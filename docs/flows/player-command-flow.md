@@ -52,9 +52,14 @@ This document describes the WR2 flow from a player entering a command in the in-
    - Invokes handler.
 14. For text input, `backend/spawns/handlers/text.py:TextCommandHandler`:
    - Parses first token + args.
+   - Replays history references and expands personal aliases before normal
+     command routing. Expanded text is redispatched with recursion guards.
+   - Splits command chains after alias expansion.
    - Resolves command using `resolve_text_handler` (prefix match across registered text commands).
    - Maps parsed args into payload fields expected by handlers (`direction`, `target`, `item`, etc.).
    - Delegates to resolved domain handler (`look`, `scan`, `move`, `drop`, `help`, `/load`, ...).
+   - Resolves built-in command synonyms in the registered handler. For example,
+     `loot` routes to the item handler as `get all corpse`.
    - `help <target>` first checks command help, then checks abilities the player
      already knows or can learn right now. Ability help is returned as plain
      console text with `data.ability`, not as the structured command help table.

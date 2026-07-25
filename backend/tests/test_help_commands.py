@@ -135,6 +135,15 @@ class TestHelpCommands(WorldTestCase):
         self.assertEqual(message["data"]["command"]["command"], "equipment")
         self.assertIn("Show items currently equipped", message.get("text", ""))
 
+    def test_help_loot_shows_get_topic(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "help loot")
+
+        message = self._message_by_type(messages, "cmd.help.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["command"]["command"], "loot")
+        self.assertIn("get all corpse", message.get("text", ""))
+
     def test_help_set_lists_settable_fields(self):
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "help /set")

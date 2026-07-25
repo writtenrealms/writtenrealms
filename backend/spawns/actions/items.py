@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Callable
 
+from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 
 from config import constants as adv_consts
@@ -728,16 +729,38 @@ class GetAction:
             quest_room_items = _quest_room_item_candidates(selected_items)
 
             item_ids = [item.id for item in room_backed_items]
-            locked_items = {
-                item.id: item
-                for item in Item.objects.select_for_update()
-                .filter(pk__in=item_ids)
-            }
-            moved_items = [locked_items[item_id] for item_id in item_ids if item_id in locked_items]
+            origin = source_container or room
+            locked_items = {}
+            if item_ids:
+                # Revalidate containment under the row lock in case another
+                # player moved an item after the initial selector query.
+                origin_content_type_id = room_backed_items[0].container_type_id
+                locked_items = {
+                    item.id: item
+                    for item in Item.objects.select_for_update()
+                    .filter(
+                        pk__in=item_ids,
+                        container_type_id=origin_content_type_id,
+                        container_id=origin.id,
+                        is_pending_deletion=False,
+                    )
+                }
+            moved_items = [
+                locked_items[item_id]
+                for item_id in item_ids
+                if item_id in locked_items
+            ]
 
-            for item in moved_items:
-                item.container = player
-                item.save(update_fields=["container_type", "container_id"])
+            if moved_items:
+                player_content_type = ContentType.objects.get_for_model(Player)
+                for item in moved_items:
+                    item.container_type_id = player_content_type.id
+                    item.container_id = player.id
+                # Loot can contain many items, so keep the move to one write.
+                Item.objects.bulk_update(
+                    moved_items,
+                    ["container_type", "container_id"],
+                )
 
             claimed_items: list[Item] = []
             for quest_room_item in quest_room_items:

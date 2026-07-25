@@ -78,6 +78,26 @@ priority by making the chosen opener target your current faceoff target.
 Some supplemental abilities can also strike a secondary active hostile in the
 same room while your normal primary attack continues against the faceoff target.
 
+## Looting
+
+Use `loot` after a kill to take every pickable item from the first matching
+corpse:
+
+```text
+loot
+```
+
+This built-in shortcut is equivalent to `get all corpse`. If more than one
+corpse is present, add the normal numbered selector:
+
+```text
+loot 2.corpse
+```
+
+Personal aliases take precedence over the built-in shortcut, so
+`alias loot = <command>` can replace it. Removing that personal alias with
+`unalias loot` restores the built-in behavior.
+
 ## Leaving Combat
 
 When combat begins, its encounter starts at round zero. You may still use an

@@ -97,6 +97,21 @@ class TestAliasCommands(WorldTestCase):
         error_message = self._message_by_type(messages, "cmd.kill.error")
         self.assertIsNotNone(error_message)
 
+    def test_player_alias_can_override_builtin_loot_shortcut(self):
+        dispatch_text_command(self.player.id, "alias loot = inventory")
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "loot")
+
+        resolve_message = self._message_by_type(messages, "cmd.alias.resolve")
+        self.assertIsNotNone(resolve_message)
+        self.assertEqual(resolve_message["data"]["resolved"], "inventory")
+        self.assertIsNotNone(
+            self._message_by_type(messages, "cmd.inventory.success")
+        )
+        self.assertIsNone(self._message_by_type(messages, "cmd.get.success"))
+        self.assertIsNone(self._message_by_type(messages, "cmd.get.error"))
+
     def test_alias_loop_returns_error_without_dispatching(self):
         dispatch_text_command(self.player.id, "alias x = y")
         dispatch_text_command(self.player.id, "alias y = x")

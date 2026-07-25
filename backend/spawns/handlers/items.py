@@ -250,24 +250,33 @@ class EquipmentHandler(CommandHandler):
 @register_handler
 class GetHandler(CommandHandler):
     command_type = "get"
-    text_commands = ("get",)
+    text_commands = ("get", "loot")
     help = {
         "name": "Get",
-        "format": "get <item> | get <item> <container>",
+        "format": "get <item> | get <item> <container> | loot [<corpse>]",
         "description": "Take an item from the room, or from a container in the room/inventory.",
+        "details": [
+            "`loot` is shorthand for `get all corpse`. Add a corpse selector "
+            "to choose among multiple corpses.",
+        ],
         "examples": [
             "get lantern",
             "get all chest",
             "get 2.apple backpack",
+            "loot",
+            "loot 2.corpse",
         ],
     }
 
     def handle(self, ctx: CommandContext) -> None:
         selector = ctx.payload.get("selector")
         source = ctx.payload.get("source")
+        args = ctx.payload.get("args", [])
 
-        if not selector:
-            args = ctx.payload.get("args", [])
+        if ctx.payload.get("command") == "loot":
+            selector = "all"
+            source = " ".join(args).strip() or "corpse"
+        elif not selector:
             if args:
                 selector = args[0]
                 if len(args) > 1:
