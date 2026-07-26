@@ -258,7 +258,7 @@ level_scale = 5.5 * 1.1^level
 
 Worlds can also choose `linear`, `flat`, or legacy WR1 `ilf` scaling under
 `spec.combat.level_scale`. See
-[combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md)
+[combat-formula-builder-guide.md](../guides/builders/combat-formula-builder-guide.md)
 for the builder-facing options.
 
 `mitigation_curve` is used for armor, dodge, and resilience:

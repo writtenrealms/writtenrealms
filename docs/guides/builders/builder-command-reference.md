@@ -342,7 +342,7 @@ Player state follows the player between worlds. Mob state belongs to the
 spawned mob and is removed with it.
 
 For state authoring guidance, see
-[state-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/state-builder-guide.md).
+[state-builder-guide.md](state-builder-guide.md).
 
 ### `/stats`
 
@@ -748,8 +748,8 @@ script: /cmd healer -- /regen {{ actor_key }} health
 
 ## Related Docs
 
-- [trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md)
-- [state-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/state-builder-guide.md)
-- [item-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/item-definition-builder-guide.md)
-- [mob-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-definition-builder-guide.md)
+- [trigger-builder-guide.md](trigger-builder-guide.md)
+- [state-builder-guide.md](state-builder-guide.md)
+- [item-definition-builder-guide.md](item-definition-builder-guide.md)
+- [mob-definition-builder-guide.md](mob-definition-builder-guide.md)
 - [ambient-command-issuers-plan.md](/Users/teebes/code/writtenrealms/docs/architecture/ambient-command-issuers-plan.md)

@@ -71,7 +71,7 @@
 ## Configuration & Environment Tips
 
 - Copy `.env.example` to `.env` and set secure secrets before running locally.
-- Use `docs/environment-setup.md` for full setup and troubleshooting details.
+- Use `docs/dev/environment-setup.md` for full setup and troubleshooting details.
 
 ## Cursor Cloud specific instructions
 

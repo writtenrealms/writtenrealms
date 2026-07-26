@@ -457,7 +457,7 @@ Implemented runtime support includes:
 - active effect `combat_modifier` primitives with `phase: attack_routine`
 - mob trait handling for `params.attack_routine`
 - builder-facing docs in
-  [attack-routine-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/attack-routine-builder-guide.md)
+  [attack-routine-builder-guide.md](../guides/builders/attack-routine-builder-guide.md)
 
 ## Open Questions
 

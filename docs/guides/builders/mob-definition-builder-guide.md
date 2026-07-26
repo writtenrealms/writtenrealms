@@ -92,7 +92,7 @@ currency rewards as one wallet batch. Applying `rewards.currencies` replaces
 the complete currency-reward mapping for that mob definition. Omit the entire
 `rewards` patch when an update should preserve the existing mapping.
 
-See [currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md)
+See [currency-builder-guide.md](currency-builder-guide.md)
 for defining currencies and choosing a default.
 
 For mobs, `weapon_damage` is an internal combat stat. It represents the mob's
@@ -177,7 +177,7 @@ reputation factions and values are integer standings. Spawned mobs receive
 concrete assignments copied from the definition.
 
 For faction documents and player creation policy, see
-[faction-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/faction-builder-guide.md).
+[faction-builder-guide.md](faction-builder-guide.md).
 
 ## Initial State
 
@@ -240,7 +240,7 @@ spec:
 
 For weighted spawn-plan traits and compatibility notes for the older draft name
 `affixes`, see
-[mob-trait-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-trait-builder-guide.md).
+[mob-trait-builder-guide.md](mob-trait-builder-guide.md).
 
 ## Loot
 

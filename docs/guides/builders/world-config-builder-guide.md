@@ -118,13 +118,13 @@ merged with the base world's runtime state.
 | `name_exclusions` | text | empty | Names or tokens to block during character creation. |
 
 For progression details, see
-[leveling-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/leveling-builder-guide.md).
+[leveling-builder-guide.md](leveling-builder-guide.md).
 
 For faction selection policy, see
-[faction-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/faction-builder-guide.md).
+[faction-builder-guide.md](faction-builder-guide.md).
 
 For ability progression, see
-[ability-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/ability-builder-guide.md).
+[ability-builder-guide.md](ability-builder-guide.md).
 
 Starting equipment entries use WR2 item definitions, not legacy item templates.
 Use `itemdefinition.<slug>` or a bare item definition slug. `count` defaults to
@@ -137,7 +137,7 @@ Starting balances are inherited from the base world and applied on character
 initialization and explicit reset. They are not granted again on reconnect or
 instance entry. Amounts must be whole numbers from `0` through
 `9,007,199,254,740,991`. For definitions, prices, rewards, and deletion rules,
-see [currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md).
+see [currency-builder-guide.md](currency-builder-guide.md).
 
 ### Class-Specific Starting Loadout
 
@@ -192,10 +192,10 @@ does not roam on that heartbeat; otherwise, present followers move with the
 leader when the destination is valid for their roaming target.
 
 For combat formulas and encounter pacing, see
-[combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md).
+[combat-formula-builder-guide.md](combat-formula-builder-guide.md).
 
 For spawn-plan roaming behavior, see
-[spawn-plan-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/spawn-plan-builder-guide.md).
+[spawn-plan-builder-guide.md](spawn-plan-builder-guide.md).
 
 ### Death And PvP
 
@@ -229,7 +229,7 @@ audience. It is omitted from instance-template manifests and cannot be
 overridden per arena.
 
 For death-related builder commands, see
-[builder-command-reference.md](/Users/teebes/code/writtenrealms/docs/guides/builder-command-reference.md).
+[builder-command-reference.md](builder-command-reference.md).
 
 ### Authored Systems
 
@@ -240,13 +240,13 @@ For death-related builder commands, see
 | `equipment` | mapping | default equipment model | Armor classes, armor proficiency, and equipment policy. |
 
 For stats and attributes, see
-[attributes-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/attributes-builder-guide.md).
+[attributes-builder-guide.md](attributes-builder-guide.md).
 
 For equipment and armor classes, see
-[item-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/item-definition-builder-guide.md).
+[item-definition-builder-guide.md](item-definition-builder-guide.md).
 
 For combat configuration, see
-[combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md).
+[combat-formula-builder-guide.md](combat-formula-builder-guide.md).
 
 ## Legacy Or Derived Fields
 
@@ -279,7 +279,7 @@ Core systems such as `stats`, `combat`, `equipment`, `ability_progression`,
 world.
 
 For instance authoring, see
-[instance-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/instance-builder-guide.md).
+[instance-builder-guide.md](instance-builder-guide.md).
 
 ## Validation Notes
 

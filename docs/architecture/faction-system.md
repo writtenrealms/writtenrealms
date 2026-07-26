@@ -19,9 +19,9 @@ Reference docs:
 
 - `.codex/skills/wr-transition/wr2-architecture.md`
 - [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
-- [mob-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-definition-builder-guide.md)
-- [instance-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/instance-builder-guide.md)
-- [condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md)
+- [mob-definition-builder-guide.md](../guides/builders/mob-definition-builder-guide.md)
+- [instance-builder-guide.md](../guides/builders/instance-builder-guide.md)
+- [condition-builder-guide.md](../guides/builders/condition-builder-guide.md)
 
 ## Core Recommendation
 

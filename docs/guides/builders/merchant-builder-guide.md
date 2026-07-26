@@ -14,7 +14,7 @@ stock unless you explicitly author drops or death triggers.
 
 The examples use a previously defined `obol` currency. Replace that code with
 the currency defined by your world. See
-[currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md).
+[currency-builder-guide.md](currency-builder-guide.md).
 
 ## How It Works
 

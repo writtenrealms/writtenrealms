@@ -31,7 +31,7 @@ Reference docs:
 - [trigger-event-subscriptions.md](trigger-event-subscriptions.md)
 - [yaml-manifest-system.md](yaml-manifest-system.md)
 - [attack-routines-and-dual-wielding.md](attack-routines-and-dual-wielding.md)
-- [condition-builder-guide.md](../guides/condition-builder-guide.md)
+- [condition-builder-guide.md](../guides/builders/condition-builder-guide.md)
 - [player-command-flow.md](../flows/player-command-flow.md)
 
 ## Implemented Design

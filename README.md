@@ -115,11 +115,11 @@ docker compose up -d --build
 
 For detailed setup instructions, environment variables reference, and troubleshooting, see:
 
-- [Environment Setup](docs/environment-setup.md)
-- [WR2 Player Command Flow](docs/player-command-flow.md)
-- [WR2 Trigger YAML Manifest System](docs/yaml-manifest-system.md)
+- [Environment Setup](docs/dev/environment-setup.md)
+- [WR2 Player Command Flow](docs/flows/player-command-flow.md)
+- [WR2 Trigger YAML Manifest System](docs/architecture/yaml-manifest-system.md)
 - [Ambient Command Issuers Plan](docs/ambient-command-issuers-plan.md)
-- [Architecture Decision Records](docs/adr/)
+- [Architecture Notes](docs/architecture/)
 
 ## Project Structure
 

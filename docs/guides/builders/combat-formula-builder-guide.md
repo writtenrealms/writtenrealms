@@ -41,7 +41,7 @@ The default combat model is:
 Auto-attacks use `basic_physical` by default. Ability components can use
 `basic_physical`, `basic_ability`, `basic_heal`, or a custom combat profile
 defined by the world. See
-[ability-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/ability-builder-guide.md)
+[ability-builder-guide.md](ability-builder-guide.md)
 for the ability authoring shape.
 
 ## Where To Edit
@@ -670,7 +670,7 @@ hits from an appropriately equipped player.
 Mob rewards use `exp_worth`. When combat grants XP, the player is checked
 against the world leveling config (`starting_level`, `leveling_curve`, and
 `max_level`). See
-[leveling-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/leveling-builder-guide.md)
+[leveling-builder-guide.md](leveling-builder-guide.md)
 for the YAML shape and `/setlevel` testing command.
 
 ## Designing Armor And Resilience
@@ -684,7 +684,7 @@ item definition, `armor` is the final defensive rating the item grants.
 allowed to equip armor and shields of that class. If heavy armor should be more
 protective than light armor, author a higher `armor` value on the heavy item.
 See
-[item-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/item-definition-builder-guide.md)
+[item-definition-builder-guide.md](item-definition-builder-guide.md)
 for the world equipment config and item YAML shape.
 
 Use resilience when you want protection from magic, psionics, tech abilities,

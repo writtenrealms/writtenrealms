@@ -17,9 +17,9 @@ defines the target shape those pieces should move toward.
 - [spawn-plan-system.md](/Users/teebes/code/writtenrealms/docs/architecture/spawn-plan-system.md)
 - [scoped-state-system.md](/Users/teebes/code/writtenrealms/docs/architecture/scoped-state-system.md)
 - [quest-system-endstate.md](/Users/teebes/code/writtenrealms/docs/architecture/quest-system-endstate.md)
-- [condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md)
-- [instance-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/instance-builder-guide.md)
-- [duels.md](../players/duels.md)
+- [condition-builder-guide.md](../guides/builders/condition-builder-guide.md)
+- [instance-builder-guide.md](../guides/builders/instance-builder-guide.md)
+- [duels.md](../guides/players/duels.md)
 - [currency-system.md](/Users/teebes/code/writtenrealms/docs/architecture/currency-system.md)
 - [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
 

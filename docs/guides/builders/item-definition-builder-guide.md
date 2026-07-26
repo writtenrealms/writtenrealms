@@ -93,7 +93,7 @@ default change cannot reinterpret the item. `currency` without `cost` is
 invalid; set `cost: null` to remove both parts of the monetary value.
 
 For world defaults, starting balances, merchants, rewards, and deletion rules,
-see [currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md).
+see [currency-builder-guide.md](currency-builder-guide.md).
 
 ## Basic Attack Messages
 
@@ -409,4 +409,4 @@ script: /cmd room -- /load item bronze-sword
 ```
 
 For full trigger scripting behavior, see
-[trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md).
+[trigger-builder-guide.md](trigger-builder-guide.md).

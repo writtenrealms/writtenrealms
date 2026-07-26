@@ -10,9 +10,9 @@ World**. The neighboring **Rooms > Edit** screen edits the selected room's
 
 For shared runtime state used by triggers, quests, and builder commands, also
 read
-[state-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/state-builder-guide.md).
+[state-builder-guide.md](state-builder-guide.md).
 For the shared condition syntax used by triggers, quests, and abilities, read
-[condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md).
+[condition-builder-guide.md](condition-builder-guide.md).
 
 ## Mental Model
 
@@ -76,7 +76,7 @@ notes, type, color, landmark state, exits, flags, details, and doors.
 
 Do not add `checks`, `room_checks`, or `triggers` under `kind: room`. Each
 trigger is its own `kind: trigger` document targeting the room. See
-[room-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/room-builder-guide.md)
+[room-builder-guide.md](room-builder-guide.md)
 for the complete room manifest workflow.
 
 ## First Room Trigger
@@ -270,7 +270,7 @@ Behavior notes:
   `failure_message` or a generated detail message
 
 For the full operator and path reference, see
-[condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md).
+[condition-builder-guide.md](condition-builder-guide.md).
 
 ## Writing `spec.script`
 
@@ -324,7 +324,7 @@ Common commands you will often use in trigger scripts:
 - `/cmd room -- /transfer {{ actor_key }} room@x,y,z`
 
 For the full slash command matrix and command-by-command reference, see
-[builder-command-reference.md](/Users/teebes/code/writtenrealms/docs/guides/builder-command-reference.md).
+[builder-command-reference.md](builder-command-reference.md).
 
 ## Writing `spec.steps`
 
@@ -1095,12 +1095,12 @@ For builder work, the important distinction is:
 
 ## Related Docs
 
-- [room-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/room-builder-guide.md)
-- [builder-command-reference.md](/Users/teebes/code/writtenrealms/docs/guides/builder-command-reference.md)
-- [item-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/item-definition-builder-guide.md)
-- [mob-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-definition-builder-guide.md)
-- [state-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/state-builder-guide.md)
-- [social-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/social-builder-guide.md)
+- [room-builder-guide.md](room-builder-guide.md)
+- [builder-command-reference.md](builder-command-reference.md)
+- [item-definition-builder-guide.md](item-definition-builder-guide.md)
+- [mob-definition-builder-guide.md](mob-definition-builder-guide.md)
+- [state-builder-guide.md](state-builder-guide.md)
+- [social-builder-guide.md](social-builder-guide.md)
 - [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
 - [trigger-matching-dsl.md](/Users/teebes/code/writtenrealms/docs/architecture/trigger-matching-dsl.md)
 - [trigger-multiline-script-execution.md](/Users/teebes/code/writtenrealms/docs/flows/trigger-multiline-script-execution.md)

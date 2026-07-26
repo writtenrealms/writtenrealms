@@ -309,16 +309,16 @@ Current required mappings:
 
 Builder-facing authoring guidance lives in:
 
-- [docs/guides/currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md)
-- [docs/guides/world-config-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/world-config-builder-guide.md)
-- [docs/guides/trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md)
-- [docs/guides/social-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/social-builder-guide.md)
-- [docs/guides/builder-command-reference.md](/Users/teebes/code/writtenrealms/docs/guides/builder-command-reference.md)
-- [docs/guides/combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md)
-- [docs/guides/leveling-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/leveling-builder-guide.md)
-- [docs/guides/spawn-plan-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/spawn-plan-builder-guide.md)
-- [docs/guides/mob-trait-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-trait-builder-guide.md)
-- [docs/guides/room-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/room-builder-guide.md)
+- [docs/guides/builders/currency-builder-guide.md](../guides/builders/currency-builder-guide.md)
+- [docs/guides/builders/world-config-builder-guide.md](../guides/builders/world-config-builder-guide.md)
+- [docs/guides/builders/trigger-builder-guide.md](../guides/builders/trigger-builder-guide.md)
+- [docs/guides/builders/social-builder-guide.md](../guides/builders/social-builder-guide.md)
+- [docs/guides/builders/builder-command-reference.md](../guides/builders/builder-command-reference.md)
+- [docs/guides/builders/combat-formula-builder-guide.md](../guides/builders/combat-formula-builder-guide.md)
+- [docs/guides/builders/leveling-builder-guide.md](../guides/builders/leveling-builder-guide.md)
+- [docs/guides/builders/spawn-plan-builder-guide.md](../guides/builders/spawn-plan-builder-guide.md)
+- [docs/guides/builders/mob-trait-builder-guide.md](../guides/builders/mob-trait-builder-guide.md)
+- [docs/guides/builders/room-builder-guide.md](../guides/builders/room-builder-guide.md)
 
 ## Current Flows
 
@@ -442,41 +442,41 @@ make imports ambiguous and prod/dev database ids do not need to match.
 Quest authoring details, including field-by-field manifest docs and current
 runtime behavior notes, live in:
 
-- [docs/guides/quest-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/quest-builder-guide.md)
-- [docs/guides/quest-reference.md](/Users/teebes/code/writtenrealms/docs/guides/quest-reference.md)
+- [docs/guides/builders/quest-builder-guide.md](../guides/builders/quest-builder-guide.md)
+- [docs/guides/builders/quest-reference.md](../guides/builders/quest-reference.md)
 
 Item definition authoring details, including stackable plain items, fixed stat
 items, randomized stat items, and item bundles, live in:
 
-- [docs/guides/item-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/item-definition-builder-guide.md)
+- [docs/guides/builders/item-definition-builder-guide.md](../guides/builders/item-definition-builder-guide.md)
 
 Merchant authoring details, including fixed stock, item-bundle stock, buyback,
 finite funds, and killable versus non-killable shopkeepers, live in:
 
-- [docs/guides/merchant-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/merchant-builder-guide.md)
+- [docs/guides/builders/merchant-builder-guide.md](../guides/builders/merchant-builder-guide.md)
 
 Mob definition authoring details, including plain mobs, fixed stat mobs, and
 randomized stat mobs, live in:
 
-- [docs/guides/mob-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-definition-builder-guide.md)
+- [docs/guides/builders/mob-definition-builder-guide.md](../guides/builders/mob-definition-builder-guide.md)
 
 Currency definitions, defaults, starting balances, prices, rewards, policies,
 and conditions are documented in:
 
-- [docs/guides/currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md)
+- [docs/guides/builders/currency-builder-guide.md](../guides/builders/currency-builder-guide.md)
 
 Spawn plan authoring details, including fixed room spawns, weighted source
 pools, guided dungeon density, spawn-plan trait/affix configuration, and
 respawn behavior, live in:
 
-- [docs/guides/spawn-plan-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/spawn-plan-builder-guide.md)
+- [docs/guides/builders/spawn-plan-builder-guide.md](../guides/builders/spawn-plan-builder-guide.md)
 
 Instance architecture, including inherited base-world content, instance-local
 layout/config overrides, goals, timers, leaderboards, and cleanup policy, lives
 in:
 
 - [docs/architecture/instance-system.md](/Users/teebes/code/writtenrealms/docs/architecture/instance-system.md)
-- [docs/guides/instance-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/instance-builder-guide.md)
+- [docs/guides/builders/instance-builder-guide.md](../guides/builders/instance-builder-guide.md)
 
 Mob trait architecture, including the rename from the earlier draft term
 `affixes` to `traits`, lives in:
@@ -490,11 +490,11 @@ ownership for extra attacks and offhand weapon permissions, lives in:
 
 Builder-facing attack routine and dual-wielding authoring guidance lives in:
 
-- [docs/guides/attack-routine-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/attack-routine-builder-guide.md)
+- [docs/guides/builders/attack-routine-builder-guide.md](../guides/builders/attack-routine-builder-guide.md)
 
 Builder-facing mob trait authoring guidance lives in:
 
-- [docs/guides/mob-trait-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-trait-builder-guide.md)
+- [docs/guides/builders/mob-trait-builder-guide.md](../guides/builders/mob-trait-builder-guide.md)
 
 ## Initial State Manifest Shape
 
@@ -857,7 +857,7 @@ metadata:
 
 Social definitions can be authored only on the base world by rank 3+ builders.
 Instances inherit the base-world catalog and cannot fork it. See
-[social-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/social-builder-guide.md)
+[social-builder-guide.md](../guides/builders/social-builder-guide.md)
 for message variables, player resolution, mob reactions, and scaling behavior.
 
 ## Room Manifest Shape
@@ -971,7 +971,7 @@ that currency, and canonical export omits them. Negative amounts remain
 invalid. Omit the entire `rewards` patch when an update should preserve the
 existing reward mapping.
 
-See [currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md)
+See [currency-builder-guide.md](../guides/builders/currency-builder-guide.md)
 for currency deletion, item, merchant, quest, death-policy, and condition
 examples.
 
@@ -980,7 +980,7 @@ examples.
 World config edits are update-only manifests (no create/delete mode). The config screen and the full world export emit the same single world document shape:
 
 For a full field reference, see
-[world-config-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/world-config-builder-guide.md).
+[world-config-builder-guide.md](../guides/builders/world-config-builder-guide.md).
 
 ```yaml
 kind: world
@@ -1085,7 +1085,7 @@ level 1 and must be `0`; for example, the second entry is the XP required to
 reach level 2. `max_level` cannot be higher than the number of curve entries.
 The example above defines five reachable levels; a 20-level world needs 20
 entries.
-See [leveling-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/leveling-builder-guide.md).
+See [leveling-builder-guide.md](../guides/builders/leveling-builder-guide.md).
 
 `starting_equipment` grants item definitions during character initialization.
 `count` defaults to `1`, `archetype` limits an entry to one class id, and `equip`
@@ -1111,7 +1111,7 @@ are defined, the world has no classes.
 For details and examples, see:
 
 - [stats-formulas-and-classes.md](/Users/teebes/code/writtenrealms/docs/architecture/stats-formulas-and-classes.md)
-- [attributes-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/attributes-builder-guide.md)
+- [attributes-builder-guide.md](../guides/builders/attributes-builder-guide.md)
 - [wr1-archetype-world-reference.md](/Users/teebes/code/writtenrealms/docs/dev/wr1-archetype-world-reference.md)
 
 World manifests also support `spec.combat`, which holds the authored WR2
@@ -1127,7 +1127,7 @@ combat formula system:
 For details, see:
 
 - [combat-resolution-formulas.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-resolution-formulas.md)
-- [combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md)
+- [combat-formula-builder-guide.md](../guides/builders/combat-formula-builder-guide.md)
 
 Ability manifests do not have an `action_type` field. Targeting, out-of-combat
 availability, component behavior, and primary-action consumption are expressed

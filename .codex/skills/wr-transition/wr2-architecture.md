@@ -307,7 +307,7 @@ Usability rules currently implemented:
 
 Reference:
 
-- `docs/yaml-manifest-system.md`
+- `docs/architecture/yaml-manifest-system.md`
 
 ---
 

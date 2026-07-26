@@ -122,9 +122,9 @@ Available template state objects:
 Triggers can both read and write state.
 
 For full trigger authoring guidance aimed at builders, also read
-[trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md).
+[trigger-builder-guide.md](trigger-builder-guide.md).
 For condition operators and paths, also read
-[condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md).
+[condition-builder-guide.md](condition-builder-guide.md).
 
 Use structured conditions with the shared WR2 condition DSL:
 
@@ -282,7 +282,7 @@ components:
     op: clear
 ```
 
-See [ability-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/ability-builder-guide.md)
+See [ability-builder-guide.md](ability-builder-guide.md)
 for full examples and ordering notes.
 
 ## Initial State In Manifests

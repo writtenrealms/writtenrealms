@@ -23,7 +23,7 @@ runtime.
 - [combat-resolution-formulas.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-resolution-formulas.md)
 - [guided-random-item-definitions.md](/Users/teebes/code/writtenrealms/docs/architecture/guided-random-item-definitions.md)
 - [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
-- [mob-definition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/mob-definition-builder-guide.md)
+- [mob-definition-builder-guide.md](../guides/builders/mob-definition-builder-guide.md)
 - `.codex/skills/wr-transition/wr2-architecture.md`
 
 ## Current Baseline

@@ -14,7 +14,7 @@ Related docs:
 
 - [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
 - [instance-system.md](/Users/teebes/code/writtenrealms/docs/architecture/instance-system.md)
-- [state-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/state-builder-guide.md)
+- [state-builder-guide.md](../guides/builders/state-builder-guide.md)
 - [ambient-command-issuers-plan.md](/Users/teebes/code/writtenrealms/docs/architecture/ambient-command-issuers-plan.md)
 
 ## Core Model

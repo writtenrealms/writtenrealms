@@ -178,9 +178,9 @@ or another direction when the policy should affect only one route. Policy
 conditions state when movement is allowed; a false condition blocks movement.
 
 For more examples, see
-[trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md)
+[trigger-builder-guide.md](trigger-builder-guide.md)
 and
-[condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md).
+[condition-builder-guide.md](condition-builder-guide.md).
 
 ## Applying And Validation
 
@@ -197,6 +197,6 @@ alter it, **Rooms > Edit** is view-only and disables save.
 ## Related Docs
 
 - [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
-- [trigger-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/trigger-builder-guide.md)
-- [condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md)
-- [spawn-plan-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/spawn-plan-builder-guide.md)
+- [trigger-builder-guide.md](trigger-builder-guide.md)
+- [condition-builder-guide.md](condition-builder-guide.md)
+- [spawn-plan-builder-guide.md](spawn-plan-builder-guide.md)

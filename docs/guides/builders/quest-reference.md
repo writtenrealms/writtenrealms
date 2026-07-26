@@ -4,18 +4,18 @@ This guide is a manifest cookbook for builders experimenting with the WR2 quest
 system.
 
 For the overall mental model and player interaction contract, read
-[quest-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/quest-builder-guide.md)
+[quest-builder-guide.md](quest-builder-guide.md)
 first. This document is more concrete: a set of typical quest manifests you can
 copy, tweak, and ingest through `World > Edit World`.
 
 For the field-by-field manifest contract, accepted enum values, and current
 runtime behavior notes for settings like repeatability, read the `Quest
 Manifest Field Reference` section in
-[quest-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/quest-builder-guide.md).
+[quest-builder-guide.md](quest-builder-guide.md).
 
 For the shared `state` system that quests now use alongside triggers and
 builder commands, read
-[state-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/state-builder-guide.md).
+[state-builder-guide.md](state-builder-guide.md).
 
 All examples here assume:
 

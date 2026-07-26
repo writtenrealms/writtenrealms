@@ -6,7 +6,7 @@ copy of the referenced definition, so its existing guided-random ranges roll
 once in the normal item spawn path.
 
 The complete design and economy rationale are in
-[crafting-system.md](../architecture/crafting-system.md). This guide is the
+[crafting-system.md](../../architecture/crafting-system.md). This guide is the
 short authoring checklist.
 
 ## Authoring Order

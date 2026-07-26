@@ -15,7 +15,7 @@ stat modifiers for buffs that can survive into combat after out-of-combat use.
 
 Ability `requirements` use the shared WR2 condition DSL. For condition
 operators and paths, read
-[condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md).
+[condition-builder-guide.md](condition-builder-guide.md).
 
 ## Mental Model
 
@@ -1159,7 +1159,7 @@ Start with simple direct damage and healing.
 
 Use the combat formula guide to tune the profiles that abilities call:
 
-- [combat-formula-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/combat-formula-builder-guide.md)
+- [combat-formula-builder-guide.md](combat-formula-builder-guide.md)
 
 Recommended first-pass order:
 

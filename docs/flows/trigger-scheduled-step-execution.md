@@ -106,7 +106,7 @@ room, and trigger actor; terminal runs do not prevent a later start.
 
 ## Related Docs
 
-- [Trigger builder guide](../guides/trigger-builder-guide.md)
-- [Condition builder guide](../guides/condition-builder-guide.md)
+- [Trigger builder guide](../guides/builders/trigger-builder-guide.md)
+- [Condition builder guide](../guides/builders/condition-builder-guide.md)
 - [Multi-line script execution](trigger-multiline-script-execution.md)
 - [YAML manifest system](../architecture/yaml-manifest-system.md)

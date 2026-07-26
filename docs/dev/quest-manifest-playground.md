@@ -29,7 +29,7 @@ That means:
 Phase 2 is where runtime quest instances, opportunities, objectives, and event
 driven progression get added.
 
-For the Phase 2 runtime walkthrough, see `docs/quest-runtime-playground.md`.
+For the Phase 2 runtime walkthrough, see `docs/dev/quest-runtime-playground.md`.
 
 ## What Exists Today
 

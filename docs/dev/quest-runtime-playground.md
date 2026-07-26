@@ -6,7 +6,7 @@ This document explains how to exercise the Phase 2 quest runtime in game.
 
 The key distinction is:
 
-- `docs/quest-manifest-playground.md` is about authoring quest templates
+- `docs/dev/quest-manifest-playground.md` is about authoring quest templates
 - this document is about making those authored templates playable through the
   Phase 2 runtime
 

@@ -6,9 +6,9 @@ author the common quest loops that are already supported in game.
 
 For the shared mutable runtime data model used across quests, triggers, and
 builder commands, also read
-[state-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/state-builder-guide.md).
+[state-builder-guide.md](state-builder-guide.md).
 For shared condition syntax, read
-[condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md).
+[condition-builder-guide.md](condition-builder-guide.md).
 
 ## Mental Model
 
@@ -230,7 +230,7 @@ refs before importing into WR2.
 ### Condition DSL
 
 Quests use the shared WR2 condition DSL documented in
-[condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md).
+[condition-builder-guide.md](condition-builder-guide.md).
 
 Quest conditions appear in `visible_if`, `accept_if`, objective tracker
 `where`, story choice `if`, and transition `when`.
@@ -401,7 +401,7 @@ Use canonical effect `type` values when authoring new manifests:
 
 `grant_currency` requires an explicit currency code and a positive whole-number
 amount. It does not fall back to Gold or the current default. See
-[currency-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/currency-builder-guide.md).
+[currency-builder-guide.md](currency-builder-guide.md).
 
 
 Allowed `mob_command` verbs today:

@@ -3,7 +3,7 @@
 ## Purpose
 
 This document describes how to get from the current repository state to the
-quest end state described in `docs/quest-system-endstate.md`.
+quest end state described in `docs/architecture/quest-system-endstate.md`.
 
 The roadmap is intentionally replacement-oriented. We do not want to spend time
 on WR1 data migration, legacy compatibility layers, or keeping the current
@@ -11,8 +11,8 @@ quest model alive longer than necessary.
 
 Reference docs:
 
-- `docs/quest-system-endstate.md`
-- `docs/guides/quest-builder-guide.md`
+- `docs/architecture/quest-system-endstate.md`
+- `docs/guides/builders/quest-builder-guide.md`
 - `docs/dev/quest-manifest-playground.md`
 - `docs/dev/quest-runtime-playground.md`
 
@@ -59,7 +59,7 @@ Implemented so far:
 - backend playground script:
   - `backend/scripts/quest_manifest_playground.py`
 - playground usage doc:
-  - `docs/quest-manifest-playground.md`
+  - `docs/dev/quest-manifest-playground.md`
 - frontend builder routes and views:
   - `frontend/src/views/builder/world/QuestTemplateList.vue`
   - `frontend/src/views/builder/world/QuestTemplateDetails.vue`
@@ -118,7 +118,7 @@ Implemented so far:
 - runtime walkthrough doc:
   - `docs/dev/quest-runtime-playground.md`
 - builder interaction guide:
-  - `docs/guides/quest-builder-guide.md`
+  - `docs/guides/builders/quest-builder-guide.md`
 - sidebar/mobile quest log integration:
   - uses the WR2 active/resolved quest instance endpoints
 - automated tests:
@@ -183,7 +183,8 @@ codebase-specific adjustments.
   `backend/spawns/events.py` and the command -> action -> event document in
   `.codex/skills/wr-transition/wr2-architecture.md`.
 - Manifest-based authoring fits the current builder direction in
-  `docs/yaml-manifest-system.md` and `backend/builders/manifests.py`.
+  `docs/architecture/yaml-manifest-system.md` and
+  `backend/builders/manifests.py`.
 - Reusing broad concepts like facts, marks, actions, and conditions is correct
   at the architecture level.
 - Named step graphs, fail-forward, and separating discovery from the quest log
