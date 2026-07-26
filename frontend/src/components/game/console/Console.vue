@@ -13,7 +13,6 @@
           class="message"
           :class="[message.type, {
             grouped: isGrouped(message, messages[index - 1]),
-            'combat-round': isCombatRound(message),
           }]"
           :distanceToBottom="distanceToBottom"
           @scrollDown="scrollToBottom"
@@ -142,15 +141,26 @@ const messages = computed(() => {
 });
 
 const isGrouped = (message, prevMessage) => {
-  if (prevMessage &&
-      prevMessage.group &&
-      prevMessage.group === message.group)
-    return true;
-  return false;
-};
+  if (!prevMessage) return false;
 
-const isCombatRound = (message) => {
-  return !!(message && message.data && message.data.round_id);
+  // A direct command response belongs with the command echo immediately above
+  // it. Notifications remain standalone even when a command caused them (for
+  // example, a duel completion after `duel surrender`).
+  if (
+    prevMessage.echo &&
+    !message.echo &&
+    typeof message.type === "string" &&
+    message.type.startsWith("cmd.")
+  ) {
+    return true;
+  }
+
+  // Other multi-message units should share an explicit group; combat rounds
+  // receive one automatically from their round_id in the game store.
+  return !!(
+    prevMessage.group &&
+    prevMessage.group === message.group
+  );
 };
 
 onMounted(() => {
@@ -222,37 +232,11 @@ const onScroll = _.debounce(updateScroll, 250);
         overflow-x: hidden;
       }
 
-      &.echo,
-      &.affect\.cmd\.look\.success,
-      &.affect\.idle\.timeout,
-      &.notification\.cmd\.say\.success,
-      &.notification\.cmd\.yell\.success,
-      &.notification\.cmd\.chat\.success,
-      &.notification\.tell,
-      &.notification\.cmd\.emote\.success,
-      &.notification\.\/echo,
-      &.notification\.decay {
+      // Standalone console entries are separate visual blocks by default.
+      // Only explicit groups (including combat rounds) and direct command
+      // responses opt out through the .grouped class.
+      &:not(:first-child):not(.grouped) {
         margin-top: 1rem;
-      }
-
-      &.notification\.movement\.enter:not(.grouped),
-      &.notification\.movement\.exit:not(.grouped) {
-        margin-top: 1rem;
-      }
-
-      &.room_write,
-      &.write\.send,
-      &.write\.sendexcept,
-      &.write\.game,
-      &.write\.zone {
-        &:not(.grouped) {
-          margin-top: 1rem;
-        }
-      }
-
-      &.combat-round:not(.grouped),
-      &.notification\.combat\.attack:not(.grouped) {
-        margin-top: 1em;
       }
 
       // Say, Chat, yell, emote, echos have a prominent color
@@ -274,11 +258,6 @@ const onScroll = _.debounce(updateScroll, 250);
         color: $color-red;
       }
 
-      &.notification\.cmd\.cchat\.success,
-      &.notification\.cmd\.gossip\.success {
-        margin-top: 1rem;
-      }
-
       &.cmd\.cchat\.success,
       &.notification\.cmd\.cchat\.success {
         color: $color-blue-chat;
@@ -290,7 +269,6 @@ const onScroll = _.debounce(updateScroll, 250);
       }
 
       &.notification\.broadcast {
-        margin-top: 1em;
         margin-bottom: 1em;
         color: $color-primary;
         font-weight: bold;

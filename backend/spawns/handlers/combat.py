@@ -11,10 +11,14 @@ class KillHandler(CommandHandler):
     text_commands = ("kill",)
     help = {
         "name": "Kill",
-        "format": "kill <mob>",
-        "description": "Fight a mob to the death using the current placeholder combat rules.",
+        "format": "kill <target>",
+        "description": (
+            "Fight a mob, or engage the opposing contestant while inside an "
+            "active duel."
+        ),
         "examples": [
             "kill rat",
+            "kill Rival",
         ],
     }
 

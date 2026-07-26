@@ -253,7 +253,14 @@ def _resolve_effect_mob(
 
     mob_id = _parse_entity_id(effect.get("mob") or effect.get("issuer"), "mob")
     if mob_id:
-        return room.mobs.select_related("definition").filter(pk=mob_id).first()
+        return (
+            room.mobs.select_related("definition")
+            .filter(
+                pk=mob_id,
+                world_id=getattr(player, "world_id", None),
+            )
+            .first()
+        )
 
     definition_id = resolve_entity_ref_id(
         world=getattr(template, "world", None) or getattr(getattr(player, "world", None), "context", None) or getattr(player, "world", None),
@@ -267,7 +274,11 @@ def _resolve_effect_mob(
         expected_type="mobdefinition",
     )
     if definition_id:
-        return first_room_mob_with_definition(room, definition_id)
+        return first_room_mob_with_definition(
+            room,
+            definition_id,
+            world=getattr(player, "world", None),
+        )
 
     selector = effect.get("selector")
     if selector:
@@ -275,6 +286,7 @@ def _resolve_effect_mob(
             return resolve_room_mob_target(
                 room,
                 selector,
+                world=getattr(player, "world", None),
                 empty_error="",
                 not_found_error="",
             )
@@ -285,12 +297,23 @@ def _resolve_effect_mob(
     if isinstance(target, dict):
         event_mob_id = _parse_entity_id(target.get("key") or target.get("id"), "mob")
         if event_mob_id:
-            mob = room.mobs.select_related("definition").filter(pk=event_mob_id).first()
+            mob = (
+                room.mobs.select_related("definition")
+                .filter(
+                    pk=event_mob_id,
+                    world_id=getattr(player, "world_id", None),
+                )
+                .first()
+            )
             if mob:
                 return mob
         event_definition_id = _coerce_amount(target.get("definition_id"))
         if event_definition_id:
-            mob = first_room_mob_with_definition(room, event_definition_id)
+            mob = first_room_mob_with_definition(
+                room,
+                event_definition_id,
+                world=getattr(player, "world", None),
+            )
             if mob:
                 return mob
 

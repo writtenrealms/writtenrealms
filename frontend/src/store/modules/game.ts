@@ -832,6 +832,14 @@ const receiveMessage = async ({
 
   } else if (message_data.type === "affect.flee.success" || isCompletedFleeSuccess) {
     commit("player_target_set", null);
+  } else if (message_data.type === "notification.duel.completed") {
+    commit("player_target_set", null);
+    if (message_data.data.actor) {
+      commit("room_chars_update", message_data.data.actor);
+    }
+    if (message_data.data.target) {
+      commit("room_chars_update", message_data.data.target);
+    }
   }
 
   if (message_data.type === 'affect.delete') {

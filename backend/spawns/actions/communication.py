@@ -27,10 +27,12 @@ def _actor_payload(actor: Player | Mob) -> dict:
 
 def _room_player_recipient_ids(actor: Player | Mob) -> list[int]:
     room_id = getattr(actor, "room_id", None)
-    if not room_id:
+    world_id = getattr(actor, "world_id", None)
+    if not room_id or not world_id:
         return []
 
     qs = Player.objects.filter(
+        world_id=world_id,
         room_id=room_id,
         in_game=True,
     )
@@ -42,10 +44,12 @@ def _room_player_recipient_ids(actor: Player | Mob) -> list[int]:
 def _zone_player_recipient_ids(actor: Player | Mob) -> list[int]:
     room = getattr(actor, "room", None)
     zone_id = getattr(room, "zone_id", None)
-    if not zone_id:
+    world_id = getattr(actor, "world_id", None)
+    if not zone_id or not world_id:
         return []
 
     qs = Player.objects.filter(
+        world_id=world_id,
         room__zone_id=zone_id,
         in_game=True,
     )
@@ -210,6 +214,7 @@ class TalkAction:
         target_mob = resolve_room_mob_target(
             actor.room,
             target_selector,
+            world=actor.world,
             empty_error="Talk to whom?",
             not_found_error="You don't see them here.",
             allow_single_match_when_empty=True,

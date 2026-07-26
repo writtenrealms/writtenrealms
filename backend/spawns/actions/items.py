@@ -247,9 +247,12 @@ def _container_items(container) -> list[Item]:
     )
 
 
-def _room_items(room: Room) -> list[Item]:
+def _room_items(room: Room, *, runtime_world) -> list[Item]:
     return list(
-        room.inventory.filter(is_pending_deletion=False)
+        room.inventory.filter(
+            world=runtime_world,
+            is_pending_deletion=False,
+        )
         .select_related("definition", "currency")
         .order_by("id")
     )
@@ -260,7 +263,9 @@ def _visible_room_items(
     room: Room,
 ) -> list[Item | QuestRoomItemProjection]:
     room_items: list[Item | QuestRoomItemProjection] = [
-        item for item in _room_items(room) if item.is_pickable
+        item
+        for item in _room_items(room, runtime_world=player.world)
+        if item.is_pickable
     ]
     room_items.extend(quest_room_item_projections_for_room(player, room.id))
     return room_items
@@ -290,7 +295,11 @@ def _resolve_accessible_container(player: Player, room: Room, selector: str) -> 
     if selector == "all" or selector.startswith("all."):
         raise ActionError("Specify a single container.", code="invalid_container")
 
-    containers = [item for item in _room_items(room) if _is_container_item(item)]
+    containers = [
+        item
+        for item in _room_items(room, runtime_world=player.world)
+        if _is_container_item(item)
+    ]
     containers.extend(item for item in _container_items(player) if _is_container_item(item))
 
     if not containers:
@@ -394,6 +403,7 @@ class DropAction:
             {room.id: room_payload_key_for(room)},
             {},
             viewer=updated_player,
+            runtime_world=updated_player.world,
         )
         item_payloads = [
             payload.model_dump()
@@ -419,6 +429,7 @@ class DropAction:
         if not updated_player.is_invisible:
             recipients = (
                 Player.objects.filter(
+                    world=updated_player.world,
                     room_id=room.id,
                     in_game=True,
                 )
@@ -552,6 +563,7 @@ class EquipAction:
             {room.id: room_payload_key_for(room)},
             {},
             viewer=updated_player,
+            runtime_world=updated_player.world,
         )
 
         payload_item_ids = {
@@ -607,7 +619,11 @@ class EquipAction:
 
         if not updated_player.is_invisible:
             recipients = (
-                Player.objects.filter(room_id=room.id, in_game=True)
+                Player.objects.filter(
+                    world=updated_player.world,
+                    room_id=room.id,
+                    in_game=True,
+                )
                 .exclude(pk=updated_player.id)
                 .values_list("id", flat=True)
             )
@@ -669,6 +685,7 @@ class RemoveEquipmentAction:
             {room.id: room_payload_key_for(room)},
             {},
             viewer=updated_player,
+            runtime_world=updated_player.world,
         )
         item_payloads = [
             payload.model_dump()
@@ -693,7 +710,11 @@ class RemoveEquipmentAction:
 
         if not updated_player.is_invisible:
             recipients = (
-                Player.objects.filter(room_id=room.id, in_game=True)
+                Player.objects.filter(
+                    world=updated_player.world,
+                    room_id=room.id,
+                    in_game=True,
+                )
                 .exclude(pk=updated_player.id)
                 .values_list("id", flat=True)
             )
@@ -768,6 +789,7 @@ class GetAction:
                     item.id: item
                     for item in Item.objects.select_for_update()
                     .filter(
+                        world=player.world,
                         pk__in=item_ids,
                         container_type_id=origin_content_type_id,
                         container_id=origin.id,
@@ -807,6 +829,7 @@ class GetAction:
             {room.id: room_payload_key_for(room)},
             {},
             viewer=updated_player,
+            runtime_world=updated_player.world,
         )
         item_payloads = [
             payload.model_dump()
@@ -838,7 +861,11 @@ class GetAction:
             and _room_visibility_target(source_container, room)
         ):
             recipients = (
-                Player.objects.filter(room_id=room.id, in_game=True)
+                Player.objects.filter(
+                    world=updated_player.world,
+                    room_id=room.id,
+                    in_game=True,
+                )
                 .exclude(pk=updated_player.id)
                 .values_list("id", flat=True)
             )
@@ -943,6 +970,7 @@ class PutAction:
             {room.id: room_payload_key_for(room)},
             {},
             viewer=updated_player,
+            runtime_world=updated_player.world,
         )
         item_payloads = [
             payload.model_dump()
@@ -969,7 +997,11 @@ class PutAction:
 
         if not updated_player.is_invisible and _room_visibility_target(target_container, room):
             recipients = (
-                Player.objects.filter(room_id=room.id, in_game=True)
+                Player.objects.filter(
+                    world=updated_player.world,
+                    room_id=room.id,
+                    in_game=True,
+                )
                 .exclude(pk=updated_player.id)
                 .values_list("id", flat=True)
             )
@@ -1007,6 +1039,7 @@ class GiveAction:
             target_mob = resolve_room_mob_target(
                 room,
                 target_selector,
+                world=player.world,
                 empty_error="Give to whom?",
                 not_found_error="You don't see them here.",
             )
@@ -1047,6 +1080,7 @@ class GiveAction:
             {room.id: room_payload_key_for(room)},
             {},
             viewer=updated_player,
+            runtime_world=updated_player.world,
         )
         item_payloads = [
             payload.model_dump()
@@ -1073,7 +1107,11 @@ class GiveAction:
 
         if not updated_player.is_invisible:
             recipients = (
-                Player.objects.filter(room_id=room.id, in_game=True)
+                Player.objects.filter(
+                    world=updated_player.world,
+                    room_id=room.id,
+                    in_game=True,
+                )
                 .exclude(pk=updated_player.id)
                 .values_list("id", flat=True)
             )

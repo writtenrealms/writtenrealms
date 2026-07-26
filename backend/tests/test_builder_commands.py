@@ -2203,6 +2203,43 @@ class TestBuilderJump(BuilderCommandTestCase):
         self.assertEqual(enter_messages[0]["player_key"], destination_watcher.key)
         self.assertIn("appears", enter_messages[0]["message"].get("text", "").lower())
 
+    def test_jump_does_not_notify_players_in_another_runtime_world(self):
+        target_room = self.room.create_at("east")
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+        other_runtime = self.world.create_spawn_world(
+            instance_ref="other-jump-runtime",
+        )
+
+        origin_watcher = self.create_player(
+            "Other Origin Watcher",
+            user=self.create_user("other-origin-watcher@example.com"),
+            world=other_runtime,
+            room=self.room,
+        )
+        destination_watcher = self.create_player(
+            "Other Destination Watcher",
+            user=self.create_user("other-destination-watcher@example.com"),
+            world=other_runtime,
+            room=target_room,
+        )
+        origin_watcher.in_game = True
+        destination_watcher.in_game = True
+        origin_watcher.save(update_fields=["in_game"])
+        destination_watcher.save(update_fields=["in_game"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/jump {target_room.relative_id}")
+
+        notified_player_keys = {
+            message["player_key"]
+            for message in messages
+            if message["message"].get("type")
+            in {"notification./jump.exit", "notification./jump.enter"}
+        }
+        self.assertNotIn(origin_watcher.key, notified_player_keys)
+        self.assertNotIn(destination_watcher.key, notified_player_keys)
+
     def test_jump_omits_notifications_when_invisible(self):
         target_room = self.room.create_at("east")
         self.player.is_invisible = True

@@ -4,6 +4,7 @@ Instance command handlers.
 These commands bridge the player-facing text command path to the WR2 instance
 runtime service in worlds.instances.
 """
+from config import constants as adv_consts
 from spawns.events import GameEvent, publish_events
 from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.registry import register_handler
@@ -63,6 +64,7 @@ class EnterInstanceHandler(CommandHandler):
             "room",
             "room__transfer_to",
             "room__transfer_to__world",
+            "room__transfer_to__world__config",
             "world",
             "world__context",
         ).get(pk=ctx.player.id)
@@ -90,15 +92,19 @@ class EnterInstanceHandler(CommandHandler):
             ctx.publish_error("enter", "This instance entrance does not belong to this world.")
             return
 
+        instance_ref = _instance_ref_from_args(ctx)
         try:
             World.enter_instance(
                 player=player,
                 transfer_to_id=transfer_to.id,
                 transfer_from_id=transfer_from.id,
-                ref=_instance_ref_from_args(ctx),
+                ref=instance_ref,
             )
-        except RuntimeError:
-            ctx.publish_error("enter", "Invalid instance reference.")
+        except RuntimeError as exc:
+            message = str(exc)
+            if instance_ref or "Match instances" not in message:
+                message = "Invalid instance reference."
+            ctx.publish_error("enter", message)
             return
 
         _publish_state_sync(ctx, player.id)
@@ -123,7 +129,11 @@ class LeaveInstanceHandler(CommandHandler):
             ctx.publish_error("leave", "You are not in an instance.")
             return
 
-        World.leave_instance(player=player)
+        try:
+            World.leave_instance(player=player)
+        except ValueError as exc:
+            ctx.publish_error("leave", str(exc))
+            return
         _publish_state_sync(ctx, player.id)
 
 
@@ -145,6 +155,7 @@ class InstanceInfoHandler(CommandHandler):
             "room",
             "room__transfer_to",
             "room__transfer_to__world",
+            "room__transfer_to__world__config",
             "world",
             "world__context",
             "world__context__instance_of",
@@ -174,6 +185,27 @@ class InstanceInfoHandler(CommandHandler):
 
         transfer_to = player.room.transfer_to if player.room else None
         if transfer_to and transfer_to.world.instance_of_id:
+            if (
+                transfer_to.world.config_id
+                and transfer_to.world.config.pvp_mode == adv_consts.PVP_MODE_MATCH
+            ):
+                text = (
+                    "This is an entrance to %s, a private match arena.\n"
+                    "Use `duel <player>` here; the challenged player can then "
+                    "use `duel accept`."
+                ) % transfer_to.world.name
+                ctx.publish(
+                    {
+                        "type": "cmd.instance.success",
+                        "text": text,
+                        "data": {
+                            "status": "duel_entrance",
+                            "template_world_id": transfer_to.world_id,
+                            "entry_room_id": transfer_to.id,
+                        },
+                    }
+                )
+                return
             text = (
                 "This room is linked to %s.\n"
                 "Use `enter` to start or re-enter your run, or `enter <instance_ref>` to join another active run."

@@ -325,7 +325,10 @@ class World(AdventBaseModel):
         # If instance, move all players back to the base world
         if self.context.instance_of:
             for player in self.players.all():
-                self.leave_instance(player=player)
+                self.leave_instance(
+                    player=player,
+                    force_active_duel=True,
+                )
 
         self.players.update(in_game=False)
 
@@ -624,9 +627,12 @@ class World(AdventBaseModel):
         return run.spawned_world
 
     @classmethod
-    def leave_instance(cls, player):
+    def leave_instance(cls, player, force_active_duel=False):
         from worlds.instances import leave_instance
-        return leave_instance(player=player)
+        return leave_instance(
+            player=player,
+            force_active_duel=force_active_duel,
+        )
 
     def exit_instance(self, player):
         template_world = self.context
@@ -1041,6 +1047,7 @@ class WorldConfig(BaseModel):
     non_ascii_names = models.BooleanField(default=False)
     is_classless = models.BooleanField(default=True)
     globals_enabled = models.BooleanField(default=True)
+    announce_duel_results = models.BooleanField(default=False)
     equipment_system = models.JSONField(default=default_equipment_system)
     stat_system = models.JSONField(default=default_stat_system)
 

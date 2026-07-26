@@ -134,6 +134,16 @@ class TestCommandFallbackTriggers(WorldTestCase):
                 ["/cmd room -- /echo -- Third line."],
             ],
         )
+        self.assertEqual(
+            {
+                (
+                    call.kwargs["kwargs"]["expected_world_id"],
+                    call.kwargs["kwargs"]["expected_room_id"],
+                )
+                for call in mock_apply_async.call_args_list
+            },
+            {(self.player.world_id, self.player.room_id)},
+        )
 
     def test_multiline_script_renders_templates_before_scheduling_followups(self):
         item_definition = ItemDefinition.objects.create(
@@ -167,6 +177,66 @@ class TestCommandFallbackTriggers(WorldTestCase):
             world=self.spawn_world,
         )
         self.assertEqual(loaded_item.name, item_definition.name)
+
+    def test_delayed_multiline_script_does_not_follow_actor_to_other_runtime(self):
+        item_definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="runtime-bound-trident",
+            name="a runtime-bound trident",
+        )
+        self._create_room_trigger(
+            script=(
+                "/cmd room -- /echo -- First line.\n"
+                "/cmd room -- /grantitem {{ actor_key }} runtime-bound-trident"
+            ),
+        )
+
+        with patch("spawns.tasks.execute_trigger_script_segments.apply_async") as mock_apply_async:
+            dispatch_text_command(self.player.id, "touch altar")
+
+        scheduled_kwargs = mock_apply_async.call_args.kwargs["kwargs"]
+        other_runtime = self.world.create_spawn_world(
+            instance_ref="other-trigger-runtime",
+        )
+        self.player.world = other_runtime
+        self.player.save(update_fields=["world"])
+
+        from spawns.tasks import execute_trigger_script_segments
+
+        execute_trigger_script_segments(**scheduled_kwargs)
+
+        self.assertFalse(
+            self.player.inventory.filter(definition=item_definition).exists()
+        )
+
+    def test_delayed_multiline_script_does_not_follow_actor_to_other_room(self):
+        item_definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="room-bound-trident",
+            name="a room-bound trident",
+        )
+        self._create_room_trigger(
+            script=(
+                "/cmd room -- /echo -- First line.\n"
+                "/cmd room -- /grantitem {{ actor_key }} room-bound-trident"
+            ),
+        )
+
+        with patch("spawns.tasks.execute_trigger_script_segments.apply_async") as mock_apply_async:
+            dispatch_text_command(self.player.id, "touch altar")
+
+        scheduled_kwargs = mock_apply_async.call_args.kwargs["kwargs"]
+        other_room = self.room.create_at("north")
+        self.player.room = other_room
+        self.player.save(update_fields=["room"])
+
+        from spawns.tasks import execute_trigger_script_segments
+
+        execute_trigger_script_segments(**scheduled_kwargs)
+
+        self.assertFalse(
+            self.player.inventory.filter(definition=item_definition).exists()
+        )
 
     def test_multiline_script_delay_is_configurable(self):
         self._create_room_trigger(

@@ -138,6 +138,35 @@ class TestMobTracker(WorldTestCase):
             self._player_messages_by_type(messages, "cmd.kill.success")
         )
 
+    def test_tracker_chase_cannot_bypass_runtime_combat_block(self):
+        tracker = self._mob()
+        origin_encounter = self._encounter(tracker)
+
+        with patch(
+            "spawns.duels.duel_combat_block_reason",
+            return_value="Combat is disabled in this duel runtime.",
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                dispatch_text_command(self.player.id, "east")
+
+        self.player.refresh_from_db()
+        tracker.refresh_from_db()
+        origin_encounter.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.destination.id)
+        self.assertEqual(tracker.room_id, self.room.id)
+        self.assertEqual(
+            origin_encounter.status,
+            CombatEncounter.STATUS_FINISHED,
+        )
+        self.assertFalse(
+            CombatEncounter.objects.filter(
+                player=self.player,
+                mob=tracker,
+                room=self.destination,
+                status=CombatEncounter.STATUS_ACTIVE,
+            ).exists()
+        )
+
     def test_pre_lock_move_clears_prepared_ability_without_a_tracker(self):
         ordinary_mob = self._mob("an ordinary guard", tracker=False)
         encounter = self._encounter(ordinary_mob)

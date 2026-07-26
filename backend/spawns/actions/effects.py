@@ -324,13 +324,26 @@ def build_character_effect(
 
 
 def _effect_is_hostile(effect: dict[str, Any]) -> bool:
+    if str(effect.get("category") or "").strip().lower() == "debuff":
+        return True
     if str(effect.get("effect") or "").strip().lower() == "dot":
         return True
-    tick_component = (effect.get("tick") or {}).get("component") or {}
-    return (
-        str(effect.get("category") or "").strip().lower() == "debuff"
-        and tick_component.get("type") == "damage"
-    )
+    tick = effect.get("tick") or {}
+    tick_component = tick.get("component") or {}
+    if tick_component.get("type") == "damage":
+        return True
+    for primitive in tick.get("primitives") or []:
+        if not isinstance(primitive, dict):
+            continue
+        if primitive.get("type") != "resource_change":
+            continue
+        try:
+            amount = float(primitive.get("amount") or 0)
+        except (TypeError, ValueError):
+            amount = 0
+        if amount < 0:
+            return True
+    return False
 
 
 def _effect_actor_fields(actor: Player | Mob, *, prefix: str) -> dict[str, Any]:
@@ -423,6 +436,7 @@ def advance_character_effect_durations(
     due_at=None,
 ) -> bool:
     queryset = _actor_effect_queryset(actor).filter(
+        world=actor.world,
         scope=ActiveEffect.SCOPE_CHARACTER,
         remaining_rounds__gt=0,
         tick={},

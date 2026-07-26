@@ -9,6 +9,10 @@ from spawns.models import (
     Mob,
     Equipment,
     Alias,
+    CombatEncounter,
+    CombatParticipant,
+    DuelMatch,
+    DuelParticipant,
     PlayerEvent,
     PlayerConfig,
     Mark)
@@ -104,6 +108,48 @@ class ClanMembershipAdmin(BaseAdmin):
     raw_id_fields = ['player', 'clan']
 
 
+class DuelMatchAdmin(BaseAdmin):
+    list_display = [
+        'id',
+        'status',
+        'base_world',
+        'template_world',
+        'challenger',
+        'challenged',
+        'winner',
+        'loser',
+    ]
+    list_filter = ['status']
+    raw_id_fields = [
+        'base_world',
+        'template_world',
+        'entrance_room',
+        'run',
+        'challenger',
+        'challenged',
+        'winner',
+        'loser',
+    ]
+
+
+class DuelParticipantAdmin(BaseAdmin):
+    list_display = ['id', 'match', 'player', 'role', 'team', 'result']
+    list_filter = ['role', 'result']
+    raw_id_fields = ['match', 'player']
+
+
+class CombatEncounterAdmin(BaseAdmin):
+    list_display = ['id', 'world', 'room', 'status', 'duel_match']
+    list_filter = ['status']
+    raw_id_fields = ['world', 'room', 'player', 'mob', 'duel_match']
+
+
+class CombatParticipantAdmin(BaseAdmin):
+    list_display = ['id', 'encounter', 'player', 'mob', 'team', 'is_active']
+    list_filter = ['is_active']
+    raw_id_fields = ['encounter', 'player', 'mob']
+
+
 def player_data_world(player_data):
     return player_data.player.world
 class PlayerDataAdmin(BaseAdmin):
@@ -112,6 +158,10 @@ class PlayerDataAdmin(BaseAdmin):
 
 admin.site.register(Clan, ClanAdmin)
 admin.site.register(ClanMembership, ClanMembershipAdmin)
+admin.site.register(DuelMatch, DuelMatchAdmin)
+admin.site.register(DuelParticipant, DuelParticipantAdmin)
+admin.site.register(CombatEncounter, CombatEncounterAdmin)
+admin.site.register(CombatParticipant, CombatParticipantAdmin)
 admin.site.register(Player, PlayerAdmin)
 admin.site.register(Equipment, EquipmentAdmin)
 admin.site.register(Item, ItemAdmin)

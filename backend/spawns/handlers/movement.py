@@ -76,9 +76,18 @@ class MoveHandler(CommandHandler):
                     player=player,
                     origin_room_id=player.room_id,
                 )
+                from spawns.actions.pvp import active_pvp_participation
+
+                pvp_participation = active_pvp_participation(
+                    player,
+                    room=player.room,
+                )
                 if any(
                     encounter.is_combat_locked
                     for encounter in escape_encounters
+                ) or (
+                    pvp_participation is not None
+                    and pvp_participation.encounter.is_combat_locked
                 ):
                     raise ActionError(
                         "You are locked in combat. You must flee.",
@@ -121,6 +130,33 @@ class MoveHandler(CommandHandler):
 
                 player.save(update_fields=["room", "stamina", "last_action_ts"])
                 player.viewed_rooms.add(context.dest_room_id)
+
+                if pvp_participation is not None:
+                    pvp_encounter_id = pvp_participation.encounter_id
+
+                    def _finish_pvp_after_move() -> None:
+                        from spawns.actions.pvp import finish_pvp_encounter
+
+                        resolved_events = finish_pvp_encounter(
+                            pvp_encounter_id,
+                        )
+                        if not resolved_events:
+                            return
+                        if move_events_published:
+                            publish_events(
+                                resolved_events,
+                                actor_key=ctx.player.key,
+                                connection_id=ctx.connection_id,
+                            )
+                        else:
+                            followup_events.extend(resolved_events)
+
+                    # Preserve the global duel lock order by cleaning up only
+                    # after this player-owned movement transaction commits.
+                    transaction.on_commit(
+                        _finish_pvp_after_move,
+                        robust=True,
+                    )
 
                 tracker_payload = (
                     tracker_plan.action_payload()

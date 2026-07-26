@@ -52,7 +52,15 @@ from spawns.handlers.registry import (
     dispatch_command,
     resolve_text_handler,
 )
-from spawns.models import ActiveEffect, CombatEncounter, Equipment, Item, Mob, Player
+from spawns.models import (
+    ActiveEffect,
+    CombatEncounter,
+    CombatParticipant,
+    Equipment,
+    Item,
+    Mob,
+    Player,
+)
 from spawns.serializers import LoadDefinitionSerializer
 from spawns.state_payloads import (
     door_state_lookup,
@@ -207,7 +215,13 @@ def _get_single_room_payload(player: Player):
         return serialize_room(None, {}, {})
     room_key_lookup = {room.id: room_payload_key_for(room)}
     door_states = door_state_lookup(player.world, [room.id])
-    return serialize_room(room, room_key_lookup, door_states, viewer=player)
+    return serialize_room(
+        room,
+        room_key_lookup,
+        door_states,
+        viewer=player,
+        runtime_world=player.world,
+    )
 
 
 def _collect_purge_targets(player: Player, selector: str) -> list[Item | Mob]:
@@ -219,7 +233,10 @@ def _collect_purge_targets(player: Player, selector: str) -> list[Item | Mob]:
             mob_id = int(selector.split(".", 1)[1])
         except (TypeError, ValueError):
             return []
-        mob = room.mobs.filter(pk=mob_id).first()
+        mob = room.mobs.filter(
+            pk=mob_id,
+            world=player.world,
+        ).first()
         return [mob] if mob else []
 
     if selector.startswith("item."):
@@ -230,12 +247,21 @@ def _collect_purge_targets(player: Player, selector: str) -> list[Item | Mob]:
         item = player.inventory.filter(pk=item_id, is_pending_deletion=False).first()
         if item:
             return [item]
-        item = room.inventory.filter(pk=item_id, is_pending_deletion=False).first()
+        item = room.inventory.filter(
+            pk=item_id,
+            world=player.world,
+            is_pending_deletion=False,
+        ).first()
         return [item] if item else []
 
-    room_mobs = list(room.mobs.select_related("definition"))
+    room_mobs = list(
+        room.mobs.filter(world=player.world).select_related("definition")
+    )
     room_items = list(
-        room.inventory.filter(is_pending_deletion=False).select_related("definition", "currency")
+        room.inventory.filter(
+            world=player.world,
+            is_pending_deletion=False,
+        ).select_related("definition", "currency")
     )
     inventory_items = list(
         player.inventory.filter(is_pending_deletion=False).select_related("definition", "currency")
@@ -1382,8 +1408,13 @@ class PurgeAction:
             room = player.room
             affected_player_ids: set[int] = set()
             if not normalized_target or normalized_target == "all":
-                items = list(room.inventory.filter(is_pending_deletion=False))
-                mobs = list(room.mobs.all())
+                items = list(
+                    room.inventory.filter(
+                        world=player.world,
+                        is_pending_deletion=False,
+                    )
+                )
+                mobs = list(room.mobs.filter(world=player.world))
                 affected_player_ids = _active_encounter_player_ids_for_mobs(mobs)
 
                 for item in items:
@@ -1394,13 +1425,18 @@ class PurgeAction:
                 out_text = "The world feels a little cleaner."
 
             elif normalized_target == "items":
-                items = list(room.inventory.filter(is_pending_deletion=False))
+                items = list(
+                    room.inventory.filter(
+                        world=player.world,
+                        is_pending_deletion=False,
+                    )
+                )
                 for item in items:
                     item.delete()
                 out_text = "You purge all items in the room."
 
             elif normalized_target == "mobs":
-                mobs = list(room.mobs.all())
+                mobs = list(room.mobs.filter(world=player.world))
                 affected_player_ids = _active_encounter_player_ids_for_mobs(mobs)
                 for mob in mobs:
                     _purge_mob_cleanly(mob=mob)
@@ -1781,13 +1817,33 @@ class WizKillAction:
         origin_room = target.room
         target_text = self._target_text(actor=actor, target=target, message=message)
         room_text = self._room_text(actor=actor, target=target)
-        updated_target, death_events = apply_player_death(
-            player=target,
-            origin_room=origin_room,
-            killer=actor,
-            target_text=target_text,
-            room_text=room_text,
-        )
+        from spawns import duels
+
+        active_duel = duels.get_active_duel_match(target)
+        if active_duel is not None:
+            opponent = duels.duel_opponent(target, match=active_duel)
+            if opponent is None:
+                raise ActionError(
+                    "The active duel has no opposing contestant.",
+                    code="duel_result_invalid",
+                )
+            duels.resolve_duel_defeat(
+                active_duel,
+                opponent,
+                target,
+                reason="scripted_defeat",
+            )
+            target.refresh_from_db()
+            updated_target = target
+            death_events = []
+        else:
+            updated_target, death_events = apply_player_death(
+                player=target,
+                origin_room=origin_room,
+                killer=actor,
+                target_text=target_text,
+                room_text=room_text,
+            )
 
         actor_payload = (
             serialize_actor(actor, actor.room).model_dump()
@@ -2645,12 +2701,60 @@ class TransferAction:
     def _active_encounters_for_update(target_ref: _TransferTargetRef):
         encounters = CombatEncounter.objects.select_for_update(nowait=True).filter(
             status=CombatEncounter.STATUS_ACTIVE,
+            duel_match_id__isnull=True,
         )
         if target_ref.target_type == "player":
             encounters = encounters.filter(player_id=target_ref.target_id)
         else:
             encounters = encounters.filter(mob_id=target_ref.target_id)
         return list(encounters.order_by("id"))
+
+    @staticmethod
+    def _active_pvp_encounter_ids(
+        *,
+        target_ref: _TransferTargetRef,
+        runtime_world: World,
+    ) -> list[int]:
+        if target_ref.target_type != "player":
+            return []
+        return list(
+            CombatParticipant.objects.filter(
+                player_id=target_ref.target_id,
+                is_active=True,
+                encounter__world=runtime_world,
+                encounter__status=CombatEncounter.STATUS_ACTIVE,
+                encounter__duel_match_id__isnull=False,
+            )
+            .order_by("encounter_id")
+            .values_list("encounter_id", flat=True)
+            .distinct()
+        )
+
+    @classmethod
+    def _finish_active_pvp_encounters(
+        cls,
+        *,
+        target_ref: _TransferTargetRef,
+        runtime_world: World,
+    ) -> tuple[list[int], list[GameEvent]]:
+        from spawns.actions.pvp import finish_pvp_encounter
+
+        encounter_ids = cls._active_pvp_encounter_ids(
+            target_ref=target_ref,
+            runtime_world=runtime_world,
+        )
+        events: list[GameEvent] = []
+        for encounter_id in encounter_ids:
+            events.extend(finish_pvp_encounter(encounter_id))
+        finished_ids = list(
+            CombatEncounter.objects.filter(
+                pk__in=encounter_ids,
+                status=CombatEncounter.STATUS_FINISHED,
+            )
+            .order_by("id")
+            .values_list("id", flat=True)
+        )
+        return finished_ids, events
 
     @staticmethod
     def _finish_active_encounters(encounters: list[CombatEncounter]) -> list[int]:
@@ -2796,6 +2900,27 @@ class TransferAction:
             selector=target_selector,
         )
 
+        pvp_finished_encounter_ids: list[int] = []
+        pvp_cleanup_events: list[GameEvent] = []
+        if target_ref.target_type == "player":
+            target_room_id = (
+                Player.objects.filter(
+                    pk=target_ref.target_id,
+                    world=resolved_runtime_world,
+                    in_game=True,
+                )
+                .values_list("room_id", flat=True)
+                .first()
+            )
+            if target_room_id is not None and target_room_id != destination.id:
+                (
+                    pvp_finished_encounter_ids,
+                    pvp_cleanup_events,
+                ) = self._finish_active_pvp_encounters(
+                    target_ref=target_ref,
+                    runtime_world=resolved_runtime_world,
+                )
+
         try:
             with transaction.atomic():
                 # Acquire both encounter and target rows without waiting. This
@@ -2810,12 +2935,25 @@ class TransferAction:
                 origin_room = target.room if target.room_id else None
                 moved = origin_room_id != destination.id
 
-                finished_encounter_ids: list[int] = []
+                if (
+                    moved
+                    and isinstance(target, Player)
+                    and self._active_pvp_encounter_ids(
+                        target_ref=target_ref,
+                        runtime_world=resolved_runtime_world,
+                    )
+                ):
+                    raise ActionError(
+                        "The target's combat state changed. Try the transfer again.",
+                        code="target_busy",
+                    )
+
+                finished_encounter_ids = list(pvp_finished_encounter_ids)
                 combat_effect_events: list[GameEvent] = []
-                ability_prepare_events: list[GameEvent] = []
+                ability_prepare_events = list(pvp_cleanup_events)
                 if moved:
-                    finished_encounter_ids = self._finish_active_encounters(
-                        active_encounters,
+                    finished_encounter_ids.extend(
+                        self._finish_active_encounters(active_encounters)
                     )
 
                     target.room_id = destination.id
@@ -2825,9 +2963,11 @@ class TransferAction:
                     combat_effect_events = self._combat_effect_state_events(
                         active_encounters,
                     )
-                    ability_prepare_events = ability_prepare_state_events_for_players(
-                        encounter.player_id
-                        for encounter in active_encounters
+                    ability_prepare_events.extend(
+                        ability_prepare_state_events_for_players(
+                            encounter.player_id
+                            for encounter in active_encounters
+                        )
                     )
                 elif isinstance(target, Player):
                     target.viewed_rooms.add(destination.id)
@@ -3022,12 +3162,20 @@ class JumpAction:
             destination_recipients: list[int] = []
             if not player.is_invisible:
                 origin_recipients = list(
-                    Player.objects.filter(room_id=origin_room_id, in_game=True)
+                    Player.objects.filter(
+                        world_id=player.world_id,
+                        room_id=origin_room_id,
+                        in_game=True,
+                    )
                     .exclude(pk=player.id)
                     .values_list("id", flat=True)
                 )
                 destination_recipients = list(
-                    Player.objects.filter(room_id=target_room.id, in_game=True)
+                    Player.objects.filter(
+                        world_id=player.world_id,
+                        room_id=target_room.id,
+                        in_game=True,
+                    )
                     .exclude(pk=player.id)
                     .values_list("id", flat=True)
                 )

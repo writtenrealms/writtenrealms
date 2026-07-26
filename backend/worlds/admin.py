@@ -63,7 +63,7 @@ root_world.short_description = 'Root World'
 class WorldConfigAdmin(BaseAdmin):
     list_display = ['id', num_worlds, root_world]
     raw_id_fields = ['starting_room', 'death_room', 'exits_to']
-    display_as_choicefield = ['death_mode']
+    display_as_choicefield = ['death_mode', 'pvp_mode']
     search_fields = ['configured_worlds__name']
 
 

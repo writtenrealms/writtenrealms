@@ -44,6 +44,6 @@ class WorldTestCase(APITestCase):
     def create_mob(self, name, **kwargs):
         return Mob.objects.create(
             name=name,
-            world=self.world,
+            world=self.spawn_world,
             room=self.room,
             **kwargs)

@@ -196,13 +196,13 @@ class TestScanCommand(WorldTestCase):
         self.exit_room = self.room.create_at("east")
         self.soldier = Mob.objects.create(
             name="a soldier",
-            world=self.world,
+            world=self.spawn_world,
             room=self.exit_room,
             keywords="soldier",
         )
         self.priest = Mob.objects.create(
             name="a priest",
-            world=self.world,
+            world=self.spawn_world,
             room=self.exit_room,
             keywords="priest",
         )
@@ -755,6 +755,7 @@ class TestStateSyncMapKeys(WorldTestCase):
             (adv_consts.PVP_MODE_DISABLED, False),
             (adv_consts.PVP_MODE_ZONE, True),
             (adv_consts.PVP_MODE_FFA, True),
+            (adv_consts.PVP_MODE_MATCH, True),
         )
 
         for pvp_mode, allow_pvp in expectations:

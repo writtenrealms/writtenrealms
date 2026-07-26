@@ -409,6 +409,57 @@ def increment_state_value(
     return updated_value
 
 
+def increment_state_values(
+    scope: str,
+    owner,
+    increments: dict[Any, int | float],
+    *,
+    runtime_world=None,
+) -> dict[str, int | float]:
+    """Increment several keys with one locked state-row write."""
+    scope = normalize_state_scope(scope)
+    normalized_increments: dict[str, int | float] = {}
+    for key, amount in increments.items():
+        normalized_key = normalize_state_key(key)
+        try:
+            amount_value: int | float = int(amount)
+        except (TypeError, ValueError):
+            try:
+                amount_value = float(amount)
+            except (TypeError, ValueError):
+                amount_value = 1
+        normalized_increments[normalized_key] = amount_value
+
+    if scope == STATE_SCOPE_QUEST:
+        state = _quest_snapshot(owner)
+        updated: dict[str, int | float] = {}
+        for key, amount in normalized_increments.items():
+            try:
+                value = state.get(key, 0) + amount
+            except TypeError:
+                value = amount
+            state[key] = value
+            updated[key] = value
+        replace_state_snapshot(scope, owner, state)
+        return updated
+
+    with transaction.atomic():
+        row = _locked_row(scope, owner, runtime_world=runtime_world)
+        data = dict(row.data or {})
+        updated = {}
+        for key, amount in normalized_increments.items():
+            try:
+                value = data.get(key, 0) + amount
+            except TypeError:
+                value = amount
+            data[key] = value
+            updated[key] = value
+        row.data = data
+        row.version = int(row.version or 0) + 1
+        row.save(update_fields=["data", "version", "modified_ts"])
+    return updated
+
+
 def initialize_character_state(character, data: dict[str, Any] | None):
     """Create initial state for a newly-created Player or Mob, if nonempty."""
     normalized = normalize_state_snapshot(data, field_name="initial_state")

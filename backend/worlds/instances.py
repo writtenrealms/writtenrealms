@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from django.db import transaction
@@ -43,6 +44,68 @@ def _assignment_member_ids(member_ids):
 
 def _active_run_qs():
     return InstanceRun.objects.filter(status__in=InstanceRun.ACTIVE_STATUSES)
+
+
+def _is_match_instance_template(template_world):
+    config = getattr(template_world, 'config', None)
+    return (
+        config is not None
+        and config.pvp_mode == adv_consts.PVP_MODE_MATCH
+    )
+
+
+def _template_has_active_match_run(template_world):
+    from spawns.models import DuelMatch
+
+    return DuelMatch.objects.filter(
+        template_world_id=template_world.id,
+        status=DuelMatch.STATUS_ACTIVE,
+        run__status__in=InstanceRun.ACTIVE_STATUSES,
+    ).exists()
+
+
+def _assert_match_run_entry_allowed(*, run, player, template_world=None):
+    """
+    Match instance refs identify a run; they are not bearer admission tokens.
+
+    Keep this check in the instance service so command, API, and async entry
+    paths all enforce the same contestant-only policy.
+    """
+    from spawns.models import DuelMatch, DuelParticipant
+
+    template_world = template_world or run.template_world
+    match = DuelMatch.objects.filter(run=run).only("id", "status").first()
+    if match is None:
+        if not _is_match_instance_template(template_world):
+            return
+        raise RuntimeError(
+            "This match instance is private to its active contestants."
+        )
+
+    admitted = (
+        match.status == DuelMatch.STATUS_ACTIVE
+        and DuelParticipant.objects.filter(
+            match=match,
+            player_id=player.id,
+            role=DuelParticipant.ROLE_CONTESTANT,
+        ).exists()
+    )
+    if not admitted:
+        raise RuntimeError(
+            "This match instance is private to its active contestants."
+        )
+
+
+def _assert_match_template_requires_ref(template_world, *, ref):
+    if ref:
+        return
+    if (
+        _is_match_instance_template(template_world)
+        or _template_has_active_match_run(template_world)
+    ):
+        raise RuntimeError(
+            "Match instances can only be entered through an accepted duel."
+        )
 
 
 def _assert_instance_template(template_world):
@@ -101,6 +164,33 @@ def _create_run(template_world, *, leader, member_ids=None, **spawn_kwargs):
         seed=ref,
         initial_member_ids=_normalize_member_ids(member_ids),
     )
+
+
+def create_fresh_instance_run(
+        template_world,
+        *,
+        leader,
+        member_ids=None,
+        **spawn_kwargs):
+    """
+    Create a new run without consulting or reusing any leader-owned run.
+
+    Match acceptance uses this path because every accepted challenge must have
+    a distinct runtime world, even when the same leader just completed another
+    match against the same opponent.
+    """
+    _assert_instance_template(template_world)
+    with transaction.atomic():
+        template_world = World.objects.select_related(
+            'config',
+            'instance_of',
+        ).get(pk=template_world.pk)
+        return _create_run(
+            template_world,
+            leader=leader,
+            member_ids=member_ids,
+            **spawn_kwargs,
+        )
 
 
 def _upsert_assignment(*, run, player, transfer_from, member_ids=None):
@@ -181,6 +271,112 @@ def _ensure_spawned_instance_started(run):
     run.spawned_world.refresh_from_db()
 
 
+def enter_players_into_run(
+        run,
+        *,
+        players_and_transfer_rooms: Iterable[tuple],
+        entry_room):
+    """
+    Atomically admit and move a bounded group into an already-created run.
+
+    ``players_and_transfer_rooms`` is an iterable of ``(player,
+    transfer_from_room)`` pairs. The caller owns match/challenge validation;
+    this helper owns the shared instance bookkeeping and movement transaction.
+    """
+    player_pairs = list(players_and_transfer_rooms)
+    if not player_pairs:
+        raise ValueError("At least one player is required.")
+
+    player_ids = [player.id for player, _transfer_from in player_pairs]
+    if any(player_id is None for player_id in player_ids):
+        raise ValueError("Players must be saved before entering an instance.")
+    if len(player_ids) != len(set(player_ids)):
+        raise ValueError("A player cannot enter the same run twice.")
+    if not entry_room or entry_room.world_id != run.template_world_id:
+        raise ValueError("Entry room does not belong to the instance template.")
+    if any(
+        transfer_from
+        and transfer_from.world_id != run.base_world_id
+        for _player, transfer_from in player_pairs
+    ):
+        raise ValueError(
+            "Transfer room does not belong to the instance's base world."
+        )
+
+    transfer_rooms_by_player_id = {
+        player.id: transfer_from
+        for player, transfer_from in player_pairs
+    }
+
+    _ensure_spawned_instance_started(run)
+
+    from spawns.models import Player
+
+    with transaction.atomic():
+        run = InstanceRun.objects.select_for_update().select_related(
+            'base_world',
+            'spawned_world',
+            'template_world',
+        ).get(pk=run.pk)
+        if run.status not in InstanceRun.ACTIVE_STATUSES:
+            raise RuntimeError("This instance run is no longer active.")
+
+        players = list(
+            Player.objects.select_for_update(of=('self',))
+            .select_related('world', 'world__context')
+            .filter(pk__in=player_ids)
+            .order_by('pk')
+        )
+        if len(players) != len(player_ids):
+            raise ValueError("One or more players no longer exist.")
+
+        for player in players:
+            in_base_world = player.world.context_id == run.base_world_id
+            already_in_run = player.world_id == run.spawned_world_id
+            if not in_base_world and not already_in_run:
+                raise RuntimeError(
+                    "A player is no longer in the instance's base world."
+                )
+            transfer_from = transfer_rooms_by_player_id[player.id]
+            if (
+                not already_in_run
+                and transfer_from
+                and player.room_id != transfer_from.id
+            ):
+                raise RuntimeError(
+                    "A player moved away before instance entry completed."
+                )
+
+        now = timezone.now()
+        for player in players:
+            transfer_from = transfer_rooms_by_player_id[player.id]
+            _upsert_assignment(
+                run=run,
+                player=player,
+                transfer_from=transfer_from,
+            )
+            _mark_other_active_participations_exited(run=run, player=player)
+            _upsert_participant(
+                run=run,
+                player=player,
+                transfer_from=transfer_from,
+            )
+
+            player.world = run.spawned_world
+            player.room = entry_room
+            player.save(update_fields=['world', 'room'])
+            move_player_carried_items_to_world(player, run.spawned_world)
+            move_player_character_effects_to_world(
+                player,
+                run.spawned_world,
+            )
+
+        run.last_active_at = now
+        run.save(update_fields=['last_active_at'])
+
+    return run
+
+
 def get_or_create_instance_run(
         template_world,
         *,
@@ -193,6 +389,7 @@ def get_or_create_instance_run(
 
     with transaction.atomic():
         template_world = World.objects.select_for_update().get(pk=template_world.pk)
+        _assert_match_template_requires_ref(template_world, ref=ref)
 
         if ref:
             run = _active_run_qs().select_for_update().filter(
@@ -202,9 +399,13 @@ def get_or_create_instance_run(
                 'spawned_world',
             ).first()
             if not run:
+                if _is_match_instance_template(template_world):
+                    raise RuntimeError("Invalid or completed match reference.")
                 spawned_world = World.objects.select_for_update().filter(
                     instance_ref=ref,
                     context=template_world,
+                ).exclude(
+                    pk__in=InstanceRun.objects.values('spawned_world_id'),
                 ).first()
                 if not spawned_world:
                     raise RuntimeError("Invalid instance reference %s" % ref)
@@ -222,6 +423,8 @@ def get_or_create_instance_run(
             if not run:
                 spawned_world = template_world.spawned_worlds.select_for_update().filter(
                     leader=player,
+                ).exclude(
+                    pk__in=InstanceRun.objects.values('spawned_world_id'),
                 ).first()
                 if spawned_world:
                     run = _run_for_spawned_world(
@@ -234,6 +437,12 @@ def get_or_create_instance_run(
                         leader=player,
                         member_ids=member_ids,
                         **spawn_kwargs)
+
+        _assert_match_run_entry_allowed(
+            run=run,
+            player=player,
+            template_world=template_world,
+        )
 
         member_id_list = _normalize_member_ids(member_ids)
         if member_id_list and not run.initial_member_ids:
@@ -290,6 +499,16 @@ def move_player_carried_items_to_world(player, world):
     return item_ids
 
 
+def move_player_character_effects_to_world(player, world):
+    """Keep character-scoped effects aligned with their target's runtime."""
+    from spawns.models import ActiveEffect
+
+    ActiveEffect.objects.filter(
+        target_player=player,
+        scope=ActiveEffect.SCOPE_CHARACTER,
+    ).exclude(world=world).update(world=world)
+
+
 def enter_instance(
         *,
         player,
@@ -297,24 +516,94 @@ def enter_instance(
         transfer_from,
         ref=None,
         member_ids=None):
+    entry_origin = (
+        player.__class__.objects.filter(pk=player.pk)
+        .values(
+            'world_id',
+            'world__context_id',
+            'room_id',
+            'room__world_id',
+        )
+        .first()
+    )
+    if entry_origin is None:
+        raise ValueError("Player no longer exists.")
+
+    template_world = transfer_to.world
+    base_world_id = template_world.instance_of_id
+    if not transfer_from or transfer_from.world_id != base_world_id:
+        raise ValueError(
+            "Transfer room does not belong to the instance's base world."
+        )
+    origin_is_base_entrance = (
+        entry_origin['world__context_id'] == base_world_id
+        and entry_origin['room_id'] == transfer_from.id
+    )
+    origin_is_same_template_run = (
+        entry_origin['world__context_id'] == template_world.id
+        and entry_origin['room__world_id'] == template_world.id
+    )
+    if not origin_is_base_entrance and not origin_is_same_template_run:
+        raise RuntimeError(
+            "A player is no longer at a valid instance entrance."
+        )
+
     run = get_or_create_instance_run(
-        transfer_to.world,
+        template_world,
         player=player,
         transfer_from=transfer_from,
         ref=ref,
         member_ids=member_ids)
+    if transfer_from.world_id != run.base_world_id:
+        raise ValueError(
+            "Transfer room does not belong to the instance's base world."
+        )
     _ensure_spawned_instance_started(run)
 
     with transaction.atomic():
+        run = (
+            InstanceRun.objects.select_for_update()
+            .select_related(
+                'spawned_world',
+                'template_world',
+            )
+            .get(pk=run.pk)
+        )
+        if run.status not in InstanceRun.ACTIVE_STATUSES:
+            raise RuntimeError("This instance run is no longer active.")
+        _assert_match_run_entry_allowed(
+            run=run,
+            player=player,
+            template_world=run.template_world,
+        )
+        locked_player = player.__class__.objects.select_for_update().get(
+            pk=player.pk
+        )
+        if locked_player.world_id != entry_origin['world_id']:
+            raise RuntimeError(
+                "A player changed worlds before instance entry completed."
+            )
+        if locked_player.room_id != entry_origin['room_id']:
+            raise RuntimeError(
+                "A player moved away before instance entry completed."
+            )
+        locked_player.world = run.spawned_world
+        locked_player.room = transfer_to
+        locked_player.save(update_fields=['world', 'room'])
+        move_player_carried_items_to_world(locked_player, run.spawned_world)
+        move_player_character_effects_to_world(
+            locked_player,
+            run.spawned_world,
+        )
+        # Preserve the existing service contract for callers that reuse the
+        # passed model instance immediately after entry.
         player.world = run.spawned_world
         player.room = transfer_to
-        player.save(update_fields=['world', 'room'])
-        move_player_carried_items_to_world(player, run.spawned_world)
 
     return run
 
 
-def leave_instance(*, player):
+def leave_instance(*, player, force_active_duel=False):
     if not player.world.context or not player.world.context.instance_of_id:
         raise ValueError("Player is not in an instance.")
 
@@ -323,6 +612,22 @@ def leave_instance(*, player):
     base_world = template_world.instance_of
 
     run = _run_for_spawned_world(spawned_instance, leader=spawned_instance.leader)
+    from spawns.models import DuelMatch, DuelParticipant
+
+    has_active_duel = DuelMatch.objects.filter(
+        run=run,
+        status=DuelMatch.STATUS_ACTIVE,
+        participants__player=player,
+        participants__role=DuelParticipant.ROLE_CONTESTANT,
+    ).exists()
+    if has_active_duel:
+        if not force_active_duel:
+            raise ValueError(
+                "Use `duel surrender` before leaving an active duel."
+            )
+        from spawns.duels import abandon_duel_run
+
+        abandon_duel_run(run)
     base_spawn_world = base_world.spawned_worlds.filter(
         is_multiplayer=True
     ).get()
@@ -347,10 +652,16 @@ def leave_instance(*, player):
         player.room = room
         player.save(update_fields=['world', 'room'])
         move_player_carried_items_to_world(player, base_spawn_world)
+        move_player_character_effects_to_world(player, base_spawn_world)
 
         if participant and not participant.exited_at:
             participant.exited_at = now
             participant.save(update_fields=['exited_at'])
+        DuelParticipant.objects.filter(
+            match__run=run,
+            player=player,
+            exited_at__isnull=True,
+        ).update(exited_at=now)
         run.last_active_at = now
         run.save(update_fields=['last_active_at'])
 

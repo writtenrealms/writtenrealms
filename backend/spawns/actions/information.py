@@ -55,7 +55,12 @@ class LookAction:
         normalized_target = str(target_selector or "").strip()
 
         if normalized_target:
-            char_target = find_room_char_target(room, normalized_target, viewer=player)
+            char_target = find_room_char_target(
+                room,
+                normalized_target,
+                viewer=player,
+                world=world,
+            )
             if char_target is not None:
                 target_payload = self._serialize_char_target(player, char_target)
                 data = {
@@ -134,7 +139,7 @@ class LookAction:
             room_key_lookup,
             door_states,
             viewer=player,
-            runtime_world=world if isolate_runtime_world else None,
+            runtime_world=world,
         )
         data = {
             "actor": actor_payload.model_dump(),
@@ -191,6 +196,7 @@ class InspectAction:
             room_key_lookup,
             door_states,
             viewer=player,
+            runtime_world=world,
         )
         data = {
             "actor": actor_payload.model_dump(),
@@ -261,10 +267,16 @@ class ScanAction:
             )
 
         actor_payload = serialize_actor(player, room)
-        target_lookup = self._active_target_lookup(exit_room)
+        target_lookup = self._active_target_lookup(
+            exit_room,
+            runtime_world=player.world,
+        )
         chars = [
             self._serialize_scan_char(player, char, target_lookup)
-            for char in self._visible_exit_room_chars(exit_room)
+            for char in self._visible_exit_room_chars(
+                exit_room,
+                runtime_world=player.world,
+            )
             if char.key != player.key
         ]
         data = {
@@ -285,14 +297,25 @@ class ScanAction:
             ]
         )
 
-    def _visible_exit_room_chars(self, exit_room) -> list[Player | Mob]:
+    def _visible_exit_room_chars(
+        self,
+        exit_room,
+        *,
+        runtime_world,
+    ) -> list[Player | Mob]:
         room_players = list(
-            exit_room.players.filter(in_game=True)
+            exit_room.players.filter(
+                world=runtime_world,
+                in_game=True,
+            )
             .select_related("user", "equipment")
             .prefetch_related("faction_assignments__faction", "clan_memberships__clan")
         )
         room_mobs = list(
-            exit_room.mobs.filter(is_pending_deletion=False)
+            exit_room.mobs.filter(
+                world=runtime_world,
+                is_pending_deletion=False,
+            )
             .select_related("definition", "equipment")
             .prefetch_related("faction_assignments__faction")
         )
@@ -311,10 +334,16 @@ class ScanAction:
             and not getattr(char, "sneak_ts", None)
         ]
 
-    def _active_target_lookup(self, exit_room) -> dict[str, dict]:
+    def _active_target_lookup(
+        self,
+        exit_room,
+        *,
+        runtime_world,
+    ) -> dict[str, dict]:
         lookup: dict[str, dict] = {}
         encounters = (
             CombatEncounter.objects.filter(
+                world=runtime_world,
                 room=exit_room,
                 status=CombatEncounter.STATUS_ACTIVE,
                 player__room=exit_room,
@@ -528,6 +557,7 @@ class RollAction:
         if player.room_id and not player.is_invisible:
             recipient_ids = list(
                 Player.objects.filter(
+                    world=player.world,
                     room_id=player.room_id,
                     in_game=True,
                 )

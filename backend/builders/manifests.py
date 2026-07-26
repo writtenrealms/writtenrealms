@@ -219,6 +219,7 @@ _WORLD_CONFIG_CONFIG_BOOL_FIELDS = (
     "non_ascii_names",
     "decay_glory",
     "globals_enabled",
+    "announce_duel_results",
 )
 _WORLD_CONFIG_LEGACY_ALLOW_PVP_FIELD = "allow_pvp"
 _WORLD_CONFIG_LEGACY_BOOL_FIELDS = (
@@ -1081,6 +1082,7 @@ def world_config_to_manifest(
                 "players_can_set_title": bool(config.players_can_set_title),
                 "non_ascii_names": bool(config.non_ascii_names),
                 "globals_enabled": bool(config.globals_enabled),
+                "announce_duel_results": bool(config.announce_duel_results),
                 "decay_glory": bool(config.decay_glory),
                 "name_exclusions": config.name_exclusions or "",
             }
@@ -1184,6 +1186,7 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
                 "auto_equip": bool(config.auto_equip),
                 "players_can_set_title": bool(config.players_can_set_title),
                 "non_ascii_names": bool(config.non_ascii_names),
+                "announce_duel_results": bool(config.announce_duel_results),
                 "decay_glory": bool(config.decay_glory),
                 "name_exclusions": config.name_exclusions or "",
                 "globals_enabled": bool(config.globals_enabled),

@@ -71,6 +71,7 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(config_resp.data["config"]["leveling_curve"][1], 30)
         self.assertEqual(config_resp.data["config"]["combat_resolution_interval"], 0)
         self.assertEqual(config_resp.data["config"]["default_roam_chance"], 10)
+        self.assertIs(config_resp.data["config"]["announce_duel_results"], False)
         self.assertNotIn("allow_pvp", config_resp.data["config"])
         stat_system = config_resp.data["config"]["stat_system"]
         self.assertEqual(
@@ -104,6 +105,7 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
             world_manifest["spec"]["pvp_mode"],
             adv_consts.PVP_MODE_FFA,
         )
+        self.assertIs(world_manifest["spec"]["announce_duel_results"], False)
         self.assertNotIn("allow_pvp", world_manifest["spec"])
         self.assertIn("player_creation", world_manifest["spec"])
         self.assertNotIn("can_select_faction", world_manifest["spec"])
@@ -139,6 +141,17 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertIn("death_currency", response.data)
         self.world.config.refresh_from_db()
         self.assertEqual(self.world.config.death_currency, self.currency)
+
+    def test_world_config_endpoint_updates_duel_announcement_policy(self):
+        response = self.client.patch(
+            self.config_ep,
+            {"announce_duel_results": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.world.config.refresh_from_db()
+        self.assertTrue(self.world.config.announce_duel_results)
 
     def test_world_config_endpoint_requires_currencies_for_monetary_policies(self):
         response = self.client.patch(
@@ -180,8 +193,8 @@ spec:
         self.assertEqual(response.status_code, 400, response.data)
         self.assertIn("must be an integer", str(response.data))
 
-    def test_world_config_exports_pvp_mode_without_legacy_allow_pvp(self):
-        self.world.config.pvp_mode = adv_consts.PVP_MODE_ZONE
+    def test_world_config_exports_match_pvp_mode_without_legacy_allow_pvp(self):
+        self.world.config.pvp_mode = adv_consts.PVP_MODE_MATCH
         self.world.config.save(update_fields=["pvp_mode"])
 
         config_resp = self.client.get(self.config_ep)
@@ -199,7 +212,7 @@ spec:
             with self.subTest(manifest=manifest):
                 self.assertEqual(
                     manifest["spec"]["pvp_mode"],
-                    adv_consts.PVP_MODE_ZONE,
+                    adv_consts.PVP_MODE_MATCH,
                 )
                 self.assertNotIn("allow_pvp", manifest["spec"])
 
@@ -248,6 +261,7 @@ spec:
   death_currency_penalty: 0.35
   death_route: nearest_in_zone
   pvp_mode: zone
+  announce_duel_results: true
   player_creation:
     core_faction:
       mode: none
@@ -376,6 +390,7 @@ spec:
         self.assertEqual(float(config.death_currency_penalty), 0.35)
         self.assertEqual(config.death_route, "nearest_in_zone")
         self.assertEqual(config.pvp_mode, "zone")
+        self.assertTrue(config.announce_duel_results)
         self.assertFalse(config.can_select_faction)
         self.assertFalse(config.can_select_gender)
         self.assertEqual(config.default_gender, "male")
@@ -465,7 +480,7 @@ kind: world
 metadata:
   world: world.{self.world.id}
 spec:
-  pvp_mode: zone
+  pvp_mode: match
   allow_pvp: true
 """
 
@@ -477,13 +492,14 @@ spec:
 
         self.assertEqual(resp.status_code, 200, resp.data)
         self.world.config.refresh_from_db()
-        self.assertEqual(self.world.config.pvp_mode, adv_consts.PVP_MODE_ZONE)
+        self.assertEqual(self.world.config.pvp_mode, adv_consts.PVP_MODE_MATCH)
 
     def test_apply_world_config_manifest_rejects_conflicting_pvp_fields(self):
         conflicts = (
             (adv_consts.PVP_MODE_DISABLED, True),
             (adv_consts.PVP_MODE_ZONE, False),
             (adv_consts.PVP_MODE_FFA, False),
+            (adv_consts.PVP_MODE_MATCH, False),
         )
 
         for pvp_mode, allow_pvp in conflicts:
@@ -727,6 +743,7 @@ spec:
         for field_name in (
             "ability_progression",
             "allow_combat",
+            "announce_duel_results",
             "combat",
             "combat_resolution_interval",
             "decay_glory",
@@ -758,6 +775,7 @@ metadata:
   world: world.{instance.id}
 spec:
   death_mode: destroy_eq
+  announce_duel_results: true
   combat_resolution_interval: 1.5
   default_roam_chance: 25
   leveling_curve: [0, 10, 30]
@@ -774,6 +792,7 @@ spec:
         text = str(resp.data)
         self.assertIn("Instance worlds inherit core systems", text)
         self.assertIn("stats", text)
+        self.assertIn("announce_duel_results", text)
         self.assertIn("combat_resolution_interval", text)
 
     def test_instance_world_config_manifest_rejects_nonlocal_world_rules(self):
@@ -819,6 +838,7 @@ spec:
   death_mode: destroy_eq
   death_currency_penalty: 0.1
   death_route: near_room
+  pvp_mode: match
 """
 
         resp = self.client.post(ep, {"manifest": manifest}, format="json")
@@ -829,6 +849,7 @@ spec:
         self.assertEqual(instance.config.death_mode, "destroy_eq")
         self.assertEqual(float(instance.config.death_currency_penalty), 0.1)
         self.assertEqual(instance.config.death_route, "near_room")
+        self.assertEqual(instance.config.pvp_mode, adv_consts.PVP_MODE_MATCH)
 
     def test_instance_world_config_manifest_normalizes_legacy_allow_pvp(self):
         instance = self._instance_world()
@@ -857,6 +878,7 @@ spec:
         resp = self.client.patch(
             ep,
             {
+                "announce_duel_results": True,
                 "combat_system": {"profiles": {}},
                 "leveling_curve": [0, 10, 30],
             },
@@ -865,6 +887,7 @@ spec:
 
         self.assertEqual(resp.status_code, 400)
         self.assertIn("Instance worlds inherit core systems", str(resp.data))
+        self.assertIn("announce_duel_results", str(resp.data))
 
     def test_instance_direct_config_patch_rejects_nonlocal_world_rules(self):
         instance = self._instance_world()

@@ -29,6 +29,7 @@ from core.stat_system import (
     get_world_label_bundle,
     world_uses_classes,
 )
+from core.world_config import inherited_system_config
 from quests.services.interactions import room_mob_quest_indicator_map, room_quest_callouts
 from quests.services.room_items import serialized_quest_room_items_for_room
 from spawns.actions.effects import active_character_effects, active_combat_effects
@@ -245,6 +246,7 @@ def get_player_with_related(player_id: int) -> Player:
             "world__context__config",
             "world__context__config__death_currency",
             "world__context__instance_of",
+            "world__context__instance_of__config",
             "world__context__instance_of__default_currency",
             "world__instance_of",
             "world__instance_of__default_currency",
@@ -950,6 +952,7 @@ def serialize_world(world: World) -> Dict:
         data = AnimateWorldSerializer(world).data
     else:
         config = world.config
+        inherited_config = inherited_system_config(world)
         data = {
             "id": world.id,
             "key": world.key,
@@ -981,6 +984,9 @@ def serialize_world(world: World) -> Dict:
             "pvp_mode": config.pvp_mode if config else adv_consts.PVP_MODE_DISABLED,
             "allow_pvp": config.allow_pvp if config else False,
             "allow_combat": config.allow_combat if config else True,
+            "announce_duel_results": bool(
+                inherited_config and inherited_config.announce_duel_results
+            ),
             "players_can_set_title": config.players_can_set_title if config else False,
             "facts": get_state_snapshot(STATE_SCOPE_WORLD, world),
             "classless": not world_uses_classes(world) if config else False,
@@ -1024,6 +1030,10 @@ def serialize_world(world: World) -> Dict:
         data["max_level"] = int(config.max_level)
         data["leveling_curve"] = list(config.leveling_curve or [])
         data["combat_resolution_interval"] = float(config.combat_resolution_interval)
+    inherited_config = inherited_system_config(world)
+    data["announce_duel_results"] = bool(
+        inherited_config and inherited_config.announce_duel_results
+    )
 
     if not data.get("context"):
         data["context"] = world.context.key if world.context else world.key
@@ -1105,7 +1115,13 @@ def build_state_sync(player: Player) -> StateSyncData:
     map_rooms, room_key_lookup = (
         build_map_payload(room_world, room_ids, door_states) if room_world else ([], {})
     )
-    room_payload = serialize_room(room, room_key_lookup, door_states, viewer=player)
+    room_payload = serialize_room(
+        room,
+        room_key_lookup,
+        door_states,
+        viewer=player,
+        runtime_world=world,
+    )
     actor_payload = serialize_actor(player, room)
     world_payload = serialize_world(world)
     who_list = build_who_list(world, player)

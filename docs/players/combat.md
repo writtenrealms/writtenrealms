@@ -28,6 +28,10 @@ Without a direction, Charge targets a mob in your current room. With one
 direction, Charge first moves you through that exit, using the normal movement
 rules, then attacks the named mob in the destination room.
 
+In an active 1v1 duel, Charge can instead target the opposing contestant. The
+same current-room and adjacent-room forms apply, and a directed Charge moves
+you into the destination arena room before starting that combat encounter.
+
 If you provide a direction without a target, Charge picks the first attackable
 living mob in the destination room, matching the implicit targeting used by
 bare `kill`.
@@ -81,6 +85,20 @@ them. Explicit opener abilities such as Charge can temporarily override that
 priority by making the chosen opener target your current faceoff target.
 Some supplemental abilities can also strike a secondary active hostile in the
 same room while your normal primary attack continues against the faceoff target.
+
+## Player Duels
+
+Player-versus-player combat is available in private duel arenas configured by a
+builder. The base world can keep PvP disabled while a linked arena instance
+permits combat only between the two contestants in an accepted match.
+
+Inside an active duel, use `kill <opponent>` and supported player-targeted
+hostile abilities. Charge-style movement openers can cross one arena exit and
+engage the opposing contestant in the adjacent room. Friendly `room.allies`
+effects apply only to their caster in the current 1v1 format; broad
+`room.players` and `room.hostiles` selectors remain unsupported for PvP. You
+cannot attack another player who is not your opposing contestant. See the
+[Duels guide](duels.md) for challenges, surrender, records, and rematches.
 
 ## Looting
 
@@ -146,3 +164,9 @@ route is checked again when the delayed flee completes, because doors, mobs,
 and other room conditions may change while you look for an opening. If that
 route has become blocked, the game uses another eligible route when one is
 available; otherwise, you lose the chance to flee and remain in combat.
+
+In a duel arena, `flee` is ordinary arena gameplay. A successful flee ends only
+the current combat encounter and never forfeits the duel. The match remains
+active, so contestants can move through the arena, pursue one another, and
+re-engage in the same or another room. Use `duel surrender` only when you
+intend to concede the match.

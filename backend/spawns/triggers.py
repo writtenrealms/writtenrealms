@@ -1114,6 +1114,8 @@ def _schedule_trigger_script_line_segments(
                 "segments": rendered_line_segments,
                 "issuer_scope": issuer_scope,
                 "connection_id": connection_id,
+                "expected_world_id": getattr(actor, "world_id", None),
+                "expected_room_id": getattr(actor, "room_id", None),
             },
             countdown=delay_seconds,
         )

@@ -43,6 +43,7 @@ from core.stat_system import (
     get_world_stat_system,
     world_uses_classes,
 )
+from core.world_config import inherited_system_config
 from spawns import instances
 from spawns.models import (
     Player,
@@ -353,6 +354,7 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
         source='config.allow_pvp', read_only=True)
     allow_combat = serializers.BooleanField(
         source='config.allow_combat')
+    announce_duel_results = serializers.SerializerMethodField()
     death_route = serializers.CharField(source='config.death_route')
     death_currency = serializers.CharField(
         source='config.death_currency.code', allow_null=True)
@@ -396,6 +398,7 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
             'pvp_mode',
             'allow_pvp',
             'allow_combat',
+            'announce_duel_results',
             'players_can_set_title',
             'facts',
             'classless',
@@ -461,6 +464,10 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
         root_world = spawn_world.context
         root_world = root_world.instance_of or root_world
         return not world_uses_classes(root_world)
+
+    def get_announce_duel_results(self, spawn_world):
+        config = inherited_system_config(spawn_world)
+        return bool(config and config.announce_duel_results)
 
     def get_economy(self, spawn_world):
         return world_economy_payload(spawn_world)

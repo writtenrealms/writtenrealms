@@ -508,6 +508,7 @@ class World(BaseModel):
     pvp_mode: str = "disabled"
     # Legacy runtime projection derived from pvp_mode; never authored directly.
     allow_pvp: bool = False
+    announce_duel_results: bool = False
     flee_to_unknown_rooms: bool = False
 
     # Player settings
@@ -1185,6 +1186,7 @@ def build_mock_state_sync(
         allow_combat=True,
         pvp_mode="disabled",
         allow_pvp=False,
+        announce_duel_results=False,
         flee_to_unknown_rooms=False,
         players_can_set_title=True,
         factions=mock_factions,

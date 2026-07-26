@@ -52,7 +52,7 @@ from spawns.ability_prepare_state import (
     ability_prepare_state_event,
 )
 from spawns.events import GameEvent
-from spawns.models import CombatEncounter, Mob, Player
+from spawns.models import CombatEncounter, CombatParticipant, Mob, Player
 from spawns.state_payloads import serialize_char_from_mob, serialize_char_from_player
 from spawns.triggers import evaluate_movement_policies
 from worlds.models import Room
@@ -670,6 +670,7 @@ def _available_trainers_in_room(player: Player) -> list[Mob]:
         return []
     trainers: list[Mob] = []
     for mob in Mob.objects.filter(
+        world_id=player.world_id,
         room_id=player.room_id,
         is_pending_deletion=False,
         definition__world_id=_definition_world_id(player.world),
@@ -759,6 +760,7 @@ def trainer_for_ability_change(player: Player, ability: AbilityDefinition) -> Mo
     if not player.room_id:
         return None
     for mob in Mob.objects.filter(
+        world_id=player.world_id,
         room_id=player.room_id,
         is_pending_deletion=False,
         definition__world_id=_definition_world_id(player.world),
@@ -1215,11 +1217,33 @@ class LearnAbilityAction:
         ])
 
 
+def _active_duel_combat_participation_exists(player_id: int) -> bool:
+    return CombatParticipant.objects.filter(
+        player_id=player_id,
+        is_active=True,
+        encounter__status=CombatEncounter.STATUS_ACTIVE,
+        encounter__duel_match_id__isnull=False,
+    ).exists()
+
+
 class UnlearnAbilityAction:
     def execute(self, player_id: int, selector: str | None) -> ActionResult:
         cleared_prepared_ability = False
+        if _active_duel_combat_participation_exists(player_id):
+            raise ActionError(
+                "You cannot unlearn abilities during duel combat.",
+                code="combat_in_progress",
+            )
         with transaction.atomic():
             player = Player.objects.select_for_update().select_related("world").get(pk=player_id)
+            # Recheck after taking the player lock without ever updating a
+            # CombatParticipant while holding that lock. PvP resolution uses
+            # the inverse canonical order (participant, then player).
+            if _active_duel_combat_participation_exists(player_id):
+                raise ActionError(
+                    "You cannot unlearn abilities during duel combat.",
+                    code="combat_in_progress",
+                )
             ability = resolve_ability_for_selector(player.world, selector)
             if not ability:
                 raise ActionError("Unlearn what ability?", code="ability_missing")
@@ -1547,6 +1571,7 @@ class AbilityAction:
         target_ref = resolve_room_mob_target(
             dest_room,
             target_selector,
+            world=player.world,
             empty_error=f"Use {ability.name} on what?",
             not_found_error="You don't see them there." if direction else "You don't see them here.",
             allow_single_match_when_empty=True,
@@ -1666,6 +1691,17 @@ class AbilityAction:
         command: str,
         args: list[str],
     ) -> ActionResult:
+        from spawns.actions.pvp import try_execute_ability
+
+        pvp_result = try_execute_ability(
+            player_id,
+            ability=ability,
+            command=command,
+            args=args,
+        )
+        if pvp_result is not None:
+            return pvp_result
+
         with transaction.atomic():
             player = Player.objects.select_for_update().select_related("world").get(pk=player_id)
             if not player.room_id:
@@ -1674,6 +1710,15 @@ class AbilityAction:
             rules_config = inherited_system_config(player.world)
             if rules_config and not rules_config.allow_combat and ability.target.get("type") == "hostile":
                 raise ActionError("Combat is disabled here.", code="combat_disabled")
+            if ability.target.get("type") == "hostile":
+                from spawns import duels
+
+                duel_block_reason = duels.duel_combat_block_reason(player)
+                if duel_block_reason:
+                    raise ActionError(
+                        str(duel_block_reason),
+                        code="duel_combat_disabled",
+                    )
             death_config = player.world.effective_config
 
             validate_ability_ready(player, ability)
@@ -1742,6 +1787,7 @@ class AbilityAction:
                     target_ref = resolve_room_mob_target(
                         room,
                         target_selector,
+                        world=player.world,
                         empty_error="Use the ability on what?",
                         not_found_error="You don't see them here.",
                     )
@@ -1792,6 +1838,7 @@ class AbilityAction:
             target_ref = resolve_room_mob_target(
                 room,
                 target_selector,
+                world=player.world,
                 empty_error="Use the ability on what?",
                 not_found_error="You don't see them here.",
             )

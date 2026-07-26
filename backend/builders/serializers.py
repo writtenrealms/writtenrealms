@@ -515,6 +515,7 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'decay_glory',
             'name_exclusions',
             'globals_enabled',
+            'announce_duel_results',
             'equipment_system',
             'stat_system',
         ]

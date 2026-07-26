@@ -88,7 +88,10 @@ def _source_matches_player(
             return False
         if room_mob_definition_ids is not None:
             return mob_definition_id in room_mob_definition_ids
-        return player.room.mobs.filter(definition_id=mob_definition_id).exists()
+        return player.room.mobs.filter(
+            world_id=player.world_id,
+            definition_id=mob_definition_id,
+        ).exists()
 
     return False
 

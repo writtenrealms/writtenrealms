@@ -19,6 +19,7 @@ defines the target shape those pieces should move toward.
 - [quest-system-endstate.md](/Users/teebes/code/writtenrealms/docs/architecture/quest-system-endstate.md)
 - [condition-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/condition-builder-guide.md)
 - [instance-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/instance-builder-guide.md)
+- [duels.md](../players/duels.md)
 - [currency-system.md](/Users/teebes/code/writtenrealms/docs/architecture/currency-system.md)
 - [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
 
@@ -43,6 +44,8 @@ defines the target shape those pieces should move toward.
 - Support clear-time records and builder/player-visible leaderboards.
 - Support inactive cleanup without deleting an instance immediately when the
   last player leaves.
+- Support private match instances whose durable result is separate from any
+  one room-level combat encounter.
 - Fit WR2's `Command -> Action -> Event` direction and existing condition DSL.
 
 ## Non-Goals
@@ -124,6 +127,7 @@ These should be authored on the instance template:
 | Timer policy | Time limit, clear-time tracking, start moment | Owned by the template. |
 | Cleanup policy | Inactive TTL, completed grace period, cleanup behavior | Owned by the template. |
 | Presentation | Instance name, short description, optional banner/art | Useful for entry prompts and completion screens. |
+| Match PvP policy | `pvp_mode: match` | Allows PvP only for admitted opposing contestants while their durable match is active. |
 
 ### Trigger Inheritance
 
@@ -211,6 +215,7 @@ Fields that should stay inherited initially:
 | `combat_resolution_interval` | Encounter pacing is part of the base combat system and should stay consistent. |
 | `ability_progression` | Learned/available abilities should remain base-world player progression. |
 | global channels and glory decay | Shared social/economy-style policy should not fork inside an instance. |
+| `announce_duel_results` | The optional announcement is base-world policy and fans out across that world and its instances. |
 | currency definitions and clan registration currency/cost | Currency definitions and global clan policy must stay shared so rewards, registration, and penalties resolve consistently. |
 
 If later we need any of these overrides, they should be introduced as deliberate
@@ -310,6 +315,74 @@ This follows the WR2 lock ordering direction:
 Entry, leave, goal progression, timer expiry, completion, and cleanup all mutate
 instance lifecycle and should lock the run row.
 
+### Durable Duel Matches And Spatial Combat Encounters
+
+An instanced duel has two lifecycles that must remain separate:
+
+| Runtime object | Scope | Ends when |
+| --- | --- | --- |
+| `DuelMatch` | The invitation, accepted contest, and durable result | A contestant is defeated or surrenders |
+| `CombatEncounter` | One active room-level engagement inside that match | The engagement ends, including when either contestant flees |
+
+`DuelMatch` records the base world, arena template, entrance, fresh
+`InstanceRun`, challenger, challenged player, status, winner, loser, and
+structured outcome. `DuelParticipant` records role, team, and result. These are
+canonical history rows. Roles and teams are extension points, but the current
+winner/loser, opponent-selection, and command services remain explicitly 1v1
+and must become team-aware before teams or spectators are exposed.
+
+`CombatEncounter` is transient combat state. A duel encounter links back to its
+match and owns `CombatParticipant` rows for actor-local intent, flee state, and
+team identity. One match may produce many sequential encounters as contestants
+move through a multi-room arena.
+
+This distinction gives `flee` its normal combat meaning. It remains a two-step
+escape, moves the player through an eligible exit, and finishes only the
+current encounter. It never writes a match result. The contestants can pursue
+one another and create another encounter when they re-engage.
+
+Accepting a challenge creates a new private run even if the same pair fought
+before. Only opposing contestants in that active match may target one another
+with `kill` or hostile abilities. Bare `enter` cannot create a match run, and
+reference-based entry admits only contestants from its active accepted match.
+Acceptance rejects contestants with active combat or live hostile character
+effects. Character-scoped non-hostile effects are rehomed with their target
+when crossing runtime boundaries, and effect resolution is scoped to the
+target's current spawned world.
+
+Defeat or explicit surrender finalizes the match exactly once:
+
+1. lock the instance run, match, and contestant rows in stable order
+2. record winner, loser, resolution, and completion time
+3. mark the linked run completed and close all match combat encounters
+4. increment `state.character.duels_fought` for both contestants
+5. increment `state.character.duels_won` for the winner and
+   `state.character.duels_lost` for the loser
+6. restore contestant resources and publish the outcome through the
+   transactional event outbox
+
+Once complete, match policy blocks all further combat in that runtime world.
+Contestants remain present until they use normal instance leave behavior. A
+rematch requires a new challenge and a new run.
+
+If all contestants are offline when the runtime reaches idle cleanup, the
+match is cancelled as abandoned and the run becomes `abandoned`. Cleanup
+restores resources and returns the players without incrementing any duel
+record; disconnecting is not silently scored as surrender.
+
+The base-world-only `announce_duel_results` flag defaults to `false`. When it
+is true, resolution sends one result event to the online population of the base
+world and its active instances:
+
+```text
+<winner> has defeated <loser> in a duel.
+```
+
+The completion transaction and active-status guard make result recording and
+counter increments idempotent under worker retries. Match and participant
+lookups use indexed status/player/world keys; combat scheduling remains scoped
+to active encounters rather than a world-wide PvP tick.
+
 ## Commands, Actions, And Events
 
 Instance lifecycle should move into WR2's command/action/event flow.
@@ -320,6 +393,12 @@ Implemented player commands:
 - `enter <instance_ref>`
 - `leave`
 - `instance`
+- `duel <player>`
+- `duel accept [player]`
+- `duel decline [player]`
+- `duel cancel`
+- `duel` / `duel status`
+- `duel surrender`
 
 Implemented authorized builder commands:
 
@@ -349,6 +428,16 @@ Recommended events:
 - `instance.closed`
 - `instance.cleaned`
 
+Implemented duel events include:
+
+- `cmd.duel.challenge.success`
+- `notification.duel.challenged`
+- `notification.duel.started`
+- `notification.duel.declined`
+- `notification.duel.cancelled`
+- `notification.duel.completed`
+- `notification.duel.announcement` when base-world announcements are enabled
+
 The current player command implementation calls the runtime instance service and
 then emits a fresh `cmd.state.sync.success` payload so the client redraws in the
 new runtime world. Future lifecycle work should add first-class instance events
@@ -369,6 +458,12 @@ Entry should:
 
 The item migration must be recursive. Containers inside containers should not
 be left in the base spawned world.
+
+For a `pvp_mode: match` template, generic entry must not create a run. Duel
+acceptance validates that both contestants are still at the same linked
+base-world entrance, creates a fresh run, admits the two contestant
+participants, and moves both players as one transaction. Knowing an instance
+reference is not sufficient admission to a private match.
 
 ### Leave Rules
 

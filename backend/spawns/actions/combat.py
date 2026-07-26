@@ -10,7 +10,7 @@ from typing import Any, Iterable
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 from config import constants as adv_consts
@@ -53,13 +53,16 @@ from spawns.events import GameEvent, enqueue_game_events
 from spawns.models import (
     ActiveEffect,
     CombatEncounter,
+    CombatParticipant,
+    DuelMatch,
+    DuelParticipant,
     Item,
     Mob,
     Player,
     PlayerCurrencyBalance,
 )
 from spawns.wallet import WalletError, mutate_balances
-from worlds.models import Room
+from worlds.models import InstanceRun, Room
 
 
 logger = logging.getLogger(__name__)
@@ -413,20 +416,34 @@ def _room_payload(viewer: Player, room: Room) -> dict:
         {room.id: room_payload_key_for(room)},
         door_states,
         viewer=viewer,
+        runtime_world=viewer.world,
     ).model_dump()
 
 
 def _combat_recipients(player: Player, room: Room) -> list[str]:
     return [
         f"player.{pid}"
-        for pid in Player.objects.filter(room_id=room.id, in_game=True)
+        for pid in Player.objects.filter(
+            world_id=player.world_id,
+            room_id=room.id,
+            in_game=True,
+        )
         .exclude(pk=player.id)
         .values_list("id", flat=True)
     ]
 
 
-def _combat_room_recipients(room: Room, *, exclude_player_ids: set[int]) -> list[str]:
-    queryset = Player.objects.filter(room_id=room.id, in_game=True)
+def _combat_room_recipients(
+    room: Room,
+    *,
+    world_id: int,
+    exclude_player_ids: set[int],
+) -> list[str]:
+    queryset = Player.objects.filter(
+        world_id=world_id,
+        room_id=room.id,
+        in_game=True,
+    )
     if exclude_player_ids:
         queryset = queryset.exclude(pk__in=exclude_player_ids)
     return [f"player.{pid}" for pid in queryset.values_list("id", flat=True)]
@@ -880,7 +897,11 @@ def _death_notification_recipients(
 ) -> list[str]:
     if not origin_room:
         return []
-    qs = Player.objects.filter(room_id=origin_room.id, in_game=True).exclude(pk=deceased.id)
+    qs = Player.objects.filter(
+        world_id=deceased.world_id,
+        room_id=origin_room.id,
+        in_game=True,
+    ).exclude(pk=deceased.id)
     if isinstance(killer, Player):
         qs = qs.exclude(pk=killer.id)
     return [f"player.{player_id}" for player_id in qs.values_list("id", flat=True)]
@@ -1372,7 +1393,11 @@ def _combat_effect_application_events(
     if viewer.is_invisible:
         return events
 
-    recipients = _combat_room_recipients(room, exclude_player_ids=direct_player_ids)
+    recipients = _combat_room_recipients(
+        room,
+        world_id=viewer.world_id,
+        exclude_player_ids=direct_player_ids,
+    )
     if recipients:
         events.append(
             GameEvent(
@@ -1655,7 +1680,11 @@ def _flee_success_events(
 
     actor_char = serialize_char_from_player(player).model_dump()
     origin_recipients = (
-        Player.objects.filter(room_id=origin_room_id, in_game=True)
+        Player.objects.filter(
+            world_id=player.world_id,
+            room_id=origin_room_id,
+            in_game=True,
+        )
         .exclude(pk=player.id)
         .values_list("id", flat=True)
     )
@@ -1670,7 +1699,11 @@ def _flee_success_events(
         )
 
     destination_recipients = (
-        Player.objects.filter(room_id=destination_room_id, in_game=True)
+        Player.objects.filter(
+            world_id=player.world_id,
+            room_id=destination_room_id,
+            in_game=True,
+        )
         .exclude(pk=player.id)
         .values_list("id", flat=True)
     )
@@ -2218,9 +2251,11 @@ def _append_uncredited_mob_defeat_events(
     target_mob.delete()
     recipients = [
         f"player.{player_id}"
-        for player_id in Player.objects.filter(room=room, in_game=True).values_list(
-            "id", flat=True
-        )
+        for player_id in Player.objects.filter(
+            world_id=target_mob.world_id,
+            room=room,
+            in_game=True,
+        ).values_list("id", flat=True)
     ]
     if not recipients:
         return
@@ -2755,14 +2790,24 @@ def _actor_for_effect_ref(
     ref: dict | None,
     *,
     player: Player,
-    target_mob: Mob | None,
+    target_mob: Player | Mob | None,
 ) -> Player | Mob | None:
     ref = ref or {}
     ref_type = str(ref.get("type") or "").strip().lower()
     ref_id = int(ref.get("id") or 0)
     if ref_type == "player" and ref_id == player.id:
         return player
-    if ref_type == "mob" and target_mob is not None and ref_id == target_mob.id:
+    if (
+        ref_type == "player"
+        and isinstance(target_mob, Player)
+        and ref_id == target_mob.id
+    ):
+        return target_mob
+    if (
+        ref_type == "mob"
+        and isinstance(target_mob, Mob)
+        and ref_id == target_mob.id
+    ):
         return target_mob
     return None
 
@@ -3035,7 +3080,7 @@ def _resolve_effect_target(
     *,
     effect: dict,
     player: Player,
-    target_mob: Mob | None,
+    target_mob: Player | Mob | None,
 ) -> Player | Mob | None:
     selector = str(target_selector or "effect.target").strip().lower()
     if selector in {"actor", "self", "effect.source"}:
@@ -3046,11 +3091,15 @@ def _resolve_effect_target(
         )
     if selector in {"target", "ability.target", "effect.target"}:
         target = effect.get("target") or {}
-        if target.get("type") == "player" and int(target.get("id") or 0) == player.id:
-            return player
+        if target.get("type") == "player":
+            target_id = int(target.get("id") or 0)
+            if target_id == player.id:
+                return player
+            if isinstance(target_mob, Player) and target_id == target_mob.id:
+                return target_mob
         if (
             target.get("type") == "mob"
-            and target_mob is not None
+            and isinstance(target_mob, Mob)
             and int(target.get("id") or 0) == target_mob.id
         ):
             return target_mob
@@ -3062,7 +3111,7 @@ def _execute_resource_change_primitive(
     primitive: dict,
     effect: dict,
     player: Player,
-    target_mob: Mob | None,
+    target_mob: Player | Mob | None,
     room: Room,
     round_id: str,
 ) -> list[GameEvent]:
@@ -3127,7 +3176,7 @@ def _execute_effect_primitives(
     primitives: list[dict],
     effect: dict,
     player: Player,
-    target_mob: Mob | None,
+    target_mob: Player | Mob | None,
     room: Room,
     round_id: str,
 ) -> list[GameEvent]:
@@ -3168,7 +3217,7 @@ def _execute_after_damage_procs(
     *,
     encounter: CombatEncounter,
     player: Player,
-    target_mob: Mob,
+    target_mob: Player | Mob,
     room: Room,
     actor: Player | Mob,
     target: Player | Mob,
@@ -3251,7 +3300,7 @@ def _apply_damage_absorption(
     *,
     encounter: CombatEncounter | None,
     player: Player,
-    target_mob: Mob | None,
+    target_mob: Player | Mob | None,
     target: Player | Mob,
     result: CombatAttackResult,
     round_id: str,
@@ -3385,7 +3434,7 @@ def _apply_combat_strike(
     *,
     encounter: CombatEncounter,
     player: Player,
-    target_mob: Mob,
+    target_mob: Player | Mob,
     room: Room,
     actor: Player | Mob,
     target: Player | Mob,
@@ -3480,7 +3529,7 @@ def _execute_output_component(
     *,
     encounter: CombatEncounter | None,
     player: Player,
-    target_mob: Mob | None,
+    target_mob: Player | Mob | None,
     room: Room,
     component: dict,
     ability: AbilityDefinition | None,
@@ -3837,6 +3886,8 @@ def _advance_character_periodic_effects(
         )
         .order_by("id")
     )
+    if encounter is not None:
+        effect_queryset = effect_queryset.filter(world=encounter.world)
     if encounter is None:
         effect_queryset = effect_queryset.filter(next_tick_ts__lte=due_at or timezone.now())
     effects = list(effect_queryset)
@@ -3898,7 +3949,18 @@ def _advance_character_periodic_effects(
             elif isinstance(source, Player):
                 tick_viewer = source
             room = target.room
-            pair_mob = target if isinstance(target, Mob) else source if isinstance(source, Mob) else None
+            pair_actor = (
+                target
+                if isinstance(target, Mob)
+                else source
+                if isinstance(source, (Player, Mob))
+                and not (
+                    isinstance(source, Player)
+                    and isinstance(tick_viewer, Player)
+                    and source.pk == tick_viewer.pk
+                )
+                else None
+            )
             tick_primitives = tick.get("primitives") or []
             if tick_viewer is not None:
                 if tick_primitives:
@@ -3906,7 +3968,7 @@ def _advance_character_periodic_effects(
                         primitives=tick_primitives,
                         effect=effect_payload,
                         player=tick_viewer,
-                        target_mob=pair_mob,
+                        target_mob=pair_actor,
                         room=room,
                         round_id=round_id,
                     )
@@ -3916,7 +3978,7 @@ def _advance_character_periodic_effects(
                     effect_events, _ = _execute_output_component(
                         encounter=encounter,
                         player=tick_viewer,
-                        target_mob=pair_mob,
+                        target_mob=pair_actor,
                         room=room,
                         component=component,
                         ability=None,
@@ -3998,17 +4060,73 @@ def _resolve_detached_actor_effects(
     target_id: int,
     due_at,
 ) -> list[GameEvent]:
+    target_model = Player if target_type == "player" else Mob
+    target_world_id = (
+        target_model.objects.filter(pk=target_id)
+        .values_list("world_id", flat=True)
+        .first()
+    )
+    if target_world_id is None:
+        return []
     target_filter = (
         {"target_player_id": target_id}
         if target_type == "player"
         else {"target_mob_id": target_id}
     )
     candidate_effects = ActiveEffect.objects.filter(
+        world_id=target_world_id,
         scope=ActiveEffect.SCOPE_CHARACTER,
         remaining_rounds__gt=0,
         next_tick_ts__lte=due_at,
         **target_filter,
     )
+
+    active_duel_match = None
+    duel_contestant_ids: set[int] = set()
+    duel_opponent_id: int | None = None
+    if target_type == "player":
+        duel_ref = (
+            DuelMatch.objects.filter(
+                status=DuelMatch.STATUS_ACTIVE,
+                run__spawned_world_id=target_world_id,
+                participants__player_id=target_id,
+                participants__role=DuelParticipant.ROLE_CONTESTANT,
+            )
+            .values("id", "run_id")
+            .order_by("id")
+            .first()
+        )
+        if duel_ref and duel_ref["run_id"]:
+            locked_run = (
+                InstanceRun.objects.select_for_update()
+                .filter(pk=duel_ref["run_id"])
+                .first()
+            )
+            if locked_run is not None:
+                active_duel_match = (
+                    DuelMatch.objects.select_for_update(of=("self",))
+                    .filter(
+                        pk=duel_ref["id"],
+                        run=locked_run,
+                        status=DuelMatch.STATUS_ACTIVE,
+                    )
+                    .first()
+                )
+        if active_duel_match is not None:
+            duel_contestant_ids = set(
+                active_duel_match.participants.filter(
+                    role=DuelParticipant.ROLE_CONTESTANT,
+                ).values_list("player_id", flat=True)
+            )
+            opponents = duel_contestant_ids - {target_id}
+            if len(opponents) == 1:
+                duel_opponent_id = next(iter(opponents))
+                # Match combat is contestant-owned. Effects from a mob, the
+                # target, or a third player cannot damage a duelist.
+                candidate_effects.filter(is_hostile=True).exclude(
+                    source_player_id=duel_opponent_id,
+                ).delete()
+
     player_ids = set(
         candidate_effects.filter(source_player_id__isnull=False).values_list(
             "source_player_id", flat=True
@@ -4021,6 +4139,7 @@ def _resolve_detached_actor_effects(
     )
     if target_type == "player":
         player_ids.add(target_id)
+        player_ids.update(duel_contestant_ids)
     else:
         mob_ids.add(target_id)
 
@@ -4037,6 +4156,9 @@ def _resolve_detached_actor_effects(
     target = target_player or target_mob
     if target is None:
         return []
+    if target.world_id != target_world_id:
+        # The target moved runtimes while this pulse established its lock set.
+        return []
     if target.world.lifecycle != adv_consts.WORLD_LIFECYCLE_RUNNING:
         return []
     if isinstance(target, Player) and (not target.in_game or target.room_id is None):
@@ -4052,6 +4174,16 @@ def _resolve_detached_actor_effects(
     else:
         active_encounter_filter &= Q(mob=target)
     if CombatEncounter.objects.filter(active_encounter_filter).exists():
+        return []
+    if (
+        isinstance(target, Player)
+        and CombatParticipant.objects.filter(
+            player=target,
+            is_active=True,
+            encounter__status=CombatEncounter.STATUS_ACTIVE,
+            encounter__duel_match_id__isnull=False,
+        ).exists()
+    ):
         return []
 
     pulse_id = f"effect-pulse:{target_type}:{target_id}:{int(due_at.timestamp())}"
@@ -4089,6 +4221,36 @@ def _resolve_detached_actor_effects(
         return events
     if isinstance(outcome.defeated_target, Player):
         killer = outcome.killer
+        from spawns import duels
+
+        if (
+            isinstance(active_duel_match, DuelMatch)
+            and active_duel_match.status == DuelMatch.STATUS_ACTIVE
+        ):
+            winner = locked_players.get(duel_opponent_id)
+            if (
+                winner is not None
+                and isinstance(killer, Player)
+                and killer.id == winner.id
+            ):
+                duels.resolve_duel_defeat(
+                    active_duel_match,
+                    winner,
+                    outcome.defeated_target,
+                    reason="effect",
+                    leading_events=events,
+                )
+                clear_actor_effect_cache(outcome.defeated_target)
+                return []
+            # Defensive fallback for corrupt/legacy effect rows: do not award
+            # a duel to someone who did not cause the defeat.
+            outcome.defeated_target.health = max(
+                1,
+                int(outcome.defeated_target.health or 0),
+            )
+            outcome.defeated_target.save(update_fields=["health"])
+            clear_actor_effect_cache(outcome.defeated_target)
+            return events
         killer_name = _combat_name(killer) if killer is not None else "An effect"
         updated_player, death_events = apply_player_death(
             player=outcome.defeated_target,
@@ -4118,6 +4280,15 @@ def resolve_due_character_effects(
         remaining_rounds__gt=0,
         next_tick_ts__lte=due_at,
         world__lifecycle=adv_consts.WORLD_LIFECYCLE_RUNNING,
+    ).filter(
+        Q(
+            target_player__isnull=False,
+            world_id=F("target_player__world_id"),
+        )
+        | Q(
+            target_mob__isnull=False,
+            world_id=F("target_mob__world_id"),
+        )
     ).filter(
         Q(
             target_player__in_game=True,
@@ -4169,7 +4340,7 @@ def _effect_target_for_component(
     ability: AbilityDefinition,
     pending: dict,
     player: Player,
-    target_mob: Mob,
+    target_mob: Player | Mob,
     actor: Player | Mob | None = None,
     default_target: Player | Mob | None = None,
 ) -> tuple[str, int, Player | Mob]:
@@ -4181,10 +4352,14 @@ def _effect_target_for_component(
 
     pending_target = pending.get("target") or {}
     pending_target_type = str(pending_target.get("type") or "").strip().lower()
+    pending_target_id = int(pending_target.get("id") or 0)
     if selector in {"target", "ability.target", "effect.target"}:
         if pending_target_type == "player":
-            return "player", player.id, player
-        if pending_target_type == "mob":
+            if pending_target_id == player.id:
+                return "player", player.id, player
+            if isinstance(target_mob, Player) and pending_target_id == target_mob.id:
+                return "player", target_mob.id, target_mob
+        if pending_target_type == "mob" and isinstance(target_mob, Mob):
             return "mob", target_mob.id, target_mob
 
     ability_target_type = str((ability.target or {}).get("type") or "").strip().lower()
@@ -4213,7 +4388,7 @@ def _execute_pending_player_ability(
     *,
     encounter: CombatEncounter,
     player: Player,
-    target_mob: Mob,
+    target_mob: Player | Mob,
     room: Room,
     round_id: str,
     player_health_max: int,
@@ -4264,7 +4439,23 @@ def _execute_pending_player_ability(
         ], AbilityRoundResult(consumed_primary=False)
 
     target = pending.get("target") or {}
-    if target.get("type") == "mob" and int(target.get("id") or 0) != target_mob.id:
+    pending_target_type = str(target.get("type") or "").strip().lower()
+    pending_target_id = int(target.get("id") or 0)
+    target_is_valid = (
+        pending_target_type == "mob"
+        and isinstance(target_mob, Mob)
+        and pending_target_id == target_mob.id
+    ) or (
+        pending_target_type == "player"
+        and (
+            pending_target_id == player.id
+            or (
+                isinstance(target_mob, Player)
+                and pending_target_id == target_mob.id
+            )
+        )
+    )
+    if not target_is_valid:
         return [
             _combat_failure_event(
                 player,
@@ -4341,7 +4532,10 @@ def _execute_pending_player_ability(
             continue
         if component_targets_character_effect(component, ability=ability):
             target_selector = str(component.get("target") or "").strip().lower()
-            if target_selector in {"room.allies", "room.players"}:
+            if (
+                target_selector in {"room.allies", "room.players"}
+                and not isinstance(target_mob, Player)
+            ):
                 events.extend(
                     execute_character_effect_component(
                         component=component,
@@ -4354,17 +4548,25 @@ def _execute_pending_player_ability(
                     )
                 )
             else:
+                scoped_target_component = (
+                    {**component, "target": "self"}
+                    if (
+                        isinstance(target_mob, Player)
+                        and target_selector == "room.allies"
+                    )
+                    else component
+                )
                 _target_type, _target_id, effect_target = _effect_target_for_component(
-                    component=component,
+                    component=scoped_target_component,
                     ability=ability,
                     pending=pending,
                     player=player,
                     target_mob=target_mob,
                 )
                 scoped_component = {
-                    **component,
+                    **scoped_target_component,
                     "primitives": _initialize_effect_primitives(
-                        component.get("primitives") or [],
+                        scoped_target_component.get("primitives") or [],
                         target=effect_target,
                         source=player,
                     ),
@@ -5104,6 +5306,17 @@ def resolve_combat_encounter_step(
     *,
     auto_advance: bool,
 ) -> CombatStepResult:
+    if CombatEncounter.objects.filter(
+        pk=encounter_id,
+        duel_match_id__isnull=False,
+    ).exists():
+        from spawns.actions.pvp import resolve_pvp_encounter_step
+
+        return resolve_pvp_encounter_step(
+            encounter_id,
+            auto_advance=auto_advance,
+        )
+
     next_delay: float | None = None
 
     with transaction.atomic():
@@ -5324,6 +5537,10 @@ class ScanRoomAggroAction:
             ):
                 return ActionResult()
 
+            from spawns import duels
+
+            if duels.duel_combat_block_reason(player):
+                return ActionResult()
             rules_config = inherited_system_config(player.world)
             if rules_config and not rules_config.allow_combat:
                 return ActionResult()
@@ -5389,6 +5606,12 @@ class ScanRoomAggroAction:
 
 class FleeAction:
     def execute(self, player_id: int) -> ActionResult:
+        from spawns.actions.pvp import try_execute_flee
+
+        pvp_result = try_execute_flee(player_id)
+        if pvp_result is not None:
+            return pvp_result
+
         with transaction.atomic():
             player = Player.objects.select_for_update().get(pk=player_id)
             room = Room.objects.filter(pk=player.room_id).first() if player.room_id else None
@@ -5521,11 +5744,25 @@ class KillAction:
         raise ActionError("Combat stalled before anyone died.", code="combat_stalled")
 
     def execute(self, player_id: int, target_selector: str | None) -> ActionResult:
+        from spawns.actions.pvp import try_execute_kill
+
+        pvp_result = try_execute_kill(player_id, target_selector)
+        if pvp_result is not None:
+            return pvp_result
+
         with transaction.atomic():
             player = Player.objects.select_for_update().get(pk=player_id)
             if not player.room_id:
                 raise ActionError("You are nowhere. Cannot kill anything.", code="no_room")
 
+            from spawns import duels
+
+            duel_block_reason = duels.duel_combat_block_reason(player)
+            if duel_block_reason:
+                raise ActionError(
+                    str(duel_block_reason),
+                    code="duel_combat_disabled",
+                )
             rules_config = inherited_system_config(player.world)
             if rules_config and not rules_config.allow_combat:
                 raise ActionError("Combat is disabled here.", code="combat_disabled")
@@ -5543,6 +5780,7 @@ class KillAction:
                 target_ref = resolve_room_mob_target(
                     room,
                     target_selector,
+                    world=player.world,
                     empty_error="Kill what?",
                     not_found_error="You don't see them here.",
                     allow_single_match_when_empty=True,

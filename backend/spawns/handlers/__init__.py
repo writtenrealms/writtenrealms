@@ -65,6 +65,7 @@ from spawns.handlers import crafting
 from spawns.handlers import currencies
 from spawns.handlers import quests
 from spawns.handlers import instances
+from spawns.handlers import duels
 
 __all__ = [
     # Base classes

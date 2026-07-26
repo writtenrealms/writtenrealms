@@ -630,8 +630,9 @@ class WizKillHandler(CommandHandler):
         "name": "Kill",
         "format": "/kill <target> [-- message]",
         "description": (
-            "Instantly kill a player target in the issuer's current room. "
-            "The target is moved through the normal death-room pipeline."
+            "Instantly defeat a player target in the issuer's current room. "
+            "In an active duel this awards the opposing contestant the win; "
+            "otherwise the target follows the normal death-room pipeline."
         ),
         "examples": [
             "/kill player.123",

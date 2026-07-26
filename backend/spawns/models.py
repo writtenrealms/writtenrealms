@@ -660,6 +660,166 @@ class MobState(BaseModel):
         ordering = ['mob_id']
 
 
+class DuelMatch(BaseModel):
+    """Durable invitation, lifecycle, and result for an instanced PvP match."""
+
+    STATUS_PENDING = "pending"
+    STATUS_ACTIVE = "active"
+    STATUS_COMPLETED = "completed"
+    STATUS_DECLINED = "declined"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_EXPIRED = "expired"
+    STATUS_CHOICES = list_to_choice((
+        STATUS_PENDING,
+        STATUS_ACTIVE,
+        STATUS_COMPLETED,
+        STATUS_DECLINED,
+        STATUS_CANCELLED,
+        STATUS_EXPIRED,
+    ))
+    OPEN_STATUSES = (STATUS_PENDING, STATUS_ACTIVE)
+
+    base_world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='duel_matches',
+    )
+    template_world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='duel_template_matches',
+    )
+    entrance_room = models.ForeignKey(
+        'worlds.Room',
+        on_delete=models.SET_NULL,
+        related_name='duel_matches_started_here',
+        blank=True,
+        null=True,
+    )
+    # Instance cleanup may remove the spawned world and its InstanceRun. Match
+    # history remains canonical and durable after that runtime cleanup.
+    run = models.OneToOneField(
+        'worlds.InstanceRun',
+        on_delete=models.SET_NULL,
+        related_name='duel_match',
+        blank=True,
+        null=True,
+    )
+    challenger = models.ForeignKey(
+        'spawns.Player',
+        on_delete=models.SET_NULL,
+        related_name='duel_challenges_sent',
+        blank=True,
+        null=True,
+    )
+    challenged = models.ForeignKey(
+        'spawns.Player',
+        on_delete=models.SET_NULL,
+        related_name='duel_challenges_received',
+        blank=True,
+        null=True,
+    )
+    winner = models.ForeignKey(
+        'spawns.Player',
+        on_delete=models.SET_NULL,
+        related_name='duel_match_wins',
+        blank=True,
+        null=True,
+    )
+    loser = models.ForeignKey(
+        'spawns.Player',
+        on_delete=models.SET_NULL,
+        related_name='duel_match_losses',
+        blank=True,
+        null=True,
+    )
+    status = models.TextField(
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING,
+        db_index=True,
+    )
+    expires_at = models.DateTimeField(db_index=True)
+    started_at = models.DateTimeField(blank=True, null=True)
+    completed_at = models.DateTimeField(blank=True, null=True)
+    outcome = models.JSONField(default=dict, blank=True)
+
+    class Meta(BaseModel.Meta):
+        indexes = [
+            models.Index(fields=['status', 'expires_at']),
+            models.Index(fields=['challenger', 'status']),
+            models.Index(fields=['challenged', 'status']),
+            models.Index(fields=['base_world', 'status']),
+            models.Index(fields=['template_world', 'status']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(challenger__isnull=True)
+                    | models.Q(challenged__isnull=True)
+                    | ~models.Q(challenger=models.F('challenged'))
+                ),
+                name='spawns_duel_distinct_challengers',
+            ),
+        ]
+
+
+class DuelParticipant(BaseModel):
+    """Team-aware match membership; spectators can be added without reshaping."""
+
+    ROLE_CONTESTANT = "contestant"
+    ROLE_SPECTATOR = "spectator"
+    ROLE_CHOICES = list_to_choice((ROLE_CONTESTANT, ROLE_SPECTATOR))
+
+    RESULT_PENDING = "pending"
+    RESULT_WON = "won"
+    RESULT_LOST = "lost"
+    RESULT_CHOICES = list_to_choice((
+        RESULT_PENDING,
+        RESULT_WON,
+        RESULT_LOST,
+    ))
+
+    match = models.ForeignKey(
+        'spawns.DuelMatch',
+        on_delete=models.CASCADE,
+        related_name='participants',
+    )
+    player = models.ForeignKey(
+        'spawns.Player',
+        on_delete=models.CASCADE,
+        related_name='duel_participations',
+    )
+    role = models.TextField(
+        choices=ROLE_CHOICES,
+        default=ROLE_CONTESTANT,
+        db_index=True,
+    )
+    team = models.PositiveSmallIntegerField(default=1)
+    result = models.TextField(
+        choices=RESULT_CHOICES,
+        default=RESULT_PENDING,
+        db_index=True,
+    )
+    joined_at = models.DateTimeField(blank=True, null=True)
+    exited_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta(BaseModel.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=['match', 'player'],
+                name='spawns_duel_unique_participant',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(team__gte=1),
+                name='spawns_duel_team_positive',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['match', 'role', 'team']),
+            models.Index(fields=['player', 'role']),
+        ]
+
+
 class CombatEncounter(BaseModel):
     STATUS_ACTIVE = "active"
     STATUS_FINISHED = "finished"
@@ -679,6 +839,13 @@ class CombatEncounter(BaseModel):
         'spawns.Player',
         on_delete=models.CASCADE,
         related_name='combat_encounters',
+    )
+    duel_match = models.ForeignKey(
+        'spawns.DuelMatch',
+        on_delete=models.CASCADE,
+        related_name='combat_encounters',
+        blank=True,
+        null=True,
     )
     mob = models.ForeignKey(
         'spawns.Mob',
@@ -708,6 +875,17 @@ class CombatEncounter(BaseModel):
             models.Index(fields=['status', 'next_resolution_ts']),
             models.Index(fields=['player', 'status']),
             models.Index(fields=['mob', 'status']),
+            models.Index(fields=['duel_match', 'status']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['duel_match'],
+                condition=(
+                    models.Q(status='active')
+                    & models.Q(duel_match__isnull=False)
+                ),
+                name='spawns_duel_one_active_encounter',
+            ),
         ]
 
     @property
@@ -720,6 +898,75 @@ class CombatEncounter(BaseModel):
     def is_combat_locked(self) -> bool:
         """Ordinary movement closes after the first encounter round begins."""
         return int(self.round_number or 0) > 0
+
+
+class CombatParticipant(BaseModel):
+    """Actor-local state for PvP and future multi-participant encounters."""
+
+    encounter = models.ForeignKey(
+        'spawns.CombatEncounter',
+        on_delete=models.CASCADE,
+        related_name='participants',
+    )
+    player = models.ForeignKey(
+        'spawns.Player',
+        on_delete=models.CASCADE,
+        related_name='combat_participations',
+        blank=True,
+        null=True,
+    )
+    mob = models.ForeignKey(
+        'spawns.Mob',
+        on_delete=models.CASCADE,
+        related_name='combat_participations',
+        blank=True,
+        null=True,
+    )
+    team = models.PositiveSmallIntegerField(default=1)
+    is_active = models.BooleanField(default=True, db_index=True)
+    pending_ability = models.JSONField(default=dict, blank=True)
+    pending_flee = models.JSONField(default=dict, blank=True)
+
+    class Meta(BaseModel.Meta):
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(player__isnull=False, mob__isnull=True)
+                    | models.Q(player__isnull=True, mob__isnull=False)
+                ),
+                name='spawns_combat_participant_one_actor',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(team__gte=1),
+                name='spawns_combat_participant_team_positive',
+            ),
+            models.UniqueConstraint(
+                fields=['encounter', 'player'],
+                condition=models.Q(player__isnull=False),
+                name='spawns_combat_unique_player',
+            ),
+            models.UniqueConstraint(
+                fields=['encounter', 'mob'],
+                condition=models.Q(mob__isnull=False),
+                name='spawns_combat_unique_mob',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['encounter', 'is_active', 'team']),
+            models.Index(fields=['mob', 'is_active']),
+            models.Index(
+                fields=['player', 'encounter'],
+                condition=(
+                    models.Q(is_active=True)
+                    & models.Q(player__isnull=False)
+                ),
+                name='spawn_combat_player_active',
+            ),
+        ]
+
+    @property
+    def actor(self):
+        return self.player or self.mob
 
 
 class ActiveEffect(BaseModel):
@@ -1150,6 +1397,11 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
         indexes = [
             models.Index(fields=['created_ts']),
             models.Index(fields=['is_pending_deletion']),
+            models.Index(
+                fields=['world', 'room', 'id'],
+                condition=models.Q(is_pending_deletion=False),
+                name='spawn_mob_world_room_live',
+            ),
         ]
 
     def create_corpse(self):

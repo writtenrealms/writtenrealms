@@ -47,6 +47,7 @@ spec:
   death_currency: crowns
   death_currency_penalty: 0.2
   pvp_mode: free_for_all
+  announce_duel_results: false
   auto_equip: true
   is_narrative: false
   players_can_set_title: true
@@ -204,7 +205,8 @@ For spawn-plan roaming behavior, see
 | `death_route` | choice | `top_faction` | `top_faction`, `near_room`, `far_room`, or `nearest_in_zone`. |
 | `death_currency` | currency code/null | initial currency | Balance charged by `lose_currency`. |
 | `death_currency_penalty` | number 0-1 | `0.2` | Fraction of equipped-item value denominated in `death_currency`, capped by that balance, charged on a non-PvP `lose_currency` death. |
-| `pvp_mode` | choice | `free_for_all` | Sole authored PvP policy: `free_for_all`, `disabled`, or `zone`. |
+| `pvp_mode` | choice | `free_for_all` | Sole authored PvP policy: `free_for_all`, `disabled`, `zone`, or `match`. |
+| `announce_duel_results` | boolean | `false` | Base-world policy that announces completed duel results when enabled. |
 
 `pvp_mode` is the only PvP policy authored in current WR2 world manifests. The
 manifest importer still accepts the legacy authored-content alias `allow_pvp`
@@ -212,6 +214,19 @@ and normalizes `false` to `disabled` or `true` to `free_for_all`. This is not a
 WR1 database migration path. If both fields are present, `allow_pvp` must agree
 with whether `pvp_mode` is disabled. New and exported manifests should use only
 `pvp_mode`.
+
+`match` is the instance-arena policy. It does not permit unrestricted attacks:
+the runtime must find an active match in the current instance and both the
+attacker and target must be eligible participants. A completed match remains
+closed to further PvP, so participants must leave and create a new match before
+fighting again. Keep the base world's `pvp_mode` set to `disabled` when PvP
+should only happen in linked arena instances.
+
+`announce_duel_results` belongs to the base world and is inherited by its
+instances. When enabled, a completed duel can publish
+`<winner> has defeated <loser> in a duel.` to the base world's announcement
+audience. It is omitted from instance-template manifests and cannot be
+overridden per arena.
 
 For death-related builder commands, see
 [builder-command-reference.md](/Users/teebes/code/writtenrealms/docs/guides/builder-command-reference.md).
@@ -260,7 +275,8 @@ manifests:
 
 Core systems such as `stats`, `combat`, `equipment`, `ability_progression`,
 `leveling_curve`, `starting_level`, `max_level`, `combat_resolution_interval`,
-and `default_roam_chance` are inherited from the base world.
+`default_roam_chance`, and `announce_duel_results` are inherited from the base
+world.
 
 For instance authoring, see
 [instance-builder-guide.md](/Users/teebes/code/writtenrealms/docs/guides/instance-builder-guide.md).
@@ -274,5 +290,6 @@ For instance authoring, see
 - `default_roam_chance` must be between `0` and `100`.
 - `combat_resolution_interval` can be `-1` or any value greater than or equal
   to `0`.
+- `pvp_mode` must be `free_for_all`, `disabled`, `zone`, or `match`.
 - `leveling_curve` must be long enough for `max_level`, and its first entry must
   be `0`.

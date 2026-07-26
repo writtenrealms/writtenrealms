@@ -4,7 +4,7 @@ from config import constants as adv_consts
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.effects import actor_is_combat_tagged
 from spawns.events import GameEvent
-from spawns.models import CombatEncounter, Player
+from spawns.models import CombatEncounter, CombatParticipant, Player
 from spawns.state_payloads import get_player_with_related, serialize_actor
 
 
@@ -17,9 +17,15 @@ def stand_player(player: Player) -> bool:
 
 
 def _active_player_encounter_exists(player: Player) -> bool:
-    return CombatEncounter.objects.filter(
+    if CombatEncounter.objects.filter(
         player=player,
         status=CombatEncounter.STATUS_ACTIVE,
+    ).exists():
+        return True
+    return CombatParticipant.objects.filter(
+        player=player,
+        is_active=True,
+        encounter__status=CombatEncounter.STATUS_ACTIVE,
     ).exists()
 
 

@@ -627,10 +627,13 @@ class ResolveTrackerChaseAction:
             )
 
             rules_config = inherited_system_config(player.world) if player else None
+            from spawns import duels
+
             combat_allowed = bool(
                 player
                 and destination_room
                 and not (rules_config and not rules_config.allow_combat)
+                and not duels.duel_combat_block_reason(player)
             )
             if combat_allowed and eligible_mobs:
                 eligible_mobs.sort(key=_target_priority_sort_key)

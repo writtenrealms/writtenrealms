@@ -338,6 +338,7 @@ def resolve_merchant_runtime(player: Player, selector: str | None) -> MerchantRu
     merchant = resolve_room_mob_target(
         player.room,
         selector,
+        world=player.world,
         empty_error="Which merchant?",
         not_found_error="You don't see that merchant here.",
         allow_single_match_when_empty=True,

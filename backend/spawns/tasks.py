@@ -16,7 +16,13 @@ from django.core.cache import cache
 from django.db.models import F, Q
 from django.utils import timezone
 from spawns.services import WorldGate
-from spawns.models import CombatEncounter, CraftingActionReceipt, Mob, Player
+from spawns.models import (
+    CombatEncounter,
+    CombatParticipant,
+    CraftingActionReceipt,
+    Mob,
+    Player,
+)
 from spawns.serializers import PlayerConfigSerializer
 from spawns.events import GameEvent, flush_game_event_outbox, publish_events
 from spawns.handlers import (
@@ -645,6 +651,7 @@ def run_game_heartbeat() -> dict[str, int]:
     from spawns.actions.effects import (
         combat_tagged_actor_ids,
     )
+    from spawns.actions.pvp import reconcile_stale_pvp_encounters
 
     players_regenerated = 0
     player_cooldowns_updated = 0
@@ -655,6 +662,10 @@ def run_game_heartbeat() -> dict[str, int]:
     # Recover any effects whose state committed before a previous worker died
     # while publishing their events.
     flush_game_event_outbox(publisher=publish_events)
+
+    stale_pvp_events = reconcile_stale_pvp_encounters()
+    if stale_pvp_events:
+        publish_events(stale_pvp_events)
 
     active_players = Player.objects.filter(
         in_game=True,
@@ -676,6 +687,16 @@ def run_game_heartbeat() -> dict[str, int]:
     active_combat_player_ids = set(
         CombatEncounter.objects.filter(
             status=CombatEncounter.STATUS_ACTIVE,
+            player__in_game=True,
+            player__world__lifecycle=api_consts.WORLD_LIFECYCLE_RUNNING,
+        ).values_list("player_id", flat=True)
+    )
+    active_combat_player_ids.update(
+        CombatParticipant.objects.filter(
+            player_id__isnull=False,
+            is_active=True,
+            encounter__status=CombatEncounter.STATUS_ACTIVE,
+            encounter__duel_match_id__isnull=False,
             player__in_game=True,
             player__world__lifecycle=api_consts.WORLD_LIFECYCLE_RUNNING,
         ).values_list("player_id", flat=True)
@@ -977,10 +998,33 @@ def execute_trigger_script_segments(
     segments: list[str],
     issuer_scope: str | None = None,
     connection_id: str | None = None,
+    expected_world_id: int | None = None,
+    expected_room_id: int | None = None,
 ):
     """
     Execute scripted trigger segments as a delayed trigger line.
+
+    New tasks capture the actor's runtime world and room when the line is
+    scheduled.  Drop stale work instead of allowing a delayed room trigger to
+    follow an actor into another room or another copy of the same instance.
+    The optional defaults preserve compatibility with tasks queued before the
+    runtime-context fields were introduced.
     """
+    if expected_world_id is not None or expected_room_id is not None:
+        actor_model = {
+            "player": Player,
+            "mob": Mob,
+        }.get(str(actor_type or "").strip().lower())
+        if actor_model is None:
+            return
+        context_filter = {"pk": actor_id}
+        if expected_world_id is not None:
+            context_filter["world_id"] = expected_world_id
+        if expected_room_id is not None:
+            context_filter["room_id"] = expected_room_id
+        if not actor_model.objects.filter(**context_filter).exists():
+            return
+
     for segment in segments or []:
         segment_text = str(segment or "").strip()
         if not segment_text:

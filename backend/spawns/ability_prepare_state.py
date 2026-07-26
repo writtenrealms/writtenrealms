@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from django.db.models import F
 
 from spawns.events import GameEvent
-from spawns.models import CombatEncounter, Player
+from spawns.models import CombatEncounter, CombatParticipant, Player
 
 
 def active_prepared_ability_slugs(player: Player) -> list[str]:
@@ -26,9 +26,21 @@ def active_prepared_ability_slugs(player: Player) -> list[str]:
         .order_by("id")
         .values_list("pending_player_ability", flat=True)
     )
+    pvp_pending_abilities = (
+        CombatParticipant.objects.filter(
+            player=player,
+            is_active=True,
+            encounter__room_id=player.room_id,
+            encounter__status=CombatEncounter.STATUS_ACTIVE,
+            encounter__duel_match_id__isnull=False,
+        )
+        .exclude(pending_ability={})
+        .order_by("encounter_id", "id")
+        .values_list("pending_ability", flat=True)
+    )
     slugs: list[str] = []
     seen_slugs: set[str] = set()
-    for pending in pending_abilities:
+    for pending in [*pending_abilities, *pvp_pending_abilities]:
         if not isinstance(pending, dict):
             continue
         slug = str(pending.get("ability") or "").strip().lower()
@@ -70,6 +82,28 @@ def ability_prepare_state_events_for_players(
         .values_list("player_id", "pending_player_ability")
     )
     for player_id, pending in pending_abilities:
+        if not isinstance(pending, dict):
+            continue
+        slug = str(pending.get("ability") or "").strip().lower()
+        player_slugs = slugs_by_player_id[player_id]
+        seen_slugs = seen_slugs_by_player_id[player_id]
+        if slug and slug not in seen_slugs:
+            seen_slugs.add(slug)
+            player_slugs.append(slug)
+
+    pvp_pending_abilities = (
+        CombatParticipant.objects.filter(
+            player_id__in=normalized_ids,
+            is_active=True,
+            encounter__room_id=F("player__room_id"),
+            encounter__status=CombatEncounter.STATUS_ACTIVE,
+            encounter__duel_match_id__isnull=False,
+        )
+        .exclude(pending_ability={})
+        .order_by("encounter_id", "id")
+        .values_list("player_id", "pending_ability")
+    )
+    for player_id, pending in pvp_pending_abilities:
         if not isinstance(pending, dict):
             continue
         slug = str(pending.get("ability") or "").strip().lower()

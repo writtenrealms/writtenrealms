@@ -221,6 +221,12 @@ spec:
         multiplier: 1.5
 ```
 
+In a `pvp_mode: match` instance, the same Charge-style contract supports the
+opposing contestant as the hostile target. A directed opener moves the caster
+through one arena exit and starts the encounter in the destination room;
+`opener_priority` still affects only the first round. The runtime validates
+that the target is the opposing contestant in the active 1v1 match.
+
 ## Attack Routine Targets
 
 Attack-routine modifiers can add strikes during a character's normal attack.
@@ -828,6 +834,13 @@ and basic attacks, but does not change healing.
 Room-wide friendly buffs can target `room.allies`. In the current WR2 combat
 runtime, room allies are in-game players in the caster's room, including the
 caster.
+
+The 1v1 duel runtime deliberately narrows `room.allies` effect components to
+the caster, both between encounters and during an active encounter. This keeps
+the opposing contestant from receiving a friendly buff while leaving the
+authoring shape ready for future team-aware ally selection. Broad
+`room.players` and `room.hostiles` selectors remain unsupported for PvP
+abilities.
 
 Use `stack_key` with `stacking: refresh` when the buff should not stack. A later
 application with the same stack key replaces the previous active effect and

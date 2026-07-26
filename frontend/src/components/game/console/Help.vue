@@ -56,6 +56,7 @@
         <div class="cmds">
           <div class="cmd" @click="cmdHelp('kill')">kill</div>
           <div class="cmd" @click="cmdHelp('flee')">flee</div>
+          <div class="cmd" @click="cmdHelp('duel')">duel</div>
           <div class="cmd" @click="cmdHelp('focus')">focus</div>
           <div class="cmd" @click="cmdHelp('ambush')">ambush</div>
           <div class="cmd" @click="cmdHelp('assist')">assist</div>

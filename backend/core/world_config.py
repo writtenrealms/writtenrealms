@@ -13,6 +13,7 @@ from typing import Any
 INSTANCE_INHERITED_CONFIG_FIELDS = {
     "ability_progression",
     "allow_combat",
+    "announce_duel_results",
     "combat_resolution_interval",
     "combat_system",
     "default_roam_chance",
@@ -43,6 +44,7 @@ INSTANCE_LOCAL_CONFIG_FIELDS = {
 INSTANCE_INHERITED_MANIFEST_FIELDS = {
     "ability_progression",
     "allow_combat",
+    "announce_duel_results",
     "combat",
     "combat_resolution_interval",
     "default_roam_chance",

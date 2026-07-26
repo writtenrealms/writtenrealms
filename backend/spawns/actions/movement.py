@@ -142,6 +142,7 @@ class BuildMoveEventsAction:
                 room_key_lookup,
                 door_states_all,
                 viewer=player,
+                runtime_world=player.world,
             ).model_dump()
         actor_payload = serialize_actor(player, dest_room)
 
@@ -179,6 +180,7 @@ class BuildMoveEventsAction:
             actor_char = serialize_char_from_player(player).model_dump()
             origin_recipients = (
                 Player.objects.filter(
+                    world=player.world,
                     room_id=context.origin_room_id,
                     in_game=True,
                 )
@@ -187,6 +189,7 @@ class BuildMoveEventsAction:
             )
             dest_recipients = (
                 Player.objects.filter(
+                    world=player.world,
                     room_id=dest_room.id,
                     in_game=True,
                 )

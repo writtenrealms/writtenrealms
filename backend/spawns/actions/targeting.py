@@ -61,6 +61,61 @@ def room_char_matches_selector(char: Player | Mob, selector: str) -> bool:
     return selector in _player_tokens(char)
 
 
+def find_room_player_target(
+    room: Room,
+    selector: str | None,
+    *,
+    world: World,
+    exclude: Player | None = None,
+    include_invisible: bool = False,
+) -> Player | None:
+    """Resolve one live player in a specific runtime world and authored room."""
+    normalized = _normalize_selector(selector)
+    if not normalized:
+        return None
+
+    players = Player.objects.filter(
+        world=world,
+        room=room,
+        in_game=True,
+    )
+    if exclude is not None:
+        players = players.exclude(pk=exclude.pk)
+    if not include_invisible:
+        players = players.filter(is_invisible=False)
+    candidates = list(players.order_by("id"))
+
+    if normalized.startswith("player."):
+        try:
+            player_id = int(normalized.split(".", 1)[1])
+        except (TypeError, ValueError):
+            return None
+        return next(
+            (candidate for candidate in candidates if candidate.id == player_id),
+            None,
+        )
+
+    counted_match = _counted_match(
+        candidates,
+        normalized,
+        room_char_matches_selector,
+    )
+    if counted_match is not None:
+        return counted_match
+
+    matches = [
+        candidate
+        for candidate in candidates
+        if room_char_matches_selector(candidate, normalized)
+    ]
+    if len(matches) > 1:
+        raise ActionError(
+            "That player target is ambiguous.",
+            code="ambiguous_target",
+        )
+    return matches[0] if matches else None
+
+
 def _counted_match(
     values: list[T],
     selector: str,
@@ -215,7 +270,10 @@ def find_accessible_item_target(
 
     room_items = list(
         with_item_salvageability(
-            room.inventory.filter(is_pending_deletion=False)
+            room.inventory.filter(
+                world=player.world,
+                is_pending_deletion=False,
+            )
             .select_related("definition", "currency")
         ).order_by("id")
     )
@@ -256,6 +314,7 @@ def resolve_room_mob_target(
     room: Room,
     selector: str | None,
     *,
+    world: World | None = None,
     empty_error: str,
     not_found_error: str,
     allow_single_match_when_empty: bool = False,
@@ -263,7 +322,10 @@ def resolve_room_mob_target(
     empty_candidate_filter: Callable[[Mob], bool] | None = None,
 ) -> Mob:
     normalized = _normalize_selector(selector)
-    room_mobs = list(room.mobs.select_related("definition").order_by("id"))
+    room_mobs_qs = room.mobs.select_related("definition")
+    if world is not None:
+        room_mobs_qs = room_mobs_qs.filter(world=world)
+    room_mobs = list(room_mobs_qs.order_by("id"))
     if not normalized:
         if allow_single_match_when_empty:
             candidates = room_mobs
@@ -280,7 +342,10 @@ def resolve_room_mob_target(
             mob_id = int(normalized.split(".", 1)[1])
         except (TypeError, ValueError):
             raise ActionError(not_found_error, code="target_not_found")
-        mob = room.mobs.select_related("definition").filter(pk=mob_id).first()
+        mob_qs = room.mobs.select_related("definition")
+        if world is not None:
+            mob_qs = mob_qs.filter(world=world)
+        mob = mob_qs.filter(pk=mob_id).first()
         if not mob:
             raise ActionError(not_found_error, code="target_not_found")
         return mob
@@ -291,7 +356,17 @@ def resolve_room_mob_target(
     raise ActionError(not_found_error, code="target_not_found")
 
 
-def first_room_mob_with_definition(room: Room, definition_id: int | None) -> Mob | None:
+def first_room_mob_with_definition(
+    room: Room,
+    definition_id: int | None,
+    *,
+    world: World | None = None,
+) -> Mob | None:
     if not definition_id:
         return None
-    return room.mobs.select_related("definition").filter(definition_id=definition_id).first()
+    queryset = room.mobs.select_related("definition").filter(
+        definition_id=definition_id,
+    )
+    if world is not None:
+        queryset = queryset.filter(world=world)
+    return queryset.first()

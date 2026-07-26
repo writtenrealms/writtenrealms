@@ -20,7 +20,14 @@ from core.scoped_state import (
     replace_initial_state_snapshot,
     replace_state_snapshot,
 )
-from spawns.models import CombatEncounter, Item, Mob
+from spawns.models import (
+    ActiveEffect,
+    CombatEncounter,
+    DuelMatch,
+    DuelParticipant,
+    Item,
+    Mob,
+)
 from tests.base import WorldTestCase
 from worlds.models import (
     InstanceAssignment,
@@ -30,7 +37,11 @@ from worlds.models import (
     WorldConfig,
 )
 from worlds.tasks import monitor_worlds
-from worlds.instances import reset_instance
+from worlds.instances import (
+    create_fresh_instance_run,
+    enter_players_into_run,
+    reset_instance,
+)
 from tests.utils import apply_basic_stat_system, capture_game_messages, dispatch_text_command
 
 
@@ -174,6 +185,21 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self.assertIn("battle-focus", definitions)
         self.assertEqual(definitions["battle-focus"]["name"], "Battle Focus")
 
+    def test_instance_state_sync_inherits_base_duel_announcement_policy(self):
+        self.world.config.announce_duel_results = True
+        self.world.config.save(update_fields=["announce_duel_results"])
+        self.instance_template.config.announce_duel_results = False
+        self.instance_template.config.save(update_fields=["announce_duel_results"])
+
+        self._enter()
+        self.player.refresh_from_db()
+
+        from spawns.state_payloads import build_state_sync
+
+        payload = build_state_sync(self.player).model_dump()
+
+        self.assertTrue(payload["world"]["announce_duel_results"])
+
     def test_instance_ability_resolvers_inherit_base_world_definitions(self):
         ability = self._ability()
         self.player.known_abilities = ["battle-focus"]
@@ -289,6 +315,373 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self.assertIsNotNone(solo_participant.exited_at)
         self.assertIsNone(group_participant.exited_at)
 
+    def test_fresh_run_creator_never_reuses_an_active_leader_run(self):
+        first_run = create_fresh_instance_run(
+            self.instance_template,
+            leader=self.player,
+        )
+        second_run = create_fresh_instance_run(
+            self.instance_template,
+            leader=self.player,
+        )
+
+        self.assertNotEqual(first_run.id, second_run.id)
+        self.assertNotEqual(first_run.spawned_world_id, second_run.spawned_world_id)
+        self.assertEqual(
+            InstanceRun.objects.filter(
+                template_world=self.instance_template,
+                leader=self.player,
+            ).count(),
+            2,
+        )
+
+    def test_completed_leader_run_is_not_reused_for_a_new_entry(self):
+        first_instance = self._enter()
+        first_run = first_instance.instance_run
+        World.leave_instance(player=self.player)
+        first_run.status = InstanceRun.STATUS_COMPLETED
+        first_run.completed_at = timezone.now()
+        first_run.save(update_fields=["status", "completed_at"])
+
+        second_instance = self._enter()
+
+        self.assertNotEqual(second_instance.id, first_instance.id)
+        self.assertNotEqual(second_instance.instance_run.id, first_run.id)
+        self.assertEqual(second_instance.instance_run.status, InstanceRun.STATUS_ACTIVE)
+
+    def test_completed_run_reference_cannot_be_reentered(self):
+        member = self.create_player("Member")
+        first_instance = self._enter()
+        first_run = first_instance.instance_run
+        World.leave_instance(player=self.player)
+        first_run.status = InstanceRun.STATUS_COMPLETED
+        first_run.completed_at = timezone.now()
+        first_run.save(update_fields=["status", "completed_at"])
+
+        with self.assertRaises(RuntimeError):
+            self._enter(player=member, ref=first_run.ref)
+
+        member.refresh_from_db()
+        self.assertEqual(member.world, self.spawn_world)
+        self.assertEqual(member.room, self.room)
+        self.assertFalse(
+            InstanceParticipant.objects.filter(
+                run=first_run,
+                player=member,
+            ).exists()
+        )
+
+    def test_enter_players_into_fresh_run_moves_both_atomically(self):
+        member = self.create_player("Member")
+        run = create_fresh_instance_run(
+            self.instance_template,
+            leader=self.player,
+            member_ids=[member.id],
+        )
+
+        entered_run = enter_players_into_run(
+            run,
+            players_and_transfer_rooms=[
+                (self.player, self.room),
+                (member, self.room),
+            ],
+            entry_room=self.instance_room,
+        )
+
+        self.player.refresh_from_db()
+        member.refresh_from_db()
+        entered_run.refresh_from_db()
+        self.assertEqual(self.player.world_id, run.spawned_world_id)
+        self.assertEqual(member.world_id, run.spawned_world_id)
+        self.assertEqual(self.player.room, self.instance_room)
+        self.assertEqual(member.room, self.instance_room)
+        self.assertEqual(
+            set(
+                run.participants.values_list(
+                    "player_id",
+                    "role",
+                    "transfer_from_id",
+                )
+            ),
+            {
+                (
+                    self.player.id,
+                    InstanceParticipant.ROLE_LEADER,
+                    self.room.id,
+                ),
+                (
+                    member.id,
+                    InstanceParticipant.ROLE_MEMBER,
+                    self.room.id,
+                ),
+            },
+        )
+        self.assertEqual(
+            set(
+                InstanceAssignment.objects.filter(
+                    instance=run.spawned_world,
+                ).values_list("player_id", flat=True)
+            ),
+            {self.player.id, member.id},
+        )
+        self.assertIsNotNone(entered_run.last_active_at)
+        self.assertEqual(
+            entered_run.spawned_world.lifecycle,
+            adv_consts.WORLD_LIFECYCLE_RUNNING,
+        )
+
+    def test_enter_players_into_run_rejects_stale_transfer_room_before_moving_anyone(self):
+        member = self.create_player("Member")
+        other_room = self.room.create_at(adv_consts.DIRECTION_NORTH)
+        member.room = other_room
+        member.save(update_fields=["room"])
+        run = create_fresh_instance_run(
+            self.instance_template,
+            leader=self.player,
+            member_ids=[member.id],
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "moved away"):
+            enter_players_into_run(
+                run,
+                players_and_transfer_rooms=[
+                    (self.player, self.room),
+                    (member, self.room),
+                ],
+                entry_room=self.instance_room,
+            )
+
+        self.player.refresh_from_db()
+        member.refresh_from_db()
+        self.assertEqual(self.player.world, self.spawn_world)
+        self.assertEqual(member.world, self.spawn_world)
+        self.assertEqual(self.player.room, self.room)
+        self.assertEqual(member.room, other_room)
+        self.assertFalse(run.participants.exists())
+        self.assertFalse(
+            InstanceAssignment.objects.filter(instance=run.spawned_world).exists()
+        )
+
+    def test_match_instance_rejects_generic_no_ref_entry(self):
+        self.instance_template.config.pvp_mode = adv_consts.PVP_MODE_MATCH
+        self.instance_template.config.save(update_fields=["pvp_mode"])
+
+        with self.assertRaisesRegex(RuntimeError, "accepted duel"):
+            self._enter()
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.world, self.spawn_world)
+        self.assertEqual(InstanceRun.objects.count(), 0)
+
+    def test_match_ref_admits_only_active_contestants(self):
+        self.instance_template.config.pvp_mode = adv_consts.PVP_MODE_MATCH
+        self.instance_template.config.save(update_fields=["pvp_mode"])
+        member = self.create_player("Member")
+        spectator = self.create_player("Spectator")
+        outsider = self.create_player("Outsider")
+        run = create_fresh_instance_run(
+            self.instance_template,
+            leader=self.player,
+            member_ids=[member.id],
+        )
+        match = DuelMatch.objects.create(
+            base_world=self.world,
+            template_world=self.instance_template,
+            entrance_room=self.room,
+            run=run,
+            challenger=self.player,
+            challenged=member,
+            status=DuelMatch.STATUS_ACTIVE,
+            expires_at=timezone.now() + timezone.timedelta(minutes=5),
+            started_at=timezone.now(),
+        )
+        DuelParticipant.objects.create(
+            match=match,
+            player=self.player,
+            role=DuelParticipant.ROLE_CONTESTANT,
+            team=1,
+        )
+        DuelParticipant.objects.create(
+            match=match,
+            player=member,
+            role=DuelParticipant.ROLE_CONTESTANT,
+            team=2,
+        )
+        DuelParticipant.objects.create(
+            match=match,
+            player=spectator,
+            role=DuelParticipant.ROLE_SPECTATOR,
+            team=1,
+        )
+
+        member_instance = self._enter(player=member, ref=run.ref)
+
+        self.assertEqual(member_instance, run.spawned_world)
+        with self.assertRaisesRegex(RuntimeError, "private"):
+            self._enter(player=spectator, ref=run.ref)
+        with self.assertRaisesRegex(RuntimeError, "private"):
+            self._enter(player=outsider, ref=run.ref)
+
+    def test_active_match_privacy_survives_template_config_mutation(self):
+        self.instance_template.config.pvp_mode = adv_consts.PVP_MODE_MATCH
+        self.instance_template.config.save(update_fields=["pvp_mode"])
+        member = self.create_player("Member")
+        outsider = self.create_player("Outsider")
+        run = create_fresh_instance_run(
+            self.instance_template,
+            leader=self.player,
+            member_ids=[member.id],
+        )
+        match = DuelMatch.objects.create(
+            base_world=self.world,
+            template_world=self.instance_template,
+            entrance_room=self.room,
+            run=run,
+            challenger=self.player,
+            challenged=member,
+            status=DuelMatch.STATUS_ACTIVE,
+            expires_at=timezone.now() + timezone.timedelta(minutes=5),
+            started_at=timezone.now(),
+        )
+        DuelParticipant.objects.create(
+            match=match,
+            player=self.player,
+            role=DuelParticipant.ROLE_CONTESTANT,
+            team=1,
+        )
+        DuelParticipant.objects.create(
+            match=match,
+            player=member,
+            role=DuelParticipant.ROLE_CONTESTANT,
+            team=2,
+        )
+        self.instance_template.config.pvp_mode = adv_consts.PVP_MODE_DISABLED
+        self.instance_template.config.save(update_fields=["pvp_mode"])
+
+        with self.assertRaisesRegex(RuntimeError, "private"):
+            self._enter(player=outsider, ref=run.ref)
+        with self.assertRaisesRegex(RuntimeError, "accepted duel"):
+            self._enter(player=outsider)
+        self.assertEqual(InstanceRun.objects.count(), 1)
+
+        entered = self._enter(player=member, ref=run.ref)
+        self.assertEqual(entered, run.spawned_world)
+
+    def test_match_entry_revalidates_run_after_startup_gap(self):
+        self.instance_template.config.pvp_mode = adv_consts.PVP_MODE_MATCH
+        self.instance_template.config.save(update_fields=["pvp_mode"])
+        member = self.create_player("Member")
+        run = create_fresh_instance_run(
+            self.instance_template,
+            leader=self.player,
+            member_ids=[member.id],
+        )
+        match = DuelMatch.objects.create(
+            base_world=self.world,
+            template_world=self.instance_template,
+            entrance_room=self.room,
+            run=run,
+            challenger=self.player,
+            challenged=member,
+            status=DuelMatch.STATUS_ACTIVE,
+            expires_at=timezone.now() + timezone.timedelta(minutes=5),
+            started_at=timezone.now(),
+        )
+        DuelParticipant.objects.create(
+            match=match,
+            player=self.player,
+            role=DuelParticipant.ROLE_CONTESTANT,
+            team=1,
+        )
+        DuelParticipant.objects.create(
+            match=match,
+            player=member,
+            role=DuelParticipant.ROLE_CONTESTANT,
+            team=2,
+        )
+
+        def complete_before_move(_run):
+            DuelMatch.objects.filter(pk=match.id).update(
+                status=DuelMatch.STATUS_COMPLETED,
+                completed_at=timezone.now(),
+            )
+            InstanceRun.objects.filter(pk=run.id).update(
+                status=InstanceRun.STATUS_COMPLETED,
+                completed_at=timezone.now(),
+            )
+
+        with patch(
+            "worlds.instances._ensure_spawned_instance_started",
+            side_effect=complete_before_move,
+        ), self.assertRaisesRegex(RuntimeError, "no longer active"):
+            self._enter(player=member, ref=run.ref)
+
+        member.refresh_from_db()
+        self.assertEqual(member.world_id, self.spawn_world.id)
+        self.assertEqual(member.room_id, self.room.id)
+
+    def test_instance_entry_revalidates_player_room_after_startup_gap(self):
+        other_room = self.room.create_at(adv_consts.DIRECTION_NORTH)
+
+        def move_player_before_final_lock(_run):
+            self.player.__class__.objects.filter(pk=self.player.id).update(
+                room=other_room,
+            )
+
+        with patch(
+            "worlds.instances._ensure_spawned_instance_started",
+            side_effect=move_player_before_final_lock,
+        ), self.assertRaisesRegex(RuntimeError, "moved away"):
+            self._enter()
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.world_id, self.spawn_world.id)
+        self.assertEqual(self.player.room_id, other_room.id)
+
+    def test_instance_entry_uses_authoritative_origin_not_stale_player_object(self):
+        other_room = self.room.create_at(adv_consts.DIRECTION_NORTH)
+        self.player.__class__.objects.filter(pk=self.player.id).update(
+            room=other_room,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "valid instance entrance"):
+            self._enter()
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.world_id, self.spawn_world.id)
+        self.assertEqual(self.player.room_id, other_room.id)
+        self.assertFalse(InstanceRun.objects.exists())
+
+    def test_match_ref_rejects_contestant_after_match_completion(self):
+        self.instance_template.config.pvp_mode = adv_consts.PVP_MODE_MATCH
+        self.instance_template.config.save(update_fields=["pvp_mode"])
+        member = self.create_player("Member")
+        run = create_fresh_instance_run(
+            self.instance_template,
+            leader=self.player,
+            member_ids=[member.id],
+        )
+        match = DuelMatch.objects.create(
+            base_world=self.world,
+            template_world=self.instance_template,
+            entrance_room=self.room,
+            run=run,
+            challenger=self.player,
+            challenged=member,
+            status=DuelMatch.STATUS_COMPLETED,
+            expires_at=timezone.now() + timezone.timedelta(minutes=5),
+            completed_at=timezone.now(),
+        )
+        DuelParticipant.objects.create(
+            match=match,
+            player=member,
+            role=DuelParticipant.ROLE_CONTESTANT,
+            team=2,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "private"):
+            self._enter(player=member, ref=run.ref)
+
     def test_enter_and_leave_move_nested_inventory_and_equipment_recursively(self):
         bag_def = self._definition("canvas-pack", "canvas pack", adv_consts.ITEM_TYPE_CONTAINER)
         gem_def = self._definition("blue-gem", "blue gem", adv_consts.ITEM_TYPE_INERT)
@@ -345,6 +738,26 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
             self.assertEqual(item.world, self.spawn_world)
             self.assertIsNotNone(item.definition_id)
 
+    def test_character_effect_runtime_follows_player_into_and_out_of_instance(self):
+        effect = ActiveEffect.objects.create(
+            world=self.spawn_world,
+            target_player=self.player,
+            scope=ActiveEffect.SCOPE_CHARACTER,
+            effect="blessing",
+            category="buff",
+            label="Blessing",
+            remaining_rounds=3,
+            duration_rounds=3,
+        )
+
+        spawned_instance = self._enter()
+        effect.refresh_from_db()
+        self.assertEqual(effect.world, spawned_instance)
+
+        World.leave_instance(player=self.player)
+        effect.refresh_from_db()
+        self.assertEqual(effect.world, self.spawn_world)
+
     def test_leave_instance_marks_participant_exited_without_deleting_run(self):
         spawned_instance = self._enter()
         run = spawned_instance.instance_run
@@ -387,6 +800,34 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
 
         mock_stop.assert_called_once()
 
+    def test_monitor_does_not_treat_offline_instance_players_as_active(self):
+        spawned_instance = self._enter()
+        run = spawned_instance.instance_run
+        self.player.in_game = False
+        self.player.save(update_fields=["in_game"])
+        old = timezone.now() - timezone.timedelta(minutes=6)
+        self.spawn_world.lifecycle = adv_consts.WORLD_LIFECYCLE_RUNNING
+        self.spawn_world.lifecycle_change_ts = timezone.now()
+        self.spawn_world.last_played_ts = old
+        self.spawn_world.save(update_fields=[
+            "lifecycle",
+            "lifecycle_change_ts",
+            "last_played_ts",
+        ])
+        run.last_active_at = old
+        run.save(update_fields=["last_active_at"])
+
+        with patch("worlds.tasks.WorldSmith") as smith:
+            monitor_worlds()
+
+        examined_world_ids = {
+            call.args[0].id
+            for call in smith.call_args_list
+            if call.args
+        }
+        self.assertIn(self.spawn_world.id, examined_world_ids)
+        self.assertIn(spawned_instance.id, examined_world_ids)
+
     def test_enter_command_uses_current_room_instance_link(self):
         self._link_current_room_to_instance()
 
@@ -427,6 +868,21 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self.assertEqual(self.player.world, self.spawn_world)
         self.assertEqual(self.player.room, self.room)
         self.assertIn("no instance entrance", message["text"].lower())
+
+    def test_enter_command_cannot_bypass_match_acceptance(self):
+        self._link_current_room_to_instance()
+        self.instance_template.config.pvp_mode = adv_consts.PVP_MODE_MATCH
+        self.instance_template.config.save(update_fields=["pvp_mode"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "enter")
+
+        self.player.refresh_from_db()
+        message = self._message_by_type(messages, "cmd.enter.error")
+        self.assertIsNotNone(message)
+        self.assertEqual(self.player.world, self.spawn_world)
+        self.assertEqual(self.player.room, self.room)
+        self.assertEqual(InstanceRun.objects.count(), 0)
 
     def test_enter_command_with_ref_joins_existing_run(self):
         self._link_current_room_to_instance()

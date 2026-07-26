@@ -82,9 +82,13 @@ Current required mappings:
   `spec.pvp_mode`; do not emit `spec.allow_pvp`. When the source has a valid
   `pvp_mode`, that value wins. Otherwise, map `allow_pvp: true` to
   `pvp_mode: free_for_all` and `allow_pvp: false` to `pvp_mode: disabled`.
+  Never infer `pvp_mode: match` from the legacy boolean; match-gated arena PvP
+  has no WR1 equivalent and must be authored explicitly in WR2.
   Exporters should audit and flag conflicts where both legacy fields are
-  present but disagree (`allow_pvp: false` with `free_for_all` or `zone`, or
-  `allow_pvp: true` with `disabled`) rather than preserving both fields.
+  present but disagree (`allow_pvp: false` with `free_for_all`, `zone`, or
+  `match`, or `allow_pvp: true` with `disabled`) rather than preserving both
+  fields. WR1 conversion should omit `spec.announce_duel_results`; there is no
+  legacy equivalent, and the WR2 default is `false`.
 - Trigger mob reactions target `kind: trigger` with `target.type:
   mobdefinition`, not `mobtemplate`.
 - Quest NPC dialogue sources use `mob_definition` / `mob_definition_id`, not
@@ -1029,6 +1033,7 @@ spec:
   death_currency_penalty: 0.2
   death_route: nearest_in_zone
   pvp_mode: zone
+  announce_duel_results: false
   player_creation:
     core_faction:
       mode: choose_required
@@ -1230,7 +1235,10 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   - currency amounts reject booleans, fractions, negatives, and values above
     `9,007,199,254,740,991`
   - `pvp_mode` is the canonical PvP field; legacy `allow_pvp` is accepted only
-    as an import alias and must not conflict when both fields are present
+    as an import alias and must not conflict when both fields are present;
+    legacy `allow_pvp: true` normalizes to `free_for_all`, never `match`
+  - `announce_duel_results` is a base-world boolean, defaults to `false`, and
+    cannot be overridden by an instance template
 - Zone and room `initial_state`, when present, must be mappings. The zone
   importer accepts legacy `spec.state` / `spec.zone_data` only as aliases for
   authored initial state; they never address a live runtime row. New manifests

@@ -239,7 +239,9 @@ def monitor_worlds():
         # If the world still has player in instasnces, we don't consider it
         # idle since they could come back out anytime.
         if Player.objects.filter(
-            world__context__instance_of=spawn_world.context).exists():
+            world__context__instance_of=spawn_world.context,
+            in_game=True,
+        ).exists():
             continue
 
         delta = _world_idle_seconds(spawn_world, now=timezone.now())
@@ -277,7 +279,10 @@ def monitor_worlds():
     for instance in stored_instances:
         logger.info("Deleting idle instance %s..." % instance.id)
         for player in instance.players.all():
-            World.leave_instance(player)
+            World.leave_instance(
+                player,
+                force_active_duel=True,
+            )
         # Redundant but we want to be absolutely sure we don't delete
         # player data.
         if instance.players.count() == 0:
