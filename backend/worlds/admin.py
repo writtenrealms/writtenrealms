@@ -2,6 +2,10 @@ from django.contrib import admin
 
 from core.admin import BaseAdmin, DirectRootWorldFilter
 from worlds.models import (
+    DeathRoutingCompiledSnapshot,
+    DeathRoutingPolicy,
+    DeathRoutingRoute,
+    DeathRoutingSnapshotReference,
     Door,
     InstanceAssignment,
     InstanceParticipant,
@@ -61,9 +65,25 @@ def root_world(config):
 root_world.short_description = 'Root World'
 
 class WorldConfigAdmin(BaseAdmin):
-    list_display = ['id', num_worlds, root_world]
-    raw_id_fields = ['starting_room', 'death_room', 'exits_to']
-    display_as_choicefield = ['death_mode', 'pvp_mode']
+    list_display = [
+        'id',
+        num_worlds,
+        root_world,
+        'death_routing_generation',
+        'death_routing_source',
+    ]
+    raw_id_fields = ['starting_room', 'exits_to']
+    display_as_choicefield = [
+        'death_mode',
+        'death_routing_source',
+        'pvp_mode',
+    ]
+    readonly_fields = [
+        'death_room',
+        'death_routing_generation',
+        'death_routing_source',
+        'death_routing_source_generation',
+    ]
     search_fields = ['configured_worlds__name']
 
 
@@ -140,13 +160,98 @@ class InstanceRunAdmin(BaseAdmin):
 
 
 class InstanceParticipantAdmin(BaseAdmin):
-    list_display = ['id', 'run', 'player', 'role', 'transfer_from', 'joined_at', 'exited_at']
-    list_filter = ['role']
-    raw_id_fields = ['run', 'player', 'transfer_from']
+    list_display = [
+        'id',
+        'run',
+        'player',
+        'role',
+        'transfer_from',
+        'return_runtime_world',
+        'joined_at',
+        'exited_at',
+        'exit_reason',
+    ]
+    list_filter = ['role', 'exit_reason']
+    raw_id_fields = [
+        'run',
+        'player',
+        'transfer_from',
+        'return_runtime_world',
+    ]
+
+
+class DerivedDeathRoutingAdmin(BaseAdmin):
+    """Derived routing records are published only through the compiler."""
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+class DeathRoutingPolicyAdmin(DerivedDeathRoutingAdmin):
+    list_display = ['id', 'config', 'enabled', 'modified_ts']
+    raw_id_fields = ['config']
+
+
+class DeathRoutingRouteAdmin(DerivedDeathRoutingAdmin):
+    list_display = [
+        'id',
+        'policy',
+        'position',
+        'compiled_version',
+        'destination_room',
+    ]
+    raw_id_fields = [
+        'policy',
+        'destination_room',
+    ]
+
+
+class DeathRoutingCompiledSnapshotAdmin(DerivedDeathRoutingAdmin):
+    list_display = [
+        'id',
+        'config',
+        'plan_generation',
+        'cache_version',
+        'retirement_pending',
+        'retired_at',
+    ]
+    raw_id_fields = ['config']
+
+
+class DeathRoutingSnapshotReferenceAdmin(DerivedDeathRoutingAdmin):
+    list_display = [
+        'id',
+        'snapshot',
+        'destination_room',
+        'core_faction',
+        'origin_zone',
+    ]
+    raw_id_fields = [
+        'snapshot',
+        'destination_room',
+        'core_faction',
+        'origin_zone',
+    ]
 
 
 admin.site.register(World, WorldAdmin)
 admin.site.register(WorldConfig, WorldConfigAdmin)
+admin.site.register(DeathRoutingPolicy, DeathRoutingPolicyAdmin)
+admin.site.register(DeathRoutingRoute, DeathRoutingRouteAdmin)
+admin.site.register(
+    DeathRoutingCompiledSnapshot,
+    DeathRoutingCompiledSnapshotAdmin,
+)
+admin.site.register(
+    DeathRoutingSnapshotReference,
+    DeathRoutingSnapshotReferenceAdmin,
+)
 admin.site.register(Zone, ZoneAdmin)
 admin.site.register(Room, RoomAdmin)
 admin.site.register(RoomFlag, RoomFlagAdmin)

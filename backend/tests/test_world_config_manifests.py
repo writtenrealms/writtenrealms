@@ -3,12 +3,30 @@ import yaml
 from rest_framework.reverse import reverse
 
 from builders.currencies import create_currency
-from builders.models import ItemDefinition, WorldBuilder, WorldStartingCurrencyBalance
+from builders.models import (
+    FACTION_TYPE_CORE,
+    Faction,
+    ItemDefinition,
+    WorldBuilder,
+    WorldStartingCurrencyBalance,
+)
 from config import constants as adv_consts
 from config import game_settings as adv_config
+from core.death_routing import (
+    load_compiled_plan,
+    resolve_death_destination,
+)
 from spawns.models import Player
 from tests.base import WorldTestCase
-from worlds.models import Room, World, WorldConfig
+from worlds.models import (
+    DeathRoutingCompiledSnapshot,
+    DeathRoutingPolicy,
+    DeathRoutingRoute,
+    DeathRoutingSnapshotReference,
+    Room,
+    World,
+    WorldConfig,
+)
 
 
 class AuthenticatedBuilderWorldTestCase(WorldTestCase):
@@ -152,6 +170,50 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(response.status_code, 200, response.data)
         self.world.config.refresh_from_db()
         self.assertTrue(self.world.config.announce_duel_results)
+
+    def test_world_config_endpoint_compiles_death_routing(self):
+        destination = self.room.create_at("east")
+        response = self.client.patch(
+            self.config_ep,
+            {
+                "death_routing": {
+                    "routes": [
+                        {
+                            "when": {
+                                "eq": [
+                                    "state.character.afterlife_path",
+                                    "ember",
+                                ],
+                            },
+                            "destination": f"room.{destination.id}",
+                        },
+                    ],
+                },
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.world.config.refresh_from_db()
+        self.assertEqual(self.world.config.death_routing_generation, 1)
+        self.assertEqual(
+            self.world.config.death_routing_policy.routes.get().destination_room,
+            destination,
+        )
+        self.assertEqual(
+            response.data["death_routing"]["routes"][0]["destination"]["id"],
+            destination.id,
+        )
+
+    def test_world_config_endpoint_rejects_instance_source_on_base_world(self):
+        response = self.client.patch(
+            self.config_ep,
+            {"death_routing_source": "base_world"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("death_routing_source", response.data)
 
     def test_world_config_endpoint_requires_currencies_for_monetary_policies(self):
         response = self.client.patch(
@@ -697,6 +759,711 @@ spec:
         self.world.config.refresh_from_db()
         self.assertEqual(self.world.config.death_mode, "destroy_all")
 
+    def test_death_routing_manifest_compiles_first_death_and_four_choices(self):
+        first_death = self.room.create_at("east")
+        choice_rooms = [
+            Room.objects.create(
+                world=self.world,
+                zone=self.zone,
+                name=f"Choice {index}",
+                x=10 + index,
+                y=0,
+                z=0,
+            )
+            for index in range(4)
+        ]
+        manifest = f"""
+kind: world
+spec:
+  death_routing:
+    routes:
+      - when:
+          eq: [state.character.afterlife_path, null]
+        destination: room@{first_death.x},{first_death.y},{first_death.z}
+      - when:
+          eq: [state.character.afterlife_path, ember]
+        destination: room.{choice_rooms[0].id}
+      - when:
+          eq: [state.character.afterlife_path, tide]
+        destination: room.{choice_rooms[1].id}
+      - when:
+          eq: [state.character.afterlife_path, stone]
+        destination: room.{choice_rooms[2].id}
+      - when:
+          eq: [state.character.afterlife_path, wind]
+        destination: room.{choice_rooms[3].id}
+"""
+
+        response = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.world.config.refresh_from_db()
+        policy = DeathRoutingPolicy.objects.get(config=self.world.config)
+        self.assertTrue(policy.enabled)
+        self.assertEqual(
+            DeathRoutingRoute.objects.filter(policy=policy).count(),
+            5,
+        )
+        self.assertEqual(
+            list(policy.routes.values_list("position", flat=True)),
+            [0, 1, 2, 3, 4],
+        )
+        self.assertEqual(self.world.config.death_routing_generation, 1)
+        snapshot = DeathRoutingCompiledSnapshot.objects.get(
+            config=self.world.config,
+            plan_generation=1,
+        )
+        self.assertEqual(
+            set(
+                DeathRoutingSnapshotReference.objects.filter(
+                    snapshot=snapshot,
+                    destination_room__isnull=False,
+                ).values_list("destination_room_id", flat=True)
+            ),
+            {
+                self.world.config.death_room_id,
+                first_death.id,
+                *(room.id for room in choice_rooms),
+            },
+        )
+        self.assertFalse(
+            snapshot.references.filter(core_faction__isnull=False).exists()
+        )
+        self.assertFalse(
+            snapshot.references.filter(origin_zone__isnull=False).exists()
+        )
+
+        plan = load_compiled_plan(self.world.config)
+        self.assertEqual(
+            plan.required_state_paths,
+            ("state.character.afterlife_path",),
+        )
+        first = resolve_death_destination(
+            plan,
+            core_faction_id=None,
+            archetype=None,
+            player_level=1,
+            character_state={},
+            origin_zone_id=self.zone.id,
+        )
+        # A state-only route remains the clean, bounded way to converge every
+        # faction on one destination.
+        ember = resolve_death_destination(
+            plan,
+            core_faction_id=999,
+            archetype=None,
+            player_level=1,
+            character_state={"afterlife_path": "ember"},
+            origin_zone_id=self.zone.id,
+        )
+        unknown = resolve_death_destination(
+            plan,
+            core_faction_id=None,
+            archetype=None,
+            player_level=1,
+            character_state={"afterlife_path": "unknown"},
+            origin_zone_id=self.zone.id,
+        )
+        self.assertEqual(first.room_id, first_death.id)
+        self.assertEqual(first.reason, "ordered_route")
+        self.assertEqual(first.matched_route_position, 0)
+        self.assertEqual(ember.room_id, choice_rooms[0].id)
+        self.assertEqual(ember.matched_route_position, 1)
+        self.assertEqual(unknown.room_id, self.world.config.death_room_id)
+        self.assertEqual(unknown.fallback_reason, "no_match")
+        self.assertIsNone(unknown.matched_route_position)
+
+        export_response = self.client.get(self.export_ep)
+        export_documents = [
+            document
+            for document in yaml.safe_load_all(export_response.data["yaml"])
+            if document is not None
+        ]
+        exported = export_documents[-1]["spec"]["death_routing"]
+        self.assertEqual(set(exported), {"routes"})
+        self.assertEqual(len(exported["routes"]), 5)
+        self.assertEqual(
+            exported["routes"][0]["when"],
+            {"eq": ["state.character.afterlife_path", None]},
+        )
+        self.assertEqual(
+            exported["routes"][0]["destination"],
+            f"room@{first_death.x},{first_death.y},{first_death.z}",
+        )
+
+    def test_death_routing_manifest_compiles_core_faction_ids_without_expansion(self):
+        destination = self.room.create_at("east")
+        factions = [
+            Faction.objects.create(
+                world=self.world,
+                code=code,
+                name=code.title(),
+                type=FACTION_TYPE_CORE,
+                playable=True,
+            )
+            for code in ("human", "orc")
+        ]
+        manifest = f"""
+kind: world
+spec:
+  death_routing:
+    routes:
+      - when:
+          all:
+            - eq: [state.character.afterlife_path, ember]
+            - in: [player.core_faction, [human, orc]]
+        destination: room.{destination.id}
+"""
+
+        response = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.world.config.refresh_from_db()
+        routes = DeathRoutingRoute.objects.filter(
+            policy__config=self.world.config
+        )
+        self.assertEqual(routes.count(), 1)
+        compiled_condition = routes.get().compiled_condition
+        self.assertEqual(
+            set(compiled_condition["children"][1]["values"]),
+            {faction.id for faction in factions},
+        )
+        snapshot = DeathRoutingCompiledSnapshot.objects.get(
+            config=self.world.config,
+            plan_generation=self.world.config.death_routing_generation,
+        )
+        self.assertEqual(
+            set(
+                snapshot.references.filter(
+                    core_faction__isnull=False,
+                ).values_list("core_faction_id", flat=True)
+            ),
+            {faction.id for faction in factions},
+        )
+        plan = load_compiled_plan(self.world.config)
+        for faction in factions:
+            with self.subTest(faction=faction.code):
+                resolution = resolve_death_destination(
+                    plan,
+                    core_faction_id=faction.id,
+                    archetype=None,
+                    player_level=1,
+                    character_state={"afterlife_path": "ember"},
+                    origin_zone_id=self.zone.id,
+                )
+                self.assertEqual(resolution.room_id, destination.id)
+                self.assertEqual(resolution.reason, "ordered_route")
+                self.assertEqual(resolution.matched_route_position, 0)
+
+    def test_death_routing_manifest_uses_first_matching_authored_route(self):
+        first_destination = self.room.create_at("east")
+        second_destination = self.room.create_at("north")
+        manifest = f"""
+kind: world
+spec:
+  death_routing:
+    routes:
+      - when:
+          in: [state.character.afterlife_path, [ember, tide]]
+        destination: room.{first_destination.id}
+      - when:
+          eq: [state.character.afterlife_path, ember]
+        destination: room.{second_destination.id}
+"""
+
+        response = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.world.config.refresh_from_db()
+        self.assertEqual(self.world.config.death_routing_policy.routes.count(), 2)
+        resolution = resolve_death_destination(
+            load_compiled_plan(self.world.config),
+            core_faction_id=None,
+            archetype=None,
+            player_level=1,
+            character_state={"afterlife_path": "ember"},
+            origin_zone_id=self.zone.id,
+        )
+        self.assertEqual(resolution.room_id, first_destination.id)
+        self.assertEqual(resolution.matched_route_position, 0)
+
+    def test_death_routing_manifest_round_trips_level_thresholds(self):
+        lower_destination = self.room.create_at("east")
+        upper_destination = self.room.create_at("north")
+        manifest = f"""
+kind: world
+spec:
+  death_routing:
+    routes:
+      - when:
+          lte: [player.level, 9]
+        destination: room.{lower_destination.id}
+      - when:
+          gte: [player.level, 10]
+        destination: room.{upper_destination.id}
+"""
+
+        response = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.world.config.refresh_from_db()
+        routes = list(
+            DeathRoutingRoute.objects.filter(
+                policy__config=self.world.config,
+            ).order_by("position")
+        )
+        self.assertEqual(
+            [route.condition for route in routes],
+            [
+                {"lte": ["player.level", 9]},
+                {"gte": ["player.level", 10]},
+            ],
+        )
+        self.assertEqual(
+            [route.compiled_condition for route in routes],
+            [
+                {"op": "lte", "source": "level", "value": 9},
+                {"op": "gte", "source": "level", "value": 10},
+            ],
+        )
+
+        plan = load_compiled_plan(self.world.config)
+        self.assertEqual(plan.required_state_paths, ())
+        for level, expected_room, expected_position in [
+            (9, lower_destination, 0),
+            (10, upper_destination, 1),
+        ]:
+            with self.subTest(level=level):
+                resolution = resolve_death_destination(
+                    plan,
+                    core_faction_id=None,
+                    archetype=None,
+                    player_level=level,
+                    character_state={},
+                    origin_zone_id=self.zone.id,
+                )
+                self.assertEqual(resolution.room_id, expected_room.id)
+                self.assertEqual(
+                    resolution.matched_route_position,
+                    expected_position,
+                )
+
+        export_response = self.client.get(self.export_ep)
+        exported_documents = [
+            document
+            for document in yaml.safe_load_all(export_response.data["yaml"])
+            if document is not None
+        ]
+        self.assertEqual(
+            exported_documents[-1]["spec"]["death_routing"]["routes"],
+            [
+                {
+                    "when": {"lte": ["player.level", 9]},
+                    "destination": (
+                        f"room@{lower_destination.x},"
+                        f"{lower_destination.y},{lower_destination.z}"
+                    ),
+                },
+                {
+                    "when": {"gte": ["player.level", 10]},
+                    "destination": (
+                        f"room@{upper_destination.x},"
+                        f"{upper_destination.y},{upper_destination.z}"
+                    ),
+                },
+            ],
+        )
+
+    def test_base_update_can_add_class_profile_and_class_route_together(self):
+        destination = self.room.create_at("east")
+        manifest = f"""
+kind: world
+spec:
+  stats:
+    attributes:
+      - key: focus
+        label: Focus
+    class_profiles:
+      psychopomp:
+        label: Psychopomp
+        main_attribute: focus
+        attribute_weights:
+          focus: 4
+  death_routing:
+    routes:
+      - when:
+          eq: [player.archetype, psychopomp]
+        destination: room.{destination.id}
+"""
+
+        response = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.world.config.refresh_from_db()
+        self.assertIn(
+            "psychopomp",
+            self.world.config.stat_system["class_profiles"],
+        )
+        route = DeathRoutingRoute.objects.get(
+            policy__config=self.world.config,
+        )
+        self.assertEqual(
+            route.condition,
+            {"eq": ["player.archetype", "psychopomp"]},
+        )
+        self.assertEqual(route.compiled_condition["source"], "archetype")
+        self.assertEqual(route.compiled_condition["value"], "psychopomp")
+        resolution = resolve_death_destination(
+            load_compiled_plan(self.world.config),
+            core_faction_id=None,
+            archetype="psychopomp",
+            player_level=1,
+            character_state={},
+            origin_zone_id=self.zone.id,
+        )
+        self.assertEqual(resolution.room_id, destination.id)
+        self.assertEqual(resolution.matched_route_position, 0)
+
+    def test_base_class_removal_waits_for_instance_local_route_to_clear(self):
+        add_class_response = self.client.post(
+            self.apply_ep,
+            {
+                "manifest": """
+kind: world
+spec:
+  stats:
+    attributes:
+      - key: brawn
+        label: Brawn
+    class_profiles:
+      warlord:
+        label: Warlord
+        main_attribute: brawn
+        attribute_weights:
+          brawn: 4
+""",
+            },
+            format="json",
+        )
+        self.assertEqual(
+            add_class_response.status_code,
+            200,
+            add_class_response.data,
+        )
+
+        instance = self._instance_world()
+        instance_destination = Room.objects.create(
+            world=instance,
+            zone=instance.config.starting_room.zone,
+            name="The Warlord Afterlife",
+            x=2,
+            y=0,
+            z=0,
+        )
+        instance_apply_ep = reverse(
+            "builder-world-manifest-apply",
+            args=[instance.pk],
+        )
+        route_response = self.client.post(
+            instance_apply_ep,
+            {
+                "manifest": f"""
+kind: world
+spec:
+  death_routing:
+    routes:
+      - when:
+          eq: [player.archetype, warlord]
+        destination: room.{instance_destination.id}
+""",
+            },
+            format="json",
+        )
+        self.assertEqual(route_response.status_code, 200, route_response.data)
+
+        remove_class_manifest = """
+kind: world
+spec:
+  stats:
+    default_profile:
+      label: ""
+      main_attribute: ""
+      attribute_weights: {}
+      stat_rules: []
+    class_profiles: {}
+"""
+        blocked_response = self.client.post(
+            self.apply_ep,
+            {"manifest": remove_class_manifest},
+            format="json",
+        )
+
+        self.assertEqual(blocked_response.status_code, 400)
+        self.assertIn(
+            "Cannot remove class profile(s) used by death routing: warlord.",
+            str(blocked_response.data),
+        )
+        self.world.config.refresh_from_db()
+        self.assertIn(
+            "warlord",
+            self.world.config.stat_system["class_profiles"],
+        )
+        instance.config.refresh_from_db()
+        self.assertTrue(instance.config.death_routing_policy.enabled)
+
+        clear_response = self.client.post(
+            instance_apply_ep,
+            {
+                "manifest": """
+kind: world
+spec:
+  death_routing: null
+""",
+            },
+            format="json",
+        )
+        self.assertEqual(clear_response.status_code, 200, clear_response.data)
+
+        removal_response = self.client.post(
+            self.apply_ep,
+            {"manifest": remove_class_manifest},
+            format="json",
+        )
+
+        self.assertEqual(removal_response.status_code, 200, removal_response.data)
+        self.world.config.refresh_from_db()
+        self.assertEqual(
+            self.world.config.stat_system["class_profiles"],
+            {},
+        )
+        instance.config.refresh_from_db()
+        self.assertFalse(instance.config.death_routing_policy.enabled)
+        self.assertFalse(instance.config.death_routing_policy.routes.exists())
+
+    def test_clearing_death_routing_creates_disabled_empty_policy(self):
+        destination = self.room.create_at("east")
+        response = self.client.post(
+            self.apply_ep,
+            {
+                "manifest": f"""
+kind: world
+spec:
+  death_routing:
+    routes:
+      - when:
+          eq: [state.character.afterlife_path, ember]
+        destination: room.{destination.id}
+""",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+
+        response = self.client.post(
+            self.apply_ep,
+            {
+                "manifest": """
+kind: world
+spec:
+  death_routing: null
+""",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.world.config.refresh_from_db()
+        self.assertEqual(self.world.config.death_routing_generation, 2)
+        self.assertFalse(self.world.config.death_routing_policy.enabled)
+        self.assertEqual(self.world.config.death_routing_policy.routes.count(), 0)
+        config_response = self.client.get(self.config_ep)
+        self.assertEqual(
+            config_response.data["manifest"]["spec"]["death_routing"],
+            {"routes": []},
+        )
+
+    def test_retired_snapshots_release_references_and_keep_eight_generations(self):
+        destination = self.room.create_at("east")
+
+        for generation in range(1, 11):
+            response = self.client.post(
+                self.apply_ep,
+                {
+                    "manifest": f"""
+kind: world
+spec:
+  death_routing:
+    routes:
+      - when:
+          eq: [state.character.route_generation, {generation}]
+        destination: room.{destination.id}
+""",
+                },
+                format="json",
+            )
+            self.assertEqual(
+                response.status_code,
+                200,
+                response.data,
+            )
+
+        self.world.config.refresh_from_db()
+        self.assertEqual(self.world.config.death_routing_generation, 10)
+        snapshots = DeathRoutingCompiledSnapshot.objects.filter(
+            config=self.world.config,
+        )
+        self.assertEqual(snapshots.count(), 8)
+        self.assertEqual(
+            list(
+                snapshots.order_by("plan_generation").values_list(
+                    "plan_generation",
+                    flat=True,
+                )
+            ),
+            list(range(3, 11)),
+        )
+
+        current_snapshot = snapshots.get(plan_generation=10)
+        retired_snapshots = snapshots.exclude(pk=current_snapshot.pk)
+        self.assertEqual(
+            retired_snapshots.filter(retired_at__isnull=False).count(),
+            7,
+        )
+        self.assertFalse(
+            DeathRoutingSnapshotReference.objects.filter(
+                snapshot__in=retired_snapshots,
+            ).exists()
+        )
+        self.assertEqual(
+            set(
+                current_snapshot.references.filter(
+                    destination_room__isnull=False,
+                ).values_list("destination_room_id", flat=True)
+            ),
+            {
+                self.world.config.death_room_id,
+                destination.id,
+            },
+        )
+        self.assertEqual(
+            DeathRoutingSnapshotReference.objects.filter(
+                snapshot__config=self.world.config,
+            ).count(),
+            2,
+        )
+
+    def test_death_room_change_rebuilds_compiled_plan_generation(self):
+        destination = self.room.create_at("east")
+        response = self.client.post(
+            self.apply_ep,
+            {
+                "manifest": f"""
+kind: world
+spec:
+  death_routing:
+    routes:
+      - when:
+          eq: [state.character.afterlife_path, ember]
+        destination: room.{destination.id}
+""",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        new_fallback = self.room.create_at("north")
+
+        response = self.client.post(
+            self.apply_ep,
+            {
+                "manifest": f"""
+kind: world
+spec:
+  death_room: room.{new_fallback.id}
+""",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.world.config.refresh_from_db()
+        self.assertEqual(self.world.config.death_routing_generation, 2)
+        plan = load_compiled_plan(self.world.config)
+        self.assertEqual(plan.fallback_room_id, new_fallback.id)
+        self.assertEqual(
+            resolve_death_destination(
+                plan,
+                core_faction_id=None,
+                archetype=None,
+                player_level=1,
+                character_state={"afterlife_path": "ember"},
+                origin_zone_id=self.zone.id,
+            ).room_id,
+            destination.id,
+        )
+
+    def test_compiled_plan_uses_current_fallback_if_snapshot_is_stale(self):
+        destination = self.room.create_at("east")
+        response = self.client.post(
+            self.apply_ep,
+            {
+                "manifest": f"""
+kind: world
+spec:
+  death_routing:
+    routes:
+      - when:
+          eq: [state.character.afterlife_path, ember]
+        destination: room.{destination.id}
+""",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.world.config.refresh_from_db()
+        old_plan = load_compiled_plan(self.world.config)
+
+        repaired_fallback = self.room.create_at("north")
+        WorldConfig.objects.filter(pk=self.world.config_id).update(
+            death_room=repaired_fallback
+        )
+        self.world.config.refresh_from_db()
+        repaired_plan = load_compiled_plan(self.world.config)
+
+        self.assertEqual(old_plan.fallback_room_id, self.room.id)
+        self.assertEqual(repaired_plan.generation, old_plan.generation)
+        self.assertEqual(repaired_plan.fallback_room_id, repaired_fallback.id)
+        self.assertEqual(
+            resolve_death_destination(
+                repaired_plan,
+                core_faction_id=None,
+                archetype=None,
+                player_level=1,
+                character_state={"afterlife_path": "unknown"},
+                origin_zone_id=self.zone.id,
+            ).room_id,
+            repaired_fallback.id,
+        )
+
     def test_apply_world_config_manifest_accepts_async_combat_pacing_sentinel(self):
         manifest = f"""
 kind: world
@@ -851,6 +1618,85 @@ spec:
         self.assertEqual(instance.config.death_route, "near_room")
         self.assertEqual(instance.config.pvp_mode, adv_consts.PVP_MODE_MATCH)
 
+    def test_instance_death_routing_source_is_explicit_and_preserves_local_policy(self):
+        instance = self._instance_world()
+        destination = Room.objects.create(
+            world=instance,
+            zone=instance.config.starting_room.zone,
+            name="Instance Afterlife",
+            x=2,
+            y=0,
+            z=0,
+        )
+        endpoint = reverse("builder-world-manifest-apply", args=[instance.pk])
+        response = self.client.post(
+            endpoint,
+            {
+                "manifest": f"""
+kind: world
+spec:
+  death_routing:
+    routes:
+      - when:
+          eq: [state.character.afterlife_path, ember]
+        destination: room.{destination.id}
+  death_routing_source: base_world
+""",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        instance.config.refresh_from_db()
+        self.assertEqual(instance.config.death_routing_source, "base_world")
+        self.assertEqual(instance.config.death_routing_source_generation, 1)
+        self.assertTrue(instance.config.death_routing_policy.enabled)
+        self.assertEqual(instance.config.death_routing_policy.routes.count(), 1)
+
+        config_response = self.client.get(
+            reverse("builder-world-config", args=[instance.pk])
+        )
+        self.assertEqual(config_response.status_code, 200)
+        spec = config_response.data["manifest"]["spec"]
+        self.assertEqual(spec["death_routing_source"], "base_world")
+        self.assertEqual(
+            spec["death_routing"]["routes"][0]["destination"],
+            f"room@{destination.x},{destination.y},{destination.z}",
+        )
+
+        response = self.client.post(
+            endpoint,
+            {
+                "manifest": """
+kind: world
+spec:
+  death_routing_source: local
+""",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        instance.config.refresh_from_db()
+        self.assertEqual(instance.config.death_routing_source, "local")
+        self.assertEqual(instance.config.death_routing_source_generation, 2)
+        self.assertEqual(instance.config.death_routing_policy.routes.count(), 1)
+
+    def test_base_world_rejects_death_routing_source(self):
+        response = self.client.post(
+            self.apply_ep,
+            {
+                "manifest": """
+kind: world
+spec:
+  death_routing_source: base_world
+""",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("only valid for instance worlds", str(response.data))
+
     def test_instance_world_config_manifest_normalizes_legacy_allow_pvp(self):
         instance = self._instance_world()
         ep = reverse("builder-world-manifest-apply", args=[instance.pk])
@@ -906,6 +1752,21 @@ spec:
         text = str(resp.data)
         self.assertIn("can only alter local instance config", text)
         self.assertIn("clan_registration_cost", text)
+
+    def test_instance_direct_config_patch_updates_death_routing_source(self):
+        instance = self._instance_world()
+        ep = reverse("builder-world-config", args=[instance.pk])
+
+        response = self.client.patch(
+            ep,
+            {"death_routing_source": "base_world"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        instance.config.refresh_from_db()
+        self.assertEqual(instance.config.death_routing_source, "base_world")
+        self.assertEqual(instance.config.death_routing_source_generation, 1)
 
     def test_instance_local_config_patch_does_not_rewrite_inherited_combat_flags(self):
         instance = self._instance_world()

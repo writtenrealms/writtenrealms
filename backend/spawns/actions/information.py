@@ -494,7 +494,7 @@ class WhoAction:
     def _players_for_actor(self, actor: Player) -> list[Player]:
         qs = (
             Player.objects.filter(world=actor.world, in_game=True)
-            .select_related("user", "room")
+            .select_related("user", "room", "core_faction")
             .prefetch_related("faction_assignments__faction", "clan_memberships__clan")
             .order_by("id")
         )

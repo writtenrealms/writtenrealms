@@ -962,7 +962,10 @@ class TestBuilderWizKill(BuilderCommandTestCase):
 
         target.refresh_from_db()
         self.assertEqual(target.room_id, self.death_room.id)
-        self.assertGreater(target.health, 0)
+        self.assertEqual(
+            (target.health, target.energy, target.stamina),
+            (1, 1, 1),
+        )
 
         success = self._message_by_type(messages, "cmd./kill.success", self.player.key)
         self.assertIsNotNone(success)
@@ -971,6 +974,14 @@ class TestBuilderWizKill(BuilderCommandTestCase):
         affect = self._message_by_type(messages, "affect.death", target.key)
         self.assertIsNotNone(affect)
         self.assertEqual(affect["text"], "The pit swallows you whole.")
+        self.assertEqual(
+            (
+                affect["data"]["actor"]["health"],
+                affect["data"]["actor"]["energy"],
+                affect["data"]["actor"]["stamina"],
+            ),
+            (1, 1, 1),
+        )
         self.assertEqual(affect["data"]["room"]["id"], self.death_room.id)
         self.assertEqual(affect["data"]["origin_room"]["id"], self.room.id)
 

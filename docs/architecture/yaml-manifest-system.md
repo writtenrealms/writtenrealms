@@ -61,6 +61,17 @@ Current required mappings:
   as an explicit absence and normalized away; canonical exports omit it.
 - Normalize only the known WR1 item-currency enum value `medal` to the built-in
   code `medals`; do not rename an unrelated authored custom code by guesswork.
+- A single fixed authored WR1 death room may become `spec.death_room`. Do not
+  copy legacy `death_route` values, spatial routing, faction `Procession`
+  destinations, player marks, past deaths, or player faction assignments into
+  `spec.death_routing`. When every legacy path can be proven to converge on one
+  room, that room may be the fail-safe; otherwise retain the global room and
+  flag the old routing policy for builder review.
+- Converted instance templates always emit
+  `death_routing_source: local`. The optional exporter must never infer base
+  delegation from WR1 content or runtime history. Builders may author a new
+  ordered deterministic policy after import using explicit character-state,
+  core-faction, class/archetype, player-level, and origin-zone selectors.
 - Convert representable legacy currency conditions to the existing structured
   condition path `actor.balances.<code>`. Flag ambiguous predicates for builder
   review instead of inventing a second currency condition language.
@@ -1239,6 +1250,17 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
     legacy `allow_pvp: true` normalizes to `free_for_all`, never `match`
   - `announce_duel_results` is a base-world boolean, defaults to `false`, and
     cannot be overridden by an instance template
+  - `death_routing.routes` is an ordered first-match list; each route has one
+    shared-DSL `when` condition and one local room `destination`
+  - death-route conditions are limited to the bounded query-free subset over
+    `player.core_faction`, `player.archetype`, `player.level`,
+    `state.character.*`, and `zone.id`; level supports inclusive `gte` / `lte`
+    thresholds, and query-backed condition operators are rejected
+  - death-route faction codes, class keys, zone refs, and destination room refs
+    resolve during manifest apply, and canonical export preserves route order
+  - `death_routing_source` is instance-only; `local` is the default and
+    `base_world` selects the direct base world's complete policy without
+    merging local routes
 - Zone and room `initial_state`, when present, must be mappings. The zone
   importer accepts legacy `spec.state` / `spec.zone_data` only as aliases for
   authored initial state; they never address a live runtime row. New manifests

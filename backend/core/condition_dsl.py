@@ -486,6 +486,45 @@ def _actor_currency_balance(
     return int(snapshot.get(code, 0) or 0)
 
 
+def _loaded_player_core_faction_code(player: Any) -> str | None:
+    """
+    Resolve canonical core identity.
+
+    Callers on hot paths should select ``core_faction`` with the Player. Other
+    shared-condition callers may pay one lazy relation read only when they
+    explicitly reference this path.
+    """
+    if (
+        player is None
+        or getattr(getattr(player, "__class__", None), "__name__", "") != "Player"
+    ):
+        return None
+
+    model_state = getattr(player, "_state", None)
+    fields_cache = getattr(model_state, "fields_cache", {}) if model_state else {}
+    core_faction = fields_cache.get("core_faction")
+    if getattr(player, "core_faction_id", None):
+        if core_faction is None:
+            core_faction = getattr(player, "core_faction", None)
+        code = str(getattr(core_faction, "code", "") or "").strip()
+        return code.lower().replace(" ", "_") or None
+
+    assignments = getattr(player, "_prefetched_objects_cache", {}).get(
+        "faction_assignments"
+    )
+    if assignments is None:
+        return None
+    for assignment in assignments:
+        candidate = getattr(assignment, "faction", None)
+        if candidate and (
+            getattr(candidate, "type", None) == "core"
+            or getattr(candidate, "is_core", False)
+        ):
+            code = str(getattr(candidate, "code", "") or "").strip()
+            return code.lower().replace(" ", "_") or None
+    return None
+
+
 def resolve_path(path: Any, context: ConditionContext) -> Any:
     normalized = str(path or "").strip()
     if not normalized:
@@ -493,6 +532,14 @@ def resolve_path(path: Any, context: ConditionContext) -> Any:
 
     actor = _context_actor(context)
     player = _context_player(context)
+    # Core identity is deliberately resolved before room/zone/world context.
+    # Those helpers may follow unloaded ORM relations, while this path's
+    # runtime contract is a query-free lookup from the already-loaded Player.
+    if normalized == "player.core_faction":
+        return _loaded_player_core_faction_code(player)
+    if normalized == "actor.core_faction":
+        return _loaded_player_core_faction_code(actor)
+
     character = _context_character(context)
     room = _context_room(context)
     zone = _context_zone(context)

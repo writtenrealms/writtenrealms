@@ -55,6 +55,20 @@ from core.abilities import (
     normalize_ability_progression,
 )
 from core.condition_dsl import validate_condition_payload
+from core.death_routing import (
+    DEATH_ROUTING_SOURCE_BASE_WORLD,
+    DEATH_ROUTING_SOURCE_LOCAL,
+    DEATH_ROUTING_SOURCES,
+    DeathRoutingCompilation,
+    DeathRoutingValidationError,
+    acquire_death_routing_config_locks,
+    canonical_death_routing_manifest_value,
+    compile_death_routing_policy,
+    death_routing_config_ids_for_world,
+    rebuild_compiled_policy_snapshot,
+    replace_compiled_policy,
+    validate_death_routing_archetype_dependencies,
+)
 from core.combat_formulas import (
     CombatFormulaValidationError,
     get_world_combat_system,
@@ -117,7 +131,7 @@ from core.world_config import (
     INSTANCE_LOCAL_MANIFEST_FIELDS,
 )
 from spawns import trigger_matcher
-from worlds.models import Room, World, Zone
+from worlds.models import Room, World, WorldConfig, Zone
 
 
 MANIFEST_API_VERSION = "v1alpha1"
@@ -252,6 +266,8 @@ _WORLD_CONFIG_LEVELING_FIELD = "leveling_curve"
 _WORLD_CONFIG_ABILITY_PROGRESS_FIELD = "ability_progression"
 _WORLD_CONFIG_PLAYER_CREATION_FIELD = "player_creation"
 _WORLD_CONFIG_STARTING_EQUIPMENT_FIELD = "starting_equipment"
+_WORLD_CONFIG_DEATH_ROUTING_FIELD = "death_routing"
+_WORLD_CONFIG_DEATH_ROUTING_SOURCE_FIELD = "death_routing_source"
 _WORLD_FIELDS_PROPAGATED_TO_SPAWNS = {
     "name",
     "short_description",
@@ -430,6 +446,11 @@ class ParsedWorldConfigManifest:
     update_default_currency: bool = False
     starting_balances: dict[Currency, int] | None = None
     initial_state: dict[str, Any] | None = None
+    update_death_routing: bool = False
+    death_routing: DeathRoutingCompilation | None = None
+    death_routing_policy: Any = None
+    update_death_routing_source: bool = False
+    death_routing_source: str | None = None
 
 
 @dataclass
@@ -1042,12 +1063,23 @@ def world_config_to_manifest(
         "death_route": config.death_route,
         "death_currency": _serialize_currency_reference(config.death_currency),
         "death_currency_penalty": _serialize_number(config.death_currency_penalty),
+        _WORLD_CONFIG_DEATH_ROUTING_FIELD: canonical_death_routing_manifest_value(
+            config=config,
+            serialize_room=lambda room: _serialize_world_room_reference(
+                room=room,
+                mode=room_reference_mode,
+            ),
+        ),
         "pvp_mode": config.pvp_mode,
         "built_by": config.built_by or "",
         "small_background": config.small_background or "",
         "large_background": config.large_background or "",
         "initial_state": dict(world.initial_state or {}),
     }
+    if is_instance_world:
+        spec[_WORLD_CONFIG_DEATH_ROUTING_SOURCE_FIELD] = (
+            config.death_routing_source or DEATH_ROUTING_SOURCE_LOCAL
+        )
     if not is_instance_world:
         spec.update(
             {
@@ -1146,11 +1178,22 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
         "death_route": config.death_route,
         "death_currency": _serialize_currency_reference(config.death_currency),
         "death_currency_penalty": _serialize_number(config.death_currency_penalty),
+        _WORLD_CONFIG_DEATH_ROUTING_FIELD: canonical_death_routing_manifest_value(
+            config=config,
+            serialize_room=lambda room: _serialize_world_room_reference(
+                room=room,
+                mode="coords",
+            ),
+        ),
         "small_background": config.small_background or "",
         "large_background": config.large_background or "",
         "pvp_mode": config.pvp_mode,
         "built_by": config.built_by or "",
     }
+    if is_instance_world:
+        config_payload[_WORLD_CONFIG_DEATH_ROUTING_SOURCE_FIELD] = (
+            config.death_routing_source or DEATH_ROUTING_SOURCE_LOCAL
+        )
     if not is_instance_world:
         config_payload.update(
             {
@@ -6513,6 +6556,8 @@ def parse_world_config_manifest(
     allowed_fields.add(_WORLD_CONFIG_ABILITY_PROGRESS_FIELD)
     allowed_fields.add(_WORLD_CONFIG_PLAYER_CREATION_FIELD)
     allowed_fields.add(_WORLD_CONFIG_STARTING_EQUIPMENT_FIELD)
+    allowed_fields.add(_WORLD_CONFIG_DEATH_ROUTING_FIELD)
+    allowed_fields.add(_WORLD_CONFIG_DEATH_ROUTING_SOURCE_FIELD)
     allowed_fields.add("initial_state")
     allowed_fields.update({
         "default_currency",
@@ -6543,6 +6588,29 @@ def parse_world_config_manifest(
             raise serializers.ValidationError(
                 "Instance world config manifests can only alter local instance fields. "
                 f"Cannot alter: {', '.join(disallowed_fields)}."
+            )
+    elif _WORLD_CONFIG_DEATH_ROUTING_SOURCE_FIELD in spec:
+        raise serializers.ValidationError(
+            "spec.death_routing_source is only valid for instance worlds."
+        )
+
+    update_death_routing = _WORLD_CONFIG_DEATH_ROUTING_FIELD in spec
+    death_routing = None
+
+    update_death_routing_source = (
+        _WORLD_CONFIG_DEATH_ROUTING_SOURCE_FIELD in spec
+    )
+    death_routing_source = None
+    if update_death_routing_source:
+        raw_source = spec.get(_WORLD_CONFIG_DEATH_ROUTING_SOURCE_FIELD)
+        if raw_source is None:
+            raise serializers.ValidationError(
+                "spec.death_routing_source cannot be null."
+            )
+        death_routing_source = str(raw_source).strip().lower()
+        if death_routing_source not in DEATH_ROUTING_SOURCES:
+            raise serializers.ValidationError(
+                "spec.death_routing_source must be local or base_world."
             )
 
     world_updates: dict[str, Any] = {}
@@ -6828,6 +6896,35 @@ def parse_world_config_manifest(
         raise serializers.ValidationError(
             "spec.clan_registration_currency is required when clan_registration_cost is nonzero.")
 
+    prospective_stat_system = config_updates.get("stat_system")
+    if update_death_routing:
+        routing_policy = spec.get(_WORLD_CONFIG_DEATH_ROUTING_FIELD)
+    else:
+        routing_policy = None
+
+    if prospective_stat_system is not None:
+        try:
+            validate_death_routing_archetype_dependencies(
+                base_world=world,
+                stat_system=prospective_stat_system,
+                excluded_config_ids=(
+                    (config.pk,) if update_death_routing else ()
+                ),
+            )
+        except DeathRoutingValidationError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
+    if update_death_routing:
+        try:
+            death_routing = compile_death_routing_policy(
+                world=world,
+                policy=routing_policy,
+                field_name=f"spec.{_WORLD_CONFIG_DEATH_ROUTING_FIELD}",
+                stat_system=prospective_stat_system,
+            )
+        except DeathRoutingValidationError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
     return ParsedWorldConfigManifest(
         world=world,
         world_updates=world_updates,
@@ -6836,6 +6933,11 @@ def parse_world_config_manifest(
         update_default_currency=update_default_currency,
         starting_balances=starting_balances,
         initial_state=initial_state,
+        update_death_routing=update_death_routing,
+        death_routing=death_routing,
+        death_routing_policy=routing_policy,
+        update_death_routing_source=update_death_routing_source,
+        death_routing_source=death_routing_source,
     )
 
 
@@ -6846,6 +6948,38 @@ def apply_world_config_manifest(parsed: ParsedWorldConfigManifest):
         raise serializers.ValidationError("Selected world has no world config.")
 
     with transaction.atomic():
+        acquire_death_routing_config_locks(
+            death_routing_config_ids_for_world(
+                world=world,
+                config=config,
+            ),
+            shared=False,
+        )
+        config = WorldConfig.objects.select_for_update().get(pk=config.pk)
+        if "stat_system" in parsed.config_updates:
+            try:
+                validate_death_routing_archetype_dependencies(
+                    base_world=world,
+                    stat_system=parsed.config_updates["stat_system"],
+                    excluded_config_ids=(
+                        (config.pk,) if parsed.update_death_routing else ()
+                    ),
+                )
+            except DeathRoutingValidationError as exc:
+                raise serializers.ValidationError(str(exc)) from exc
+
+        death_routing = parsed.death_routing
+        if parsed.update_death_routing:
+            try:
+                death_routing = compile_death_routing_policy(
+                    world=world,
+                    policy=parsed.death_routing_policy,
+                    field_name=f"spec.{_WORLD_CONFIG_DEATH_ROUTING_FIELD}",
+                    stat_system=parsed.config_updates.get("stat_system"),
+                )
+            except DeathRoutingValidationError as exc:
+                raise serializers.ValidationError(str(exc)) from exc
+
         if parsed.initial_state is not None:
             replace_initial_state_snapshot(
                 STATE_SCOPE_WORLD,
@@ -6884,6 +7018,18 @@ def apply_world_config_manifest(parsed: ParsedWorldConfigManifest):
                 world.spawned_worlds.update(**spawn_updates)
 
         config_updates = dict(parsed.config_updates)
+        if parsed.update_death_routing_source:
+            if not world.instance_of_id:
+                raise serializers.ValidationError(
+                    "death_routing_source is only valid for instance worlds."
+                )
+            if config.death_routing_source != parsed.death_routing_source:
+                config_updates["death_routing_source"] = (
+                    parsed.death_routing_source
+                )
+                config_updates["death_routing_source_generation"] = (
+                    int(config.death_routing_source_generation or 0) + 1
+                )
         if "is_narrative" in config_updates:
             config_updates["allow_combat"] = not bool(config_updates["is_narrative"])
 
@@ -6891,6 +7037,18 @@ def apply_world_config_manifest(parsed: ParsedWorldConfigManifest):
             for field_name, value in config_updates.items():
                 setattr(config, field_name, value)
             config.save(update_fields=list(config_updates.keys()))
+
+        if parsed.update_death_routing:
+            config = replace_compiled_policy(
+                world=world,
+                config=config,
+                compilation=death_routing,
+            )
+        elif "death_room" in config_updates:
+            config = rebuild_compiled_policy_snapshot(
+                world=world,
+                config=config,
+            )
 
     return config
 
@@ -7002,10 +7160,42 @@ def _apply_faction_assignments(
 
 def apply_faction_manifest(parsed: ParsedFactionManifest) -> Faction:
     with transaction.atomic():
+        acquire_death_routing_config_locks(
+            death_routing_config_ids_for_world(
+                world=parsed.world,
+                config=parsed.world.config,
+            ),
+            shared=False,
+        )
         if parsed.faction is None:
             faction = Faction.objects.create(world=parsed.world, **parsed.fields)
         else:
-            faction = parsed.faction
+            faction = Faction.objects.select_for_update().get(
+                pk=parsed.faction.pk
+            )
+            target_type = parsed.fields.get("type", faction.type)
+            target_code = parsed.fields.get("code", faction.code)
+            if (
+                (
+                    target_type != faction.type
+                    or target_code != faction.code
+                )
+                and faction.death_routing_snapshot_references.exists()
+            ):
+                raise serializers.ValidationError(
+                    "Cannot change the code or type of a faction used by "
+                    "active death routing."
+                )
+            if (
+                faction_is_core(faction)
+                and target_type != FACTION_TYPE_CORE
+            ):
+                from spawns.models import Player
+
+                if Player.objects.filter(core_faction=faction).exists():
+                    raise serializers.ValidationError(
+                        "Cannot change a core faction used by characters to reputation."
+                    )
             for field_name, value in parsed.fields.items():
                 setattr(faction, field_name, value)
             faction.save(update_fields=[*parsed.fields.keys(), "modified_ts"])

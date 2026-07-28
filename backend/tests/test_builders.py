@@ -10,6 +10,10 @@ from rest_framework.reverse import reverse
 
 from config import constants as adv_consts
 
+from core.death_routing import (
+    compile_death_routing_policy,
+    replace_compiled_policy,
+)
 from core.scoped_state import (
     STATE_SCOPE_WORLD,
     replace_initial_state_snapshot,
@@ -324,6 +328,7 @@ class TestWorldAdminInstanceEndpoint(BuilderTestCase):
             player=self.player,
             role=InstanceParticipant.ROLE_LEADER,
             transfer_from=self.room,
+            return_runtime_world=self.spawn_world,
         )
 
         resp = self.client.get(reverse('builder-world-admin', args=[self.world.pk]))
@@ -375,6 +380,7 @@ class TestWorldAdminInstanceEndpoint(BuilderTestCase):
             player=self.player,
             role=InstanceParticipant.ROLE_LEADER,
             transfer_from=self.room,
+            return_runtime_world=self.spawn_world,
         )
 
         resp = self.client.get(
@@ -1401,6 +1407,31 @@ class WorldFactionTests(BuilderTestCase):
         self.factions_ep = reverse('builder-world-factions', args=[
             self.world.pk])
 
+    def _create_routed_core_faction(self):
+        faction = Faction.objects.create(
+            world=self.world,
+            code='routed-core',
+            name='Routed Core',
+            type='core',
+            playable=True)
+        compilation = compile_death_routing_policy(
+            world=self.world,
+            policy={
+                'routes': [{
+                    'when': {
+                        'eq': ['player.core_faction', faction.code],
+                    },
+                    'destination': f'room.{self.room.pk}',
+                }],
+            },
+        )
+        replace_compiled_policy(
+            world=self.world,
+            config=self.world.config,
+            compilation=compilation,
+        )
+        return faction
+
     def test_list_factions(self):
         resp = self.client.get(self.factions_ep)
         self.assertEqual(resp.status_code, 200)
@@ -1760,9 +1791,9 @@ class WorldFactionTests(BuilderTestCase):
             name='John',
             room=self.room,
             user=self.user,
-            world=spawned_world)
+            world=spawned_world,
+            core_faction=faction_a)
 
-        FactionAssignment.objects.create(faction=faction_a, member=player)
         FactionAssignment.objects.create(faction=faction_b, member=player)
 
         ep = reverse('builder-world-faction-detail', args=[
@@ -1798,14 +1829,73 @@ class WorldFactionTests(BuilderTestCase):
             code='faction',
             name='Faction',
             is_core=True)
-        FactionAssignment.objects.create(
-            member=self.player,
-            faction=faction)
+        self.player.core_faction = faction
+        self.player.save(update_fields=['core_faction'])
         endpoint = reverse('builder-world-faction-detail', args=[
             self.world.pk, faction.pk])
         resp = self.client.delete(endpoint, args=[self.world.pk, faction.pk])
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(Faction.objects.count(), 1)
+
+    def test_cannot_delete_core_faction_used_by_death_routing(self):
+        faction = self._create_routed_core_faction()
+        endpoint = reverse('builder-world-faction-detail', args=[
+            self.world.pk, faction.pk])
+
+        resp = self.client.delete(endpoint)
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('active death routing', str(resp.data))
+        self.assertTrue(Faction.objects.filter(pk=faction.pk).exists())
+
+    def test_cannot_change_code_of_core_faction_used_by_death_routing(self):
+        faction = self._create_routed_core_faction()
+        endpoint = reverse('builder-world-faction-detail', args=[
+            self.world.pk, faction.pk])
+
+        resp = self.client.patch(endpoint, {
+            'code': 'renamed-core',
+        }, format='json')
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('active death routing', str(resp.data))
+        faction.refresh_from_db()
+        self.assertEqual(faction.code, 'routed-core')
+
+    def test_cannot_change_type_of_core_faction_used_by_death_routing(self):
+        faction = self._create_routed_core_faction()
+        endpoint = reverse('builder-world-faction-detail', args=[
+            self.world.pk, faction.pk])
+
+        resp = self.client.patch(endpoint, {
+            'type': 'reputation',
+        }, format='json')
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('active death routing', str(resp.data))
+        faction.refresh_from_db()
+        self.assertEqual(faction.type, 'core')
+
+    def test_cannot_change_player_core_faction_to_reputation(self):
+        faction = Faction.objects.create(
+            world=self.world,
+            code='faction',
+            name='Faction',
+            type='core')
+        self.player.core_faction = faction
+        self.player.save(update_fields=['core_faction'])
+        endpoint = reverse('builder-world-faction-detail', args=[
+            self.world.pk, faction.pk])
+
+        resp = self.client.put(endpoint, {
+            'code': faction.code,
+            'name': faction.name,
+            'type': 'reputation',
+        })
+
+        self.assertEqual(resp.status_code, 400)
+        faction.refresh_from_db()
+        self.assertEqual(faction.type, 'core')
 
     def test_can_delete_a_reputation_faction_with_assignments(self):
         faction = Faction.objects.create(
@@ -1906,6 +1996,27 @@ class WorldManagePlayerTests(BuilderTestCase):
         self.assertEqual(resp.status_code, 200)
         self.player.refresh_from_db()
         self.assertTrue(self.player.is_builder)
+
+    def test_player_list_filters_by_core_faction(self):
+        faction = Faction.objects.create(
+            world=self.world,
+            code='routed-core',
+            name='Routed Core',
+            type='core',
+            playable=True)
+        self.player.core_faction = faction
+        self.player.save(update_fields=['core_faction'])
+
+        resp = self.client.get(
+            reverse('builder-player-list', args=[self.world.pk]),
+            {'faction': faction.code},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            [result['id'] for result in resp.data['results']],
+            [self.player.id],
+        )
 
     def test_reset_player_in_other_world_returns_404(self):
         other_user = self.create_user('other@example.com')

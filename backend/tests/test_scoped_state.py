@@ -4,6 +4,7 @@ from django.test.utils import CaptureQueriesContext
 from builders.models import AbilityDefinition, MobDefinition, SpawnEntry, SpawnPlan
 from core.condition_dsl import ConditionContext, resolve_path
 from core.scoped_state import (
+    CHARACTER_STATE_MAX_ENCODED_BYTES,
     STATE_SCOPE_CHARACTER,
     STATE_SCOPE_ROOM,
     STATE_SCOPE_WORLD,
@@ -190,6 +191,15 @@ class TestScopedRuntimeState(WorldTestCase):
         self.assertTrue(
             CharacterState.objects.filter(player=self.player).exists()
         )
+
+    def test_player_character_state_has_a_bounded_json_size(self):
+        with self.assertRaisesRegex(ValueError, "byte limit"):
+            set_state_value(
+                STATE_SCOPE_CHARACTER,
+                self.player,
+                "large",
+                "x" * CHARACTER_STATE_MAX_ENCODED_BYTES,
+            )
 
     def test_mob_actor_state_wins_over_viewer_player_state(self):
         mob = Mob.objects.create(

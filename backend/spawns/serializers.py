@@ -7,8 +7,6 @@ from core.scoped_state import (
     STATE_SCOPE_ZONE,
     get_state_snapshot,
 )
-from core.factions import core_faction_policy
-
 from config import constants as adv_consts
 from core.utils import is_ascii
 
@@ -25,7 +23,6 @@ from builders.models import (
     ItemDefinition,
     MobDefinition,
     Faction,
-    FactionAssignment,
     FactionRelationship,
     RoomAction,
     Trigger,
@@ -56,6 +53,38 @@ from spawns.models import (
     PlayerCurrencyBalance)
 from system.models import SiteControl
 from worlds.models import World, Zone, Room, RoomDetail
+
+
+def _player_faction_assignments(player):
+    prefetched = getattr(player, '_prefetched_objects_cache', {}).get(
+        'faction_assignments')
+    if prefetched is not None:
+        return list(prefetched)
+    return list(
+        player.faction_assignments.select_related('faction').all()
+    )
+
+
+def _player_core_faction(player):
+    """Prefer canonical Player identity, with an exact legacy-row fallback."""
+    if player.core_faction_id:
+        cached = player._state.fields_cache.get('core_faction')
+        return cached if cached is not None else player.core_faction
+    for assignment in _player_faction_assignments(player):
+        faction = assignment.faction
+        if faction and (faction.type == 'core' or faction.is_core):
+            return faction
+    return None
+
+
+def _player_factions_payload(player):
+    core_faction = _player_core_faction(player)
+    factions = {'core': core_faction.code} if core_faction else {}
+    for assignment in _player_faction_assignments(player):
+        faction = assignment.faction
+        if faction and faction.type != 'core' and not faction.is_core:
+            factions[faction.code] = assignment.value
+    return factions
 
 
 def _currency_definition_payload(currency):
@@ -260,23 +289,8 @@ class PlayerSerializer(serializers.ModelSerializer):
         return player.world.lifecycle == api_consts.WORLD_STATE_COMPLETE
 
     def get_core_faction(self, player):
-        qs = FactionAssignment.objects.filter(
-            member_type__model='player',
-            member_id=player.id)
-
-        core_assignment = qs.filter(faction__type='core').first()
-        if core_assignment:
-            return core_assignment.faction.name
-
-        policy = core_faction_policy(player.world.context or player.world)
-        if policy.default:
-            default_faction = Faction.objects.filter(
-                world=player.world.context or player.world,
-                type='core',
-                code=policy.default).first()
-            if default_faction:
-                return default_faction.name
-        return adv_consts.FACTION_CORE_HUMAN
+        core_faction = _player_core_faction(player)
+        return core_faction.name if core_faction else None
 
     def get_title(self, player):
         if player.title:
@@ -928,6 +942,7 @@ class AnimatePlayerSerializer(serializers.ModelSerializer):
     marks = serializers.SerializerMethodField()
     clan = serializers.SerializerMethodField()
     economy = serializers.SerializerMethodField()
+    factions = serializers.SerializerMethodField()
 
     class Meta:
         model = Player
@@ -1029,13 +1044,18 @@ class AnimatePlayerSerializer(serializers.ModelSerializer):
 
     def get_keywords(self, player):
         keywords = [player.name.lower(), 'player', player.key]
-        fa_qs = player.faction_assignments.all()
-        core_assignment = fa_qs.filter(faction__type='core').first()
-        if core_assignment:
-            keywords.append(core_assignment.faction.code.lower())
+        core_faction = _player_core_faction(player)
+        if core_faction:
+            keywords.append(core_faction.code.lower())
         return ' '.join(keywords)
 
+    def get_factions(self, player):
+        return _player_factions_payload(player)
+
     def get_marks(self, player):
+        cached = getattr(player, '_character_state_snapshot', None)
+        if isinstance(cached, dict):
+            return dict(cached)
         return get_state_snapshot(STATE_SCOPE_CHARACTER, player)
 
     def get_clan(self, player):

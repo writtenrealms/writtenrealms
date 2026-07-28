@@ -8,6 +8,7 @@ import yaml
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.db.models import Prefetch
+from django.db.models.deletion import RestrictedError
 from django.utils.text import slugify
 from rest_framework import serializers
 
@@ -36,6 +37,10 @@ from builders.models import (
 from builders.loot_tables import normalize_loot_table
 from config import constants as adv_consts
 from core.condition_dsl import validate_condition_payload
+from core.death_routing import (
+    acquire_death_routing_config_locks,
+    death_routing_config_ids_for_world,
+)
 from core.mob_traits import normalize_trait_table
 from core.scoped_state import (
     STATE_SCOPE_ROOM,
@@ -2118,14 +2123,42 @@ def delete_zone_manifest(*, world: World, manifest: dict[str, Any]) -> Zone:
     if not zone_ref:
         raise serializers.ValidationError("metadata.ref is required.")
     relative_id = _parse_zone_ref(zone_ref, field_name="metadata.ref")
-    zone = Zone.objects.filter(world=world, relative_id=relative_id).first()
-    if zone is None:
-        raise serializers.ValidationError("Zone delete manifest does not resolve to an existing zone.")
-    if zone.rooms.exists():
-        raise serializers.ValidationError("Cannot delete a zone with rooms assigned to it.")
-    zone._deleted_payload = serialize_zone_payload(zone, include_yaml=False)
-    zone.delete()
-    return zone
+    with transaction.atomic():
+        acquire_death_routing_config_locks(
+            death_routing_config_ids_for_world(
+                world=world,
+                config=world.config,
+            ),
+            shared=False,
+        )
+        zone = (
+            Zone.objects.select_for_update()
+            .filter(world=world, relative_id=relative_id)
+            .first()
+        )
+        if zone is None:
+            raise serializers.ValidationError(
+                "Zone delete manifest does not resolve to an existing zone."
+            )
+        if zone.rooms.exists():
+            raise serializers.ValidationError(
+                "Cannot delete a zone with rooms assigned to it."
+            )
+        if zone.death_routing_snapshot_references.exists():
+            raise serializers.ValidationError(
+                "Cannot delete a zone used by active death routing."
+            )
+        zone._deleted_payload = serialize_zone_payload(
+            zone,
+            include_yaml=False,
+        )
+        try:
+            zone.delete()
+        except RestrictedError as exc:
+            raise serializers.ValidationError(
+                "Cannot delete a zone referenced by death routing."
+            ) from exc
+        return zone
 
 
 def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room, bool]:
@@ -2553,10 +2586,29 @@ def delete_faction_manifest(*, world: World, manifest: dict[str, Any]) -> Factio
         world=world,
         manifest=manifest,
     )
-    faction = parsed.faction
-    faction._deleted_payload = builder_manifests.serialize_faction_payload(faction)
-    faction.delete()
-    return faction
+    with transaction.atomic():
+        acquire_death_routing_config_locks(
+            death_routing_config_ids_for_world(
+                world=world,
+                config=world.config,
+            ),
+            shared=False,
+        )
+        faction = Faction.objects.select_for_update().get(pk=parsed.faction.pk)
+        if faction.death_routing_snapshot_references.exists():
+            raise serializers.ValidationError(
+                "Cannot delete a faction used by active death routing."
+            )
+        faction._deleted_payload = builder_manifests.serialize_faction_payload(
+            faction
+        )
+        try:
+            faction.delete()
+        except RestrictedError as exc:
+            raise serializers.ValidationError(
+                "Cannot delete a faction referenced by death routing."
+            ) from exc
+        return faction
 
 
 def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[SpawnPlan, bool]:
@@ -2739,6 +2791,19 @@ def apply_world_manifest(*, world: World, manifest: dict[str, Any]) -> None:
             if room_ref.startswith(_ROOM_REF_PREFIX):
                 room = _get_or_create_room(world=world, room_ref=room_ref)
                 spec[field_name] = f"room.{room.id}"
+
+        death_routing = spec.get("death_routing")
+        if isinstance(death_routing, dict):
+            routes = death_routing.get("routes")
+            if isinstance(routes, list):
+                for route in routes:
+                    if not isinstance(route, dict) or "destination" not in route:
+                        continue
+                    room_ref = str(route.get("destination") or "").strip()
+                    if not room_ref.startswith(_ROOM_REF_PREFIX):
+                        continue
+                    room = _get_or_create_room(world=world, room_ref=room_ref)
+                    route["destination"] = f"room.{room.id}"
 
         parsed = builder_manifests.parse_world_config_manifest(
             world=world,

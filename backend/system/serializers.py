@@ -1,4 +1,3 @@
-from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q, Value, CharField
 from django.db.models.functions import Concat, Lower
 from django.conf import settings
@@ -9,7 +8,7 @@ from rest_framework import serializers
 
 from config import constants as adv_consts
 from config import constants as api_consts
-from builders.models import HousingLease, FactionAssignment
+from builders.models import HousingLease
 from core.serializers import ref_field, ReferenceField
 from core.economy import format_currency
 from spawns.models import Item, Player, PlayerEvent, Clan, ClanMembership
@@ -550,21 +549,9 @@ class ClanJoinDeserializer(serializers.Serializer):
         clan_master = ClanMembership.objects.filter(
             clan=clan,
             rank=adv_consts.CLAN_RANK_MASTER).first().player
-        clan_core_faction_a = FactionAssignment.objects.filter(
-            faction__world=player.world.context,
-            faction__is_core=True,
-            member_id=clan_master.id,
-            member_type=ContentType.objects.get_for_model(clan_master)
-        ).first()
-        if clan_core_faction_a:
-            player_core_faction_a = FactionAssignment.objects.filter(
-                faction__world=player.world.context,
-                faction__is_core=True,
-                member_id=player.id,
-                member_type=ContentType.objects.get_for_model(clan_master)
-            ).first()
-            if (not player_core_faction_a or
-                player_core_faction_a.faction != clan_core_faction_a.faction):
+        clan_core_faction_id = clan_master.core_faction_id
+        if clan_core_faction_id:
+            if player.core_faction_id != clan_core_faction_id:
                 raise serializers.ValidationError(
                     "You cannot join this clan.")
 

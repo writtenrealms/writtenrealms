@@ -895,6 +895,14 @@ class InstanceParticipant(BaseModel):
         ROLE_LEADER,
         ROLE_MEMBER,
     )
+    EXIT_REASON_LEFT = 'left'
+    EXIT_REASON_REPLACED = 'replaced'
+    EXIT_REASON_DEATH_DELEGATED = 'death_delegated'
+    EXIT_REASON_CHOICES = (
+        EXIT_REASON_LEFT,
+        EXIT_REASON_REPLACED,
+        EXIT_REASON_DEATH_DELEGATED,
+    )
 
     run = models.ForeignKey(
         'worlds.InstanceRun',
@@ -913,8 +921,16 @@ class InstanceParticipant(BaseModel):
         related_name='instance_participants_from',
         on_delete=models.SET_NULL,
         **optional)
+    return_runtime_world = models.ForeignKey(
+        'worlds.World',
+        related_name='returning_instance_participants',
+        on_delete=models.RESTRICT,
+        **optional)
     joined_at = models.DateTimeField(default=timezone.now)
     exited_at = models.DateTimeField(**optional)
+    exit_reason = models.TextField(
+        choices=list_to_choice(EXIT_REASON_CHOICES),
+        **optional)
 
     class Meta(BaseModel.Meta):
         unique_together = ('run', 'player')
@@ -922,6 +938,27 @@ class InstanceParticipant(BaseModel):
             models.Index(fields=['player', 'exited_at']),
             models.Index(fields=['run', 'exited_at']),
             models.Index(fields=['role']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['player'],
+                condition=models.Q(exited_at__isnull=True),
+                name='worlds_instance_one_active_player'),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        exited_at__isnull=True,
+                        exit_reason__isnull=True,
+                        return_runtime_world__isnull=False,
+                    )
+                    | models.Q(
+                        exited_at__isnull=False,
+                        exit_reason__isnull=False,
+                        return_runtime_world__isnull=True,
+                    )
+                ),
+                name='worlds_instance_participant_exit_shape',
+            ),
         ]
 
     def __str__(self):
@@ -993,6 +1030,13 @@ class WorldState(BaseModel):
 
 class WorldConfig(BaseModel):
 
+    DEATH_ROUTING_SOURCE_LOCAL = 'local'
+    DEATH_ROUTING_SOURCE_BASE_WORLD = 'base_world'
+    DEATH_ROUTING_SOURCES = (
+        DEATH_ROUTING_SOURCE_LOCAL,
+        DEATH_ROUTING_SOURCE_BASE_WORLD,
+    )
+
     # Fields not exposed to builders
 
     can_create_chars = models.BooleanField(default=True)
@@ -1011,7 +1055,7 @@ class WorldConfig(BaseModel):
                                       **optional)
     death_room = models.ForeignKey('worlds.Room',
                                    related_name='death_room_for',
-                                   on_delete=models.CASCADE,
+                                   on_delete=models.RESTRICT,
                                    **optional)
     death_currency = models.ForeignKey(
         'builders.Currency',
@@ -1061,6 +1105,10 @@ class WorldConfig(BaseModel):
     death_route = models.TextField(
         choices=list_to_choice(adv_consts.DEATH_ROUTES),
         default=adv_consts.DEATH_ROUTE_TOP_FACTION)
+    death_routing_source = models.TextField(
+        choices=list_to_choice(DEATH_ROUTING_SOURCES),
+        default=DEATH_ROUTING_SOURCE_LOCAL,
+    )
     pvp_mode = models.TextField(
         choices=list_to_choice(adv_consts.PVP_MODES),
         default=adv_consts.PVP_MODE_FFA)
@@ -1075,6 +1123,10 @@ class WorldConfig(BaseModel):
     starting_level = models.PositiveIntegerField(default=1)
     leveling_curve = models.JSONField(default=default_leveling_curve)
     max_level = models.PositiveIntegerField(default=20)
+    # Monotonic routing identities belong to the config rather than the
+    # replaceable policy row, so rebuilt plans can never reuse a cache key.
+    death_routing_generation = models.BigIntegerField(default=0)
+    death_routing_source_generation = models.BigIntegerField(default=0)
     death_currency_penalty = models.DecimalField(
         max_digits=6,
         decimal_places=5,
@@ -1122,6 +1174,150 @@ class WorldConfig(BaseModel):
 
     def __str__(self):
         return "WorldConfig %s" % self.pk
+
+
+class DeathRoutingPolicy(BaseModel):
+    """Canonical selector policy for one world or instance config."""
+
+    config = models.OneToOneField(
+        'worlds.WorldConfig',
+        related_name='death_routing_policy',
+        on_delete=models.CASCADE,
+    )
+    enabled = models.BooleanField(default=False)
+
+
+class DeathRoutingRoute(BaseModel):
+    """One canonical ordered first-match route."""
+
+    policy = models.ForeignKey(
+        'worlds.DeathRoutingPolicy',
+        related_name='routes',
+        on_delete=models.CASCADE,
+    )
+    position = models.PositiveSmallIntegerField()
+    # ``condition`` is normalized portable DSL for exact manifest round trips.
+    # ``compiled_condition`` contains the bounded, query-free identifier IR.
+    condition = models.JSONField(default=dict)
+    compiled_version = models.PositiveSmallIntegerField(default=2)
+    compiled_condition = models.JSONField(default=dict)
+    destination_room = models.ForeignKey(
+        'worlds.Room',
+        related_name='death_routing_routes',
+        on_delete=models.RESTRICT,
+    )
+
+    class Meta(BaseModel.Meta):
+        ordering = ['position', 'id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['policy', 'position'],
+                name='worlds_death_route_position_unique',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(position__lt=32),
+                name='worlds_death_route_position_bound',
+            ),
+        ]
+
+
+class DeathRoutingCompiledSnapshot(BaseModel):
+    """Immutable, rebuildable ordered plan for one policy generation."""
+
+    CACHE_VERSION = 2
+
+    config = models.ForeignKey(
+        'worlds.WorldConfig',
+        related_name='death_routing_snapshots',
+        on_delete=models.CASCADE,
+    )
+    plan_generation = models.BigIntegerField()
+    cache_version = models.PositiveSmallIntegerField(default=CACHE_VERSION)
+    data = models.JSONField(default=dict)
+    retirement_pending = models.BooleanField(default=False)
+    retired_at = models.DateTimeField(**optional)
+
+    class Meta(BaseModel.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=['config', 'plan_generation', 'cache_version'],
+                name='worlds_death_route_snapshot_unique',
+            ),
+        ]
+
+
+class DeathRoutingSnapshotReference(BaseModel):
+    """
+    Relational retention for identifiers embedded in an immutable snapshot.
+
+    Runtime plans use compact integer maps. These RESTRICT references protect
+    the current generation's rooms, faction keys, and zones. Publication takes
+    an exclusive config lock, so references are released only after all
+    shared in-flight death resolutions have drained.
+    """
+
+    snapshot = models.ForeignKey(
+        'worlds.DeathRoutingCompiledSnapshot',
+        related_name='references',
+        on_delete=models.CASCADE,
+    )
+    destination_room = models.ForeignKey(
+        'worlds.Room',
+        related_name='death_routing_snapshot_references',
+        on_delete=models.RESTRICT,
+        **optional,
+    )
+    core_faction = models.ForeignKey(
+        'builders.Faction',
+        related_name='death_routing_snapshot_references',
+        on_delete=models.RESTRICT,
+        **optional,
+    )
+    origin_zone = models.ForeignKey(
+        'worlds.Zone',
+        related_name='death_routing_snapshot_references',
+        on_delete=models.RESTRICT,
+        **optional,
+    )
+
+    class Meta(BaseModel.Meta):
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        destination_room__isnull=False,
+                        core_faction__isnull=True,
+                        origin_zone__isnull=True,
+                    )
+                    | models.Q(
+                        destination_room__isnull=True,
+                        core_faction__isnull=False,
+                        origin_zone__isnull=True,
+                    )
+                    | models.Q(
+                        destination_room__isnull=True,
+                        core_faction__isnull=True,
+                        origin_zone__isnull=False,
+                    )
+                ),
+                name='worlds_death_snapshot_ref_one_target',
+            ),
+            models.UniqueConstraint(
+                fields=['snapshot', 'destination_room'],
+                condition=models.Q(destination_room__isnull=False),
+                name='worlds_death_snapshot_room_unique',
+            ),
+            models.UniqueConstraint(
+                fields=['snapshot', 'core_faction'],
+                condition=models.Q(core_faction__isnull=False),
+                name='worlds_death_snapshot_faction_unique',
+            ),
+            models.UniqueConstraint(
+                fields=['snapshot', 'origin_zone'],
+                condition=models.Q(origin_zone__isnull=False),
+                name='worlds_death_snapshot_zone_unique',
+            ),
+        ]
 
 
 class Zone(AdventWorldBaseModel):

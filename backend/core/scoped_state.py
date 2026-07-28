@@ -26,6 +26,8 @@ RUNTIME_SCOPES = (
     STATE_SCOPE_ROOM,
 )
 
+CHARACTER_STATE_MAX_ENCODED_BYTES = 64 * 1024
+
 
 def normalize_state_scope(scope: Any) -> str:
     normalized = str(scope or "").strip().lower()
@@ -62,6 +64,30 @@ def normalize_state_snapshot(
         return json.loads(json.dumps(normalized))
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field_name} must contain JSON-compatible values.") from exc
+
+
+def validate_character_state_size(
+    data: dict[str, Any],
+    *,
+    field_name: str = "character.state",
+) -> None:
+    encoded = json.dumps(
+        data,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    if len(encoded) > CHARACTER_STATE_MAX_ENCODED_BYTES:
+        raise ValueError(
+            f"{field_name} exceeds the {CHARACTER_STATE_MAX_ENCODED_BYTES}-byte limit."
+        )
+
+
+def _is_player_character(owner) -> bool:
+    return (
+        owner is not None
+        and getattr(getattr(owner, "__class__", None), "__name__", "") == "Player"
+    )
 
 
 def _character_snapshot_from_legacy(character) -> dict[str, Any]:
@@ -254,6 +280,8 @@ def replace_state_snapshot(
 ) -> dict[str, Any]:
     scope = normalize_state_scope(scope)
     normalized_data = normalize_state_snapshot(data, field_name=f"{scope}.state")
+    if scope == STATE_SCOPE_CHARACTER and _is_player_character(owner):
+        validate_character_state_size(normalized_data)
     if owner is None:
         return normalized_data
     if scope == STATE_SCOPE_QUEST:
@@ -318,6 +346,8 @@ def set_state_value(
         data = dict(row.data or {})
         data[normalized_key] = value
         row.data = normalize_state_snapshot(data, field_name=f"{scope}.state")
+        if scope == STATE_SCOPE_CHARACTER and _is_player_character(owner):
+            validate_character_state_size(row.data)
         row.version = int(row.version or 0) + 1
         row.save(update_fields=["data", "version", "modified_ts"])
     return value
@@ -403,7 +433,9 @@ def increment_state_value(
         except TypeError:
             updated_value = amount_value
         data[normalized_key] = updated_value
-        row.data = data
+        row.data = normalize_state_snapshot(data, field_name=f"{scope}.state")
+        if scope == STATE_SCOPE_CHARACTER and _is_player_character(owner):
+            validate_character_state_size(row.data)
         row.version = int(row.version or 0) + 1
         row.save(update_fields=["data", "version", "modified_ts"])
     return updated_value
@@ -454,7 +486,9 @@ def increment_state_values(
                 value = amount
             data[key] = value
             updated[key] = value
-        row.data = data
+        row.data = normalize_state_snapshot(data, field_name=f"{scope}.state")
+        if scope == STATE_SCOPE_CHARACTER and _is_player_character(owner):
+            validate_character_state_size(row.data)
         row.version = int(row.version or 0) + 1
         row.save(update_fields=["data", "version", "modified_ts"])
     return updated
@@ -463,6 +497,8 @@ def increment_state_values(
 def initialize_character_state(character, data: dict[str, Any] | None):
     """Create initial state for a newly-created Player or Mob, if nonempty."""
     normalized = normalize_state_snapshot(data, field_name="initial_state")
+    if _is_player_character(character):
+        validate_character_state_size(normalized, field_name="initial_state")
     if not normalized:
         return None
     model_cls, lookup = _row_lookup(STATE_SCOPE_CHARACTER, character)

@@ -3,10 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
+import hashlib
+import json
 import logging
 import math
 import random
 from typing import Any, Iterable
+import uuid
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
@@ -24,6 +27,15 @@ from core.combat_formulas import (
 from core.computations import compute_stats
 from core.abilities import definition_world
 from core.condition_dsl import ConditionContext, evaluate_condition, resolve_path
+from core.death_routing import (
+    DEATH_ROUTING_SOURCE_BASE_WORLD,
+    DEATH_ROUTING_SOURCE_LOCAL,
+    DeathRoutingPlanError,
+    acquire_death_routing_config_locks,
+    death_routing_config_ids_for_world,
+    load_compiled_plan,
+    resolve_death_destination,
+)
 from core.factions import faction_is_core
 from core.leveling import ExperienceGrant, apply_experience
 from core.world_config import inherited_system_config
@@ -52,8 +64,10 @@ from spawns.ability_prepare_state import (
 from spawns.events import GameEvent, enqueue_game_events
 from spawns.models import (
     ActiveEffect,
+    CharacterState,
     CombatEncounter,
     CombatParticipant,
+    DeathResolutionReceipt,
     DuelMatch,
     DuelParticipant,
     Item,
@@ -62,7 +76,14 @@ from spawns.models import (
     PlayerCurrencyBalance,
 )
 from spawns.wallet import WalletError, mutate_balances
-from worlds.models import InstanceRun, Room
+from worlds.instances import transfer_instance_participant
+from worlds.models import (
+    InstanceParticipant,
+    InstanceRun,
+    Room,
+    World,
+    WorldConfig,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -409,14 +430,20 @@ def _player_combat_stats(player: Player) -> CombatStats:
     )
 
 
-def _room_payload(viewer: Player, room: Room) -> dict:
-    door_states = door_state_lookup(viewer.world, [room.id])
+def _room_payload(
+    viewer: Player,
+    room: Room,
+    *,
+    runtime_world: World | None = None,
+) -> dict:
+    runtime_world = runtime_world or viewer.world
+    door_states = door_state_lookup(runtime_world, [room.id])
     return serialize_room(
         room,
         {room.id: room_payload_key_for(room)},
         door_states,
         viewer=viewer,
-        runtime_world=viewer.world,
+        runtime_world=runtime_world,
     ).model_dump()
 
 
@@ -893,12 +920,13 @@ def _death_notification_recipients(
     *,
     deceased: Player,
     origin_room: Room | None,
+    origin_world_id: int | None = None,
     killer=None,
 ) -> list[str]:
     if not origin_room:
         return []
     qs = Player.objects.filter(
-        world_id=deceased.world_id,
+        world_id=origin_world_id or deceased.world_id,
         room_id=origin_room.id,
         in_game=True,
     ).exclude(pk=deceased.id)
@@ -1065,6 +1093,150 @@ def _apply_player_death_penalty(
     return "", None, None
 
 
+_DEATH_TOKEN_NAMESPACE = uuid.UUID("b7951fbf-f1bb-4aab-b739-61af27374691")
+
+
+def _normalize_death_token(value) -> uuid.UUID:
+    if value is None:
+        return uuid.uuid4()
+    if isinstance(value, uuid.UUID):
+        return value
+    text = str(value).strip()
+    if not text:
+        return uuid.uuid4()
+    try:
+        return uuid.UUID(text)
+    except ValueError:
+        return uuid.uuid5(_DEATH_TOKEN_NAMESPACE, text)
+
+
+def _death_killer_identity(killer) -> dict[str, Any] | None:
+    if killer is None:
+        return None
+    if isinstance(killer, Player):
+        actor_type = "player"
+    elif isinstance(killer, Mob):
+        actor_type = "mob"
+    elif isinstance(killer, Room):
+        actor_type = "room"
+    elif isinstance(killer, StoredEffectSource):
+        actor_type = str(killer.actor_type or "effect")
+    else:
+        actor_type = killer.__class__.__name__.lower()
+    actor_id = getattr(killer, "pk", None)
+    return {
+        "type": actor_type,
+        "id": int(actor_id) if actor_id is not None else None,
+    }
+
+
+def _death_request_fingerprint(
+    *,
+    player_id: int,
+    killer,
+    cause: str,
+    forced: bool,
+) -> str:
+    payload = {
+        "player_id": int(player_id),
+        "killer": _death_killer_identity(killer),
+        "cause": str(cause or "combat"),
+        "forced": bool(forced),
+    }
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _replayed_death_result(
+    *,
+    player_id: int,
+    death_token: uuid.UUID,
+    request_fingerprint: str,
+) -> Player | None:
+    receipt = (
+        DeathResolutionReceipt.objects.filter(
+            player_id=player_id,
+            death_token=death_token,
+        )
+        .only("request_fingerprint")
+        .first()
+    )
+    if receipt is None:
+        return None
+    if receipt.request_fingerprint != request_fingerprint:
+        raise ActionError(
+            "That death token was already used for another incident.",
+            code="death_token_conflict",
+        )
+    return (
+        Player.objects.select_related("world", "room")
+        .get(pk=player_id)
+    )
+
+
+def _death_preflight_player(player_id: int) -> Player:
+    return (
+        Player.objects.select_related(
+            "world",
+            "world__config",
+            "world__config__death_currency",
+            "world__config__death_room",
+            "world__config__starting_room",
+            "world__context",
+            "world__context__config",
+            "world__context__config__death_currency",
+            "world__context__config__death_room",
+            "world__context__config__starting_room",
+            "world__context__instance_of",
+            "world__context__instance_of__config",
+            "world__context__instance_of__config__death_room",
+            "world__context__instance_of__config__starting_room",
+            "room",
+            "room__zone",
+        )
+        .get(pk=player_id)
+    )
+
+
+def _authored_world_for_runtime(runtime_world: World) -> World:
+    return runtime_world.context or runtime_world
+
+
+def _configured_room(
+    *,
+    config,
+    owner_world: World,
+    room_id: int | None,
+) -> Room | None:
+    if room_id is None:
+        return None
+    return (
+        Room.objects.select_related("world", "zone")
+        .filter(pk=room_id, world_id=owner_world.id)
+        .first()
+    )
+
+
+def _fail_safe_room(*, config, owner_world: World) -> tuple[Room | None, str | None]:
+    room = _configured_room(
+        config=config,
+        owner_world=owner_world,
+        room_id=config.death_room_id,
+    )
+    if room is not None:
+        return room, None
+    room = _configured_room(
+        config=config,
+        owner_world=owner_world,
+        room_id=config.starting_room_id,
+    )
+    return room, "missing_death_room"
+
+
 def apply_player_death(
     *,
     player: Player,
@@ -1073,34 +1245,286 @@ def apply_player_death(
     target_text: str | None = None,
     room_text: str | None = None,
     config=None,
+    death_token=None,
+    cause: str = "combat",
+    forced: bool = False,
 ) -> tuple[Player, list[GameEvent]]:
-    with transaction.atomic():
-        updated_player = Player.objects.select_for_update().get(pk=player.pk)
-        origin_room = origin_room or updated_player.room
-        stats = _player_combat_stats(updated_player)
-        death_config = config or updated_player.world.effective_config
-        death_room = (
-            death_config.death_room
-            if death_config and death_config.death_room_id
-            else updated_player.get_starting_room()
-        )
-        if not death_room:
-            raise ActionError("There is no death room for this world.", code="no_death_room")
+    """
+    Resolve and commit a death exactly once.
 
-        updated_player.health = stats.player_health_max
-        updated_player.energy = stats.player_energy_max
-        updated_player.stamina = stats.player_stamina_max
-        updated_player.room = death_room
-        updated_player.save(update_fields=["health", "energy", "stamina", "room"])
+    Authored conditions are compiled before this path is reached. Runtime
+    routing evaluates the immutable ordered plan in memory and loads at most
+    one CharacterState row, only when the plan references character state.
+    """
+    normalized_token = _normalize_death_token(death_token)
+    request_fingerprint = _death_request_fingerprint(
+        player_id=player.pk,
+        killer=killer,
+        cause=cause,
+        forced=forced,
+    )
+    replayed_player = _replayed_death_result(
+        player_id=player.pk,
+        death_token=normalized_token,
+        request_fingerprint=request_fingerprint,
+    )
+    if replayed_player is not None:
+        return replayed_player, []
+
+    preflight_player = _death_preflight_player(player.pk)
+    origin_runtime = preflight_player.world
+    origin_owner = _authored_world_for_runtime(origin_runtime)
+    origin_config = origin_owner.config
+    if origin_config is None:
+        raise ActionError(
+            "There is no death configuration for this world.",
+            code="no_death_config",
+        )
+    # ``config`` remains accepted for callers that already resolved the
+    # effective config. It may not redirect a death to another config.
+    if config is not None and config.pk != origin_config.pk:
+        raise ActionError(
+            "The supplied death configuration is not active for this world.",
+            code="death_config_mismatch",
+        )
+
+    is_instance_death = bool(origin_owner.instance_of_id)
+    candidate_config_ids = death_routing_config_ids_for_world(
+        world=origin_owner,
+        config=origin_config,
+    )
+
+    committed_origin_room = origin_room or preflight_player.room
+    committed_origin_world = origin_runtime
+    participant = None
+    used_transport_fallback = False
+    character_state = {}
+    loaded_character_state_for_routing = False
+    origin_zone_id = (
+        committed_origin_room.zone_id
+        if committed_origin_room is not None
+        else None
+    )
+    routing_archetype = str(preflight_player.archetype or "").strip().lower()
+    routing_level = int(preflight_player.level)
+    matched_route_position = None
+    decision_reason = "fallback"
+    routing_source = DEATH_ROUTING_SOURCE_LOCAL
+    plan_owner = origin_owner
+    plan_config = origin_config
+    compiled_plan = None
+    plan_load_error = None
+    fallback_reason = ""
+    penalty_text = ""
+    penalty_money = None
+    corpse_id = None
+
+    with transaction.atomic():
+        # Shared routing locks are acquired before the Player row and remain
+        # held through movement and receipt creation. They do not conflict
+        # with other deaths, but route/config publication must wait until this
+        # generation is no longer in use.
+        acquire_death_routing_config_locks(
+            candidate_config_ids,
+            shared=True,
+        )
+        # Player is the participation reservation. Instance entry, leave, and
+        # delegation use the same Player -> InstanceParticipant row order.
+        updated_player = (
+            Player.objects.select_for_update(of=("self",))
+            .select_related(
+                "world",
+                "world__context",
+                "world__context__config",
+                "equipment",
+                "core_faction",
+                "room",
+                "room__zone",
+            )
+            .get(pk=player.pk)
+        )
+        concurrent_receipt = (
+            DeathResolutionReceipt.objects.filter(
+                player=updated_player,
+                death_token=normalized_token,
+            )
+            .only("request_fingerprint")
+            .first()
+        )
+        if concurrent_receipt is not None:
+            if concurrent_receipt.request_fingerprint != request_fingerprint:
+                raise ActionError(
+                    "That death token was already used for another incident.",
+                    code="death_token_conflict",
+                )
+            return updated_player, []
+
+        if updated_player.world_id != origin_runtime.id:
+            raise ActionError(
+                "The player moved before death resolution completed.",
+                code="death_context_changed",
+            )
+
+        locked_configs = (
+            WorldConfig.objects.select_related(
+                "death_currency",
+                "death_room",
+                "starting_room",
+            )
+            .filter(pk__in=candidate_config_ids)
+            .in_bulk()
+        )
+        origin_config = locked_configs.get(origin_owner.config_id)
+        if origin_config is None:
+            raise ActionError(
+                "There is no death configuration for this world.",
+                code="no_death_config",
+            )
+        routing_source = (
+            str(
+                origin_config.death_routing_source
+                or DEATH_ROUTING_SOURCE_LOCAL
+            )
+            if is_instance_death
+            else DEATH_ROUTING_SOURCE_LOCAL
+        )
+        if (
+            routing_source == DEATH_ROUTING_SOURCE_BASE_WORLD
+            and is_instance_death
+        ):
+            plan_owner = origin_owner.instance_of
+        else:
+            routing_source = DEATH_ROUTING_SOURCE_LOCAL
+            plan_owner = origin_owner
+        plan_config = locked_configs.get(plan_owner.config_id)
+        if plan_config is None:
+            raise ActionError(
+                "The selected death-routing owner has no configuration.",
+                code="no_death_config",
+            )
+        try:
+            compiled_plan = load_compiled_plan(plan_config)
+            plan_load_error = None
+        except DeathRoutingPlanError:
+            logger.exception(
+                "Compiled death-routing plan is unavailable for config %s.",
+                plan_config.pk,
+            )
+            compiled_plan = None
+            plan_load_error = "compiled_plan_unavailable"
+        fallback_reason = plan_load_error or ""
+
+        # The locked Player row, not a caller's potentially stale model
+        # instance, is authoritative for corpse/drop placement and observers.
+        committed_origin_room = updated_player.room
+        origin_zone_id = (
+            committed_origin_room.zone_id
+            if committed_origin_room is not None
+            else None
+        )
+        routing_archetype = str(
+            updated_player.archetype or ""
+        ).strip().lower()
+        routing_level = int(updated_player.level)
+
+        if is_instance_death:
+            participant = (
+                InstanceParticipant.objects.select_for_update(of=("self",))
+                .select_related("run", "return_runtime_world")
+                .filter(
+                    player=updated_player,
+                    run__spawned_world_id=origin_runtime.id,
+                    exited_at__isnull=True,
+                )
+                .first()
+            )
+
+        transport_valid = True
+        if routing_source == DEATH_ROUTING_SOURCE_BASE_WORLD:
+            transport_valid = bool(
+                participant is not None
+                and participant.return_runtime_world_id
+                and participant.run.base_world_id == plan_owner.id
+                and participant.return_runtime_world.context_id == plan_owner.id
+            )
+
+        if not transport_valid:
+            used_transport_fallback = True
+            destination_room, emergency_reason = _fail_safe_room(
+                config=origin_config,
+                owner_world=origin_owner,
+            )
+            decision_reason = "transport_fallback"
+            fallback_reason = emergency_reason or "invalid_return_runtime"
+        else:
+            if (
+                compiled_plan is not None
+                and compiled_plan.enabled
+                and compiled_plan.required_state_paths
+            ):
+                state_record = (
+                    CharacterState.objects.select_for_update(of=("self",))
+                    .only("data")
+                    .filter(player=updated_player)
+                    .first()
+                )
+                loaded_character_state_for_routing = True
+                if state_record is not None and isinstance(
+                    state_record.data,
+                    dict,
+                ):
+                    character_state = dict(state_record.data)
+
+            if compiled_plan is None:
+                destination_room, emergency_reason = _fail_safe_room(
+                    config=plan_config,
+                    owner_world=plan_owner,
+                )
+                fallback_reason = emergency_reason or fallback_reason
+            else:
+                resolution = resolve_death_destination(
+                    compiled_plan,
+                    core_faction_id=updated_player.core_faction_id,
+                    archetype=routing_archetype,
+                    player_level=routing_level,
+                    character_state=character_state,
+                    origin_zone_id=origin_zone_id,
+                )
+                decision_reason = resolution.reason
+                fallback_reason = resolution.fallback_reason or ""
+                matched_route_position = resolution.matched_route_position
+                destination_room = _configured_room(
+                    config=plan_config,
+                    owner_world=plan_owner,
+                    room_id=resolution.room_id,
+                )
+                if destination_room is None:
+                    destination_room, emergency_reason = _fail_safe_room(
+                        config=plan_config,
+                        owner_world=plan_owner,
+                    )
+                    decision_reason = "fallback"
+                    fallback_reason = emergency_reason or "invalid_destination"
+
+        if destination_room is None:
+            raise ActionError(
+                "There is no valid death room for this world.",
+                code="no_death_room",
+            )
+
+        updated_player.health = 1
+        updated_player.energy = 1
+        updated_player.stamina = 1
         ActiveEffect.objects.filter(target_player=updated_player).delete()
         clear_actor_effect_cache(updated_player)
         penalty_text, corpse_id, penalty_money = _apply_player_death_penalty(
             player=updated_player,
-            death_mode=death_config.death_mode if death_config else adv_consts.DEATH_MODE_LOSE_NONE,
-            death_currency=death_config.death_currency if death_config else None,
+            death_mode=origin_config.death_mode,
+            death_currency=origin_config.death_currency,
             death_currency_penalty=(
-                death_config.death_currency_penalty if death_config else 0),
-            origin_room=origin_room or death_room,
+                origin_config.death_currency_penalty
+            ),
+            origin_room=committed_origin_room or destination_room,
             is_pvp_death=(
                 isinstance(killer, Player)
                 or (
@@ -1117,14 +1541,170 @@ def apply_player_death(
         for encounter in active_encounters:
             _finish_encounter(encounter)
 
+        if (
+            routing_source == DEATH_ROUTING_SOURCE_BASE_WORLD
+            and not used_transport_fallback
+        ):
+            updated_player.save(
+                update_fields=["health", "energy", "stamina"],
+            )
+            updated_player = transfer_instance_participant(
+                participant=participant,
+                destination_room=destination_room,
+                exit_reason=InstanceParticipant.EXIT_REASON_DEATH_DELEGATED,
+                expected_origin_world_id=origin_runtime.id,
+            )
+            updated_player.death_sequence = (
+                int(updated_player.death_sequence or 0) + 1
+            )
+            updated_player.save(update_fields=["death_sequence"])
+        else:
+            updated_player.room = destination_room
+            updated_player.death_sequence = (
+                int(updated_player.death_sequence or 0) + 1
+            )
+            updated_player.location_sequence = (
+                int(updated_player.location_sequence or 0) + 1
+            )
+            updated_player.save(
+                update_fields=[
+                    "health",
+                    "energy",
+                    "stamina",
+                    "room",
+                    "death_sequence",
+                    "location_sequence",
+                ],
+            )
+
+        destination_runtime = updated_player.world
+        penalty_result = {
+            "mode": origin_config.death_mode,
+            "text": penalty_text,
+            "money": penalty_money,
+        }
+        receipt_result = {
+            "origin_world_id": origin_runtime.id,
+            "origin_room_id": (
+                committed_origin_room.id
+                if committed_origin_room is not None
+                else None
+            ),
+            "origin_instance_run_id": (
+                participant.run_id if participant is not None else None
+            ),
+            "origin_instance_participant_id": (
+                participant.id if participant is not None else None
+            ),
+            "destination_world_id": destination_runtime.id,
+            "destination_room_id": destination_room.id,
+            "routing_source": routing_source,
+            "decision_reason": decision_reason,
+            "fallback_reason": fallback_reason,
+            "routing_inputs": {
+                "core_faction_id": updated_player.core_faction_id,
+                "archetype": routing_archetype or None,
+                "level": routing_level,
+                "origin_zone_id": origin_zone_id,
+            },
+            "matched_route_position": matched_route_position,
+            "death_sequence": updated_player.death_sequence,
+            "location_sequence": updated_player.location_sequence,
+        }
+        DeathResolutionReceipt.objects.create(
+            player=updated_player,
+            death_token=normalized_token,
+            request_fingerprint=request_fingerprint,
+            origin_world=origin_runtime,
+            origin_room=committed_origin_room,
+            destination_world=destination_runtime,
+            destination_room=destination_room,
+            origin_instance_run=participant.run if participant else None,
+            origin_instance_participant=participant,
+            routing_source=routing_source,
+            origin_config=origin_config,
+            source_generation=(
+                int(origin_config.death_routing_source_generation or 0)
+                if is_instance_death
+                else 0
+            ),
+            plan_config=plan_config,
+            plan_generation=(
+                int(compiled_plan.generation)
+                if compiled_plan is not None
+                else int(plan_config.death_routing_generation or 0)
+            ),
+            core_faction_id=updated_player.core_faction_id,
+            decision_reason=decision_reason,
+            fallback_reason=fallback_reason,
+            matched_route_position=matched_route_position,
+            death_sequence=updated_player.death_sequence,
+            location_sequence=updated_player.location_sequence,
+            penalty=penalty_result,
+            corpse_id=corpse_id,
+            result=receipt_result,
+        )
+
+        domain_events = [
+            GameEvent(
+                type="player.died",
+                recipients=[],
+                data={
+                    "player_id": updated_player.id,
+                    "death_token": str(normalized_token),
+                    **receipt_result,
+                    "corpse_id": corpse_id,
+                },
+            ),
+        ]
+        if (
+            routing_source == DEATH_ROUTING_SOURCE_BASE_WORLD
+            and not used_transport_fallback
+            and participant is not None
+        ):
+            domain_events.append(
+                GameEvent(
+                    type="instance.left",
+                    recipients=[],
+                    data={
+                        "player_id": updated_player.id,
+                        "run_id": participant.run_id,
+                        "participant_id": participant.id,
+                        "reason": InstanceParticipant.EXIT_REASON_DEATH_DELEGATED,
+                        "death_token": str(normalized_token),
+                        "destination_world_id": destination_runtime.id,
+                        "destination_room_id": destination_room.id,
+                    },
+                )
+            )
+        enqueue_game_events(domain_events)
+
+    death_room = destination_room
+    if loaded_character_state_for_routing:
+        # The death event serializes character state as ``marks``. Reuse the
+        # locked routing snapshot so state-backed policies still perform only
+        # one CharacterState read for the complete death response.
+        updated_player._character_state_snapshot = character_state
     affect_data = {
         "actor": serialize_actor(updated_player, death_room).model_dump(),
         "room": _room_payload(updated_player, death_room),
         "penalty": penalty_money,
         "penalty_text": penalty_text,
     }
-    if origin_room:
-        affect_data["origin_room"] = _room_payload(updated_player, origin_room)
+    if committed_origin_room:
+        affect_data["origin_room"] = _room_payload(
+            updated_player,
+            committed_origin_room,
+            runtime_world=committed_origin_world,
+        )
+    affect_data["death_routing"] = {
+        "source": routing_source,
+        "decision": decision_reason,
+        "fallback_reason": fallback_reason or None,
+        "matched_route_position": matched_route_position,
+        "death_sequence": updated_player.death_sequence,
+        "location_sequence": updated_player.location_sequence,
+    }
     killer_payload = _death_killer_payload(killer)
     if killer_payload:
         affect_data["killer"] = killer_payload
@@ -1142,7 +1722,8 @@ def apply_player_death(
     if room_text and not updated_player.is_invisible:
         recipients = _death_notification_recipients(
             deceased=updated_player,
-            origin_room=origin_room,
+            origin_room=committed_origin_room,
+            origin_world_id=committed_origin_world.id,
             killer=killer,
         )
         if recipients:
@@ -4258,6 +4839,11 @@ def _resolve_detached_actor_effects(
             killer=killer,
             target_text="You succumb to your wounds.",
             room_text=f"{killer_name} kills {outcome.defeated_target.name}.",
+            death_token=(
+                f"detached-effect:{pulse_id}:player:"
+                f"{outcome.defeated_target.id}"
+            ),
+            cause="character_effect",
         )
         events.extend(death_events)
         clear_actor_effect_cache(updated_player)
@@ -5075,6 +5661,8 @@ def _apply_mob_primary_turn(
             target_text="You have been slain.",
             room_text=f"{mob_name} kills {player.name}.",
             config=config,
+            death_token=f"{round_id}:player:{player.id}",
+            cause="combat",
         )
         events.extend(death_events)
         return MobTurnOutcome(
@@ -5121,6 +5709,8 @@ def _apply_mob_primary_turn(
             target_text="You have been slain.",
             room_text=f"{mob_name} kills {player.name}.",
             config=config,
+            death_token=f"{round_id}:player:{player.id}",
+            cause="combat",
         )
         events.extend(death_events)
         return MobTurnOutcome(
@@ -5192,6 +5782,8 @@ def _apply_encounter_round(
             target_text="You succumb to your wounds.",
             room_text=f"{killer_name} kills {player.name}.",
             config=config,
+            death_token=f"{round_id}:player:{player.id}",
+            cause="character_effect",
         )
         events.extend(death_events)
         return CombatStepResult(

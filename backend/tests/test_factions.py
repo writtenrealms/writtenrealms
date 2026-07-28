@@ -184,8 +184,15 @@ class TestFactionPlayerCreation(WorldTestCase):
 
         resp = self.client.post(self.char_ep, {"name": "Mara"}, format="json")
         self.assertEqual(resp.status_code, 201, resp.data)
-        player = Player.objects.get(pk=resp.data["id"])
-        self.assertEqual(player.faction_assignments.get().faction.code, "human")
+        player = Player.objects.select_related("core_faction").get(
+            pk=resp.data["id"],
+        )
+        self.assertEqual(player.core_faction.code, "human")
+        self.assertFalse(
+            player.faction_assignments.filter(
+                faction__type=FACTION_TYPE_CORE,
+            ).exists()
+        )
 
         resp = self.client.post(
             self.char_ep,

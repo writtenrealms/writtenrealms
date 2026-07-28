@@ -20,6 +20,7 @@ from spawns.models import (
     CombatEncounter,
     CombatParticipant,
     CraftingActionReceipt,
+    DeathResolutionReceipt,
     Mob,
     Player,
 )
@@ -55,6 +56,34 @@ def prune_crafting_action_receipts(retention_days: int = 7) -> int:
     cutoff = timezone.now() - timedelta(days=days)
     deleted, _ = CraftingActionReceipt.objects.filter(
         created_ts__lt=cutoff
+    ).delete()
+    return deleted
+
+
+@shared_task(ignore_result=True)
+def prune_death_resolution_receipts(
+    retention_days: int = 30,
+    batch_size: int = 10_000,
+) -> int:
+    """Bound death idempotency history while retaining a long retry window."""
+    try:
+        days = max(1, int(retention_days))
+    except (TypeError, ValueError):
+        days = 30
+    try:
+        limit = max(1, min(int(batch_size), 10_000))
+    except (TypeError, ValueError):
+        limit = 10_000
+    cutoff = timezone.now() - timedelta(days=days)
+    receipt_ids = list(
+        DeathResolutionReceipt.objects.filter(created_ts__lt=cutoff)
+        .order_by("created_ts", "id")
+        .values_list("id", flat=True)[:limit]
+    )
+    if not receipt_ids:
+        return 0
+    deleted, _ = DeathResolutionReceipt.objects.filter(
+        id__in=receipt_ids
     ).delete()
     return deleted
 

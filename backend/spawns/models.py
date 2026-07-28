@@ -102,26 +102,21 @@ class Equipment(AdventBaseModel):
         return item
 
 
-class PlayerManager(models.Manager):
-
-    def create(self, name, room, user, world, *args, **kwargs):
-        return super().create(
-            name=name,
-            room=room,
-            user=user,
-            world=world,
-            *args, **kwargs)
-
-
 class Player(CharMixin, AdventBaseModel):
-
-    objects = PlayerManager()
 
     pending_deletion_ts = models.DateTimeField(db_index=True, **optional)
 
     world = models.ForeignKey('worlds.World',
                               on_delete=models.CASCADE,
                               related_name='players')
+    # Canonical player core identity. Reputation continues to use
+    # FactionAssignment; new players do not duplicate their core identity there.
+    core_faction = models.ForeignKey(
+        'builders.Faction',
+        on_delete=models.RESTRICT,
+        related_name='core_faction_players',
+        **optional,
+    )
     user = models.ForeignKey('users.User',
                              on_delete=models.CASCADE,
                              related_name='characters')
@@ -151,6 +146,8 @@ class Player(CharMixin, AdventBaseModel):
     # Points gained and lost when killing / dying to other players
     glory = models.PositiveIntegerField(default=0)
     wallet_revision = models.BigIntegerField(default=0)
+    death_sequence = models.BigIntegerField(default=0)
+    location_sequence = models.BigIntegerField(default=0)
 
     # Moderation flags
     nochat = models.BooleanField(default=False)
@@ -515,18 +512,34 @@ class Player(CharMixin, AdventBaseModel):
         their starting room instead, if it's defined.
         """
 
-        # Right now there should only be 1 core faction, but just in
-        # case in the future we allow multiple, and since it doesn't
-        # make the code slower otherwise, we treat the future case.
-        core_factions = self.faction_assignments.filter(
-            models.Q(faction__type='core') | models.Q(faction__is_core=True)
-        ).order_by('created_ts')
-        for core_faction in core_factions:
-            if core_faction.faction.starting_room:
-                return core_faction.faction.starting_room
+        if self.core_faction_id:
+            core_faction = self._state.fields_cache.get('core_faction')
+            if core_faction is None:
+                core_faction = self.core_faction
+            if core_faction.starting_room_id:
+                return core_faction.starting_room
+        else:
+            # Transitional read-only fallback for rows created before direct
+            # core-faction identity was introduced.
+            legacy_assignment = (
+                self.faction_assignments
+                .filter(
+                    models.Q(faction__type='core')
+                    | models.Q(faction__is_core=True)
+                )
+                .select_related('faction', 'faction__starting_room')
+                .order_by('created_ts')
+                .first()
+            )
+            if (
+                legacy_assignment
+                and legacy_assignment.faction.starting_room_id
+            ):
+                return legacy_assignment.faction.starting_room
 
         # Default to the world's starting room
-        return self.world.context.config.starting_room
+        authored_world = self.world.context or self.world
+        return authored_world.config.starting_room
 
     def reset(self, level=None):
         player = self
@@ -644,6 +657,91 @@ class CharacterState(BaseModel):
 
     class Meta(BaseModel.Meta):
         ordering = ['player_id']
+
+
+class DeathResolutionReceipt(BaseModel):
+    """Durable idempotency result for one player death incident."""
+
+    player = models.ForeignKey(
+        'spawns.Player',
+        on_delete=models.CASCADE,
+        related_name='death_resolution_receipts',
+    )
+    death_token = models.UUIDField()
+    request_fingerprint = models.CharField(max_length=128)
+    origin_world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.SET_NULL,
+        related_name='death_receipts_originating_here',
+        **optional,
+    )
+    origin_room = models.ForeignKey(
+        'worlds.Room',
+        on_delete=models.SET_NULL,
+        related_name='death_receipts_originating_here',
+        **optional,
+    )
+    destination_world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.SET_NULL,
+        related_name='death_receipts_ending_here',
+        **optional,
+    )
+    destination_room = models.ForeignKey(
+        'worlds.Room',
+        on_delete=models.SET_NULL,
+        related_name='death_receipts_ending_here',
+        **optional,
+    )
+    origin_instance_run = models.ForeignKey(
+        'worlds.InstanceRun',
+        on_delete=models.SET_NULL,
+        related_name='death_resolution_receipts',
+        **optional,
+    )
+    origin_instance_participant = models.ForeignKey(
+        'worlds.InstanceParticipant',
+        on_delete=models.SET_NULL,
+        related_name='death_resolution_receipts',
+        **optional,
+    )
+    routing_source = models.CharField(max_length=32)
+    origin_config = models.ForeignKey(
+        'worlds.WorldConfig',
+        on_delete=models.SET_NULL,
+        related_name='origin_death_resolution_receipts',
+        **optional,
+    )
+    source_generation = models.BigIntegerField(default=0)
+    plan_config = models.ForeignKey(
+        'worlds.WorldConfig',
+        on_delete=models.SET_NULL,
+        related_name='plan_death_resolution_receipts',
+        **optional,
+    )
+    plan_generation = models.BigIntegerField(default=0)
+    matched_route_position = models.PositiveSmallIntegerField(**optional)
+    core_faction = models.ForeignKey(
+        'builders.Faction',
+        on_delete=models.SET_NULL,
+        related_name='death_resolution_receipts',
+        **optional,
+    )
+    decision_reason = models.CharField(max_length=64)
+    fallback_reason = models.CharField(max_length=64, blank=True, default='')
+    death_sequence = models.BigIntegerField()
+    location_sequence = models.BigIntegerField()
+    penalty = models.JSONField(default=dict, blank=True)
+    corpse_id = models.BigIntegerField(**optional)
+    result = models.JSONField(default=dict, blank=True)
+
+    class Meta(BaseModel.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=['player', 'death_token'],
+                name='spawns_death_receipt_player_token',
+            ),
+        ]
 
 
 class MobState(BaseModel):

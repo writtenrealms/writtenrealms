@@ -74,6 +74,26 @@ explicit regeneration values from your stats still apply, and stamina keeps its
 baseline recovery. These passive updates refresh the vitals display silently;
 they do not add entries to the game console.
 
+## Death Destinations
+
+A world may use one fixed death room or deterministic routes based on facts
+about your character and the place where you died. For example, core factions
+may have separate infirmaries, lower- and higher-level characters may use
+different recovery areas, classes may return to different divine domains, and
+actions taken during play may set character state that changes a later death
+destination. Routes are evaluated in builder-authored order and the first
+matching route wins.
+
+Instance deaths stay inside the current instance by default. An instance may
+instead be configured to use the base world's death routing. In that case its
+own death penalty is applied in the instance first, then you and any surviving
+carried equipment return atomically to the exact base-world runtime from which
+you entered. Items or a corpse left by the penalty remain in the instance.
+
+After every death, your current health, energy (mana in worlds that use that
+label), and stamina are each set to 1. They then recover through normal
+regeneration; death does not refill them.
+
 ## Multiple Hostiles
 
 Several hostile mobs in the same room can engage you at once. You still have one

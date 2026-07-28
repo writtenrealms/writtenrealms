@@ -59,6 +59,11 @@ app.conf.beat_schedule = {
         'task': 'spawns.tasks.prune_crafting_action_receipts',
         'schedule': crontab(hour='4', minute='20'),
     },
+    'prune-death-resolution-receipts': {
+        'task': 'spawns.tasks.prune_death_resolution_receipts',
+        'schedule': crontab(minute='25'),
+        'options': {'expires': 3300},
+    },
     'prune-scheduled-trigger-runs': {
         'task': 'spawns.tasks.prune_scheduled_trigger_runs',
         'schedule': crontab(minute='25'),

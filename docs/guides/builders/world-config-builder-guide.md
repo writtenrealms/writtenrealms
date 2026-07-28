@@ -43,9 +43,22 @@ spec:
   combat_resolution_interval: 0
   default_roam_chance: 10
   death_mode: lose_none
-  death_route: top_faction
   death_currency: crowns
   death_currency_penalty: 0.2
+  death_routing:
+    routes:
+      - when:
+          gte: [player.level, 20]
+        destination: room@9,0,0
+      - when:
+          eq: [player.archetype, warlord]
+        destination: room@10,0,0
+      - when:
+          eq: [player.core_faction, orc]
+        destination: room@11,0,0
+      - when:
+          eq: [state.character.divine_patron, poseidon]
+        destination: room@12,0,0
   pvp_mode: free_for_all
   announce_duel_results: false
   auto_equip: true
@@ -202,11 +215,81 @@ For spawn-plan roaming behavior, see
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `death_mode` | choice | `lose_none` | `lose_all`, `lose_none`, `lose_eq`, `destroy_eq`, `destroy_all`, `lose_currency`, or `lose_inv`. |
-| `death_route` | choice | `top_faction` | `top_faction`, `near_room`, `far_room`, or `nearest_in_zone`. |
+| `death_routing` | mapping/null | `null` | Optional ordered deterministic routing policy. |
 | `death_currency` | currency code/null | initial currency | Balance charged by `lose_currency`. |
 | `death_currency_penalty` | number 0-1 | `0.2` | Fraction of equipped-item value denominated in `death_currency`, capped by that balance, charged on a non-PvP `lose_currency` death. |
 | `pvp_mode` | choice | `free_for_all` | Sole authored PvP policy: `free_for_all`, `disabled`, `zone`, or `match`. |
 | `announce_duel_results` | boolean | `false` | Base-world policy that announces completed duel results when enabled. |
+
+`death_room` is always the unconditional fail-safe. A routing policy adds
+ordered conditional destinations without replacing that safety room. Routes
+are evaluated from top to bottom against the character and the room where the
+death occurred. Evaluation stops at the first match.
+
+Every completed player death sets current health, energy, and stamina to 1,
+regardless of `death_mode`, the matched route, or whether an instance delegates
+to base-world routing. Normal regeneration resumes from those values.
+
+Death routing uses the shared condition syntax, but the death compiler accepts
+only a bounded, precompilable subset:
+
+- `player.core_faction` for canonical core-faction identity
+- `player.archetype` for the world's class/profile key
+- `player.level` for exact levels or inclusive level bands
+- any `state.character.*` path set by gameplay or triggers
+- `zone.id` for the authored zone containing the room where the death occurred
+- `eq`, `in`, `all`, `any`, and `not`
+- `gte` and `lte` for `player.level`
+- `always: true` only as the final route
+
+Destinations, faction codes, class keys, and zone references are validated when
+the manifest is applied. Query-backed conditions such as inventory, quests, or
+mob presence are deliberately unavailable in the death hot path. A trigger can
+translate those gameplay consequences into character state before a later
+death. There is no reserved death-routing state key and no player command for
+selecting a route; builders may use any valid `state.character.*` path and set
+it through ordinary gameplay.
+
+Level operands must be positive integers. `gte` and `lte` are inclusive:
+`gte: [player.level, 20]` means level 20 or higher. Since levels are integers,
+strictly above level 20 can be written as `gte: [player.level, 21]`, and
+strictly below level 20 as `lte: [player.level, 19]`.
+
+A class profile cannot be removed while a death route in the base world or one
+of its instance templates still references that class key. Clear or update
+those routes first.
+
+Order is significant, and overlapping conditions are allowed. For example, a
+zone-specific field hospital can override class and faction destinations by
+appearing first:
+
+```yaml
+death_routing:
+  routes:
+    - when:
+        eq: [zone.id, zone@7]
+      destination: room@10,0,0
+
+    - when:
+        gte: [player.level, 20]
+      destination: room@9,0,0
+
+    - when:
+        eq: [player.archetype, warlord]
+      destination: room@11,0,0
+
+    - when:
+        in: [player.core_faction, [human, orc]]
+      destination: room@12,0,0
+
+    - when:
+        eq: [state.character.divine_patron, poseidon]
+      destination: room@13,0,0
+```
+
+Omitting `death_routing` from an update preserves the current policy. Setting
+it to `null`, or supplying an empty route list, disables conditional routing.
+If no route matches, the player goes to `death_room`.
 
 `pvp_mode` is the only PvP policy authored in current WR2 world manifests. The
 manifest importer still accepts the legacy authored-content alias `allow_pvp`
@@ -258,6 +341,7 @@ manifests.
 | `can_select_faction` | Derived storage field. | Configure `player_creation.core_faction`. |
 | `allow_combat` | Stored field not accepted in world manifests. | Use `is_narrative`. |
 | `is_classless` | Legacy compatibility field accepted by import. | Configure `stats.class_profiles`; absence of class profiles means classless. |
+| `death_route` | Legacy authored field retained for compatibility; deterministic routing does not interpret it. | Configure `death_routing`. |
 | `starting_eq` | Stored many-to-many starter equipment. | Not currently authored through `kind: world`. |
 | `exits_to` | Instance transfer field. | Configure instance entry/exit behavior through instance-specific workflows. |
 
@@ -269,9 +353,16 @@ manifests:
 - identity text: `name`, `short_description`, `description`, `motd`,
   `is_public`
 - local rooms: `starting_room`, `death_room`
-- local death/PvP/presentation fields: `death_mode`, `death_route`,
-  `death_currency`, `death_currency_penalty`, `pvp_mode`, `built_by`,
-  `small_background`, `large_background`
+- local death/PvP/presentation fields: `death_mode`, `death_routing`,
+  `death_routing_source`, `death_currency`, `death_currency_penalty`,
+  `pvp_mode`, `built_by`, `small_background`, `large_background`
+
+`death_routing_source` is instance-only. `local` is the default and uses the
+instance template's complete routing policy. `base_world` uses the base
+world's complete policy and atomically returns the player to the exact base
+runtime from which they entered. The instance's local `death_room` remains
+required as a transport-integrity fallback, and the instance still owns its
+death penalty.
 
 Core systems such as `stats`, `combat`, `equipment`, `ability_progression`,
 `leveling_curve`, `starting_level`, `max_level`, `combat_resolution_interval`,

@@ -119,6 +119,46 @@ class TestKillCommand(WorldTestCase):
             name=name,
         )
 
+    def test_all_death_modes_reset_current_vitals_to_one(self):
+        for death_mode in adv_consts.DEATH_MODES:
+            with self.subTest(death_mode=death_mode):
+                self._set_death_mode(death_mode)
+                self.player.refresh_from_db()
+                self.player.health = 17
+                self.player.energy = 13
+                self.player.stamina = 11
+                self.player.save(
+                    update_fields=["health", "energy", "stamina"],
+                )
+
+                updated_player, events = apply_player_death(
+                    player=self.player,
+                    forced=True,
+                )
+
+                updated_player.refresh_from_db()
+                self.assertEqual(
+                    (
+                        updated_player.health,
+                        updated_player.energy,
+                        updated_player.stamina,
+                    ),
+                    (1, 1, 1),
+                )
+                death_affect = self._death_event_by_type(
+                    events,
+                    "affect.death",
+                )
+                self.assertIsNotNone(death_affect)
+                self.assertEqual(
+                    (
+                        death_affect.data["actor"]["health"],
+                        death_affect.data["actor"]["energy"],
+                        death_affect.data["actor"]["stamina"],
+                    ),
+                    (1, 1, 1),
+                )
+
     def test_player_death_destroy_eq_destroys_equipment(self):
         self._set_death_mode(adv_consts.DEATH_MODE_DESTROY_EQ)
         sword = self._equipped_item()
@@ -595,10 +635,25 @@ class TestKillCommand(WorldTestCase):
         self.player.refresh_from_db()
         self.assertTrue(Mob.objects.filter(pk=mob.id).exists())
         self.assertEqual(self.player.room_id, graveyard.id)
-        self.assertEqual(self.player.health, self.stats["health_max"])
+        self.assertEqual(
+            (
+                self.player.health,
+                self.player.energy,
+                self.player.stamina,
+            ),
+            (1, 1, 1),
+        )
 
         death_affect = self._message_by_type(messages, "affect.death", self.player.key)
         self.assertIsNotNone(death_affect)
+        self.assertEqual(
+            (
+                death_affect["data"]["actor"]["health"],
+                death_affect["data"]["actor"]["energy"],
+                death_affect["data"]["actor"]["stamina"],
+            ),
+            (1, 1, 1),
+        )
         self.assertEqual(death_affect["data"]["room"]["id"], graveyard.id)
         self.assertEqual(death_affect["data"]["origin_room"]["id"], self.room.id)
 

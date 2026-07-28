@@ -47,6 +47,16 @@ from core.leveling import (
     validate_leveling_config,
 )
 from core.economy import MAX_CURRENCY_AMOUNT, economy_world, money_payload
+from core.death_routing import (
+    DeathRoutingValidationError,
+    acquire_death_routing_config_locks,
+    canonical_death_routing_manifest_value,
+    compile_death_routing_policy,
+    death_routing_config_ids_for_world,
+    rebuild_compiled_policy_snapshot,
+    replace_compiled_policy,
+    validate_death_routing_archetype_dependencies,
+)
 from core.factions import normalize_faction_code
 from core.stat_system import (
     StatSystemValidationError,
@@ -210,6 +220,9 @@ _WORLD_CONFIG_CLONE_SKIP_FIELDS = {
     "modified_ts",
     *_INSTANCE_CONFIG_LOCAL_ROOM_FIELDS,
     *INSTANCE_INHERITED_CONFIG_FIELDS,
+    "death_routing_generation",
+    "death_routing_source",
+    "death_routing_source_generation",
 }
 
 
@@ -483,6 +496,10 @@ class WorldConfigSerializer(serializers.ModelSerializer):
 
     death_room = ReferenceField(required=True, allow_null=False)
     starting_room = ReferenceField(required=True, allow_null=False)
+    death_routing = serializers.JSONField(
+        required=False,
+        allow_null=True,
+    )
 
     class Meta:
         model = WorldConfig
@@ -495,6 +512,8 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'death_room',
             'death_mode',
             'death_route',
+            'death_routing',
+            'death_routing_source',
             'death_currency',
             'death_currency_penalty',
             'clan_registration_currency',
@@ -578,6 +597,13 @@ class WorldConfigSerializer(serializers.ModelSerializer):
                     "Instance worlds can only alter local instance config. "
                     f"Cannot alter: {', '.join(disallowed_fields)}."
                 )
+        elif "death_routing_source" in attrs:
+            raise serializers.ValidationError({
+                "death_routing_source": (
+                    "Death routing source is only configurable for instance worlds."
+                ),
+            })
+
         if world is not None:
             base_world = economy_world(world)
             currency_errors = {}
@@ -649,6 +675,42 @@ class WorldConfigSerializer(serializers.ModelSerializer):
         except (EquipmentSystemValidationError, StatSystemValidationError) as exc:
             raise serializers.ValidationError(str(exc))
 
+        routing_supplied = "death_routing" in attrs
+        if routing_supplied:
+            if world is None:
+                raise serializers.ValidationError({
+                    "death_routing": "A world is required to validate death routing.",
+                })
+            routing_policy = attrs["death_routing"]
+            try:
+                self._death_routing_compilation = compile_death_routing_policy(
+                    world=world,
+                    policy=routing_policy,
+                    field_name="death_routing",
+                    stat_system=attrs.get("stat_system"),
+                )
+            except DeathRoutingValidationError as exc:
+                raise serializers.ValidationError({
+                    "death_routing": str(exc),
+                }) from exc
+            self._death_routing_policy = copy.deepcopy(routing_policy)
+
+        if "stat_system" in attrs and world is not None:
+            try:
+                validate_death_routing_archetype_dependencies(
+                    base_world=world,
+                    stat_system=attrs["stat_system"],
+                    excluded_config_ids=(
+                        (config.pk,)
+                        if routing_supplied and config is not None
+                        else ()
+                    ),
+                )
+            except DeathRoutingValidationError as exc:
+                raise serializers.ValidationError({
+                    "stat_system": str(exc),
+                }) from exc
+
         try:
             validate_leveling_config(
                 starting_level=attrs.get(
@@ -667,6 +729,97 @@ class WorldConfigSerializer(serializers.ModelSerializer):
         except LevelingConfigError as exc:
             raise serializers.ValidationError(str(exc))
         return attrs
+
+    def update(self, instance, validated_data):
+        routing_supplied = "death_routing" in validated_data
+        validated_data.pop("death_routing", None)
+        world = self.context.get("world") if isinstance(self.context, dict) else None
+        if world is None:
+            world = instance.configured_worlds.filter(context__isnull=True).first()
+
+        with transaction.atomic():
+            acquire_death_routing_config_locks(
+                death_routing_config_ids_for_world(
+                    world=world,
+                    config=instance,
+                ),
+                shared=False,
+            )
+            instance = WorldConfig.objects.select_for_update().get(pk=instance.pk)
+            old_death_room_id = instance.death_room_id
+            old_source = instance.death_routing_source
+
+            if "stat_system" in validated_data:
+                try:
+                    validate_death_routing_archetype_dependencies(
+                        base_world=world,
+                        stat_system=validated_data["stat_system"],
+                        excluded_config_ids=(
+                            (instance.pk,) if routing_supplied else ()
+                        ),
+                    )
+                except DeathRoutingValidationError as exc:
+                    raise serializers.ValidationError({
+                        "stat_system": str(exc),
+                    }) from exc
+
+            routing_compilation = None
+            if routing_supplied:
+                try:
+                    routing_compilation = compile_death_routing_policy(
+                        world=world,
+                        policy=copy.deepcopy(self._death_routing_policy),
+                        field_name="death_routing",
+                        stat_system=validated_data.get("stat_system"),
+                    )
+                except DeathRoutingValidationError as exc:
+                    raise serializers.ValidationError({
+                        "death_routing": str(exc),
+                    }) from exc
+
+            instance = super().update(instance, validated_data)
+
+            source_changed = (
+                "death_routing_source" in validated_data
+                and instance.death_routing_source != old_source
+            )
+            if source_changed:
+                instance.death_routing_source_generation = (
+                    int(instance.death_routing_source_generation or 0) + 1
+                )
+                instance.save(
+                    update_fields=[
+                        "death_routing_source_generation",
+                        "modified_ts",
+                    ]
+                )
+
+            if routing_supplied:
+                instance = replace_compiled_policy(
+                    world=world,
+                    config=instance,
+                    compilation=routing_compilation,
+                )
+            elif (
+                "death_room" in validated_data
+                and instance.death_room_id != old_death_room_id
+            ):
+                instance = rebuild_compiled_policy_snapshot(
+                    world=world,
+                    config=instance,
+                )
+        return instance
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["death_routing"] = canonical_death_routing_manifest_value(
+            config=instance,
+            serialize_room=lambda room: ReferenceField().to_representation(room),
+        )
+        world = self.context.get("world") if isinstance(self.context, dict) else None
+        if world is not None and not world.instance_of_id:
+            data.pop("death_routing_source", None)
+        return data
 
 # World Admin
 
@@ -2293,9 +2446,37 @@ class FactionSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         validated_data = self._normalize_type_fields(validated_data)
-        instance = super().update(instance, validated_data)
-        self.check_default(instance, validated_data)
-        return instance
+        world = instance.world
+        with transaction.atomic():
+            acquire_death_routing_config_locks(
+                death_routing_config_ids_for_world(
+                    world=world,
+                    config=world.config,
+                ),
+                shared=False,
+            )
+            instance = Faction.objects.select_for_update().get(pk=instance.pk)
+            changes_routing_identity = (
+                (
+                    "code" in validated_data
+                    and validated_data["code"] != instance.code
+                )
+                or (
+                    "type" in validated_data
+                    and validated_data["type"] != instance.type
+                )
+            )
+            if (
+                changes_routing_identity
+                and instance.death_routing_snapshot_references.exists()
+            ):
+                raise serializers.ValidationError(
+                    "Cannot change the code or type of a faction used by "
+                    "active death routing."
+                )
+            instance = super().update(instance, validated_data)
+            self.check_default(instance, validated_data)
+            return instance
 
     def validate_code(self, code):
         lowercase_code = code.lower()
@@ -2385,11 +2566,20 @@ class FactionSerializer(serializers.ModelSerializer):
             player_ids_with_faction = faction.assignments_for.filter(
                 member_type__model='player'
             ).values_list('member_id', flat=True)
-            are_player_core_assignments = FactionAssignment.objects.filter(
-                member_type__model='player',
-                member_id__in=player_ids_with_faction,
-                faction__world_id=self.instance.world_id,
-                faction__is_core=True).exists()
+            from spawns.models import Player
+
+            are_player_core_assignments = (
+                Player.objects.filter(
+                    pk__in=player_ids_with_faction,
+                    core_faction__isnull=False,
+                ).exists()
+                or FactionAssignment.objects.filter(
+                    member_type__model='player',
+                    member_id__in=player_ids_with_faction,
+                    faction__world_id=self.instance.world_id,
+                    faction__is_core=True,
+                ).exists()
+            )
             if are_player_core_assignments:
                 raise serializers.ValidationError(error)
 
@@ -2404,6 +2594,18 @@ class FactionSerializer(serializers.ModelSerializer):
                 faction__is_core=True).exists()
             if are_mob_core_assignments:
                 raise serializers.ValidationError(error)
+
+        if (
+            faction
+            and faction.type == FACTION_TYPE_CORE
+            and target_type != FACTION_TYPE_CORE
+        ):
+            from spawns.models import Player
+
+            if Player.objects.filter(core_faction=faction).exists():
+                raise serializers.ValidationError(
+                    'Cannot change a core faction used by characters to reputation.'
+                )
 
         return super().validate(data)
 

@@ -100,14 +100,29 @@ class CharMixin(models.Model):
             assignments = list(
                 self.faction_assignments.select_related('faction').all())
 
-        # Get the core faction; if there are accidental duplicates, keep the
-        # first assignment (oldest, given BaseModel default ordering).
         core = None
-        for assignment in assignments:
-            faction = assignment.faction
-            if faction and (faction.type == 'core' or faction.is_core):
-                core = faction.code
-                break
+        direct_core_id = getattr(self, 'core_faction_id', None)
+        if direct_core_id:
+            model_state = getattr(self, '_state', None)
+            fields_cache = (
+                getattr(model_state, 'fields_cache', {})
+                if model_state is not None
+                else {}
+            )
+            direct_core = fields_cache.get('core_faction')
+            if direct_core is None:
+                direct_core = getattr(self, 'core_faction', None)
+            if direct_core is not None:
+                core = direct_core.code
+        else:
+            # Transitional fallback for characters created before Player
+            # gained canonical direct core identity. If there are accidental
+            # duplicates, keep the oldest assignment.
+            for assignment in assignments:
+                faction = assignment.faction
+                if faction and (faction.type == 'core' or faction.is_core):
+                    core = faction.code
+                    break
 
         # Fall back to the world's default core faction.
         if core is None:
@@ -145,11 +160,29 @@ class CharMixin(models.Model):
             assignments = list(
                 self.faction_assignments.select_related('faction').all())
 
-        # If we have a non-human core race, return that.
-        for assignment in assignments:
-            faction = assignment.faction
-            if faction and (faction.type == 'core' or faction.is_core) and faction.code != 'human':
-                return faction.name
+        direct_core_id = getattr(self, 'core_faction_id', None)
+        if direct_core_id:
+            model_state = getattr(self, '_state', None)
+            fields_cache = (
+                getattr(model_state, 'fields_cache', {})
+                if model_state is not None
+                else {}
+            )
+            direct_core = fields_cache.get('core_faction')
+            if direct_core is None:
+                direct_core = getattr(self, 'core_faction', None)
+            if direct_core is not None and direct_core.code != 'human':
+                return direct_core.name
+        else:
+            # Transitional assignment fallback.
+            for assignment in assignments:
+                faction = assignment.faction
+                if (
+                    faction
+                    and (faction.type == 'core' or faction.is_core)
+                    and faction.code != 'human'
+                ):
+                    return faction.name
 
         # If we belong to any non-core faction, return the highest standing
         # for a clanned faction.

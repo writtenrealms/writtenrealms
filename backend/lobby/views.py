@@ -1,4 +1,3 @@
-from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
 from django.db import connection
 from django.db.models import F, Q, Count, Subquery, OuterRef, IntegerField
@@ -17,7 +16,6 @@ from core.utils import distinct_list
 from config import constants as api_consts
 
 from builders.models import (
-    FactionAssignment,
     LastViewedRoom,
     WorldBuilder,
     WorldReview)
@@ -85,10 +83,14 @@ class RecentChars(generics.ListAPIView):
     queryset = Player.objects.all()
 
     def get_queryset(self):
-        return exclude_archived_player_worlds(Player.objects.filter(
-            user=self.request.user,
-            pending_deletion_ts__isnull=True,
-        )).order_by('-last_connection_ts')[0:4]
+        return exclude_archived_player_worlds(
+            Player.objects.filter(
+                user=self.request.user,
+                pending_deletion_ts__isnull=True,
+            )
+            .select_related('core_faction')
+            .prefetch_related('faction_assignments__faction')
+        ).order_by('-last_connection_ts')[0:4]
 
 
 class FeaturedWorlds(WorldCardListView):
@@ -498,13 +500,18 @@ class WorldCharacters(WorldLobbyBase,
         if not self.request.user.is_authenticated:
             return Player.objects.none()
 
-        return Player.objects.filter(
-            user=self.request.user,
-            pending_deletion_ts__isnull=True,
-            world__context_id=self.world.pk,
-        ).order_by(
-            F('last_connection_ts').desc(nulls_last=True),
-            '-id',
+        return (
+            Player.objects.filter(
+                user=self.request.user,
+                pending_deletion_ts__isnull=True,
+                world__context_id=self.world.pk,
+            )
+            .select_related('core_faction')
+            .prefetch_related('faction_assignments__faction')
+            .order_by(
+                F('last_connection_ts').desc(nulls_last=True),
+                '-id',
+            )
         )
 
     def perform_create(self, serializer):
@@ -539,14 +546,8 @@ class WorldCharacters(WorldLobbyBase,
         player = serializer.save(
             user=self.request.user,
             world=spawn_world,
+            core_faction=core_faction,
             last_connection_ts=timezone.now())
-
-        if core_faction:
-            FactionAssignment.objects.create(
-                faction=core_faction,
-                value=1,
-                member_type=ContentType.objects.get_for_model(player),
-                member_id=player.id)
 
         player.room = player.get_starting_room()
         player.save()
@@ -748,10 +749,14 @@ class Lobby(APIView):
         # Variable sections
 
         # Recent Characters
-        recent_characters = exclude_archived_player_worlds(Player.objects.filter(
-            user=request.user,
-            pending_deletion_ts__isnull=True,
-        )).order_by('-last_connection_ts')[0:4]
+        recent_characters = exclude_archived_player_worlds(
+            Player.objects.filter(
+                user=request.user,
+                pending_deletion_ts__isnull=True,
+            )
+            .select_related('core_faction')
+            .prefetch_related('faction_assignments__faction')
+        ).order_by('-last_connection_ts')[0:4]
         recent_characters_data = PlayerSerializer(
             recent_characters, many=True, context=ctx).data
 

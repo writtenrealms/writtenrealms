@@ -150,9 +150,10 @@ Format:
 ```
 
 Instantly kills a player target in the issuer's current room. The target is
-moved through the normal death-room pipeline, resources are restored from the
-world stat system, `affect.death` is emitted, and death-room event triggers can
-run.
+moved through the normal death-room pipeline; current health, energy, and
+stamina are each set to 1; `affect.death` is emitted; and death-room event
+triggers can run. The player recovers those resources through normal
+regeneration.
 
 The optional `--` message is sent to the killed player as the death text. Use
 `&&` chaining with `/echo` for separate room flavor text.
@@ -179,13 +180,16 @@ Available modes:
 
 | Mode | Effect |
 | --- | --- |
-| `lose_none` | Restores the player in the death room without changing equipment, inventory, or currency balances. |
+| `lose_none` | Moves the player to the death room without changing equipment, inventory, or currency balances. |
 | `lose_all` | Moves equipped items and carried inventory into a corpse in the room where the player died. |
 | `lose_eq` | Moves equipped items into a corpse in the room where the player died; carried inventory stays with the player. |
 | `lose_inv` | Moves carried inventory into a corpse in the room where the player died; equipment stays equipped. |
 | `destroy_eq` | Deletes equipped items; carried inventory stays with the player. |
 | `destroy_all` | Deletes equipped items and carried inventory. |
 | `lose_currency` | On non-PvP deaths, charges `death_currency_penalty` of the player's configured `death_currency` balance, capped by the current balance. PvP deaths do not charge this cost. |
+
+Every mode sets current health, energy, and stamina to 1. The modes only change
+the item or currency penalty; none refills a player's resources.
 
 Example world manifest fragment:
 

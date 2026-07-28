@@ -1,7 +1,7 @@
 import json
 
 from builders.currencies import create_currency
-from builders.models import ItemDefinition, MobDefinition
+from builders.models import Faction, ItemDefinition, MobDefinition
 from core.condition_dsl import (
     ConditionContext,
     MAX_CONDITION_NESTING_DEPTH,
@@ -16,7 +16,7 @@ from core.scoped_state import (
     set_state_value,
 )
 from quests.services.predicates import evaluate_condition as evaluate_quest_condition
-from spawns.models import Item, Mob, PlayerCurrencyBalance
+from spawns.models import Item, Mob, Player, PlayerCurrencyBalance
 from tests.base import WorldTestCase
 
 
@@ -62,6 +62,27 @@ class TestSharedConditionDsl(WorldTestCase):
                 context=context,
             )
         )
+
+    def test_player_core_faction_lazily_resolves_plain_player_hyphenated_code(self):
+        faction = Faction.objects.create(
+            world=self.world,
+            code="moon-clan",
+            name="Moon Clan",
+            type="core",
+            playable=True,
+        )
+        self.player.core_faction = faction
+        self.player.save(update_fields=["core_faction"])
+        plain_player = Player.objects.get(pk=self.player.pk)
+        self.assertNotIn("core_faction", plain_player._state.fields_cache)
+
+        with self.assertNumQueries(1):
+            resolved = resolve_path(
+                "player.core_faction",
+                ConditionContext(player=plain_player),
+            )
+
+        self.assertEqual(resolved, "moon-clan")
 
     def test_trigger_structured_conditions_use_shared_context(self):
         payload = json.dumps({

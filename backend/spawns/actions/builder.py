@@ -1808,6 +1808,7 @@ class WizKillAction:
         target_selector: str,
         message: str | None = None,
         runtime_world: World | None = None,
+        death_token=None,
     ) -> ActionResult:
         target = self._resolve_target(
             actor=actor,
@@ -1843,6 +1844,9 @@ class WizKillAction:
                 killer=actor,
                 target_text=target_text,
                 room_text=room_text,
+                death_token=death_token,
+                cause="builder_forced",
+                forced=True,
             )
 
         actor_payload = (

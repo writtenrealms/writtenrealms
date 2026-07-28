@@ -128,21 +128,23 @@ class WorldGate:
                 event=constants.PLAYER_EVENT_LOGOUT,
             ).exclude(
                 player=player
+            ).select_related(
+                'player',
             ).order_by('-created_ts').first()
             if last_logout:
-                player_assignment = player.faction_assignments.filter(
-                    faction__is_core=True).first()
-                last_logout_assignment = last_logout.player.faction_assignments.filter(
-                    faction__is_core=True).first()
-                if player_assignment and last_logout_assignment:
-                    if (player_assignment.faction
-                        != last_logout_assignment.faction):
-                        delta = timedelta(minutes=cross_race_cooldown)
-                        if (timezone.now() - last_logout.created_ts) < delta:
-                            raise ServiceError(
-                                "You must wait %s minutes before switching "
-                                "to a character of a different core faction."
-                                % cross_race_cooldown)
+                current_core_id = player.core_faction_id
+                previous_core_id = last_logout.player.core_faction_id
+                if (
+                    current_core_id
+                    and previous_core_id
+                    and current_core_id != previous_core_id
+                ):
+                    delta = timedelta(minutes=cross_race_cooldown)
+                    if (timezone.now() - last_logout.created_ts) < delta:
+                        raise ServiceError(
+                            "You must wait %s minutes before switching "
+                            "to a character of a different core faction."
+                            % cross_race_cooldown)
 
         # Only worlds in STORED, NEW or RUNNING states may be entered.
         if world.lifecycle != constants.WORLD_STATE_RUNNING:

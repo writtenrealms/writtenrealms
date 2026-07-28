@@ -350,10 +350,14 @@ class TestCreatePlayerCharacter(WorldTestCase):
         })
         self.assertEqual(resp.status_code, 201)
 
-        player = Player.objects.get(pk=resp.data['id'])
-        faction_assignment = player.faction_assignments.get(
-            faction__code='elves')
-        self.assertEqual(faction_assignment.value, 1)
+        player = Player.objects.select_related('core_faction').get(
+            pk=resp.data['id'])
+        self.assertEqual(player.core_faction.code, 'elves')
+        self.assertFalse(
+            player.faction_assignments.filter(
+                faction__type='core',
+            ).exists()
+        )
         # Check that player got placed in the faction's starting room
         self.assertEqual(player.room, faction_starting_room)
 

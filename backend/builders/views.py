@@ -38,6 +38,11 @@ from core.utils.mobs import suggest_stats
 from config import constants as api_consts
 from config import game_settings as adv_config
 from core.abilities import definition_world
+from core.death_routing import (
+    acquire_death_routing_config_locks,
+    death_routing_config_ids_for_world,
+    rebuild_compiled_policy_snapshot,
+)
 from core.economy import economy_world
 from core.leveling import LevelingConfigError
 from core.scoped_state import STATE_SCOPE_WORLD, get_state_snapshot
@@ -86,7 +91,7 @@ from spawns.models import Player
 from spawns import serializers as spawn_serializers
 from users.models import User
 from worlds.models import (
-    World, Room, Zone, RoomFlag, RoomDetail, Door)
+    World, WorldConfig, Room, Zone, RoomFlag, RoomDetail, Door)
 from worlds.services import WorldSmith
 from worlds import tasks as world_tasks
 
@@ -129,7 +134,13 @@ class BaseWorldBuilderViewSet(RequestDataMixin,
         # Filter by faction
         faction = self.request.query_params.get('faction')
         if faction:
-            qs = qs.filter(faction_assignments__faction__code=faction)
+            if qs.model is Player:
+                qs = qs.filter(
+                    Q(core_faction__code=faction)
+                    | Q(faction_assignments__faction__code=faction)
+                ).distinct()
+            else:
+                qs = qs.filter(faction_assignments__faction__code=faction)
 
         # Filter by level range
         level_range = self.request.query_params.get('level_range')
@@ -548,12 +559,33 @@ class FactionViewSet(BaseWorldBuilderViewSet):
         return self.world
 
     def perform_destroy(self, instance):
-        if FactionAssignment.objects.filter(
-            faction=instance,
-            faction__is_core=True).exists():
-            raise drf_exceptions.ValidationError(
-                'Cannot delete a core faction with assignments.')
-        instance.delete()
+        world = instance.world
+        with transaction.atomic():
+            acquire_death_routing_config_locks(
+                death_routing_config_ids_for_world(
+                    world=world,
+                    config=world.config,
+                ),
+                shared=False,
+            )
+            instance = Faction.objects.select_for_update().get(pk=instance.pk)
+            has_assignments = FactionAssignment.objects.filter(
+                faction=instance,
+                faction__is_core=True,
+            ).exists()
+            has_players = Player.objects.filter(core_faction=instance).exists()
+            if has_assignments or has_players:
+                raise drf_exceptions.ValidationError(
+                    'Cannot delete a core faction with assignments.')
+            if instance.death_routing_snapshot_references.exists():
+                raise drf_exceptions.ValidationError(
+                    'Cannot delete a faction used by active death routing.')
+            try:
+                instance.delete()
+            except RestrictedError as exc:
+                raise drf_exceptions.ValidationError(
+                    'Cannot delete a faction referenced by death routing.'
+                ) from exc
 
 world_factions = FactionViewSet.as_view({
     'get': 'list',
@@ -855,25 +887,42 @@ class ZoneBuilderViewSet(WorldCreationMixin,
 
     def destroy(self, request, world_pk, pk, *args, **kwargs):
         zone = Zone.objects.get(pk=pk)
-        rooms = zone.rooms.all()
-        if rooms.count() > 0:
-            raise serializers.ValidationError('Cannot delete a zone with rooms assigned to it.')
+        world = zone.world
+        with transaction.atomic():
+            acquire_death_routing_config_locks(
+                death_routing_config_ids_for_world(
+                    world=world,
+                    config=world.config,
+                ),
+                shared=False,
+            )
+            zone = Zone.objects.select_for_update().get(pk=pk)
+            if zone.rooms.exists():
+                raise serializers.ValidationError(
+                    'Cannot delete a zone with rooms assigned to it.')
+            if zone.death_routing_snapshot_references.exists():
+                raise serializers.ValidationError(
+                    'Cannot delete a zone used by active death routing.')
 
-        builder = WorldBuilder.objects.filter(
-            user=self.request.user,
-            world=zone.world).first()
+            builder = WorldBuilder.objects.filter(
+                user=self.request.user,
+                world=world,
+            ).first()
+            try:
+                self.perform_destroy(zone)
+            except RestrictedError as exc:
+                raise serializers.ValidationError(
+                    'Cannot delete a zone referenced by death routing.'
+                ) from exc
 
-        destroy_output = super().destroy(request, world_pk, pk, *args, **kwargs)
+            if builder:
+                BuilderAssignment.objects.filter(
+                    builder=builder,
+                    assignment_type=ContentType.objects.get_for_model(Zone),
+                    assignment_id=zone.id,
+                ).delete()
 
-        if builder:
-            assignments = BuilderAssignment.objects.filter(
-                builder=builder,
-                assignment_type=ContentType.objects.get_for_model(Zone),
-                assignment_id=zone.id)
-            if assignments:
-                assignments.delete()
-
-        return destroy_output
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 zone_list =  ZoneBuilderViewSet.as_view({
     'get': 'list',
@@ -1038,38 +1087,66 @@ class RoomBuilderDetailViewSet(RoomBuilderListViewSet):
         except Room.DoesNotExist:
             raise NotFound
 
-        world_rooms = room.world.rooms.all()
+        world = room.world
+        config = world.config
+        with transaction.atomic():
+            acquire_death_routing_config_locks(
+                death_routing_config_ids_for_world(
+                    world=world,
+                    config=config,
+                ),
+                shared=False,
+            )
+            room = Room.objects.select_for_update().get(pk=pk)
+            config = WorldConfig.objects.select_for_update().get(pk=config.pk)
+            world_rooms = room.world.rooms.all()
 
-        if world_rooms.count() == 1:
-            raise serializers.ValidationError(
-                'Cannot delete the last room in a world.')
+            if world_rooms.count() == 1:
+                raise serializers.ValidationError(
+                    'Cannot delete the last room in a world.')
 
-        if room.players.filter(in_game=True).count():
-            raise serializers.ValidationError(
-                'Cannot delete room with a connected player in it.')
+            if room.players.filter(in_game=True).exists():
+                raise serializers.ValidationError(
+                    'Cannot delete room with a connected player in it.')
 
-        config = room.world.config
+            if room.death_routing_routes.exists():
+                raise serializers.ValidationError(
+                    'Cannot delete a room used by an active death route.')
 
-        if room == config.starting_room:
-            first_room = world_rooms.exclude(id=pk).first()
-            config.starting_room = first_room
-            config.save()
+            config_updates = []
+            if room.id == config.starting_room_id:
+                config.starting_room = world_rooms.exclude(id=pk).first()
+                config_updates.append("starting_room")
 
-        if room == config.death_room:
-            config.death_room = config.starting_room
-            config.save()
+            death_room_changed = room.id == config.death_room_id
+            if death_room_changed:
+                config.death_room = config.starting_room
+                config_updates.append("death_room")
 
-        # If any players are in this room, move them to the
-        # new starting room
-        room.players.update(room=config.starting_room)
+            if config_updates:
+                config.save(update_fields=[*config_updates, "modified_ts"])
+            if death_room_changed:
+                config = rebuild_compiled_policy_snapshot(
+                    world=world,
+                    config=config,
+                )
 
-        # Delete room related builder assignments
-        BuilderAssignment.objects.filter(
-            assignment_id=room.id,
-            assignment_type=ContentType.objects.get_for_model(Room),
-        ).delete()
+            # If any offline players are in this room, move them to the new
+            # starting room before deleting the authored room.
+            room.players.update(room=config.starting_room)
 
-        return super().destroy(request, pk, *args, **kwargs)
+            BuilderAssignment.objects.filter(
+                assignment_id=room.id,
+                assignment_type=ContentType.objects.get_for_model(Room),
+            ).delete()
+            try:
+                self.perform_destroy(room)
+            except RestrictedError as exc:
+                raise serializers.ValidationError(
+                    'Cannot delete a room referenced by death routing.'
+                ) from exc
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class InstanceRoomListViewSet(WorldCreationMixin,
@@ -1098,7 +1175,7 @@ class InstanceRoomListViewSet(WorldCreationMixin,
 instance_room_list = InstanceRoomListViewSet.as_view({'get': 'list'})
 
 
-class LegacyRoomBuilderDetailViewSet(RoomBuilderListViewSet):
+class LegacyRoomBuilderDetailViewSet(RoomBuilderDetailViewSet):
     serializer_class = builder_serializers.LegacyRoomBuilderSerializer
 
 room_detail = RoomBuilderDetailViewSet.as_view({
@@ -2293,21 +2370,42 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                 world=self.world,
                 manifest=manifest,
             )
-            faction = parsed_delete.faction
-            if FactionAssignment.objects.filter(
-                faction=faction,
-                faction__type=builder_manifests.FACTION_TYPE_CORE,
-            ).exists():
-                raise serializers.ValidationError(
-                    "Cannot delete a core faction with assignments."
+            with transaction.atomic():
+                acquire_death_routing_config_locks(
+                    death_routing_config_ids_for_world(
+                        world=self.world,
+                        config=self.world.config,
+                    ),
+                    shared=False,
                 )
-            faction_payload = {
-                "id": faction.id,
-                "key": f"faction.{faction.id}",
-                "code": faction.code,
-                "name": faction.name,
-            }
-            faction.delete()
+                faction = Faction.objects.select_for_update().get(
+                    pk=parsed_delete.faction.pk
+                )
+                has_assignments = FactionAssignment.objects.filter(
+                    faction=faction,
+                    faction__type=builder_manifests.FACTION_TYPE_CORE,
+                ).exists()
+                has_players = Player.objects.filter(core_faction=faction).exists()
+                if has_assignments or has_players:
+                    raise serializers.ValidationError(
+                        "Cannot delete a core faction with assignments."
+                    )
+                if faction.death_routing_snapshot_references.exists():
+                    raise serializers.ValidationError(
+                        "Cannot delete a faction used by active death routing."
+                    )
+                faction_payload = {
+                    "id": faction.id,
+                    "key": f"faction.{faction.id}",
+                    "code": faction.code,
+                    "name": faction.name,
+                }
+                try:
+                    faction.delete()
+                except RestrictedError as exc:
+                    raise serializers.ValidationError(
+                        "Cannot delete a faction referenced by death routing."
+                    ) from exc
             return Response(
                 {
                     "kind": builder_manifests.FACTION_MANIFEST_KIND,

@@ -22,6 +22,7 @@ defines the target shape those pieces should move toward.
 - [duels.md](../guides/players/duels.md)
 - [currency-system.md](/Users/teebes/code/writtenrealms/docs/architecture/currency-system.md)
 - [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
+- [deterministic-death-routing.md](deterministic-death-routing.md)
 
 ## Goals
 
@@ -35,6 +36,8 @@ defines the target shape those pieces should move toward.
   system, equipment rules, and combat formulas.
 - Support a small allowlist of instance config overrides, especially death
   behavior, without turning instances into hidden forks of the base world.
+- Keep death routing inside the instance by default while allowing an explicit
+  instance setting to route and return a dead player through the base world.
 - Support optional goals:
   - no goal, free enter/exit
   - kill one or more specific mobs
@@ -176,12 +179,23 @@ Every playable instance template should define:
 | Field | Meaning | Rule |
 | --- | --- | --- |
 | `entry_room` / `starting_room` | Room participants enter when the run starts | Must be a room in the instance template. |
-| `death_room` | Room participants go to when they die inside the run | Must be a room in the instance template. |
+| `death_room` | Local death and transport fail-safe room | Must be a room in the instance template, even during base delegation. |
+| `death_routing` | Optional local death policy | Uses base class/faction/level identity, local zones, or character state and targets only local rooms. |
+| `death_routing_source` | Complete destination-policy owner | `local` (default) or `base_world`; instance-only and never inherited. |
 | `exit_room` / `exits_to` | Default base-world return room when no entry room is remembered | Must be a room in the base world or be omitted to use participant `transfer_from`. |
 
-The important rule is that `death_room` inside an instance is not the base-world
-death room. Death inside a private dungeon should resolve inside that dungeon
-unless the instance explicitly closes or ejects the player.
+The instance's `death_room` and `death_routing` remain wholly local and are
+never inherited or merged through the override mechanism. Source `local`
+selects both. Source `base_world` selects the linked base world's complete
+policy and fail-safe, then atomically exits the Player to the recorded base
+runtime. The local `death_room` remains required. Local `death_routing` remains
+optional, but any present policy or disabled tombstone stays canonical,
+validated, editable, and exportable so switching back to `local` is
+non-destructive.
+
+Only destination selection delegates. The instance effective config continues
+to own death mode, currency/equipment penalties, corpse/drop behavior, and
+instance goal reactions.
 
 ### Config Override Allowlist
 
@@ -194,7 +208,6 @@ Good initial override candidates:
 | `death_mode` | A base world may use currency loss while an instance destroys equipment or drops inventory. |
 | `death_currency` | Selects the concrete base-catalog currency used when `death_mode` is `lose_currency`. |
 | `death_currency_penalty` | Sets the balance fraction lost when `death_mode` is `lose_currency`. |
-| `death_route` | Needed if faction or route-specific death behavior should differ. |
 | `pvp_mode` | Instances often need stricter PvP policy than the base world. |
 | `never_reload` or spawn reload policy | Completion-sensitive instances may need spawn-plan reconciliation disabled or constrained. |
 | presentation fields | Instance lobby/entry art and text can differ from the base world. |
@@ -259,9 +272,15 @@ class InstanceParticipant(models.Model):
     run = models.ForeignKey(InstanceRun, on_delete=models.CASCADE)
     player = models.ForeignKey("spawns.Player", on_delete=models.CASCADE)
     role = models.TextField(default="member")
+    return_runtime_world = models.ForeignKey(
+        "worlds.World",
+        null=True,
+        on_delete=models.RESTRICT,
+    )
     transfer_from = models.ForeignKey("worlds.Room", null=True, on_delete=models.SET_NULL)
     joined_at = models.DateTimeField()
     exited_at = models.DateTimeField(null=True)
+    exit_reason = models.TextField(null=True)
 ```
 
 The spawned world remains the owner of concrete runtime objects:
@@ -283,6 +302,35 @@ Player character state remains player-owned and follows the player through
 entry and leave. Mob character state belongs to a spawned mob and is deleted
 with that mob.
 
+`transfer_from` identifies an authored base-world room; it does not identify
+which spawned base runtime the Player occupied. Entry must record that exact
+runtime in `return_runtime_world` and require
+`return_runtime_world.context_id == run.base_world_id`. Normal leave and
+death-driven delegation use the relation directly and never choose the first
+spawned base world at runtime.
+
+A database check requires `return_runtime_world IS NOT NULL` whenever
+`exited_at IS NULL`. Historical cleanup may clear it only after exit and after
+the durable exit receipt has captured the runtime id. This keeps active
+returns deterministic without making participant history pin a base runtime
+forever.
+
+A partial unique constraint permits at most one active participant per Player.
+The return runtime is immutable while that participation is active. A trigger
+or equivalently protected domain service enforces that its context and the
+instance template match `run.base_world`.
+
+Because absence cannot be row-locked, every participant create/reactivate,
+entry/leave, and instance death locks the Player row as its participation
+reservation. It serializes a missing-row fallback against concurrent admission
+without adding a separate advisory-lock query or contending across players.
+
+While the participant is active, this relation is a return lease. Entry and
+base-runtime teardown serialize through the same per-runtime lifecycle lock;
+teardown rejects active leases. A death can therefore return under its
+participant lock without adding one shared base-runtime lock to every
+delegated death.
+
 ### Status Values
 
 Recommended run statuses:
@@ -303,17 +351,41 @@ This status model lets cleanup be separate from completion.
 
 ### Locking
 
-`InstanceRun` should be the first aggregate locked for mutating instance actions.
-This follows the WR2 lock ordering direction:
+`InstanceRun` is the first aggregate locked for actions that mutate run
+lifecycle. The extended WR2 order is:
 
-1. Instance run
-2. Rooms
-3. Characters
-4. Mobs
-5. Items
+1. Base-runtime lifecycle lock, only when creating a return lease or tearing
+   down that runtime
+2. Instance run
+3. Match/combat aggregates in stable id order
+4. Player rows, which also serve as participation reservations, in stable id
+   order
+5. Instance participants in stable id order
+6. Rooms
+7. Mobs
+8. Items
 
 Entry, leave, goal progression, timer expiry, completion, and cleanup all mutate
 instance lifecycle and should lock the run row.
+
+Deterministic death routing is the bounded exception for scalability. Every
+instance death first takes shared transaction advisory locks for the local and
+base routing configs in sorted config-id order. Shared locks coexist, so deaths
+do not block one another; builder publication takes the exclusive form. The
+death then locks Player and the affected participant. A delegated death may
+mark that participant exited without locking or synchronously updating
+`InstanceRun`, provided it makes no run-level transition. Its transactional
+outbox consumer upserts one unique run-dirty generation, coalescing many exits.
+The lifecycle worker batches exits, locks Run once, updates activity with
+`GREATEST`, recounts active participants, and applies guarded transitions.
+Cleanup locks Run and then participant rows, includes exit timestamps in
+effective-last-activity calculation, and revalidates before teardown. This
+avoids moving a same-run lock convoy from death workers to lifecycle workers
+without permitting premature cleanup.
+
+If death also resolves a duel, fails a goal, or otherwise changes run status,
+the outer action owns the full Run-first lock set and composes both mutations in
+one transaction.
 
 ### Durable Duel Matches And Spatial Combat Encounters
 
@@ -365,6 +437,12 @@ Once complete, match policy blocks all further combat in that runtime world.
 Contestants remain present until they use normal instance leave behavior. A
 rematch requires a new challenge and a new run.
 
+The explicit exception is a match template configured with
+`death_routing_source: base_world`: a lethal defeat composes match completion
+with the loser's atomic death delegation and participant exit under the
+Run-first lock order. Surrender without death still uses normal match/leave
+behavior.
+
 If all contestants are offline when the runtime reaches idle cleanup, the
 match is cancelled as abandoned and the run becomes `abandoned`. Cleanup
 restores resources and returns the players without incrementing any duel
@@ -411,7 +489,7 @@ Future authorized system/builder/admin commands:
 Recommended actions:
 
 - `EnterInstanceAction(player_id, template_world_id, entry_room_id, transfer_from_room_id, ref=None)`
-- `LeaveInstanceAction(player_id, run_id)`
+- `LeaveInstanceAction(player_id, run_id, action_token)`
 - `EvaluateInstanceGoalAction(run_id, cause_event_id=None)`
 - `CompleteInstanceAction(run_id, resolution, cause_event_id=None)`
 - `ExpireInstanceAction(run_id)`
@@ -445,19 +523,30 @@ for observability, goals, timers, and cleanup.
 
 ### Entry Rules
 
+Player authored identity is stable across runtime movement. Admission derives
+the authored family from the current runtime context and requires it to match
+`run.base_world`. Entry and leave mutate `Player.world` and `Player.room` only,
+preserving `Player.core_faction`.
+
 Entry should:
 
 1. resolve the base world, instance template, and target entry room
-2. find or create an active `InstanceRun`
-3. create or update the participant row
-4. move the player into the run's spawned world and entry room
-5. recursively migrate carried/equipped item rows to the spawned world
-6. seed world/zone/room state if this is a newly created runtime world
-7. emit `instance.entered`
-8. emit normal room look/enter events
+2. validate the Player's current authored base-world family
+3. under the per-runtime lifecycle lock, validate that the current Player
+   world is a running spawned runtime whose context is that base world and
+   establish its return lease
+4. find or create an active `InstanceRun`
+5. create or update the participant row, recording the current runtime as
+   `return_runtime_world` before movement
+6. move the player into the run's spawned world and entry room
+7. move the complete carried/equipped ownership closure to the spawned world
+8. seed world/zone/room state if this is a newly created runtime world
+9. emit `instance.entered`
+10. emit normal room look/enter events
 
-The item migration must be recursive. Containers inside containers should not
-be left in the base spawned world.
+The transfer is recursively complete in semantics: containers inside
+containers cannot be left in the base runtime. Its database implementation
+must still be set-based rather than one query per container.
 
 For a `pvp_mode: match` template, generic entry must not create a run. Duel
 acceptance validates that both contestants are still at the same linked
@@ -474,14 +563,29 @@ Leave should:
    - participant `transfer_from`
    - explicit instance exit destination
    - base-world starting room fallback
-3. move the player to the base spawned world
-4. recursively migrate carried/equipped item rows to the base spawned world
-5. set participant `exited_at`
-6. update run `last_active_at`
-7. emit `instance.left`
-8. leave cleanup to the cleanup scheduler
+3. validate and use the participant's exact `return_runtime_world`
+4. move the player to that runtime and chosen authored room
+5. move the complete carried/equipped ownership closure to that runtime
+6. set participant `exited_at` and `exit_reason`
+7. update run `last_active_at`
+8. emit `instance.left`
+9. leave cleanup to the cleanup scheduler
 
 Leaving should not delete the run.
+
+The target transfer primitive must move the complete carried/equipped ownership
+closure with a set-based database update or equivalent carrier-derived model.
+The current recursive per-container query pattern is not suitable for
+performance-sensitive death delegation.
+
+Every exit has a durable `InstanceExitReceipt` keyed by
+`(participant_id, action_token)`. It records exit reason, origin and destination
+runtime/room ids, return-runtime id, Player location sequence, and event id.
+Normal leave uses a server-namespaced action token; delegated death derives its
+exit token from the death token and inserts both receipts in one transaction.
+A retry returns the receipt before relying on current Player location. The
+participant's historical return-runtime relation may be cleared only after this
+receipt exists.
 
 ## Instance Goals
 
@@ -928,6 +1032,7 @@ The instance config screen should separate:
 | Section | Behavior |
 | --- | --- |
 | Required rooms | Editable instance entry/death rooms. |
+| Death routing | Explicit local/base source, dormant local policy, and transport fail-safe status. |
 | Inherited config | Read-only values from base world. |
 | Overrides | Editable allowlisted overrides. |
 | Goal | Optional goal summary and edit entry point. |
@@ -986,14 +1091,20 @@ links. Completion is an instance lifecycle event.
 
 Instance authoring should fit the WR2 manifest workflow.
 
-There are two viable manifest approaches:
+The canonical target document is `apiVersion: v1alpha1`, `kind: instance`.
+It owns instance template metadata, config, goals, timers, and cleanup. During
+the transition, `kind: world` plus `metadata.instance_of` remains accepted
+compatibility input and may remain the internal editing/storage primitive, but
+the canonical instance exporter emits `kind: instance`.
 
-1. Continue representing instance templates as `kind: world` documents with
-   `metadata.instance_of`.
-2. Add an explicit `kind: instance` document for instance template metadata,
-   config, goals, timers, and cleanup.
-
-The clearer long-term path is `kind: instance`.
+Changing the linked base (`metadata.world` canonically or
+`metadata.instance_of` in compatibility input) is an explicit relink action,
+not an ordinary field update. It is blocked while runs are active and must
+atomically validate or rebuild every base-catalog reference and family-owned
+policy, including deterministic-death class and core-faction selectors, and
+increment both the source-selection and any changed local-plan generation. See
+[deterministic-death-routing.md](deterministic-death-routing.md) for that
+policy's relink contract.
 
 Example:
 
@@ -1007,6 +1118,8 @@ metadata:
 spec:
   entry_room: room@0,0,0
   death_room: room@0,1,0
+  # Omit or use local for the default in-instance behavior.
+  death_routing_source: base_world
   exit_room: room.42
 
   overrides:
@@ -1043,9 +1156,9 @@ spec:
 Zones, rooms, paths, triggers, and spawn plans would still use their existing
 manifest kinds, applied to the instance template world context.
 
-Short term, `kind: world` can remain the storage/editing primitive. The builder
-can still expose instance metadata through `kind: instance` later without
-changing the underlying fact that an instance template has rooms/zones/plans.
+Short term, the builder may translate between the canonical instance document
+and the existing world-backed editing primitive without changing the underlying
+fact that an instance template has rooms/zones/plans.
 
 The current `kind: world`, `kind: zone`, and `kind: room` documents expose
 `spec.initial_state` on the instance template. These are seeds for new runs and
@@ -1096,29 +1209,67 @@ guided random population.
 
 ## Death Behavior
 
-Death inside an instance should use the instance effective config.
+Death inside an instance always uses the instance effective penalty config. Its
+destination policy is selected by `death_routing_source`.
 
 Important rules:
 
-- Death room must be instance-local.
+- `local` is the default. It selects the instance `death_routing` and local
+  `death_room`, and the participant stays in the run.
+- `base_world` selects the direct base world's entire compiled routing policy
+  and base `death_room`; policies and fail-safes are never merged.
+- The local `death_room` remains required as a transport-integrity fail-safe.
+  A dormant instance policy remains local, validated, and round-trippable.
 - Death mode may be overridden by the instance.
 - Death penalties still act on the player's real inventory, equipment, or
   code-keyed wallet balances.
-- If items are destroyed or dropped, they belong to the instance run's spawned
-  world at that moment.
+- Penalty and corpse/drop creation happen while the Player still belongs to the
+  instance. Destroyed/dropped items and corpses stay in that runtime.
+- Delegation then moves the Player, surviving carried/equipped asset closure,
+  and any surviving character effects to the exact
+  `InstanceParticipant.return_runtime_world`; it does not use normal
+  `transfer_from`/`exit_room` destination selection.
+- Player world/room, participant exit, causal sequences, death event,
+  `instance.left(reason=death_delegated)`, and the final state-sync request
+  commit atomically. There is no intermediate local death room.
+- Delegation exits only the affected participant and does not lock/update the
+  shared Run row unless the outer death action also changes run lifecycle.
+- An invalid return-runtime context uses only the local `death_room`, keeps the
+  participant active, and records the transport fallback. A transient transfer
+  failure rolls back and retries.
 - If a death causes failure, the failure should be an instance event, not a
   special case inside combat damage resolution.
 
-Example:
+Local example:
 
 - Base world: `death_mode: lose_currency`, `death_currency: crowns`,
   `death_currency_penalty: 0.2`
 - Instance override: `death_mode: destroy_eq`
+- Instance source: `local`
 - Player dies in instance:
   - equipment destruction uses the override
   - player is moved to the instance death room
   - instance goal may optionally fail on `player.died`
   - leaving later returns the player to the base world
+
+Delegated example:
+
+- The same instance sets `death_routing_source: base_world`.
+- A player whose gameplay has set `state.character.afterlife_path` to `ember`
+  dies:
+  - equipment destruction still uses the instance override
+  - the base compiled policy maps `ember` and core faction to a base room
+  - the player and surviving carried assets cross directly to the recorded base
+    runtime and selected room
+  - the corpse/drop remains in the instance
+  - the participant is exited with `death_delegated`
+  - the instance goal may still consume `player.died` using immutable origin-run
+    metadata
+
+See
+[deterministic-death-routing.md](deterministic-death-routing.md)
+for the manifest, source-generation, cache, lock, failure, and receipt
+contracts.
 
 ## Rewards And Outcomes
 
@@ -1167,7 +1318,10 @@ Gaps to close:
 
 - add first-class `InstanceRun` lifecycle state
 - move entry/leave to WR2 actions/events
-- recursively migrate carried/equipped items on enter and leave
+- record the exact base return runtime on every participant
+- replace per-container migration with a set-based carried/equipped ownership
+  closure transfer
+- add local/default and delegated/base death routing source behavior
 - stop deleting runs as an inline side effect of leaving
 - add instance goal/timer policy
 - add event subscriptions for instance objectives
@@ -1179,7 +1333,7 @@ Gaps to close:
 
 ### Phase 1: Stabilize Existing Runtime Movement
 
-- Centralize recursive item world migration.
+- Centralize a bounded, set-based carried/equipped ownership-closure transfer.
 - Use the same migration path for enter and leave.
 - Add backend tests for nested inventory/equipment transfer.
 - Preserve existing `World.instance_for()` behavior while wrapping it in a
@@ -1187,9 +1341,12 @@ Gaps to close:
 
 ### Phase 2: Add InstanceRun
 
-- Add `InstanceRun` and `InstanceParticipant`.
+- Add `InstanceRun` and `InstanceParticipant`, including protected
+  `return_runtime_world` and an exit reason.
 - Create a run whenever an instance spawned world is created.
-- Backfill/adapt current `InstanceAssignment` into participants.
+- Replace current `InstanceAssignment` runtime use with participants. WR2
+  launches on a clean database; this does not require a WR1 production backfill
+  or compatibility layer.
 - Keep spawned `World` as the runtime object owner.
 - Update admin views to show run status, participants, started/completed times,
   and cleanup ETA.
@@ -1198,6 +1355,9 @@ Gaps to close:
 
 - Add `EnterInstanceAction` and `LeaveInstanceAction`.
 - Emit `instance.entered` and `instance.left`.
+- Record/validate the exact return runtime during entry and use it during leave.
+- Add server-namespaced leave tokens and durable instance-exit receipts before
+  allowing historical return relations to clear.
 - Keep existing endpoints as compatibility wrappers.
 - Remove frontend dependence on old hardcoded instance success messages over
   time.
@@ -1206,10 +1366,21 @@ Gaps to close:
 
 - Define inherited fields and override allowlist.
 - Validate instance entry/death rooms are local to the instance template.
+- Add instance-only `death_routing_source`, default it to `local`, and expose
+  dormant local policy plus transport fail-safe state.
 - Show inherited values and overrides separately in the builder.
 - Keep base-owned resource editors read-only or linked from instance contexts.
 
-### Phase 5: Add Goal Runtime
+### Phase 5: Add Delegated Death Exit
+
+- Integrate selected base compiled plans with the canonical death coordinator.
+- Apply instance penalties before one atomic Player/asset transfer.
+- Mark the participant exited and enqueue `player.died`,
+  `instance.left(reason=death_delegated)`, and final state sync together.
+- Add participant-sharded concurrency, idempotency, transport-fallback, and
+  maximum-inventory performance coverage.
+
+### Phase 6: Add Goal Runtime
 
 - Add goal spec fields to the instance template.
 - Add objective progress storage to `InstanceRun`.
@@ -1217,14 +1388,14 @@ Gaps to close:
 - Add completion/failure evaluation using the condition DSL.
 - Emit `instance.goal.progressed`, `instance.completed`, and `instance.failed`.
 
-### Phase 6: Add Timers And Leaderboards
+### Phase 7: Add Timers And Leaderboards
 
 - Add `expires_at`, scheduled expiry action, and timer display payload.
 - Add `InstanceClearRecord`.
 - Add fastest/recent clear endpoints.
 - Add player-visible completion summary.
 
-### Phase 7: Add Cleanup Scheduler
+### Phase 8: Add Cleanup Scheduler
 
 - Add status-aware cleanup task.
 - Close inactive runs after TTL.
@@ -1238,13 +1409,31 @@ New automated tests should live under `backend/tests/`.
 Recommended coverage:
 
 - entering an instance creates or reuses an active run
-- entering recursively moves inventory, equipment, and nested container contents
-  to the spawned instance world
-- leaving recursively moves carried/equipped items back to the base spawned world
+- entering moves inventory, equipment, and nested container contents to the
+  spawned instance world
+- entry records the exact validated base return runtime
+- one Player cannot have two active participants and an active return runtime
+  cannot be changed or cleared
+- leaving moves the carried/equipped ownership closure to the recorded base
+  runtime
+- retrying leave after return-relation cleanup returns the durable exit receipt
+  without moving or emitting twice
 - leaving does not delete the run
 - inactive cleanup closes and cleans a run after TTL
 - completed cleanup waits for grace period and preserves clear record
-- instance death uses instance death room and death mode override
+- instance death defaults to local routing and uses the death mode override
+- delegated death uses the base policy/base fail-safe while retaining the
+  instance penalty
+- delegated death atomically exits the participant and moves surviving nested
+  assets to the recorded base runtime while corpse/drops remain in the instance
+- invalid return-runtime context uses the local transport fail-safe and keeps
+  the participant active
+- concurrent delegated deaths in one run do not contend on the shared Run row
+- delegated transfer query shape is set-based and maximum-inventory latency is
+  measured
+- carried ownership cycles and limits are rejected on mutation; corrupted
+  closures never transfer partially
+- simultaneous participant exits coalesce into one dirty-run lifecycle batch
 - base definitions are visible from an instance template while local rooms/zones
   remain instance-owned
 - instance config rejects base-world rooms for instance death room
@@ -1263,8 +1452,6 @@ Recommended coverage:
 
 ## Open Questions
 
-- Should instance templates be exported as `kind: instance` only, or should
-  `kind: world` remain the canonical manifest with an instance flag?
 - Which base-world global triggers should be inheritable, and how should
   builders mark that intent?
 - Should re-entry after completion be allowed during grace periods, or should
@@ -1282,7 +1469,8 @@ game.
 That means:
 
 - local layout
-- local death room
+- local death room and local-by-default death routing
+- explicit base-world death delegation when the builder chooses it
 - local spawn behavior
 - local goal and timer
 - local cleanup lifecycle

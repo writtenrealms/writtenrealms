@@ -16,6 +16,7 @@ Related docs:
 - [instance-system.md](/Users/teebes/code/writtenrealms/docs/architecture/instance-system.md)
 - [state-builder-guide.md](../guides/builders/state-builder-guide.md)
 - [ambient-command-issuers-plan.md](/Users/teebes/code/writtenrealms/docs/architecture/ambient-command-issuers-plan.md)
+- [deterministic-death-routing.md](deterministic-death-routing.md)
 
 ## Core Model
 
@@ -333,6 +334,15 @@ State values must be JSON-compatible and should remain small. Prefer scalars:
 
 Small lists or mappings are available when a concrete system needs them, but a
 large or frequently queried structure usually deserves its own model.
+
+Implemented state bounds:
+
+- `CharacterState` has a 64 KiB maximum canonical encoded JSON document per
+  Player.
+- Shared state-service mutation paths enforce the limit.
+- Death routing may reference any `state.character.*` path. It locks and reads
+  the bounded character-state document at most once, then evaluates every
+  referenced path in memory without per-route queries.
 
 Keys should be stable lowercase `snake_case`:
 

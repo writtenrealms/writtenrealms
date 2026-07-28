@@ -254,6 +254,7 @@ def get_player_with_related(player_id: int) -> Player:
             "user",
             "config",
             "equipment",
+            "core_faction",
         )
         .prefetch_related(
             "aliases",
@@ -1066,7 +1067,7 @@ def build_who_list(world: World, actor: Player) -> List[WhoListEntry]:
     idle_cutoff = timezone.now() - timedelta(seconds=adv_consts.IDLE_THRESHOLD)
     qs = (
         Player.objects.filter(world=world, in_game=True)
-        .select_related("user")
+        .select_related("user", "core_faction")
         .prefetch_related("faction_assignments__faction", "clan_memberships__clan")
     )
     who_list: List[WhoListEntry] = []

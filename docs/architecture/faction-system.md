@@ -19,6 +19,7 @@ Reference docs:
 
 - `.codex/skills/wr-transition/wr2-architecture.md`
 - [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
+- [deterministic-death-routing.md](deterministic-death-routing.md)
 - [mob-definition-builder-guide.md](../guides/builders/mob-definition-builder-guide.md)
 - [instance-builder-guide.md](../guides/builders/instance-builder-guide.md)
 - [condition-builder-guide.md](../guides/builders/condition-builder-guide.md)
@@ -161,7 +162,6 @@ spec:
   description: Humans are adaptable and numerous.
   playable: true
   starting_room: room@0,0,0
-  death_room: room@0,0,0
   default_languages:
     - common
 ```
@@ -211,8 +211,6 @@ Core faction fields:
 - `playable`: whether players may be assigned this core faction at character
   creation
 - `starting_room`: optional faction-specific starting room
-- `death_room`: optional faction-specific death room, if faction death routing
-  is implemented
 - `default_languages`: optional language codes granted by this core faction
 
 Reputation faction fields:
@@ -422,6 +420,11 @@ fields:
 
 A player core faction is canonical character identity.
 
+The target storage is nullable `Player.core_faction`, validated against the
+authored base-world family resolved from the player's runtime or instance
+context. `FactionAssignment` remains the canonical player storage only for
+reputation standings.
+
 Creation rules:
 
 - use world `player_creation.core_faction` policy
@@ -459,8 +462,11 @@ Rules:
 - `faction` must reference a `type: reputation` faction
 - amount may be positive or negative
 - the effect creates or updates the player's reputation assignment
-- core faction changes should use a separate explicit effect such as
-  `set_core_faction`, not `adjust_reputation`
+- V1 does not expose a gameplay `set_core_faction` effect. A future explicit
+  core-faction repair/change action must follow the validation and aggregate
+  locking contract in
+  [deterministic-death-routing.md](deterministic-death-routing.md); it must not
+  reuse `adjust_reputation`.
 
 Conditions that check faction state must use the WR2 condition framework rather
 than adding a new predicate language.
@@ -470,12 +476,8 @@ Recommended condition field vocabulary:
 ```yaml
 conditions:
   all:
-    - op: eq
-      left: player.core_faction
-      right: human
-    - op: gte
-      left: player.reputation.ashwick
-      right: 50
+    - eq: [player.core_faction, human]
+    - gte: [player.reputation.ashwick, 50]
 ```
 
 Event payloads should expose faction data where useful:
@@ -520,25 +522,19 @@ spec:
 
 ## Death Routing
 
-WR2 death routing should be explicit world policy.
+The target contract is defined in
+[deterministic-death-routing.md](deterministic-death-routing.md).
 
-Recommended direction:
+Core faction may be used alone or alongside class, character-state, and
+origin-zone predicates through the shared condition DSL. Reputation faction
+and rank do not participate. Portable faction codes resolve to canonical
+faction ids when the policy is applied, and the runtime consumes only a
+precompiled ordered predicate list.
 
-- world config may define a global death room
-- core factions may define `death_room`
-- reputation factions must not determine death location by default
-- if `core_faction_death_room` is enabled and the player's core faction has a
-  death room, use it
-- otherwise fall back to the global death room
-
-Faction death routing should be explicit:
-
-```yaml
-kind: world
-spec:
-  death:
-    route: core_faction_death_room
-```
+New behavior belongs to explicit world/instance policy rather than an implicit
+scan of faction assignments or faction rooms. The existing faction
+`death_room`, legacy `death_route` enum, and `Procession` structures are not the
+target runtime contract.
 
 ## Builder UI Language
 
@@ -566,7 +562,8 @@ Canonical faction data should remain relational:
 
 - faction definitions
 - faction ranks
-- player assignments
+- nullable `Player.core_faction` for stable player identity
+- player `FactionAssignment` rows for reputation standings
 - mob definition assignments
 - spawned mob assignments
 
@@ -588,6 +585,9 @@ Implemented WR2 surfaces:
 - mob definition faction assignment support
 - mob definition factions copied/synced to spawned mobs
 - WR2 quest effects for reputation standing
+- player authored identity uses nullable `Player.core_faction`
+- stop writing player core identity as a core `FactionAssignment`; retain
+  player assignments for reputation only
 
 Still future work:
 

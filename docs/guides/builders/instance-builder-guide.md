@@ -28,10 +28,12 @@ The foundation exists now:
 
 - entering an instance creates an `InstanceRun`
 - each player in that run gets an `InstanceParticipant`
+- participation records the exact base runtime used for return; exit never
+  rediscovers or guesses a runtime shard
 - group members can join the same run by instance reference
 - leaving marks the participant exited instead of deleting the run
 - carried and equipped item ownership moves into and out of the spawned
-  instance world recursively
+  instance world with bounded, depth-batched traversal
 - players can use `enter`, `enter <instance_ref>`, `leave`, and `instance`
   from the game command input
 - builder/admin payloads expose run state and participant counts
@@ -90,9 +92,11 @@ An instance template owns its own playable space and run policy:
 - exit behavior
 - future goal, timer, leaderboard, and cleanup policy
 
-The death room for an instance should be inside the instance template. A player
-who dies inside an instance should not be sent to the base world's death room
-unless the instance explicitly closes or ejects them.
+The death room for an instance must be inside the instance template. By
+default, a player who dies inside an instance follows the template's local
+death routing and remains in that run. A template may explicitly delegate
+destination selection to its base world; that death atomically exits the
+participant to the exact base runtime recorded at entry.
 
 ## State And Instance Boundaries
 
@@ -174,8 +178,9 @@ supported death mode, but every currency reference still resolves against the
 base-world catalog.
 
 Instance world config manifests only accept local fields: identity text,
-visibility, starting/death rooms, initial state, death mode, death route, death
-currency and penalty, PvP policy, builder credit, and background art.
+visibility, starting/death rooms, initial state, death mode, deterministic
+death routing and its source, death currency and penalty, PvP policy, builder
+credit, and background art.
 Player-creation and global policy fields such as default currency, starting
 balances, title rules, naming rules, globals, class selection, starting
 equipment, leveling, stats, equipment, combat, and abilities belong to the
@@ -186,13 +191,71 @@ inside a spawned instance. Ability definitions cannot be authored on instance
 templates; define them on the base world and use requirements or conditions when
 an ability should only matter in a particular instance.
 
+## Configuring Death Routing
+
+Instance templates support two destination-policy sources:
+
+```yaml
+kind: world
+spec:
+  starting_room: room@0,0,0
+  death_room: room@0,1,0
+  death_routing_source: local
+  death_routing:
+    routes:
+      - when:
+          eq: [zone.id, zone@3]
+        destination: room@0,1,0
+      - when:
+          gte: [player.level, 20]
+        destination: room@2,1,0
+      - when:
+          eq: [player.archetype, warlord]
+        destination: room@1,1,0
+```
+
+`local` is the default. The template's compiled policy and `death_room`
+determine the destination, and the player stays inside the current run. Route
+conditions may inspect the player's faction, class, level, or character state,
+plus the room zone where the player died. The first matching route wins.
+
+Level thresholds use inclusive `gte` and `lte` comparisons. For example,
+`gte: [player.level, 20]` means level 20 or higher.
+
+To route through the base world instead:
+
+```yaml
+kind: world
+spec:
+  death_routing_source: base_world
+  death_room: room@0,1,0
+```
+
+`base_world` selects the base world's complete policy, including its fail-safe
+room; it does not merge base and local routes. The local policy remains stored
+and can be re-enabled later by switching the source back to `local`.
+Core-faction, class, level, and character-state conditions in the base policy
+apply to delegated deaths. Base-world zone references do not match
+instance-template zones; use local routing when an instance's own zones must
+select its death destination.
+
+Only destination selection delegates. The instance's `death_mode`, currency
+loss, equipment destruction, drops, and corpse creation still apply in the
+origin instance. After the penalty, surviving carried and equipped items move
+with the player to the recorded return runtime. A missing or invalid return
+record uses the instance's local `death_room` and does not guess another base
+runtime.
+
 ## Connecting A Base Room To An Instance
 
 Use the base-world room config to choose the instance room players enter.
 
-The base room is the return point remembered for the player. When the player
-leaves the instance, WR2 returns them to that remembered room unless a more
-specific exit policy overrides it.
+The base room is the ordinary return point remembered for the player. The
+participant also records the exact spawned base runtime containing that room.
+When the player leaves, WR2 uses that protected runtime relation rather than
+searching for whichever base runtime happens to exist. Delegated death uses
+the recorded runtime with the base death-routing destination instead of the
+entrance room.
 
 For group play, the leader's created run has a shared instance reference.
 Members can join that same run by entering through the shared reference instead

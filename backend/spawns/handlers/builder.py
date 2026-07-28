@@ -672,6 +672,12 @@ class WizKillHandler(CommandHandler):
                 target_selector=target,
                 message=message,
                 runtime_world=ctx.world,
+                death_token=(
+                    f"builder-kill:{ctx.payload.get('_request_id')}:"
+                    f"{ctx.payload.get('_request_segment')}"
+                    if ctx.payload.get("_request_id")
+                    else None
+                ),
             )
         except ActionError as err:
             ctx.publish(

@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from builders.models import (
@@ -40,7 +41,9 @@ from worlds.tasks import monitor_worlds
 from worlds.instances import (
     create_fresh_instance_run,
     enter_players_into_run,
+    player_carried_item_ids,
     reset_instance,
+    transfer_instance_participant,
 )
 from tests.utils import apply_basic_stat_system, capture_game_messages, dispatch_text_command
 
@@ -130,7 +133,9 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self.assertEqual(self.player.room, self.instance_room)
         self.assertEqual(participant.role, InstanceParticipant.ROLE_LEADER)
         self.assertEqual(participant.transfer_from, self.room)
+        self.assertEqual(participant.return_runtime_world, self.spawn_world)
         self.assertIsNone(participant.exited_at)
+        self.assertIsNone(participant.exit_reason)
 
         assignment = InstanceAssignment.objects.get(instance=spawned_instance, player=self.player)
         self.assertEqual(assignment.transfer_from, self.room)
@@ -296,6 +301,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         participant = InstanceParticipant.objects.get(run=run, player=member)
         self.assertEqual(participant.role, InstanceParticipant.ROLE_MEMBER)
         self.assertEqual(participant.transfer_from, self.room)
+        self.assertEqual(participant.return_runtime_world, self.spawn_world)
         self.assertIsNone(participant.exited_at)
 
     def test_member_solo_run_is_exited_when_joining_group_run(self):
@@ -313,6 +319,11 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
             player=member,
         )
         self.assertIsNotNone(solo_participant.exited_at)
+        self.assertEqual(
+            solo_participant.exit_reason,
+            InstanceParticipant.EXIT_REASON_REPLACED,
+        )
+        self.assertIsNone(solo_participant.return_runtime_world_id)
         self.assertIsNone(group_participant.exited_at)
 
     def test_fresh_run_creator_never_reuses_an_active_leader_run(self):
@@ -460,6 +471,24 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self.assertFalse(run.participants.exists())
         self.assertFalse(
             InstanceAssignment.objects.filter(instance=run.spawned_world).exists()
+        )
+
+    def test_failed_single_entry_rolls_back_participant_and_player_movement(self):
+        with patch(
+            "worlds.instances.move_player_carried_items_to_world",
+            side_effect=RuntimeError("transfer failed"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "transfer failed"):
+                self._enter()
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.world, self.spawn_world)
+        self.assertEqual(self.player.room, self.room)
+        self.assertFalse(
+            InstanceParticipant.objects.filter(player=self.player).exists()
+        )
+        self.assertFalse(
+            InstanceAssignment.objects.filter(player=self.player).exists()
         )
 
     def test_match_instance_rejects_generic_no_ref_entry(self):
@@ -738,6 +767,43 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
             self.assertEqual(item.world, self.spawn_world)
             self.assertIsNotNone(item.definition_id)
 
+    def test_carried_item_traversal_is_batched_instead_of_per_container(self):
+        bag_def = self._definition(
+            "travel-pack",
+            "travel pack",
+            adv_consts.ITEM_TYPE_CONTAINER,
+        )
+        gem_def = self._definition(
+            "travel-stone",
+            "travel stone",
+            adv_consts.ITEM_TYPE_INERT,
+        )
+        expected_ids = set()
+        for index in range(20):
+            bag = Item.objects.create(
+                world=self.spawn_world,
+                definition=bag_def,
+                definition_slug_snapshot=bag_def.slug,
+                container=self.player,
+                name=f"travel pack {index}",
+                type=adv_consts.ITEM_TYPE_CONTAINER,
+            )
+            stone = Item.objects.create(
+                world=self.spawn_world,
+                definition=gem_def,
+                definition_slug_snapshot=gem_def.slug,
+                container=bag,
+                name=f"travel stone {index}",
+                type=adv_consts.ITEM_TYPE_INERT,
+            )
+            expected_ids.update((bag.id, stone.id))
+
+        with patch(
+            "spawns.models.Item.get_contained_ids",
+            side_effect=AssertionError("per-container traversal used"),
+        ):
+            self.assertEqual(player_carried_item_ids(self.player), expected_ids)
+
     def test_character_effect_runtime_follows_player_into_and_out_of_instance(self):
         effect = ActiveEffect.objects.create(
             world=self.spawn_world,
@@ -773,8 +839,142 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self.assertEqual(run.status, InstanceRun.STATUS_ACTIVE)
         self.assertIsNotNone(run.last_active_at)
         self.assertIsNotNone(participant.exited_at)
+        self.assertEqual(
+            participant.exit_reason,
+            InstanceParticipant.EXIT_REASON_LEFT,
+        )
+        self.assertIsNone(participant.return_runtime_world_id)
         self.assertEqual(self.player.world, self.spawn_world)
         self.assertEqual(self.player.room, self.room)
+
+    def test_leave_uses_the_participants_exact_recorded_runtime(self):
+        spawned_instance = self._enter()
+        participant = spawned_instance.instance_run.participants.get(
+            player=self.player,
+        )
+        other_runtime = World.objects.create(
+            name="Another Island Runtime",
+            config=self.world.config,
+            context=self.world,
+            is_multiplayer=True,
+        )
+        self.assertEqual(participant.return_runtime_world, self.spawn_world)
+
+        World.leave_instance(player=self.player)
+
+        self.player.refresh_from_db()
+        participant.refresh_from_db()
+        self.assertIsNone(participant.return_runtime_world)
+        self.assertEqual(self.player.world, self.spawn_world)
+        self.assertNotEqual(self.player.world, other_runtime)
+
+    def test_exited_participant_does_not_block_return_runtime_deletion(self):
+        alternate_runtime = World.objects.create(
+            name="Temporary Island Runtime",
+            config=self.world.config,
+            context=self.world,
+            is_multiplayer=False,
+        )
+        self.player.world = alternate_runtime
+        self.player.save(update_fields=["world"])
+
+        spawned_instance = self._enter()
+        participant = spawned_instance.instance_run.participants.get(
+            player=self.player,
+        )
+        self.assertEqual(participant.return_runtime_world, alternate_runtime)
+        World.leave_instance(player=self.player)
+
+        self.player.world = self.spawn_world
+        self.player.save(update_fields=["world"])
+        alternate_runtime_id = alternate_runtime.id
+        alternate_runtime.delete()
+
+        participant.refresh_from_db()
+        self.assertIsNone(participant.return_runtime_world_id)
+        self.assertFalse(
+            World.objects.filter(pk=alternate_runtime_id).exists()
+        )
+
+    def test_database_enforces_participant_exit_shape(self):
+        spawned_instance = self._enter()
+        participant = spawned_instance.instance_run.participants.get(
+            player=self.player,
+        )
+
+        invalid_active_updates = (
+            {"return_runtime_world": None},
+            {"exit_reason": InstanceParticipant.EXIT_REASON_LEFT},
+        )
+        for updates in invalid_active_updates:
+            with self.assertRaises(IntegrityError):
+                with transaction.atomic():
+                    InstanceParticipant.objects.filter(
+                        pk=participant.pk,
+                    ).update(**updates)
+
+        World.leave_instance(player=self.player)
+        participant.refresh_from_db()
+        invalid_exited_updates = (
+            {"exit_reason": None},
+            {"return_runtime_world": self.spawn_world},
+        )
+        for updates in invalid_exited_updates:
+            with self.assertRaises(IntegrityError):
+                with transaction.atomic():
+                    InstanceParticipant.objects.filter(
+                        pk=participant.pk,
+                    ).update(**updates)
+
+    def test_reentry_records_the_new_exact_return_runtime(self):
+        spawned_instance = self._enter()
+        run = spawned_instance.instance_run
+        World.leave_instance(player=self.player)
+        alternate_runtime = World.objects.create(
+            name="Alternate Island Runtime",
+            config=self.world.config,
+            context=self.world,
+            is_multiplayer=True,
+        )
+        self.player.world = alternate_runtime
+        self.player.room = self.room
+        self.player.save(update_fields=["world", "room"])
+
+        self._enter()
+
+        participant = run.participants.get(player=self.player)
+        self.assertEqual(participant.return_runtime_world, alternate_runtime)
+        self.assertIsNone(participant.exit_reason)
+        World.leave_instance(player=self.player)
+        self.player.refresh_from_db()
+        participant.refresh_from_db()
+        self.assertEqual(self.player.world, alternate_runtime)
+        self.assertIsNone(participant.return_runtime_world_id)
+
+    def test_atomic_participant_transfer_does_not_update_the_run(self):
+        spawned_instance = self._enter()
+        run = spawned_instance.instance_run
+        participant = run.participants.get(player=self.player)
+        original_last_active_at = run.last_active_at
+
+        updated_player = transfer_instance_participant(
+            participant=participant,
+            destination_room=self.world.config.death_room,
+            exit_reason=InstanceParticipant.EXIT_REASON_DEATH_DELEGATED,
+            expected_origin_world_id=spawned_instance.id,
+        )
+
+        run.refresh_from_db()
+        participant.refresh_from_db()
+        self.assertEqual(run.last_active_at, original_last_active_at)
+        self.assertEqual(updated_player.world, self.spawn_world)
+        self.assertEqual(updated_player.room, self.world.config.death_room)
+        self.assertIsNotNone(participant.exited_at)
+        self.assertEqual(
+            participant.exit_reason,
+            InstanceParticipant.EXIT_REASON_DEATH_DELEGATED,
+        )
+        self.assertIsNone(participant.return_runtime_world_id)
 
     def test_monitor_keeps_recently_vacated_instance_running(self):
         spawned_instance = self._enter()

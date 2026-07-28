@@ -406,9 +406,24 @@ class TestCombatFlee(WorldTestCase):
         events = resolve_due_character_effects()
 
         self.player.refresh_from_db()
-        self.assertGreater(self.player.health, 0)
+        self.assertEqual(
+            (
+                self.player.health,
+                self.player.energy,
+                self.player.stamina,
+            ),
+            (1, 1, 1),
+        )
         self.assertFalse(ActiveEffect.objects.filter(target_player=self.player).exists())
         death_event = next(event for event in events if event.type == "affect.death")
+        self.assertEqual(
+            (
+                death_event.data["actor"]["health"],
+                death_event.data["actor"]["energy"],
+                death_event.data["actor"]["stamina"],
+            ),
+            (1, 1, 1),
+        )
         self.assertEqual(death_event.data["killer"]["key"], mob.key)
         self.assertEqual(death_event.data["origin_room"]["id"], self.escape_room.id)
 
