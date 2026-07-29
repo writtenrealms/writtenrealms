@@ -1634,7 +1634,34 @@ class RoomDetail(AdventBaseModel):
     is_hidden = models.BooleanField(default=False)
 
 
+class Doorway(AdventBaseModel):
+    """One authored doorway shared by one or two directional door faces."""
+
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='doorways',
+    )
+    key = models.ForeignKey(
+        'builders.ItemDefinition',
+        on_delete=models.RESTRICT,
+        related_name='key_doorways',
+        **optional,
+    )
+    destroy_key = models.BooleanField(default=False)
+    default_state = models.TextField(
+        choices=list_to_choice(adv_consts.DOOR_STATES),
+        default=adv_consts.DOOR_STATE_CLOSED,
+    )
+
 class Door(AdventBaseModel):
+    """A directional face of a logical doorway."""
+
+    doorway = models.ForeignKey(
+        'worlds.Doorway',
+        on_delete=models.CASCADE,
+        related_name='faces',
+    )
 
     direction = models.TextField(
         choices=list_to_choice(adv_consts.DIRECTIONS))
@@ -1646,13 +1673,34 @@ class Door(AdventBaseModel):
                                 on_delete=models.CASCADE,
                                 related_name='doors_to')
     name = models.TextField(default='door')
-    key = models.ForeignKey('builders.ItemDefinition',
-                            on_delete=models.CASCADE,
-                            related_name='key_doors',
-                            **optional)
-    destroy_key = models.BooleanField(default=False)
-    default_state = models.TextField(
-        choices=list_to_choice(adv_consts.DOOR_STATES),
-        default=adv_consts.DOOR_STATE_CLOSED)
-    # SPWs only
-    #current_state = models.TextField(default=adv_consts.DOOR_STATE_CLOSED)
+
+    class Meta(AdventBaseModel.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=['from_room', 'direction'],
+                name='worlds_door_unique_room_direction',
+            ),
+            models.UniqueConstraint(
+                fields=['doorway', 'from_room'],
+                name='worlds_door_unique_doorway_room',
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(from_room=models.F('to_room')),
+                name='worlds_door_distinct_rooms',
+            ),
+        ]
+    @property
+    def key(self):
+        return self.doorway.key
+
+    @property
+    def key_id(self):
+        return self.doorway.key_id
+
+    @property
+    def destroy_key(self):
+        return self.doorway.destroy_key
+
+    @property
+    def default_state(self):
+        return self.doorway.default_state

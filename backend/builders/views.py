@@ -54,6 +54,12 @@ from core.view_mixins import (
 from lobby.cache import LOBBY_FIXED_SECTIONS_CACHE_KEY
 
 from builders import manifests as builder_manifests
+from builders.doors import (
+    DoorFaceSpec,
+    delete_door_faces,
+    remove_door_face,
+    upsert_door_face,
+)
 from builders import permissions as builder_permissions
 from builders import serializers as builder_serializers
 from builders import world_export as builder_world_export
@@ -1044,6 +1050,7 @@ class RoomBuilderDetailViewSet(RoomBuilderListViewSet):
             raise NotFound
         return Response({}, status=status.HTTP_201_CREATED)
 
+    @transaction.atomic
     def update(self, request, *args, **kwargs):
         """
         Overwrite rest_framework.mixins.UpdateModelMixin.update so that
@@ -1057,17 +1064,47 @@ class RoomBuilderDetailViewSet(RoomBuilderListViewSet):
         original_exits = {
             d: getattr(instance, d) for d in adv_consts.DIRECTIONS
         }
+        existing_doors = {
+            door.direction: door
+            for door in instance.doors_from.select_related(
+                "doorway",
+                "doorway__key",
+            )
+        }
 
-        self.perform_update(serializer)
+        instance = serializer.save()
 
-        # See if we need to remove any doors from this action
+        # Re-home a door through the canonical service when its exit changes.
+        # A former reciprocal face remains a valid one-way door, but it must
+        # no longer share physical state with the re-pointed face.
         for d in adv_consts.DIRECTIONS:
             if d in request.data:
                 if getattr(instance, d) != original_exits.get(d):
-                    Door.objects.filter(
-                        from_room=instance,
-                        direction=d,
-                    ).update(to_room=getattr(instance, d))
+                    old_door = existing_doors.get(d)
+                    if old_door is None:
+                        continue
+                    new_destination = getattr(instance, d)
+                    if new_destination is None:
+                        remove_door_face(
+                            room=instance,
+                            direction=d,
+                            remove_reverse=False,
+                        )
+                        continue
+                    upsert_door_face(
+                        room=instance,
+                        spec=DoorFaceSpec(
+                            direction=d,
+                            name=old_door.name,
+                            to_room=new_destination,
+                            key_id=old_door.key_id,
+                            destroy_key=old_door.destroy_key,
+                            default_state=old_door.default_state,
+                        ),
+                        create_reverse=True,
+                    )
+
+        instance.update_live_instances()
 
         if getattr(instance, '_prefetched_objects_cache', None):
             # If 'prefetch_related' has been applied to a queryset, we need to
@@ -1139,6 +1176,11 @@ class RoomBuilderDetailViewSet(RoomBuilderListViewSet):
                 assignment_id=room.id,
                 assignment_type=ContentType.objects.get_for_model(Room),
             ).delete()
+            delete_door_faces(
+                Door.objects.filter(
+                    Q(from_room=room) | Q(to_room=room)
+                )
+            )
             try:
                 self.perform_destroy(room)
             except RestrictedError as exc:
@@ -2794,6 +2836,7 @@ class WorldManifestApplyView(BaseWorldBuilderView):
         if len(manifests) == 1:
             return self._dispatch_manifest(manifests[0])
 
+        builder_world_export.validate_room_door_stream_consistency(manifests)
         results = []
         with transaction.atomic():
             for index, manifest in enumerate(manifests, start=1):
@@ -3087,18 +3130,16 @@ class RoomClearDoor(WorldValidatorMixin, APIView):
         direction = serializer.initial_data.get('direction')
         door = serializer.validated_data['direction']
         room = door.from_room
-        door.delete()
+        _, reverse_door = remove_door_face(
+            room=room,
+            direction=direction,
+            remove_reverse=True,
+        )
         room.update_live_instances()
 
         exit_room = getattr(room, direction)
-        if exit_room:
-            try:
-                Door.objects.get(
-                    from_room=exit_room,
-                    to_room=room).delete()
-                exit_room.update_live_instances()
-            except Door.DoesNotExist:
-                pass
+        if exit_room and reverse_door is not None:
+            exit_room.update_live_instances()
 
         return Response({}, status=status.HTTP_204_NO_CONTENT)
 

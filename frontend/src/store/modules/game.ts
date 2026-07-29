@@ -468,15 +468,6 @@ const receiveMessage = async ({
     }
     commit("last_viewed_room_message_set", message_data);
     commit("player_target_set", null);
-    if (message_data.data.door_states && message_data.data.door_states.length) {
-      for (const data of message_data.data.door_states) {
-        commit("map_update_door_state", {
-          room_key: data.key,
-          direction: data.direction,
-          door_state: data.door_state,
-        });
-      }
-    }
 
     if (message_data.data.room.id === "10129") {
       // Hardcode for Cave "loading... indicator when completing"
@@ -504,6 +495,19 @@ const receiveMessage = async ({
       commit("set_room_key", message_data.data.target.key);
     }
     commit("player_target_set", null);
+  }
+
+  // Door transitions carry compact deltas so the map and active room can be
+  // updated without replacing either room snapshot. This covers movement,
+  // player commands, privileged slash commands, and room notifications.
+  if (Array.isArray(message_data.data?.door_states)) {
+    for (const data of message_data.data.door_states) {
+      commit("map_update_door_state", {
+        room_key: data.key,
+        direction: data.direction,
+        door_state: data.door_state,
+      });
+    }
   }
 
   // Move in notifications
@@ -1428,16 +1432,28 @@ const mutations = {
     };
   },
   map_update_door_state: (state, { room_key, direction, door_state }) => {
-    let room = state.map[room_key];
-    if (!room) return;
-    const existing_state = room[`${direction}_door_state`];
-    if (existing_state != door_state) {
-      room[`${direction}_door_state`] = door_state;
+    if (!room_key || !direction || !door_state) return;
+    const state_key = `${direction}_door_state`;
+    const map_room = state.map && state.map[room_key];
+    if (map_room && map_room[state_key] !== door_state) {
+      state.map = {
+        ...state.map,
+        [room_key]: {
+          ...map_room,
+          [state_key]: door_state,
+        },
+      };
     }
-    state.map = {
-      ...state.map,
-      [room.key]: room,
-    };
+    if (
+      state.room &&
+      state.room.key === room_key &&
+      state.room[state_key] !== door_state
+    ) {
+      state.room = {
+        ...state.room,
+        [state_key]: door_state,
+      };
+    }
   },
   set_room_key: (state, room_key) => {
     state.room_key = room_key;

@@ -94,6 +94,17 @@ class MoveHandler(CommandHandler):
                         code="in_combat",
                     )
 
+                from spawns.actions.doors import (
+                    cancel_pending_player_door_action,
+                )
+
+                followup_events.extend(
+                    cancel_pending_player_door_action(
+                        player=player,
+                        code="actor_moved",
+                        message="You stop working with the door as you move.",
+                    )
+                )
                 resolution = ResolveMoveAction().execute(player, direction)
                 context = resolution.data["context"]
 

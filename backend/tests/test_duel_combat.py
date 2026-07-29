@@ -33,6 +33,7 @@ from spawns.models import (
     ActiveEffect,
     CombatEncounter,
     CombatParticipant,
+    DoorState,
     DuelMatch,
     DuelParticipant,
     GameEventOutbox,
@@ -47,7 +48,7 @@ from tests.utils import (
 from spawns.events import flush_game_event_outbox
 from spawns.handlers import dispatch_command
 from worlds.instances import create_fresh_instance_run
-from worlds.models import InstanceRun, World, WorldConfig
+from worlds.models import Door, Doorway, InstanceRun, World, WorldConfig
 
 
 class DuelCombatTests(WorldTestCase):
@@ -339,6 +340,57 @@ class DuelCombatTests(WorldTestCase):
             ).count(),
             1,
         )
+
+    def test_flee_rechecks_door_under_lock_before_room_change(self):
+        from spawns.actions.doors import (
+            lock_door_state_for_movement as real_door_lock,
+        )
+
+        doorway = Doorway.objects.create(
+            world=self.arena,
+            default_state=adv_consts.DOOR_STATE_OPEN,
+        )
+        Door.objects.create(
+            doorway=doorway,
+            direction=adv_consts.DIRECTION_EAST,
+            from_room=self.arena_room,
+            to_room=self.escape_room,
+        )
+        starting_stamina = self.player.stamina
+        KillAction().execute(self.player.id, "Rival")
+        encounter = CombatEncounter.objects.get(
+            duel_match=self.match,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        FleeAction().execute(self.player.id)
+
+        def close_door_then_lock(**kwargs):
+            DoorState.objects.update_or_create(
+                doorway=doorway,
+                world=self.run.spawned_world,
+                defaults={"state": adv_consts.DOOR_STATE_CLOSED},
+            )
+            return real_door_lock(**kwargs)
+
+        with patch(
+            "spawns.actions.combat.lock_door_state_for_movement",
+            side_effect=close_door_then_lock,
+        ) as lock_mock:
+            result = FleeAction().execute(self.player.id)
+
+        self.player.refresh_from_db()
+        encounter.refresh_from_db()
+        participant = CombatParticipant.objects.get(
+            encounter=encounter,
+            player=self.player,
+        )
+        error = next(event for event in result.events if event.type == "cmd.flee.error")
+        self.assertEqual(error.data["code"], "closed_door")
+        self.assertEqual(self.player.room_id, self.arena_room.id)
+        self.assertEqual(self.player.stamina, starting_stamina)
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
+        self.assertEqual(participant.pending_flee, {})
+        lock_mock.assert_called_once()
 
     def test_simultaneous_flee_refunds_nonmoving_players_reservation(self):
         self.world.config.combat_resolution_interval = 1

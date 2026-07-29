@@ -37,6 +37,7 @@ from builders import serializers as builder_serializers
 from tests.base import WorldTestCase
 from spawns import serializers as spawn_serializers
 from spawns.models import Player, Mob, DoorState, Item
+from spawns.state_payloads import door_state_lookup
 from users.models import User
 from worlds.models import (
     InstanceParticipant,
@@ -47,6 +48,7 @@ from worlds.models import (
     RoomFlag,
     RoomDetail,
     Door,
+    Doorway,
 )
 
 
@@ -974,6 +976,9 @@ class DoorTests(BuilderTestCase):
             'builder-room-set-door',
             args=[self.world.pk, self.room.pk])
 
+    def _create_doorway(self, **kwargs):
+        return Doorway.objects.create(world=self.world, **kwargs)
+
     def test_add_door(self):
         "Simplest case"
         resp = self.client.post(self.set_room_ep, {
@@ -989,10 +994,11 @@ class DoorTests(BuilderTestCase):
         self.assertEqual(door.direction, 'east')
 
         # Reverse door also
-        door = Door.objects.get(
+        door2 = Door.objects.get(
             from_room=self.room2,
             to_room=self.room)
-        self.assertEqual(door.direction, 'west')
+        self.assertEqual(door2.direction, 'west')
+        self.assertEqual(door.doorway_id, door2.doorway_id)
 
     def test_add_door_with_options(self):
         key = ItemDefinition.objects.create(
@@ -1000,7 +1006,7 @@ class DoorTests(BuilderTestCase):
             name='a key',
             world=self.world)
         resp = self.client.post(self.set_room_ep, {
-            'name': 'dooR dropped', # 'dropped' will be dropped
+            'name': 'dooR dropped',
             'default_state': 'locked',
             'direction': 'east',
             'key': key.key,
@@ -1011,7 +1017,7 @@ class DoorTests(BuilderTestCase):
         door = Door.objects.get(
             from_room=self.room,
             to_room=self.room2)
-        self.assertEqual(door.name, 'door')
+        self.assertEqual(door.name, 'door dropped')
         self.assertEqual(door.default_state, 'locked')
         self.assertEqual(door.key, key)
         self.assertTrue(door.destroy_key)
@@ -1020,7 +1026,8 @@ class DoorTests(BuilderTestCase):
         door2 = Door.objects.get(
             from_room=self.room2,
             to_room=self.room)
-        self.assertEqual(door2.name, 'door')
+        self.assertEqual(door2.name, 'door dropped')
+        self.assertEqual(door2.doorway_id, door.doorway_id)
         self.assertEqual(door2.default_state, 'locked')
         self.assertEqual(door2.key, key)
         self.assertTrue(door2.destroy_key)
@@ -1049,11 +1056,14 @@ class DoorTests(BuilderTestCase):
                 to_room=self.room)
 
     def test_change_connection_to_one_way_alters_door(self):
+        doorway = self._create_doorway()
         door1 = Door.objects.create(
+            doorway=doorway,
             from_room=self.room,
             to_room=self.room2,
             direction='east')
         door2 = Door.objects.create(
+            doorway=doorway,
             from_room=self.room2,
             to_room=self.room,
             direction='west')
@@ -1070,10 +1080,11 @@ class DoorTests(BuilderTestCase):
         with self.assertRaises(Door.DoesNotExist):
             door2.refresh_from_db() # door 2 is gone
 
-    def test_change_connection_to_two_way_removes_one_door(self):
+    def test_change_connection_to_two_way_adds_reciprocal_face(self):
         self.room2.west = None
         self.room2.save()
         door1 = Door.objects.create(
+            doorway=self._create_doorway(),
             from_room=self.room,
             to_room=self.room2,
             direction='east')
@@ -1085,18 +1096,40 @@ class DoorTests(BuilderTestCase):
             })
         if serializer.is_valid(raise_exception=True):
             serializer.save(room=self.room)
-        with self.assertRaises(Door.DoesNotExist):
-            door1.refresh_from_db()
+        door1.refresh_from_db()
+        door2 = Door.objects.get(
+            from_room=self.room2,
+            to_room=self.room,
+            direction="west",
+        )
+        self.assertEqual(door1.doorway_id, door2.doorway_id)
 
     def test_remove_connection_removes_door2(self):
+        doorway = self._create_doorway()
         door1 = Door.objects.create(
+            doorway=doorway,
             from_room=self.room,
             to_room=self.room2,
             direction='east')
         door2 = Door.objects.create(
+            doorway=doorway,
             from_room=self.room2,
             to_room=self.room,
             direction='west')
+        north_room = self.room.create_at("north")
+        north_doorway = self._create_doorway()
+        north_door = Door.objects.create(
+            doorway=north_doorway,
+            from_room=self.room,
+            to_room=north_room,
+            direction="north",
+        )
+        south_door = Door.objects.create(
+            doorway=north_doorway,
+            from_room=north_room,
+            to_room=self.room,
+            direction="south",
+        )
         serializer = builder_serializers.RoomDirActionSerializer(
             room=self.room,
             data={
@@ -1109,14 +1142,17 @@ class DoorTests(BuilderTestCase):
             door1.refresh_from_db()
         with self.assertRaises(Door.DoesNotExist):
             door2.refresh_from_db()
+        north_door.refresh_from_db()
+        south_door.refresh_from_db()
 
     def test_set_existing_door(self):
+        doorway = self._create_doorway(destroy_key=False)
         door = Door.objects.create(
+            doorway=doorway,
             from_room=self.room,
             to_room=self.room2,
             name='door',
-            direction='east',
-            destroy_key=False)
+            direction='east')
         ep = reverse('builder-room-set-door',
                      args=[self.world.pk, self.room.pk])
         resp = self.client.post(ep, {
@@ -1130,26 +1166,28 @@ class DoorTests(BuilderTestCase):
         self.assertEqual(door.name, 'gate')
         self.assertTrue(door.destroy_key)
 
-    def test_asymmetrical_door_states(self):
-        "Test one side locked and the other closed"
+    def test_reciprocal_door_faces_share_settings(self):
         key = ItemDefinition.objects.create(
             item_type='key',
             name='a key',
             world=self.world)
+        doorway = self._create_doorway(
+            default_state='locked',
+            destroy_key=True,
+            key=key,
+        )
         door = Door.objects.create(
+            doorway=doorway,
             from_room=self.room,
             to_room=self.room2,
             name='door',
-            direction='east',
-            default_state='locked',
-            destroy_key=True,
-            key=key)
+            direction='east')
         door2 = Door.objects.create(
+            doorway=doorway,
             from_room=self.room2,
             to_room=self.room,
             name='door',
-            direction='west',
-            default_state='locked')
+            direction='west')
 
         ep = reverse('builder-room-set-door',
                      args=[self.world.pk, self.room.pk])
@@ -1165,13 +1203,21 @@ class DoorTests(BuilderTestCase):
         self.assertEqual(door.default_state, 'closed')
         self.assertIsNone(door.key)
         self.assertFalse(door.destroy_key)
+        door2.refresh_from_db()
+        self.assertEqual(door2.doorway_id, door.doorway_id)
+        self.assertEqual(door2.default_state, 'closed')
+        self.assertIsNone(door2.key)
+        self.assertFalse(door2.destroy_key)
 
     def test_clear_door_mutual(self):
+        doorway = self._create_doorway()
         door1 = Door.objects.create(
+            doorway=doorway,
             from_room=self.room,
             to_room=self.room2,
             direction='east')
         door2 = Door.objects.create(
+            doorway=doorway,
             from_room=self.room2,
             to_room=self.room,
             direction='west')
@@ -1188,10 +1234,14 @@ class DoorTests(BuilderTestCase):
         with self.assertRaises(Door.DoesNotExist):
             door2.refresh_from_db()
 
+        self.assertFalse(Doorway.objects.filter(pk=doorway.pk).exists())
+
     def test_clear_door_one_way(self):
         self.room2.west = None
         self.room2.save()
+        doorway = self._create_doorway()
         door = Door.objects.create(
+            doorway=doorway,
             from_room=self.room,
             to_room=self.room2,
             direction='east')
@@ -1206,13 +1256,17 @@ class DoorTests(BuilderTestCase):
 
         # There is no other door
         self.assertEqual(Door.objects.count(), 0)
+        self.assertFalse(Doorway.objects.filter(pk=doorway.pk).exists())
 
     def test_delete_room_deletes_doors(self):
+        doorway = self._create_doorway()
         door1 = Door.objects.create(
+            doorway=doorway,
             from_room=self.room,
             to_room=self.room2,
             direction='east')
         door2 = Door.objects.create(
+            doorway=doorway,
             from_room=self.room2,
             to_room=self.room,
             direction='west')
@@ -1231,11 +1285,14 @@ class DoorTests(BuilderTestCase):
 
     def test_set_exit(self):
         "If we set the exit of a room to a new room, the door should update."
+        doorway = self._create_doorway()
         door1 = Door.objects.create(
+            doorway=doorway,
             from_room=self.room,
             to_room=self.room2,
             direction='east')
         door2 = Door.objects.create(
+            doorway=doorway,
             from_room=self.room2,
             to_room=self.room,
             direction='west')
@@ -1255,10 +1312,12 @@ class DoorTests(BuilderTestCase):
 
         door1.refresh_from_db()
         self.assertEqual(door1.to_room, room3)
+        self.assertNotEqual(door1.doorway_id, doorway.id)
 
-        # door 2 is unchanged
+        # The old reciprocal face remains as an independent one-way door.
         door2.refresh_from_db()
         self.assertEqual(door2.to_room, self.room)
+        self.assertEqual(door2.doorway_id, doorway.id)
 
     # Validation tests
 
@@ -1292,9 +1351,13 @@ class DoorTests(BuilderTestCase):
             to_room=self.room2)
         self.assertEqual(door.direction, 'east')
 
-        # Door state was created
-        state = DoorState.objects.get(door=door, world=spawn_world)
-        self.assertEqual(state.state, 'locked')
+        # Authored defaults remain sparse until the first runtime mutation.
+        self.assertFalse(DoorState.objects.filter(
+            doorway=door.doorway,
+            world=spawn_world,
+        ).exists())
+        states = door_state_lookup(spawn_world, [self.room.id])
+        self.assertEqual(states[self.room.id]['east'], 'locked')
 
 
 class PathTests(BuilderTestCase):

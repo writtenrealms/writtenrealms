@@ -148,6 +148,66 @@ A door identifies its direction and destination independently from the exit
 map. `key` is optional; when present, use an `itemdefinition.<slug>` ref.
 `default_state` is `open`, `closed`, or `locked`.
 
+## Door Runtime Behavior
+
+An authored door is one logical doorway. Reciprocal door entries provide a face
+in each connected room and share `key`, `destroy_key`, and `default_state`;
+manifest validation rejects reciprocal entries that disagree on those fields.
+A deliberately one-way door remains a valid one-faced logical doorway.
+Changing a connected exit from mutual to one-way removes only the reverse
+face; changing it back adds the reciprocal face without discarding the door's
+settings. Repointing one side to a different room splits that face into a new
+logical doorway and preserves the former reverse face as a one-way door.
+
+Its live state is `open`, `closed`, or `locked`. Every transition updates all
+of its faces atomically in the current runtime world. Separate instance runs do
+not share live door state.
+
+Ordinary player behavior is deliberately passage-friendly:
+
+- `open` is immediate.
+- `open` on a locked door atomically unlocks and opens it when the player
+  carries the configured key.
+- `unlock` provides the precise alternative of unlocking while leaving the
+  door closed.
+- `close` has a 2.5-second wind-up.
+- `lock` is immediate on a closed door; on an open door, it uses the same
+  2.5-second wind-up before closing and locking.
+
+The close wind-up prevents rapid repeated closing from acting like an
+unconfigured lock. It is a runtime rule rather than a per-door authoring
+setting.
+
+Authored command-fallback Triggers may still use these verbs for actions such
+as `open cage`. The built-in command takes precedence when its target resolves
+to a real door; otherwise the normal command Trigger gets a chance to handle
+the text.
+
+Builders can force door states directly:
+
+```text
+/open north
+/close ironbound gate
+/lock north
+/unlock north
+```
+
+Trusted Trigger scripts can use a mob or room issuer through `/cmd`:
+
+```yaml
+script: /cmd room -- /close north
+script: /cmd gatekeeper -- /lock north
+```
+
+A builder's direct `/cmd room -- ...` does not delegate builder authority; use
+the slash command directly outside a Trigger.
+
+The slash forms are immediate, bypass keys, and are safe to retry. `/close`
+never turns a locked door into an unlocked one. A repeated command for the
+current state is a successful no-op and does not fire a door state-change
+event. For the full permission matrix and command behavior, see
+[builder-command-reference.md](builder-command-reference.md#open-close-lock-unlock).
+
 ## Movement Rules Use Policy Triggers
 
 Do not add `checks` or `room_checks` to a room manifest. Gate entry or exit

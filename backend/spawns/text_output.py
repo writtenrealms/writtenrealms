@@ -145,6 +145,16 @@ def _render_room_detail_text(detail: object) -> str | None:
     return None
 
 
+def _render_door_text(door: dict | None) -> str | None:
+    if not door:
+        return None
+    name = str(door.get("name") or "door").strip() or "door"
+    state = str(door.get("state") or "").strip().lower()
+    if not state:
+        return None
+    return f"The {name} is {state}."
+
+
 def _render_inventory_text(actor: dict | None) -> str | None:
     if not actor:
         return None
@@ -518,6 +528,8 @@ def render_event_text(
             return _render_item_text(target)
         if target_type == "char":
             return _render_char_text(target)
+        if target_type == "door":
+            return _render_door_text(target)
         if target_type == "room_detail":
             return _render_room_detail_text(target)
         return None

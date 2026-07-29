@@ -39,6 +39,19 @@ from worlds.models import Room
 _COUNTED_ITEM_RE = re.compile(r"^(?P<count>\d+)\.(?P<token>.+)$")
 
 
+def _cancel_pending_door_action(player: Player) -> list[GameEvent]:
+    # Import at call time to avoid the state-payload/handler registration
+    # cycle while keeping cancellation in the caller's player-locked
+    # transaction.
+    from spawns.actions.doors import cancel_pending_player_door_action
+
+    return cancel_pending_player_door_action(
+        player=player,
+        code="physical_action_replaced",
+        message="You stop working with the door to do something else.",
+    )
+
+
 def _tokenize_keywords(value: str) -> list[str]:
     return [token for token in re.split(r"\W+", value.lower()) if token]
 
@@ -382,6 +395,7 @@ class DropAction:
     def execute(self, player_id: int, selector: str) -> ActionResult:
         with transaction.atomic():
             player = Player.objects.select_for_update().get(pk=player_id)
+            door_cancellation_events = _cancel_pending_door_action(player)
             if not player.room_id:
                 raise ActionError("You are nowhere. Cannot drop items.", code="no_room")
 
@@ -418,6 +432,7 @@ class DropAction:
         text = render_event_text("cmd.drop.success", data, viewer=updated_player)
 
         events = [
+            *door_cancellation_events,
             GameEvent(
                 type="cmd.drop.success",
                 recipients=[updated_player.key],
@@ -470,6 +485,7 @@ class EquipAction:
     ) -> ActionResult:
         with transaction.atomic():
             player = Player.objects.select_for_update().get(pk=player_id)
+            door_cancellation_events = _cancel_pending_door_action(player)
             if not player.room_id:
                 raise ActionError("You are nowhere. Cannot equip items.", code="no_room")
 
@@ -609,6 +625,7 @@ class EquipAction:
         text = render_event_text(event_type, data, viewer=updated_player)
 
         events = [
+            *door_cancellation_events,
             GameEvent(
                 type=event_type,
                 recipients=[updated_player.key],
@@ -652,6 +669,7 @@ class RemoveEquipmentAction:
     def execute(self, player_id: int, selector: str, *, command_type: str = "remove") -> ActionResult:
         with transaction.atomic():
             player = Player.objects.select_for_update().get(pk=player_id)
+            door_cancellation_events = _cancel_pending_door_action(player)
             if not player.room_id:
                 raise ActionError("You are nowhere. Cannot remove equipment.", code="no_room")
 
@@ -700,6 +718,7 @@ class RemoveEquipmentAction:
         text = render_event_text(event_type, data, viewer=updated_player)
 
         events = [
+            *door_cancellation_events,
             GameEvent(
                 type=event_type,
                 recipients=[updated_player.key],
@@ -741,6 +760,7 @@ class GetAction:
     def execute(self, player_id: int, selector: str, source_selector: str | None = None) -> ActionResult:
         with transaction.atomic():
             player = Player.objects.select_for_update().get(pk=player_id)
+            door_cancellation_events = _cancel_pending_door_action(player)
             if not player.room_id:
                 raise ActionError("You are nowhere. Cannot get items.", code="no_room")
 
@@ -847,6 +867,7 @@ class GetAction:
         text = render_event_text("cmd.get.success", data, viewer=updated_player)
 
         events = [
+            *door_cancellation_events,
             GameEvent(
                 type="cmd.get.success",
                 recipients=[updated_player.key],
@@ -902,6 +923,7 @@ class PutAction:
     def execute(self, player_id: int, selector: str, target_selector: str) -> ActionResult:
         with transaction.atomic():
             player = Player.objects.select_for_update().get(pk=player_id)
+            door_cancellation_events = _cancel_pending_door_action(player)
             if not player.room_id:
                 raise ActionError("You are nowhere. Cannot put items.", code="no_room")
 
@@ -987,6 +1009,7 @@ class PutAction:
         text = render_event_text("cmd.put.success", data, viewer=updated_player)
 
         events = [
+            *door_cancellation_events,
             GameEvent(
                 type="cmd.put.success",
                 recipients=[updated_player.key],
@@ -1032,6 +1055,7 @@ class GiveAction:
     def execute(self, player_id: int, selector: str, target_selector: str) -> ActionResult:
         with transaction.atomic():
             player = Player.objects.select_for_update().get(pk=player_id)
+            door_cancellation_events = _cancel_pending_door_action(player)
             if not player.room_id:
                 raise ActionError("You are nowhere. Cannot give items.", code="no_room")
 
@@ -1097,6 +1121,7 @@ class GiveAction:
         text = render_event_text("cmd.give.success", data, viewer=updated_player)
 
         events = [
+            *door_cancellation_events,
             GameEvent(
                 type="cmd.give.success",
                 recipients=[updated_player.key],

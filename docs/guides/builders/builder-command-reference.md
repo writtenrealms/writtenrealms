@@ -57,6 +57,7 @@ Legend:
 | `/state` | Direct | No | Script | Script | Script | Script |
 | `/stats` | Direct | No | No | No | No | No |
 | `/regen` | Direct | No | Mob | No | No | No |
+| `/open`, `/close`, `/lock`, `/unlock` | Direct | No | Script | Script | No | No |
 | `/set` | Direct | No | No | Script | No | No |
 | `/setlevel` | Direct | No | No | No | No | No |
 | `/setclass` | Direct | Script | No | Script | No | No |
@@ -408,6 +409,66 @@ Examples:
 /cmd healer -- /regen {{ actor_key }} health
 ```
 
+### `/open`, `/close`, `/lock`, `/unlock`
+
+Formats:
+
+```text
+/open <direction|door name>
+/close <direction|door name>
+/lock <direction|door name>
+/unlock <direction|door name>
+```
+
+These commands immediately force a door into an explicit state. They are the
+builder and automation counterparts of the ordinary player commands:
+
+| Command | Result |
+| --- | --- |
+| `/open` | Force the door open, bypassing its key. |
+| `/close` | Force an open door closed. An already locked door remains locked. |
+| `/lock` | Force the door closed and locked. |
+| `/unlock` | Force the door closed and unlocked. |
+
+Targets can be a direction or a case-insensitive door name. When a name is
+ambiguous, include its direction, such as `/open iron gate north`. A missing or
+ambiguous target is rejected rather than selecting a door implicitly.
+
+Direct use requires a builder player with access to the current world. Trusted
+mob and room scripts can also use these commands, but player-backed scripts
+cannot. Mob commands affect a door in the mob's current room; room commands
+affect a door belonging to that room. Zone and world issuers are intentionally
+unsupported because they have no unambiguous local doorway.
+
+Examples:
+
+```text
+/open north
+/lock iron gate
+```
+
+Direct `/cmd room -- ...` and `/cmd <mob> -- ...` do not inherit a builder
+player's authority. Use the slash command directly when acting as a builder.
+The room/mob forms are available only inside trusted Trigger scripts, where
+`script_source` provenance is preserved:
+
+```yaml
+script: /cmd room -- /close north
+script: /cmd gatekeeper -- /lock east
+```
+
+Slash door commands are immediate: they bypass keys and the player's
+2.5-second close or close-and-lock wind-up. Every actual state transition is
+applied to both faces of the logical doorway in the current runtime world and
+notifies occupants on both sides.
+
+The commands are idempotent for reliable scripts. Asking for the state the door
+already has succeeds with `changed: false`, does not publish a
+`door.state_changed` event, and does not run state-change reactions. A real
+transition publishes one `door.state_changed` event containing the previous
+and resulting states, the logical doorway, issuer provenance, cause, and compact
+state deltas for both faces.
+
 ### `/set`
 
 Format:
@@ -748,6 +809,12 @@ Have a scripted mob restore health:
 
 ```yaml
 script: /cmd healer -- /regen {{ actor_key }} health
+```
+
+Close and lock a gate from a trusted room script:
+
+```yaml
+script: /cmd room -- /lock north
 ```
 
 ## Related Docs

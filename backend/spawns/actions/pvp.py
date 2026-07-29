@@ -58,6 +58,32 @@ def _duels():
     return duels
 
 
+def _cancel_pending_door_for_ability(player: Player) -> None:
+    from spawns.actions.doors import (
+        cancel_pending_player_door_action_durably,
+    )
+
+    cancel_pending_player_door_action_durably(
+        player=player,
+        code="physical_action_replaced",
+        message="You stop working with the door to use an ability.",
+    )
+
+
+def _cancel_pending_door_for_physical_action(
+    player: Player,
+    *,
+    message: str,
+) -> list[GameEvent]:
+    from spawns.actions.doors import cancel_pending_player_door_action
+
+    return cancel_pending_player_door_action(
+        player=player,
+        code="physical_action_replaced",
+        message=message,
+    )
+
+
 def _is_match_runtime(player: Player) -> bool:
     template_world = getattr(player.world, "context", None)
     config = getattr(template_world, "config", None)
@@ -868,17 +894,24 @@ def try_execute_kill(
                 f"You are already fighting {target.name}.",
                 code="combat_in_progress",
             )
+        cancellation_events = _cancel_pending_door_for_physical_action(
+            attacker,
+            message="You stop working with the door to fight.",
+        )
         encounter_id = encounter.id
         interval = encounter.resolution_interval
-        events = (
-            _engage_events(
-                attacker=attacker,
-                target=target,
-                room=attacker.room,
-            )
-            if created
-            else []
-        )
+        events = [
+            *cancellation_events,
+            *(
+                _engage_events(
+                    attacker=attacker,
+                    target=target,
+                    room=attacker.room,
+                )
+                if created
+                else []
+            ),
+        ]
 
     if interval == -1:
         step = resolve_pvp_encounter_step(
@@ -931,6 +964,7 @@ def _execute_duel_self_utility(
         )
     with transaction.atomic():
         _match, attacker, _opponent = _locked_opener_players(attacker_id)
+        _cancel_pending_door_for_ability(attacker)
         return ability_actions.AbilityAction()._resolve_self_utility(
             player=attacker,
             ability=_duel_scoped_self_utility_ability(ability),
@@ -954,6 +988,7 @@ def _try_execute_room_opener_ability(
     with transaction.atomic():
         match, attacker, opponent = _locked_opener_players(attacker_id)
         ability_actions.validate_ability_ready(attacker, ability)
+        _cancel_pending_door_for_ability(attacker)
         direction, selector = ability_actions._split_room_opener_args(
             args,
             ability=ability,
@@ -1265,6 +1300,7 @@ def try_execute_ability(
             created = False
 
         ability_actions.validate_ability_ready(attacker, ability)
+        _cancel_pending_door_for_ability(attacker)
         participant = next(
             (
                 row
@@ -1335,6 +1371,7 @@ def try_execute_flee(player_id: int) -> ActionResult | None:
         return None
 
     resolve_now = False
+    events: list[GameEvent] = []
     with transaction.atomic():
         context = _locked_context(participation.encounter_id)
         if context is None:
@@ -1350,16 +1387,28 @@ def try_execute_flee(player_id: int) -> ActionResult | None:
 
         pending = participant.pending_flee or {}
         if pending.get("status") == "ready" and context.encounter.resolution_interval == -1:
+            events.extend(
+                _cancel_pending_door_for_physical_action(
+                    player,
+                    message="You stop working with the door to flee.",
+                )
+            )
             resolve_now = True
         elif pending:
-            return ActionResult(events=[
-                GameEvent(
-                    type="cmd.flee.success",
-                    recipients=[player.key],
-                    data={"status": pending.get("status", "preparing")},
-                    text="You are already trying to flee.",
-                )
-            ])
+            return ActionResult(
+                events=[
+                    *_cancel_pending_door_for_physical_action(
+                        player,
+                        message="You stop working with the door to flee.",
+                    ),
+                    GameEvent(
+                        type="cmd.flee.success",
+                        recipients=[player.key],
+                        data={"status": pending.get("status", "preparing")},
+                        text="You are already trying to flee.",
+                    ),
+                ]
+            )
         else:
             prevention = preventing_action_effect(
                 player,
@@ -1373,6 +1422,10 @@ def try_execute_flee(player_id: int) -> ActionResult | None:
                     data=combat._action_prevention_data(prevention, action="flee"),
                 )
             destination = combat._choose_flee_destination(player)
+            cancellation_events = _cancel_pending_door_for_physical_action(
+                player,
+                message="You stop working with the door to flee.",
+            )
             player.stamina = max(
                 0,
                 int(player.stamina or 0) - destination.movement_cost,
@@ -1394,6 +1447,7 @@ def try_execute_flee(player_id: int) -> ActionResult | None:
                 ]
             )
             events = [
+                *cancellation_events,
                 GameEvent(
                     type="cmd.flee.success",
                     recipients=[player.key],
@@ -1414,7 +1468,7 @@ def try_execute_flee(player_id: int) -> ActionResult | None:
         step = resolve_pvp_encounter_step(
             participation.encounter_id,
             auto_advance=False,
-            leading_events=events if "events" in locals() else None,
+            leading_events=events or None,
         )
         return ActionResult(events=step.events)
     return ActionResult(events=events)
@@ -1522,13 +1576,46 @@ def _complete_ready_flee(
         or destination.room_id != destination_room_id
         or destination.movement_cost != reserved_cost
     )
+    origin_room_id = context.encounter.room_id
+    door_state = combat.lock_door_state_for_movement(
+        runtime_world=player.world,
+        room_id=origin_room_id,
+        direction=destination.direction,
+    )
+    if door_state and door_state.state in (
+        adv_consts.DOOR_STATE_CLOSED,
+        adv_consts.DOOR_STATE_LOCKED,
+    ):
+        participant.pending_flee = {}
+        participant.pending_ability = {}
+        participant.save(
+            update_fields=[
+                "pending_flee",
+                "pending_ability",
+                "modified_ts",
+            ]
+        )
+        player.stamina = combat._reconciled_flee_stamina(
+            player,
+            reserved_cost=reserved_cost,
+            replacement_cost=0,
+        )
+        player.save(update_fields=["stamina", "modified_ts"])
+        return False, True, [
+            combat._flee_completion_error_event(
+                player,
+                message="The way is blocked.",
+                code="closed_door",
+                round_id=round_id,
+            )
+        ]
+
     if route_changed:
         player.stamina = combat._reconciled_flee_stamina(
             player,
             reserved_cost=reserved_cost,
             replacement_cost=destination.movement_cost,
         )
-    origin_room_id = context.encounter.room_id
     player.room_id = destination.room_id
     player.last_action_ts = timezone.now()
     update_fields = ["room", "last_action_ts", "modified_ts"]

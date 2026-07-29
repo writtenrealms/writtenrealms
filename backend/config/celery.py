@@ -47,6 +47,13 @@ app.conf.beat_schedule = {
         # value after broker/worker backpressure and should not pile up.
         'options': {'expires': _heartbeat_interval_seconds()},
     },
+    'run-due-prepared-game-actions': {
+        'task': 'spawns.tasks.run_due_prepared_game_actions',
+        'schedule': _heartbeat_interval_seconds(),
+        # ETA tasks normally resolve these at 2.5s. This bounded poll is the
+        # durable recovery path if an ETA delivery is lost.
+        'options': {'expires': _heartbeat_interval_seconds()},
+    },
     'run-world-spawn-plans': {
         'task': 'worlds.tasks.run_world_spawn_plans',
         'schedule': _spawn_plan_interval_seconds(),
@@ -67,6 +74,11 @@ app.conf.beat_schedule = {
     'prune-scheduled-trigger-runs': {
         'task': 'spawns.tasks.prune_scheduled_trigger_runs',
         'schedule': crontab(minute='25'),
+        'options': {'expires': 3300},
+    },
+    'prune-prepared-game-actions': {
+        'task': 'spawns.tasks.prune_prepared_game_actions',
+        'schedule': crontab(hour='4', minute='25'),
         'options': {'expires': 3300},
     },
     'monitor-worlds': {

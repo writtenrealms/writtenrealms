@@ -23,6 +23,9 @@ IS_CLUSTER = pick({
 MOVEMENT_COST = 2
 # Shared cadence for heartbeat/tick-like async behavior across WR2 systems.
 GAME_HEARTBEAT_INTERVAL_SECONDS = 2
+# Player close/lock wind-up. The durable action scheduler remains authoritative;
+# Celery ETA delivery is only the low-latency wake-up path.
+DOOR_ACTION_DELAY_SECONDS = 2.5
 # Spawn-plan cadence for periodic world respawn processing.
 GAME_SPAWN_PLAN_INTERVAL_SECONDS = 15
 # Default percent chance that a roaming mob moves on each heartbeat.

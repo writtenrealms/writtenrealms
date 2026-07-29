@@ -103,7 +103,7 @@ class TestHelpCommands(WorldTestCase):
         message = self._message_by_type(messages, "cmd.help.success")
         self.assertIsNotNone(message)
         self.assertIn("Commands:", message.get("text", ""))
-        self.assertIn("look | look <target>", message.get("text", ""))
+        self.assertIn("look | look <target|direction>", message.get("text", ""))
         self.assertIn("scan <direction>", message.get("text", ""))
         self.assertIn("/load <item|mob> <definition_id|slug> [cmd]", message.get("text", ""))
         self.assertIn(

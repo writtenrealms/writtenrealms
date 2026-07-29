@@ -19,11 +19,19 @@ from spawns.actions.combat import (
     resolve_combat_encounter_step,
     resolve_due_character_effects,
 )
-from spawns.models import ActiveEffect, CombatEncounter, Item, Mob, Player
+from spawns.models import (
+    ActiveEffect,
+    CombatEncounter,
+    DoorState,
+    Item,
+    Mob,
+    Player,
+    PreparedGameAction,
+)
 from spawns.wallet import balance_map
 from spawns.tasks import resolve_combat_encounter
 from tests.base import WorldTestCase
-from worlds.models import Room
+from worlds.models import Door, Doorway, Room
 from tests.utils import (
     apply_basic_stat_system,
     capture_game_messages,
@@ -983,6 +991,54 @@ class TestCombatFlee(WorldTestCase):
         choose.assert_not_called()
         self.assertTrue(any(event.type == "cmd.flee.success" for event in result.events))
 
+    def test_flee_rechecks_door_under_lock_before_room_change(self):
+        from spawns.actions.doors import (
+            lock_door_state_for_movement as real_door_lock,
+        )
+
+        doorway = Doorway.objects.create(
+            world=self.world,
+            default_state=adv_consts.DOOR_STATE_OPEN,
+        )
+        Door.objects.create(
+            doorway=doorway,
+            direction=adv_consts.DIRECTION_EAST,
+            from_room=self.room,
+            to_room=self.escape_room,
+        )
+        encounter = self._active_encounter(self._mob())
+        dispatch_text_command(self.player.id, "flee")
+        encounter.refresh_from_db()
+        encounter.pending_flee = {**encounter.pending_flee, "status": "ready"}
+        encounter.save(update_fields=["pending_flee"])
+
+        def close_door_then_lock(**kwargs):
+            DoorState.objects.update_or_create(
+                doorway=doorway,
+                world=self.spawn_world,
+                defaults={"state": adv_consts.DOOR_STATE_CLOSED},
+            )
+            return real_door_lock(**kwargs)
+
+        with patch(
+            "spawns.actions.combat.lock_door_state_for_movement",
+            side_effect=close_door_then_lock,
+        ) as lock_mock:
+            result = resolve_combat_encounter_step(
+                encounter.id,
+                auto_advance=False,
+            )
+
+        self.player.refresh_from_db()
+        encounter.refresh_from_db()
+        error = next(event for event in result.events if event.type == "cmd.flee.error")
+        self.assertEqual(error.data["code"], "closed_door")
+        self.assertEqual(self.player.room_id, self.room.id)
+        self.assertEqual(self.player.stamina, self.stats["stamina_max"])
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
+        self.assertEqual(encounter.pending_flee, {})
+        lock_mock.assert_called_once()
+
     def test_flee_stays_in_combat_and_refunds_cost_when_route_becomes_blocked(self):
         definition = MobDefinition.objects.create(
             world=self.world,
@@ -1143,6 +1199,42 @@ class TestCombatFlee(WorldTestCase):
 
         error = self._messages_by_type(no_exit_messages, "cmd.flee.error")[0]
         self.assertEqual(error["data"]["code"], "no_flee_exit")
+
+    def test_flee_cancels_pending_door_action_in_combat_transaction(self):
+        doorway = Doorway.objects.create(
+            world=self.world,
+            default_state=adv_consts.DOOR_STATE_OPEN,
+        )
+        Door.objects.create(
+            doorway=doorway,
+            from_room=self.room,
+            to_room=self.escape_room,
+            direction=adv_consts.DIRECTION_EAST,
+            name="iron gate",
+        )
+        prepared = PreparedGameAction.objects.create(
+            player=self.player,
+            runtime_world=self.spawn_world,
+            room=self.room,
+            doorway=doorway,
+            action_type=PreparedGameAction.ACTION_CLOSE_DOOR,
+            run_at=timezone.now() + timedelta(seconds=30),
+            request_selector="east",
+            target_direction=adv_consts.DIRECTION_EAST,
+            target_name="iron gate",
+        )
+        self._active_encounter(self._mob())
+
+        result = FleeAction().execute(self.player.id)
+
+        prepared.refresh_from_db()
+        self.assertEqual(
+            prepared.status,
+            PreparedGameAction.STATUS_CANCELLED,
+        )
+        self.assertEqual(prepared.failure_code, "physical_action_replaced")
+        self.assertEqual(result.events[0].type, "cmd.close.cancelled")
+        self.assertIn("cmd.flee.success", [event.type for event in result.events])
 
     def test_flee_requires_enough_stamina_for_destination_room(self):
         self.world.config.combat_resolution_interval = 1.5

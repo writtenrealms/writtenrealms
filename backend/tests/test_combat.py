@@ -1,3 +1,4 @@
+from datetime import timedelta
 from unittest.mock import patch
 
 from core.combat_formulas import normalize_combat_system
@@ -8,11 +9,17 @@ from builders.currencies import create_currency
 from builders.models import Faction, Trigger
 from config import constants as adv_consts
 from spawns.actions.combat import apply_player_death, mob_should_aggro_player
-from spawns.models import CombatEncounter, Item, Mob, Player
+from spawns.models import (
+    CombatEncounter,
+    Item,
+    Mob,
+    Player,
+    PreparedGameAction,
+)
 from spawns.wallet import balance_map, mutate_balances
 from spawns.tasks import resolve_combat_encounter
 from tests.base import WorldTestCase
-from worlds.models import Room
+from worlds.models import Door, Doorway, Room
 from tests.utils import (
     apply_basic_stat_system,
     capture_game_messages,
@@ -554,6 +561,58 @@ class TestKillCommand(WorldTestCase):
         self.assertIsNone(
             self._message_by_type(messages, "notification.reward", watcher.key)
         )
+
+    def test_kill_cancels_pending_door_action_in_combat_transaction(self):
+        destination = self.room.create_at(adv_consts.DIRECTION_EAST)
+        doorway = Doorway.objects.create(
+            world=self.world,
+            default_state=adv_consts.DOOR_STATE_OPEN,
+        )
+        Door.objects.create(
+            doorway=doorway,
+            from_room=self.room,
+            to_room=destination,
+            direction=adv_consts.DIRECTION_EAST,
+            name="iron gate",
+        )
+        prepared = PreparedGameAction.objects.create(
+            player=self.player,
+            runtime_world=self.spawn_world,
+            room=self.room,
+            doorway=doorway,
+            action_type=PreparedGameAction.ACTION_CLOSE_DOOR,
+            run_at=timezone.now() + timedelta(seconds=30),
+            request_selector="east",
+            target_direction=adv_consts.DIRECTION_EAST,
+            target_name="iron gate",
+        )
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Rat",
+            keywords="rat",
+            health=1,
+            health_max=1,
+            attack_power=0,
+            fights_back=False,
+        )
+        mob.create_corpse()
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "kill rat")
+
+        prepared.refresh_from_db()
+        self.assertEqual(
+            prepared.status,
+            PreparedGameAction.STATUS_CANCELLED,
+        )
+        self.assertEqual(prepared.failure_code, "physical_action_replaced")
+        cancellation = self._message_by_type(
+            messages,
+            "cmd.close.cancelled",
+            self.player.key,
+        )
+        self.assertIsNotNone(cancellation)
 
     def test_kill_reward_levels_player_when_xp_crosses_threshold(self):
         self.player.experience = 29

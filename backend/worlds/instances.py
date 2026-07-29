@@ -676,6 +676,25 @@ def _increment_location_sequence(player, update_fields):
     update_fields.append('location_sequence')
 
 
+def _cancel_pending_door_action(*, player, code, message):
+    from spawns.actions.doors import cancel_pending_player_door_action
+
+    return cancel_pending_player_door_action(
+        player=player,
+        code=code,
+        message=message,
+    )
+
+
+def _enqueue_cancellation_events(events):
+    if not events:
+        return
+    from spawns.events import enqueue_game_events, flush_game_event_outbox
+
+    enqueue_game_events(events)
+    transaction.on_commit(flush_game_event_outbox, robust=True)
+
+
 def transfer_instance_participant(
         *,
         participant,
@@ -752,6 +771,21 @@ def transfer_instance_participant(
                 "The player is no longer in the expected instance runtime."
             )
 
+        cancellation_events = _cancel_pending_door_action(
+            player=locked_player,
+            code=(
+                "actor_dead"
+                if exit_reason
+                == InstanceParticipant.EXIT_REASON_DEATH_DELEGATED
+                else "actor_world_changed"
+            ),
+            message=(
+                "You can no longer finish with the door."
+                if exit_reason
+                == InstanceParticipant.EXIT_REASON_DEATH_DELEGATED
+                else "You stop working with the door as you leave the instance."
+            ),
+        )
         locked_player.world = return_runtime
         locked_player.room = destination_room
         player_update_fields = ['world', 'room']
@@ -768,6 +802,7 @@ def transfer_instance_participant(
             'exit_reason',
             'return_runtime_world',
         ])
+        _enqueue_cancellation_events(cancellation_events)
 
     return locked_player
 
@@ -854,6 +889,11 @@ def enter_instance(
                 "A player moved away before instance entry completed."
             )
 
+        cancellation_events = _cancel_pending_door_action(
+            player=locked_player,
+            code="actor_world_changed",
+            message="You stop working with the door as you enter the instance.",
+        )
         list(
             InstanceParticipant.objects.select_for_update(of=('self',))
             .filter(player_id=locked_player.pk)
@@ -898,6 +938,7 @@ def enter_instance(
         # passed model instance immediately after entry.
         player.world = run.spawned_world
         player.room = transfer_to
+        _enqueue_cancellation_events(cancellation_events)
 
     return run
 
@@ -1054,6 +1095,7 @@ def reset_instance(*, player) -> InstanceResetResult:
         DoorState,
         Item,
         Mob,
+        PreparedGameAction,
     )
     with transaction.atomic():
         player = player.__class__.objects.select_for_update().get(pk=player.pk)
@@ -1078,6 +1120,17 @@ def reset_instance(*, player) -> InstanceResetResult:
         if all(active_player.id != player.id for active_player in active_players):
             active_players.append(player)
         protected_item_ids = _protected_player_item_ids(active_players)
+        cancellation_events = []
+        for active_player in active_players:
+            cancellation_events.extend(
+                _cancel_pending_door_action(
+                    player=active_player,
+                    code="instance_reset",
+                    message=(
+                        "The instance reset interrupts your work with the door."
+                    ),
+                )
+            )
 
         combat_encounters_qs = CombatEncounter.objects.filter(world=spawned_world)
         combat_encounters_deleted = combat_encounters_qs.count()
@@ -1093,6 +1146,10 @@ def reset_instance(*, player) -> InstanceResetResult:
         mobs_deleted = mobs_qs.count()
         mobs_qs.delete()
 
+        # Instance teardown is the one reset path that may remove touched
+        # doorway rows: its prepared actions disappear in the same transaction,
+        # so no old revision can become valid again.
+        PreparedGameAction.objects.filter(runtime_world=spawned_world).delete()
         DoorState.objects.filter(world=spawned_world).delete()
         reset_runtime_state(spawned_world)
 
@@ -1114,6 +1171,7 @@ def reset_instance(*, player) -> InstanceResetResult:
         spawned_world.save(update_fields=['is_clean', 'last_spawn_plan_run_ts'])
 
         run_spawn_plans_for_world(world=spawned_world, initial=True)
+        _enqueue_cancellation_events(cancellation_events)
 
     return InstanceResetResult(
         run_id=run.id,

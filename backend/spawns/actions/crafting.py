@@ -79,6 +79,16 @@ def serialize_item(*args, **kwargs):
     return implementation(*args, **kwargs)
 
 
+def _cancel_pending_door_action(player: Player) -> list[GameEvent]:
+    from spawns.actions.doors import cancel_pending_player_door_action
+
+    return cancel_pending_player_door_action(
+        player=player,
+        code="physical_action_replaced",
+        message="You stop working with the door to do something else.",
+    )
+
+
 def _json_safe(value):
     return json.loads(json.dumps(value, cls=DjangoJSONEncoder))
 
@@ -523,6 +533,7 @@ class CraftItemAction:
                     ],
                 )
 
+            door_cancellation_events = _cancel_pending_door_action(player)
             _providers, offers = crafting_offers(
                 player,
                 provider_selector=provider_selector,
@@ -721,6 +732,7 @@ class CraftItemAction:
         return ActionResult(
             data=data,
             events=[
+                *door_cancellation_events,
                 GameEvent(
                     type="cmd.craft.success",
                     recipients=[player.key],
@@ -941,6 +953,7 @@ class SalvageItemAction:
                     ],
                 )
 
+            door_cancellation_events = _cancel_pending_door_action(player)
             remaining_spoils = 0
             if spoils:
                 spoils_qs = player.inventory.filter(
@@ -1134,6 +1147,7 @@ class SalvageItemAction:
         return ActionResult(
             data=data,
             events=[
+                *door_cancellation_events,
                 GameEvent(
                     type="cmd.salvage.success",
                     recipients=[player.key],

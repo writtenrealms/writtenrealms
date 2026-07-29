@@ -291,7 +291,6 @@ class Player(CharMixin, AdventBaseModel):
         from builders.models import FactionAssignment
         from core.economy import economy_world
         from spawns.wallet import replace_balances
-        from worlds.models import Door
 
         leveling_config = get_world_leveling_config(self.world)
         if level is None:
@@ -493,15 +492,6 @@ class Player(CharMixin, AdventBaseModel):
             reason="character.reset" if reset else "character.initialize",
             emit_event=False,
         )
-
-        # Add door states
-        if not self.world.is_multiplayer:
-            for door in Door.objects.filter(
-                from_room__world=self.world.context):
-                DoorState.objects.create(
-                    door=door,
-                    world=self.world,
-                    state=door.default_state)
 
         return self
 
@@ -1804,16 +1794,115 @@ class Alias(BaseModel):
 
 
 class DoorState(BaseModel):
-    "SPWs only, track door state"
+    """Runtime state for one logical doorway in one live world."""
 
-    door = models.ForeignKey('worlds.Door',
-                             on_delete=models.CASCADE,
-                             related_name='door_states')
+    doorway = models.ForeignKey(
+        'worlds.Doorway',
+        on_delete=models.CASCADE,
+        related_name='runtime_states',
+    )
     world = models.ForeignKey('worlds.World',
                               on_delete=models.CASCADE,
                               related_name='door_states')
     state = models.TextField(choices=list_to_choice(adv_consts.DOOR_STATES),
                              default=adv_consts.DOOR_STATE_CLOSED)
+    revision = models.BigIntegerField(default=0)
+
+    class Meta(BaseModel.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=['world', 'doorway'],
+                name='spawns_door_state_runtime_doorway',
+            ),
+        ]
+class PreparedGameAction(AdventBaseModel):
+    """Durable door request receipt, optionally pending a short wind-up."""
+
+    ACTION_OPEN_DOOR = 'open_door'
+    ACTION_CLOSE_DOOR = 'close_door'
+    ACTION_LOCK_DOOR = 'lock_door'
+    ACTION_UNLOCK_DOOR = 'unlock_door'
+    ACTION_CHOICES = (
+        ACTION_OPEN_DOOR,
+        ACTION_CLOSE_DOOR,
+        ACTION_LOCK_DOOR,
+        ACTION_UNLOCK_DOOR,
+    )
+
+    STATUS_PENDING = 'pending'
+    STATUS_COMPLETED = 'completed'
+    STATUS_CANCELLED = 'cancelled'
+    STATUS_CHOICES = (
+        STATUS_PENDING,
+        STATUS_COMPLETED,
+        STATUS_CANCELLED,
+    )
+
+    player = models.ForeignKey(
+        'spawns.Player',
+        on_delete=models.CASCADE,
+        related_name='prepared_game_actions',
+    )
+    runtime_world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='prepared_game_actions',
+    )
+    room = models.ForeignKey(
+        'worlds.Room',
+        on_delete=models.CASCADE,
+        related_name='prepared_game_actions',
+    )
+    doorway = models.ForeignKey(
+        'worlds.Doorway',
+        on_delete=models.CASCADE,
+        related_name='prepared_game_actions',
+    )
+    action_type = models.TextField(choices=list_to_choice(ACTION_CHOICES))
+    status = models.TextField(
+        choices=list_to_choice(STATUS_CHOICES),
+        default=STATUS_PENDING,
+    )
+    run_at = models.DateTimeField()
+    expected_revision = models.BigIntegerField(default=0)
+    request_id = models.UUIDField(**optional)
+    request_segment = models.CharField(max_length=128, default='r')
+    request_selector = models.TextField(blank=True, default='')
+    target_direction = models.TextField(
+        choices=list_to_choice(adv_consts.DIRECTIONS),
+    )
+    target_name = models.TextField(default='door')
+    failure_code = models.CharField(max_length=64, blank=True, default='')
+    result = models.JSONField(default=dict, blank=True)
+    completed_ts = models.DateTimeField(**optional)
+
+    class Meta(AdventBaseModel.Meta):
+        indexes = [
+            models.Index(
+                fields=['status', 'run_at', 'id'],
+                name='spawn_prepared_due_idx',
+            ),
+            models.Index(
+                fields=['status', 'modified_ts', 'id'],
+                name='spawn_prepared_prune_idx',
+            ),
+            models.Index(
+                fields=['runtime_world', 'doorway', 'status'],
+                name='spawn_prepared_door_idx',
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['player'],
+                condition=models.Q(status='pending'),
+                name='spawn_prepared_player_pending_uniq',
+            ),
+            models.UniqueConstraint(
+                fields=['player', 'request_id', 'request_segment'],
+                condition=models.Q(request_id__isnull=False),
+                name='spawn_prepared_request_uniq',
+            ),
+        ]
 
 
 

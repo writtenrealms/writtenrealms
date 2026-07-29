@@ -49,6 +49,12 @@ This plan remains directional, but several pieces are now implemented:
   issuers resolve one player or mob in the issuer room and live runtime world,
   lock only that target row, and mutate the runtime character rather than its
   authored definition.
+- `/open`, `/close`, `/lock`, and `/unlock` support direct builder players and
+  script-source-gated room/mob issuers. They require an explicit live runtime
+  world, mutate the same canonical doorway state used by players and movement,
+  and intentionally reject zone/world issuers. A direct builder's
+  `/cmd room -- ...` does not delegate builder authority; the room form works
+  only when trusted Trigger provenance sets `script_source`.
 - Direct scheduled room dispatch should include `world_id` or
   `runtime_world_id` in the payload when the command needs live-instance
   context. `/cmd room` carries this from the originating character

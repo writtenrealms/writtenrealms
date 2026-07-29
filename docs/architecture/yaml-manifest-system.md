@@ -176,8 +176,23 @@ Current required mappings:
 - Builder read-only spawn-plan inspection APIs are `/zones/<id>/spawn-plans/`
   and `/rooms/<id>/spawn-plans/`; do not export/import or call the removed
   `/loads/` endpoints.
-- WR1 door keys export as WR2 `itemdefinition.<slug>` refs; `Door.key` now points
-  to `ItemDefinition`.
+- WR1 door keys export as WR2 `itemdefinition.<slug>` refs. The WR2 manifest
+  surface remains one `spec.doors[]` entry on each originating room; exporters
+  must not emit an internal `Doorway` id, a doorway ref, or a separate manifest
+  kind.
+- Before emitting doors, group WR1 rows whose endpoints and opposite directions
+  form a reciprocal pair. A pair becomes one canonical WR2 doorway with two
+  faces. Preserve `direction`, `name`, and destination separately on each face,
+  while requiring the pair to agree on `key`, `destroy_key`, and
+  `default_state`. Emit those shared values identically in both room documents.
+- If reciprocal WR1 faces disagree on any shared setting, report the pair for
+  builder review and do not choose one face as the winner or import them as two
+  unrelated doorways. A single WR1 face, or a face whose reverse exit is not
+  authored, remains a one-faced doorway; the exporter must not invent a reverse
+  face.
+- Export only authored default door state. Never inspect or export a live WR1
+  door's current open, closed, or locked state, a pending close, a key held by a
+  player, or any other runtime state.
 - WR1 room or loader-authored room inventory exports as `kind: spawnplan`
   entries targeting WR2 room refs and `itemdefinition` / `itembundle` refs.
 - WR1 `RandomItemProfile` rows do not export as a WR2 model or manifest kind.
@@ -919,6 +934,29 @@ Including `flags`, `details`, or `doors` replaces that complete collection for
 the room. The canonical YAML shown after a save includes every exit direction,
 so copy/edit/save round trips do not depend on hidden form state.
 
+The external room-manifest shape is intentionally unchanged even though WR2
+stores a canonical logical doorway internally. Each `spec.doors[]` entry is one
+directional face:
+
+- the containing room is the origin
+- `direction`, `to_room`, and `name` belong to that face
+- `key`, `destroy_key`, and `default_state` belong to the logical doorway
+
+Two entries are reciprocal faces when they connect the same two rooms in
+opposite directions and the rooms have the corresponding reverse exits. They
+share one runtime state and one set of key/default settings. Canonical export
+repeats those shared fields on both room documents so every room manifest stays
+self-contained; it does not expose a `doorway` field or require a new manifest
+kind. A face without a reciprocal entry remains a valid one-faced doorway.
+
+An apply stream that supplies both reciprocal faces must give them identical
+`key`, `destroy_key`, and `default_state` values. Conflicting values reject the
+apply atomically instead of letting document order choose a winner. Faces whose
+endpoints/directions are not truly reciprocal remain independent one-faced
+doorways. Applying only one face may intentionally change the logical doorway's
+shared settings; a later canonical export then shows those values on every
+reciprocal face.
+
 Room triggers are separate documents. Use `kind: trigger` with a room target;
 do not add a `checks`, `room_checks`, or `triggers` key to `kind: room`.
 
@@ -1266,6 +1304,12 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   authored initial state; they never address a live runtime row. New manifests
   must emit `spec.initial_state`. Runtime world/zone/room state is not accepted
   as manifest input.
+- Room door entries remain directional faces in `spec.doors`. A face's
+  destination must match that room's exit, directions cannot repeat within one
+  room, and a door cannot connect a room to itself or cross authored worlds.
+  Reciprocal faces share one canonical doorway and must agree on `key`,
+  `destroy_key`, and `default_state` when supplied together; inconsistent pairs
+  reject the complete apply rather than being resolved by document order.
 - Spawn-plan entry `initial_state`, when present, must be a mapping and every
   possible source for that entry must be a mob definition.
 - Mob-definition `initial_state`, when present, must be a mapping. It seeds new

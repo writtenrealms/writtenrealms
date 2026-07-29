@@ -255,13 +255,36 @@ class WorldGate:
         else:
             self.exit_spw(player_data_id=player_data_id)
 
-        self.player.refresh_from_db()
-        self.player.in_game = False
-        self.player.save(update_fields=['in_game'])
+        with transaction.atomic():
+            player = Player.objects.select_for_update(of=('self',)).get(
+                pk=self.player.pk,
+            )
+            from spawns.actions.doors import (
+                cancel_pending_player_door_action,
+            )
+            from spawns.events import (
+                enqueue_game_events,
+                flush_game_event_outbox,
+            )
 
-        PlayerEvent.objects.create(
-            player=self.player,
-            event=constants.PLAYER_EVENT_LOGOUT)
+            cancellation_events = cancel_pending_player_door_action(
+                player=player,
+                code="actor_logged_out",
+                message="You stop working with the door as you leave the world.",
+            )
+            player.in_game = False
+            player.save(update_fields=['in_game'])
+            PlayerEvent.objects.create(
+                player=player,
+                event=constants.PLAYER_EVENT_LOGOUT,
+            )
+            if cancellation_events:
+                enqueue_game_events(cancellation_events)
+                transaction.on_commit(
+                    flush_game_event_outbox,
+                    robust=True,
+                )
+        self.player = player
 
     def exit_spw(self, player_data_id=None):
         from worlds.services import WorldSmith

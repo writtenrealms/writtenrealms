@@ -67,9 +67,27 @@ class ResolveMoveAction:
         if not dest_room:
             raise ActionError("You cannot go that way.", code="no_exit")
 
-        door_states = door_state_lookup(player.world, [current_room.id]).get(current_room.id, {})
-        if door_states.get(direction) in ("closed", "locked"):
-            raise ActionError("The way is blocked.", code="closed_door")
+        from spawns.actions.doors import lock_door_state_for_movement
+
+        door_state = lock_door_state_for_movement(
+            runtime_world=player.world,
+            room_id=current_room.id,
+            direction=direction,
+        )
+        if door_state and door_state.state in ("closed", "locked"):
+            door_name = door_state.face.name or "door"
+            raise ActionError(
+                f"The {door_name} is {door_state.state}.",
+                code="closed_door",
+                data={
+                    "door": {
+                        "key": f"door.{door_state.face.id}",
+                        "name": door_name,
+                        "direction": door_state.face.direction,
+                        "state": door_state.state,
+                    },
+                },
+            )
 
         movement_cost = _movement_cost(dest_room)
         if player.stamina < movement_cost:

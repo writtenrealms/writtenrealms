@@ -15,10 +15,10 @@ from spawns.ability_prepare_state import (
     ability_prepare_state_events_for_players,
 )
 from spawns.actions.base import ActionResult
+from spawns.actions.doors import lock_door_state_for_movement
 from spawns.events import GameEvent
 from spawns.models import ActiveEffect, CombatEncounter, Mob, Player
 from spawns.state_payloads import (
-    door_state_lookup,
     safe_capitalize,
     serialize_char_from_mob,
     serialize_char_from_player,
@@ -285,9 +285,8 @@ def _load_tracker_rooms(
     return rooms.get(origin_room_id), rooms.get(destination_room_id)
 
 
-def _tracker_edge_is_passable(
+def _tracker_edge_is_valid(
     *,
-    player: Player,
     origin_room: Room | None,
     destination_room: Room | None,
     direction: str,
@@ -301,14 +300,7 @@ def _tracker_edge_is_passable(
         or getattr(origin_room, f"{direction}_id", None) != destination_room.id
     ):
         return False
-    door_states = door_state_lookup(player.world, [origin_room.id]).get(
-        origin_room.id,
-        {},
-    )
-    return door_states.get(direction) not in (
-        adv_consts.DOOR_STATE_CLOSED,
-        adv_consts.DOOR_STATE_LOCKED,
-    )
+    return True
 
 
 def _arrival_source_text(reverse_direction: str) -> str:
@@ -570,10 +562,9 @@ class ResolveTrackerChaseAction:
                 and int(player.health or 0) > 0
                 and player.room_id == destination_room_id
             )
-            edge_is_passable = bool(
+            edge_is_valid = bool(
                 player_is_valid
-                and _tracker_edge_is_passable(
-                    player=player,
+                and _tracker_edge_is_valid(
                     origin_room=origin_room,
                     destination_room=destination_room,
                     direction=direction,
@@ -595,7 +586,7 @@ class ResolveTrackerChaseAction:
                 source=source,
             )
             eligible_mobs: list[Mob] = []
-            if edge_is_passable and origin_room is not None:
+            if edge_is_valid and origin_room is not None:
                 eligible_mobs = [
                     mob
                     for mob in unprocessed_mobs
@@ -611,6 +602,18 @@ class ResolveTrackerChaseAction:
                         event_data=event_data,
                     )
                 ]
+
+            if eligible_mobs:
+                door_state = lock_door_state_for_movement(
+                    runtime_world=player.world,
+                    room_id=origin_room_id,
+                    direction=direction,
+                )
+                if door_state and door_state.state in (
+                    adv_consts.DOOR_STATE_CLOSED,
+                    adv_consts.DOOR_STATE_LOCKED,
+                ):
+                    eligible_mobs = []
 
             timestamp = timezone.now()
             for mob in unprocessed_mobs:

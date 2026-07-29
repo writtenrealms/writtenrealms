@@ -56,7 +56,20 @@ def run_spawn_plans_for_world(world, zone_id=None, initial=False, repopulate=Fal
         # Reset doors for MPW
         if world.is_multiplayer and should_zone_reset:
             doors = Door.objects.filter(
-                from_room__zone=zone)
+                from_room__zone=zone,
+            ).select_related("doorway", "from_room")
+            doorway_ids = list(
+                doors.order_by("doorway_id")
+                .values_list("doorway_id", flat=True)
+                .distinct()
+            )
+            from spawns.actions.doors import reset_runtime_doorways
+
+            with transaction.atomic():
+                reset_runtime_doorways(
+                    runtime_world=world,
+                    doorway_ids=doorway_ids,
+                )
             for door in doors:
                 output['doors'].append({
                     'room_id': door.from_room.id,

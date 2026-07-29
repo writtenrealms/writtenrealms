@@ -38,12 +38,14 @@ class LookHandler(CommandHandler):
     text_commands = ("look",)
     help = {
         "name": "Look",
-        "format": "look | look <target>",
+        "format": "look | look <target|direction>",
         "description": (
-            "Look at your current room, or at a specific target in it."
+            "Look at your current room, a specific target in it, or a door "
+            "in a direction."
         ),
         "examples": [
             "look",
+            "look north",
             "look soldier",
             "look sword",
         ],

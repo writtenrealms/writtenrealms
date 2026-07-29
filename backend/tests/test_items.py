@@ -1,12 +1,16 @@
+from datetime import timedelta
+
 from config import constants as adv_consts
 from builders.models import CraftMaterial, ItemDefinition, ItemSalvageYield
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from spawns.actions.items import EquipAction
+from django.utils import timezone
+from spawns.actions.items import DropAction, EquipAction
 from spawns.handlers import dispatch_command
-from spawns.models import Item
+from spawns.models import Item, PreparedGameAction
 from tests.base import WorldTestCase
 from tests.utils import capture_game_messages, dispatch_text_command
+from worlds.models import Doorway
 
 
 def create_test_item(
@@ -171,6 +175,42 @@ class TestDropCommand(WorldTestCase):
         self.assertEqual(item.container_id, self.room.id)
         message = self._message_by_type(messages, "cmd.drop.success")
         self.assertIsNotNone(message)
+
+    def test_drop_atomically_cancels_a_pending_door_action(self):
+        doorway = Doorway.objects.create(
+            world=self.world,
+            default_state=adv_consts.DOOR_STATE_OPEN,
+        )
+        prepared = PreparedGameAction.objects.create(
+            player=self.player,
+            runtime_world=self.spawn_world,
+            room=self.room,
+            doorway=doorway,
+            action_type=PreparedGameAction.ACTION_CLOSE_DOOR,
+            run_at=timezone.now() + timedelta(seconds=30),
+            request_selector="east",
+            target_direction=adv_consts.DIRECTION_EAST,
+            target_name="iron gate",
+        )
+        create_test_item(
+            self.world,
+            self.spawn_world,
+            self.player,
+            "Lantern",
+        )
+
+        result = DropAction().execute(self.player.id, "lantern")
+
+        prepared.refresh_from_db()
+        self.assertEqual(
+            prepared.status,
+            PreparedGameAction.STATUS_CANCELLED,
+        )
+        self.assertEqual(prepared.failure_code, "physical_action_replaced")
+        self.assertEqual(
+            [event.type for event in result.events[:2]],
+            ["cmd.close.cancelled", "cmd.drop.success"],
+        )
 
 
 class TestGetCommand(WorldTestCase):

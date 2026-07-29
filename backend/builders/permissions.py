@@ -7,6 +7,9 @@ class IsWorldBuilder(permissions.BasePermission):
     "ensures the requester is a builder for the requested world object"
 
     def has_permission(self, request, view):
+        # Views use this value in get_queryset/get_object. Initialize it even
+        # for public-world early returns and anonymous requests.
+        view._builder_rank = 0
 
         # Special case for WOT API
         if (view.world.is_public

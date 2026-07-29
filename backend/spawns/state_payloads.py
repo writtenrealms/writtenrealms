@@ -9,7 +9,8 @@ import json
 from datetime import timedelta
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from django.db.models import Prefetch
+from django.db.models import F, OuterRef, Prefetch, Subquery
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from builders.models import AbilityDefinition, CraftMaterial, ItemSalvageYield
@@ -679,19 +680,81 @@ def door_state_lookup(world: World, room_ids: Iterable[int]) -> Dict[int, Dict[s
     if not room_ids:
         return {}
 
-    door_states = {
-        state.door_id: state.state
-        for state in DoorState.objects.filter(world=world, door__from_room_id__in=room_ids).select_related(
-            "door"
+    doors = list(
+        Door.objects.filter(from_room_id__in=room_ids).values(
+            "from_room_id",
+            "direction",
+            "doorway_id",
+            "doorway__default_state",
         )
-    }
+    )
+    doorway_ids = {door["doorway_id"] for door in doors}
+    door_states = dict(
+        DoorState.objects.filter(
+            world=world,
+            doorway_id__in=doorway_ids,
+        ).values_list("doorway_id", "state")
+    )
     lookup: Dict[int, Dict[str, str]] = {}
-    for door in Door.objects.filter(from_room_id__in=room_ids).values(
-        "id", "from_room_id", "direction", "default_state"
-    ):
-        state = door_states.get(door["id"], door["default_state"])
+    for door in doors:
+        state = door_states.get(
+            door["doorway_id"],
+            door["doorway__default_state"],
+        )
         lookup.setdefault(door["from_room_id"], {})[door["direction"]] = state
     return lookup
+
+
+def directional_door_payload(
+    world: World,
+    room_id: int,
+    direction: str,
+) -> Optional[dict]:
+    """Return one room-facing door and its effective state without materializing it."""
+    if not room_id or direction not in adv_consts.DIRECTIONS:
+        return None
+
+    authored_world_id = world.context_id
+    if authored_world_id is None:
+        return None
+
+    runtime_state = (
+        DoorState.objects.filter(
+            world_id=world.id,
+            doorway_id=OuterRef("doorway_id"),
+        )
+        .values("state")[:1]
+    )
+    door = (
+        Door.objects.filter(
+            from_room_id=room_id,
+            direction=direction,
+            doorway__world_id=authored_world_id,
+        )
+        .annotate(
+            effective_state=Coalesce(
+                Subquery(runtime_state),
+                F("doorway__default_state"),
+            )
+        )
+        .values(
+            "id",
+            "name",
+            "direction",
+            "effective_state",
+        )
+        .first()
+    )
+    if door is None:
+        return None
+
+    return {
+        "id": door["id"],
+        "key": f"door.{door['id']}",
+        "name": door["name"] or "door",
+        "direction": door["direction"],
+        "state": door["effective_state"],
+    }
 
 
 def build_map_payload(

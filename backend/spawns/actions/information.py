@@ -12,6 +12,7 @@ from spawns.models import CombatEncounter, Mob, Player
 from spawns.state_payloads import (
     build_map_payload,
     collect_map_room_ids,
+    directional_door_payload,
     door_state_lookup,
     get_player_with_related,
     is_player_visible_on_who_list,
@@ -25,6 +26,22 @@ from spawns.state_payloads import (
 from quests.services.interactions import room_mob_quest_indicator_map
 from quests.services.room_items import find_quest_room_item_target
 from spawns.text_output import render_event_text
+
+
+_LOOK_DIRECTION_ALIASES = {
+    direction: direction
+    for direction in adv_consts.DIRECTIONS
+}
+_LOOK_DIRECTION_ALIASES.update(
+    {
+        direction[0]: direction
+        for direction in adv_consts.DIRECTIONS
+    }
+)
+
+
+def _look_direction(target_selector: str) -> str | None:
+    return _LOOK_DIRECTION_ALIASES.get(target_selector.strip().lower())
 
 
 def _normalize_roll_target(target: str | None) -> str:
@@ -55,6 +72,35 @@ class LookAction:
         normalized_target = str(target_selector or "").strip()
 
         if normalized_target:
+            direction = _look_direction(normalized_target)
+            if direction:
+                door_target = directional_door_payload(
+                    world,
+                    room.id,
+                    direction,
+                )
+                if door_target is not None:
+                    data = {
+                        "actor": actor_payload.model_dump(),
+                        "target": door_target,
+                        "target_type": "door",
+                    }
+                    text = render_event_text(
+                        "cmd.look.success",
+                        data,
+                        viewer=player,
+                    )
+                    return ActionResult(
+                        events=[
+                            GameEvent(
+                                type="cmd.look.success",
+                                recipients=[player.key],
+                                data=data,
+                                text=text,
+                            )
+                        ]
+                    )
+
             char_target = find_room_char_target(
                 room,
                 normalized_target,

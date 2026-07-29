@@ -381,21 +381,27 @@ class APIExtractor:
     # Single Player World component
 
     def save_doors(self):
-        for chunk in self.chunks.get('door', []):
-            try:
-                door = Door.objects.get(
-                    from_room_id=chunk['room_id'],
-                    direction=chunk['direction'])
-                door_state = door.door_states.get(
-                    world=self.world)
+        from spawns.actions.doors import lock_runtime_door_state
+
+        with transaction.atomic():
+            for chunk in self.chunks.get('door', []):
+                try:
+                    door = Door.objects.select_related("doorway").get(
+                        from_room_id=chunk['room_id'],
+                        direction=chunk['direction'],
+                    )
+                except Door.DoesNotExist:
+                    continue
+                door_state = lock_runtime_door_state(
+                    runtime_world=self.world,
+                    doorway=door.doorway,
+                )
                 if door_state.state != chunk['state']:
                     door_state.state = chunk['state']
-                    door_state.save()
-                # if door.current_state != chunk['state']:
-                #     door.current_state = chunk['state']
-                #     door.save()
-            except Door.DoesNotExist:
-                pass
+                    door_state.revision += 1
+                    door_state.save(
+                        update_fields=["state", "revision", "modified_ts"]
+                    )
 
     def save_facts(self):
         for chunk in self.chunks.get('facts', []):

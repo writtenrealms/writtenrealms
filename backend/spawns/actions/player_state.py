@@ -45,12 +45,20 @@ class RestAction:
         if _active_player_encounter_exists(player) or actor_is_combat_tagged(player):
             raise ActionError("You cannot rest in combat.", code="in_combat")
 
+        from spawns.actions.doors import cancel_pending_player_door_action
+
+        cancellation_events = cancel_pending_player_door_action(
+            player=player,
+            code="physical_action_replaced",
+            message="You stop working with the door to rest.",
+        )
         if player.state != adv_consts.CHARACTER_STATE_RESTING:
             player.state = adv_consts.CHARACTER_STATE_RESTING
             player.save(update_fields=["state"])
 
         return ActionResult(
             events=[
+                *cancellation_events,
                 _state_event(
                     player=player,
                     command_type="rest",
@@ -63,9 +71,17 @@ class RestAction:
 class StandAction:
     def execute(self, player_id: int) -> ActionResult:
         player = Player.objects.select_for_update().get(pk=player_id)
+        from spawns.actions.doors import cancel_pending_player_door_action
+
+        cancellation_events = cancel_pending_player_door_action(
+            player=player,
+            code="physical_action_replaced",
+            message="You stop working with the door to stand.",
+        )
         stand_player(player)
         return ActionResult(
             events=[
+                *cancellation_events,
                 _state_event(
                     player=player,
                     command_type="stand",

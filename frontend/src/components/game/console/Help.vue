@@ -96,6 +96,16 @@
         </div>
       </div>
 
+      <div class="cmd-group door-commands">
+        <div class="group-title">Doors</div>
+        <div class="cmds">
+          <div class="cmd" @click="cmdHelp('open')">open</div>
+          <div class="cmd" @click="cmdHelp('close')">close</div>
+          <div class="cmd" @click="cmdHelp('lock')">lock</div>
+          <div class="cmd" @click="cmdHelp('unlock')">unlock</div>
+        </div>
+      </div>
+
       <div class="cmd-group communication-commands">
         <div class="group-title">Communication</div>
         <div class="cmds">
@@ -201,6 +211,7 @@
             <div class="cmd" @click="cmdHelp('/open')">/open</div>
             <div class="cmd" @click="cmdHelp('/close')">/close</div>
             <div class="cmd" @click="cmdHelp('/lock')">/lock</div>
+            <div class="cmd" @click="cmdHelp('/unlock')">/unlock</div>
             <div class="cmd" @click="cmdHelp('/chat')">/chat</div>
             <div class="cmd" @click="cmdHelp('/take')">/take</div>
             <div class="cmd" @click="cmdHelp('/kill')">/kill</div>

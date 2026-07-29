@@ -2,10 +2,10 @@ from unittest.mock import patch
 
 from builders.models import Path, PathRoom, SpawnPlan, SpawnPlanRun, SpawnPlacement
 from config import constants as api_consts
-from spawns.models import CombatEncounter, Mob
+from spawns.models import CombatEncounter, DoorState, Mob
 from spawns.tasks import run_mob_roaming
 from tests.base import WorldTestCase
-from worlds.models import Room, RoomFlag
+from worlds.models import Door, Doorway, Room, RoomFlag
 from tests.utils import capture_game_messages
 
 
@@ -26,6 +26,65 @@ class TestMobRoaming(WorldTestCase):
             y=y,
             z=z,
         )
+
+    def _cohort(self):
+        plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug="sparring-patrols",
+            name="Sparring Patrols",
+        )
+        run = SpawnPlanRun.objects.create(
+            spawn_world=self.spawn_world,
+            plan=plan,
+            seed="test",
+        )
+        leader_placement = SpawnPlacement.objects.create(
+            run=run,
+            entry_slug="sparabaras",
+            slot_index=0,
+            room=self.room,
+            source_type="mobdefinition",
+            source_slug="sparabara",
+            state={
+                "cohort_slug": "sparring-path-patrol",
+                "cohort_role": "leader",
+            },
+        )
+        follower_placement = SpawnPlacement.objects.create(
+            run=run,
+            entry_slug="archers",
+            slot_index=0,
+            room=self.room,
+            source_type="mobdefinition",
+            source_slug="persian-archer",
+            parent_entry_slug="sparabaras",
+            parent_slot_index=0,
+            state={
+                "cohort_slug": "sparring-path-patrol",
+                "cohort_role": "follower",
+            },
+        )
+        group_id = "cohort:sparring-path-patrol:0"
+        leader = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="a sparabara",
+            keywords="sparabara",
+            roams=self.zone,
+            group_id=group_id,
+            spawn_placement=leader_placement,
+        )
+        follower = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="a persian archer",
+            keywords="archer",
+            roams=self.zone,
+            group_id=group_id,
+            spawn_placement=follower_placement,
+        )
+        return leader, follower
 
     def test_zone_roaming_moves_mob_with_roams_target(self):
         destination = self._room(name="East Room", x=1, y=0)
@@ -65,6 +124,45 @@ class TestMobRoaming(WorldTestCase):
                 for msg in messages
             )
         )
+
+    def test_roaming_rechecks_door_after_selecting_exit(self):
+        destination = self._room(name="East Room", x=1, y=0)
+        self.room.east = destination
+        self.room.save(update_fields=["east"])
+        doorway = Doorway.objects.create(
+            world=self.world,
+            default_state=api_consts.DOOR_STATE_OPEN,
+        )
+        Door.objects.create(
+            doorway=doorway,
+            direction=api_consts.DIRECTION_EAST,
+            from_room=self.room,
+            to_room=destination,
+        )
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="a cautious patrol",
+            roams=self.zone,
+        )
+
+        def close_door_then_choose(options):
+            DoorState.objects.update_or_create(
+                doorway=doorway,
+                world=self.spawn_world,
+                defaults={"state": api_consts.DOOR_STATE_CLOSED},
+            )
+            return options[0]
+
+        with patch(
+            "spawns.tasks.random.choice",
+            side_effect=close_door_then_choose,
+        ):
+            roamed = run_mob_roaming()
+
+        mob.refresh_from_db()
+        self.assertEqual(roamed, 0)
+        self.assertEqual(mob.room_id, self.room.id)
 
     def test_roaming_notifications_from_same_heartbeat_share_group(self):
         destination = self._room(name="East Room", x=1, y=0)
@@ -276,62 +374,7 @@ class TestMobRoaming(WorldTestCase):
         destination = self._room(name="East Room", x=1, y=0)
         self.room.east = destination
         self.room.save(update_fields=["east"])
-        plan = SpawnPlan.objects.create(
-            world=self.world,
-            zone=self.zone,
-            slug="sparring-patrols",
-            name="Sparring Patrols",
-        )
-        run = SpawnPlanRun.objects.create(
-            spawn_world=self.spawn_world,
-            plan=plan,
-            seed="test",
-        )
-        leader_placement = SpawnPlacement.objects.create(
-            run=run,
-            entry_slug="sparabaras",
-            slot_index=0,
-            room=self.room,
-            source_type="mobdefinition",
-            source_slug="sparabara",
-            state={
-                "cohort_slug": "sparring-path-patrol",
-                "cohort_role": "leader",
-            },
-        )
-        follower_placement = SpawnPlacement.objects.create(
-            run=run,
-            entry_slug="archers",
-            slot_index=0,
-            room=self.room,
-            source_type="mobdefinition",
-            source_slug="persian-archer",
-            parent_entry_slug="sparabaras",
-            parent_slot_index=0,
-            state={
-                "cohort_slug": "sparring-path-patrol",
-                "cohort_role": "follower",
-            },
-        )
-        group_id = "cohort:sparring-path-patrol:0"
-        leader = Mob.objects.create(
-            world=self.spawn_world,
-            room=self.room,
-            name="a sparabara",
-            keywords="sparabara",
-            roams=self.zone,
-            group_id=group_id,
-            spawn_placement=leader_placement,
-        )
-        follower = Mob.objects.create(
-            world=self.spawn_world,
-            room=self.room,
-            name="a persian archer",
-            keywords="archer",
-            roams=self.zone,
-            group_id=group_id,
-            spawn_placement=follower_placement,
-        )
+        leader, follower = self._cohort()
         CombatEncounter.objects.create(
             world=self.spawn_world,
             room=self.room,
@@ -341,6 +384,42 @@ class TestMobRoaming(WorldTestCase):
         )
 
         roamed = run_mob_roaming(active_combat_mob_ids={follower.id})
+
+        leader.refresh_from_db()
+        follower.refresh_from_db()
+        self.assertEqual(roamed, 0)
+        self.assertEqual(leader.room_id, self.room.id)
+        self.assertEqual(follower.room_id, self.room.id)
+
+    def test_cohort_roaming_rechecks_door_after_selecting_exit(self):
+        destination = self._room(name="East Room", x=1, y=0)
+        self.room.east = destination
+        self.room.save(update_fields=["east"])
+        doorway = Doorway.objects.create(
+            world=self.world,
+            default_state=api_consts.DOOR_STATE_OPEN,
+        )
+        Door.objects.create(
+            doorway=doorway,
+            direction=api_consts.DIRECTION_EAST,
+            from_room=self.room,
+            to_room=destination,
+        )
+        leader, follower = self._cohort()
+
+        def close_door_then_choose(options):
+            DoorState.objects.update_or_create(
+                doorway=doorway,
+                world=self.spawn_world,
+                defaults={"state": api_consts.DOOR_STATE_CLOSED},
+            )
+            return options[0]
+
+        with patch(
+            "spawns.tasks.random.choice",
+            side_effect=close_door_then_choose,
+        ):
+            roamed = run_mob_roaming()
 
         leader.refresh_from_db()
         follower.refresh_from_db()

@@ -13,6 +13,7 @@ from django.utils.text import slugify
 from rest_framework import serializers
 
 from builders import manifests as builder_manifests
+from builders.doors import DoorFaceSpec, replace_room_door_faces
 from builders.models import (
     AbilityDefinition,
     CraftMaterial,
@@ -431,6 +432,22 @@ def serialize_zone_payload(
     return payload
 
 
+def _room_door_faces_for_export(room: Room) -> list[Door]:
+    cached_faces = getattr(
+        room,
+        "_prefetched_objects_cache",
+        {},
+    ).get("doors_from")
+    if cached_faces is None:
+        cached_faces = list(
+            room.doors_from.select_related(
+                "doorway__key",
+                "to_room",
+            )
+        )
+    return sorted(cached_faces, key=lambda door: (door.direction, door.id))
+
+
 def _serialize_room_manifest(room: Room) -> dict[str, Any]:
     return {
         "kind": ROOM_MANIFEST_KIND,
@@ -468,7 +485,7 @@ def _serialize_room_manifest(room: Room) -> dict[str, Any]:
                     "destroy_key": bool(door.destroy_key),
                     "default_state": door.default_state,
                 }
-                for door in room.doors_from.all().select_related("key", "to_room").order_by("direction", "id")
+                for door in _room_door_faces_for_export(room)
             ],
             **(
                 {
@@ -1284,8 +1301,13 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             for room in world.rooms.prefetch_related(
                 "flags",
                 "details",
-                "doors_from__key",
-                "doors_from__to_room",
+                Prefetch(
+                    "doors_from",
+                    queryset=Door.objects.select_related(
+                        "doorway__key",
+                        "to_room",
+                    ).order_by("direction", "id"),
+                ),
             ).select_related(
                 "zone",
                 "north",
@@ -1406,6 +1428,59 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
         elif kind == builder_manifests.TRIGGER_MANIFEST_KIND:
             counts["triggers"] += 1
     return counts
+
+
+def validate_room_door_stream_consistency(documents: list[dict[str, Any]]) -> None:
+    """Reject conflicting reciprocal door settings before a batch mutates data."""
+    faces: dict[tuple[str, str, str], tuple[str, bool, str]] = {}
+    for document in documents:
+        if parse_document_kind(document) != ROOM_MANIFEST_KIND:
+            continue
+        metadata = _manifest_metadata(document)
+        spec = _manifest_spec(document)
+        origin_ref = str(metadata.get("ref") or "").strip().lower()
+        door_entries = spec.get("doors")
+        if not origin_ref or not isinstance(door_entries, list):
+            continue
+        for door in door_entries:
+            if not isinstance(door, dict):
+                continue
+            direction = str(door.get("direction") or "").strip().lower()
+            to_room_ref = str(door.get("to_room") or "").strip().lower()
+            if direction not in adv_consts.REVERSE_DIRECTIONS or not to_room_ref:
+                continue
+            faces[(origin_ref, to_room_ref, direction)] = (
+                str(door.get("key") or "").strip().lower(),
+                bool(door.get("destroy_key")),
+                str(
+                    door.get(
+                        "default_state",
+                        adv_consts.DOOR_STATE_CLOSED,
+                    )
+                ).strip().lower(),
+            )
+
+    checked: set[tuple[str, str, str]] = set()
+    for face, config in faces.items():
+        if face in checked:
+            continue
+        origin_ref, to_room_ref, direction = face
+        reverse = (
+            to_room_ref,
+            origin_ref,
+            adv_consts.REVERSE_DIRECTIONS[direction],
+        )
+        reverse_config = faces.get(reverse)
+        if reverse_config is None:
+            continue
+        checked.update((face, reverse))
+        if config != reverse_config:
+            raise serializers.ValidationError(
+                "Reciprocal room door manifests must use identical key, "
+                "destroy_key, and default_state settings. Conflicting faces: "
+                f"{origin_ref} {direction} and "
+                f"{to_room_ref} {reverse[2]}."
+            )
 
 
 def serialize_world_export_payload(world: World) -> dict[str, Any]:
@@ -2299,7 +2374,8 @@ def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room
             doors = spec.get("doors") or []
             if not isinstance(doors, list):
                 raise serializers.ValidationError("spec.doors must be a list.")
-            Door.objects.filter(from_room=room).delete()
+            door_specs: list[DoorFaceSpec] = []
+            seen_directions: set[str] = set()
             for door in doors:
                 if not isinstance(door, dict):
                     raise serializers.ValidationError("spec.doors entries must be mappings.")
@@ -2308,30 +2384,39 @@ def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room
                     choices=adv_consts.DIRECTIONS,
                     field_name="spec.doors.direction",
                 )
+                if direction in seen_directions:
+                    raise serializers.ValidationError(
+                        f"spec.doors contains duplicate direction '{direction}'."
+                    )
+                seen_directions.add(direction)
                 to_room_ref = str(door.get("to_room") or "").strip()
                 if not to_room_ref:
                     raise serializers.ValidationError("spec.doors.to_room is required.")
                 key_ref = str(door.get("key") or "").strip()
-                Door.objects.create(
+                key = (
+                    _get_item_definition(
+                        world=world,
+                        value=key_ref,
+                        field_name="spec.doors.key",
+                    )
+                    if key_ref else None
+                )
+                door_specs.append(DoorFaceSpec(
                     direction=direction,
-                    from_room=room,
                     to_room=_get_or_create_room(world=world, room_ref=to_room_ref),
                     name=str(door.get("name") or "door"),
-                    key=(
-                        _get_item_definition(
-                            world=world,
-                            value=key_ref,
-                            field_name="spec.doors.key",
-                        )
-                        if key_ref else None
-                    ),
+                    key_id=key.id if key else None,
                     destroy_key=bool(door.get("destroy_key")),
                     default_state=builder_manifests._coerce_choice(
                         door.get("default_state", adv_consts.DOOR_STATE_CLOSED),
                         choices=adv_consts.DOOR_STATES,
                         field_name="spec.doors.default_state",
                     ),
-                )
+                ))
+            try:
+                replace_room_door_faces(room=room, specs=door_specs)
+            except ValueError as exc:
+                raise serializers.ValidationError(str(exc))
 
     return room, created
 

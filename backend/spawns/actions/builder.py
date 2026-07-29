@@ -2906,6 +2906,7 @@ class TransferAction:
 
         pvp_finished_encounter_ids: list[int] = []
         pvp_cleanup_events: list[GameEvent] = []
+        door_cancellation_events: list[GameEvent] = []
         if target_ref.target_type == "player":
             target_room_id = (
                 Player.objects.filter(
@@ -2950,6 +2951,22 @@ class TransferAction:
                     raise ActionError(
                         "The target's combat state changed. Try the transfer again.",
                         code="target_busy",
+                    )
+
+                if moved and isinstance(target, Player):
+                    from spawns.actions.doors import (
+                        cancel_pending_player_door_action,
+                    )
+
+                    door_cancellation_events.extend(
+                        cancel_pending_player_door_action(
+                            player=target,
+                            code="actor_transferred",
+                            message=(
+                                "You stop working with the door as you are "
+                                "transferred."
+                            ),
+                        )
                     )
 
                 finished_encounter_ids = list(pvp_finished_encounter_ids)
@@ -3064,6 +3081,7 @@ class TransferAction:
             "destination_room": destination_payload,
         }
         events: list[GameEvent] = [
+            *door_cancellation_events,
             GameEvent(
                 type="cmd./transfer.success",
                 recipients=[actor.key],
@@ -3131,6 +3149,7 @@ class JumpAction:
             raise ActionError("Usage: /jump <room_id|direction>", code="invalid_args")
         jump_direction = _normalize_jump_direction(normalized_selector)
         room_selector_id = None if jump_direction else _parse_room_selector(normalized_selector)
+        door_cancellation_events: list[GameEvent] = []
 
         with transaction.atomic():
             player = Player.objects.select_for_update().get(pk=player_id)
@@ -3157,6 +3176,18 @@ class JumpAction:
                     raise ActionError("You cannot jump that way.", code="no_exit")
                 raise ActionError("Invalid room ID.", code="invalid_room")
 
+            if target_room.id != origin_room_id:
+                from spawns.actions.doors import (
+                    cancel_pending_player_door_action,
+                )
+
+                door_cancellation_events.extend(
+                    cancel_pending_player_door_action(
+                        player=player,
+                        code="actor_moved",
+                        message="You stop working with the door as you jump.",
+                    )
+                )
             player.room_id = target_room.id
             player.last_action_ts = timezone.now()
             player.save(update_fields=["room", "last_action_ts"])
@@ -3188,7 +3219,7 @@ class JumpAction:
         room_payload = _get_single_room_payload(updated_player).model_dump()
         actor_payload = serialize_actor(updated_player, updated_player.room).model_dump()
 
-        events: list[GameEvent] = []
+        events: list[GameEvent] = list(door_cancellation_events)
         actor_name = updated_player.name
         actor_char = serialize_char_from_player(updated_player).model_dump()
 

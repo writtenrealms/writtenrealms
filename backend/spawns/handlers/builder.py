@@ -401,6 +401,8 @@ def _parse_transfer_args(
 class LoadHandler(CommandHandler):
     command_type = "/load"
     text_commands = ("/load",)
+    # Preserve the long-standing shorthand now that /lock also begins /lo.
+    text_aliases = {"/lo": "/load"}
     builder_only = True
     allow_script_source = True
     supported_actor_types = ("player", "mob", "room")

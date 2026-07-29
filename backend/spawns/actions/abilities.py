@@ -1722,6 +1722,15 @@ class AbilityAction:
             death_config = player.world.effective_config
 
             validate_ability_ready(player, ability)
+            from spawns.actions.doors import (
+                cancel_pending_player_door_action_durably,
+            )
+
+            cancel_pending_player_door_action_durably(
+                player=player,
+                code="physical_action_replaced",
+                message="You stop working with the door to use an ability.",
+            )
 
             target_type = (ability.target or {}).get("type") or "hostile"
             active_encounter = _active_player_encounter(player)

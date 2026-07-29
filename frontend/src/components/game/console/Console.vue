@@ -107,6 +107,7 @@ const consoleMessage = (message) => {
 
   if (type === "cmd.look.success" && message.data.target_type === "item") return LookItem;
   if (type === "cmd.look.success" && message.data.target_type === "char") return LookChar;
+  if (type === "cmd.look.success" && message.data.target_type === "door") return Message;
   if (type === "cmd.look.success" && message.data.target_type === "room_detail") return Message;
 
   if (type === "cmd.look.success" ||

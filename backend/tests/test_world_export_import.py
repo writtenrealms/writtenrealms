@@ -4,6 +4,7 @@ from django.contrib.contenttypes.models import ContentType
 
 import yaml
 
+from rest_framework import serializers
 from rest_framework.reverse import reverse
 
 from builders import world_export as builder_world_export
@@ -27,7 +28,15 @@ from core.scoped_state import (
 )
 from quests.models import QuestArcTemplate, QuestTemplate
 from tests.base import WorldTestCase
-from worlds.models import Door, Room, RoomDetail, RoomFlag, WorldConfig, Zone
+from worlds.models import (
+    Door,
+    Doorway,
+    Room,
+    RoomDetail,
+    RoomFlag,
+    WorldConfig,
+    Zone,
+)
 
 
 class AuthenticatedBuilderWorldTestCase(WorldTestCase):
@@ -182,14 +191,18 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             name="a growing barley plant",
         )
 
+        doorway = Doorway.objects.create(
+            world=self.world,
+            key=self.brass_key,
+            destroy_key=False,
+            default_state=adv_consts.DOOR_STATE_CLOSED,
+        )
         Door.objects.create(
+            doorway=doorway,
             direction="east",
             from_room=self.start_room,
             to_room=self.harbor_room,
             name="harbor gate",
-            key=self.brass_key,
-            destroy_key=False,
-            default_state=adv_consts.DOOR_STATE_CLOSED,
         )
 
         self.quartermaster = MobDefinition.objects.create(
@@ -566,6 +579,43 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         target_docs = [doc for doc in yaml.safe_load_all(target_export_resp.data["yaml"]) if doc is not None]
 
         self.assertEqual(source_docs, target_docs)
+
+    def test_batch_rejects_conflicting_reciprocal_door_settings(self):
+        room_a = "room@0,0,0"
+        room_b = "room@10,0,0"
+        manifests = [
+            {
+                "kind": "room",
+                "metadata": {"ref": room_a},
+                "spec": {
+                    "doors": [{
+                        "direction": "east",
+                        "to_room": room_b,
+                        "key": "itemdefinition.brass_key",
+                        "destroy_key": False,
+                        "default_state": "closed",
+                    }],
+                },
+            },
+            {
+                "kind": "room",
+                "metadata": {"ref": room_b},
+                "spec": {
+                    "doors": [{
+                        "direction": "west",
+                        "to_room": room_a,
+                        "key": "itemdefinition.brass_key",
+                        "destroy_key": True,
+                        "default_state": "locked",
+                    }],
+                },
+            },
+        ]
+
+        with self.assertRaises(serializers.ValidationError):
+            builder_world_export.validate_room_door_stream_consistency(
+                manifests
+            )
 
     def test_world_export_serializes_portable_room_refs_inside_quests(self):
         resp = self.client.get(self.export_ep)

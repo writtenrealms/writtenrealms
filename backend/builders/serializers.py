@@ -94,9 +94,15 @@ from builders.models import (
     Procession)
 from core.db import qs_by_pks
 from core.serializers import KeyNameSerializer, ReferenceField, AuthorField
+from builders.doors import (
+    DoorFaceSpec,
+    delete_door_faces,
+    remove_door_face,
+    upsert_door_face,
+)
 from spawns import serializers as spawn_serializers
 from spawns import trigger_matcher
-from spawns.models import Player, DoorState, PlayerConfig, Mob, Item, Equipment
+from spawns.models import Player, PlayerConfig, Mob, Item, Equipment
 from system.models import Nexus
 from system.policies import get_platform_policy
 from users.models import User
@@ -441,6 +447,7 @@ class WorldSerializer(serializers.ModelSerializer):
                 'Cannot create an instance of a singleplayer world.')
         return instance_of
 
+    @transaction.atomic
     def create(self, validated_data):
         if 'author' not in validated_data:
             validated_data['author'] = self.context['request'].user
@@ -1559,7 +1566,14 @@ class RoomBuilderSerializer(serializers.ModelSerializer):
 
     def get_doors(self, room):
         doors = {}
-        doors_data = RoomDoorSerializer(room.doors_from.all(), many=True).data
+        doors_data = RoomDoorSerializer(
+            room.doors_from.select_related(
+                "doorway__key",
+                "from_room",
+                "to_room",
+            ),
+            many=True,
+        ).data
         for door_data in doors_data:
             doors[door_data['direction']] = door_data
         return doors
@@ -1750,15 +1764,43 @@ class RoomDirActionSerializer(serializers.Serializer):
                      or room.get_inbound_exit_room(direction))
         if not exit_room:
             raise ValueError("No room to connect to.")
+
+        reverse_direction = adv_consts.REVERSE_DIRECTIONS[direction]
+        existing_face = (
+            Door.objects.select_related("doorway", "doorway__key")
+            .filter(from_room=room, direction=direction)
+            .first()
+        )
+        reverse_face = (
+            Door.objects.select_related("doorway", "doorway__key")
+            .filter(
+                from_room=exit_room,
+                direction=reverse_direction,
+                to_room=room,
+            )
+            .first()
+        )
         setattr(room, direction, exit_room)
         room.save()
-        setattr(exit_room, adv_consts.REVERSE_DIRECTIONS[direction], room)
+        setattr(exit_room, reverse_direction, room)
         exit_room.save()
 
-        # If there were doors (which presumably would only happen if
-        # previously we were in a one-way scenario), remove them.
-        room.doors_from.all().delete()
-        room.doors_to.all().delete()
+        # Preserve an existing one-way face and add/merge its reciprocal
+        # counterpart. Changing exit topology must not discard door content.
+        source_face = existing_face or reverse_face
+        if source_face is not None:
+            upsert_door_face(
+                room=room,
+                spec=DoorFaceSpec(
+                    direction=direction,
+                    name=source_face.name,
+                    to_room=exit_room,
+                    key_id=source_face.key_id,
+                    destroy_key=source_face.destroy_key,
+                    default_state=source_face.default_state,
+                ),
+                create_reverse=True,
+            )
 
         return exit_room
 
@@ -1774,8 +1816,13 @@ class RoomDirActionSerializer(serializers.Serializer):
         setattr(exit_room, adv_consts.REVERSE_DIRECTIONS[direction], None)
         exit_room.save()
 
-        # If there was a door going from the exit room to the room, remove it
-        room.doors_to.all().delete()
+        # Only the removed reverse edge loses its face. Other inbound doors
+        # in either room are unrelated authored content.
+        remove_door_face(
+            room=exit_room,
+            direction=adv_consts.REVERSE_DIRECTIONS[direction],
+            remove_reverse=False,
+        )
 
         return exit_room
 
@@ -1786,22 +1833,22 @@ class RoomDirActionSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 'No room to disconnect from.')
 
-        # If there are doors, remove them
-        Door.objects.filter(
-            from_room=room,
-            to_room=exit_room).delete()
-        Door.objects.filter(
-            from_room=exit_room,
-            to_room=room).delete()
+        # Remove only the two faces attached to this edge.
+        remove_door_face(
+            room=room,
+            direction=direction,
+            remove_reverse=False,
+        )
+        remove_door_face(
+            room=exit_room,
+            direction=adv_consts.REVERSE_DIRECTIONS[direction],
+            remove_reverse=False,
+        )
 
         setattr(room, direction, None)
         room.save()
         setattr(exit_room, adv_consts.REVERSE_DIRECTIONS[direction], None)
         exit_room.save()
-
-        # Clear doors
-        room.doors_from.all().delete()
-        room.doors_to.all().delete()
 
         return exit_room
 
@@ -1908,7 +1955,15 @@ class RoomDoorSerializer(serializers.ModelSerializer):
 
     from_room = ReferenceField()
     to_room = ReferenceField()
-    key = ReferenceField(required=False, allow_null=True)
+    key = ReferenceField(source="doorway.key", read_only=True)
+    default_state = serializers.CharField(
+        source="doorway.default_state",
+        read_only=True,
+    )
+    destroy_key = serializers.BooleanField(
+        source="doorway.destroy_key",
+        read_only=True,
+    )
 
     class Meta:
         model = Door
@@ -1939,10 +1994,10 @@ class RoomSetDoorSerializer(serializers.Serializer):
 
     def validate_name(self, name):
         if name:
-            name = name.split()[0]
-            return name.lower()
+            return " ".join(name.split()).lower()
         return name
 
+    @transaction.atomic
     def create(self, validated_data):
         # See if there is already a door defined in that direction
         direction = validated_data['direction']
@@ -1952,78 +2007,25 @@ class RoomSetDoorSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 "Room has no exit in the specified direction.")
 
-        # Set door to exit
+        key = validated_data.get("key")
         try:
-            door = Door.objects.get(
-                from_room=self.room,
-                direction=direction)
-            if door.to_room != to_room:
-                door.to_room = to_room
-            if validated_data.get('name'):
-                door.name = validated_data['name']
-        except Door.DoesNotExist:
-            door = Door.objects.create(
-                from_room=self.room,
-                direction=direction,
-                to_room=to_room,
-                name=validated_data['name'])
-
-        if validated_data.get('key'):
-            door.key = validated_data['key']
-        else:
-            door.key = None
-        if validated_data.get('destroy_key'):
-            door.destroy_key = validated_data['destroy_key']
-        else:
-            door.destroy_key = False
-        if validated_data.get('default_state'):
-                door.default_state = validated_data['default_state']
-        door.save()
-
-        spawned_spws = self.room.world.spawned_worlds.filter(
-            is_multiplayer=False)
-        # For SPWs, set the door state
-        for spawn_world in spawned_spws:
-            try:
-                door_state = DoorState.objects.get(
-                    door=door,
-                    world=spawn_world)
-            except DoorState.DoesNotExist:
-                door_state = DoorState.objects.create(
-                    door=door,
-                    world=spawn_world,
-                    state=door.default_state)
-
-        # Is there a reverse connection?
-        reverse_door = None
-        if getattr(to_room, adv_consts.REVERSE_DIRECTIONS[direction], None):
-            try:
-                reverse_door = Door.objects.get(
-                    from_room=to_room,
-                    to_room=self.room)
-            except Door.DoesNotExist:
-                reverse_door = Door.objects.create(
-                    from_room=to_room,
-                    to_room=self.room,
-                    direction=adv_consts.REVERSE_DIRECTIONS[direction],
-                    name=validated_data.get('name'),
-                    default_state=validated_data['default_state'])
-                if validated_data.get('key'):
-                    reverse_door.key = validated_data['key']
-                if validated_data.get('destroy_key'):
-                    reverse_door.destroy_key = validated_data['destroy_key']
-                reverse_door.save()
-
-            for spawn_world in spawned_spws:
-                try:
-                    door_state = DoorState.objects.get(
-                        door=reverse_door,
-                        world=spawn_world)
-                except DoorState.DoesNotExist:
-                    door_state = DoorState.objects.create(
-                        door=reverse_door,
-                        world=spawn_world,
-                        state=reverse_door.default_state)
+            door, reverse_door = upsert_door_face(
+                room=self.room,
+                spec=DoorFaceSpec(
+                    direction=direction,
+                    name=validated_data.get("name") or "door",
+                    to_room=to_room,
+                    key_id=key.id if key else None,
+                    destroy_key=bool(validated_data.get("destroy_key")),
+                    default_state=validated_data.get(
+                        "default_state",
+                        adv_consts.DOOR_STATE_CLOSED,
+                    ),
+                ),
+                create_reverse=True,
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc))
 
         return {
             'door': door,

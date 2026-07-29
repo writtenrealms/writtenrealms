@@ -7,7 +7,7 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from spawns.models import CombatEncounter, DoorState, Mob
 from tests.base import WorldTestCase
-from worlds.models import Door, RoomFlag
+from worlds.models import Door, Doorway, RoomFlag
 from tests.utils import (
     apply_basic_stat_system,
     capture_game_messages,
@@ -1033,11 +1033,15 @@ class TestMobTracker(WorldTestCase):
     def test_door_closed_before_chase_resolution_leaves_tracker_behind(self):
         tracker = self._mob()
         self._encounter(tracker)
-        door = Door.objects.create(
+        doorway = Doorway.objects.create(
+            world=self.world,
+            default_state=adv_consts.DOOR_STATE_OPEN,
+        )
+        Door.objects.create(
+            doorway=doorway,
             direction=adv_consts.DIRECTION_EAST,
             from_room=self.room,
             to_room=self.destination,
-            default_state=adv_consts.DOOR_STATE_OPEN,
         )
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
@@ -1045,11 +1049,11 @@ class TestMobTracker(WorldTestCase):
                 with self.captureOnCommitCallbacks(execute=False) as callbacks:
                     dispatch_text_command(self.player.id, "east")
                 self.assertTrue(callbacks)
-                DoorState.objects.create(
-                    door=door,
+                updated = DoorState.objects.filter(
+                    doorway=doorway,
                     world=self.spawn_world,
-                    state=adv_consts.DOOR_STATE_CLOSED,
-                )
+                ).update(state=adv_consts.DOOR_STATE_CLOSED)
+                self.assertEqual(updated, 1)
                 for callback in callbacks:
                     callback()
 

@@ -13,8 +13,10 @@ from backend.config.exceptions import ServiceError
 from core.computations import compute_stats
 from core.world_config import inherited_system_config
 from django.core.cache import cache
+from django.db import transaction
 from django.db.models import F, Q
 from django.utils import timezone
+from spawns.actions.doors import lock_door_state_for_movement
 from spawns.services import WorldGate
 from spawns.models import (
     CombatEncounter,
@@ -100,6 +102,27 @@ def prune_scheduled_trigger_runs(retention_days: int = 7) -> int:
     from spawns.trigger_steps import prune_terminal_trigger_runs
 
     return prune_terminal_trigger_runs(retention_days=retention_days)
+
+
+@shared_task(name="spawns.tasks.resolve_prepared_game_action", ignore_result=True)
+def resolve_prepared_game_action(action_id: int):
+    from spawns.actions.doors import resolve_prepared_door_action
+
+    return resolve_prepared_door_action(action_id)
+
+
+@shared_task(name="spawns.tasks.run_due_prepared_game_actions", ignore_result=True)
+def run_due_prepared_game_actions(limit: int = 100):
+    from spawns.actions.doors import process_due_prepared_door_actions
+
+    return process_due_prepared_door_actions(limit=limit)
+
+
+@shared_task(name="spawns.tasks.prune_prepared_game_actions", ignore_result=True)
+def prune_prepared_game_actions(retention_days: int = 7) -> int:
+    from spawns.actions.doors import prune_terminal_prepared_door_actions
+
+    return prune_terminal_prepared_door_actions(retention_days=retention_days)
 
 
 def _notify_world_lifecycle(player: Player, world: World, action: str) -> None:
@@ -356,14 +379,42 @@ def _try_roam_mob(
     if chance <= 0 or random.randint(1, 100) > chance:
         return False
 
-    options = _eligible_mob_roam_options(mob)
-    if not options:
-        return False
+    with transaction.atomic():
+        mob = (
+            Mob.objects.select_for_update(of=("self",))
+            .select_related("world", "definition", "spawn_placement")
+            .filter(
+                pk=mob.id,
+                is_pending_deletion=False,
+                room_id__isnull=False,
+                roams_type__isnull=False,
+                roams_id__isnull=False,
+            )
+            .first()
+        )
+        if mob is None:
+            return False
 
-    direction, destination = random.choice(options)
-    origin_room_id = mob.room_id
-    mob.room = destination
-    mob.save(update_fields=["room", "modified_ts"])
+        options = _eligible_mob_roam_options(mob)
+        if not options:
+            return False
+
+        direction, destination = random.choice(options)
+        origin_room_id = mob.room_id
+        door_state = lock_door_state_for_movement(
+            runtime_world=mob.world,
+            room_id=origin_room_id,
+            direction=direction,
+        )
+        if door_state and door_state.state in (
+            api_consts.DOOR_STATE_CLOSED,
+            api_consts.DOOR_STATE_LOCKED,
+        ):
+            return False
+
+        mob.room = destination
+        mob.save(update_fields=["room", "modified_ts"])
+
     _publish_mob_roam_events(
         mob=mob,
         origin_room_id=origin_room_id,
@@ -420,45 +471,65 @@ def _try_roam_cohort(
             aggro_mob_ids_by_world_room=aggro_mob_ids_by_world_room,
         ) else 0
 
-    members = list(
-        Mob.objects.filter(
-            world_id=mob.world_id,
-            group_id=group_id,
-            is_pending_deletion=False,
-            room_id__isnull=False,
+    with transaction.atomic():
+        members = list(
+            Mob.objects.select_for_update(of=("self",))
+            .filter(
+                world_id=mob.world_id,
+                group_id=group_id,
+                is_pending_deletion=False,
+                room_id__isnull=False,
+            )
+            .select_related("world", "definition", "spawn_placement")
+            .order_by("id")
         )
-        .select_related("world", "definition", "spawn_placement")
-        .order_by("id")
-    )
-    leader = _cohort_roam_leader(members)
-    if leader is None:
-        return 0
-    if any(member.id in active_combat_mob_ids for member in members):
-        return 0
+        leader = _cohort_roam_leader(members)
+        if leader is None:
+            return 0
+        if any(member.id in active_combat_mob_ids for member in members):
+            return 0
 
-    chance = _mob_roam_chance(leader, world_default_chance=world_default_chance)
-    if chance <= 0 or random.randint(1, 100) > chance:
-        return 0
+        chance = _mob_roam_chance(leader, world_default_chance=world_default_chance)
+        if chance <= 0 or random.randint(1, 100) > chance:
+            return 0
 
-    options = _eligible_mob_roam_options(leader)
-    if not options:
-        return 0
+        options = _eligible_mob_roam_options(leader)
+        if not options:
+            return 0
 
-    direction, destination = random.choice(options)
-    origin_room_id = leader.room_id
-    movable_members = [
-        member
-        for member in members
-        if member.room_id == origin_room_id
-        and member.roams
-        and _roam_target_allows_room(member.roams, destination)
-    ]
-    if not any(member.id == leader.id for member in movable_members):
-        return 0
+        direction, destination = random.choice(options)
+        origin_room_id = leader.room_id
+        movable_members = [
+            member
+            for member in members
+            if member.room_id == origin_room_id
+            and member.roams
+            and _roam_target_allows_room(member.roams, destination)
+        ]
+        if not any(member.id == leader.id for member in movable_members):
+            return 0
+
+        door_state = lock_door_state_for_movement(
+            runtime_world=leader.world,
+            room_id=origin_room_id,
+            direction=direction,
+        )
+        if door_state and door_state.state in (
+            api_consts.DOOR_STATE_CLOSED,
+            api_consts.DOOR_STATE_LOCKED,
+        ):
+            return 0
+
+        modified_ts = timezone.now()
+        for member in movable_members:
+            member.room = destination
+            member.modified_ts = modified_ts
+        Mob.objects.bulk_update(
+            movable_members,
+            ["room", "modified_ts"],
+        )
 
     for member in movable_members:
-        member.room = destination
-        member.save(update_fields=["room", "modified_ts"])
         _publish_mob_roam_events(
             mob=member,
             origin_room_id=origin_room_id,

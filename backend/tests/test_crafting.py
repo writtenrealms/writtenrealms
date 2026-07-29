@@ -1,5 +1,6 @@
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from threading import Barrier
 from unittest.mock import patch
 
@@ -9,6 +10,7 @@ from django.db import connection
 from django.db import close_old_connections
 from django.test import TransactionTestCase
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 
 from builders.currencies import create_currency
 from builders.models import (
@@ -44,12 +46,13 @@ from spawns.models import (
     Item,
     Player,
     PlayerMaterialBalance,
+    PreparedGameAction,
 )
 from spawns.request_segments import append_request_segment
 from spawns.state_payloads import serialize_actor
 from spawns.wallet import balance_map, mutate_balances
 from tests.base import WorldTestCase
-from worlds.models import Room, World, WorldConfig
+from worlds.models import Doorway, Room, World, WorldConfig
 from tests.utils import apply_basic_stat_system, capture_game_messages
 
 
@@ -148,6 +151,23 @@ class CraftingRuntimeTestCase(WorldTestCase):
             {self.currency: amount},
             reason="crafting test setup",
             emit_event=False,
+        )
+
+    def _prepare_door_action(self):
+        doorway = Doorway.objects.create(
+            world=self.world,
+            default_state=adv_consts.DOOR_STATE_OPEN,
+        )
+        return PreparedGameAction.objects.create(
+            player=self.player,
+            runtime_world=self.spawn_world,
+            room=self.room,
+            doorway=doorway,
+            action_type=PreparedGameAction.ACTION_CLOSE_DOOR,
+            run_at=timezone.now() + timedelta(seconds=30),
+            request_selector="east",
+            target_direction=adv_consts.DIRECTION_EAST,
+            target_name="iron gate",
         )
 
     def _dispatch_text(self, text):
@@ -885,6 +905,27 @@ class TestCraftingMutation(CraftingRuntimeTestCase):
             ["crafting.item.crafted", "crafting.material.changed"],
         )
 
+    def test_craft_atomically_cancels_a_pending_door_action(self):
+        prepared = self._prepare_door_action()
+        self._balance(self.bronze, 10)
+        self._balance(self.leather, 3)
+
+        result = CraftItemAction().execute(
+            self.player.id,
+            "blue crested helm",
+        )
+
+        prepared.refresh_from_db()
+        self.assertEqual(
+            prepared.status,
+            PreparedGameAction.STATUS_CANCELLED,
+        )
+        self.assertEqual(prepared.failure_code, "physical_action_replaced")
+        self.assertEqual(
+            [event.type for event in result.events[:2]],
+            ["cmd.close.cancelled", "cmd.craft.success"],
+        )
+
     def test_priced_craft_atomically_debits_wallet_and_records_cost(self):
         self._price_recipe(150)
         self._fund(200)
@@ -1012,9 +1053,11 @@ class TestCraftingMutation(CraftingRuntimeTestCase):
         receipt = CraftingActionReceipt.objects.get()
         self.assertNotIn("actor", receipt.result)
         self.assertNotIn("materials", receipt.result)
+        prepared = self._prepare_door_action()
 
         # A retry must replay the operation snapshot without rolling current
-        # player state backward to the moment of the first response.
+        # player state backward to the moment of the first response or cancel
+        # a door action started after the original request completed.
         bronze.quantity = 9
         bronze.save(update_fields=["quantity"])
         mutate_balances(
@@ -1031,7 +1074,13 @@ class TestCraftingMutation(CraftingRuntimeTestCase):
 
         bronze.refresh_from_db()
         leather.refresh_from_db()
+        prepared.refresh_from_db()
         self.assertEqual((bronze.quantity, leather.quantity), (9, 2))
+        self.assertEqual(prepared.status, PreparedGameAction.STATUS_PENDING)
+        self.assertNotIn(
+            "cmd.close.cancelled",
+            [event.type for event in replay.events],
+        )
         self.assertEqual(self.player.inventory.filter(definition=self.helm_definition).count(), 1)
         self.assertFalse(first.data["replayed"])
         self.assertTrue(replay.data["replayed"])
@@ -1549,6 +1598,27 @@ class TestSalvageRuntime(CraftingRuntimeTestCase):
             ["crafting.item.salvaged", "crafting.material.changed"],
         )
 
+    def test_salvage_atomically_cancels_a_pending_door_action(self):
+        prepared = self._prepare_door_action()
+        definition = self._persian_definition()
+        definition.spawn(self.player, self.spawn_world)
+
+        result = SalvageItemAction().execute(
+            self.player.id,
+            "scale coat",
+        )
+
+        prepared.refresh_from_db()
+        self.assertEqual(
+            prepared.status,
+            PreparedGameAction.STATUS_CANCELLED,
+        )
+        self.assertEqual(prepared.failure_code, "physical_action_replaced")
+        self.assertEqual(
+            [event.type for event in result.events[:2]],
+            ["cmd.close.cancelled", "cmd.salvage.success"],
+        )
+
     def test_salvage_rejects_ambiguous_inventory_selector(self):
         definition = self._persian_definition()
         definition.spawn(self.player, self.spawn_world)
@@ -1683,14 +1753,21 @@ class TestSalvageRuntime(CraftingRuntimeTestCase):
             item.key,
             request_id=request_id,
         )
+        prepared = self._prepare_door_action()
         replay = SalvageItemAction().execute(
             self.player.id,
             item.key,
             request_id=request_id,
         )
 
+        prepared.refresh_from_db()
         self.assertFalse(first.data["replayed"])
         self.assertTrue(replay.data["replayed"])
+        self.assertEqual(prepared.status, PreparedGameAction.STATUS_PENDING)
+        self.assertNotIn(
+            "cmd.close.cancelled",
+            [event.type for event in replay.events],
+        )
         self.assertIn("Salvage already completed", replay.events[0].text)
         self.assertNotIn("You recover", replay.events[0].text)
         self.assertEqual(
