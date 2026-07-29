@@ -29,6 +29,9 @@ from core.scoped_state import (
     normalize_state_snapshot,
 )
 from core.trigger_steps import (
+    TRIGGER_ACTOR_REF,
+    TRIGGER_ROOM_REF,
+    TRIGGER_STEP_ACTION_COMMAND,
     TRIGGER_STEP_ACTION_CONSUME_ITEM,
     TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM,
     TRIGGER_STEP_ACTION_DEBIT_CURRENCY,
@@ -37,6 +40,7 @@ from core.trigger_steps import (
     TRIGGER_STEP_ACTION_REPLACE_ROOM_ITEM,
     TRIGGER_STEP_ACTION_SET_MOB,
     TRIGGER_STEP_ACTION_SPAWN_ROOM_ITEM,
+    SCRIPT_COMMAND_DEPTH_KEY,
     TriggerStepSpecError,
     normalize_trigger_step_error_policy,
     normalize_trigger_steps,
@@ -48,6 +52,10 @@ from spawns.events import (
     publish_events,
 )
 from spawns.models import Item, Mob, MobState, Player, ScheduledTriggerRun
+from spawns.script_commands import (
+    ScriptCommandError,
+    ScriptCommandRunner,
+)
 from spawns.wallet import WalletError, mutate_balances
 from worlds.models import Room, World
 
@@ -56,6 +64,7 @@ DEFAULT_DUE_RUN_LIMIT = 100
 MAX_ACTIVE_TRIGGER_RUNS_PER_ACTOR = 16
 MAX_TRIGGER_SET_MOB_CANDIDATES = 256
 TRIGGER_GATED_TEXT = "More time is needed."
+_TRIGGER_PROVENANCE_BINDING_KEY = "_trigger_provenance"
 
 
 logger = logging.getLogger(__name__)
@@ -156,6 +165,15 @@ def _expected_actor_room_id(
             except (TypeError, ValueError):
                 pass
     return trigger_room_id
+
+
+def _script_command_depth(event_data: dict[str, Any] | None) -> int:
+    if not isinstance(event_data, dict):
+        return 0
+    try:
+        return max(0, int(event_data.get(SCRIPT_COMMAND_DEPTH_KEY) or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _trigger_gate_cache_key(trigger_id: int, scope_key: str) -> str:
@@ -299,6 +317,25 @@ def _mob_definition_ref_parts(value: Any) -> tuple[str, int | str]:
     return "slug", text
 
 
+def _command_mob_subject(
+    action: dict[str, Any],
+) -> dict[str, Any] | None:
+    if action.get("type") != TRIGGER_STEP_ACTION_COMMAND:
+        return None
+    subject = action.get("subject")
+    if not isinstance(subject, dict) or subject.get("type") != "mob":
+        return None
+    return subject
+
+
+def _step_mob_selector(
+    action: dict[str, Any],
+) -> dict[str, Any] | None:
+    if action.get("type") == TRIGGER_STEP_ACTION_SET_MOB:
+        return action
+    return _command_mob_subject(action)
+
+
 def _snapshot_steps_with_definition_ids(
     steps: list[dict[str, Any]],
     *,
@@ -315,6 +352,11 @@ def _snapshot_steps_with_definition_ids(
                 refs.add(_definition_ref_parts(action.get("with")))
             if action.get("type") == TRIGGER_STEP_ACTION_SET_MOB:
                 mob_refs.add(_mob_definition_ref_parts(action.get("mob")))
+            command_subject = _command_mob_subject(action)
+            if command_subject is not None:
+                mob_refs.add(
+                    _mob_definition_ref_parts(command_subject.get("mob"))
+                )
             if action.get("type") == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
                 currency_codes.add(str(action.get("currency") or "").strip().lower())
 
@@ -397,6 +439,13 @@ def _snapshot_steps_with_definition_ids(
                 ]
                 action["mob_definition_id"] = definition.id
                 action["mob"] = f"mobdefinition.{definition.slug}"
+            command_subject = _command_mob_subject(action)
+            if command_subject is not None:
+                definition = resolved_mobs[
+                    _mob_definition_ref_parts(command_subject.get("mob"))
+                ]
+                command_subject["mob_definition_id"] = definition.id
+                command_subject["mob"] = f"mobdefinition.{definition.slug}"
             if action.get("type") == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
                 currency = currencies[str(action.get("currency") or "").lower()]
                 action["currency_id"] = currency.id
@@ -433,7 +482,9 @@ def _set_mob_candidate_ids(
     room_id: int,
     definition_id: int,
     has_candidate_predicate: bool,
+    action_label: str = "set_mob",
 ) -> tuple[int, ...]:
+    action_display = action_label.replace("_", " ")
     query_limit = (
         MAX_TRIGGER_SET_MOB_CANDIDATES + 1
         if has_candidate_predicate
@@ -454,9 +505,9 @@ def _set_mob_candidate_ids(
         and len(candidate_ids) > MAX_TRIGGER_SET_MOB_CANDIDATES
     ):
         raise TriggerStepExecutionError(
-            "The set_mob action has too many candidates to evaluate "
+            f"The {action_display} action has too many candidates to evaluate "
             f"safely (maximum {MAX_TRIGGER_SET_MOB_CANDIDATES}).",
-            code="set_mob_candidate_limit",
+            code=f"{action_label}_candidate_limit",
         )
     return candidate_ids
 
@@ -491,6 +542,10 @@ def _step_locks_mob_actor(
     return (
         include_mob_actor
         or any(
+            action.get("type") == TRIGGER_STEP_ACTION_COMMAND
+            for action in actions
+        )
+        or any(
             action.get("type") == TRIGGER_STEP_ACTION_SET_MOB
             for action in actions
         )
@@ -512,15 +567,17 @@ def _prelock_step_mobs(
     include_mob_actor: bool = False,
 ) -> dict[int, tuple[int, ...]]:
     mob_actions_by_definition: dict[int, list[dict[str, Any]]] = {}
+    set_mob_definition_ids: set[int] = set()
     for action in actions:
-        if (
-            action.get("type") == TRIGGER_STEP_ACTION_SET_MOB
-            and action.get("mob_definition_id")
-        ):
+        selector = _step_mob_selector(action)
+        if selector is not None and selector.get("mob_definition_id"):
+            definition_id = int(selector["mob_definition_id"])
             mob_actions_by_definition.setdefault(
-                int(action["mob_definition_id"]),
+                definition_id,
                 [],
-            ).append(action)
+            ).append(selector)
+            if action.get("type") == TRIGGER_STEP_ACTION_SET_MOB:
+                set_mob_definition_ids.add(definition_id)
 
     prelocked_mob_ids: dict[int, tuple[int, ...]] = {}
     mob_ids_to_lock: set[int] = set()
@@ -534,6 +591,11 @@ def _prelock_step_mobs(
             has_candidate_predicate=any(
                 action.get("where") not in (None, {}, [])
                 for action in definition_actions
+            ),
+            action_label=(
+                "set_mob"
+                if definition_id in set_mob_definition_ids
+                else "command_subject"
             ),
         )
         prelocked_mob_ids[definition_id] = candidate_ids
@@ -566,9 +628,9 @@ def _prelock_step_resources(
 ) -> TriggerStepPrelocks | None:
     """Lock a mixed step's existing Mob, then Item rows in aggregate order."""
     mob_actions = [
-        action
+        selector
         for action in actions
-        if action.get("type") == TRIGGER_STEP_ACTION_SET_MOB
+        if (selector := _step_mob_selector(action)) is not None
     ]
     existing_item_actions = [
         action
@@ -594,8 +656,7 @@ def _prelock_step_resources(
     needs_prelock = (
         has_debit
         or lock_mob_actor
-        or bool(mob_actions and existing_item_actions)
-        or len(mob_actions) > 1
+        or bool(mob_actions)
         or len(existing_item_actions) > 1
     )
     if not needs_prelock:
@@ -969,32 +1030,36 @@ def _lock_or_create_mob_state(mob: Mob) -> tuple[MobState, bool]:
         )
 
 
-def _set_mob(
+def _select_step_mob(
     *,
     run: ScheduledTriggerRun,
-    action: dict[str, Any],
+    selector: dict[str, Any],
     room: Room,
     runtime_world: World,
     trigger_actor: Player | Mob | None,
-    candidate_ids: tuple[int, ...] | None = None,
-) -> Mob:
+    candidate_ids: tuple[int, ...] | None,
+    action_label: str,
+    not_found_code: str,
+    ambiguous_code: str,
+) -> tuple[Mob, dict[str, dict[str, Any]]]:
+    action_display = action_label.replace("_", " ")
     try:
-        definition_id = int(action["mob_definition_id"])
+        definition_id = int(selector["mob_definition_id"])
     except (KeyError, TypeError, ValueError) as exc:
         raise TriggerStepExecutionError(
-            "The set_mob action has no valid mob definition.",
+            f"The {action_display} action has no valid mob definition.",
             code="invalid_mob_definition",
         ) from exc
 
-    where = action.get("where")
+    where = selector.get("where")
     if candidate_ids is None:
         candidate_ids = _set_mob_candidate_ids(
             runtime_world_id=run.runtime_world_id,
             room_id=run.room_id,
             definition_id=definition_id,
             has_candidate_predicate=where not in (None, {}, []),
+            action_label=action_label,
         )
-    matches: list[Mob] = []
     candidates = (
         Mob.objects.select_for_update(of=("self",))
         .select_related(
@@ -1005,6 +1070,7 @@ def _set_mob(
             "world__context__instance_of",
         )
         .filter(
+            pk__in=candidate_ids,
             world_id=run.runtime_world_id,
             room_id=run.room_id,
             definition_id=definition_id,
@@ -1012,13 +1078,7 @@ def _set_mob(
         )
         .order_by("id")
     )
-    # Mixed steps prelock this stable set before Item rows. Standalone actions
-    # use the same bounded selection so a crowded room cannot create an
-    # unbounded row-lock scan.
-    candidates = candidates.filter(pk__in=candidate_ids)
-    # The iterator keeps memory bounded in unusually crowded rooms. Stop after
-    # two matches because the action requires exactly one and no further row
-    # can change the result from ambiguous.
+    matches: list[Mob] = []
     invariant_state_cache: dict[str, dict[str, Any]] = {}
     for candidate in candidates.iterator(chunk_size=32):
         if where not in (None, {}, []) and not _matches_set_mob_where(
@@ -1037,15 +1097,103 @@ def _set_mob(
     if not matches:
         raise TriggerStepExecutionError(
             "No matching mob is available in the trigger room.",
-            code="set_mob_not_found",
+            code=not_found_code,
         )
     if len(matches) > 1:
         raise TriggerStepExecutionError(
-            "More than one mob matches the set_mob action.",
-            code="set_mob_ambiguous",
+            f"More than one mob matches the {action_display} action.",
+            code=ambiguous_code,
+        )
+    return matches[0], invariant_state_cache
+
+
+def _resolve_command_subject(
+    *,
+    run: ScheduledTriggerRun,
+    action: dict[str, Any],
+    room: Room,
+    runtime_world: World,
+    trigger_actor: Player | Mob | None,
+    candidate_ids: tuple[int, ...] | None = None,
+) -> Player | Mob | Room:
+    subject = action.get("subject")
+    if subject == TRIGGER_ROOM_REF:
+        return room
+    if subject == TRIGGER_ACTOR_REF:
+        if trigger_actor is None:
+            raise TriggerStepExecutionError(
+                "The trigger actor is no longer available.",
+                code="command_subject_unavailable",
+            )
+        if isinstance(trigger_actor, Player) and not trigger_actor.in_game:
+            raise TriggerStepExecutionError(
+                "The trigger player is no longer in the game.",
+                code="command_subject_unavailable",
+            )
+        return trigger_actor
+    if not isinstance(subject, dict) or subject.get("type") != "mob":
+        raise TriggerStepExecutionError(
+            "The command action has an invalid subject.",
+            code="invalid_command_subject",
         )
 
-    mob = matches[0]
+    mob, invariant_state_cache = _select_step_mob(
+        run=run,
+        selector=subject,
+        room=room,
+        runtime_world=runtime_world,
+        trigger_actor=trigger_actor,
+        candidate_ids=candidate_ids,
+        action_label="command_subject",
+        not_found_code="command_subject_not_found",
+        ambiguous_code="command_subject_ambiguous",
+    )
+    where = subject.get("where")
+    if where in (None, {}, []):
+        return mob
+
+    state_record, state_record_created = _lock_or_create_mob_state(mob)
+    locked_state = dict(state_record.data or {})
+    matches = _matches_set_mob_where(
+        where,
+        mob=mob,
+        trigger_actor=trigger_actor,
+        room=room,
+        runtime_world=runtime_world,
+        state_snapshot=locked_state,
+        invariant_state_cache=invariant_state_cache,
+    )
+    if state_record_created and not state_record.data:
+        state_record.delete()
+    if not matches:
+        raise TriggerStepExecutionError(
+            "No matching mob is available in the trigger room.",
+            code="command_subject_not_found",
+        )
+    return mob
+
+
+def _set_mob(
+    *,
+    run: ScheduledTriggerRun,
+    action: dict[str, Any],
+    room: Room,
+    runtime_world: World,
+    trigger_actor: Player | Mob | None,
+    candidate_ids: tuple[int, ...] | None = None,
+) -> Mob:
+    mob, invariant_state_cache = _select_step_mob(
+        run=run,
+        selector=action,
+        room=room,
+        runtime_world=runtime_world,
+        trigger_actor=trigger_actor,
+        candidate_ids=candidate_ids,
+        action_label="set_mob",
+        not_found_code="set_mob_not_found",
+        ambiguous_code="set_mob_ambiguous",
+    )
+    where = action.get("where")
     state_record, state_record_created = _lock_or_create_mob_state(mob)
     locked_state = dict(state_record.data or {})
     if where not in (None, {}, []) and not _matches_set_mob_where(
@@ -1450,6 +1598,11 @@ def _execute_current_step(
         for action in actions
         if action.get("type") == TRIGGER_STEP_ACTION_DEBIT_CURRENCY
     ]
+    command_actions = [
+        action
+        for action in actions
+        if action.get("type") == TRIGGER_STEP_ACTION_COMMAND
+    ]
     if debit_actions:
         if run.actor_type != "player":
             raise TriggerStepExecutionError(
@@ -1457,6 +1610,7 @@ def _execute_current_step(
                 code="invalid_actor",
             )
     actor_row_actions = {
+        TRIGGER_STEP_ACTION_COMMAND,
         TRIGGER_STEP_ACTION_CONSUME_ITEM,
         TRIGGER_STEP_ACTION_GRANT_ITEM,
         TRIGGER_STEP_ACTION_DEBIT_CURRENCY,
@@ -1489,10 +1643,19 @@ def _execute_current_step(
             actions=actions,
             bindings=bindings,
         )
+    if command_actions and trigger_actor is None:
+        trigger_actor = _load_trigger_actor(run)
+    if command_actions and trigger_actor is None:
+        raise TriggerStepExecutionError(
+            "The trigger actor is no longer available.",
+            code="actor_missing",
+        )
 
     for action in actions:
         action_type = action.get("type")
         if action_type == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
+            continue
+        elif action_type == TRIGGER_STEP_ACTION_COMMAND:
             continue
         elif action_type == TRIGGER_STEP_ACTION_CONSUME_ITEM:
             definition_id = int(action["item_definition_id"])
@@ -1602,6 +1765,26 @@ def _execute_current_step(
                 code="unsupported_action",
             )
 
+    resolved_command_subjects: dict[int, Player | Mob | Room] = {}
+    for action_index, action in enumerate(actions):
+        if action.get("type") != TRIGGER_STEP_ACTION_COMMAND:
+            continue
+        command_subject = _command_mob_subject(action)
+        candidate_ids = None
+        if command_subject is not None and prelocks is not None:
+            candidate_ids = prelocks.mob_ids_by_definition.get(
+                int(command_subject["mob_definition_id"]),
+                (),
+            )
+        resolved_command_subjects[action_index] = _resolve_command_subject(
+            run=run,
+            action=action,
+            room=room,
+            runtime_world=runtime_world,
+            trigger_actor=trigger_actor,
+            candidate_ids=candidate_ids,
+        )
+
     debited_actor: Player | None = None
     debited_currencies: dict[int, Currency] = {}
     debit_room: Room | None = None
@@ -1633,7 +1816,7 @@ def _execute_current_step(
                     room_id=debit_room.id,
                 )
 
-    for action in actions:
+    for action_index, action in enumerate(actions):
         action_type = action.get("type")
         if action_type == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
             events.extend(
@@ -1646,6 +1829,41 @@ def _execute_current_step(
                     room_recipient_keys=debit_room_recipient_keys,
                 )
             )
+        elif action_type == TRIGGER_STEP_ACTION_COMMAND:
+            trigger_provenance = bindings.get(
+                _TRIGGER_PROVENANCE_BINDING_KEY,
+                {},
+            )
+            if not isinstance(trigger_provenance, dict):
+                trigger_provenance = {}
+            try:
+                command_result = ScriptCommandRunner().execute(
+                    issuer=room,
+                    subject=resolved_command_subjects[action_index],
+                    command=str(action.get("command") or ""),
+                    render_actor=trigger_actor,
+                    runtime_world=runtime_world,
+                    provenance={
+                        "trigger_id": (
+                            trigger_provenance.get("id")
+                            or run.trigger_id
+                        ),
+                        "trigger_key": trigger_provenance.get("key"),
+                        "run_id": run.id,
+                        "step_index": run.next_step_index,
+                        "action_index": action_index,
+                        "command_depth": bindings.get(
+                            SCRIPT_COMMAND_DEPTH_KEY,
+                            0,
+                        ),
+                    },
+                )
+            except ScriptCommandError as exc:
+                raise TriggerStepExecutionError(
+                    str(exc),
+                    code=exc.code,
+                ) from exc
+            events.extend(command_result.events)
         elif action_type == TRIGGER_STEP_ACTION_ECHO:
             event = _echo_event(
                 run=run,
@@ -1780,6 +1998,15 @@ def start_trigger_steps(
                 normalized_steps,
                 authored_world_id=definition_world_id,
             )
+            command_depth = _script_command_depth(event_data)
+            initial_bindings = {
+                _TRIGGER_PROVENANCE_BINDING_KEY: {
+                    "id": current_trigger.id,
+                    "key": current_trigger.key,
+                },
+            }
+            if command_depth:
+                initial_bindings[SCRIPT_COMMAND_DEPTH_KEY] = command_depth
             initial_prelocks = None
             resources_prelocked = False
             initial_mob_prelocks: dict[int, tuple[int, ...]] = {}
@@ -1872,7 +2099,7 @@ def start_trigger_steps(
                     initial_prelocks = _prelock_step_resources(
                         run=prelock_context,
                         actions=snapshot_steps[0].get("actions") or [],
-                        bindings={},
+                        bindings=initial_bindings,
                         include_mob_actor=True,
                         prelocked_mob_ids_by_definition=(
                             initial_mob_prelocks
@@ -1889,7 +2116,7 @@ def start_trigger_steps(
                     actor_id=locked_actor.id,
                     actor_key=locked_actor.key,
                     steps=snapshot_steps,
-                    bindings={},
+                    bindings=initial_bindings,
                     next_step_index=0,
                     next_run_ts=started_ts,
                     started_ts=started_ts,

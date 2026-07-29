@@ -17,7 +17,13 @@ from builders.currencies import create_currency
 from builders.models import ItemDefinition, MobDefinition, Trigger
 from config import constants as adv_consts
 from core.scoped_state import STATE_SCOPE_CHARACTER, get_state_snapshot
-from core.trigger_steps import TriggerStepSpecError, normalize_trigger_steps
+from core.trigger_steps import (
+    SCRIPT_COMMAND_DEPTH_KEY,
+    SCRIPT_COMMAND_PROVENANCE_KEY,
+    TriggerStepSpecError,
+    normalize_trigger_steps,
+)
+from spawns.events import GameEvent, publish_events
 from spawns.models import (
     GameEventOutbox,
     Item,
@@ -40,6 +46,7 @@ from spawns.trigger_steps import (
     prune_terminal_trigger_runs,
     start_trigger_steps,
 )
+from spawns.script_commands import MAX_SCRIPT_COMMAND_DEPTH
 from spawns.wallet import mutate_balances
 from tests.base import WorldTestCase
 from worlds.models import Room, World, WorldConfig
@@ -380,6 +387,206 @@ class TestScheduledTriggerSteps(WorldTestCase):
             },
         )
 
+    def test_command_action_normalizes_room_actor_and_mob_subjects(self):
+        normalized = normalize_trigger_steps([
+            {
+                "after_seconds": 0,
+                "actions": [
+                    {
+                        "type": "command",
+                        "subject": "trigger_actor",
+                        "command": " say I have paid. ",
+                    },
+                    {
+                        "type": "command",
+                        "subject": "trigger_room",
+                        "command": "/echo The ferry pulls away.",
+                    },
+                    {
+                        "type": "command",
+                        "subject": {
+                            "type": "mob",
+                            "room": "trigger_room",
+                            "mob": "mobdefinition.charon",
+                            "where": {
+                                "eq": ["state.character.on_duty", True],
+                            },
+                        },
+                        "command": "emote grunts satisfactorily.",
+                    },
+                ],
+            },
+        ])
+
+        self.assertEqual(
+            normalized[0]["actions"],
+            [
+                {
+                    "type": "command",
+                    "subject": "trigger_actor",
+                    "command": "say I have paid.",
+                },
+                {
+                    "type": "command",
+                    "subject": "trigger_room",
+                    "command": "/echo The ferry pulls away.",
+                },
+                {
+                    "type": "command",
+                    "subject": {
+                        "type": "mob",
+                        "room": "trigger_room",
+                        "mob": "mobdefinition.charon",
+                        "where": {
+                            "eq": ["state.character.on_duty", True],
+                        },
+                    },
+                    "command": "emote grunts satisfactorily.",
+                },
+            ],
+        )
+
+    def test_command_action_rejects_unsafe_or_invalid_shapes(self):
+        invalid_actions = [
+            {
+                "type": "command",
+                "subject": "another_player",
+                "command": "say no",
+            },
+            {
+                "type": "command",
+                "subject": {
+                    "type": "player",
+                    "room": "trigger_room",
+                    "mob": "mobdefinition.charon",
+                },
+                "command": "say no",
+            },
+            {
+                "type": "command",
+                "subject": {
+                    "type": "mob",
+                    "room": "another_room",
+                    "mob": "mobdefinition.charon",
+                },
+                "command": "say no",
+            },
+            {
+                "type": "command",
+                "subject": "trigger_actor",
+                "command": "",
+            },
+            {
+                "type": "command",
+                "subject": "trigger_actor",
+                "command": "say one\nsay two",
+            },
+            {
+                "type": "command",
+                "subject": "trigger_actor",
+                "command": "say one; say two",
+            },
+            {
+                "type": "command",
+                "subject": "trigger_actor",
+                "command": "say one && say two",
+            },
+            {
+                "type": "command",
+                "subject": "trigger_actor",
+                "command": "!1",
+            },
+            {
+                "type": "command",
+                "subject": "trigger_actor",
+                "command": "/cmd room -- /echo no",
+            },
+            {
+                "type": "command",
+                "subject": "trigger_actor",
+                "command": "say no",
+                "issuer": "trigger_room",
+            },
+        ]
+
+        for action in invalid_actions:
+            with self.subTest(action=action):
+                with self.assertRaises(TriggerStepSpecError):
+                    normalize_trigger_steps([
+                        {
+                            "after_seconds": 0,
+                            "actions": [action],
+                        },
+                    ])
+
+    def test_command_action_can_follow_currency_debit(self):
+        normalized = normalize_trigger_steps([
+            {
+                "after_seconds": 0,
+                "actions": [
+                    {
+                        "type": "debit_currency",
+                        "actor": "trigger_actor",
+                        "currency": "obol",
+                        "amount": 10,
+                    },
+                    {
+                        "type": "command",
+                        "subject": "trigger_actor",
+                        "command": "say The fare is paid.",
+                    },
+                ],
+            },
+        ])
+
+        self.assertEqual(
+            normalized[0]["actions"][1]["command"],
+            "say The fare is paid.",
+        )
+
+    def test_step_actions_require_mutation_debit_output_phase_order(self):
+        invalid_action_lists = [
+            [
+                {
+                    "type": "command",
+                    "subject": "trigger_actor",
+                    "command": "say Too soon.",
+                },
+                {
+                    "type": "grant_item",
+                    "actor": "trigger_actor",
+                    "item": "itemdefinition.harvested-barley",
+                },
+            ],
+            [
+                {
+                    "type": "echo",
+                    "room": "trigger_room",
+                    "text": "Too soon.",
+                },
+                {
+                    "type": "debit_currency",
+                    "actor": "trigger_actor",
+                    "currency": "obol",
+                    "amount": 10,
+                },
+            ],
+        ]
+
+        for actions in invalid_action_lists:
+            with self.subTest(actions=actions):
+                with self.assertRaisesMessage(
+                    TriggerStepSpecError,
+                    "order actions as mutations, then debits, then "
+                    "command/echo output",
+                ):
+                    normalize_trigger_steps([
+                        {
+                            "after_seconds": 0,
+                            "actions": actions,
+                        },
+                    ])
+
     def test_debit_currency_action_rejects_invalid_fields_and_amounts(self):
         invalid_actions = [
             {
@@ -439,7 +646,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
 
         with self.assertRaisesMessage(
             TriggerStepSpecError,
-            "put item and mob mutations before the debit",
+            "order actions as mutations, then debits, then command/echo output",
         ):
             normalize_trigger_steps([
                 {
@@ -603,6 +810,74 @@ class TestScheduledTriggerSteps(WorldTestCase):
 
         self.assertEqual(raised.exception.code, "set_mob_candidate_limit")
 
+    def test_command_mob_subject_prelocks_are_bounded(self):
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="bounded-command-guards",
+            name="a speaking guard",
+        )
+        guards = Mob.objects.bulk_create([
+            Mob(
+                world=self.spawn_world,
+                room=self.room,
+                definition=definition,
+                name=f"Speaking Guard {index}",
+            )
+            for index in range(5)
+        ])
+        run = SimpleNamespace(
+            runtime_world_id=self.spawn_world.id,
+            room_id=self.room.id,
+            actor_type="player",
+            actor_id=self.player.id,
+        )
+        command = {
+            "type": "command",
+            "subject": {
+                "type": "mob",
+                "room": "trigger_room",
+                "mob_definition_id": definition.id,
+            },
+            "command": "say Halt.",
+        }
+
+        prelocks = _prelock_step_resources(
+            run=run,
+            actions=[command],
+            bindings={},
+        )
+
+        self.assertEqual(
+            prelocks.mob_ids_by_definition[definition.id],
+            tuple(guard.id for guard in guards[:2]),
+        )
+
+        Mob.objects.bulk_create([
+            Mob(
+                world=self.spawn_world,
+                room=self.room,
+                definition=definition,
+                name=f"Extra Speaking Guard {index}",
+            )
+            for index in range(
+                MAX_TRIGGER_SET_MOB_CANDIDATES - len(guards) + 1
+            )
+        ])
+        command["subject"]["where"] = {
+            "eq": ["state.character.on_duty", True],
+        }
+        with self.assertRaises(TriggerStepExecutionError) as raised:
+            _prelock_step_resources(
+                run=run,
+                actions=[command],
+                bindings={},
+            )
+
+        self.assertEqual(
+            raised.exception.code,
+            "command_subject_candidate_limit",
+        )
+
     def test_debit_currency_charges_player_and_notifies_actor_and_room(self):
         obol = create_currency(
             world=self.world,
@@ -703,6 +978,470 @@ class TestScheduledTriggerSteps(WorldTestCase):
             [entry["player_key"] for entry in wallet_messages],
             [self.player.key],
         )
+
+    def test_sixth_step_can_force_trigger_player_to_say(self):
+        original_observer = self.create_player(
+            "Original Speech Observer",
+            user=self.create_user("original-speech-observer@example.com"),
+        )
+        original_observer.in_game = True
+        original_observer.save(update_fields=["in_game"])
+        other_room = self.room.create_at("north")
+        current_observer = self.create_player(
+            "Current Speech Observer",
+            user=self.create_user("current-speech-observer@example.com"),
+        )
+        current_observer.room = other_room
+        current_observer.in_game = True
+        current_observer.save(update_fields=["room", "in_game"])
+        steps = [
+            {
+                "after_seconds": 0 if index == 0 else 1,
+                "actions": [
+                    {
+                        "type": "echo",
+                        "room": "trigger_room",
+                        "text": f"The ferry bell marks stage {index + 1}.",
+                    },
+                ],
+            }
+            for index in range(5)
+        ]
+        steps.append({
+            "after_seconds": 1,
+            "actions": [
+                {
+                    "type": "command",
+                    "subject": "trigger_actor",
+                    "command": "say I accept the ferryman's price.",
+                },
+            ],
+        })
+        trigger = self._create_trigger(
+            match="begin crossing oath",
+            conditions="",
+            steps=steps,
+        )
+
+        self._dispatch(self.player.id, "begin crossing oath")
+        run = ScheduledTriggerRun.objects.get(trigger=trigger)
+        self.assertEqual(run.next_step_index, 1)
+        self.player.room = other_room
+        self.player.save(update_fields=["room"])
+
+        with capture_game_messages() as messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                result = process_due_trigger_runs(
+                    limit=10,
+                    now=run.started_ts + timedelta(seconds=5),
+                )
+
+        self.assertEqual(result["processed"], 5)
+        run.refresh_from_db()
+        self.assertEqual(run.status, ScheduledTriggerRun.STATUS_COMPLETED)
+        say_messages = [
+            entry
+            for entry in messages
+            if entry["message"]["type"] in {
+                "cmd.say.success",
+                "notification.cmd.say.success",
+            }
+        ]
+        self.assertEqual(
+            {entry["player_key"] for entry in say_messages},
+            {self.player.key, current_observer.key},
+        )
+        self.assertNotIn(
+            original_observer.key,
+            {entry["player_key"] for entry in say_messages},
+        )
+        self.assertTrue(all(
+            entry["message"]["data"]["actor"]["key"] == self.player.key
+            and entry["message"]["data"]["text"]
+            == "I accept the ferryman's price."
+            for entry in say_messages
+        ))
+
+    def test_room_command_executes_echo_through_step_outbox(self):
+        observer = self.create_player(
+            "Room Command Observer",
+            user=self.create_user("room-command-observer@example.com"),
+        )
+        observer.in_game = True
+        observer.save(update_fields=["in_game"])
+        trigger = self._create_trigger(
+            match="rock ferry",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": "trigger_room",
+                            "command": "/echo The ferry rocks against the pier.",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "rock ferry")
+
+        run = ScheduledTriggerRun.objects.get(trigger=trigger)
+        self.assertEqual(run.status, ScheduledTriggerRun.STATUS_COMPLETED)
+        room_echoes = [
+            entry
+            for entry in messages
+            if entry["message"]["type"] == "notification./echo"
+        ]
+        self.assertEqual(
+            {
+                (entry["player_key"], entry["message"]["text"])
+                for entry in room_echoes
+            },
+            {
+                (self.player.key, "The ferry rocks against the pier."),
+                (observer.key, "The ferry rocks against the pier."),
+            },
+        )
+
+    def test_mob_command_runs_only_after_currency_debit_succeeds(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: 20},
+            reason="test.setup",
+            emit_event=False,
+        )
+        charon_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="charon",
+            name="Charon",
+        )
+        charon = charon_definition.spawn(self.room, self.spawn_world)
+        trigger = self._create_trigger(
+            match="pay charon",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": "trigger_room",
+                                "mob": "mobdefinition.charon",
+                            },
+                            "command": "emote grunts satisfactorily.",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "pay charon")
+
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.player,
+                currency=obol,
+            ).amount,
+            10,
+        )
+        run = ScheduledTriggerRun.objects.get(trigger=trigger)
+        command_snapshot = run.steps[0]["actions"][1]
+        self.assertEqual(
+            command_snapshot["subject"]["mob_definition_id"],
+            charon_definition.id,
+        )
+        self.assertTrue(any(
+            entry["player_key"] == self.player.key
+            and entry["message"]["type"]
+            == "notification.cmd.emote.success"
+            and entry["message"]["data"]["actor"]["key"] == charon.key
+            and entry["message"]["data"]["text"]
+            == "grunts satisfactorily."
+            for entry in messages
+        ))
+
+    def test_insufficient_currency_prevents_mob_command_output(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: 9},
+            reason="test.setup",
+            emit_event=False,
+        )
+        charon_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="unpaid-charon",
+            name="Charon",
+        )
+        charon_definition.spawn(self.room, self.spawn_world)
+        trigger = self._create_trigger(
+            match="underpay charon",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": "trigger_room",
+                                "mob": "mobdefinition.unpaid-charon",
+                            },
+                            "command": "emote grunts satisfactorily.",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "underpay charon")
+
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.player,
+                currency=obol,
+            ).amount,
+            9,
+        )
+        self.assertFalse(
+            ScheduledTriggerRun.objects.filter(trigger=trigger).exists()
+        )
+        self.assertFalse(any(
+            entry["message"]["type"]
+            in {
+                "cmd.emote.success",
+                "notification.cmd.emote.success",
+                "notification.trigger.currency_debited",
+            }
+            for entry in messages
+        ))
+
+    def test_command_failure_rolls_back_a_preceding_currency_debit(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: 10},
+            reason="test.setup",
+            emit_event=False,
+        )
+        trigger = self._create_trigger(
+            match="unsafe crossing",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                        {
+                            "type": "command",
+                            "subject": "trigger_actor",
+                            "command": "north",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        result = start_trigger_steps(
+            trigger=trigger,
+            actor=self.player,
+            room=self.room,
+        )
+
+        self.assertFalse(result.started)
+        self.assertEqual(result.code, "command_not_step_safe")
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.player,
+                currency=obol,
+            ).amount,
+            10,
+        )
+        self.assertFalse(ScheduledTriggerRun.objects.filter(trigger=trigger).exists())
+        self.assertFalse(GameEventOutbox.objects.exists())
+
+    def test_later_command_failure_suppresses_earlier_command_output(self):
+        trigger = self._create_trigger(
+            match="broken oath",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": "trigger_actor",
+                            "command": "say This must never be heard.",
+                        },
+                        {
+                            "type": "command",
+                            "subject": "trigger_actor",
+                            "command": "north",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            result = start_trigger_steps(
+                trigger=trigger,
+                actor=self.player,
+                room=self.room,
+            )
+
+        self.assertFalse(result.started)
+        self.assertEqual(result.code, "command_not_step_safe")
+        self.assertFalse(
+            ScheduledTriggerRun.objects.filter(trigger=trigger).exists()
+        )
+        self.assertFalse(GameEventOutbox.objects.exists())
+        self.assertFalse(any(
+            entry["message"]["type"]
+            in {
+                "cmd.say.success",
+                "notification.cmd.say.success",
+            }
+            for entry in messages
+        ))
+
+    def test_muted_forced_player_say_rolls_back_currency_debit(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: 10},
+            reason="test.setup",
+            emit_event=False,
+        )
+        self.player.is_muted = True
+        self.player.save(update_fields=["is_muted"])
+        trigger = self._create_trigger(
+            match="muted oath",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                        {
+                            "type": "command",
+                            "subject": "trigger_actor",
+                            "command": "say I swear the oath.",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        result = start_trigger_steps(
+            trigger=trigger,
+            actor=self.player,
+            room=self.room,
+        )
+
+        self.assertFalse(result.started)
+        self.assertEqual(result.code, "muted")
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.player,
+                currency=obol,
+            ).amount,
+            10,
+        )
+        self.assertFalse(ScheduledTriggerRun.objects.filter(trigger=trigger).exists())
+        self.assertFalse(GameEventOutbox.objects.exists())
+
+    def test_mob_command_requires_exactly_one_room_local_subject(self):
+        charon_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="ambiguous-charon",
+            name="Charon",
+        )
+        charon_definition.spawn(self.room, self.spawn_world)
+        charon_definition.spawn(self.room, self.spawn_world)
+        trigger = self._create_trigger(
+            match="hail charon",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": "trigger_room",
+                                "mob": "mobdefinition.ambiguous-charon",
+                            },
+                            "command": "emote looks up.",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        result = start_trigger_steps(
+            trigger=trigger,
+            actor=self.player,
+            room=self.room,
+        )
+
+        self.assertFalse(result.started)
+        self.assertEqual(result.code, "command_subject_ambiguous")
+        self.assertFalse(ScheduledTriggerRun.objects.filter(trigger=trigger).exists())
+        self.assertFalse(GameEventOutbox.objects.exists())
 
     def test_debit_currency_does_not_reveal_an_invisible_player(self):
         obol = create_currency(
@@ -2377,7 +3116,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
 
     def test_failed_action_rolls_back_earlier_actions_in_same_step(self):
         steps = self._steps()
-        steps[1]["actions"].append({
+        steps[1]["actions"].insert(-1, {
             "type": "consume_item",
             "actor": "trigger_actor",
             "item": "itemdefinition.barley-seed",
@@ -2438,14 +3177,14 @@ class TestScheduledTriggerSteps(WorldTestCase):
                         "item": "itemdefinition.barley-seed",
                     },
                     {
-                        "type": "echo",
-                        "room": "trigger_room",
-                        "text": "This echo must roll back.",
-                    },
-                    {
                         "type": "consume_item",
                         "actor": "trigger_actor",
                         "item": "itemdefinition.barley-seed",
+                    },
+                    {
+                        "type": "echo",
+                        "room": "trigger_room",
+                        "text": "This echo must roll back.",
                     },
                 ],
             },
@@ -2656,6 +3395,86 @@ class TestScheduledTriggerSteps(WorldTestCase):
         run = ScheduledTriggerRun.objects.get(trigger=trigger)
         self.assertEqual(run.actor_type, "player")
         self.assertEqual(run.actor_id, self.player.id)
+
+    def test_forced_say_preserves_depth_without_reentering_reaction(self):
+        import spawns.handlers  # noqa: F401
+
+        mob_definition = MobDefinition.objects.create(
+            world=self.world,
+            name="Echoing Keeper",
+        )
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            definition=mob_definition,
+            name="Echoing Keeper",
+        )
+        trigger = Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_WORLD,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(Mob),
+            target_id=mob.id,
+            name="Echo the player",
+            event=adv_consts.MOB_REACTION_EVENT_SAYING,
+            match="repeat forever",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": "trigger_actor",
+                            "command": "say repeat forever",
+                        },
+                    ],
+                },
+            ],
+            gate_delay=0,
+            display_action_in_room=False,
+        )
+        initial_depth = MAX_SCRIPT_COMMAND_DEPTH - 1
+        event = GameEvent(
+            type="cmd.say.success",
+            recipients=[self.player.key],
+            data={
+                "actor": {
+                    "key": self.player.key,
+                    "name": self.player.name,
+                },
+                "text": "repeat forever",
+                SCRIPT_COMMAND_DEPTH_KEY: initial_depth,
+            },
+        )
+
+        with capture_game_messages() as messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                publish_events([event], actor_key=self.player.key)
+
+        runs = list(ScheduledTriggerRun.objects.filter(trigger=trigger))
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(
+            runs[0].bindings[SCRIPT_COMMAND_DEPTH_KEY],
+            initial_depth,
+        )
+        self.assertEqual(
+            runs[0].status,
+            ScheduledTriggerRun.STATUS_COMPLETED,
+        )
+        self.assertFalse(GameEventOutbox.objects.exists())
+        forced_messages = [
+            entry["message"]
+            for entry in messages
+            if (
+                entry["message"]["type"] == "cmd.say.success"
+                and entry["message"].get("text")
+            )
+        ]
+        self.assertEqual(len(forced_messages), 1)
+        self.assertNotIn(
+            SCRIPT_COMMAND_PROVENANCE_KEY,
+            forced_messages[0]["data"],
+        )
 
     def test_say_event_step_trigger_ignores_same_room_mob_in_other_instance(self):
         fixture = self._cross_instance_mob_event_fixture(
@@ -3027,6 +3846,54 @@ class TestScheduledTriggerSteps(WorldTestCase):
 
         self.assertEqual(result["processed"], 1)
         self.assertEqual(self._room_items(self.growing).count(), 1)
+
+    def test_deleted_trigger_identity_survives_in_command_provenance(self):
+        trigger = self._create_trigger(
+            match="begin vanishing script",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "The sequence begins.",
+                        },
+                    ],
+                },
+                {
+                    "after_seconds": 1,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": "trigger_actor",
+                            "command": "say The source is gone.",
+                        },
+                    ],
+                },
+            ],
+        )
+        trigger_id = trigger.id
+        trigger_key = trigger.key
+        self._dispatch(self.player.id, "begin vanishing script")
+        run = ScheduledTriggerRun.objects.get(trigger=trigger)
+
+        trigger.delete()
+        run.refresh_from_db()
+        self.assertIsNone(run.trigger_id)
+
+        result = process_due_trigger_runs(
+            now=run.started_ts + timedelta(seconds=1),
+        )
+
+        self.assertEqual(result["processed"], 1)
+        say_event = GameEventOutbox.objects.get(
+            event_type="cmd.say.success",
+        )
+        provenance = say_event.data[SCRIPT_COMMAND_PROVENANCE_KEY]
+        self.assertEqual(provenance["trigger_id"], trigger_id)
+        self.assertEqual(provenance["trigger_key"], trigger_key)
 
 
 class TestConcurrentHarvestTriggerSteps(TransactionTestCase):

@@ -59,18 +59,39 @@ This plan remains directional, but several pieces are now implemented:
   `runtime_world_id` in the payload when the command needs live-instance
   context. `/cmd room` carries this from the originating character
   automatically.
+- `dispatch_command` and `CommandContext` now carry explicit issuer and
+  optional subject identity while retaining the current actor compatibility
+  fields. A room-issued Trigger-step command can therefore execute with a
+  player or mob subject without pretending that subject initiated the intent.
+- A dedicated `ScriptCommandRunner` now powers typed Trigger `command` actions.
+  It captures audited event-only handler output inside the step transaction so
+  publication occurs through the durable outbox after commit. Durable events
+  carry internal Trigger/run/issuer/subject provenance that is stripped from
+  player payloads, and are deliberately excluded from Trigger and quest
+  subscriptions because forced behavior is not voluntary player input.
+- Trigger command actions support the fixed Trigger room, the Trigger actor
+  (including a player), or one bounded exact-one room-local mob selector.
+  Single-command, nested-dispatch, alias/history, and fallback-trigger guards
+  are enforced at this boundary.
+- The runner reuses the already resolved subject, issuer, and runtime world
+  rather than refetching those identities once per command action.
 
 Current trigger command kind is `command`.
 
 Still future work:
 
-- The explicit `issuer`/`subject` context shape described below is not yet
-  implemented.
 - Handler declarations still use `supported_actor_types`; they have not yet
-  moved to `allowed_issuer_types` and `required_subject_types`.
-- There is not yet a dedicated `ScriptCommandRunner`.
-- Ambient command recursion limits, rate limits, and structured diagnostics are
-  not complete.
+  moved generally to `allowed_issuer_types` and `required_subject_types`.
+  Trigger steps currently add a narrower `trigger_step_mode: events_only`
+  capability for audited handlers.
+- The dedicated runner is integrated with typed Trigger steps, but legacy
+  `spec.script`, quests, and other scheduled script sources have not yet moved
+  to it.
+- Ambient command rate limits and cross-source recursion/deduplication limits
+  are not complete. Typed command steps already reject chains, history,
+  aliases, nested `/cmd`, and fallback Trigger recursion. Their marked output
+  does not enter Trigger or quest subscriber cascades; an eight-layer depth
+  cap remains a secondary internal safeguard.
 - A generic `before_command` policy hook for vetoing already resolved command
   handlers is not implemented.
 
@@ -270,7 +291,8 @@ Ambient scripting can create loops quickly. Add guardrails early:
 
 ### Phase 1: Model and compatibility
 
-Status: partially implemented through the existing actor compatibility model.
+Status: implemented for dispatcher/context resolution with compatibility
+aliases retained.
 
 1. Add `issuer` and `subject` fields to command context and registry resolution.
 2. Keep current actor-based fields as compatibility aliases.
@@ -313,13 +335,20 @@ Exit criteria:
 
 ### Phase 4: Script runner integration
 
-1. Add `ScriptCommandRunner` that executes command lines under ambient issuer context.
-2. Integrate with trigger and quest script entry points.
-3. Route command execution exclusively through runner for scripted sources.
+Status: implemented for typed Trigger command actions; other script entry
+points remain pending.
+
+1. Add `ScriptCommandRunner` that executes command lines under ambient issuer
+   context. Implemented for one bounded command.
+2. Integrate with typed Trigger steps. Implemented.
+3. Integrate with legacy Trigger scripts and quest script entry points.
+4. Route command execution exclusively through the runner for scripted
+   sources.
 
 Exit criteria:
-- At least one room trigger path executes commands via runner in WR2.
-- Traceable issuer metadata appears in logs/errors.
+- At least one room trigger path executes commands via runner in WR2. Met.
+- Traceable issuer metadata appears in command context and step errors. Met for
+  typed Trigger steps.
 
 ### Phase 5: Pre-action policy hooks and room-check replacement
 

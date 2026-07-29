@@ -71,6 +71,7 @@ class SocialHandler(CommandHandler):
 
     command_type = "social"
     supported_actor_types = ("player", "mob")
+    trigger_step_mode = "events_only"
 
     def handle(self, ctx: CommandContext) -> None:
         command = ctx.payload.get("social") or ctx.payload.get("command")

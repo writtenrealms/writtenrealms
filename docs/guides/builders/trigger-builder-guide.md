@@ -145,8 +145,9 @@ If neither is present, the manifest creates a new trigger.
   mob `say`, `receive`, `periodic`, and `social` event triggers.
 - `script`: free-form command lines to run when a command or event trigger
   fires. Use this for immediate command-oriented behavior.
-- `steps`: typed, transaction-safe actions with builder-authored timing. Use
-  this for durable item sequences and other supported timed behavior.
+- `steps`: transaction-safe actions and audited commands with builder-authored
+  timing. Use this for durable item sequences, currency operations, and timed
+  room/mob/player command output.
 - `on_step_error`: delayed-step failure policy. The current supported value is
   `cancel`.
 - `conditions`: optional gate. Leave blank for no gate.
@@ -308,7 +309,7 @@ Practical guidance:
 - use multiple lines when you want a paced reveal
 - prefer simple, explicit commands over one very dense line
 - use `steps` instead when exact item identity, configurable timing, durable
-  continuation, or per-step transactions matter
+  continuation, per-step transactions, or a timed command subject matters
 
 Common commands you will often use in trigger scripts:
 
@@ -522,10 +523,96 @@ player's current room rather than notifying the room where the Trigger began.
 Invisible or logged-out players receive the private result without a room
 message that would reveal them.
 
+### Running Commands From Steps
+
+Use one `command` action when a timed step should have the Trigger room, the
+triggering player or mob, or one exact room-local mob execute an audited
+command.
+
+This toll charges the triggering player and then has Charon emote:
+
+```yaml
+steps:
+  - after_seconds: 0
+    actions:
+      - type: debit_currency
+        actor: trigger_actor
+        currency: obol
+        amount: 10
+      - type: command
+        subject:
+          type: mob
+          room: trigger_room
+          mob: mobdefinition.charon
+        command: emote grunts satisfactorily.
+```
+
+The command runs only if the debit and every other action in the step succeeds.
+Its output is captured and written to the event outbox with the rest of the
+step. If Charon is absent or ambiguous, the player has insufficient funds, or
+the command itself fails, neither the debit nor the emote commits.
+
+There are three subject forms:
+
+```yaml
+# The original Trigger room executes an ambient command.
+- type: command
+  subject: trigger_room
+  command: /echo The ferry pulls away from the pier.
+
+# The player or mob that activated the Trigger executes the command.
+- type: command
+  subject: trigger_actor
+  command: say I accept the ferryman's price.
+
+# Exactly one live mob of this definition in the original Trigger room acts.
+- type: command
+  subject:
+    type: mob
+    room: trigger_room
+    mob: mobdefinition.charon
+    where:
+      eq:
+        - state.character.on_duty
+        - true
+  command: emote raises one skeletal hand.
+```
+
+`trigger_actor` explicitly supports players. A delayed player command follows
+that player within the same runtime world and uses the player's current room;
+for example, a sixth step can force the player to `say` a line after five
+earlier stages. The fixed `trigger_room` and selected-mob forms stay attached
+to the original runtime world and room. The initial contract deliberately
+does not select an arbitrary bystander player by name or room position:
+`trigger_actor` is the stable player subject.
+
+Commands currently approved for transactional steps are room-local `say`,
+`emote`, `talk`, authored socials, and room-subject, room-scoped `/echo`.
+A handler must be audited and explicitly marked as event-only before it
+becomes available here. Zone-wide `yell` and zone/world echoes are excluded
+because they can create large fanout while a step transaction is open.
+Movement, combat, inventory mutation, builder-state mutation, and nested
+`/cmd` dispatch are not currently step-safe.
+
+One action contains exactly one command. Newlines, `;` or `&&` chains, history
+references, and nested `/cmd` are rejected. Use multiple `command` actions in
+one step for multiple immediate commands. Player aliases, command history, and
+fallback command Triggers are suppressed for forced commands. Published
+output remains visible, while internal durable events carry
+Trigger/run/issuer/subject provenance that is not exposed to players. Forced
+output does not drive quest progress or another Trigger reaction. A depth
+marker is also retained as defense in depth.
+
+The Trigger room is recorded internally as the command issuer; `subject` is
+the embodied player or mob that performs it. Builders cannot spoof that
+provenance. Command templates such as `{{ actor_key }}` render against the
+original Trigger actor before dispatch.
+
 ### Supported Step Actions
 
 | Type | Required fields | Effect |
 | --- | --- | --- |
+| `command` | `subject`, `command` | Executes one audited event-only command as `trigger_room`, `trigger_actor`, or one exact room-local mob selector. Command failure rolls back the step. |
 | `debit_currency` | `actor: trigger_actor`, `currency`, `amount` | Atomically removes a positive amount of one explicit currency from the triggering player. Fails if the actor is not a player or has insufficient funds. |
 | `consume_item` | `actor: trigger_actor`, `item`, optional `count` | Removes exact-definition items from the triggering actor's inventory. `count` defaults to `1`. |
 | `consume_room_item` | `room: trigger_room`, `item`, optional `count` | Removes exact-definition items from the triggering room. `count` defaults to `1`. |
@@ -537,7 +624,8 @@ message that would reveal them.
 
 Use portable item refs such as `itemdefinition.barley-seeds`, not database ids.
 `echo.text` is literal text; unlike `script`, it does not render template
-variables such as `{{ actor_key }}`.
+variables such as `{{ actor_key }}`. `command.command` does render those
+variables against the original Trigger actor.
 Binding names use lowercase letters, numbers, and underscores, begin with a
 letter, and are at most 64 characters. A replacement target must refer to a
 binding created by an earlier `spawn_room_item`; `previous_stage` is not an
@@ -550,11 +638,12 @@ A trigger may contain at most 32 steps and each step at most 16 actions. Each
 `grant_item.count` and the sum of all granted items in one step may be at most
 `32`. `debit_currency.amount` may be at most
 `9,007,199,254,740,991`. Multiple currency debits in one step are applied as
-one wallet batch and increment the wallet revision once. Put every item or mob
-mutation before the first debit in that step; after the first debit, only more
-debits or `echo` actions are allowed. This keeps balance locks last while an
-`echo` can still follow the success text in authored order. `echo.text` may
-contain at most 4,000 characters. The complete
+one wallet batch and increment the wallet revision once. Order actions as all
+item/mob mutations, then all debits, then event-only `command`/`echo` output.
+No mutation may follow a debit or output action, and no debit may follow
+output. This keeps balance locks last while preserving authored output order.
+`command.command` and `echo.text` may each contain at most 4,000
+characters. The complete
 normalized `steps` payload may be at most 256 KiB when serialized as UTF-8
 JSON.
 
@@ -566,9 +655,10 @@ typed sequences in one runtime world; another start returns
 `too_many_active_sequences` until one finishes or cancels.
 
 Each step is atomic. With `on_step_error: cancel`, a missing or harvested bound
-item or an insufficient currency balance rolls back that entire step and
-cancels the remaining sequence. Completed earlier steps stay completed. Put
-actions that must succeed or fail together in the same step.
+item, an insufficient currency balance, an unavailable command subject, or a
+rejected command rolls back that entire step and cancels the remaining
+sequence. Completed earlier steps stay completed. Put actions that must
+succeed or fail together in the same step.
 
 `set_mob.mob` uses a portable `mobdefinition.<slug>` ref. Its optional `where`
 uses the query-free candidate subset of the shared condition DSL, evaluated

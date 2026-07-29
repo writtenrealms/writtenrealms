@@ -302,8 +302,12 @@ Current required mappings:
   `item_present` with `location: actor_inventory` and `location: room`,
   respectively. Preserve negation and counts. Flag arbitrary or dynamic
   delayed commands, ambiguous purge selectors, nested delays, and unsupported
-  action types for builder review rather than embedding command strings inside
-  typed actions.
+  action types for builder review. A deterministic delayed `say`, `emote`,
+  social, or room echo may instead export as one typed `command`
+  action when its subject maps unambiguously to `trigger_actor`,
+  `trigger_room`, or exactly one portable room-local mob definition. Emit one
+  action per command; do not put WR1 command chains or `/cmd` wrappers inside
+  `command.command`.
 - A deterministic WR1 harvest item action attached to the mature stage may
   export as a separate room-scoped command trigger. Preserve its authored
   command match, set `display_action_in_room: true`, and add an `item_present`
@@ -745,9 +749,9 @@ spec:
 
 ### Typed Scheduled `steps`
 
-Use `spec.steps` when a trigger needs builder-controlled timing and exact,
-transactional item or currency operations. `script` and `steps` cannot both be
-non-empty.
+Use `spec.steps` when a trigger needs builder-controlled timing, exact
+transactional item/currency operations, or an audited command executed by the
+Trigger environment. `script` and `steps` cannot both be non-empty.
 
 ```yaml
 kind: trigger
@@ -804,21 +808,63 @@ steps:
         amount: 10
 ```
 
+An audited command can execute as the Trigger room, the Trigger actor
+(including a player), or one exact room-local mob:
+
+```yaml
+steps:
+  - after_seconds: 0
+    actions:
+      - type: debit_currency
+        actor: trigger_actor
+        currency: obol
+        amount: 10
+      - type: command
+        subject:
+          type: mob
+          room: trigger_room
+          mob: mobdefinition.charon
+        command: emote grunts satisfactorily.
+  - after_seconds: 10
+    actions:
+      - type: command
+        subject: trigger_actor
+        command: say I accept the ferryman's price.
+```
+
 The first step must have `after_seconds: 0`; later offsets are positive and
 relative to the prior step. Each offset and their cumulative total are capped
-at one year. `debit_currency`, `consume_item`, `consume_room_item`, `grant_item`,
-`spawn_room_item`, `replace_room_item`, `set_mob`, and `echo` are the action
-whitelist. Item and mob-definition refs are resolved within the authored world
-and stored portably. A debit requires `actor: trigger_actor`, a positive safe
-integer amount, and a currency code resolved against the base-world catalog;
-omission never means the current default. Bindings must be created before use
-and identify exact runtime items, not keywords or definition matches. `set_mob`
-resolves exactly one live candidate in the current runtime room, may filter it
-through the query-free Boolean/comparison subset of shared `where` conditions,
-and can atomically update its supported runtime fields and character state.
-Item and mob mutations must precede the first `debit_currency` in a step; only
-additional debits or `echo` may follow it. This lets all debits remain one
-wallet batch with balance rows locked last.
+at one year. `command`, `debit_currency`, `consume_item`, `consume_room_item`,
+`grant_item`, `spawn_room_item`, `replace_room_item`, `set_mob`, and `echo` are
+the action whitelist. Item and mob-definition refs are resolved within the
+authored world and stored portably. A debit requires
+`actor: trigger_actor`, a positive safe integer amount, and a currency code
+resolved against the base-world catalog; omission never means the current
+default. Bindings must be created before use and identify exact runtime items,
+not keywords or definition matches. `set_mob` resolves exactly one live
+candidate in the current runtime room, may filter it through the query-free
+Boolean/comparison subset of shared `where` conditions, and can atomically
+update its supported runtime fields and character state.
+
+`command.subject` is `trigger_room`, `trigger_actor`, or a mapping with
+`type: mob`, `room: trigger_room`, a portable `mobdefinition.<slug>`, and an
+optional query-free `where`. One action executes one command; command chains,
+history references, and nested `/cmd` dispatch are rejected. The dedicated
+runner accepts only handlers explicitly audited as event-only. Current
+coverage is room-local `say`, `emote`, `talk`, authored socials, and
+room-subject, room-scoped `/echo`. The Trigger room is retained as the issuer
+while an embodied player or mob is recorded as the subject. Durable command
+events carry internal, unforgeable Trigger/run/issuer/subject provenance,
+which is stripped from the player payload. Output remains visible but does not
+count as voluntary input for quest or Trigger subscriptions; a depth marker
+remains as defense in depth. `trigger_actor` is the only player subject in
+this initial contract; typed steps do not select arbitrary bystander players.
+
+Actions use three ordered phases: item and mob mutations first, all
+`debit_currency` actions next, then event-only `command` and `echo` output.
+No mutation may follow a debit or output action, and no debit may follow
+command/echo output. This preserves authored ordering while keeping all
+debits in one wallet batch with balance rows locked last.
 Query-backed presence and quest operators belong in the trigger's outer
 conditions. Policy triggers cannot define steps.
 
@@ -1291,8 +1337,14 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 - `debit_currency` requires exactly `actor: trigger_actor`, an explicit
   base-world currency code, and a positive integer `amount` no greater than
   `9,007,199,254,740,991`.
-- Item and mob mutation actions must precede the first `debit_currency` in a
-  step. Only `debit_currency` and `echo` actions may follow it.
+- `command` requires exactly one `command` string and a `subject` of
+  `trigger_room`, `trigger_actor`, or an exact-one room-local mob selector.
+  Newlines, `;`/`&&` chains, history references, and nested `/cmd` are rejected;
+  the resolved handler must explicitly support event-only Trigger-step
+  execution.
+- Step actions are phase ordered: item/mob mutations, then all
+  `debit_currency` actions, then `command`/`echo` output. A mutation cannot
+  follow a debit or output action, and a debit cannot follow output.
 - `spawn_room_item.bind` names are unique and must precede any matching
   `replace_room_item.target`. The current `spec.on_step_error` value is
   `cancel`.

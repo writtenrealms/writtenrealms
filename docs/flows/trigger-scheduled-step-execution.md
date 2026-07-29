@@ -2,7 +2,8 @@
 
 This note describes the runtime path for a command or event trigger with a
 non-empty `spec.steps` list. Typed steps are the durable alternative to
-free-form multi-line `spec.script` pacing.
+free-form multi-line `spec.script` pacing and can include audited command
+execution with explicit room, actor, or mob subjects.
 
 ## Start Transaction
 
@@ -16,9 +17,10 @@ When a trigger matches:
    that runtime world and room.
 4. Evaluate `spec.conditions`. This closes the race between checking for an
    empty plot and spawning the first crop.
-5. Validate the typed steps, resolve all item/mob-definition refs against the
-   authored world and all debit currency codes against the base economy world,
-   then snapshot their stable ids and portable slugs/codes.
+5. Validate the typed steps, resolve all item/mob-definition refs (including
+   command mob subjects) against the authored world and all debit currency
+   codes against the base economy world, then snapshot their stable ids and
+   portable slugs/codes.
 6. Convert relative `after_seconds` values to cumulative offsets from the run's
    fixed `started_ts`.
 7. Reject a duplicate active run for the same trigger, runtime world, room, and
@@ -40,12 +42,16 @@ The run is the source of truth for delayed work. It stores:
 - the next step cursor and absolute due timestamp
 - exact bindings such as `crop -> item.123`
 - concrete currency ids alongside portable authored codes
+- concrete mob-definition ids for exact-one command subjects
 - status and terminal error information
 
 Deleting or editing the authored trigger does not rewrite an in-flight run.
 Deleting an item definition needed by a future step causes that step to cancel
 cleanly rather than resolving a newly created definition with the same slug.
-Player movement or logout does not redirect room actions or echoes.
+Player movement or logout does not redirect fixed room actions, echoes, or mob
+selectors. A `command` with `subject: trigger_actor` is intentionally different:
+it follows that actor's current room in the same runtime world, and a missing
+or logged-out player subject fails the step.
 
 ## Due-Step Worker
 
@@ -80,13 +86,20 @@ Every action in one step shares a transaction:
   existing Mob and Item candidates in aggregate order, and locks the ordered
   balance rows last. The complete batch is rejected if any balance is
   insufficient.
+- `command` resolves `trigger_room`, the current `trigger_actor`, or exactly one
+  live mob from a portable definition in the original runtime room. The
+  Trigger room is the issuer and an embodied player/mob is the subject.
+  Only handlers explicitly audited as event-only are accepted.
 - `echo` selects players currently in the original runtime world and room.
 
-The authoring contract places item and mob mutations before the first debit;
-only more debits or `echo` may follow it. Non-debit mixed steps use the same
-Mob-then-Item prelock phase, so concurrent runs cannot invert the aggregate
-order. Immediate and delayed Mob-triggered steps lock the actor and all bounded
-target candidates together in ascending Mob id order before Item rows.
+The authoring contract uses three phases: item and mob mutations, all debits,
+then event-only commands and `echo` output. Mutations cannot follow a debit or
+output action, and debits cannot follow output. Command mob subjects join the
+same bounded exact-one Mob prelock used by `set_mob`.
+Non-debit mixed steps use the same Mob-then-Item prelock phase, so concurrent
+runs cannot invert the aggregate order. Immediate and delayed Mob-triggered
+steps lock the actor and all bounded target candidates together in ascending
+Mob id order before Item rows.
 Immediate Mob starts pin only that Mob set while conditions, active-run limits,
 and the cache-backed gate are checked; they select and lock Item candidates
 only after those checks pass. Item candidates are capped by the summed authored
@@ -97,6 +110,19 @@ step. An unfiltered `set_mob` needs at most two stable candidates to prove
 ambiguity. A filtered `set_mob` may evaluate at most 256 candidates; a larger
 candidate population fails the step instead of taking an unbounded set of row
 locks.
+
+The dedicated `ScriptCommandRunner` renders one command against the original
+Trigger actor and dispatches it with explicit room issuer and optional
+player/mob subject context. Newlines, `;`/`&&` chains, history references,
+nested `/cmd`, aliases, and fallback Trigger matching are disabled. Approved
+handlers publish only `GameEvent` objects. A context-local capture intercepts
+those events, and direct command-result messages, without touching WebSockets
+or subscriptions inside the transaction. A handler error becomes a structured
+step error. Durable command events carry internal
+Trigger/run/issuer/subject provenance, which is stripped from the WebSocket
+payload. Player-visible output is delivered normally, but Trigger and quest
+subscribers skip it because a forced action is not voluntary player input. A
+maximum depth marker remains as a secondary safeguard for internal forwarding.
 
 Events are written to `GameEventOutbox` before commit and published afterward.
 A process failure before commit leaves the run due and changes nothing. A
@@ -131,8 +157,9 @@ may claim it again immediately.
 
 Expected semantic failures—missing actor inventory, missing room items, a
 harvested/moved bound item, a missing actor for a grant, a non-player debit
-actor, insufficient funds, or a deleted definition/currency—roll back the
-current step. With
+actor, insufficient funds, a missing/ambiguous command subject, an unsafe or
+rejected command, or a deleted definition/currency—roll back the current step.
+With
 `on_step_error: cancel`, the run records the error and becomes `cancelled`.
 Earlier committed steps remain intact; later steps do not run.
 

@@ -34,6 +34,7 @@ class SayHandler(CommandHandler):
     command_type = "say"
     text_commands = ("say",)
     supported_actor_types = ("player", "mob")
+    trigger_step_mode = "events_only"
     help = {
         "name": "Say",
         "format": "say <message>",
@@ -106,6 +107,7 @@ class EmoteHandler(CommandHandler):
     command_type = "emote"
     text_commands = ("emote",)
     supported_actor_types = ("player", "mob")
+    trigger_step_mode = "events_only"
     help = {
         "name": "Emote",
         "format": "emote <message>",
@@ -142,6 +144,7 @@ class TalkHandler(CommandHandler):
     command_type = "talk"
     text_commands = ("talk",)
     supported_actor_types = ("player",)
+    trigger_step_mode = "events_only"
     help = {
         "name": "Talk",
         "format": "talk <mob>",

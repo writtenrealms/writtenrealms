@@ -1,20 +1,31 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
-from typing import Callable, Iterable, Sequence
+from typing import Callable, Iterable, Iterator, Sequence
 import uuid
 
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
+from core.trigger_steps import (
+    SCRIPT_COMMAND_DEPTH_KEY,
+    SCRIPT_COMMAND_PROVENANCE_KEY,
+)
 from fastapi_app.game_ws import publish_to_player
 
 
 logger = logging.getLogger(__name__)
+
+_captured_game_events: ContextVar[list[GameEvent] | None] = ContextVar(
+    "captured_game_events",
+    default=None,
+)
 
 
 @dataclass(frozen=True)
@@ -36,6 +47,23 @@ class GameEvent:
         return message
 
 
+@contextmanager
+def capture_game_events() -> Iterator[list[GameEvent]]:
+    """
+    Capture events from audited command handlers without publishing them.
+
+    Trigger steps use this boundary to keep command output inside the step
+    transaction. The caller is responsible for enqueuing the returned events
+    only after every action in the step succeeds.
+    """
+    captured: list[GameEvent] = []
+    token = _captured_game_events.set(captured)
+    try:
+        yield captured
+    finally:
+        _captured_game_events.reset(token)
+
+
 def publish_events(
     events: Iterable[GameEvent],
     *,
@@ -46,8 +74,24 @@ def publish_events(
     Publish a list of events. If actor_key/connection_id is provided, only
     events targeting the actor will be pinned to that connection.
     """
-    for event in events:
+    event_list = list(events)
+    capture_sink = _captured_game_events.get()
+    if capture_sink is not None:
+        capture_sink.extend(event_list)
+        return
+
+    for event in event_list:
         message = event.to_message()
+        if isinstance(
+            event.data.get(SCRIPT_COMMAND_PROVENANCE_KEY),
+            dict,
+        ):
+            # Provenance is durable server metadata used for routing and
+            # auditing, not part of the player-facing command payload.
+            public_data = deepcopy(event.data)
+            public_data.pop(SCRIPT_COMMAND_DEPTH_KEY, None)
+            public_data.pop(SCRIPT_COMMAND_PROVENANCE_KEY, None)
+            message["data"] = public_data
         for recipient in event.recipients:
             recipient_connection_id = event.connection_id
             if (
@@ -63,24 +107,37 @@ def publish_events(
                 connection_id=recipient_connection_id,
             )
 
-        # Late import avoids trigger/state payload import cycles during app bootstrap.
-        from spawns.trigger_subscriptions import dispatch_trigger_subscriptions_for_event
+        # A Trigger step may make an embodied subject speak or emote, but that
+        # authored behavior is not voluntary player input. Keep its visible
+        # output while preventing forced commands from progressing quests or
+        # recursively starting more Triggers.
+        if not isinstance(
+            event.data.get(SCRIPT_COMMAND_PROVENANCE_KEY),
+            dict,
+        ):
+            # Late imports avoid trigger/state payload import cycles during
+            # app bootstrap.
+            from spawns.trigger_subscriptions import (
+                dispatch_trigger_subscriptions_for_event,
+            )
 
-        dispatch_trigger_subscriptions_for_event(
-            event_type=event.type,
-            event_data=event.data,
-            actor_key=actor_key,
-            connection_id=connection_id,
-        )
+            dispatch_trigger_subscriptions_for_event(
+                event_type=event.type,
+                event_data=event.data,
+                actor_key=actor_key,
+                connection_id=connection_id,
+            )
 
-        from quests.subscriptions import dispatch_quest_subscriptions_for_event
+            from quests.subscriptions import (
+                dispatch_quest_subscriptions_for_event,
+            )
 
-        dispatch_quest_subscriptions_for_event(
-            event_type=event.type,
-            event_data=event.data,
-            actor_key=actor_key,
-            connection_id=connection_id,
-        )
+            dispatch_quest_subscriptions_for_event(
+                event_type=event.type,
+                event_data=event.data,
+                actor_key=actor_key,
+                connection_id=connection_id,
+            )
 
 
 def enqueue_game_events(events: Iterable[GameEvent]) -> int:

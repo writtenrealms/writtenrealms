@@ -541,6 +541,69 @@ spec:
             self.trigger.steps,
         )
 
+    def test_apply_trigger_manifest_supports_command_step_subjects(self):
+        charon = MobDefinition.objects.create(
+            world=self.world,
+            slug="charon",
+            name="Charon",
+        )
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: command
+          subject: trigger_room
+          command: /echo The ferry creaks.
+    - after_seconds: 5
+      actions:
+        - type: command
+          subject: trigger_actor
+          command: say I accept the fare.
+    - after_seconds: 5
+      actions:
+        - type: command
+          subject:
+            type: mob
+            room: trigger_room
+            mob: {charon.id}
+          command: emote nods once.
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.trigger.refresh_from_db()
+        self.assertEqual(
+            self.trigger.steps[0]["actions"][0],
+            {
+                "type": "command",
+                "subject": "trigger_room",
+                "command": "/echo The ferry creaks.",
+            },
+        )
+        self.assertEqual(
+            self.trigger.steps[1]["actions"][0]["subject"],
+            "trigger_actor",
+        )
+        self.assertEqual(
+            self.trigger.steps[2]["actions"][0]["subject"]["mob"],
+            "mobdefinition.charon",
+        )
+        self.assertEqual(
+            resp.data["trigger"]["manifest"]["spec"]["steps"],
+            self.trigger.steps,
+        )
+
     def test_apply_trigger_manifest_rejects_invalid_currency_debit_steps(self):
         create_currency(
             world=self.world,
@@ -601,7 +664,7 @@ spec:
           actor: trigger_actor
           item: itemdefinition.{late_item.slug}
 """,
-                "put item and mob mutations before the debit",
+                "order actions as mutations, then debits, then command/echo output",
             ),
         )
 

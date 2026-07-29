@@ -438,6 +438,21 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
                             "currency": "obol",
                             "amount": 10,
                         },
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": "trigger_room",
+                                "mob": self.quartermaster.id,
+                                "where": {
+                                    "eq": [
+                                        "state.character.on_duty",
+                                        True,
+                                    ],
+                                },
+                            },
+                            "command": "emote nods approvingly.",
+                        },
                     ],
                 },
                 {
@@ -673,6 +688,19 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             "obol",
         )
         self.assertEqual(
+            trigger["spec"]["steps"][0]["actions"][3]["subject"]["mob"],
+            "mobdefinition.quartermaster",
+        )
+        self.assertEqual(
+            trigger["spec"]["steps"][0]["actions"][3]["subject"]["where"],
+            {
+                "eq": [
+                    "state.character.on_duty",
+                    True,
+                ],
+            },
+        )
+        self.assertEqual(
             trigger["spec"]["steps"][1]["actions"][0]["with"],
             "itemdefinition.barley-growing",
         )
@@ -900,6 +928,19 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(
             manifest["spec"]["steps"][0]["actions"][2]["currency"],
             "obol",
+        )
+        self.assertEqual(
+            manifest["spec"]["steps"][0]["actions"][3]["subject"]["mob"],
+            "mobdefinition.quartermaster",
+        )
+        self.assertEqual(
+            manifest["spec"]["steps"][0]["actions"][3]["subject"]["where"],
+            {
+                "eq": [
+                    "state.character.on_duty",
+                    True,
+                ],
+            },
         )
 
     def test_zone_detail_returns_apply_and_delete_yaml(self):

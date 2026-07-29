@@ -14,7 +14,9 @@ from core.scoped_state import (
     replace_state_snapshot,
 )
 from spawns.handlers import dispatch_command
+from spawns.events import publish_events
 from spawns.models import Item
+from spawns.script_commands import ScriptCommandRunner
 from spawns.wallet import balance_map
 from quests.models import QuestInstance, QuestTemplate
 from quests.services.discovery import list_opportunities
@@ -1657,6 +1659,49 @@ class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
         self.assertEqual(balance_map(self.player)["obol"], 8)
         self.assertIn("quest.instance.resolved", self._message_types(final_messages))
         self.assertIn("notification.cmd.say.success", self._message_types(final_messages))
+
+    def test_forced_talk_is_visible_but_does_not_resolve_quest(self):
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "look")
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "kill rat")
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "kill rat")
+
+        quest_instance = QuestInstance.objects.get(
+            player=self.player,
+            template__slug="rat_cull",
+        )
+        self.assertEqual(quest_instance.current_step_id, "report")
+        self.assertEqual(quest_instance.status, "active")
+
+        forced_talk = ScriptCommandRunner().execute(
+            issuer=self.room,
+            subject=self.player,
+            command="talk captain",
+            render_actor=self.player,
+            runtime_world=self.spawn_world,
+            provenance={
+                "trigger_id": 17,
+                "run_id": 23,
+                "step_index": 5,
+                "action_index": 0,
+            },
+        )
+        with capture_game_messages() as forced_messages:
+            publish_events(forced_talk.events)
+
+        self.assertIn("cmd.talk.success", self._message_types(forced_messages))
+        quest_instance.refresh_from_db()
+        self.assertEqual(quest_instance.current_step_id, "report")
+        self.assertEqual(quest_instance.status, "active")
+        self.assertEqual(balance_map(self.player).get("obol", 0), 0)
+
+        with capture_game_messages():
+            dispatch_text_command(self.player.id, "talk captain")
+
+        quest_instance.refresh_from_db()
+        self.assertEqual(quest_instance.status, "resolved")
 
     def test_return_to_captain_shows_question_indicator_after_kills(self):
         with capture_game_messages():

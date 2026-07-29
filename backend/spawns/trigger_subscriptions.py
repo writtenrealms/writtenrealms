@@ -98,6 +98,7 @@ def _on_cmd_say_success(
         room=player.room_id,
         match_text=str(message_text or ""),
         connection_id=connection_id,
+        source_event_data=event_data,
     )
 
 
@@ -234,6 +235,7 @@ def _on_affect_social(
         connection_id=connection_id,
         isolate_runtime_world=True,
         target_mob_id=target_mob_id,
+        source_event_data=event_data,
     )
 
 

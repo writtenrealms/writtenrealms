@@ -262,8 +262,9 @@ under lock, batches all currency debits in the step, and rolls back the entire
 step if any balance is insufficient. The private success text always goes to
 the charged player. The third-person text goes only to in-game witnesses in
 that player's current room and is suppressed while the player is invisible.
-Put item and mob mutations before the step's first debit; only more debits or
-`echo` actions may follow it.
+Order each step as item/mob mutations, then all debits, then audited event-only
+`command` or `echo` output. Do not put a mutation after a debit/output action
+or a debit after command/echo output.
 
 ## Starting Balances And Reset
 

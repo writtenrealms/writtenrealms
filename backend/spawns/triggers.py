@@ -18,6 +18,7 @@ from core.condition_dsl import (
     structured_condition_payload,
 )
 from core.conditions import evaluate_conditions
+from core.trigger_steps import SCRIPT_COMMAND_DEPTH_KEY
 from core.trigger_policy_cache import get_trigger_policy_cache_version
 from core.utils import format_actor_msg
 from spawns.handlers.registry import (
@@ -784,6 +785,7 @@ def execute_mob_event_triggers(
     connection_id: str | None = None,
     isolate_runtime_world: bool = False,
     target_mob_id: int | None = None,
+    source_event_data: dict | None = None,
 ) -> None:
     normalized_event = _normalized_text(event)
     if normalized_event not in adv_consts.MOB_REACTION_EVENTS:
@@ -841,6 +843,21 @@ def execute_mob_event_triggers(
     if not triggers:
         return
 
+    trigger_event_data = {
+        "event": normalized_event,
+        "match": match_text or "",
+    }
+    if isinstance(source_event_data, dict):
+        try:
+            command_depth = max(
+                0,
+                int(source_event_data.get(SCRIPT_COMMAND_DEPTH_KEY) or 0),
+            )
+        except (TypeError, ValueError):
+            command_depth = 0
+        if command_depth:
+            trigger_event_data[SCRIPT_COMMAND_DEPTH_KEY] = command_depth
+
     trigger_by_target: dict[tuple[int, int], list[Trigger]] = {}
     for trigger in _ordered_triggers(triggers):
         if not trigger.target_type_id or not trigger.target_id:
@@ -875,10 +892,7 @@ def execute_mob_event_triggers(
                     trigger=trigger,
                     actor=evaluator,
                     room=resolved_room,
-                    event_data={
-                        "event": normalized_event,
-                        "match": match_text or "",
-                    },
+                    event_data=trigger_event_data,
                     gate_scope_key=scope_key,
                 )
                 continue

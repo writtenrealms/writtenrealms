@@ -1269,9 +1269,11 @@ Performance requirements:
 - All `debit_currency` actions in one typed Trigger step are aggregated into
   one wallet mutation, so work remains bounded by touched currencies rather
   than action count.
-- Typed steps place item and mob mutations before the first debit. Mixed steps,
-  including steps without currency, prelock existing Mob then Item candidates
-  consistently before balance rows are acquired. Immediate and delayed
+- Typed steps phase item/mob mutations before all debits, and debits before
+  command/echo output. Mixed steps, including steps without currency, prelock
+  existing Mob then Item candidates consistently before balance rows are
+  acquired. Exact-one mob subjects for event-only `command` actions join the
+  same bounded Mob prelock. Immediate and delayed
   Mob-triggered mutations lock the actor and bounded target-candidate union in
   ascending Mob id order. Immediate starts defer Item selection and locking
   until conditions, duplicate/cap checks, and the Trigger gate have passed.

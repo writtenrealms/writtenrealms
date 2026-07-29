@@ -1052,6 +1052,23 @@ def _canonicalize_trigger_steps(
                     world=world,
                     entity_ref_cache=entity_ref_cache,
                 )
+            subject = action.get("subject")
+            if (
+                isinstance(subject, dict)
+                and str(subject.get("type") or "").strip().lower() == "mob"
+            ):
+                subject["mob"] = _canonicalize_entity_ref(
+                    subject.get("mob"),
+                    world=world,
+                    expected_type="mobdefinition",
+                    entity_ref_cache=entity_ref_cache,
+                )
+                if "where" in subject:
+                    subject["where"] = _canonicalize_condition_refs(
+                        subject.get("where"),
+                        world=world,
+                        entity_ref_cache=entity_ref_cache,
+                    )
     return canonical_steps
 
 

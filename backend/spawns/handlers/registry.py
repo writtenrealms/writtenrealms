@@ -6,7 +6,7 @@ Handlers are automatically discovered when their modules are imported.
 """
 from typing import Type
 
-from spawns.handlers.base import CommandHandler, CommandContext
+from spawns.handlers.base import CommandActor, CommandHandler, CommandContext
 from spawns.models import Mob, Player
 from worlds.models import Room, World, Zone
 
@@ -53,6 +53,144 @@ def _resolve_runtime_world(payload: dict, default_world: World | None) -> World 
         return World.objects.get(pk=world_id)
     except World.DoesNotExist:
         raise ActorNotFoundError("world", world_id)
+
+
+def _resolve_command_actor(
+    *,
+    actor_type: str,
+    actor_id: int,
+    payload: dict,
+) -> tuple[
+    CommandActor,
+    Player | None,
+    Mob | None,
+    Room | None,
+    Zone | None,
+    World | None,
+]:
+    player = None
+    mob = None
+    room = None
+    zone = None
+    world = None
+    if actor_type == "player":
+        try:
+            player = Player.objects.get(pk=actor_id)
+        except Player.DoesNotExist:
+            raise PlayerNotFoundError(actor_id)
+        actor = player
+        world = player.world
+        room = player.room
+        zone = getattr(room, "zone", None)
+    elif actor_type == "mob":
+        try:
+            mob = Mob.objects.get(pk=actor_id)
+        except Mob.DoesNotExist:
+            raise ActorNotFoundError("mob", actor_id)
+        actor = mob
+        world = mob.world
+        room = mob.room
+        zone = getattr(room, "zone", None)
+    elif actor_type == "room":
+        try:
+            room = Room.objects.select_related("world", "zone").get(pk=actor_id)
+        except Room.DoesNotExist:
+            raise ActorNotFoundError("room", actor_id)
+        actor = room
+        world = _resolve_runtime_world(payload, room.world)
+        zone = room.zone
+    elif actor_type == "zone":
+        try:
+            zone = Zone.objects.select_related("world", "center").get(pk=actor_id)
+        except Zone.DoesNotExist:
+            raise ActorNotFoundError("zone", actor_id)
+        actor = zone
+        world = _resolve_runtime_world(payload, zone.world)
+        room = zone.center
+    elif actor_type == "world":
+        try:
+            world = World.objects.get(pk=actor_id)
+        except World.DoesNotExist:
+            raise ActorNotFoundError("world", actor_id)
+        actor = world
+    else:
+        raise ValueError(f"Unsupported actor_type: {actor_type}")
+    return actor, player, mob, room, zone, world
+
+
+def _resolved_command_actor_context(
+    *,
+    actor_type: str,
+    actor_id: int,
+    actor: CommandActor,
+    payload: dict,
+    runtime_world: World | None = None,
+    room_hint: Room | None = None,
+) -> tuple[
+    CommandActor,
+    Player | None,
+    Mob | None,
+    Room | None,
+    Zone | None,
+    World | None,
+]:
+    actor_models = {
+        "player": Player,
+        "mob": Mob,
+        "room": Room,
+        "zone": Zone,
+        "world": World,
+    }
+    actor_model = actor_models.get(actor_type)
+    if actor_model is None:
+        raise ValueError(f"Unsupported actor_type: {actor_type}")
+    if not isinstance(actor, actor_model) or actor.pk != actor_id:
+        raise ValueError(
+            "The resolved command actor does not match its declared identity."
+        )
+
+    payload_world_id = _payload_int(payload, "runtime_world_id", "world_id")
+    if (
+        runtime_world is not None
+        and payload_world_id is not None
+        and runtime_world.id != payload_world_id
+    ):
+        raise ValueError(
+            "The resolved runtime world does not match the command payload."
+        )
+
+    player = actor if isinstance(actor, Player) else None
+    mob = actor if isinstance(actor, Mob) else None
+    room = actor if isinstance(actor, Room) else None
+    zone = actor if isinstance(actor, Zone) else None
+    world = actor if isinstance(actor, World) else None
+
+    if player is not None or mob is not None:
+        embodied = player or mob
+        world = runtime_world or embodied.world
+        if world.id != embodied.world_id:
+            raise ValueError(
+                "The resolved command actor is outside the runtime world."
+            )
+        if room_hint is not None and room_hint.id == embodied.room_id:
+            room = room_hint
+        else:
+            room = embodied.room
+        zone = room.zone if room is not None else None
+    elif room is not None:
+        world = runtime_world or _resolve_runtime_world(payload, room.world)
+        zone = room.zone
+    elif zone is not None:
+        world = runtime_world or _resolve_runtime_world(payload, zone.world)
+        room = zone.center
+    elif world is not None and runtime_world is not None:
+        if world.id != runtime_world.id:
+            raise ValueError(
+                "The resolved world actor does not match the runtime world."
+            )
+        world = runtime_world
+
+    return actor, player, mob, room, zone, world
 
 
 # Global handler registry: command_type -> handler instance
@@ -161,12 +299,20 @@ def dispatch_command(
     actor_id: int | None = None,
     published_messages: list[dict] | None = None,
     script_source: bool = False,
+    capture_only: bool = False,
+    issuer_type: str | None = None,
+    issuer_id: int | None = None,
+    subject_type: str | None = None,
+    subject_id: int | None = None,
+    resolved_actor: CommandActor | None = None,
+    resolved_issuer: CommandActor | None = None,
+    resolved_runtime_world: World | None = None,
 ) -> None:
     """
     Dispatch a command to its registered handler.
 
     This is the main entry point for command processing. It:
-    1. Resolves the actor from actor_type/actor_id (or player_id fallback)
+    1. Resolves the compatibility actor plus explicit issuer/subject identity
     2. Looks up the handler for command_type
     3. Builds a CommandContext
     4. Invokes the handler
@@ -177,6 +323,13 @@ def dispatch_command(
         actor_type: "player", "mob", "room", "zone", or "world".
             Defaults to "player" when player_id is provided.
         actor_id: Actor database ID.
+        issuer_type/issuer_id: Optional originator of the command intent.
+        subject_type/subject_id: Optional embodied execution subject. When
+            present, this is also the compatibility actor for existing
+            handlers.
+        resolved_actor/resolved_issuer/resolved_runtime_world: Optional
+            already-resolved internal context. Identity fields remain
+            authoritative and are validated before these objects are reused.
         payload: Command-specific data from the client
         connection_id: Optional WebSocket connection identifier
 
@@ -184,8 +337,19 @@ def dispatch_command(
         ActorNotFoundError: If the actor cannot be resolved
         HandlerNotFoundError: If no handler is registered for command_type
     """
-    resolved_actor_type = actor_type
-    resolved_actor_id = actor_id
+    explicit_subject = subject_type is not None or subject_id is not None
+    if explicit_subject and (subject_type is None or subject_id is None):
+        raise ValueError(
+            "dispatch_command requires both subject_type and subject_id."
+        )
+    explicit_issuer = issuer_type is not None or issuer_id is not None
+    if explicit_issuer and (issuer_type is None or issuer_id is None):
+        raise ValueError(
+            "dispatch_command requires both issuer_type and issuer_id."
+        )
+
+    resolved_actor_type = subject_type or actor_type
+    resolved_actor_id = subject_id if explicit_subject else actor_id
 
     if resolved_actor_type is None and player_id is not None:
         resolved_actor_type = "player"
@@ -193,57 +357,78 @@ def dispatch_command(
         resolved_actor_id = player_id
 
     if not resolved_actor_type or resolved_actor_id is None:
-        raise ValueError("dispatch_command requires actor_type and actor_id (or player_id).")
+        if issuer_type and issuer_id is not None:
+            resolved_actor_type = issuer_type
+            resolved_actor_id = issuer_id
+        else:
+            raise ValueError(
+                "dispatch_command requires actor_type and actor_id "
+                "(or player_id)."
+            )
 
-    # Resolve actor
-    actor = None
-    player = None
-    mob = None
-    room = None
-    zone = None
-    world = None
-    if resolved_actor_type == "player":
-        try:
-            player = Player.objects.get(pk=resolved_actor_id)
-        except Player.DoesNotExist:
-            raise PlayerNotFoundError(resolved_actor_id)
-        actor = player
-        world = player.world
-        room = player.room
-        zone = getattr(room, "zone", None)
-    elif resolved_actor_type == "mob":
-        try:
-            mob = Mob.objects.get(pk=resolved_actor_id)
-        except Mob.DoesNotExist:
-            raise ActorNotFoundError("mob", resolved_actor_id)
-        actor = mob
-        world = mob.world
-        room = mob.room
-        zone = getattr(room, "zone", None)
-    elif resolved_actor_type == "room":
-        try:
-            room = Room.objects.select_related("world", "zone").get(pk=resolved_actor_id)
-        except Room.DoesNotExist:
-            raise ActorNotFoundError("room", resolved_actor_id)
-        actor = room
-        world = _resolve_runtime_world(payload, room.world)
-        zone = room.zone
-    elif resolved_actor_type == "zone":
-        try:
-            zone = Zone.objects.select_related("world", "center").get(pk=resolved_actor_id)
-        except Zone.DoesNotExist:
-            raise ActorNotFoundError("zone", resolved_actor_id)
-        actor = zone
-        world = _resolve_runtime_world(payload, zone.world)
-        room = zone.center
-    elif resolved_actor_type == "world":
-        try:
-            world = World.objects.get(pk=resolved_actor_id)
-        except World.DoesNotExist:
-            raise ActorNotFoundError("world", resolved_actor_id)
-        actor = world
+    if actor_type is not None and explicit_subject and actor_type != subject_type:
+        raise ValueError("actor_type and subject_type must match when both are set.")
+    if actor_id is not None and explicit_subject and actor_id != subject_id:
+        raise ValueError("actor_id and subject_id must match when both are set.")
+
+    resolved_issuer_type = issuer_type or resolved_actor_type
+    resolved_issuer_id = (
+        issuer_id
+        if issuer_id is not None
+        else resolved_actor_id
+    )
+
+    room_hint = (
+        resolved_issuer
+        if isinstance(resolved_issuer, Room)
+        else None
+    )
+    if resolved_actor is None:
+        actor, player, mob, room, zone, world = _resolve_command_actor(
+            actor_type=resolved_actor_type,
+            actor_id=resolved_actor_id,
+            payload=payload,
+        )
     else:
-        raise ValueError(f"Unsupported actor_type: {resolved_actor_type}")
+        actor, player, mob, room, zone, world = (
+            _resolved_command_actor_context(
+                actor_type=resolved_actor_type,
+                actor_id=resolved_actor_id,
+                actor=resolved_actor,
+                payload=payload,
+                runtime_world=resolved_runtime_world,
+                room_hint=room_hint,
+            )
+        )
+
+    if (
+        resolved_issuer_type == resolved_actor_type
+        and resolved_issuer_id == resolved_actor_id
+    ):
+        if (
+            resolved_issuer is not None
+            and resolved_issuer is not actor
+        ):
+            raise ValueError(
+                "The resolved command issuer conflicts with the command actor."
+            )
+        issuer = actor
+    elif resolved_issuer is not None:
+        issuer, *_issuer_context = _resolved_command_actor_context(
+            actor_type=resolved_issuer_type,
+            actor_id=resolved_issuer_id,
+            actor=resolved_issuer,
+            payload=payload,
+            runtime_world=resolved_runtime_world,
+        )
+    else:
+        issuer, *_issuer_context = _resolve_command_actor(
+            actor_type=resolved_issuer_type,
+            actor_id=resolved_issuer_id,
+            payload=payload,
+        )
+
+    subject = actor if resolved_actor_type in {"player", "mob"} else None
 
     # Get handler
     handler = get_handler(command_type)
@@ -264,6 +449,15 @@ def dispatch_command(
         world=world,
         published_messages=published_messages,
         script_source=script_source,
+        capture_only=capture_only,
+        issuer=issuer,
+        issuer_type=resolved_issuer_type,
+        issuer_id=resolved_issuer_id,
+        issuer_key=issuer.key,
+        subject=subject,
+        subject_type=resolved_actor_type if subject is not None else None,
+        subject_id=resolved_actor_id if subject is not None else None,
+        subject_key=actor.key if subject is not None else None,
     )
 
     # Guard direct dispatches that target unsupported actor types.

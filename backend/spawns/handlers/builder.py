@@ -755,6 +755,7 @@ class EchoHandler(CommandHandler):
     builder_only = True
     allow_script_source = True
     supported_actor_types = ("player", "mob", "room", "zone", "world")
+    trigger_step_mode = "events_only"
     help = {
         "name": "Echo",
         "format": "/echo [room|zone|world] <message>",
@@ -769,6 +770,40 @@ class EchoHandler(CommandHandler):
             "/wecho The world trembles.",
         ],
     }
+
+    def validate_trigger_step_command(
+        self,
+        *,
+        command: str,
+        subject_type: str,
+    ) -> tuple[str, str] | None:
+        if subject_type != "room":
+            return (
+                "Trigger-step /echo commands require subject: trigger_room.",
+                "unsupported_command_subject",
+            )
+
+        tokens = str(command or "").split()
+        if not tokens or tokens[0].lower() != "/echo":
+            return (
+                "Trigger-step echoes support only the room-scoped /echo command.",
+                "command_scope_not_step_safe",
+            )
+        if len(tokens) < 2 or tokens[1] == "--":
+            return None
+
+        scope_token = tokens[1].lower()
+        matching_scopes = [
+            scope
+            for scope in ("room", "zone", "world")
+            if scope.startswith(scope_token)
+        ]
+        if len(matching_scopes) == 1 and matching_scopes[0] != "room":
+            return (
+                "Zone- and world-scoped echoes are not safe for Trigger steps.",
+                "command_scope_not_step_safe",
+            )
+        return None
 
     def handle(self, ctx: CommandContext) -> None:
         if not can_execute_builder_command(ctx, self):

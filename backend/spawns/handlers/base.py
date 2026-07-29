@@ -14,12 +14,17 @@ from fastapi_app.game_ws import publish_to_player
 
 
 CommandActor = Player | Mob | Room | Zone | World
+TRIGGER_STEP_MODE_EVENTS_ONLY = "events_only"
 
 
 @dataclass
 class CommandContext:
     """
-    Context passed to command handlers containing resolved actor and request metadata.
+    Resolved command context.
+
+    ``issuer`` records who initiated the intent. ``subject`` records the
+    embodied player or mob performing it, when present. ``actor`` remains the
+    compatibility execution object used by existing handlers.
     """
     actor: CommandActor
     actor_type: str
@@ -34,11 +39,22 @@ class CommandContext:
     world: World | None = None
     published_messages: list[dict] | None = None
     script_source: bool = False
+    capture_only: bool = False
+    issuer: CommandActor | None = None
+    issuer_type: str | None = None
+    issuer_id: int | None = None
+    issuer_key: str | None = None
+    subject: CommandActor | None = None
+    subject_type: str | None = None
+    subject_id: int | None = None
+    subject_key: str | None = None
 
     def publish(self, message: dict) -> None:
         """Publish a message to this actor channel (if connected) and optional capture sink."""
         if self.published_messages is not None:
             self.published_messages.append(message)
+        if self.capture_only:
+            return
         publish_to_player(self.actor_key, message, connection_id=self.connection_id)
 
     def publish_success(self, command_type: str, data: dict, text: str | None = None) -> None:
@@ -84,6 +100,9 @@ class CommandHandler(ABC):
     allow_script_source: bool = False
     allow_mob_actor: bool = False
     supported_actor_types: tuple[str, ...] = ("player",)
+    # Only audited handlers whose execution produces GameEvents and performs
+    # no irreversible external work may opt into Trigger-step execution.
+    trigger_step_mode: str | None = None
     help: dict[str, Any] | None = None
 
     @abstractmethod
@@ -98,6 +117,15 @@ class CommandHandler(ABC):
         to send results back to the client.
         """
         pass
+
+    def validate_trigger_step_command(
+        self,
+        *,
+        command: str,
+        subject_type: str,
+    ) -> tuple[str, str] | None:
+        """Return an optional (message, code) rejection for Trigger steps."""
+        return None
 
     @classmethod
     def get_help_data(cls, *, command_name: str | None = None) -> dict[str, Any] | None:

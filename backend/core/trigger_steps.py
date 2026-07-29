@@ -10,6 +10,7 @@ from core.economy import MAX_CURRENCY_AMOUNT
 TRIGGER_STEP_ERROR_POLICY_CANCEL = "cancel"
 TRIGGER_STEP_ERROR_POLICIES = (TRIGGER_STEP_ERROR_POLICY_CANCEL,)
 
+TRIGGER_STEP_ACTION_COMMAND = "command"
 TRIGGER_STEP_ACTION_DEBIT_CURRENCY = "debit_currency"
 TRIGGER_STEP_ACTION_CONSUME_ITEM = "consume_item"
 TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM = "consume_room_item"
@@ -19,6 +20,7 @@ TRIGGER_STEP_ACTION_REPLACE_ROOM_ITEM = "replace_room_item"
 TRIGGER_STEP_ACTION_SET_MOB = "set_mob"
 TRIGGER_STEP_ACTION_ECHO = "echo"
 TRIGGER_STEP_ACTION_TYPES = (
+    TRIGGER_STEP_ACTION_COMMAND,
     TRIGGER_STEP_ACTION_DEBIT_CURRENCY,
     TRIGGER_STEP_ACTION_CONSUME_ITEM,
     TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM,
@@ -47,12 +49,19 @@ MAX_TRIGGER_SEQUENCE_DURATION_SECONDS = 31_536_000
 MAX_TRIGGER_CONSUME_ITEM_COUNT = 1_000
 MAX_TRIGGER_GRANT_ITEM_COUNT = 32
 MAX_TRIGGER_GRANT_ITEMS_PER_STEP = 32
+MAX_TRIGGER_COMMAND_LENGTH = 4_000
 MAX_TRIGGER_ECHO_LENGTH = 4_000
+SCRIPT_COMMAND_DEPTH_KEY = "_script_command_depth"
+SCRIPT_COMMAND_PROVENANCE_KEY = "_script_command_provenance"
 # Keeps cached hooks and durable run snapshots bounded even when every action
 # uses its maximum field size.
 MAX_TRIGGER_STEPS_SERIALIZED_BYTES = 256 * 1024
 
 _BINDING_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_COMMAND_CHAIN_RE = re.compile(
+    r""";(?=(?:[^'"]|'[^']*'|"[^"]*")*$)"""
+)
+_NESTED_COMMAND_TOKENS = {"/cmd", "/force", "/rcmd", "/zcmd", "/wcmd"}
 
 
 class TriggerStepSpecError(ValueError):
@@ -280,6 +289,87 @@ def _binding(value: Any, *, field_name: str) -> str:
     return normalized
 
 
+def _normalize_command_subject(
+    value: Any,
+    *,
+    field_name: str,
+    mob_ref_normalizer: MobRefNormalizer | None,
+    condition_normalizer: ConditionNormalizer | None,
+) -> str | dict[str, Any]:
+    if isinstance(value, str):
+        subject_ref = value.strip().lower()
+        if subject_ref not in {TRIGGER_ACTOR_REF, TRIGGER_ROOM_REF}:
+            raise TriggerStepSpecError(
+                f"{field_name} must be '{TRIGGER_ACTOR_REF}', "
+                f"'{TRIGGER_ROOM_REF}', or a mob selector."
+            )
+        return subject_ref
+
+    subject = _mapping(value, field_name=field_name)
+    _exact_fields(
+        subject,
+        field_name=field_name,
+        required={"type", "room", "mob"},
+        optional={"where"},
+    )
+    subject_type = str(subject.get("type") or "").strip().lower()
+    if subject_type != "mob":
+        raise TriggerStepSpecError(
+            f"{field_name}.type must be 'mob'."
+        )
+    normalized: dict[str, Any] = {
+        "type": "mob",
+        "room": _context_ref(
+            subject.get("room"),
+            field_name=f"{field_name}.room",
+            expected=TRIGGER_ROOM_REF,
+        ),
+        "mob": _mob_ref(
+            subject.get("mob"),
+            field_name=f"{field_name}.mob",
+            mob_ref_normalizer=mob_ref_normalizer,
+        ),
+    }
+    if "where" in subject:
+        normalized["where"] = _normalize_condition(
+            subject.get("where"),
+            field_name=f"{field_name}.where",
+            condition_normalizer=condition_normalizer,
+        )
+    return normalized
+
+
+def _normalize_step_command(value: Any, *, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise TriggerStepSpecError(f"{field_name} must be a string.")
+    command = value.strip()
+    if not command:
+        raise TriggerStepSpecError(f"{field_name} is required.")
+    if len(command) > MAX_TRIGGER_COMMAND_LENGTH:
+        raise TriggerStepSpecError(
+            f"{field_name} cannot exceed {MAX_TRIGGER_COMMAND_LENGTH} characters."
+        )
+    if "\n" in command or "\r" in command:
+        raise TriggerStepSpecError(
+            f"{field_name} must contain exactly one command."
+        )
+    if "&&" in command or len(
+        [segment for segment in _COMMAND_CHAIN_RE.split(command) if segment.strip()]
+    ) != 1:
+        raise TriggerStepSpecError(
+            f"{field_name} cannot contain a command chain."
+        )
+    if command.startswith("!"):
+        raise TriggerStepSpecError(
+            f"{field_name} cannot contain a command-history reference."
+        )
+    if command.split()[0].lower() in _NESTED_COMMAND_TOKENS:
+        raise TriggerStepSpecError(
+            f"{field_name} cannot contain nested command dispatch."
+        )
+    return command
+
+
 def _normalize_action(
     value: Any,
     *,
@@ -321,6 +411,26 @@ def _normalize_action(
                 field_name=f"{field_name}.amount",
                 minimum=1,
                 maximum=MAX_CURRENCY_AMOUNT,
+            ),
+        }
+
+    if action_type == TRIGGER_STEP_ACTION_COMMAND:
+        _exact_fields(
+            action,
+            field_name=field_name,
+            required={"type", "subject", "command"},
+        )
+        return {
+            "type": action_type,
+            "subject": _normalize_command_subject(
+                action.get("subject"),
+                field_name=f"{field_name}.subject",
+                mob_ref_normalizer=mob_ref_normalizer,
+                condition_normalizer=condition_normalizer,
+            ),
+            "command": _normalize_step_command(
+                action.get("command"),
+                field_name=f"{field_name}.command",
             ),
         }
 
@@ -593,16 +703,28 @@ def normalize_trigger_steps(
             )
             for action_index, action in enumerate(raw_actions)
         ]
-        debit_seen = False
+        action_phase = "mutations"
         for action_index, action in enumerate(normalized_actions):
             action_type = action.get("type")
             if action_type == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
-                debit_seen = True
-            elif debit_seen and action_type != TRIGGER_STEP_ACTION_ECHO:
+                if action_phase == "outputs":
+                    raise TriggerStepSpecError(
+                        f"{field_name}.actions[{action_index}] cannot debit "
+                        "currency after a command or echo; order actions as "
+                        "mutations, then debits, then command/echo output."
+                    )
+                action_phase = "debits"
+            elif action_type in {
+                TRIGGER_STEP_ACTION_COMMAND,
+                TRIGGER_STEP_ACTION_ECHO,
+            }:
+                action_phase = "outputs"
+            elif action_phase != "mutations":
                 raise TriggerStepSpecError(
-                    f"{field_name}.actions[{action_index}] must be "
-                    "debit_currency or echo after the first debit_currency "
-                    "action; put item and mob mutations before the debit."
+                    f"{field_name}.actions[{action_index}] cannot mutate "
+                    "items or mobs after a debit, command, or echo; order "
+                    "actions as mutations, then debits, then command/echo "
+                    "output."
                 )
         grant_count = sum(
             int(action.get("count") or 1)
