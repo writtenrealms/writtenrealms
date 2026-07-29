@@ -3,11 +3,14 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.reverse import reverse
 from rest_framework.test import APIClient
 
 from builders.currencies import (
+    _trigger_snapshot_currency_references,
     create_currency,
+    currency_usage_map,
     delete_currency,
     replace_starting_balances,
     select_default_currency,
@@ -23,7 +26,11 @@ from builders.models import (
 )
 from config import constants as adv_consts
 from core.economy import MAX_CURRENCY_AMOUNT, economy_world
-from spawns.models import Player, PlayerCurrencyBalance
+from spawns.models import (
+    Player,
+    PlayerCurrencyBalance,
+    ScheduledTriggerRun,
+)
 from spawns.wallet import WalletError, balance_map, mutate_balances
 from quests.models import QuestTemplate
 from worlds.models import World
@@ -217,6 +224,203 @@ class CurrencyAuthoringTests(CurrencyTestCase):
             delete_currency(obol)
 
         self.assertTrue(Currency.objects.filter(pk=obol.pk).exists())
+
+    def test_delete_blocks_trigger_step_currency_debit_reference(self):
+        obol = create_currency(world=self.world, code="obol", name="Obol")
+        drachma = create_currency(
+            world=self.world,
+            code="drachma",
+            name="Drachma",
+        )
+        select_default_currency(world=self.world, currency=drachma)
+        Trigger.objects.create(
+            world=self.world,
+            scope="world",
+            kind="command",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with self.assertRaisesMessage(ValidationError, "1 trigger"):
+            delete_currency(obol)
+
+        self.assertTrue(Currency.objects.filter(pk=obol.pk).exists())
+
+    def test_delete_blocks_instance_trigger_step_currency_debit_reference(self):
+        obol = create_currency(world=self.world, code="obol", name="Obol")
+        drachma = create_currency(
+            world=self.world,
+            code="drachma",
+            name="Drachma",
+        )
+        select_default_currency(world=self.world, currency=drachma)
+        instance = World.objects.new_world(
+            name="Currency Toll Instance",
+            author=self.user,
+            instance_of=self.world,
+        )
+        Trigger.objects.create(
+            world=instance,
+            scope="world",
+            kind="command",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with self.assertRaisesMessage(ValidationError, "1 trigger"):
+            delete_currency(obol)
+
+        self.assertTrue(Currency.objects.filter(pk=obol.pk).exists())
+
+    def test_delete_blocks_active_trigger_currency_debit_snapshot(self):
+        obol = create_currency(world=self.world, code="obol", name="Obol")
+        drachma = create_currency(
+            world=self.world,
+            code="drachma",
+            name="Drachma",
+        )
+        select_default_currency(world=self.world, currency=drachma)
+        trigger = Trigger.objects.create(
+            world=self.world,
+            scope="world",
+            kind="command",
+        )
+        player = self.create_player()
+        now = timezone.now()
+        run = ScheduledTriggerRun.objects.create(
+            trigger=trigger,
+            runtime_world=self.spawn_world,
+            room=player.room,
+            actor_type="player",
+            actor_id=player.id,
+            actor_key=player.key,
+            steps=[
+                {
+                    "after_seconds": 5,
+                    "due_after_seconds": 5,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "currency_id": obol.id,
+                            "amount": 10,
+                        },
+                    ],
+                },
+            ],
+            next_run_ts=now,
+            started_ts=now,
+            status=ScheduledTriggerRun.STATUS_ACTIVE,
+        )
+        trigger.delete()
+        run.refresh_from_db()
+        self.assertIsNone(run.trigger_id)
+
+        with self.assertRaisesMessage(
+            ValidationError,
+            "1 active trigger sequence",
+        ):
+            delete_currency(obol)
+
+        self.assertTrue(Currency.objects.filter(pk=obol.pk).exists())
+
+    def test_active_trigger_snapshot_scan_is_deferred_and_single_pass(self):
+        obol = create_currency(world=self.world, code="obol", name="Obol")
+        drachma = create_currency(
+            world=self.world,
+            code="drachma",
+            name="Drachma",
+        )
+        player = self.create_player()
+        now = timezone.now()
+        ScheduledTriggerRun.objects.create(
+            runtime_world=self.spawn_world,
+            room=player.room,
+            actor_type="player",
+            actor_id=player.id,
+            actor_key=player.key,
+            steps=[
+                {
+                    "after_seconds": 5,
+                    "due_after_seconds": 5,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "currency_id": obol.id,
+                            "amount": 10,
+                        },
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "drachma",
+                            "currency_id": drachma.id,
+                            "amount": 2,
+                        },
+                    ],
+                },
+            ],
+            next_run_ts=now,
+            started_ts=now,
+            status=ScheduledTriggerRun.STATUS_ACTIVE,
+        )
+
+        with patch(
+            "builders.currencies._trigger_snapshot_currency_references",
+            wraps=_trigger_snapshot_currency_references,
+        ) as collect_references:
+            catalog_usages = currency_usage_map(
+                world=self.world,
+                currencies=[obol, drachma],
+            )
+
+        self.assertEqual(collect_references.call_count, 0)
+        for currency in (obol, drachma):
+            self.assertNotIn(
+                {"type": "active trigger sequence", "count": 1},
+                catalog_usages[currency.id],
+            )
+
+        with patch(
+            "builders.currencies._trigger_snapshot_currency_references",
+            wraps=_trigger_snapshot_currency_references,
+        ) as collect_references:
+            deletion_usages = currency_usage_map(
+                world=self.world,
+                currencies=[obol, drachma],
+                include_active_trigger_sequences=True,
+            )
+
+        self.assertEqual(collect_references.call_count, 1)
+        for currency in (obol, drachma):
+            self.assertIn(
+                {"type": "active trigger sequence", "count": 1},
+                deletion_usages[currency.id],
+            )
 
     def test_delete_blocks_crafting_recipe_cost_reference(self):
         obol = create_currency(world=self.world, code="obol", name="Obol")

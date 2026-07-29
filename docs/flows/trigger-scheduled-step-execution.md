@@ -16,8 +16,9 @@ When a trigger matches:
    that runtime world and room.
 4. Evaluate `spec.conditions`. This closes the race between checking for an
    empty plot and spawning the first crop.
-5. Validate the typed steps, resolve all item-definition refs against the
-   authored world, and snapshot their ids and slugs.
+5. Validate the typed steps, resolve all item/mob-definition refs against the
+   authored world and all debit currency codes against the base economy world,
+   then snapshot their stable ids and portable slugs/codes.
 6. Convert relative `after_seconds` values to cumulative offsets from the run's
    fixed `started_ts`.
 7. Reject a duplicate active run for the same trigger, runtime world, room, and
@@ -38,6 +39,7 @@ The run is the source of truth for delayed work. It stores:
 - the normalized step snapshot
 - the next step cursor and absolute due timestamp
 - exact bindings such as `crop -> item.123`
+- concrete currency ids alongside portable authored codes
 - status and terminal error information
 
 Deleting or editing the authored trigger does not rewrite an in-flight run.
@@ -73,7 +75,28 @@ Every action in one step shares a transaction:
   the exact new item id.
 - `replace_room_item` locks that bound id, verifies its exact world and room,
   spawns the replacement, removes the old item, and updates the binding.
+- `debit_currency` requires a player actor. All debit actions in the step are
+  aggregated into one wallet mutation. The step locks the Player, prelocks any
+  existing Mob and Item candidates in aggregate order, and locks the ordered
+  balance rows last. The complete batch is rejected if any balance is
+  insufficient.
 - `echo` selects players currently in the original runtime world and room.
+
+The authoring contract places item and mob mutations before the first debit;
+only more debits or `echo` may follow it. Non-debit mixed steps use the same
+Mob-then-Item prelock phase, so concurrent runs cannot invert the aggregate
+order. Immediate and delayed Mob-triggered steps lock the actor and all bounded
+target candidates together in ascending Mob id order before Item rows.
+Immediate Mob starts pin only that Mob set while conditions, active-run limits,
+and the cache-backed gate are checked; they select and lock Item candidates
+only after those checks pass. Item candidates are capped by the summed authored
+consume counts, locked by stable id, and reused during execution; bounded slack
+for same-step bound replacements prevents a replacement from exhausting a
+later consume set. A later external drop is not pulled into the already-running
+step. An unfiltered `set_mob` needs at most two stable candidates to prove
+ambiguity. A filtered `set_mob` may evaluate at most 256 candidates; a larger
+candidate population fails the step instead of taking an unbounded set of row
+locks.
 
 Events are written to `GameEventOutbox` before commit and published afterward.
 A process failure before commit leaves the run due and changes nothing. A
@@ -81,10 +104,23 @@ failure after commit cannot lose the event because the outbox remains durable.
 Room-item additions and removals use a room-scoped delta. Inventory additions
 or removals use a private delta sent only to the triggering player; when that
 player also needs the room delta, the two changes share one private payload.
-This keeps fanout bounded to at most two events per step without disclosing an
-inventory grant to other occupants. Viewer-specific custom item actions are
-refreshed the next time the client receives a full room view, such as after
-`look`; a scheduled item delta does not force a look or recompute those actions.
+This keeps item-delta fanout bounded to at most two events per step without
+disclosing an inventory grant to other occupants. Viewer-specific custom item
+actions are refreshed the next time the client receives a full room view, such
+as after `look`; a scheduled item delta does not force a look or recompute those
+actions.
+
+A successful currency debit also queues the private
+`currency.balances_changed` event and visible perspective-specific text. The
+actor receives `You part with 10 obols.`; current in-game occupants of the
+actor's room other than the actor receive `Joe parts with 10 obols.` using the
+authored currency singular/plural and actor name. A delayed debit therefore
+follows the actor's current location instead of notifying stale occupants of
+the original Trigger room. Invisible or logged-out actors produce no witness
+event. Witness payloads contain the charged amount but no private balance,
+revision, or before/after values. These events are constructed only after the
+wallet batch succeeds. With at most 16 actions per step, wallet work remains
+one bounded mutation and debit text fanout remains bounded.
 
 After success, the cursor advances and `next_run_ts` is calculated as
 `started_ts + cumulative_offset`. Worker lateness therefore does not stretch
@@ -94,8 +130,9 @@ may claim it again immediately.
 ## Failure And Completion
 
 Expected semantic failures—missing actor inventory, missing room items, a
-harvested/moved bound item, a missing actor for a grant, or a deleted
-definition—roll back the current step. With
+harvested/moved bound item, a missing actor for a grant, a non-player debit
+actor, insufficient funds, or a deleted definition/currency—roll back the
+current step. With
 `on_step_error: cancel`, the run records the error and becomes `cancelled`.
 Earlier committed steps remain intact; later steps do not run.
 

@@ -432,6 +432,12 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
                             "item": self.barley_seedling.id,
                             "bind": "crop",
                         },
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
                     ],
                 },
                 {
@@ -663,6 +669,10 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             "itemdefinition.barley-seedling",
         )
         self.assertEqual(
+            trigger["spec"]["steps"][0]["actions"][2]["currency"],
+            "obol",
+        )
+        self.assertEqual(
             trigger["spec"]["steps"][1]["actions"][0]["with"],
             "itemdefinition.barley-growing",
         )
@@ -886,6 +896,10 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(
             manifest["spec"]["steps"][1]["actions"][0]["with"],
             "itemdefinition.barley-growing",
+        )
+        self.assertEqual(
+            manifest["spec"]["steps"][0]["actions"][2]["currency"],
+            "obol",
         )
 
     def test_zone_detail_returns_apply_and_delete_yaml(self):

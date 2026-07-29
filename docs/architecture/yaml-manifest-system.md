@@ -746,7 +746,8 @@ spec:
 ### Typed Scheduled `steps`
 
 Use `spec.steps` when a trigger needs builder-controlled timing and exact,
-transactional item operations. `script` and `steps` cannot both be non-empty.
+transactional item or currency operations. `script` and `steps` cannot both be
+non-empty.
 
 ```yaml
 kind: trigger
@@ -787,30 +788,53 @@ spec:
   on_step_error: cancel
 ```
 
+For an atomic player charge, use an explicit currency code:
+
+```yaml
+conditions:
+  gte:
+    - actor.balances.obol
+    - 10
+steps:
+  - after_seconds: 0
+    actions:
+      - type: debit_currency
+        actor: trigger_actor
+        currency: obol
+        amount: 10
+```
+
 The first step must have `after_seconds: 0`; later offsets are positive and
 relative to the prior step. Each offset and their cumulative total are capped
-at one year. `consume_item`, `consume_room_item`, `grant_item`,
+at one year. `debit_currency`, `consume_item`, `consume_room_item`, `grant_item`,
 `spawn_room_item`, `replace_room_item`, `set_mob`, and `echo` are the action
 whitelist. Item and mob-definition refs are resolved within the authored world
-and stored portably. Bindings must be created before use and identify exact
-runtime items, not keywords or definition matches. `set_mob` resolves exactly
-one live candidate in the current runtime room, may filter it through the
-query-free Boolean/comparison subset of shared `where` conditions, and can
-atomically update its supported runtime fields and character state. Query-backed
-presence and quest operators belong in the trigger's outer conditions. Policy
-triggers cannot define steps.
+and stored portably. A debit requires `actor: trigger_actor`, a positive safe
+integer amount, and a currency code resolved against the base-world catalog;
+omission never means the current default. Bindings must be created before use
+and identify exact runtime items, not keywords or definition matches. `set_mob`
+resolves exactly one live candidate in the current runtime room, may filter it
+through the query-free Boolean/comparison subset of shared `where` conditions,
+and can atomically update its supported runtime fields and character state.
+Item and mob mutations must precede the first `debit_currency` in a step; only
+additional debits or `echo` may follow it. This lets all debits remain one
+wallet batch with balance rows locked last.
+Query-backed presence and quest operators belong in the trigger's outer
+conditions. Policy triggers cannot define steps.
 
 Step zero rechecks conditions under a runtime-world/room-scoped transaction
 mutex and commits with its actions. Later steps are persisted in a
 `ScheduledTriggerRun` snapshot with cumulative due offsets, original runtime
-world/room context, exact item bindings, and the actor identity. A separate
-bounded Celery beat worker claims due rows through the `(status, next_run_ts)`
-index with `select_for_update(skip_locked=True)`. Celery ETA jobs are not the
-source of truth. Each step and its outbox events share a transaction;
-`on_step_error: cancel` rolls back the failed step and cancels the remainder.
-Only one run of the same trigger may be active for a given runtime world, room,
-and trigger actor; different actors may run concurrently. A runtime actor is
-also limited to 16 active typed sequences in one runtime world.
+world/room context, exact item bindings, stable currency ids, and the actor
+identity. A separate bounded Celery beat worker claims due rows through the
+`(status, next_run_ts)` index with `select_for_update(skip_locked=True)`. Celery
+ETA jobs are not the source of truth. Each step, wallet mutation, and outbox
+events share a transaction; `on_step_error: cancel` rolls back the failed step
+and cancels the remainder. All debits in one step use one ordered wallet batch.
+Insufficient funds produce no debit or success text. Only one run of the same
+trigger may be active for a given runtime world, room, and trigger actor;
+different actors may run concurrently. A runtime actor is also limited to 16
+active typed sequences in one runtime world.
 See `docs/flows/trigger-scheduled-step-execution.md` for the runtime flow.
 
 ### Delete Trigger
@@ -1264,6 +1288,11 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 - Typed step actions reject unknown fields and types. Context refs are limited
   to `trigger_actor` and `trigger_room`; item refs must resolve to an
   `itemdefinition` in the selected world.
+- `debit_currency` requires exactly `actor: trigger_actor`, an explicit
+  base-world currency code, and a positive integer `amount` no greater than
+  `9,007,199,254,740,991`.
+- Item and mob mutation actions must precede the first `debit_currency` in a
+  step. Only `debit_currency` and `echo` actions may follow it.
 - `spawn_room_item.bind` names are unique and must precede any matching
   `replace_room_item.target`. The current `spec.on_step_error` value is
   `cancel`.

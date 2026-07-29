@@ -8,6 +8,7 @@ from django.core.cache import cache
 
 from rest_framework.reverse import reverse
 
+from builders.currencies import create_currency
 from builders.models import (
     BuilderAssignment,
     ItemDefinition,
@@ -494,6 +495,138 @@ spec:
         trigger_payload = resp.data["trigger"]
         self.assertEqual(trigger_payload["manifest"]["spec"]["steps"], self.trigger.steps)
         self.assertEqual(trigger_payload["manifest"]["spec"]["on_step_error"], "cancel")
+
+    def test_apply_trigger_manifest_supports_currency_debit_step(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: debit_currency
+          actor: trigger_actor
+          currency: currency.{obol.id}
+          amount: 10
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.trigger.refresh_from_db()
+        self.assertEqual(
+            self.trigger.steps[0]["actions"][0],
+            {
+                "type": "debit_currency",
+                "actor": "trigger_actor",
+                "currency": "obol",
+                "amount": 10,
+            },
+        )
+        self.assertEqual(
+            resp.data["trigger"]["manifest"]["spec"]["steps"],
+            self.trigger.steps,
+        )
+
+    def test_apply_trigger_manifest_rejects_invalid_currency_debit_steps(self):
+        create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        late_item = ItemDefinition.objects.create(
+            world=self.world,
+            slug="late-debit-item",
+            name="a late debit item",
+        )
+        invalid_actions = (
+            (
+                """
+        - type: debit_currency
+          actor: trigger_actor
+          currency: missing
+          amount: 10
+""",
+                "unknown currency",
+            ),
+            (
+                """
+        - type: debit_currency
+          actor: trigger_actor
+          currency: obol
+          amount: 0
+""",
+                "must be a positive integer",
+            ),
+            (
+                """
+        - type: debit_currency
+          actor: other_actor
+          currency: obol
+          amount: 10
+""",
+                "must be 'trigger_actor'",
+            ),
+            (
+                """
+        - type: debit_currency
+          actor: trigger_actor
+          currency: obol
+          amount: 10
+          message: custom
+""",
+                "unsupported field",
+            ),
+            (
+                f"""
+        - type: debit_currency
+          actor: trigger_actor
+          currency: obol
+          amount: 10
+        - type: grant_item
+          actor: trigger_actor
+          item: itemdefinition.{late_item.slug}
+""",
+                "put item and mob mutations before the debit",
+            ),
+        )
+
+        for action_yaml, expected_error in invalid_actions:
+            with self.subTest(expected_error=expected_error):
+                manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  steps:
+    - after_seconds: 0
+      actions:
+{action_yaml}
+"""
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": manifest},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 400, resp.data)
+                self.assertIn(expected_error, str(resp.data).lower())
 
     def test_apply_trigger_manifest_supports_typed_harvest_actions(self):
         mature = ItemDefinition.objects.create(
@@ -1046,6 +1179,61 @@ spec:
         self.assertEqual(
             exported_trigger["spec"]["steps"][0]["actions"][0]["item"],
             "itemdefinition.barley-seed",
+        )
+
+    def test_instance_trigger_steps_resolve_base_world_currency(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        instance_world = World.objects.new_world(
+            name="Toll Gate Instance",
+            author=self.user,
+            config=WorldConfig.objects.create(),
+            instance_of=self.world,
+        )
+        instance_room = instance_world.config.starting_room
+        apply_ep = reverse(
+            "builder-world-manifest-apply",
+            args=[instance_world.id],
+        )
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{instance_world.id}
+  name: Pay Instance Toll
+spec:
+  scope: room
+  kind: command
+  target:
+    type: room
+    key: room.{instance_room.id}
+  match: pay toll
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: debit_currency
+          actor: trigger_actor
+          currency: {obol.id}
+          amount: 10
+"""
+
+        resp = self.client.post(
+            apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        trigger = Trigger.objects.get(
+            world=instance_world,
+            name="Pay Instance Toll",
+        )
+        self.assertEqual(
+            trigger.steps[0]["actions"][0]["currency"],
+            "obol",
         )
 
     def test_apply_trigger_manifest_rejects_script_with_steps(self):

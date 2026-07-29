@@ -2350,6 +2350,22 @@ def _normalize_trigger_mob_definition_ref(
     return f"mobdefinition.{mob_definition.slug}"
 
 
+def _normalize_trigger_currency_ref(
+    *,
+    world: World,
+    value: Any,
+    field_name: str,
+) -> str:
+    currency = _resolve_currency_reference(
+        world=world,
+        value=value,
+        field_name=field_name,
+    )
+    if currency is None:
+        raise serializers.ValidationError(f"{field_name} is required.")
+    return currency.code
+
+
 def _normalize_trigger_condition_refs(value: Any, *, world: World) -> Any:
     if isinstance(value, list):
         return [
@@ -3162,6 +3178,13 @@ def parse_trigger_manifest(
             ),
             mob_ref_normalizer=lambda value, field_name: (
                 _normalize_trigger_mob_definition_ref(
+                    world=world,
+                    value=value,
+                    field_name=field_name,
+                )
+            ),
+            currency_ref_normalizer=lambda value, field_name: (
+                _normalize_trigger_currency_ref(
                     world=world,
                     value=value,
                     field_name=field_name,

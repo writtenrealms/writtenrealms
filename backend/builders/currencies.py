@@ -239,7 +239,44 @@ def _payload_references_currency(value, *, code: str) -> bool:
     return bool(balance_path.search(text) or typed_assignment.search(text))
 
 
-def currency_usage_map(*, world, currencies=None) -> dict[int, list[dict]]:
+def _trigger_snapshot_currency_references(
+    snapshot,
+) -> tuple[set[int], set[str]]:
+    """Collect debit refs from one bounded scheduled-step snapshot once."""
+    currency_ids: set[int] = set()
+    currency_codes: set[str] = set()
+    if not isinstance(snapshot, list):
+        return currency_ids, currency_codes
+    for step in snapshot:
+        if not isinstance(step, dict):
+            continue
+        actions = step.get("actions")
+        if not isinstance(actions, list):
+            continue
+        for action in actions:
+            if (
+                not isinstance(action, dict)
+                or action.get("type") != "debit_currency"
+            ):
+                continue
+            raw_currency_id = action.get("currency_id")
+            if isinstance(raw_currency_id, int) and not isinstance(
+                raw_currency_id,
+                bool,
+            ):
+                currency_ids.add(raw_currency_id)
+            code = str(action.get("currency") or "").strip().lower()
+            if code:
+                currency_codes.add(code)
+    return currency_ids, currency_codes
+
+
+def currency_usage_map(
+    *,
+    world,
+    currencies=None,
+    include_active_trigger_sequences: bool = False,
+) -> dict[int, list[dict]]:
     """Build one bounded usage registry for a world's entire currency catalog."""
     from builders.models import (
         AbilityDefinition,
@@ -261,6 +298,7 @@ def currency_usage_map(*, world, currencies=None) -> dict[int, list[dict]]:
         MerchantStockEntry,
         Mob,
         PlayerCurrencyBalance,
+        ScheduledTriggerRun,
     )
     from worlds.models import WorldConfig
 
@@ -359,7 +397,7 @@ def currency_usage_map(*, world, currencies=None) -> dict[int, list[dict]]:
     add_structured(
         "trigger",
         Trigger.objects.filter(world__in=authored_worlds),
-        ("conditions", "script"),
+        ("conditions", "script", "steps"),
     )
     add_structured(
         "room action",
@@ -413,6 +451,37 @@ def currency_usage_map(*, world, currencies=None) -> dict[int, list[dict]]:
         | Q(instance_of_id=base_world.pk)
         | Q(context__instance_of_id=base_world.pk)
     )
+    if include_active_trigger_sequences:
+        active_trigger_counts = {
+            currency_id: 0
+            for currency_id in currency_ids
+        }
+        catalog_currency_ids = set(currency_ids)
+        currency_id_by_code = {
+            code: currency_id
+            for currency_id, code in code_by_id.items()
+        }
+        for snapshot in ScheduledTriggerRun.objects.filter(
+            runtime_world__in=economy_worlds,
+            status=ScheduledTriggerRun.STATUS_ACTIVE,
+        ).values_list("steps", flat=True).iterator():
+            snapshot_ids, snapshot_codes = (
+                _trigger_snapshot_currency_references(snapshot)
+            )
+            referenced_ids = snapshot_ids & catalog_currency_ids
+            referenced_ids.update(
+                currency_id_by_code[code]
+                for code in snapshot_codes
+                if code in currency_id_by_code
+            )
+            for currency_id in referenced_ids:
+                active_trigger_counts[currency_id] += 1
+        for currency_id, count in active_trigger_counts.items():
+            if count:
+                usages[currency_id].append(
+                    {"type": "active trigger sequence", "count": count}
+                )
+
     snapshot_counts = {currency_id: 0 for currency_id in currency_ids}
     for snapshot in Mob.objects.filter(world__in=economy_worlds).values_list(
         "currency_reward_snapshot",
@@ -437,6 +506,7 @@ def currency_usage(currency: Currency) -> list[dict]:
     return currency_usage_map(
         world=currency.world,
         currencies=[currency],
+        include_active_trigger_sequences=True,
     ).get(currency.pk, [])
 
 

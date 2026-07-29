@@ -13,6 +13,7 @@ from django.db import OperationalError, close_old_connections
 from django.test import TransactionTestCase
 from django.utils import timezone
 
+from builders.currencies import create_currency
 from builders.models import ItemDefinition, MobDefinition, Trigger
 from config import constants as adv_consts
 from core.scoped_state import STATE_SCOPE_CHARACTER, get_state_snapshot
@@ -23,17 +24,23 @@ from spawns.models import (
     Mob,
     MobState,
     Player,
+    PlayerCurrencyBalance,
     ScheduledTriggerRun,
 )
 from spawns.trigger_steps import (
     MAX_ACTIVE_TRIGGER_RUNS_PER_ACTOR,
+    MAX_TRIGGER_SET_MOB_CANDIDATES,
+    TriggerStepExecutionError,
     TriggerMobChange,
     TriggerMobChanges,
+    _consume_room_item,
     _mob_change_events,
+    _prelock_step_resources,
     process_due_trigger_runs,
     prune_terminal_trigger_runs,
     start_trigger_steps,
 )
+from spawns.wallet import mutate_balances
 from tests.base import WorldTestCase
 from worlds.models import Room, World, WorldConfig
 from tests.utils import capture_game_messages, dispatch_text_command
@@ -347,6 +354,864 @@ class TestScheduledTriggerSteps(WorldTestCase):
                 },
             ],
         )
+
+    def test_debit_currency_action_normalizes_explicit_player_charge(self):
+        normalized = normalize_trigger_steps([
+            {
+                "after_seconds": 0,
+                "actions": [
+                    {
+                        "type": "debit_currency",
+                        "actor": "trigger_actor",
+                        "currency": "ObOl",
+                        "amount": 10,
+                    },
+                ],
+            },
+        ])
+
+        self.assertEqual(
+            normalized[0]["actions"][0],
+            {
+                "type": "debit_currency",
+                "actor": "trigger_actor",
+                "currency": "obol",
+                "amount": 10,
+            },
+        )
+
+    def test_debit_currency_action_rejects_invalid_fields_and_amounts(self):
+        invalid_actions = [
+            {
+                "type": "debit_currency",
+                "actor": "other_actor",
+                "currency": "obol",
+                "amount": 10,
+            },
+            {
+                "type": "debit_currency",
+                "actor": "trigger_actor",
+                "currency": "",
+                "amount": 10,
+            },
+            {
+                "type": "debit_currency",
+                "actor": "trigger_actor",
+                "currency": "currency.obol",
+                "amount": 10,
+            },
+            {
+                "type": "debit_currency",
+                "actor": "trigger_actor",
+                "currency": "obol",
+                "amount": 0,
+            },
+            {
+                "type": "debit_currency",
+                "actor": "trigger_actor",
+                "currency": "obol",
+                "amount": True,
+            },
+            {
+                "type": "debit_currency",
+                "actor": "trigger_actor",
+                "currency": "obol",
+                "amount": 1.5,
+            },
+            {
+                "type": "debit_currency",
+                "actor": "trigger_actor",
+                "currency": "obol",
+                "amount": 10,
+                "message": "unsupported",
+            },
+        ]
+
+        for action in invalid_actions:
+            with self.subTest(action=action):
+                with self.assertRaises(TriggerStepSpecError):
+                    normalize_trigger_steps([
+                        {
+                            "after_seconds": 0,
+                            "actions": [action],
+                        },
+                    ])
+
+        with self.assertRaisesMessage(
+            TriggerStepSpecError,
+            "put item and mob mutations before the debit",
+        ):
+            normalize_trigger_steps([
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                        {
+                            "type": "grant_item",
+                            "actor": "trigger_actor",
+                            "item": "itemdefinition.harvested-barley",
+                        },
+                    ],
+                },
+            ])
+
+    def test_debit_item_prelocks_are_bounded_and_pin_candidate_ids(self):
+        actor_items = [
+            self.seed.spawn(self.player, self.spawn_world)
+            for _index in range(5)
+        ]
+        room_items = [
+            self.mature.spawn(self.room, self.spawn_world)
+            for _index in range(5)
+        ]
+        run = SimpleNamespace(
+            runtime_world_id=self.spawn_world.id,
+            room_id=self.room.id,
+            actor_type="player",
+            actor_id=self.player.id,
+        )
+        actions = [
+            {
+                "type": "consume_item",
+                "actor": "trigger_actor",
+                "item_definition_id": self.seed.id,
+                "count": 2,
+            },
+            {
+                "type": "replace_room_item",
+                "target": "crop",
+                "with_item_definition_id": self.seedling.id,
+            },
+            {
+                "type": "consume_room_item",
+                "room": "trigger_room",
+                "item_definition_id": self.mature.id,
+                "count": 3,
+            },
+            {
+                "type": "debit_currency",
+                "actor": "trigger_actor",
+                "currency_id": 1,
+                "amount": 10,
+            },
+        ]
+
+        prelocks = _prelock_step_resources(
+            run=run,
+            actions=actions,
+            bindings={
+                "crop": {
+                    "type": "item",
+                    "id": room_items[0].id,
+                },
+            },
+        )
+
+        self.assertEqual(
+            prelocks.actor_item_ids_by_definition[self.seed.id],
+            tuple(item.id for item in actor_items[:2]),
+        )
+        captured_room_ids = prelocks.room_item_ids_by_definition[self.mature.id]
+        self.assertEqual(
+            captured_room_ids,
+            tuple(item.id for item in room_items[:4]),
+        )
+
+        Item.objects.filter(pk__in=captured_room_ids).delete()
+        late_item = self.mature.spawn(self.room, self.spawn_world)
+        with self.assertRaises(TriggerStepExecutionError) as raised:
+            _consume_room_item(
+                run=run,
+                action=actions[2],
+                definition=self.mature,
+                candidate_ids=captured_room_ids,
+            )
+
+        self.assertEqual(raised.exception.code, "required_room_item_missing")
+        self.assertTrue(Item.objects.filter(pk=late_item.id).exists())
+
+    def test_debit_mob_prelocks_are_bounded_and_reject_oversized_predicates(self):
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="bounded-toll-guards",
+            name="a toll guard",
+        )
+        guards = Mob.objects.bulk_create([
+            Mob(
+                world=self.spawn_world,
+                room=self.room,
+                definition=definition,
+                name=f"Toll Guard {index}",
+            )
+            for index in range(5)
+        ])
+        run = SimpleNamespace(
+            runtime_world_id=self.spawn_world.id,
+            room_id=self.room.id,
+            actor_type="player",
+            actor_id=self.player.id,
+        )
+        debit = {
+            "type": "debit_currency",
+            "actor": "trigger_actor",
+            "currency_id": 1,
+            "amount": 10,
+        }
+        set_mob = {
+            "type": "set_mob",
+            "room": "trigger_room",
+            "mob_definition_id": definition.id,
+            "fields": {"attackable": True},
+        }
+
+        prelocks = _prelock_step_resources(
+            run=run,
+            actions=[set_mob, debit],
+            bindings={},
+        )
+
+        self.assertEqual(
+            prelocks.mob_ids_by_definition[definition.id],
+            tuple(guard.id for guard in guards[:2]),
+        )
+
+        Mob.objects.bulk_create([
+            Mob(
+                world=self.spawn_world,
+                room=self.room,
+                definition=definition,
+                name=f"Extra Toll Guard {index}",
+            )
+            for index in range(
+                MAX_TRIGGER_SET_MOB_CANDIDATES - len(guards) + 1
+            )
+        ])
+        set_mob["where"] = {
+            "eq": ["state.character.on_duty", True],
+        }
+        with self.assertRaises(TriggerStepExecutionError) as raised:
+            _prelock_step_resources(
+                run=run,
+                actions=[set_mob, debit],
+                bindings={},
+            )
+
+        self.assertEqual(raised.exception.code, "set_mob_candidate_limit")
+
+    def test_debit_currency_charges_player_and_notifies_actor_and_room(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="Obol",
+            plural_name="Obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: 20},
+            reason="test.setup",
+            emit_event=False,
+        )
+        observer = self.create_player(
+            "Observer",
+            user=self.create_user("currency-observer@example.com"),
+        )
+        observer.in_game = True
+        observer.save(update_fields=["in_game"])
+        trigger = self._create_trigger(
+            match="pay toll",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                    ],
+                },
+            ],
+        )
+        revision_before = self.player.wallet_revision
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "pay toll")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.wallet_revision, revision_before + 1)
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.player,
+                currency=obol,
+            ).amount,
+            10,
+        )
+        run = ScheduledTriggerRun.objects.get(trigger=trigger)
+        self.assertEqual(run.status, ScheduledTriggerRun.STATUS_COMPLETED)
+        self.assertEqual(
+            run.steps[0]["actions"][0]["currency_id"],
+            obol.id,
+        )
+        self.assertEqual(
+            run.steps[0]["actions"][0]["currency"],
+            "obol",
+        )
+
+        debit_messages = [
+            entry
+            for entry in messages
+            if (
+                entry["message"]["type"]
+                == "notification.trigger.currency_debited"
+            )
+        ]
+        self.assertEqual(
+            [
+                (entry["player_key"], entry["message"]["text"])
+                for entry in debit_messages
+            ],
+            [
+                (self.player.key, "You part with 10 obols."),
+                (observer.key, "Joe parts with 10 obols."),
+            ],
+        )
+        observer_data = debit_messages[1]["message"]["data"]
+        self.assertEqual(
+            observer_data["money"],
+            {
+                "amount": 10,
+                "currency": "obol",
+                "display": "10 Obols",
+            },
+        )
+        self.assertNotIn("before", observer_data)
+        self.assertNotIn("after", observer_data)
+        self.assertNotIn("wallet_revision", observer_data)
+        wallet_messages = [
+            entry
+            for entry in messages
+            if entry["message"]["type"] == "currency.balances_changed"
+        ]
+        self.assertEqual(
+            [entry["player_key"] for entry in wallet_messages],
+            [self.player.key],
+        )
+
+    def test_debit_currency_does_not_reveal_an_invisible_player(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: 10},
+            reason="test.setup",
+            emit_event=False,
+        )
+        observer = self.create_player(
+            "Observer",
+            user=self.create_user("invisible-currency-observer@example.com"),
+        )
+        observer.in_game = True
+        observer.save(update_fields=["in_game"])
+        self.player.is_invisible = True
+        self.player.save(update_fields=["is_invisible"])
+        self._create_trigger(
+            match="pay hidden toll",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "pay hidden toll")
+
+        debit_messages = [
+            entry
+            for entry in messages
+            if (
+                entry["message"]["type"]
+                == "notification.trigger.currency_debited"
+            )
+        ]
+        self.assertEqual(
+            [
+                (entry["player_key"], entry["message"]["text"])
+                for entry in debit_messages
+            ],
+            [(self.player.key, "You part with 10 obols.")],
+        )
+        self.assertNotIn(
+            observer.key,
+            [entry["player_key"] for entry in debit_messages],
+        )
+
+    def test_debit_currency_insufficient_funds_rolls_back_without_success_text(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: 9},
+            reason="test.setup",
+            emit_event=False,
+        )
+        seed = self.seed.spawn(self.player, self.spawn_world)
+        observer = self.create_player(
+            "Observer",
+            user=self.create_user("poor-currency-observer@example.com"),
+        )
+        observer.in_game = True
+        observer.save(update_fields=["in_game"])
+        trigger = self._create_trigger(
+            match="pay impossible toll",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "consume_item",
+                            "actor": "trigger_actor",
+                            "item": "itemdefinition.barley-seed",
+                        },
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "The toll gate opens.",
+                        },
+                    ],
+                },
+            ],
+        )
+        revision_before = self.player.wallet_revision
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "pay impossible toll")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.wallet_revision, revision_before)
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.player,
+                currency=obol,
+            ).amount,
+            9,
+        )
+        self.assertTrue(Item.objects.filter(pk=seed.id).exists())
+        self.assertFalse(
+            ScheduledTriggerRun.objects.filter(trigger=trigger).exists()
+        )
+        self.assertFalse(GameEventOutbox.objects.exists())
+        self.assertFalse(
+            any(
+                "part with" in str(entry["message"].get("text", "")).lower()
+                or "parts with" in str(entry["message"].get("text", "")).lower()
+                or entry["message"]["type"] == "notification./echo"
+                for entry in messages
+            )
+        )
+        self.assertTrue(
+            any(
+                "insufficient funds" in str(
+                    entry["message"].get("text", "")
+                ).lower()
+                for entry in messages
+            )
+        )
+
+    def test_multiple_currency_debits_share_one_wallet_mutation(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: 11},
+            reason="test.setup",
+            emit_event=False,
+        )
+        self._create_trigger(
+            match="pay two tolls",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 1,
+                        },
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                    ],
+                },
+            ],
+        )
+        revision_before = self.player.wallet_revision
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "pay two tolls")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.wallet_revision, revision_before + 1)
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.player,
+                currency=obol,
+            ).amount,
+            0,
+        )
+        self.assertEqual(
+            [
+                entry["message"]["text"]
+                for entry in messages
+                if (
+                    entry["player_key"] == self.player.key
+                    and entry["message"]["type"]
+                    == "notification.trigger.currency_debited"
+                )
+            ],
+            [
+                "You part with 1 obol.",
+                "You part with 10 obols.",
+            ],
+        )
+        self.assertEqual(
+            len([
+                entry
+                for entry in messages
+                if entry["message"]["type"] == "currency.balances_changed"
+            ]),
+            1,
+        )
+
+    def test_delayed_currency_debit_cancels_cleanly_when_funds_are_insufficient(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: 9},
+            reason="test.setup",
+            emit_event=False,
+        )
+        trigger = self._create_trigger(
+            match="start delayed toll",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "spawn_room_item",
+                            "room": "trigger_room",
+                            "item": "itemdefinition.barley-seedling",
+                        },
+                    ],
+                },
+                {
+                    "after_seconds": 5,
+                    "actions": [
+                        {
+                            "type": "grant_item",
+                            "actor": "trigger_actor",
+                            "item": "itemdefinition.harvested-barley",
+                        },
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                    ],
+                },
+            ],
+        )
+        self._dispatch(self.player.id, "start delayed toll")
+        run = ScheduledTriggerRun.objects.get(trigger=trigger)
+        self.assertEqual(run.status, ScheduledTriggerRun.STATUS_ACTIVE)
+        self.assertEqual(self._room_items(self.seedling).count(), 1)
+
+        with capture_game_messages() as messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                result = process_due_trigger_runs(now=run.next_run_ts)
+
+        self.assertEqual(result["cancelled"], 1)
+        run.refresh_from_db()
+        self.assertEqual(run.status, ScheduledTriggerRun.STATUS_CANCELLED)
+        self.assertEqual(run.failure_code, "insufficient_funds")
+        self.assertEqual(self._room_items(self.seedling).count(), 1)
+        self.assertFalse(
+            self.player.inventory.filter(definition=self.harvested).exists()
+        )
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.player,
+                currency=obol,
+            ).amount,
+            9,
+        )
+        self.assertFalse(
+            any(
+                entry["message"]["type"]
+                in {
+                    "currency.balances_changed",
+                    "notification.trigger.currency_debited",
+                    "notification.trigger.items_changed",
+                }
+                for entry in messages
+            )
+        )
+
+    def test_delayed_currency_debit_notifies_players_in_actors_current_room(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: 10},
+            reason="test.setup",
+            emit_event=False,
+        )
+        original_observer = self.create_player(
+            "Original Observer",
+            user=self.create_user("original-currency-observer@example.com"),
+        )
+        original_observer.in_game = True
+        original_observer.save(update_fields=["in_game"])
+        other_room = self.room.create_at("north")
+        current_observer = self.create_player(
+            "Current Observer",
+            user=self.create_user("current-currency-observer@example.com"),
+        )
+        current_observer.room = other_room
+        current_observer.in_game = True
+        current_observer.save(update_fields=["room", "in_game"])
+        trigger = self._create_trigger(
+            match="start moving toll",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "The toll will come due.",
+                        },
+                    ],
+                },
+                {
+                    "after_seconds": 5,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                    ],
+                },
+            ],
+        )
+        self._dispatch(self.player.id, "start moving toll")
+        run = ScheduledTriggerRun.objects.get(trigger=trigger)
+        self.player.room = other_room
+        self.player.save(update_fields=["room"])
+
+        with capture_game_messages() as messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                result = process_due_trigger_runs(now=run.next_run_ts)
+
+        self.assertEqual(result["completed"], 1)
+        debit_messages = [
+            entry
+            for entry in messages
+            if (
+                entry["message"]["type"]
+                == "notification.trigger.currency_debited"
+            )
+        ]
+        self.assertEqual(
+            [
+                (entry["player_key"], entry["message"]["text"])
+                for entry in debit_messages
+            ],
+            [
+                (self.player.key, "You part with 10 obols."),
+                (current_observer.key, "Joe parts with 10 obols."),
+            ],
+        )
+        self.assertNotIn(
+            original_observer.key,
+            [entry["player_key"] for entry in debit_messages],
+        )
+        self.assertTrue(
+            all(
+                entry["message"]["data"]["room"]["key"] == other_room.key
+                for entry in debit_messages
+            )
+        )
+
+    def test_debit_step_replacement_keeps_later_consume_candidates_bounded(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: 10},
+            reason="test.setup",
+            emit_event=False,
+        )
+        trigger = self._create_trigger(
+            match="start replacement toll",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "spawn_room_item",
+                            "room": "trigger_room",
+                            "item": "itemdefinition.barley-mature",
+                            "bind": "crop",
+                        },
+                    ],
+                },
+                {
+                    "after_seconds": 5,
+                    "actions": [
+                        {
+                            "type": "replace_room_item",
+                            "target": "crop",
+                            "with": "itemdefinition.barley-seedling",
+                        },
+                        {
+                            "type": "consume_room_item",
+                            "room": "trigger_room",
+                            "item": "itemdefinition.barley-mature",
+                            "count": 2,
+                        },
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                    ],
+                },
+            ],
+        )
+        self._dispatch(self.player.id, "start replacement toll")
+        run = ScheduledTriggerRun.objects.get(trigger=trigger)
+        bound_item_id = run.bindings["crop"]["id"]
+        decoys = [
+            self.mature.spawn(self.room, self.spawn_world)
+            for _index in range(2)
+        ]
+        self.assertLess(bound_item_id, min(item.id for item in decoys))
+
+        with self.captureOnCommitCallbacks(execute=True):
+            result = process_due_trigger_runs(now=run.next_run_ts)
+
+        self.assertEqual(result["completed"], 1)
+        run.refresh_from_db()
+        self.assertEqual(run.status, ScheduledTriggerRun.STATUS_COMPLETED)
+        self.assertFalse(self._room_items(self.mature).exists())
+        self.assertEqual(self._room_items(self.seedling).count(), 1)
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.player,
+                currency=obol,
+            ).amount,
+            0,
+        )
+
+    def test_currency_debit_rejects_a_mob_trigger_actor(self):
+        create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        trigger = self._create_trigger(
+            match="mob pays toll",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                    ],
+                },
+            ],
+        )
+        mob = self.create_mob("Toll Collector")
+
+        result = start_trigger_steps(
+            trigger=trigger,
+            actor=mob,
+            room=self.room,
+        )
+
+        self.assertFalse(result.started)
+        self.assertEqual(result.code, "invalid_actor")
+        self.assertFalse(
+            ScheduledTriggerRun.objects.filter(trigger=trigger).exists()
+        )
+        self.assertFalse(GameEventOutbox.objects.exists())
 
     def test_set_mob_action_normalizes_fields_where_and_state(self):
         normalized = normalize_trigger_steps([
@@ -675,6 +1540,165 @@ class TestScheduledTriggerSteps(WorldTestCase):
         self.assertTrue(mob_change["data"]["mobs"][0]["attackable"])
         self.assertNotIn("actions", mob_change["data"]["mobs"][0])
         self.assertNotIn("quest_indicator", mob_change["data"]["mobs"][0])
+
+    def test_mob_mixed_steps_lock_actor_and_targets_in_stable_id_order(self):
+        from spawns import trigger_steps as trigger_step_runtime
+
+        target_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="lock-order-target",
+            name="a lock-order target",
+        )
+        actor_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="lock-order-actor",
+            name="a lock-order actor",
+        )
+        target = target_definition.spawn(self.room, self.spawn_world)
+        actor = actor_definition.spawn(self.room, self.spawn_world)
+        self.assertLess(target.id, actor.id)
+        trigger = self._create_trigger(
+            match="delayed mob lock order",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "set_mob",
+                            "room": "trigger_room",
+                            "mob": "mobdefinition.lock-order-target",
+                            "fields": {"name": "a changed target"},
+                        },
+                        {
+                            "type": "grant_item",
+                            "actor": "trigger_actor",
+                            "item": "itemdefinition.barley-seed",
+                        },
+                    ],
+                },
+                {
+                    "after_seconds": 1,
+                    "actions": [
+                        {
+                            "type": "set_mob",
+                            "room": "trigger_room",
+                            "mob": "mobdefinition.lock-order-target",
+                            "fields": {
+                                "description": "A safely locked target.",
+                            },
+                        },
+                        {
+                            "type": "grant_item",
+                            "actor": "trigger_actor",
+                            "item": "itemdefinition.barley-seed",
+                        },
+                    ],
+                },
+            ],
+        )
+        locked_batches = []
+        original_mob_lock = trigger_step_runtime._lock_mob_rows
+
+        def record_mob_locks(**kwargs):
+            locked_ids = original_mob_lock(**kwargs)
+            locked_batches.append(locked_ids)
+            return locked_ids
+
+        with (
+            patch(
+                "spawns.trigger_steps._lock_mob_rows",
+                side_effect=record_mob_locks,
+            ),
+            patch("spawns.trigger_steps._flush_queued_events"),
+        ):
+            result = start_trigger_steps(
+                trigger=trigger,
+                actor=actor,
+                room=self.room,
+            )
+        self.assertTrue(result.started)
+        self.assertEqual(locked_batches, [(target.id, actor.id)])
+        run = ScheduledTriggerRun.objects.get(pk=result.run_id)
+
+        locked_batches.clear()
+        with (
+            patch(
+                "spawns.trigger_steps._lock_mob_rows",
+                side_effect=record_mob_locks,
+            ),
+            patch("spawns.trigger_steps._flush_queued_events"),
+        ):
+            due_result = process_due_trigger_runs(now=run.next_run_ts)
+
+        self.assertEqual(locked_batches, [(target.id, actor.id)])
+        self.assertEqual(due_result["completed"], 1)
+        target.refresh_from_db()
+        self.assertEqual(target.name, "a changed target")
+        self.assertEqual(
+            target.description,
+            "A safely locked target.",
+        )
+        self.assertEqual(
+            actor.inventory.filter(definition=self.seed).count(),
+            2,
+        )
+
+    def test_rejected_mob_start_does_not_prelock_step_items(self):
+        from spawns import trigger_steps as trigger_step_runtime
+
+        target_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="rejected-lock-target",
+            name="a rejected lock target",
+        )
+        actor_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="rejected-lock-actor",
+            name="a rejected lock actor",
+        )
+        target_definition.spawn(self.room, self.spawn_world)
+        actor = actor_definition.spawn(self.room, self.spawn_world)
+        trigger = self._create_trigger(
+            match="rejected mob lock",
+            conditions=self._inventory_condition(),
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "set_mob",
+                            "room": "trigger_room",
+                            "mob": "mobdefinition.rejected-lock-target",
+                            "fields": {"name": "an unreachable change"},
+                        },
+                        {
+                            "type": "consume_item",
+                            "actor": "trigger_actor",
+                            "item": "itemdefinition.barley-seed",
+                            "count": 1000,
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with (
+            patch(
+                "spawns.trigger_steps._prelock_step_resources",
+                wraps=trigger_step_runtime._prelock_step_resources,
+            ) as prelock_resources,
+            patch("spawns.trigger_steps._flush_queued_events"),
+        ):
+            result = start_trigger_steps(
+                trigger=trigger,
+                actor=actor,
+                room=self.room,
+            )
+
+        self.assertFalse(result.started)
+        self.assertEqual(result.code, "conditions_failed")
+        prelock_resources.assert_not_called()
 
     def test_set_mob_field_only_update_keeps_character_state_sparse(self):
         commander_definition = MobDefinition.objects.create(
@@ -2130,5 +3154,224 @@ class TestConcurrentHarvestTriggerSteps(TransactionTestCase):
         )
         self.assertEqual(
             ScheduledTriggerRun.objects.filter(trigger=self.trigger).count(),
+            1,
+        )
+
+    def test_concurrent_same_room_starts_cannot_overspend_one_player(self):
+        obol = create_currency(
+            world=self.authored_world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.first_player,
+            {obol: 10},
+            reason="test.setup",
+            emit_event=False,
+        )
+        toll_trigger = Trigger.objects.create(
+            world=self.authored_world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=self.room.id,
+            name="Pay concurrent toll",
+            match="pay toll",
+            script="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                    ],
+                },
+            ],
+            display_action_in_room=True,
+        )
+        barrier = Barrier(2)
+
+        def debit_once(_attempt):
+            close_old_connections()
+            try:
+                actor = Player.objects.get(pk=self.first_player.id)
+                room = Room.objects.get(pk=self.room.id)
+                trigger = Trigger.objects.get(pk=toll_trigger.id)
+                barrier.wait(timeout=5)
+                result = start_trigger_steps(
+                    trigger=trigger,
+                    actor=actor,
+                    room=room,
+                )
+                return "started" if result.started else result.code
+            finally:
+                close_old_connections()
+
+        with patch("spawns.trigger_steps._flush_queued_events"):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                outcomes = list(executor.map(debit_once, range(2)))
+
+        self.assertEqual(
+            sorted(outcomes),
+            ["insufficient_funds", "started"],
+        )
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.first_player,
+                currency=obol,
+            ).amount,
+            0,
+        )
+        self.assertEqual(
+            ScheduledTriggerRun.objects.filter(trigger=toll_trigger).count(),
+            1,
+        )
+
+    def test_concurrent_due_runs_contend_safely_on_one_player_wallet(self):
+        obol = create_currency(
+            world=self.authored_world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.first_player,
+            {obol: 10},
+            reason="test.setup",
+            emit_event=False,
+        )
+        revision_before = self.first_player.wallet_revision
+        second_room = self.room.create_at("north")
+
+        def create_toll_trigger(*, room, match):
+            return Trigger.objects.create(
+                world=self.authored_world,
+                scope=adv_consts.TRIGGER_SCOPE_ROOM,
+                kind=adv_consts.TRIGGER_KIND_COMMAND,
+                target_type=ContentType.objects.get_for_model(Room),
+                target_id=room.id,
+                name=f"Delayed {match}",
+                match=match,
+                script="",
+                steps=[
+                    {
+                        "after_seconds": 0,
+                        "actions": [
+                            {
+                                "type": "echo",
+                                "room": "trigger_room",
+                                "text": "A toll is pending.",
+                            },
+                        ],
+                    },
+                    {
+                        "after_seconds": 1,
+                        "actions": [
+                            {
+                                "type": "debit_currency",
+                                "actor": "trigger_actor",
+                                "currency": "obol",
+                                "amount": 10,
+                            },
+                        ],
+                    },
+                ],
+                display_action_in_room=True,
+            )
+
+        first_trigger = create_toll_trigger(
+            room=self.room,
+            match="first delayed toll",
+        )
+        second_trigger = create_toll_trigger(
+            room=second_room,
+            match="second delayed toll",
+        )
+        with patch("spawns.trigger_steps._flush_queued_events"):
+            first_start = start_trigger_steps(
+                trigger=first_trigger,
+                actor=self.first_player,
+                room=self.room,
+            )
+            self.assertTrue(first_start.started)
+            self.first_player.room = second_room
+            self.first_player.save(update_fields=["room"])
+            second_start = start_trigger_steps(
+                trigger=second_trigger,
+                actor=self.first_player,
+                room=second_room,
+            )
+            self.assertTrue(second_start.started)
+        runs = list(
+            ScheduledTriggerRun.objects.filter(
+                trigger__in=[first_trigger, second_trigger],
+            ).order_by("id")
+        )
+        due_at = max(run.next_run_ts for run in runs)
+        GameEventOutbox.objects.all().delete()
+        barrier = Barrier(2)
+
+        def advance_once(_attempt):
+            close_old_connections()
+            try:
+                barrier.wait(timeout=5)
+                return process_due_trigger_runs(limit=1, now=due_at)
+            finally:
+                close_old_connections()
+
+        with patch("spawns.trigger_steps._flush_queued_events"):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                results = list(executor.map(advance_once, range(2)))
+
+        self.assertEqual(
+            sum(result["processed"] for result in results),
+            2,
+        )
+        self.assertEqual(
+            sum(result["completed"] for result in results),
+            1,
+        )
+        self.assertEqual(
+            sum(result["cancelled"] for result in results),
+            1,
+        )
+        self.assertEqual(
+            list(
+                ScheduledTriggerRun.objects.filter(pk__in=[run.pk for run in runs])
+                .order_by("status")
+                .values_list("status", "failure_code")
+            ),
+            [
+                (ScheduledTriggerRun.STATUS_CANCELLED, "insufficient_funds"),
+                (ScheduledTriggerRun.STATUS_COMPLETED, ""),
+            ],
+        )
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.first_player,
+                currency=obol,
+            ).amount,
+            0,
+        )
+        self.first_player.refresh_from_db()
+        self.assertEqual(
+            self.first_player.wallet_revision,
+            revision_before + 1,
+        )
+        self.assertEqual(
+            GameEventOutbox.objects.filter(
+                event_type="currency.balances_changed",
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            GameEventOutbox.objects.filter(
+                event_type="notification.trigger.currency_debited",
+            ).count(),
             1,
         )

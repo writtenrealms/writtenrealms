@@ -20,9 +20,10 @@ from django.db import (
 from django.db.models import Q
 from django.utils import timezone
 
-from builders.models import ItemDefinition, MobDefinition, Trigger
+from builders.models import Currency, ItemDefinition, MobDefinition, Trigger
 from core.condition_dsl import ConditionContext, evaluate_condition
 from core.conditions import evaluate_conditions
+from core.economy import format_currency, money_payload
 from core.scoped_state import (
     STATE_SCOPE_CHARACTER,
     normalize_state_snapshot,
@@ -30,6 +31,7 @@ from core.scoped_state import (
 from core.trigger_steps import (
     TRIGGER_STEP_ACTION_CONSUME_ITEM,
     TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM,
+    TRIGGER_STEP_ACTION_DEBIT_CURRENCY,
     TRIGGER_STEP_ACTION_ECHO,
     TRIGGER_STEP_ACTION_GRANT_ITEM,
     TRIGGER_STEP_ACTION_REPLACE_ROOM_ITEM,
@@ -46,11 +48,13 @@ from spawns.events import (
     publish_events,
 )
 from spawns.models import Item, Mob, MobState, Player, ScheduledTriggerRun
+from spawns.wallet import WalletError, mutate_balances
 from worlds.models import Room, World
 
 
 DEFAULT_DUE_RUN_LIMIT = 100
 MAX_ACTIVE_TRIGGER_RUNS_PER_ACTOR = 16
+MAX_TRIGGER_SET_MOB_CANDIDATES = 256
 TRIGGER_GATED_TEXT = "More time is needed."
 
 
@@ -101,6 +105,13 @@ class TriggerMobChanges:
     @property
     def changed(self) -> bool:
         return bool(self.updated)
+
+
+@dataclass(frozen=True)
+class TriggerStepPrelocks:
+    mob_ids_by_definition: dict[int, tuple[int, ...]]
+    actor_item_ids_by_definition: dict[int, tuple[int, ...]]
+    room_item_ids_by_definition: dict[int, tuple[int, ...]]
 
 
 def _flush_queued_events() -> None:
@@ -295,6 +306,7 @@ def _snapshot_steps_with_definition_ids(
 ) -> list[dict[str, Any]]:
     refs: set[tuple[str, int | str]] = set()
     mob_refs: set[tuple[str, int | str]] = set()
+    currency_codes: set[str] = set()
     for step in steps:
         for action in step.get("actions") or []:
             if "item" in action:
@@ -303,6 +315,8 @@ def _snapshot_steps_with_definition_ids(
                 refs.add(_definition_ref_parts(action.get("with")))
             if action.get("type") == TRIGGER_STEP_ACTION_SET_MOB:
                 mob_refs.add(_mob_definition_ref_parts(action.get("mob")))
+            if action.get("type") == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
+                currency_codes.add(str(action.get("currency") or "").strip().lower())
 
     ids = [value for ref_type, value in refs if ref_type == "id"]
     slugs = [value for ref_type, value in refs if ref_type == "slug"]
@@ -348,6 +362,21 @@ def _snapshot_steps_with_definition_ids(
             )
         resolved_mobs[ref] = definition
 
+    currencies = {
+        currency.code: currency
+        for currency in Currency.objects.filter(
+            world_id=authored_world_id,
+            code__in=currency_codes,
+        ).only("id", "code")
+    }
+    missing_currency_codes = currency_codes - set(currencies)
+    if missing_currency_codes:
+        missing_code = sorted(missing_currency_codes)[0]
+        raise TriggerStepExecutionError(
+            f"Currency '{missing_code}' is unavailable in the trigger world.",
+            code="currency_missing",
+        )
+
     cumulative_seconds = 0
     snapshot = deepcopy(steps)
     for step in snapshot:
@@ -368,6 +397,10 @@ def _snapshot_steps_with_definition_ids(
                 ]
                 action["mob_definition_id"] = definition.id
                 action["mob"] = f"mobdefinition.{definition.slug}"
+            if action.get("type") == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
+                currency = currencies[str(action.get("currency") or "").lower()]
+                action["currency_id"] = currency.id
+                action["currency"] = currency.code
     return snapshot
 
 
@@ -394,11 +427,294 @@ def _step_definitions(step: dict[str, Any], *, authored_world_id: int) -> dict[i
     return definitions
 
 
+def _set_mob_candidate_ids(
+    *,
+    runtime_world_id: int,
+    room_id: int,
+    definition_id: int,
+    has_candidate_predicate: bool,
+) -> tuple[int, ...]:
+    query_limit = (
+        MAX_TRIGGER_SET_MOB_CANDIDATES + 1
+        if has_candidate_predicate
+        else 2
+    )
+    candidate_ids = tuple(
+        Mob.objects.filter(
+            world_id=runtime_world_id,
+            room_id=room_id,
+            definition_id=definition_id,
+            is_pending_deletion=False,
+        )
+        .order_by("id")
+        .values_list("id", flat=True)[:query_limit]
+    )
+    if (
+        has_candidate_predicate
+        and len(candidate_ids) > MAX_TRIGGER_SET_MOB_CANDIDATES
+    ):
+        raise TriggerStepExecutionError(
+            "The set_mob action has too many candidates to evaluate "
+            f"safely (maximum {MAX_TRIGGER_SET_MOB_CANDIDATES}).",
+            code="set_mob_candidate_limit",
+        )
+    return candidate_ids
+
+
+def _lock_mob_rows(
+    *,
+    runtime_world_id: int,
+    mob_ids: set[int],
+) -> tuple[int, ...]:
+    if not mob_ids:
+        return ()
+    return tuple(
+        Mob.objects.select_for_update(of=("self",))
+        .filter(
+            pk__in=mob_ids,
+            world_id=runtime_world_id,
+            is_pending_deletion=False,
+        )
+        .order_by("id")
+        .values_list("id", flat=True)
+    )
+
+
+def _step_locks_mob_actor(
+    *,
+    run: ScheduledTriggerRun,
+    actions: list[dict[str, Any]],
+    include_mob_actor: bool,
+) -> bool:
+    if _actor_model(run.actor_type) is not Mob:
+        return False
+    return (
+        include_mob_actor
+        or any(
+            action.get("type") == TRIGGER_STEP_ACTION_SET_MOB
+            for action in actions
+        )
+        or any(
+            action.get("type")
+            in {
+                TRIGGER_STEP_ACTION_CONSUME_ITEM,
+                TRIGGER_STEP_ACTION_GRANT_ITEM,
+            }
+            for action in actions
+        )
+    )
+
+
+def _prelock_step_mobs(
+    *,
+    run: ScheduledTriggerRun,
+    actions: list[dict[str, Any]],
+    include_mob_actor: bool = False,
+) -> dict[int, tuple[int, ...]]:
+    mob_actions_by_definition: dict[int, list[dict[str, Any]]] = {}
+    for action in actions:
+        if (
+            action.get("type") == TRIGGER_STEP_ACTION_SET_MOB
+            and action.get("mob_definition_id")
+        ):
+            mob_actions_by_definition.setdefault(
+                int(action["mob_definition_id"]),
+                [],
+            ).append(action)
+
+    prelocked_mob_ids: dict[int, tuple[int, ...]] = {}
+    mob_ids_to_lock: set[int] = set()
+    for definition_id, definition_actions in sorted(
+        mob_actions_by_definition.items()
+    ):
+        candidate_ids = _set_mob_candidate_ids(
+            runtime_world_id=run.runtime_world_id,
+            room_id=run.room_id,
+            definition_id=definition_id,
+            has_candidate_predicate=any(
+                action.get("where") not in (None, {}, [])
+                for action in definition_actions
+            ),
+        )
+        prelocked_mob_ids[definition_id] = candidate_ids
+        mob_ids_to_lock.update(candidate_ids)
+
+    if _step_locks_mob_actor(
+        run=run,
+        actions=actions,
+        include_mob_actor=include_mob_actor,
+    ):
+        mob_ids_to_lock.add(run.actor_id)
+    # Actor and target Mobs share one globally ordered lock acquisition.
+    _lock_mob_rows(
+        runtime_world_id=run.runtime_world_id,
+        mob_ids=mob_ids_to_lock,
+    )
+    return prelocked_mob_ids
+
+
+def _prelock_step_resources(
+    *,
+    run: ScheduledTriggerRun,
+    actions: list[dict[str, Any]],
+    bindings: dict[str, Any],
+    include_mob_actor: bool = False,
+    prelocked_mob_ids_by_definition: (
+        dict[int, tuple[int, ...]] | None
+    ) = None,
+    mob_rows_prelocked: bool = False,
+) -> TriggerStepPrelocks | None:
+    """Lock a mixed step's existing Mob, then Item rows in aggregate order."""
+    mob_actions = [
+        action
+        for action in actions
+        if action.get("type") == TRIGGER_STEP_ACTION_SET_MOB
+    ]
+    existing_item_actions = [
+        action
+        for action in actions
+        if action.get("type")
+        in {
+            TRIGGER_STEP_ACTION_CONSUME_ITEM,
+            TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM,
+            TRIGGER_STEP_ACTION_GRANT_ITEM,
+            TRIGGER_STEP_ACTION_REPLACE_ROOM_ITEM,
+        }
+    ]
+    has_debit = any(
+        action.get("type") == TRIGGER_STEP_ACTION_DEBIT_CURRENCY
+        for action in actions
+    )
+    actor_model = _actor_model(run.actor_type)
+    lock_mob_actor = _step_locks_mob_actor(
+        run=run,
+        actions=actions,
+        include_mob_actor=include_mob_actor,
+    )
+    needs_prelock = (
+        has_debit
+        or lock_mob_actor
+        or bool(mob_actions and existing_item_actions)
+        or len(mob_actions) > 1
+        or len(existing_item_actions) > 1
+    )
+    if not needs_prelock:
+        return None
+
+    if mob_rows_prelocked:
+        prelocked_mob_ids = dict(
+            prelocked_mob_ids_by_definition or {}
+        )
+    else:
+        prelocked_mob_ids = _prelock_step_mobs(
+            run=run,
+            actions=actions,
+            include_mob_actor=include_mob_actor,
+        )
+
+    actor_definition_counts: dict[int, int] = {}
+    room_definition_counts: dict[int, int] = {}
+    for action in actions:
+        action_type = action.get("type")
+        if action_type not in {
+            TRIGGER_STEP_ACTION_CONSUME_ITEM,
+            TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM,
+        }:
+            continue
+        definition_id = int(action["item_definition_id"])
+        target_counts = (
+            actor_definition_counts
+            if action_type == TRIGGER_STEP_ACTION_CONSUME_ITEM
+            else room_definition_counts
+        )
+        target_counts[definition_id] = (
+            target_counts.get(definition_id, 0)
+            + int(action.get("count") or 1)
+        )
+
+    actor_item_ids: dict[int, tuple[int, ...]] = {}
+    if actor_definition_counts and actor_model is not None:
+        actor_type_id = ContentType.objects.get_for_model(actor_model).id
+        for definition_id, count in sorted(actor_definition_counts.items()):
+            actor_item_ids[definition_id] = tuple(
+                Item.objects.filter(
+                    world_id=run.runtime_world_id,
+                    container_type_id=actor_type_id,
+                    container_id=run.actor_id,
+                    definition_id=definition_id,
+                    is_pending_deletion=False,
+                )
+                .order_by("id")
+                .values_list("id", flat=True)[:count]
+            )
+
+    room_item_ids: dict[int, tuple[int, ...]] = {}
+    if room_definition_counts:
+        room_type_id = ContentType.objects.get_for_model(Room).id
+        replacement_slack = sum(
+            1
+            for action in actions
+            if action.get("type") == TRIGGER_STEP_ACTION_REPLACE_ROOM_ITEM
+        )
+        for definition_id, count in sorted(room_definition_counts.items()):
+            room_item_ids[definition_id] = tuple(
+                Item.objects.filter(
+                    world_id=run.runtime_world_id,
+                    container_type_id=room_type_id,
+                    container_id=run.room_id,
+                    definition_id=definition_id,
+                    is_pending_deletion=False,
+                )
+                .order_by("id")
+                .values_list("id", flat=True)[:count + replacement_slack]
+            )
+
+    bound_item_ids: set[int] = set()
+    for action in actions:
+        if action.get("type") != TRIGGER_STEP_ACTION_REPLACE_ROOM_ITEM:
+            continue
+        binding = bindings.get(str(action.get("target") or "").strip())
+        if not isinstance(binding, dict) or binding.get("type") != "item":
+            continue
+        try:
+            bound_item_ids.add(int(binding["id"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    item_ids = {
+        item_id
+        for ids_by_definition in (actor_item_ids, room_item_ids)
+        for candidate_ids in ids_by_definition.values()
+        for item_id in candidate_ids
+    }
+    item_ids.update(bound_item_ids)
+    if item_ids:
+        # Candidate selection is capped by the sum of authored consume counts.
+        # Lock that exact stable set together so a later drop cannot introduce
+        # a new, out-of-order Item lock.
+        list(
+            Item.objects.select_for_update()
+            .filter(
+                pk__in=item_ids,
+                world_id=run.runtime_world_id,
+                is_pending_deletion=False,
+            )
+            .order_by("id")
+            .values_list("id", flat=True)
+        )
+    return TriggerStepPrelocks(
+        mob_ids_by_definition=prelocked_mob_ids,
+        actor_item_ids_by_definition=actor_item_ids,
+        room_item_ids_by_definition=room_item_ids,
+    )
+
+
 def _consume_item(
     *,
     run: ScheduledTriggerRun,
     action: dict[str, Any],
     definition: ItemDefinition,
+    candidate_ids: tuple[int, ...] | None = None,
 ) -> list[tuple[int, str]]:
     actor_model = _actor_model(run.actor_type)
     if actor_model is None:
@@ -417,16 +733,14 @@ def _consume_item(
         )
 
     count = int(action.get("count") or 1)
-    items = list(
-        actor.inventory.select_for_update()
-        .filter(
-            world_id=run.runtime_world_id,
-            definition_id=definition.id,
-            is_pending_deletion=False,
-        )
-        .order_by("id")
-        .only("id")[:count]
+    candidates = actor.inventory.select_for_update().filter(
+        world_id=run.runtime_world_id,
+        definition_id=definition.id,
+        is_pending_deletion=False,
     )
+    if candidate_ids is not None:
+        candidates = candidates.filter(pk__in=candidate_ids)
+    items = list(candidates.order_by("id").only("id")[:count])
     if len(items) != count:
         raise TriggerStepExecutionError(
             f"The trigger actor does not have {count} required item(s).",
@@ -442,21 +756,20 @@ def _consume_room_item(
     run: ScheduledTriggerRun,
     action: dict[str, Any],
     definition: ItemDefinition,
+    candidate_ids: tuple[int, ...] | None = None,
 ) -> list[tuple[int, str]]:
     room_type = ContentType.objects.get_for_model(Room)
     count = int(action.get("count") or 1)
-    items = list(
-        Item.objects.select_for_update()
-        .filter(
-            world_id=run.runtime_world_id,
-            container_type_id=room_type.id,
-            container_id=run.room_id,
-            definition_id=definition.id,
-            is_pending_deletion=False,
-        )
-        .order_by("id")
-        .only("id")[:count]
+    candidates = Item.objects.select_for_update().filter(
+        world_id=run.runtime_world_id,
+        container_type_id=room_type.id,
+        container_id=run.room_id,
+        definition_id=definition.id,
+        is_pending_deletion=False,
     )
+    if candidate_ids is not None:
+        candidates = candidates.filter(pk__in=candidate_ids)
+    items = list(candidates.order_by("id").only("id")[:count])
     if len(items) != count:
         raise TriggerStepExecutionError(
             f"The trigger room does not have {count} required item(s).",
@@ -663,6 +976,7 @@ def _set_mob(
     room: Room,
     runtime_world: World,
     trigger_actor: Player | Mob | None,
+    candidate_ids: tuple[int, ...] | None = None,
 ) -> Mob:
     try:
         definition_id = int(action["mob_definition_id"])
@@ -673,6 +987,13 @@ def _set_mob(
         ) from exc
 
     where = action.get("where")
+    if candidate_ids is None:
+        candidate_ids = _set_mob_candidate_ids(
+            runtime_world_id=run.runtime_world_id,
+            room_id=run.room_id,
+            definition_id=definition_id,
+            has_candidate_predicate=where not in (None, {}, []),
+        )
     matches: list[Mob] = []
     candidates = (
         Mob.objects.select_for_update(of=("self",))
@@ -691,6 +1012,10 @@ def _set_mob(
         )
         .order_by("id")
     )
+    # Mixed steps prelock this stable set before Item rows. Standalone actions
+    # use the same bounded selection so a crowded room cannot create an
+    # unbounded row-lock scan.
+    candidates = candidates.filter(pk__in=candidate_ids)
     # The iterator keeps memory bounded in unusually crowded rooms. Stop after
     # two matches because the action requires exactly one and no further row
     # can change the result from ambiguous.
@@ -928,6 +1253,107 @@ def _mob_change_events(
     ]
 
 
+def _debit_step_currencies(
+    *,
+    run: ScheduledTriggerRun,
+    debit_actions: list[dict[str, Any]],
+    trigger_actor: Player,
+) -> tuple[Player, dict[int, Currency]]:
+    deltas: dict[int, int] = {}
+    for action in debit_actions:
+        currency_id = int(action["currency_id"])
+        deltas[currency_id] = (
+            deltas.get(currency_id, 0) - int(action["amount"])
+        )
+
+    try:
+        mutation = mutate_balances(
+            trigger_actor,
+            deltas,
+            reason="trigger.debit_currency",
+        )
+    except WalletError as exc:
+        raise TriggerStepExecutionError(
+            str(exc),
+            code=exc.code,
+        ) from exc
+    return (
+        mutation.player,
+        {
+            change.currency.id: change.currency
+            for change in mutation.changes
+        },
+    )
+
+
+def _currency_debit_events(
+    *,
+    run: ScheduledTriggerRun,
+    action: dict[str, Any],
+    currency: Currency,
+    actor: Player,
+    room: Room,
+    room_recipient_keys: tuple[str, ...],
+) -> list[GameEvent]:
+    amount = int(action["amount"])
+    display = format_currency(amount, currency)
+    amount_prefix = f"{amount} "
+    currency_label = display[len(amount_prefix):]
+    if (
+        currency_label
+        and " " not in currency_label
+        and not currency_label.isupper()
+    ):
+        # Catalog labels are commonly title-cased for standalone wallet UI.
+        # A one-word unit is a common noun in this sentence; preserve acronyms
+        # and authored multi-word capitalization.
+        display = (
+            f"{amount_prefix}"
+            f"{currency_label[:1].lower()}{currency_label[1:]}"
+        )
+    actor_name = actor.name or "Someone"
+    data = {
+        "actor": {
+            "key": actor.key,
+            "name": actor_name,
+            "char_type": "player",
+        },
+        "room": {
+            "id": room.id,
+            "key": room.key,
+            "name": room.name or "",
+        },
+        "money": money_payload(amount, currency),
+    }
+    events = [
+        GameEvent(
+            type="notification.trigger.currency_debited",
+            recipients=[run.actor_key],
+            data={**data, "perspective": "actor"},
+            text=f"You part with {display}.",
+        )
+    ]
+    observer_recipients = tuple(
+        recipient
+        for recipient in room_recipient_keys
+        if recipient != run.actor_key
+    )
+    if observer_recipients and actor.in_game and not actor.is_invisible:
+        from spawns.state_payloads import safe_capitalize
+
+        events.append(
+            GameEvent(
+                type="notification.trigger.currency_debited",
+                recipients=observer_recipients,
+                data={**data, "perspective": "room"},
+                text=(
+                    f"{safe_capitalize(actor_name)} parts with {display}."
+                ),
+            )
+        )
+    return events
+
+
 def _echo_event(
     *,
     run: ScheduledTriggerRun,
@@ -958,16 +1384,27 @@ def _echo_event(
     )
 
 
-def _room_recipient_keys(run: ScheduledTriggerRun) -> tuple[str, ...]:
+def _room_recipient_keys_for(
+    *,
+    runtime_world_id: int,
+    room_id: int,
+) -> tuple[str, ...]:
     return tuple(
         f"player.{player_id}"
         for player_id in Player.objects.filter(
-            world_id=run.runtime_world_id,
-            room_id=run.room_id,
+            world_id=runtime_world_id,
+            room_id=room_id,
             in_game=True,
         )
         .order_by("id")
         .values_list("id", flat=True)
+    )
+
+
+def _room_recipient_keys(run: ScheduledTriggerRun) -> tuple[str, ...]:
+    return _room_recipient_keys_for(
+        runtime_world_id=run.runtime_world_id,
+        room_id=run.room_id,
     )
 
 
@@ -977,6 +1414,8 @@ def _execute_current_step(
     runtime_world: World | None = None,
     room: Room | None = None,
     trigger_actor: Player | Mob | None = None,
+    prelocks: TriggerStepPrelocks | None = None,
+    resources_prelocked: bool = False,
 ) -> list[GameEvent]:
     steps = run.steps if isinstance(run.steps, list) else []
     if run.next_step_index >= len(steps):
@@ -1005,22 +1444,99 @@ def _execute_current_step(
     item_changes = TriggerItemChanges()
     mob_changes = TriggerMobChanges()
     room_recipient_keys = _room_recipient_keys(run)
+    actions = step.get("actions") or []
+    debit_actions = [
+        action
+        for action in actions
+        if action.get("type") == TRIGGER_STEP_ACTION_DEBIT_CURRENCY
+    ]
+    if debit_actions:
+        if run.actor_type != "player":
+            raise TriggerStepExecutionError(
+                "Only a player trigger actor can be charged currency.",
+                code="invalid_actor",
+            )
+    actor_row_actions = {
+        TRIGGER_STEP_ACTION_CONSUME_ITEM,
+        TRIGGER_STEP_ACTION_GRANT_ITEM,
+        TRIGGER_STEP_ACTION_DEBIT_CURRENCY,
+    }
+    if (
+        run.actor_type == "player"
+        and any(action.get("type") in actor_row_actions for action in actions)
+    ):
+        if (
+            not isinstance(trigger_actor, Player)
+            or trigger_actor.id != run.actor_id
+            or trigger_actor.world_id != run.runtime_world_id
+        ):
+            trigger_actor = (
+                Player.objects.select_for_update()
+                .filter(
+                    pk=run.actor_id,
+                    world_id=run.runtime_world_id,
+                )
+                .first()
+            )
+        if trigger_actor is None:
+            raise TriggerStepExecutionError(
+                "The trigger actor is no longer available.",
+                code="actor_missing",
+            )
+    if not resources_prelocked:
+        prelocks = _prelock_step_resources(
+            run=run,
+            actions=actions,
+            bindings=bindings,
+        )
 
-    for action in step.get("actions") or []:
+    for action in actions:
         action_type = action.get("type")
-        if action_type == TRIGGER_STEP_ACTION_CONSUME_ITEM:
+        if action_type == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
+            continue
+        elif action_type == TRIGGER_STEP_ACTION_CONSUME_ITEM:
+            definition_id = int(action["item_definition_id"])
+            candidate_ids = None
+            if prelocks is not None:
+                candidate_ids = (
+                    prelocks.actor_item_ids_by_definition.get(
+                        definition_id,
+                        (),
+                    )
+                    + tuple(
+                        item.id
+                        for item in item_changes.actor_inventory_added.values()
+                        if item.definition_id == definition_id
+                    )
+                )
             for removed_id, removed_key in _consume_item(
                 run=run,
                 action=action,
-                definition=definitions[int(action["item_definition_id"])],
+                definition=definitions[definition_id],
+                candidate_ids=candidate_ids,
             ):
                 if item_changes.actor_inventory_added.pop(removed_id, None) is None:
                     item_changes.actor_inventory_removed.append({"key": removed_key})
         elif action_type == TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM:
+            definition_id = int(action["item_definition_id"])
+            candidate_ids = None
+            if prelocks is not None:
+                candidate_ids = (
+                    prelocks.room_item_ids_by_definition.get(
+                        definition_id,
+                        (),
+                    )
+                    + tuple(
+                        item.id
+                        for item in item_changes.room_items_added.values()
+                        if item.definition_id == definition_id
+                    )
+                )
             for removed_id, removed_key in _consume_room_item(
                 run=run,
                 action=action,
-                definition=definitions[int(action["item_definition_id"])],
+                definition=definitions[definition_id],
+                candidate_ids=candidate_ids,
             ):
                 if item_changes.room_items_added.pop(removed_id, None) is None:
                     item_changes.room_items_removed.append({"key": removed_key})
@@ -1063,6 +1579,14 @@ def _execute_current_step(
                 room=room,
                 runtime_world=runtime_world,
                 trigger_actor=trigger_actor,
+                candidate_ids=(
+                    None
+                    if prelocks is None
+                    else prelocks.mob_ids_by_definition.get(
+                        int(action["mob_definition_id"]),
+                        (),
+                    )
+                ),
             )
             change = mob_changes.updated.setdefault(
                 updated_mob.id,
@@ -1070,6 +1594,58 @@ def _execute_current_step(
             )
             change.mob = updated_mob
             change.fields.update(action["fields"])
+        elif action_type == TRIGGER_STEP_ACTION_ECHO:
+            continue
+        else:
+            raise TriggerStepExecutionError(
+                f"Unsupported scheduled trigger action '{action_type}'.",
+                code="unsupported_action",
+            )
+
+    debited_actor: Player | None = None
+    debited_currencies: dict[int, Currency] = {}
+    debit_room: Room | None = None
+    debit_room_recipient_keys: tuple[str, ...] = ()
+    if debit_actions:
+        # Balance rows are last in the global aggregate lock order. Every
+        # existing Mob/Item candidate was locked above in the same order used
+        # by non-debit mixed steps before this single wallet mutation.
+        debited_actor, debited_currencies = _debit_step_currencies(
+            run=run,
+            debit_actions=debit_actions,
+            trigger_actor=trigger_actor,
+        )
+        trigger_actor = debited_actor
+        if debited_actor.room_id == room.id:
+            debit_room = room
+        elif debited_actor.room_id is not None:
+            debit_room = Room.objects.filter(pk=debited_actor.room_id).first()
+        if (
+            debit_room is not None
+            and debited_actor.in_game
+            and not debited_actor.is_invisible
+        ):
+            if debit_room.id == room.id:
+                debit_room_recipient_keys = room_recipient_keys
+            else:
+                debit_room_recipient_keys = _room_recipient_keys_for(
+                    runtime_world_id=run.runtime_world_id,
+                    room_id=debit_room.id,
+                )
+
+    for action in actions:
+        action_type = action.get("type")
+        if action_type == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
+            events.extend(
+                _currency_debit_events(
+                    run=run,
+                    action=action,
+                    currency=debited_currencies[int(action["currency_id"])],
+                    actor=debited_actor,
+                    room=debit_room or room,
+                    room_recipient_keys=debit_room_recipient_keys,
+                )
+            )
         elif action_type == TRIGGER_STEP_ACTION_ECHO:
             event = _echo_event(
                 run=run,
@@ -1079,11 +1655,6 @@ def _execute_current_step(
             )
             if event is not None:
                 events.append(event)
-        else:
-            raise TriggerStepExecutionError(
-                f"Unsupported scheduled trigger action '{action_type}'.",
-                code="unsupported_action",
-            )
 
     events.extend(
         _item_change_events(
@@ -1156,21 +1727,15 @@ def start_trigger_steps(
                 runtime_world_id=runtime_world_id,
                 room_id=room.id,
             )
-            locked_actor = (
-                actor_model.objects.select_for_update()
-                .get(pk=actor.id)
-            )
             expected_actor_room_id = _expected_actor_room_id(
                 trigger_room_id=room.id,
                 event_data=event_data,
             )
-            if (
-                locked_actor.world_id != runtime_world_id
-                or locked_actor.room_id != expected_actor_room_id
-            ):
-                raise TriggerStepExecutionError(
-                    "The trigger actor is no longer in the triggering room.",
-                    code="context_changed",
+            locked_actor = None
+            if actor_model is Player:
+                locked_actor = (
+                    Player.objects.select_for_update()
+                    .get(pk=actor.id)
                 )
 
             current_trigger = Trigger.objects.filter(
@@ -1209,6 +1774,44 @@ def start_trigger_steps(
                 raise TriggerStepExecutionError(
                     "The trigger does not belong to the triggering room's template world.",
                     code="world_mismatch",
+                )
+
+            snapshot_steps = _snapshot_steps_with_definition_ids(
+                normalized_steps,
+                authored_world_id=definition_world_id,
+            )
+            initial_prelocks = None
+            resources_prelocked = False
+            initial_mob_prelocks: dict[int, tuple[int, ...]] = {}
+            prelock_context = None
+            if actor_model is Mob:
+                prelock_context = ScheduledTriggerRun(
+                    runtime_world_id=runtime_world_id,
+                    room_id=room.id,
+                    actor_type=actor_type,
+                    actor_id=actor.id,
+                )
+                initial_mob_prelocks = _prelock_step_mobs(
+                    run=prelock_context,
+                    actions=snapshot_steps[0].get("actions") or [],
+                    include_mob_actor=True,
+                )
+                locked_actor = (
+                    Mob.objects.select_for_update(of=("self",))
+                    .get(
+                        pk=actor.id,
+                        world_id=runtime_world_id,
+                        is_pending_deletion=False,
+                    )
+                )
+
+            if (
+                locked_actor.world_id != runtime_world_id
+                or locked_actor.room_id != expected_actor_room_id
+            ):
+                raise TriggerStepExecutionError(
+                    "The trigger actor is no longer in the triggering room.",
+                    code="context_changed",
                 )
 
             condition_text = (
@@ -1265,10 +1868,18 @@ def start_trigger_steps(
                 scope_key=gate_scope_key,
             )
             try:
-                snapshot_steps = _snapshot_steps_with_definition_ids(
-                    normalized_steps,
-                    authored_world_id=definition_world_id,
-                )
+                if prelock_context is not None:
+                    initial_prelocks = _prelock_step_resources(
+                        run=prelock_context,
+                        actions=snapshot_steps[0].get("actions") or [],
+                        bindings={},
+                        include_mob_actor=True,
+                        prelocked_mob_ids_by_definition=(
+                            initial_mob_prelocks
+                        ),
+                        mob_rows_prelocked=True,
+                    )
+                    resources_prelocked = True
                 started_ts = timezone.now()
                 run = ScheduledTriggerRun.objects.create(
                     trigger=current_trigger,
@@ -1290,6 +1901,8 @@ def start_trigger_steps(
                     runtime_world=runtime_world,
                     room=room,
                     trigger_actor=locked_actor,
+                    prelocks=initial_prelocks,
+                    resources_prelocked=resources_prelocked,
                 )
                 queued_event_count = enqueue_game_events(events)
                 if queued_event_count:

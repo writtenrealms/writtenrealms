@@ -235,6 +235,36 @@ conditions:
 A missing sparse balance row evaluates as zero. Do not create currency-specific
 condition syntax.
 
+## Trigger Currency Debits
+
+A typed Trigger step can charge its triggering player:
+
+```yaml
+steps:
+  - after_seconds: 0
+    actions:
+      - type: debit_currency
+        actor: trigger_actor
+        currency: obol
+        amount: 10
+```
+
+The currency code and positive integer amount are required. Unlike a new
+money-bearing relational field, this stored action never resolves an omitted
+currency from the current default. The code is validated against the base-world
+catalog when the Trigger manifest is applied and snapshotted to the concrete
+currency id when the sequence starts.
+
+Use an `actor.balances.<code>` condition when the action should be hidden or
+show a builder-authored failure message to players who cannot afford it. That
+condition is not the debit's concurrency guard: execution rechecks the wallet
+under lock, batches all currency debits in the step, and rolls back the entire
+step if any balance is insufficient. The private success text always goes to
+the charged player. The third-person text goes only to in-game witnesses in
+that player's current room and is suppressed while the player is invisible.
+Put item and mob mutations before the step's first debit; only more debits or
+`echo` actions may follow it.
+
 ## Starting Balances And Reset
 
 `starting_balances` is an exact replacement mapping for the world's starting
@@ -262,10 +292,11 @@ metadata:
 Deletion is blocked while the currency is the default or is referenced by
 starting balances, items, crafting-recipe fees, merchants, mob rewards,
 death/clan policies, runtime merchant/item/mob snapshots, a nonzero player
-balance, or a canonical structured reference in quests, triggers, room
-actions, crafting recipe conditions, mob definitions, spawn plans, or
-abilities. The builder response lists registered usage blockers. Select
-another default and remove references before deleting.
+balance, an active Trigger sequence, or a canonical structured reference in
+quests, Trigger conditions and steps, room actions, crafting recipe conditions,
+mob definitions, spawn plans, or abilities. The builder response lists
+registered usage blockers. Select another default and remove references before
+deleting.
 
 Currency authoring is also blocked while an ordinary spawn or instance run for
 the base world is running. Stop those worlds before changing the catalog,

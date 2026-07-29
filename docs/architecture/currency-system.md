@@ -397,11 +397,15 @@ balances. It may prune zero player rows after those checks pass. Database
 `RESTRICT` constraints remain the final guard for relational references.
 
 The same bounded usage registry scans canonical structured authoring fields once
-per catalog load: quests, quest arcs, triggers, room actions, crafting recipes,
-mob definitions, spawn plans and entries, and abilities. It also checks stopped
-runtime mob reward snapshots. This keeps deletion safe for both relational
-references and portable `actor.balances.<code>`/typed currency references
-without repeating the audit once per currency on the builder list screen.
+per catalog load: quests, quest arcs, Trigger conditions/scripts/typed steps,
+room actions, crafting recipes, mob definitions, spawn plans and entries, and
+abilities. It also checks stopped runtime mob reward snapshots. Active
+Trigger-step snapshots are intentionally scanned only by the actual delete
+operation, after the economy's editable/stopped requirement passes; ordinary
+builder list and retrieve requests do not deserialize every player's active
+sequence. This keeps deletion safe for both relational references and portable
+`actor.balances.<code>`/typed currency references without repeating the audit
+once per currency on the builder list screen.
 
 Foreign keys for canonical monetary references should use `RESTRICT`, not
 `SET_NULL` followed by an implicit Gold or current-default fallback. `RESTRICT`
@@ -749,6 +753,14 @@ older snapshot and converge after duplicate/out-of-order delivery. Because the
 wallet currently has no generic replay receipt, replaying the mutation itself
 would produce another revision and event. A public room event may say that a
 player received a reward without broadcasting the player's wallet.
+
+Typed Trigger debits use that separation directly. The triggering player gets
+the private balance event plus `You part with <money>.`; other current
+in-game occupants of the actor's current room get
+`<Actor> parts with <money>.` without `wallet_revision`, full balances, or
+before/after values. Invisible or logged-out actors have no public witness
+event. Insufficient funds roll back the step and produce neither success
+message.
 
 Feature events such as `merchant.item.bought`, `quest.completed`, or
 `mob.killed` should still be emitted. Consumers should not parse text to learn
@@ -1254,6 +1266,21 @@ Performance requirements:
   or world's whole population in one transaction.
 - A currency mutation is not one Celery task per balance row. One feature
   Action performs its bounded batch in one transaction.
+- All `debit_currency` actions in one typed Trigger step are aggregated into
+  one wallet mutation, so work remains bounded by touched currencies rather
+  than action count.
+- Typed steps place item and mob mutations before the first debit. Mixed steps,
+  including steps without currency, prelock existing Mob then Item candidates
+  consistently before balance rows are acquired. Immediate and delayed
+  Mob-triggered mutations lock the actor and bounded target-candidate union in
+  ascending Mob id order. Immediate starts defer Item selection and locking
+  until conditions, duplicate/cap checks, and the Trigger gate have passed.
+  Item selection is bounded by requested consume counts plus the step's bounded
+  replacement count and pinned to those ids, rather than locking every matching
+  item in a room or inventory.
+- The stopped-world currency delete check extracts all stable ids and codes
+  from each active Trigger snapshot in one pass. Normal builder catalog reads
+  do not scan active sequences.
 
 For a `k`-currency mutation, the implemented shape is one Player-lock query,
 one batched currency-validation query, one ordered balance-lock query, bounded
@@ -1412,11 +1439,16 @@ wallet API.
 - quest and instance reward effects
 - clan/system costs
 - existing currency conditions
+- atomic typed Trigger `debit_currency` steps and perspective-specific success
+  messages
 - route every writer through the service and remove direct special-field writes
 
 Privileged generic currency adjustments/awards are deferred. The former
 Gold-specific `/award` help entries have been removed until a permissioned,
 audited command with an explicit currency code is designed and implemented.
+The Trigger debit is not that generic command: it is an authored positive
+charge against only `trigger_actor`, requires an explicit currency, rejects
+non-player actors, and cannot credit or arbitrarily set a balance.
 
 ### Implemented Foundation: Builder And Player Surfaces
 

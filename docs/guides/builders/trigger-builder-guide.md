@@ -486,10 +486,47 @@ new action. The growth sequence does not force a look. The harvest trigger
 rechecks its condition and executes all three actions in one transaction, so
 concurrent attempts cannot grant two harvested bunches from one mature bunch.
 
+### Charging The Triggering Player
+
+Use `debit_currency` when a typed Trigger step charges the player who activated
+it:
+
+```yaml
+conditions:
+  gte:
+    - actor.balances.obol
+    - 10
+show_details_on_failure: true
+failure_message: You need 10 obols to pay the toll.
+steps:
+  - after_seconds: 0
+    actions:
+      - type: debit_currency
+        actor: trigger_actor
+        currency: obol
+        amount: 10
+```
+
+`currency` is required and is stored as the explicit base-world currency code;
+the world's default is never substituted later. `amount` is a positive integer.
+Only a player Trigger actor can be charged.
+
+The balance condition is useful for action visibility and a custom failure
+message, but the debit still performs an authoritative balance check under the
+wallet lock. If the player has insufficient funds, the step fails atomically:
+no money or same-step items change and no success message is sent. On success,
+the player sees `You part with 10 obols.` and other players in the actor's
+current room see `Joe parts with 10 obols.`, using the actor's name and the
+currency's authored singular or plural name. A delayed charge follows the
+player's current room rather than notifying the room where the Trigger began.
+Invisible or logged-out players receive the private result without a room
+message that would reveal them.
+
 ### Supported Step Actions
 
 | Type | Required fields | Effect |
 | --- | --- | --- |
+| `debit_currency` | `actor: trigger_actor`, `currency`, `amount` | Atomically removes a positive amount of one explicit currency from the triggering player. Fails if the actor is not a player or has insufficient funds. |
 | `consume_item` | `actor: trigger_actor`, `item`, optional `count` | Removes exact-definition items from the triggering actor's inventory. `count` defaults to `1`. |
 | `consume_room_item` | `room: trigger_room`, `item`, optional `count` | Removes exact-definition items from the triggering room. `count` defaults to `1`. |
 | `grant_item` | `actor: trigger_actor`, `item`, optional `count` | Spawns exact-definition items directly into the triggering actor's inventory. `count` defaults to `1`. |
@@ -511,7 +548,13 @@ A trigger may contain at most 32 steps and each step at most 16 actions. Each
 `31,536,000` (one year). `consume_item.count` and
 `consume_room_item.count` may each be at most `1,000`;
 `grant_item.count` and the sum of all granted items in one step may be at most
-`32`. `echo.text` may contain at most 4,000 characters. The complete
+`32`. `debit_currency.amount` may be at most
+`9,007,199,254,740,991`. Multiple currency debits in one step are applied as
+one wallet batch and increment the wallet revision once. Put every item or mob
+mutation before the first debit in that step; after the first debit, only more
+debits or `echo` actions are allowed. This keeps balance locks last while an
+`echo` can still follow the success text in authored order. `echo.text` may
+contain at most 4,000 characters. The complete
 normalized `steps` payload may be at most 256 KiB when serialized as UTF-8
 JSON.
 
@@ -523,9 +566,9 @@ typed sequences in one runtime world; another start returns
 `too_many_active_sequences` until one finishes or cancels.
 
 Each step is atomic. With `on_step_error: cancel`, a missing or harvested bound
-item rolls back that entire step and cancels the remaining sequence. Completed
-earlier steps stay completed. Put actions that must succeed or fail together in
-the same step.
+item or an insufficient currency balance rolls back that entire step and
+cancels the remaining sequence. Completed earlier steps stay completed. Put
+actions that must succeed or fail together in the same step.
 
 `set_mob.mob` uses a portable `mobdefinition.<slug>` ref. Its optional `where`
 uses the query-free candidate subset of the shared condition DSL, evaluated
@@ -535,9 +578,12 @@ trigger's outer conditions. Candidate comparisons may use
 `state.character.*`, supported direct `actor.*` fields, and
 `player.id`/`player.key`; relationship paths and typed definition-ref
 resolution are intentionally excluded. The action fails if zero or more than
-one candidate matches. Supported `fields` are `name`, `room_description`,
-`description`, and `attackable`; `state` is merged into that mob's mutable
-character state.
+one candidate matches. An unfiltered action examines at most two candidates
+because that is enough to establish ambiguity. A filtered action may examine
+at most 256 candidates of the requested definition in the room and fails if
+that safety limit would be exceeded. Supported `fields` are `name`,
+`room_description`, `description`, and `attackable`; `state` is merged into
+that mob's mutable character state.
 Because step zero is atomic, a `set_mob` and `consume_item` in the same step
 either both commit or both roll back.
 

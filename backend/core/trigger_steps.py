@@ -4,10 +4,13 @@ import json
 import re
 from typing import Any, Callable
 
+from core.economy import MAX_CURRENCY_AMOUNT
+
 
 TRIGGER_STEP_ERROR_POLICY_CANCEL = "cancel"
 TRIGGER_STEP_ERROR_POLICIES = (TRIGGER_STEP_ERROR_POLICY_CANCEL,)
 
+TRIGGER_STEP_ACTION_DEBIT_CURRENCY = "debit_currency"
 TRIGGER_STEP_ACTION_CONSUME_ITEM = "consume_item"
 TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM = "consume_room_item"
 TRIGGER_STEP_ACTION_GRANT_ITEM = "grant_item"
@@ -16,6 +19,7 @@ TRIGGER_STEP_ACTION_REPLACE_ROOM_ITEM = "replace_room_item"
 TRIGGER_STEP_ACTION_SET_MOB = "set_mob"
 TRIGGER_STEP_ACTION_ECHO = "echo"
 TRIGGER_STEP_ACTION_TYPES = (
+    TRIGGER_STEP_ACTION_DEBIT_CURRENCY,
     TRIGGER_STEP_ACTION_CONSUME_ITEM,
     TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM,
     TRIGGER_STEP_ACTION_GRANT_ITEM,
@@ -57,6 +61,7 @@ class TriggerStepSpecError(ValueError):
 
 ItemRefNormalizer = Callable[[Any, str], str]
 MobRefNormalizer = Callable[[Any, str], str]
+CurrencyRefNormalizer = Callable[[Any, str], str]
 ConditionNormalizer = Callable[[Any, str], Any]
 
 
@@ -170,6 +175,26 @@ def _mob_ref(
     return normalized
 
 
+def _currency_ref(
+    value: Any,
+    *,
+    field_name: str,
+    currency_ref_normalizer: CurrencyRefNormalizer | None,
+) -> str:
+    if currency_ref_normalizer is not None:
+        return currency_ref_normalizer(value, field_name)
+    if isinstance(value, bool):
+        raise TriggerStepSpecError(
+            f"{field_name} must reference a currency."
+        )
+    normalized = str(value or "").strip().lower()
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", normalized):
+        raise TriggerStepSpecError(
+            f"{field_name} must be an explicit currency code."
+        )
+    return normalized
+
+
 def _normalize_state_mapping(value: Any, *, field_name: str) -> dict[str, Any]:
     mapping = _mapping(value, field_name=field_name)
     try:
@@ -262,6 +287,7 @@ def _normalize_action(
     bindings: set[str],
     item_ref_normalizer: ItemRefNormalizer | None,
     mob_ref_normalizer: MobRefNormalizer | None,
+    currency_ref_normalizer: CurrencyRefNormalizer | None,
     condition_normalizer: ConditionNormalizer | None,
 ) -> dict[str, Any]:
     action = _mapping(value, field_name=field_name)
@@ -271,6 +297,32 @@ def _normalize_action(
             f"{field_name}.type must be one of: "
             f"{', '.join(TRIGGER_STEP_ACTION_TYPES)}."
         )
+
+    if action_type == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
+        _exact_fields(
+            action,
+            field_name=field_name,
+            required={"type", "actor", "currency", "amount"},
+        )
+        return {
+            "type": action_type,
+            "actor": _context_ref(
+                action.get("actor"),
+                field_name=f"{field_name}.actor",
+                expected=TRIGGER_ACTOR_REF,
+            ),
+            "currency": _currency_ref(
+                action.get("currency"),
+                field_name=f"{field_name}.currency",
+                currency_ref_normalizer=currency_ref_normalizer,
+            ),
+            "amount": _integer(
+                action.get("amount"),
+                field_name=f"{field_name}.amount",
+                minimum=1,
+                maximum=MAX_CURRENCY_AMOUNT,
+            ),
+        }
 
     if action_type == TRIGGER_STEP_ACTION_CONSUME_ITEM:
         _exact_fields(
@@ -473,6 +525,7 @@ def normalize_trigger_steps(
     *,
     item_ref_normalizer: ItemRefNormalizer | None = None,
     mob_ref_normalizer: MobRefNormalizer | None = None,
+    currency_ref_normalizer: CurrencyRefNormalizer | None = None,
     condition_normalizer: ConditionNormalizer | None = None,
 ) -> list[dict[str, Any]]:
     if value in (None, ""):
@@ -535,10 +588,22 @@ def normalize_trigger_steps(
                 bindings=bindings,
                 item_ref_normalizer=item_ref_normalizer,
                 mob_ref_normalizer=mob_ref_normalizer,
+                currency_ref_normalizer=currency_ref_normalizer,
                 condition_normalizer=condition_normalizer,
             )
             for action_index, action in enumerate(raw_actions)
         ]
+        debit_seen = False
+        for action_index, action in enumerate(normalized_actions):
+            action_type = action.get("type")
+            if action_type == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
+                debit_seen = True
+            elif debit_seen and action_type != TRIGGER_STEP_ACTION_ECHO:
+                raise TriggerStepSpecError(
+                    f"{field_name}.actions[{action_index}] must be "
+                    "debit_currency or echo after the first debit_currency "
+                    "action; put item and mob mutations before the debit."
+                )
         grant_count = sum(
             int(action.get("count") or 1)
             for action in normalized_actions
