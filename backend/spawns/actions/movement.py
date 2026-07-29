@@ -114,7 +114,9 @@ class ResolveMoveAction:
 
 class ChangeRoomAction:
     def execute(self, player: Player, dest_room_id: int) -> ActionResult:
-        player.room_id = dest_room_id
+        if player.room_id != dest_room_id:
+            player.room_id = dest_room_id
+            player.location_sequence = int(player.location_sequence or 0) + 1
         player.last_action_ts = timezone.now()
         return ActionResult(data={"dest_room_id": dest_room_id})
 

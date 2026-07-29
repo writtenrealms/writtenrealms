@@ -905,6 +905,7 @@ class DuelCombatTests(WorldTestCase):
         )
         self.opponent.room = self.escape_room
         self.opponent.save(update_fields=["room"])
+        location_sequence_before = self.player.location_sequence
 
         dispatch_text_command(
             self.player.id,
@@ -918,6 +919,10 @@ class DuelCombatTests(WorldTestCase):
             status=CombatEncounter.STATUS_ACTIVE,
         )
         self.assertEqual(self.player.room_id, self.escape_room.id)
+        self.assertEqual(
+            self.player.location_sequence,
+            location_sequence_before + 1,
+        )
         self.assertEqual(encounter.room_id, self.escape_room.id)
         self.assertEqual(encounter.round_number, 1)
         self.assertEqual(encounter.opening_priority[0]["source"], "charge")

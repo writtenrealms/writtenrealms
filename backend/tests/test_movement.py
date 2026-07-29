@@ -49,6 +49,7 @@ class TestMovementCommands(WorldTestCase):
     def test_move_success_updates_room_and_stamina(self):
         dest_room = self.room.create_at(adv_consts.DIRECTION_EAST)
         expected_cost = movement_cost(dest_room.type)
+        location_sequence_before = self.player.location_sequence
 
         with capture_game_messages() as messages:
             dispatch_command(
@@ -59,6 +60,10 @@ class TestMovementCommands(WorldTestCase):
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.room_id, dest_room.id)
+        self.assertEqual(
+            self.player.location_sequence,
+            location_sequence_before + 1,
+        )
         self.assertEqual(self.player.stamina, 10 - expected_cost)
 
         self.assertTrue("cmd.move.success" in self._message_types(messages))

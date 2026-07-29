@@ -496,7 +496,7 @@ spec:
         self.assertEqual(trigger_payload["manifest"]["spec"]["steps"], self.trigger.steps)
         self.assertEqual(trigger_payload["manifest"]["spec"]["on_step_error"], "cancel")
 
-    def test_apply_trigger_manifest_supports_currency_debit_step(self):
+    def test_apply_trigger_manifest_preserves_interleaved_command_and_debit_order(self):
         obol = create_currency(
             world=self.world,
             code="obol",
@@ -513,10 +513,19 @@ spec:
   steps:
     - after_seconds: 0
       actions:
+        - type: command
+          subject: trigger_actor
+          command: say The fare is due.
         - type: debit_currency
           actor: trigger_actor
           currency: currency.{obol.id}
           amount: 10
+        - type: echo
+          room: trigger_room
+          text: The ferryman accepts the fare.
+        - type: command
+          subject: trigger_actor
+          command: say Get on board.
 """
 
         resp = self.client.post(
@@ -528,13 +537,30 @@ spec:
         self.assertEqual(resp.status_code, 200, resp.data)
         self.trigger.refresh_from_db()
         self.assertEqual(
-            self.trigger.steps[0]["actions"][0],
-            {
-                "type": "debit_currency",
-                "actor": "trigger_actor",
-                "currency": "obol",
-                "amount": 10,
-            },
+            self.trigger.steps[0]["actions"],
+            [
+                {
+                    "type": "command",
+                    "subject": "trigger_actor",
+                    "command": "say The fare is due.",
+                },
+                {
+                    "type": "debit_currency",
+                    "actor": "trigger_actor",
+                    "currency": "obol",
+                    "amount": 10,
+                },
+                {
+                    "type": "echo",
+                    "room": "trigger_room",
+                    "text": "The ferryman accepts the fare.",
+                },
+                {
+                    "type": "command",
+                    "subject": "trigger_actor",
+                    "command": "say Get on board.",
+                },
+            ],
         )
         self.assertEqual(
             resp.data["trigger"]["manifest"]["spec"]["steps"],
@@ -664,7 +690,7 @@ spec:
           actor: trigger_actor
           item: itemdefinition.{late_item.slug}
 """,
-                "order actions as mutations, then debits, then command/echo output",
+                "item and mob mutations must precede all debit, command, and echo actions",
             ),
         )
 

@@ -3,10 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from types import SimpleNamespace
+import uuid
 
 from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
-from django.db import connection
+from django.db import connection, transaction
 from django.db.models import BooleanField, Case, Q, Value, When
 
 from builders.models import ItemDefinition, MobDefinition, Trigger
@@ -786,6 +787,8 @@ def execute_mob_event_triggers(
     isolate_runtime_world: bool = False,
     target_mob_id: int | None = None,
     source_event_data: dict | None = None,
+    capture_output: bool = False,
+    gate_claim_collector: list[tuple[str, str]] | None = None,
 ) -> None:
     normalized_event = _normalized_text(event)
     if normalized_event not in adv_consts.MOB_REACTION_EVENTS:
@@ -847,6 +850,7 @@ def execute_mob_event_triggers(
         "event": normalized_event,
         "match": match_text or "",
     }
+    command_depth = 0
     if isinstance(source_event_data, dict):
         try:
             command_depth = max(
@@ -857,6 +861,7 @@ def execute_mob_event_triggers(
             command_depth = 0
         if command_depth:
             trigger_event_data[SCRIPT_COMMAND_DEPTH_KEY] = command_depth
+    from spawns.script_commands import MAX_SCRIPT_COMMAND_DEPTH
 
     trigger_by_target: dict[tuple[int, int], list[Trigger]] = {}
     for trigger in _ordered_triggers(triggers):
@@ -894,7 +899,11 @@ def execute_mob_event_triggers(
                     room=resolved_room,
                     event_data=trigger_event_data,
                     gate_scope_key=scope_key,
+                    gate_claim_collector=gate_claim_collector,
                 )
+                continue
+
+            if command_depth >= MAX_SCRIPT_COMMAND_DEPTH:
                 continue
 
             if trigger.conditions:
@@ -908,10 +917,14 @@ def execute_mob_event_triggers(
                 if not evaluated.get("result"):
                     continue
 
-            if not _is_gate_allowed(trigger, scope_key):
+            gate_allowed, gate_claim = _consume_gate(trigger, scope_key)
+            if not gate_allowed:
                 continue
-
-            _consume_gate(trigger, scope_key)
+            if (
+                gate_claim is not None
+                and gate_claim_collector is not None
+            ):
+                gate_claim_collector.append(gate_claim)
 
             script_lines = _split_trigger_script_lines(trigger.script)
             if not script_lines:
@@ -924,6 +937,8 @@ def execute_mob_event_triggers(
                 segments=first_line_segments,
                 issuer_scope=trigger.scope,
                 connection_id=connection_id,
+                script_command_depth=command_depth + 1,
+                capture_only=capture_output,
             )
 
             for line_index, line_segments in enumerate(script_lines[1:], start=1):
@@ -934,6 +949,9 @@ def execute_mob_event_triggers(
                     line_index=line_index,
                     issuer_scope=trigger.scope,
                     connection_id=connection_id,
+                    script_command_depth=command_depth + 1,
+                    capture_only=capture_output,
+                    defer_until_commit=True,
                 )
 
 
@@ -974,13 +992,25 @@ def _is_gate_allowed(trigger: Trigger, scope_key: str) -> bool:
     return not bool(cache.get(gate_key))
 
 
-def _consume_gate(trigger: Trigger, scope_key: str) -> None:
+def _consume_gate(
+    trigger: Trigger,
+    scope_key: str,
+) -> tuple[bool, tuple[str, str] | None]:
+    """Atomically claim a legacy-script gate.
+
+    The earlier read-only gate check remains useful when rendering available
+    action labels, but execution must use ``cache.add`` so two simultaneous
+    arrivals cannot both pass a get-then-set race.
+    """
     gate_delay = _gate_delay(trigger)
     if gate_delay == 0:
-        return
+        return True, None
     gate_key = _trigger_gate_cache_key(trigger, scope_key)
     timeout = None if gate_delay < 0 else gate_delay
-    cache.set(gate_key, 1, timeout=timeout)
+    token = uuid.uuid4().hex
+    if not cache.add(gate_key, token, timeout=timeout):
+        return False, None
+    return True, (gate_key, token)
 
 
 def _dispatch_trigger_script_segment(
@@ -990,6 +1020,8 @@ def _dispatch_trigger_script_segment(
     segment: str,
     issuer_scope: str | None = None,
     connection_id: str | None = None,
+    script_command_depth: int = 0,
+    capture_only: bool = False,
 ) -> str | None:
     rendered_segment = _render_trigger_script_segment(
         actor=render_actor or actor,
@@ -1032,15 +1064,19 @@ def _dispatch_trigger_script_segment(
         payload["issuer_scope"] = issuer_scope
 
     try:
-        dispatch_command(
-            command_type=command_type,
-            actor_type=actor_type,
-            actor_id=actor.id,
-            payload=payload,
-            connection_id=connection_id,
-            script_source=True,
-            published_messages=dispatched_messages,
-        )
+        from spawns.events import inherit_script_command_depth
+
+        with inherit_script_command_depth(script_command_depth):
+            dispatch_command(
+                command_type=command_type,
+                actor_type=actor_type,
+                actor_id=actor.id,
+                payload=payload,
+                connection_id=connection_id,
+                script_source=True,
+                published_messages=dispatched_messages,
+                capture_only=capture_only,
+            )
     except (ActorNotFoundError, HandlerNotFoundError, ValueError) as err:
         return str(err)
 
@@ -1058,6 +1094,8 @@ def _dispatch_trigger_script_segments(
     segments: list[str],
     issuer_scope: str | None = None,
     connection_id: str | None = None,
+    script_command_depth: int = 0,
+    capture_only: bool = False,
 ) -> list[str]:
     errors: list[str] = []
     for segment in segments:
@@ -1067,6 +1105,8 @@ def _dispatch_trigger_script_segments(
             segment=segment,
             issuer_scope=issuer_scope,
             connection_id=connection_id,
+            script_command_depth=script_command_depth,
+            capture_only=capture_only,
         )
         if dispatched_error:
             errors.append(dispatched_error)
@@ -1090,6 +1130,9 @@ def _schedule_trigger_script_line_segments(
     line_index: int,
     issuer_scope: str | None = None,
     connection_id: str | None = None,
+    script_command_depth: int = 0,
+    capture_only: bool = False,
+    defer_until_commit: bool = False,
 ) -> list[str]:
     if not line_segments:
         return []
@@ -1102,6 +1145,8 @@ def _schedule_trigger_script_line_segments(
             segments=line_segments,
             issuer_scope=issuer_scope,
             connection_id=connection_id,
+            script_command_depth=script_command_depth,
+            capture_only=capture_only,
         )
 
     from spawns import tasks as spawn_tasks
@@ -1120,19 +1165,39 @@ def _schedule_trigger_script_line_segments(
     if not rendered_line_segments:
         return []
 
-    try:
+    task_kwargs = {
+        "actor_type": actor_type,
+        "actor_id": actor.id,
+        "segments": rendered_line_segments,
+        "issuer_scope": issuer_scope,
+        "connection_id": connection_id,
+        "expected_world_id": getattr(actor, "world_id", None),
+        "expected_room_id": getattr(actor, "room_id", None),
+        "script_command_depth": script_command_depth,
+    }
+
+    def enqueue_delayed_line() -> None:
         spawn_tasks.execute_trigger_script_segments.apply_async(
-            kwargs={
-                "actor_type": actor_type,
-                "actor_id": actor.id,
-                "segments": rendered_line_segments,
-                "issuer_scope": issuer_scope,
-                "connection_id": connection_id,
-                "expected_world_id": getattr(actor, "world_id", None),
-                "expected_room_id": getattr(actor, "room_id", None),
-            },
+            kwargs=task_kwargs,
             countdown=delay_seconds,
         )
+
+    if defer_until_commit and connection.in_atomic_block:
+        def enqueue_after_commit() -> None:
+            try:
+                enqueue_delayed_line()
+            except Exception:
+                # Use the same pre-rendered payload and expected location
+                # checks as the queued task. A broker failure must not make a
+                # delayed line follow an actor that moved after it was
+                # scheduled or render templates a second time.
+                spawn_tasks.execute_trigger_script_segments(**task_kwargs)
+
+        transaction.on_commit(enqueue_after_commit, robust=True)
+        return []
+
+    try:
+        enqueue_delayed_line()
     except Exception:
         return _dispatch_trigger_script_segments(
             actor=actor,
@@ -1140,6 +1205,8 @@ def _schedule_trigger_script_line_segments(
             segments=line_segments,
             issuer_scope=issuer_scope,
             connection_id=connection_id,
+            script_command_depth=script_command_depth,
+            capture_only=capture_only,
         )
 
     return []
@@ -1339,10 +1406,9 @@ def execute_command_fallback_trigger(
                     )
                 continue
 
-        if not _is_gate_allowed(trigger, scope_key):
+        gate_allowed, _gate_claim = _consume_gate(trigger, scope_key)
+        if not gate_allowed:
             return TriggerExecutionResult(handled=True, feedback=TRIGGER_GATED_TEXT)
-
-        _consume_gate(trigger, scope_key)
 
         script_lines = _split_trigger_script_lines(trigger.script)
         if not script_lines:

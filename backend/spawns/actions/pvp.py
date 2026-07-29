@@ -1062,6 +1062,7 @@ def _try_execute_room_opener_ability(
             ability_actions.stand_player(attacker)
             attacker.save(update_fields=[
                 "room",
+                "location_sequence",
                 "stamina",
                 "state",
                 "last_action_ts",
@@ -1617,8 +1618,14 @@ def _complete_ready_flee(
             replacement_cost=destination.movement_cost,
         )
     player.room_id = destination.room_id
+    player.location_sequence = int(player.location_sequence or 0) + 1
     player.last_action_ts = timezone.now()
-    update_fields = ["room", "last_action_ts", "modified_ts"]
+    update_fields = [
+        "room",
+        "location_sequence",
+        "last_action_ts",
+        "modified_ts",
+    ]
     if route_changed:
         update_fields.append("stamina")
     player.save(update_fields=update_fields)

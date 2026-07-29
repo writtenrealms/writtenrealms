@@ -25,6 +25,7 @@ from core.trigger_steps import (
 )
 from spawns.events import GameEvent, publish_events
 from spawns.models import (
+    CombatEncounter,
     GameEventOutbox,
     Item,
     Mob,
@@ -544,7 +545,47 @@ class TestScheduledTriggerSteps(WorldTestCase):
             "say The fare is paid.",
         )
 
-    def test_step_actions_require_mutation_debit_output_phase_order(self):
+    def test_command_echo_and_debit_actions_can_interleave_in_authored_order(self):
+        actions = [
+            {
+                "type": "command",
+                "subject": "trigger_actor",
+                "command": "say The fare is due.",
+            },
+            {
+                "type": "debit_currency",
+                "actor": "trigger_actor",
+                "currency": "obol",
+                "amount": 10,
+            },
+            {
+                "type": "echo",
+                "room": "trigger_room",
+                "text": "The ferryman accepts the fare.",
+            },
+            {
+                "type": "command",
+                "subject": "trigger_actor",
+                "command": "say Get on board.",
+            },
+            {
+                "type": "debit_currency",
+                "actor": "trigger_actor",
+                "currency": "drachma",
+                "amount": 1,
+            },
+        ]
+
+        normalized = normalize_trigger_steps([
+            {
+                "after_seconds": 0,
+                "actions": actions,
+            },
+        ])
+
+        self.assertEqual(normalized[0]["actions"], actions)
+
+    def test_step_actions_require_item_and_mob_mutation_prefix(self):
         invalid_action_lists = [
             [
                 {
@@ -560,15 +601,30 @@ class TestScheduledTriggerSteps(WorldTestCase):
             ],
             [
                 {
+                    "type": "debit_currency",
+                    "actor": "trigger_actor",
+                    "currency": "obol",
+                    "amount": 10,
+                },
+                {
+                    "type": "grant_item",
+                    "actor": "trigger_actor",
+                    "item": "itemdefinition.harvested-barley",
+                },
+            ],
+            [
+                {
                     "type": "echo",
                     "room": "trigger_room",
                     "text": "Too soon.",
                 },
                 {
-                    "type": "debit_currency",
-                    "actor": "trigger_actor",
-                    "currency": "obol",
-                    "amount": 10,
+                    "type": "set_mob",
+                    "room": "trigger_room",
+                    "mob": "mobdefinition.ferryman",
+                    "fields": {
+                        "description": "The ferryman waits.",
+                    },
                 },
             ],
         ]
@@ -577,8 +633,8 @@ class TestScheduledTriggerSteps(WorldTestCase):
             with self.subTest(actions=actions):
                 with self.assertRaisesMessage(
                     TriggerStepSpecError,
-                    "order actions as mutations, then debits, then "
-                    "command/echo output",
+                    "item and mob mutations must precede all debit, command, "
+                    "and echo actions",
                 ):
                     normalize_trigger_steps([
                         {
@@ -646,7 +702,8 @@ class TestScheduledTriggerSteps(WorldTestCase):
 
         with self.assertRaisesMessage(
             TriggerStepSpecError,
-            "order actions as mutations, then debits, then command/echo output",
+            "item and mob mutations must precede all debit, command, and echo "
+            "actions",
         ):
             normalize_trigger_steps([
                 {
@@ -1107,7 +1164,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
             },
         )
 
-    def test_mob_command_runs_only_after_currency_debit_succeeds(self):
+    def test_mob_command_before_currency_debit_commits_atomically(self):
         obol = create_currency(
             world=self.world,
             code="obol",
@@ -1134,12 +1191,6 @@ class TestScheduledTriggerSteps(WorldTestCase):
                     "after_seconds": 0,
                     "actions": [
                         {
-                            "type": "debit_currency",
-                            "actor": "trigger_actor",
-                            "currency": "obol",
-                            "amount": 10,
-                        },
-                        {
                             "type": "command",
                             "subject": {
                                 "type": "mob",
@@ -1147,6 +1198,12 @@ class TestScheduledTriggerSteps(WorldTestCase):
                                 "mob": "mobdefinition.charon",
                             },
                             "command": "emote grunts satisfactorily.",
+                        },
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
                         },
                     ],
                 },
@@ -1164,7 +1221,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
             10,
         )
         run = ScheduledTriggerRun.objects.get(trigger=trigger)
-        command_snapshot = run.steps[0]["actions"][1]
+        command_snapshot = run.steps[0]["actions"][0]
         self.assertEqual(
             command_snapshot["subject"]["mob_definition_id"],
             charon_definition.id,
@@ -1176,6 +1233,485 @@ class TestScheduledTriggerSteps(WorldTestCase):
             and entry["message"]["data"]["actor"]["key"] == charon.key
             and entry["message"]["data"]["text"]
             == "grunts satisfactorily."
+            for entry in messages
+        ))
+
+    def test_ferry_step_preserves_authored_output_order_and_transfers_actor(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: 20},
+            reason="test.setup",
+            emit_event=False,
+        )
+        charon_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="ferry-charon",
+            name="Charon",
+        )
+        charon_definition.spawn(self.room, self.spawn_world)
+        destination = self.room.create_at("east")
+        destination_ref = (
+            f"room@{destination.x},{destination.y},{destination.z}"
+        )
+        trigger = self._create_trigger(
+            match="cross acheron",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": "trigger_room",
+                                "mob": "mobdefinition.ferry-charon",
+                            },
+                            "command": "emote grunts satisfactorily.",
+                        },
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": "trigger_room",
+                                "mob": "mobdefinition.ferry-charon",
+                            },
+                            "command": "say Get on board.",
+                        },
+                        {
+                            "type": "command",
+                            "subject": "trigger_room",
+                            "command": (
+                                f"/transfer {{{{ actor_key }}}} "
+                                f"{destination_ref}"
+                            ),
+                        },
+                    ],
+                },
+            ],
+        )
+        location_sequence_before = self.player.location_sequence
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "cross acheron")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, destination.id)
+        self.assertEqual(
+            self.player.location_sequence,
+            location_sequence_before + 1,
+        )
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.player,
+                currency=obol,
+            ).amount,
+            10,
+        )
+        run = ScheduledTriggerRun.objects.get(trigger=trigger)
+        self.assertEqual(run.status, ScheduledTriggerRun.STATUS_COMPLETED)
+
+        relevant_types = [
+            entry["message"]["type"]
+            for entry in messages
+            if (
+                entry["player_key"] == self.player.key
+                and entry["message"]["type"]
+                in {
+                    "notification.cmd.emote.success",
+                    "notification.trigger.currency_debited",
+                    "notification.cmd.say.success",
+                    "affect.transfer",
+                    "currency.balances_changed",
+                }
+            )
+        ]
+        self.assertEqual(
+            relevant_types,
+            [
+                "notification.cmd.emote.success",
+                "notification.trigger.currency_debited",
+                "notification.cmd.say.success",
+                "affect.transfer",
+                "currency.balances_changed",
+            ],
+        )
+
+    def test_transfer_before_debit_and_player_say_uses_destination_context(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: 10},
+            reason="test.setup",
+            emit_event=False,
+        )
+        origin_observer = self.create_player(
+            "Origin Observer",
+            user=self.create_user("transfer-origin-step@example.com"),
+        )
+        origin_observer.in_game = True
+        origin_observer.save(update_fields=["in_game"])
+        destination = self.room.create_at("east")
+        destination_observer = self.create_player(
+            "Destination Observer",
+            user=self.create_user("transfer-destination-step@example.com"),
+            room=destination,
+        )
+        destination_observer.in_game = True
+        destination_observer.save(update_fields=["in_game"])
+        destination_ref = (
+            f"room@{destination.x},{destination.y},{destination.z}"
+        )
+        trigger = self._create_trigger(
+            match="board immediately",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": "trigger_actor",
+                            "command": f"/transfer self {destination_ref}",
+                        },
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                        {
+                            "type": "command",
+                            "subject": "trigger_actor",
+                            "command": "say I am aboard.",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "board immediately")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, destination.id)
+        self.assertEqual(
+            ScheduledTriggerRun.objects.get(trigger=trigger).status,
+            ScheduledTriggerRun.STATUS_COMPLETED,
+        )
+        destination_messages = [
+            entry["message"]["type"]
+            for entry in messages
+            if entry["player_key"] == destination_observer.key
+        ]
+        self.assertIn(
+            "notification.trigger.currency_debited",
+            destination_messages,
+        )
+        self.assertIn("notification.cmd.say.success", destination_messages)
+        origin_message_types = {
+            entry["message"]["type"]
+            for entry in messages
+            if entry["player_key"] == origin_observer.key
+        }
+        self.assertNotIn(
+            "notification.trigger.currency_debited",
+            origin_message_types,
+        )
+        self.assertNotIn("notification.cmd.say.success", origin_message_types)
+
+    def test_invalid_transfer_rolls_back_earlier_output_and_currency(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: 10},
+            reason="test.setup",
+            emit_event=False,
+        )
+        charon_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="rollback-charon",
+            name="Charon",
+        )
+        charon_definition.spawn(self.room, self.spawn_world)
+        trigger = self._create_trigger(
+            match="broken crossing",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": "trigger_room",
+                                "mob": "mobdefinition.rollback-charon",
+                            },
+                            "command": "emote waves the traveler onward.",
+                        },
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                        {
+                            "type": "command",
+                            "subject": "trigger_room",
+                            "command": (
+                                "/transfer {{ actor_key }} "
+                                "room@999999,999999,999999"
+                            ),
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            result = start_trigger_steps(
+                trigger=trigger,
+                actor=self.player,
+                room=self.room,
+            )
+
+        self.assertFalse(result.started)
+        self.assertEqual(result.code, "invalid_room")
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.room.id)
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.player,
+                currency=obol,
+            ).amount,
+            10,
+        )
+        self.assertFalse(ScheduledTriggerRun.objects.filter(trigger=trigger).exists())
+        self.assertFalse(GameEventOutbox.objects.exists())
+        self.assertFalse(any(
+            entry["message"]["type"]
+            in {
+                "notification.cmd.emote.success",
+                "notification.trigger.currency_debited",
+                "affect.transfer",
+            }
+            for entry in messages
+        ))
+
+    def test_trigger_step_transfer_rejects_non_trigger_actor_target(self):
+        destination = self.room.create_at("east")
+        destination_ref = (
+            f"room@{destination.x},{destination.y},{destination.z}"
+        )
+        other = self.create_player(
+            "Other Traveler",
+            user=self.create_user("other-trigger-transfer@example.com"),
+        )
+        other.in_game = True
+        other.save(update_fields=["in_game"])
+        trigger = self._create_trigger(
+            match="move someone else",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": "trigger_room",
+                            "command": (
+                                f"/transfer {other.key} {destination_ref}"
+                            ),
+                        },
+                    ],
+                },
+            ],
+        )
+
+        result = start_trigger_steps(
+            trigger=trigger,
+            actor=self.player,
+            room=self.room,
+        )
+
+        self.assertFalse(result.started)
+        self.assertEqual(result.code, "unsupported_transfer_target")
+        other.refresh_from_db()
+        self.assertEqual(other.room_id, self.room.id)
+
+    def test_trigger_step_transfer_fails_fast_for_active_player_combat(self):
+        destination = self.room.create_at("east")
+        destination_ref = (
+            f"room@{destination.x},{destination.y},{destination.z}"
+        )
+        trigger = self._create_trigger(
+            match="leave duel",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": "trigger_room",
+                            "command": (
+                                f"/transfer {{{{ actor_key }}}} "
+                                f"{destination_ref}"
+                            ),
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with patch(
+            "spawns.actions.builder.TransferAction._active_pvp_encounter_ids",
+            return_value=[123],
+        ):
+            result = start_trigger_steps(
+                trigger=trigger,
+                actor=self.player,
+                room=self.room,
+            )
+
+        self.assertFalse(result.started)
+        self.assertEqual(result.code, "target_busy")
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.room.id)
+
+    def test_trigger_step_transfer_fires_destination_mob_reaction(self):
+        destination = self.room.create_at("east")
+        destination_ref = (
+            f"room@{destination.x},{destination.y},{destination.z}"
+        )
+        watcher_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="step-transfer-watcher",
+            name="Threshold Watcher",
+        )
+        watcher = watcher_definition.spawn(destination, self.spawn_world)
+        Trigger.objects.create(
+            world=self.world,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            scope=adv_consts.TRIGGER_SCOPE_WORLD,
+            target_type=ContentType.objects.get_for_model(MobDefinition),
+            target_id=watcher_definition.id,
+            event=adv_consts.MOB_REACTION_EVENT_ENTERING,
+            script="say Welcome aboard.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+        self._create_trigger(
+            match="board watched ferry",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": "trigger_room",
+                            "command": (
+                                f"/transfer {{{{ actor_key }}}} "
+                                f"{destination_ref}"
+                            ),
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "board watched ferry")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, destination.id)
+        self.assertTrue(any(
+            entry["player_key"] == self.player.key
+            and entry["message"]["type"] == "notification.cmd.say.success"
+            and entry["message"]["data"]["actor"]["key"] == watcher.key
+            and entry["message"]["data"]["text"] == "Welcome aboard."
+            for entry in messages
+        ))
+
+    def test_trigger_step_transfer_starts_destination_aggro_once(self):
+        self.world.config.combat_resolution_interval = 1.5
+        self.world.config.save(update_fields=["combat_resolution_interval"])
+        destination = self.room.create_at("east")
+        destination_ref = (
+            f"room@{destination.x},{destination.y},{destination.z}"
+        )
+        hostile = Mob.objects.create(
+            world=self.spawn_world,
+            room=destination,
+            name="Acheron Sentinel",
+            keywords="sentinel",
+            health=20,
+            health_max=20,
+            attack_power=4,
+            aggression=adv_consts.MOB_AGGRESSION_ALL,
+        )
+        self._create_trigger(
+            match="board hostile ferry",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": "trigger_actor",
+                            "command": f"/transfer self {destination_ref}",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with patch(
+            "spawns.tasks.resolve_combat_encounter.apply_async"
+        ) as schedule_mock:
+            with capture_game_messages() as messages:
+                self._dispatch(self.player.id, "board hostile ferry")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, destination.id)
+        self.assertEqual(
+            CombatEncounter.objects.filter(
+                player=self.player,
+                mob=hostile,
+                status=CombatEncounter.STATUS_ACTIVE,
+            ).count(),
+            1,
+        )
+        schedule_mock.assert_called_once()
+        self.assertTrue(any(
+            entry["player_key"] == self.player.key
+            and entry["message"]["type"] == "cmd.kill.success"
+            and entry["message"]["text"] == "Acheron Sentinel attacks you!"
             for entry in messages
         ))
 
@@ -1206,12 +1742,6 @@ class TestScheduledTriggerSteps(WorldTestCase):
                     "after_seconds": 0,
                     "actions": [
                         {
-                            "type": "debit_currency",
-                            "actor": "trigger_actor",
-                            "currency": "obol",
-                            "amount": 10,
-                        },
-                        {
                             "type": "command",
                             "subject": {
                                 "type": "mob",
@@ -1219,6 +1749,12 @@ class TestScheduledTriggerSteps(WorldTestCase):
                                 "mob": "mobdefinition.unpaid-charon",
                             },
                             "command": "emote grunts satisfactorily.",
+                        },
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
                         },
                     ],
                 },
@@ -1601,6 +2137,23 @@ class TestScheduledTriggerSteps(WorldTestCase):
             reason="test.setup",
             emit_event=False,
         )
+        origin_observer = self.create_player(
+            "First Toll Observer",
+            user=self.create_user("first-toll-observer@example.com"),
+        )
+        origin_observer.in_game = True
+        origin_observer.save(update_fields=["in_game"])
+        destination = self.room.create_at("east")
+        destination_observer = self.create_player(
+            "Second Toll Observer",
+            user=self.create_user("second-toll-observer@example.com"),
+            room=destination,
+        )
+        destination_observer.in_game = True
+        destination_observer.save(update_fields=["in_game"])
+        destination_ref = (
+            f"room@{destination.x},{destination.y},{destination.z}"
+        )
         self._create_trigger(
             match="pay two tolls",
             conditions="",
@@ -1613,6 +2166,16 @@ class TestScheduledTriggerSteps(WorldTestCase):
                             "actor": "trigger_actor",
                             "currency": "obol",
                             "amount": 1,
+                        },
+                        {
+                            "type": "command",
+                            "subject": "trigger_actor",
+                            "command": f"/transfer self {destination_ref}",
+                        },
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "The first toll is counted.",
                         },
                         {
                             "type": "debit_currency",
@@ -1653,6 +2216,69 @@ class TestScheduledTriggerSteps(WorldTestCase):
                 "You part with 10 obols.",
             ],
         )
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, destination.id)
+        self.assertEqual(
+            [
+                entry["message"]["type"]
+                for entry in messages
+                if (
+                    entry["player_key"] == self.player.key
+                    and entry["message"]["type"]
+                    in {
+                        "notification.trigger.currency_debited",
+                        "affect.transfer",
+                        "currency.balances_changed",
+                    }
+                )
+            ],
+            [
+                "notification.trigger.currency_debited",
+                "affect.transfer",
+                "notification.trigger.currency_debited",
+                "currency.balances_changed",
+            ],
+        )
+        self.assertEqual(
+            [
+                entry["message"]["type"]
+                for entry in messages
+                if entry["player_key"] == origin_observer.key
+                and entry["message"]["type"]
+                in {
+                    "notification.trigger.currency_debited",
+                    "notification./transfer.exit",
+                    "notification./echo",
+                }
+            ],
+            [
+                "notification.trigger.currency_debited",
+                "notification./transfer.exit",
+                "notification./echo",
+            ],
+        )
+        self.assertEqual(
+            [
+                entry["message"]["type"]
+                for entry in messages
+                if entry["player_key"] == destination_observer.key
+                and entry["message"]["type"]
+                in {
+                    "notification./transfer.enter",
+                    "notification.trigger.currency_debited",
+                }
+            ],
+            [
+                "notification./transfer.enter",
+                "notification.trigger.currency_debited",
+            ],
+        )
+        self.assertFalse(any(
+            entry["message"]["type"] == "notification./echo"
+            and entry["player_key"]
+            in {self.player.key, destination_observer.key}
+            for entry in messages
+        ))
         self.assertEqual(
             len([
                 entry

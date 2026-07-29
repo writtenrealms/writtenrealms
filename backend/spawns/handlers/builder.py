@@ -29,6 +29,7 @@ from spawns.handlers.base import (
     ChoiceResolutionError,
     CommandContext,
     CommandHandler,
+    TRIGGER_STEP_MODE_TRANSACTIONAL,
     resolve_unambiguous_choice,
 )
 from spawns.handlers.permissions import (
@@ -776,7 +777,10 @@ class EchoHandler(CommandHandler):
         *,
         command: str,
         subject_type: str,
+        subject_key: str,
+        render_actor_key: str,
     ) -> tuple[str, str] | None:
+        del subject_key, render_actor_key
         if subject_type != "room":
             return (
                 "Trigger-step /echo commands require subject: trigger_room.",
@@ -1298,6 +1302,7 @@ class TransferHandler(CommandHandler):
     builder_only = True
     allow_script_source = True
     supported_actor_types = ("player", "mob", "room")
+    trigger_step_mode = TRIGGER_STEP_MODE_TRANSACTIONAL
     help = {
         "name": "Transfer",
         "format": "/transfer <target> <room_id|room@x,y,z|direction|here>",
@@ -1310,6 +1315,11 @@ class TransferHandler(CommandHandler):
             "Use room@x,y,z in portable trigger YAML.",
             "Put custom feedback before /transfer in an earlier same-line && segment.",
             "Room and mob issuers are available only to trusted trigger scripts.",
+            (
+                "Trigger steps may transfer only the Trigger actor. Use "
+                "/transfer {{ actor_key }} room@x,y,z from a room or selected "
+                "mob subject, or /transfer self room@x,y,z from the Trigger actor."
+            ),
         ],
         "examples": [
             "/transfer player.123 room@10,4,0",
@@ -1318,8 +1328,53 @@ class TransferHandler(CommandHandler):
         ],
     }
 
+    def validate_trigger_step_command(
+        self,
+        *,
+        command: str,
+        subject_type: str,
+        subject_key: str,
+        render_actor_key: str,
+    ) -> tuple[str, str] | None:
+        if subject_type not in self.supported_actor_types:
+            return (
+                f"{subject_type.capitalize()}s cannot execute /transfer.",
+                "unsupported_command_subject",
+            )
+
+        tokens = str(command or "").split()
+        if (
+            len(tokens) != 3
+            or tokens[0].lower() not in {"/transfer", "transfer"}
+        ):
+            return (
+                "Usage: /transfer <trigger actor> <room@x,y,z|direction|here>.",
+                "invalid_args",
+            )
+
+        target = tokens[1].lower()
+        render_key = str(render_actor_key or "").lower()
+        subject_is_trigger_actor = (
+            str(subject_key or "").lower() == render_key
+        )
+        targets_trigger_actor = (
+            target == render_key
+            or (
+                target in {"self", "me"}
+                and subject_is_trigger_actor
+            )
+        )
+        if not targets_trigger_actor:
+            return (
+                "Trigger-step /transfer commands may target only the Trigger actor.",
+                "unsupported_transfer_target",
+            )
+        return None
+
     def _can_execute_transfer_command(self, ctx: CommandContext) -> bool:
         if has_builder_access(ctx.player):
+            return True
+        if ctx.trigger_step and ctx.capture_only and ctx.script_source:
             return True
         return bool(
             ctx.script_source
@@ -1368,6 +1423,7 @@ class TransferHandler(CommandHandler):
                 target_selector=target,
                 room_selector=room_selector,
                 runtime_world=ctx.world,
+                trigger_step=ctx.trigger_step,
             )
         except ActionError as err:
             ctx.publish(
@@ -1404,19 +1460,6 @@ class TransferHandler(CommandHandler):
             actor_key=target_key,
             connection_id=target_connection_id,
         )
-
-        if result.data.get("target_type") == "player" and result.data.get("moved"):
-            from spawns.actions.combat import ScanRoomAggroAction
-
-            aggro_result = ScanRoomAggroAction().execute(
-                int(result.data["target_id"]),
-            )
-            if aggro_result.events:
-                publish_events(
-                    aggro_result.events,
-                    actor_key=target_key,
-                    connection_id=target_connection_id,
-                )
 
 
 @register_handler

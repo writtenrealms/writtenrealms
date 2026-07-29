@@ -529,12 +529,19 @@ Use one `command` action when a timed step should have the Trigger room, the
 triggering player or mob, or one exact room-local mob execute an audited
 command.
 
-This toll charges the triggering player and then has Charon emote:
+This crossing has Charon react, charges the triggering player, gives a final
+instruction, and transfers that player:
 
 ```yaml
 steps:
   - after_seconds: 0
     actions:
+      - type: command
+        subject:
+          type: mob
+          room: trigger_room
+          mob: mobdefinition.charon
+        command: emote grunts satisfactorily.
       - type: debit_currency
         actor: trigger_actor
         currency: obol
@@ -544,13 +551,18 @@ steps:
           type: mob
           room: trigger_room
           mob: mobdefinition.charon
-        command: emote grunts satisfactorily.
+        command: say Get on board.
+      - type: command
+        subject: trigger_room
+        command: /transfer {{ actor_key }} room@10,4,0
 ```
 
-The command runs only if the debit and every other action in the step succeeds.
-Its output is captured and written to the event outbox with the rest of the
-step. If Charon is absent or ambiguous, the player has insufficient funds, or
-the command itself fails, neither the debit nor the emote commits.
+The authored order is also the narrative-output order. The runtime first
+preflights the complete currency batch, captures every command, and commits all
+effects in one transaction. A debit's authoritative wallet state event is sent
+after the authored action events. If Charon is absent or ambiguous, the player
+has insufficient funds, the transfer target or destination is invalid, or any
+command fails, the debit, transfer, and all same-step output roll back together.
 
 There are three subject forms:
 
@@ -564,6 +576,11 @@ There are three subject forms:
 - type: command
   subject: trigger_actor
   command: say I accept the ferryman's price.
+
+# The triggering player transfers themself.
+- type: command
+  subject: trigger_actor
+  command: /transfer self room@10,4,0
 
 # Exactly one live mob of this definition in the original Trigger room acts.
 - type: command
@@ -587,12 +604,23 @@ does not select an arbitrary bystander player by name or room position:
 `trigger_actor` is the stable player subject.
 
 Commands currently approved for transactional steps are room-local `say`,
-`emote`, `talk`, authored socials, and room-subject, room-scoped `/echo`.
-A handler must be audited and explicitly marked as event-only before it
-becomes available here. Zone-wide `yell` and zone/world echoes are excluded
-because they can create large fanout while a step transaction is open.
-Movement, combat, inventory mutation, builder-state mutation, and nested
-`/cmd` dispatch are not currently step-safe.
+`emote`, `talk`, authored socials, room-subject, room-scoped `/echo`, and the
+audited transactional `/transfer` command. Most approved handlers are
+event-only. `/transfer` is the intentional mutating exception: it can target
+only the Trigger actor, but any of the three supported subject forms may issue
+it. The canonical forms are `subject: trigger_room` with
+`/transfer {{ actor_key }} room@x,y,z` and `subject: trigger_actor` with
+`/transfer self room@x,y,z`. An exact-one selected mob may also issue
+`/transfer {{ actor_key }} room@x,y,z`. `self` or `me` is accepted only when
+the resolved subject is the Trigger actor. That is normally
+`subject: trigger_actor`, but a selected mob can also qualify when it is itself
+the Mob Trigger actor. Other room and selected-mob subjects must name the
+rendered actor key. Always use the portable `room@x,y,z` destination form in
+authored YAML.
+Zone-wide `yell` and zone/world echoes are excluded because they can create
+large fanout while a step transaction is open. Other movement, combat,
+inventory mutation, builder-state mutation, and nested `/cmd` dispatch are not
+currently step-safe.
 
 One action contains exactly one command. Newlines, `;` or `&&` chains, history
 references, and nested `/cmd` are rejected. Use multiple `command` actions in
@@ -600,11 +628,20 @@ one step for multiple immediate commands. Player aliases, command history, and
 fallback command Triggers are suppressed for forced commands. Published
 output remains visible, while internal durable events carry
 Trigger/run/issuer/subject provenance that is not exposed to players. Forced
-output does not drive quest progress or another Trigger reaction. A depth
-marker is also retained as defense in depth.
+speech and social output does not drive quest progress or another Trigger
+reaction. A transfer that actually moves a player or mob is different: its
+durable lifecycle event runs destination `entering` reactions after commit,
+when no Trigger-step locks are held. A moved player still in that destination
+after its reactions additionally runs hostile-mob aggro. The derived output is
+captured and durably enqueued in a new transaction. Within one event batch,
+only the actor's final transfer arrival runs this work. A later player transfer
+also invalidates an earlier pending player arrival, and every delivery rechecks
+the actor's current runtime world and room. Inherited reaction commands remain
+bounded by the eight-layer depth limit. A same-room transfer runs no arrival
+work.
 
-The Trigger room is recorded internally as the command issuer; `subject` is
-the embodied player or mob that performs it. Builders cannot spoof that
+The Trigger room is recorded internally as the command issuer; `subject` is the
+chosen room, player, or mob execution identity. Builders cannot spoof that
 provenance. Command templates such as `{{ actor_key }}` render against the
 original Trigger actor before dispatch.
 
@@ -612,7 +649,7 @@ original Trigger actor before dispatch.
 
 | Type | Required fields | Effect |
 | --- | --- | --- |
-| `command` | `subject`, `command` | Executes one audited event-only command as `trigger_room`, `trigger_actor`, or one exact room-local mob selector. Command failure rolls back the step. |
+| `command` | `subject`, `command` | Executes one audited command as `trigger_room`, `trigger_actor`, or one exact room-local mob selector. Approved commands are event-only except for transactional `/transfer`, whose target is restricted to the Trigger actor. Command failure rolls back the step. |
 | `debit_currency` | `actor: trigger_actor`, `currency`, `amount` | Atomically removes a positive amount of one explicit currency from the triggering player. Fails if the actor is not a player or has insufficient funds. |
 | `consume_item` | `actor: trigger_actor`, `item`, optional `count` | Removes exact-definition items from the triggering actor's inventory. `count` defaults to `1`. |
 | `consume_room_item` | `room: trigger_room`, `item`, optional `count` | Removes exact-definition items from the triggering room. `count` defaults to `1`. |
@@ -637,11 +674,16 @@ A trigger may contain at most 32 steps and each step at most 16 actions. Each
 `consume_room_item.count` may each be at most `1,000`;
 `grant_item.count` and the sum of all granted items in one step may be at most
 `32`. `debit_currency.amount` may be at most
-`9,007,199,254,740,991`. Multiple currency debits in one step are applied as
-one wallet batch and increment the wallet revision once. Order actions as all
-item/mob mutations, then all debits, then event-only `command`/`echo` output.
-No mutation may follow a debit or output action, and no debit may follow
-output. This keeps balance locks last while preserving authored output order.
+`9,007,199,254,740,991`. Multiple currency debits in one step are preflighted
+and applied as one wallet batch and increment the wallet revision once. Put all
+item and mob mutations in an initial prefix. After that prefix, `command`,
+`echo`, and `debit_currency` actions may interleave in the exact narrative order
+you want. No item or mob mutation may follow one of those actions. Internally,
+step-safe commands do not branch on or mutate the wallet, the runtime captures
+their effects transactionally, and balance rows are written last to preserve
+the global lock order. A transfer may serialize a pre-debit wallet in its full
+player snapshot, so the authoritative aggregate wallet state event follows all
+authored action events.
 `command.command` and `echo.text` may each contain at most 4,000
 characters. The complete
 normalized `steps` payload may be at most 256 KiB when serialized as UTF-8
@@ -840,22 +882,73 @@ one slug or id is invalid, no items are granted.
 ## Transferring Characters
 
 Use `/transfer` when a scripted room or mob must forcibly move a player or mob
-without ordinary movement checks:
+without ordinary movement checks. In an immediate `script`, use the room
+wrapper:
 
 ```yaml
 script: /cmd room -- /transfer {{ actor_key }} room@10,4,0
 ```
 
+In a typed Trigger step, do not use `/cmd`. Either have the Trigger room
+transfer the Trigger actor:
+
+```yaml
+- type: command
+  subject: trigger_room
+  command: /transfer {{ actor_key }} room@10,4,0
+```
+
+Or have an embodied Trigger actor transfer themself:
+
+```yaml
+- type: command
+  subject: trigger_actor
+  command: /transfer self room@10,4,0
+```
+
+Those are the canonical forms, but an exact-one selected mob may also issue the
+command with the Trigger actor as its explicit target:
+
+```yaml
+- type: command
+  subject:
+    type: mob
+    room: trigger_room
+    mob: mobdefinition.charon
+  command: /transfer {{ actor_key }} room@10,4,0
+```
+
+Any supported subject may issue `/transfer`; the initial step-safe contract
+restricts the target, not the subject. A builder cannot use a step command to
+select an arbitrary bystander player or mob. `self` and `me` are accepted only
+when the resolved command subject is the Trigger actor. Other subjects must use
+`{{ actor_key }}`.
+
 Always use the portable `room@x,y,z` destination form in trigger YAML. Database
-room ids can differ after export and import. The room issuer and target must be
-in the same live runtime world; transfer cannot cross instance runs.
+room ids can differ after export and import. The Trigger room, execution
+subject, target, and destination must remain in the same live runtime world;
+transfer cannot cross instance runs.
 
 Transfer bypasses stamina, door traversal checks, and movement policy triggers.
-A direction destination still reads the issuer room's exit topology. Transfer
-finishes active combat for a character that actually changes rooms, sends a
-player target a full transfer room snapshot, updates origin and destination
-occupants, and runs destination mob `entering` reactions only in the target's
-runtime world.
+Relative `here` and direction destinations read the subject's room, not always
+the recorded Trigger-room issuer: `trigger_room` uses the original Trigger room,
+`trigger_actor` uses the actor's current room, and a selected mob uses that
+mob's room. Transfer normally finishes active combat for a character that
+actually changes rooms, sends a player target a full transfer room snapshot,
+and updates origin and destination occupants. A typed-step transfer instead
+fails with `target_busy` if the player target is in active PvP; ordinary active
+encounters are finished on a successful move.
+
+In a typed step, the room change and transfer events remain inside the step
+transaction and roll back if any action fails. After an actual move commits,
+the durable lifecycle event runs destination mob `entering` reactions for a
+player or mob target only in the target's runtime world. A player target still
+in that destination after its reactions also runs hostile-mob aggro. Those
+derived events are captured and durably enqueued outside the original locks.
+Only the final transfer arrival in one batch runs this work; a later player
+transfer also invalidates an earlier pending player arrival. Reaction command
+depth remains bounded at eight. A same-room transfer has no arrival lifecycle
+work; a same-room player target receives a normal look snapshot.
 
 If the transfer needs custom text, run that text before the transfer. Keep both
 independently wrapped room commands on the same script line when they should
@@ -866,10 +959,14 @@ script: /cmd room -- /send {{ actor_key }} -- The wall folds around you. && /cmd
 ```
 
 WR1's `transfer <target> <room> <command>` trailing-command form is not valid
-WR2 syntax. Keep the pre-transfer command explicit as shown above. Repeat the
-`/cmd room --` wrapper because `&&` segments are dispatched independently. The
-WR2 transfer will also emit its standard disappearance notification; review
-migrated scripts that used the WR1 trailing command to suppress that text.
+WR2 syntax. Keep the pre-transfer command explicit as shown above. In
+`spec.script`, repeat the `/cmd room --` wrapper because `&&` segments are
+dispatched independently. In `spec.steps`, use separate `command` actions;
+after any initial item/mob mutation prefix, they may interleave with `echo` and
+`debit_currency` actions in authored narrative order. The authoritative wallet
+state event follows those action events. The WR2 transfer will also emit its
+standard disappearance notification; review migrated scripts that used the WR1
+trailing command to suppress that text.
 
 ## Death Traps
 

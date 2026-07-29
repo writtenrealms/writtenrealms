@@ -325,10 +325,18 @@ Current required mappings:
   legacy room id to the imported room's coordinates; never copy a WR1 or WR2
   database id into portable trigger YAML. Normalize slashless `transfer` to
   `/transfer`. For mob-authored scripts, keep the mob as issuer and use the same
-  portable destination. WR1's optional trailing transfer command does not map
-  directly: export it as an explicit command before `/transfer`. For immediate
-  timing, use same-line `&&` segments and repeat the ambient wrapper for every
-  segment, for example `/cmd room -- /send ... && /cmd room -- /transfer ...`.
+  portable destination. When the surrounding WR1 action maps to typed
+  `spec.steps`, the canonical forms are `subject: trigger_room` with
+  `/transfer {{ actor_key }} room@x,y,z` and `subject: trigger_actor` with
+  `/transfer self room@x,y,z`. Any supported step subject may issue the command
+  provided the target is the Trigger actor; for example, an exact-one selected
+  mob can use `/transfer {{ actor_key }} room@x,y,z`. WR1's optional trailing
+  transfer command does not map directly: export it as an explicit command
+  before `/transfer`. For an immediate `spec.script`, use same-line `&&`
+  segments and repeat the ambient wrapper for every segment, for example
+  `/cmd room -- /send ... && /cmd room -- /transfer ...`. In `spec.steps`, emit
+  separate `command` actions in their authored narrative order after any
+  initial item/mob mutation prefix.
   Separate script lines are heartbeat-paced and are not equivalent. WR2 still
   emits the standard disappearance notification, whereas WR1 suppressed that
   text when a trailing command was present, so exporters should flag those
@@ -815,6 +823,12 @@ An audited command can execute as the Trigger room, the Trigger actor
 steps:
   - after_seconds: 0
     actions:
+      - type: command
+        subject:
+          type: mob
+          room: trigger_room
+          mob: mobdefinition.charon
+        command: emote grunts satisfactorily.
       - type: debit_currency
         actor: trigger_actor
         currency: obol
@@ -824,7 +838,10 @@ steps:
           type: mob
           room: trigger_room
           mob: mobdefinition.charon
-        command: emote grunts satisfactorily.
+        command: say Get on board.
+      - type: command
+        subject: trigger_room
+        command: /transfer {{ actor_key }} room@10,4,0
   - after_seconds: 10
     actions:
       - type: command
@@ -850,21 +867,46 @@ update its supported runtime fields and character state.
 `type: mob`, `room: trigger_room`, a portable `mobdefinition.<slug>`, and an
 optional query-free `where`. One action executes one command; command chains,
 history references, and nested `/cmd` dispatch are rejected. The dedicated
-runner accepts only handlers explicitly audited as event-only. Current
-coverage is room-local `say`, `emote`, `talk`, authored socials, and
-room-subject, room-scoped `/echo`. The Trigger room is retained as the issuer
-while an embodied player or mob is recorded as the subject. Durable command
-events carry internal, unforgeable Trigger/run/issuer/subject provenance,
-which is stripped from the player payload. Output remains visible but does not
-count as voluntary input for quest or Trigger subscriptions; a depth marker
-remains as defense in depth. `trigger_actor` is the only player subject in
-this initial contract; typed steps do not select arbitrary bystander players.
+runner accepts only explicitly audited handlers. Current coverage is room-local
+`say`, `emote`, `talk`, authored socials, room-subject, room-scoped `/echo`,
+and transactional `/transfer`. The transfer target must be the Trigger actor,
+but any supported step subject may issue the command. The canonical forms are
+`subject: trigger_room` with `/transfer {{ actor_key }} room@x,y,z` and
+`subject: trigger_actor` with `/transfer self room@x,y,z`; an exact-one selected
+mob may also use the explicit `{{ actor_key }}` target. `self` or `me` is valid
+only when the resolved subject is the Trigger actor; a selected mob can qualify
+when it is itself the Mob Trigger actor. Relative `here` and direction
+destinations are resolved from the subject's room: the fixed Trigger room, the
+Trigger actor's current room, or the selected mob's room respectively. Portable
+manifests should use `room@x,y,z`, not a database room id, to avoid both that
+context dependence and database-id instability. A typed transfer that would
+move a player in active PvP fails with `target_busy`; a successful move finishes
+ordinary active encounters. The Trigger room is retained as the recorded issuer
+while the chosen room, player, or mob is recorded as the step subject. Durable
+command events carry internal, unforgeable
+Trigger/run/issuer/subject provenance, which is stripped from the player
+payload. Forced speech and socials remain visible but do not count as voluntary
+input for quest or Trigger subscriptions. When a transfer actually moves its
+target, the committed lifecycle event starts destination `entering` reactions
+for a player or mob after commit. A moved player still in that destination after
+its reactions additionally starts hostile-mob aggro. The derived output is
+captured into another durable outbox batch. Only the actor's final transfer
+arrival in one event batch runs this work. A later player transfer also
+invalidates an earlier pending player arrival, and every delivery rechecks the
+actor's current runtime world and room. Reaction execution preserves the
+bounded eight-layer depth. No lifecycle arrival work runs for a same-room
+transfer. `trigger_actor` is the only player subject in this initial contract;
+typed steps do not select arbitrary bystander players.
 
-Actions use three ordered phases: item and mob mutations first, all
-`debit_currency` actions next, then event-only `command` and `echo` output.
-No mutation may follow a debit or output action, and no debit may follow
-command/echo output. This preserves authored ordering while keeping all
-debits in one wallet batch with balance rows locked last.
+Item and mob mutations must form an initial action prefix. After that prefix,
+`debit_currency`, `command`, and `echo` may interleave, and their narrative
+events retain authored order. The runtime preflights all debit actions as one
+aggregate, captures approved commands and transactional transfer state, and
+writes balance rows last. Approved commands do not branch on or mutate the
+wallet. `/transfer` may nevertheless serialize a pre-debit wallet as part of
+its full player snapshot, so the authoritative `currency.balances_changed`
+event is appended after all authored action events. Any later action failure
+rolls back the balance, transfer state, and captured events together.
 Query-backed presence and quest operators belong in the trigger's outer
 conditions. Policy triggers cannot define steps.
 
@@ -1340,11 +1382,15 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 - `command` requires exactly one `command` string and a `subject` of
   `trigger_room`, `trigger_actor`, or an exact-one room-local mob selector.
   Newlines, `;`/`&&` chains, history references, and nested `/cmd` are rejected;
-  the resolved handler must explicitly support event-only Trigger-step
-  execution.
-- Step actions are phase ordered: item/mob mutations, then all
-  `debit_currency` actions, then `command`/`echo` output. A mutation cannot
-  follow a debit or output action, and a debit cannot follow output.
+  the resolved handler must explicitly support Trigger-step execution.
+  Any supported subject may issue transactional `/transfer`, but only the
+  Trigger actor may be its target. Relative destinations use the subject's room;
+  authored content should use a portable `room@x,y,z` destination. Moving a
+  player in active PvP fails with `target_busy`.
+- Item/mob mutations must be an initial action prefix. After that prefix,
+  `debit_currency`, `command`, and `echo` may interleave in authored narrative
+  order. The aggregate wallet state event follows those action events. No
+  item/mob mutation may follow one of those actions.
 - `spawn_room_item.bind` names are unique and must precede any matching
   `replace_room_item.target`. The current `spec.on_step_error` value is
   `cancel`.

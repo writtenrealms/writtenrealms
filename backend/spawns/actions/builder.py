@@ -44,7 +44,11 @@ from spawns.ability_prepare_state import (
     ability_prepare_state_event,
     ability_prepare_state_events_for_players,
 )
-from spawns.events import GameEvent
+from spawns.events import (
+    GameEvent,
+    TRANSFER_LOCATION_SEQUENCE_KEY,
+    TRANSFER_RUNTIME_WORLD_KEY,
+)
 from spawns.handlers.base import ChoiceResolutionError, resolve_unambiguous_choice
 from spawns.handlers.registry import (
     ActorNotFoundError,
@@ -2872,6 +2876,7 @@ class TransferAction:
         target_selector: str,
         room_selector: str,
         runtime_world: World | None = None,
+        trigger_step: bool = False,
     ) -> ActionResult:
         issuer_room = _actor_room(actor)
         if issuer_room is None:
@@ -2918,6 +2923,17 @@ class TransferAction:
                 .first()
             )
             if target_room_id is not None and target_room_id != destination.id:
+                if (
+                    trigger_step
+                    and self._active_pvp_encounter_ids(
+                        target_ref=target_ref,
+                        runtime_world=resolved_runtime_world,
+                    )
+                ):
+                    raise ActionError(
+                        "The target is busy in player combat. Try the transfer again.",
+                        code="target_busy",
+                    )
                 (
                     pvp_finished_encounter_ids,
                     pvp_cleanup_events,
@@ -2978,7 +2994,13 @@ class TransferAction:
                     )
 
                     target.room_id = destination.id
-                    target.save(update_fields=["room"])
+                    target_update_fields = ["room"]
+                    if isinstance(target, Player):
+                        target.location_sequence = (
+                            int(target.location_sequence or 0) + 1
+                        )
+                        target_update_fields.append("location_sequence")
+                    target.save(update_fields=target_update_fields)
                     if isinstance(target, Player):
                         target.viewed_rooms.add(destination.id)
                     combat_effect_events = self._combat_effect_state_events(
@@ -3079,7 +3101,12 @@ class TransferAction:
             "actor": transferred_payload,
             "origin_room": origin_payload,
             "destination_room": destination_payload,
+            TRANSFER_RUNTIME_WORLD_KEY: resolved_runtime_world.id,
         }
+        if isinstance(updated_target, Player):
+            movement_data[TRANSFER_LOCATION_SEQUENCE_KEY] = int(
+                updated_target.location_sequence or 0
+            )
         events: list[GameEvent] = [
             *door_cancellation_events,
             GameEvent(
@@ -3188,9 +3215,19 @@ class JumpAction:
                         message="You stop working with the door as you jump.",
                     )
                 )
-            player.room_id = target_room.id
+            if player.room_id != target_room.id:
+                player.room_id = target_room.id
+                player.location_sequence = (
+                    int(player.location_sequence or 0) + 1
+                )
             player.last_action_ts = timezone.now()
-            player.save(update_fields=["room", "last_action_ts"])
+            player.save(
+                update_fields=[
+                    "room",
+                    "location_sequence",
+                    "last_action_ts",
+                ]
+            )
             player.viewed_rooms.add(target_room.id)
 
             origin_recipients: list[int] = []

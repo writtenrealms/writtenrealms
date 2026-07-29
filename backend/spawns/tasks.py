@@ -1100,6 +1100,7 @@ def execute_trigger_script_segments(
     connection_id: str | None = None,
     expected_world_id: int | None = None,
     expected_room_id: int | None = None,
+    script_command_depth: int = 0,
 ):
     """
     Execute scripted trigger segments as a delayed trigger line.
@@ -1138,14 +1139,17 @@ def execute_trigger_script_segments(
             payload["issuer_scope"] = issuer_scope
 
         try:
-            dispatch_command(
-                command_type="text",
-                actor_type=actor_type,
-                actor_id=actor_id,
-                payload=payload,
-                connection_id=connection_id,
-                script_source=True,
-            )
+            from spawns.events import inherit_script_command_depth
+
+            with inherit_script_command_depth(script_command_depth):
+                dispatch_command(
+                    command_type="text",
+                    actor_type=actor_type,
+                    actor_id=actor_id,
+                    payload=payload,
+                    connection_id=connection_id,
+                    script_source=True,
+                )
         except (ActorNotFoundError, HandlerNotFoundError, ValueError):
             return
 

@@ -2558,8 +2558,9 @@ def _complete_flee(
         )
 
     player.room_id = destination_room_id
+    player.location_sequence = int(player.location_sequence or 0) + 1
     player.last_action_ts = timezone.now()
-    player_update_fields = ["room", "last_action_ts"]
+    player_update_fields = ["room", "location_sequence", "last_action_ts"]
     if route_changed:
         player_update_fields.append("stamina")
     player.save(update_fields=player_update_fields)

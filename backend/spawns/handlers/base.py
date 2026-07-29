@@ -15,6 +15,11 @@ from fastapi_app.game_ws import publish_to_player
 
 CommandActor = Player | Mob | Room | Zone | World
 TRIGGER_STEP_MODE_EVENTS_ONLY = "events_only"
+TRIGGER_STEP_MODE_TRANSACTIONAL = "transactional"
+TRIGGER_STEP_MODES = frozenset({
+    TRIGGER_STEP_MODE_EVENTS_ONLY,
+    TRIGGER_STEP_MODE_TRANSACTIONAL,
+})
 
 
 @dataclass
@@ -40,6 +45,7 @@ class CommandContext:
     published_messages: list[dict] | None = None
     script_source: bool = False
     capture_only: bool = False
+    trigger_step: bool = False
     issuer: CommandActor | None = None
     issuer_type: str | None = None
     issuer_id: int | None = None
@@ -100,8 +106,11 @@ class CommandHandler(ABC):
     allow_script_source: bool = False
     allow_mob_actor: bool = False
     supported_actor_types: tuple[str, ...] = ("player",)
-    # Only audited handlers whose execution produces GameEvents and performs
-    # no irreversible external work may opt into Trigger-step execution.
+    # Only audited handlers whose output is capturable and whose work is fully
+    # covered by the caller's transaction may opt into Trigger-step execution.
+    # ``events_only`` handlers do not mutate durable game state.
+    # ``transactional`` handlers may mutate state but must not perform
+    # irreversible external work before commit.
     trigger_step_mode: str | None = None
     help: dict[str, Any] | None = None
 
@@ -123,6 +132,8 @@ class CommandHandler(ABC):
         *,
         command: str,
         subject_type: str,
+        subject_key: str,
+        render_actor_key: str,
     ) -> tuple[str, str] | None:
         """Return an optional (message, code) rejection for Trigger steps."""
         return None

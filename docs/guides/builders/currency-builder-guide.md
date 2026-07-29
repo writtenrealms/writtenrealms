@@ -262,9 +262,18 @@ under lock, batches all currency debits in the step, and rolls back the entire
 step if any balance is insufficient. The private success text always goes to
 the charged player. The third-person text goes only to in-game witnesses in
 that player's current room and is suppressed while the player is invisible.
-Order each step as item/mob mutations, then all debits, then audited event-only
-`command` or `echo` output. Do not put a mutation after a debit/output action
-or a debit after command/echo output.
+Put item and mob mutations first as one uninterrupted prefix. After that,
+`debit_currency`, `command`, and `echo` may interleave in the authored narrative
+order you want. The runtime preflights all debits as one aggregate before
+executing the step, captures approved commands transactionally, and writes
+balance rows last. Step-safe commands do not branch on or mutate the wallet.
+`/transfer` can nevertheless serialize the pre-debit wallet inside its full
+player snapshot; the authoritative `currency.balances_changed` state event is
+therefore emitted after every authored action event. Debit witness text still
+uses the actor's room at that action's authored position: a transfer before the
+debit notifies the destination, while a transfer after it leaves the debit text
+in the origin room. If any debit or command fails, no balance, transactional
+command effect, or success text commits.
 
 ## Starting Balances And Reset
 

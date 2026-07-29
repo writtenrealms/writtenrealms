@@ -64,17 +64,35 @@ This plan remains directional, but several pieces are now implemented:
   fields. A room-issued Trigger-step command can therefore execute with a
   player or mob subject without pretending that subject initiated the intent.
 - A dedicated `ScriptCommandRunner` now powers typed Trigger `command` actions.
-  It captures audited event-only handler output inside the step transaction so
-  publication occurs through the durable outbox after commit. Durable events
-  carry internal Trigger/run/issuer/subject provenance that is stripped from
-  player payloads, and are deliberately excluded from Trigger and quest
-  subscriptions because forced behavior is not voluntary player input.
+  It captures audited handler output inside the step transaction so publication
+  occurs through the durable outbox after commit. Most approved commands are
+  event-only; `/transfer` is also audited for transactional Trigger-step use
+  with the Trigger actor as its only target; any supported step subject may
+  issue it. Its room change and events roll back with a failed step. Durable
+  events carry internal Trigger/run/issuer/subject provenance that is stripped
+  from player payloads. Forced speech and socials are excluded from Trigger and
+  quest subscriptions because they are not voluntary player input. When a
+  transfer actually moves its target, the committed lifecycle event runs
+  destination `entering` reactions for a player or mob after commit; a moved
+  player still in that destination after its reactions additionally runs
+  hostile-mob aggro. Reaction and aggro output is captured and durably enqueued
+  outside the original step locks. Only the final arrival for an actor in one
+  event batch runs this work; a later player transfer also invalidates an
+  earlier pending player arrival, and delivery rechecks current runtime and
+  room.
 - Trigger command actions support the fixed Trigger room, the Trigger actor
   (including a player), or one bounded exact-one room-local mob selector.
   Single-command, nested-dispatch, alias/history, and fallback-trigger guards
   are enforced at this boundary.
 - The runner reuses the already resolved subject, issuer, and runtime world
   rather than refetching those identities once per command action.
+- Typed steps require item/mob mutations as an initial prefix. After that,
+  `command`, `echo`, and `debit_currency` retain authored narrative-output order
+  while aggregate funds are preflighted and balance rows are written last. The
+  authoritative wallet state event follows those action events. Approved
+  commands do not branch on or mutate the wallet; `/transfer` may serialize a
+  pre-debit wallet snapshot as part of its full player state, so the final
+  wallet event deliberately supersedes it.
 
 Current trigger command kind is `command`.
 
@@ -82,16 +100,19 @@ Still future work:
 
 - Handler declarations still use `supported_actor_types`; they have not yet
   moved generally to `allowed_issuer_types` and `required_subject_types`.
-  Trigger steps currently add a narrower `trigger_step_mode: events_only`
-  capability for audited handlers.
+  Trigger steps currently add narrower audited modes for event-only and
+  transactional handlers.
 - The dedicated runner is integrated with typed Trigger steps, but legacy
   `spec.script`, quests, and other scheduled script sources have not yet moved
   to it.
 - Ambient command rate limits and cross-source recursion/deduplication limits
   are not complete. Typed command steps already reject chains, history,
-  aliases, nested `/cmd`, and fallback Trigger recursion. Their marked output
-  does not enter Trigger or quest subscriber cascades; an eight-layer depth
-  cap remains a secondary internal safeguard.
+  aliases, nested `/cmd`, and fallback Trigger recursion. Marked speech/social
+  output does not enter Trigger or quest subscriber cascades. Transfer
+  lifecycle and location-refresh events are the explicit post-commit
+  exceptions. Transfer arrival reactions inherit the script depth, are capped
+  at eight layers, collapse same-batch intermediate arrivals, and validate the
+  current runtime and room before reacting or scanning for aggro.
 - A generic `before_command` policy hook for vetoing already resolved command
   handlers is not implemented.
 
@@ -340,7 +361,9 @@ points remain pending.
 
 1. Add `ScriptCommandRunner` that executes command lines under ambient issuer
    context. Implemented for one bounded command.
-2. Integrate with typed Trigger steps. Implemented.
+2. Integrate with typed Trigger steps. Implemented for audited event-only
+   commands and transactional `/transfer` restricted to the Trigger actor as
+   its target.
 3. Integrate with legacy Trigger scripts and quest script entry points.
 4. Route command execution exclusively through the runner for scripted
    sources.
@@ -373,7 +396,8 @@ Exit criteria:
 
 ### Phase 6: Safety and hardening
 
-1. Add recursion/depth/rate protections.
+1. Add recursion/depth/rate protections. The eight-layer scripted-command depth
+   guard is implemented; broader rate protections remain pending.
 2. Add structured telemetry for ambient command execution.
 3. Add failure policy (continue vs stop-on-error) per script context.
 

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 
 from config import constants as adv_consts
@@ -1159,7 +1160,10 @@ def reset_instance(*, player) -> InstanceResetResult:
         if player_ids:
             player.__class__.objects.filter(
                 pk__in=player_ids,
-            ).update(room=starting_room)
+            ).update(
+                room=starting_room,
+                location_sequence=F('location_sequence') + 1,
+            )
 
         run.progress = {}
         run.outcome = {}

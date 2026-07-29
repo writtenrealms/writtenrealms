@@ -1605,7 +1605,15 @@ class AbilityAction:
             ChangeRoomAction().execute(player, move_context.dest_room_id)
             AdjustStaminaAction().execute(player, -move_context.movement_cost)
             stand_player(player)
-            player.save(update_fields=["room", "stamina", "state", "last_action_ts"])
+            player.save(
+                update_fields=[
+                    "room",
+                    "location_sequence",
+                    "stamina",
+                    "state",
+                    "last_action_ts",
+                ]
+            )
             player.viewed_rooms.add(move_context.dest_room_id)
             move_events = BuildMoveEventsAction().execute(move_context).events
         else:

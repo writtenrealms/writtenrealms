@@ -51,12 +51,20 @@ from spawns.events import (
     flush_game_event_outbox,
     publish_events,
 )
-from spawns.models import Item, Mob, MobState, Player, ScheduledTriggerRun
+from spawns.handlers.base import TRIGGER_STEP_MODE_TRANSACTIONAL
+from spawns.models import (
+    Item,
+    Mob,
+    MobState,
+    Player,
+    PlayerCurrencyBalance,
+    ScheduledTriggerRun,
+)
 from spawns.script_commands import (
     ScriptCommandError,
     ScriptCommandRunner,
 )
-from spawns.wallet import WalletError, mutate_balances
+from spawns.wallet import WalletError, WalletMutation, mutate_balances
 from worlds.models import Room, World
 
 
@@ -226,7 +234,14 @@ def _release_trigger_gate(claim: tuple[str, str] | None) -> None:
         logger.exception("Failed to release trigger gate %s", gate_key)
 
 
-def _lock_runtime_room(*, runtime_world_id: int, room_id: int) -> None:
+def release_trigger_gate_claims(
+    claims: list[tuple[str, str]],
+) -> None:
+    for claim in reversed(claims):
+        _release_trigger_gate(claim)
+
+
+def lock_trigger_runtime_room(*, runtime_world_id: int, room_id: int) -> None:
     """Serialize starts only within one runtime-world/room pair."""
     if connection.vendor == "postgresql":
         lock_scope = f"scheduled-trigger-room:{runtime_world_id}:{room_id}".encode()
@@ -1401,24 +1416,59 @@ def _mob_change_events(
     ]
 
 
-def _debit_step_currencies(
-    *,
-    run: ScheduledTriggerRun,
+def _debit_deltas(
     debit_actions: list[dict[str, Any]],
-    trigger_actor: Player,
-) -> tuple[Player, dict[int, Currency]]:
+) -> dict[int, int]:
     deltas: dict[int, int] = {}
     for action in debit_actions:
         currency_id = int(action["currency_id"])
         deltas[currency_id] = (
             deltas.get(currency_id, 0) - int(action["amount"])
         )
+    return deltas
+
+
+def _preflight_step_currency_debits(
+    *,
+    debit_actions: list[dict[str, Any]],
+    trigger_actor: Player,
+) -> None:
+    """Validate aggregate funds without taking balance-row locks.
+
+    The Trigger step already owns the Player row, and all wallet writers lock
+    Player before balances. That makes this read stable while preserving
+    balance rows as the final aggregate lock acquired by the step.
+    """
+    deltas = _debit_deltas(debit_actions)
+    balances = dict(
+        PlayerCurrencyBalance.objects.filter(
+            player_id=trigger_actor.id,
+            currency_id__in=sorted(deltas),
+        ).values_list("currency_id", "amount")
+    )
+    if any(
+        int(balances.get(currency_id, 0)) + delta < 0
+        for currency_id, delta in deltas.items()
+    ):
+        raise TriggerStepExecutionError(
+            "Insufficient funds.",
+            code="insufficient_funds",
+        )
+
+
+def _debit_step_currencies(
+    *,
+    debit_actions: list[dict[str, Any]],
+    trigger_actor: Player,
+) -> tuple[WalletMutation, dict[int, Currency]]:
+    deltas = _debit_deltas(debit_actions)
 
     try:
         mutation = mutate_balances(
             trigger_actor,
             deltas,
             reason="trigger.debit_currency",
+            emit_event=False,
         )
     except WalletError as exc:
         raise TriggerStepExecutionError(
@@ -1426,11 +1476,19 @@ def _debit_step_currencies(
             code=exc.code,
         ) from exc
     return (
-        mutation.player,
+        mutation,
         {
             change.currency.id: change.currency
             for change in mutation.changes
         },
+    )
+
+
+def _wallet_balance_event(mutation: WalletMutation) -> GameEvent:
+    return GameEvent(
+        type="currency.balances_changed",
+        recipients=[mutation.player.key],
+        data=mutation.payload(reason="trigger.debit_currency"),
     )
 
 
@@ -1591,7 +1649,6 @@ def _execute_current_step(
     events: list[GameEvent] = []
     item_changes = TriggerItemChanges()
     mob_changes = TriggerMobChanges()
-    room_recipient_keys = _room_recipient_keys(run)
     actions = step.get("actions") or []
     debit_actions = [
         action
@@ -1649,6 +1706,11 @@ def _execute_current_step(
         raise TriggerStepExecutionError(
             "The trigger actor is no longer available.",
             code="actor_missing",
+        )
+    if debit_actions:
+        _preflight_step_currency_debits(
+            debit_actions=debit_actions,
+            trigger_actor=trigger_actor,
         )
 
     for action in actions:
@@ -1765,81 +1827,98 @@ def _execute_current_step(
                 code="unsupported_action",
             )
 
-    resolved_command_subjects: dict[int, Player | Mob | Room] = {}
-    for action_index, action in enumerate(actions):
-        if action.get("type") != TRIGGER_STEP_ACTION_COMMAND:
-            continue
-        command_subject = _command_mob_subject(action)
-        candidate_ids = None
-        if command_subject is not None and prelocks is not None:
-            candidate_ids = prelocks.mob_ids_by_definition.get(
-                int(command_subject["mob_definition_id"]),
-                (),
-            )
-        resolved_command_subjects[action_index] = _resolve_command_subject(
+    # Typed item and mob mutations are an authored prefix. Publish their
+    # deltas before any command can emit a full character/room snapshot.
+    mutation_room_recipient_keys = _room_recipient_keys(run)
+    events.extend(
+        _item_change_events(
             run=run,
-            action=action,
             room=room,
-            runtime_world=runtime_world,
-            trigger_actor=trigger_actor,
-            candidate_ids=candidate_ids,
+            changes=item_changes,
+            room_recipient_keys=mutation_room_recipient_keys,
         )
-
-    debited_actor: Player | None = None
-    debited_currencies: dict[int, Currency] = {}
-    debit_room: Room | None = None
-    debit_room_recipient_keys: tuple[str, ...] = ()
-    if debit_actions:
-        # Balance rows are last in the global aggregate lock order. Every
-        # existing Mob/Item candidate was locked above in the same order used
-        # by non-debit mixed steps before this single wallet mutation.
-        debited_actor, debited_currencies = _debit_step_currencies(
+    )
+    events.extend(
+        _mob_change_events(
             run=run,
-            debit_actions=debit_actions,
-            trigger_actor=trigger_actor,
+            room=room,
+            changes=mob_changes,
+            room_recipient_keys=mutation_room_recipient_keys,
         )
-        trigger_actor = debited_actor
-        if debited_actor.room_id == room.id:
-            debit_room = room
-        elif debited_actor.room_id is not None:
-            debit_room = Room.objects.filter(pk=debited_actor.room_id).first()
-        if (
-            debit_room is not None
-            and debited_actor.in_game
-            and not debited_actor.is_invisible
-        ):
-            if debit_room.id == room.id:
-                debit_room_recipient_keys = room_recipient_keys
-            else:
-                debit_room_recipient_keys = _room_recipient_keys_for(
-                    runtime_world_id=run.runtime_world_id,
-                    room_id=debit_room.id,
-                )
+    )
+
+    action_events: dict[int, list[GameEvent]] = {}
+    debit_contexts: dict[int, tuple[Room, tuple[str, ...]]] = {}
+    trigger_room_recipient_keys: tuple[str, ...] | None = (
+        mutation_room_recipient_keys
+    )
+    debit_context_cache: dict[
+        tuple[int | None, bool, bool],
+        tuple[Room, tuple[str, ...]],
+    ] = {}
+    trigger_provenance = bindings.get(
+        _TRIGGER_PROVENANCE_BINDING_KEY,
+        {},
+    )
+    if not isinstance(trigger_provenance, dict):
+        trigger_provenance = {}
 
     for action_index, action in enumerate(actions):
         action_type = action.get("type")
         if action_type == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
-            events.extend(
-                _currency_debit_events(
-                    run=run,
-                    action=action,
-                    currency=debited_currencies[int(action["currency_id"])],
-                    actor=debited_actor,
-                    room=debit_room or room,
-                    room_recipient_keys=debit_room_recipient_keys,
+            if not isinstance(trigger_actor, Player):
+                raise TriggerStepExecutionError(
+                    "Only a player trigger actor can be charged currency.",
+                    code="invalid_actor",
                 )
+            context_key = (
+                trigger_actor.room_id,
+                bool(trigger_actor.in_game),
+                bool(trigger_actor.is_invisible),
             )
+            debit_context = debit_context_cache.get(context_key)
+            if debit_context is None:
+                debit_room = None
+                if trigger_actor.room_id == room.id:
+                    debit_room = room
+                elif trigger_actor.room_id is not None:
+                    debit_room = Room.objects.filter(
+                        pk=trigger_actor.room_id,
+                    ).first()
+                debit_room = debit_room or room
+                debit_recipients: tuple[str, ...] = ()
+                if (
+                    trigger_actor.room_id is not None
+                    and trigger_actor.in_game
+                    and not trigger_actor.is_invisible
+                ):
+                    debit_recipients = _room_recipient_keys_for(
+                        runtime_world_id=run.runtime_world_id,
+                        room_id=debit_room.id,
+                    )
+                debit_context = (debit_room, debit_recipients)
+                debit_context_cache[context_key] = debit_context
+            debit_contexts[action_index] = debit_context
         elif action_type == TRIGGER_STEP_ACTION_COMMAND:
-            trigger_provenance = bindings.get(
-                _TRIGGER_PROVENANCE_BINDING_KEY,
-                {},
+            command_subject = _command_mob_subject(action)
+            candidate_ids = None
+            if command_subject is not None and prelocks is not None:
+                candidate_ids = prelocks.mob_ids_by_definition.get(
+                    int(command_subject["mob_definition_id"]),
+                    (),
+                )
+            subject = _resolve_command_subject(
+                run=run,
+                action=action,
+                room=room,
+                runtime_world=runtime_world,
+                trigger_actor=trigger_actor,
+                candidate_ids=candidate_ids,
             )
-            if not isinstance(trigger_provenance, dict):
-                trigger_provenance = {}
             try:
                 command_result = ScriptCommandRunner().execute(
                     issuer=room,
-                    subject=resolved_command_subjects[action_index],
+                    subject=subject,
                     command=str(action.get("command") or ""),
                     render_actor=trigger_actor,
                     runtime_world=runtime_world,
@@ -1863,33 +1942,61 @@ def _execute_current_step(
                     str(exc),
                     code=exc.code,
                 ) from exc
-            events.extend(command_result.events)
+            action_events[action_index] = list(command_result.events)
+            if command_result.mode == TRIGGER_STEP_MODE_TRANSACTIONAL:
+                # The initial transactional command contract can move only
+                # the Trigger actor. Refresh it before later command subjects,
+                # debit witness snapshots, or room echoes are resolved.
+                trigger_actor.refresh_from_db()
+                trigger_room_recipient_keys = None
+                debit_context_cache.clear()
         elif action_type == TRIGGER_STEP_ACTION_ECHO:
+            if trigger_room_recipient_keys is None:
+                trigger_room_recipient_keys = _room_recipient_keys(run)
             event = _echo_event(
                 run=run,
                 action=action,
                 room=room,
-                room_recipient_keys=room_recipient_keys,
+                room_recipient_keys=trigger_room_recipient_keys,
             )
-            if event is not None:
-                events.append(event)
+            action_events[action_index] = [] if event is None else [event]
 
-    events.extend(
-        _item_change_events(
-            run=run,
-            room=room,
-            changes=item_changes,
-            room_recipient_keys=room_recipient_keys,
+    wallet_mutation: WalletMutation | None = None
+    debited_currencies: dict[int, Currency] = {}
+    if debit_actions:
+        # Commands have finished and all of their output remains captured.
+        # Acquire ordered balance rows last, write the complete debit batch
+        # once, and let any later failure roll back every command and mutation.
+        wallet_mutation, debited_currencies = _debit_step_currencies(
+            debit_actions=debit_actions,
+            trigger_actor=trigger_actor,
         )
-    )
-    events.extend(
-        _mob_change_events(
-            run=run,
-            room=room,
-            changes=mob_changes,
-            room_recipient_keys=room_recipient_keys,
-        )
-    )
+
+    for action_index, action in enumerate(actions):
+        action_type = action.get("type")
+        if action_type == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
+            debit_room, debit_recipients = debit_contexts[action_index]
+            events.extend(
+                _currency_debit_events(
+                    run=run,
+                    action=action,
+                    currency=debited_currencies[int(action["currency_id"])],
+                    actor=wallet_mutation.player,
+                    room=debit_room,
+                    room_recipient_keys=debit_recipients,
+                )
+            )
+        elif action_type in {
+            TRIGGER_STEP_ACTION_COMMAND,
+            TRIGGER_STEP_ACTION_ECHO,
+        }:
+            events.extend(action_events.get(action_index, ()))
+
+    if wallet_mutation is not None:
+        # A transfer event contains a full pre-debit character snapshot. Keep
+        # the authoritative aggregate wallet state sync last in the batch so
+        # clients cannot overwrite the final balance with that snapshot.
+        events.append(_wallet_balance_event(wallet_mutation))
 
     run.bindings = bindings
     run.next_step_index += 1
@@ -1926,6 +2033,7 @@ def start_trigger_steps(
     conditions: str | None = None,
     event_data: dict[str, Any] | None = None,
     gate_scope_key: str | None = None,
+    gate_claim_collector: list[tuple[str, str]] | None = None,
 ) -> TriggerStepStartResult:
     actor_type = _actor_kind(actor)
     actor_model = _actor_model(actor_type)
@@ -1941,7 +2049,7 @@ def start_trigger_steps(
     gate_claim: tuple[str, str] | None = None
     try:
         with transaction.atomic():
-            _lock_runtime_room(
+            lock_trigger_runtime_room(
                 runtime_world_id=runtime_world_id,
                 room_id=room.id,
             )
@@ -2094,6 +2202,8 @@ def start_trigger_steps(
                 trigger=current_trigger,
                 scope_key=gate_scope_key,
             )
+            if gate_claim is not None and gate_claim_collector is not None:
+                gate_claim_collector.append(gate_claim)
             try:
                 if prelock_context is not None:
                     initial_prelocks = _prelock_step_resources(

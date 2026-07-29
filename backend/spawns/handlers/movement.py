@@ -139,7 +139,14 @@ class MoveHandler(CommandHandler):
                 ChangeRoomAction().execute(player, context.dest_room_id)
                 AdjustStaminaAction().execute(player, -context.movement_cost)
 
-                player.save(update_fields=["room", "stamina", "last_action_ts"])
+                player.save(
+                    update_fields=[
+                        "room",
+                        "location_sequence",
+                        "stamina",
+                        "last_action_ts",
+                    ]
+                )
                 player.viewed_rooms.add(context.dest_room_id)
 
                 if pvp_participation is not None:

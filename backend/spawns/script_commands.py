@@ -4,6 +4,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from django.db import connection
+
 from core.trigger_steps import (
     MAX_TRIGGER_COMMAND_LENGTH,
     SCRIPT_COMMAND_DEPTH_KEY,
@@ -11,7 +13,10 @@ from core.trigger_steps import (
 )
 from core.utils import format_actor_msg, split_cmd
 from spawns.events import GameEvent, capture_game_events
-from spawns.handlers.base import TRIGGER_STEP_MODE_EVENTS_ONLY
+from spawns.handlers.base import (
+    TRIGGER_STEP_MODE_TRANSACTIONAL,
+    TRIGGER_STEP_MODES,
+)
 from spawns.handlers.registry import (
     ActorNotFoundError,
     HandlerNotFoundError,
@@ -35,6 +40,7 @@ class ScriptCommandError(ValueError):
 @dataclass(frozen=True)
 class ScriptCommandResult:
     command: str
+    mode: str
     events: tuple[GameEvent, ...]
 
 
@@ -122,9 +128,10 @@ class ScriptCommandRunner:
     """
     Execute one audited command while capturing all output as GameEvents.
 
-    A handler must explicitly declare ``trigger_step_mode = "events_only"``.
-    That declaration is reserved for handlers which do not perform external
-    side effects and whose database reads are safe inside a Trigger step.
+    A handler must explicitly opt into one of the audited Trigger-step modes.
+    Event-only handlers produce captured output without durable mutations.
+    Transactional handlers may mutate durable state, but every effect must be
+    covered by the caller's transaction and external work must wait for commit.
     """
 
     def execute(
@@ -196,13 +203,19 @@ class ScriptCommandRunner:
             command_type = "text"
             payload = {"text": rendered}
 
-        if (
-            getattr(handler, "trigger_step_mode", None)
-            != TRIGGER_STEP_MODE_EVENTS_ONLY
-        ):
+        handler_mode = getattr(handler, "trigger_step_mode", None)
+        if handler_mode not in TRIGGER_STEP_MODES:
             raise ScriptCommandError(
                 f"The '{command_token}' command is not safe for Trigger steps.",
                 code="command_not_step_safe",
+            )
+        if (
+            handler_mode == TRIGGER_STEP_MODE_TRANSACTIONAL
+            and not connection.in_atomic_block
+        ):
+            raise ScriptCommandError(
+                "Transactional Trigger-step commands require an active transaction.",
+                code="transaction_required",
             )
         if subject_type not in getattr(
             handler,
@@ -216,6 +229,8 @@ class ScriptCommandRunner:
         trigger_step_rejection = handler.validate_trigger_step_command(
             command=rendered,
             subject_type=subject_type,
+            subject_key=subject.key,
+            render_actor_key=render_actor.key,
         )
         if trigger_step_rejection is not None:
             message, code = trigger_step_rejection
@@ -253,6 +268,7 @@ class ScriptCommandRunner:
                     published_messages=captured_messages,
                     script_source=True,
                     capture_only=True,
+                    trigger_step=True,
                     resolved_actor=subject,
                     resolved_issuer=issuer,
                     resolved_runtime_world=runtime_world,
@@ -309,5 +325,6 @@ class ScriptCommandRunner:
         ]
         return ScriptCommandResult(
             command=rendered,
+            mode=handler_mode,
             events=tuple(events),
         )

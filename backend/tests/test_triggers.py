@@ -238,6 +238,32 @@ class TestCommandFallbackTriggers(WorldTestCase):
             self.player.inventory.filter(definition=item_definition).exists()
         )
 
+    def test_broker_failure_fallback_keeps_delayed_line_location_bound(self):
+        from spawns.triggers import _schedule_trigger_script_line_segments
+
+        with patch(
+            "spawns.tasks.execute_trigger_script_segments.apply_async",
+            side_effect=RuntimeError("broker unavailable"),
+        ), self.captureOnCommitCallbacks(execute=False) as callbacks:
+            errors = _schedule_trigger_script_line_segments(
+                actor=self.player,
+                line_segments=["say Delayed reaction."],
+                line_index=1,
+                issuer_scope=adv_consts.TRIGGER_SCOPE_ROOM,
+                defer_until_commit=True,
+            )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(callbacks), 1)
+        other_room = self.room.create_at("north")
+        self.player.room = other_room
+        self.player.save(update_fields=["room"])
+
+        with capture_game_messages() as messages:
+            callbacks[0]()
+
+        self.assertEqual(messages, [])
+
     def test_multiline_script_delay_is_configurable(self):
         self._create_room_trigger(
             script=(

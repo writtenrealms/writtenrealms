@@ -1,9 +1,11 @@
 from unittest.mock import patch
 
 import spawns.handlers  # noqa: F401
+from django.db import transaction
 
 from core.trigger_steps import SCRIPT_COMMAND_PROVENANCE_KEY
-from spawns.events import publish_events
+from spawns.events import GameEvent, publish_events
+from spawns.handlers.base import TRIGGER_STEP_MODE_TRANSACTIONAL
 from spawns.handlers.registry import dispatch_command, get_handler
 from spawns.script_commands import (
     MAX_SCRIPT_COMMAND_DEPTH,
@@ -129,6 +131,42 @@ class TestScriptCommandRunner(WorldTestCase):
 
         self.assertTrue(result.events)
 
+    def test_transactional_command_requires_an_enclosing_transaction(self):
+        destination = self.room.create_at("east")
+        destination_ref = (
+            f"room@{destination.x},{destination.y},{destination.z}"
+        )
+
+        with patch(
+            "spawns.script_commands.connection.in_atomic_block",
+            False,
+        ):
+            with self.assertRaises(ScriptCommandError) as raised:
+                ScriptCommandRunner().execute(
+                    issuer=self.room,
+                    subject=self.player,
+                    command=f"/transfer self {destination_ref}",
+                    render_actor=self.player,
+                    runtime_world=self.spawn_world,
+                )
+
+        self.assertEqual(raised.exception.code, "transaction_required")
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.room.id)
+
+        with transaction.atomic():
+            result = ScriptCommandRunner().execute(
+                issuer=self.room,
+                subject=self.player,
+                command=f"/transfer self {destination_ref}",
+                render_actor=self.player,
+                runtime_world=self.spawn_world,
+            )
+
+        self.assertEqual(result.mode, TRIGGER_STEP_MODE_TRANSACTIONAL)
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, destination.id)
+
     def test_scripted_command_output_skips_trigger_and_quest_subscribers(self):
         result = ScriptCommandRunner().execute(
             issuer=self.room,
@@ -182,6 +220,52 @@ class TestScriptCommandRunner(WorldTestCase):
             }
             for event in result.events
         ))
+
+    def test_scripted_transfer_lifecycle_reaches_structural_subscribers(self):
+        provenance = {
+            "source": "trigger_step",
+            "trigger_id": 17,
+        }
+        transfer_events = [
+            GameEvent(
+                type="affect.transfer",
+                recipients=[self.player.key],
+                data={
+                    "actor": {"key": self.player.key},
+                    SCRIPT_COMMAND_PROVENANCE_KEY: provenance,
+                },
+            ),
+            GameEvent(
+                type="notification./transfer.enter",
+                recipients=[],
+                data={
+                    "actor": {"key": self.player.key},
+                    SCRIPT_COMMAND_PROVENANCE_KEY: provenance,
+                },
+            ),
+        ]
+
+        with patch(
+            "spawns.trigger_subscriptions.dispatch_trigger_subscriptions_for_event"
+        ) as trigger_dispatch, patch(
+            "quests.subscriptions.dispatch_quest_subscriptions_for_event"
+        ) as quest_dispatch:
+            publish_events(transfer_events)
+
+        self.assertEqual(
+            [
+                call.kwargs["event_type"]
+                for call in trigger_dispatch.call_args_list
+            ],
+            ["notification./transfer.enter"],
+        )
+        self.assertEqual(
+            [
+                call.kwargs["event_type"]
+                for call in quest_dispatch.call_args_list
+            ],
+            ["affect.transfer"],
+        )
 
     def test_room_subject_is_preserved_in_command_provenance(self):
         result = ScriptCommandRunner().execute(

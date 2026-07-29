@@ -1798,10 +1798,11 @@ class TestBuilderTransfer(BuilderCommandTestCase):
         self.player.save(update_fields=["is_invisible"])
 
         with capture_game_messages() as messages:
-            dispatch_text_command(
-                self.player.id,
-                f"/transfer self {self._room_ref(destination)}",
-            )
+            with self.captureOnCommitCallbacks(execute=True):
+                dispatch_text_command(
+                    self.player.id,
+                    f"/transfer self {self._room_ref(destination)}",
+                )
 
         reaction_actor_keys = {
             message["message"].get("data", {}).get("actor", {}).get("key")
@@ -1825,10 +1826,14 @@ class TestBuilderTransfer(BuilderCommandTestCase):
             keywords="courier",
         )
         with capture_game_messages() as mob_messages:
-            dispatch_text_command(
-                self.player.id,
-                f"/transfer {transferred_mob.key} {self._room_ref(destination)}",
-            )
+            with self.captureOnCommitCallbacks(execute=True):
+                dispatch_text_command(
+                    self.player.id,
+                    (
+                        f"/transfer {transferred_mob.key} "
+                        f"{self._room_ref(destination)}"
+                    ),
+                )
 
         transferred_mob.refresh_from_db()
         watcher.refresh_from_db()

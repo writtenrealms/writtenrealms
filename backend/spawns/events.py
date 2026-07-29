@@ -22,9 +22,18 @@ from fastapi_app.game_ws import publish_to_player
 
 logger = logging.getLogger(__name__)
 
+FINAL_TRANSFER_ENTER_KEY = "_final_transfer_enter"
+TRANSFER_LOCATION_SEQUENCE_KEY = "_transfer_location_sequence"
+TRANSFER_RUNTIME_WORLD_KEY = "_transfer_runtime_world_id"
+TRANSFER_ENTER_EVENT_TYPE = "notification./transfer.enter"
+
 _captured_game_events: ContextVar[list[GameEvent] | None] = ContextVar(
     "captured_game_events",
     default=None,
+)
+_inherited_script_command_depth: ContextVar[int] = ContextVar(
+    "inherited_script_command_depth",
+    default=0,
 )
 
 
@@ -45,6 +54,87 @@ class GameEvent:
         if self.group:
             message["group"] = self.group
         return message
+
+
+def _with_inherited_script_command_depth(
+    event: GameEvent,
+    depth: int,
+) -> GameEvent:
+    try:
+        event_depth = max(
+            0,
+            int(event.data.get(SCRIPT_COMMAND_DEPTH_KEY) or 0),
+        )
+    except (TypeError, ValueError):
+        event_depth = 0
+    if event_depth >= depth:
+        return event
+    return GameEvent(
+        type=event.type,
+        recipients=event.recipients,
+        data={
+            **event.data,
+            SCRIPT_COMMAND_DEPTH_KEY: depth,
+        },
+        text=event.text,
+        group=event.group,
+        connection_id=event.connection_id,
+    )
+
+
+def _with_final_transfer_enter_markers(
+    events: list[GameEvent],
+) -> list[GameEvent]:
+    """Mark only the last transfer arrival per actor in one event batch."""
+    last_index_by_actor: dict[str, int] = {}
+    for index, event in enumerate(events):
+        if str(event.type or "").strip().lower() != TRANSFER_ENTER_EVENT_TYPE:
+            continue
+        actor = event.data.get("actor")
+        actor_key = actor.get("key") if isinstance(actor, dict) else None
+        if actor_key:
+            last_index_by_actor[str(actor_key)] = index
+    if not last_index_by_actor:
+        return events
+
+    marked_events: list[GameEvent] = []
+    for index, event in enumerate(events):
+        if str(event.type or "").strip().lower() != TRANSFER_ENTER_EVENT_TYPE:
+            marked_events.append(event)
+            continue
+        actor = event.data.get("actor")
+        actor_key = actor.get("key") if isinstance(actor, dict) else None
+        if not actor_key:
+            marked_events.append(event)
+            continue
+        marked_events.append(GameEvent(
+            type=event.type,
+            recipients=event.recipients,
+            data={
+                **event.data,
+                FINAL_TRANSFER_ENTER_KEY: (
+                    last_index_by_actor[str(actor_key)] == index
+                ),
+            },
+            text=event.text,
+            group=event.group,
+            connection_id=event.connection_id,
+        ))
+    return marked_events
+
+
+@contextmanager
+def inherit_script_command_depth(depth: int) -> Iterator[None]:
+    """Attach a bounded reaction-command depth to events published in scope."""
+    try:
+        normalized_depth = max(0, int(depth))
+    except (TypeError, ValueError):
+        normalized_depth = 0
+    token = _inherited_script_command_depth.set(normalized_depth)
+    try:
+        yield
+    finally:
+        _inherited_script_command_depth.reset(token)
 
 
 @contextmanager
@@ -74,7 +164,13 @@ def publish_events(
     Publish a list of events. If actor_key/connection_id is provided, only
     events targeting the actor will be pinned to that connection.
     """
-    event_list = list(events)
+    event_list = _with_final_transfer_enter_markers(list(events))
+    inherited_depth = _inherited_script_command_depth.get()
+    if inherited_depth:
+        event_list = [
+            _with_inherited_script_command_depth(event, inherited_depth)
+            for event in event_list
+        ]
     capture_sink = _captured_game_events.get()
     if capture_sink is not None:
         capture_sink.extend(event_list)
@@ -82,15 +178,24 @@ def publish_events(
 
     for event in event_list:
         message = event.to_message()
-        if isinstance(
-            event.data.get(SCRIPT_COMMAND_PROVENANCE_KEY),
-            dict,
+        if (
+            SCRIPT_COMMAND_DEPTH_KEY in event.data
+            or FINAL_TRANSFER_ENTER_KEY in event.data
+            or TRANSFER_LOCATION_SEQUENCE_KEY in event.data
+            or TRANSFER_RUNTIME_WORLD_KEY in event.data
+            or isinstance(
+                event.data.get(SCRIPT_COMMAND_PROVENANCE_KEY),
+                dict,
+            )
         ):
-            # Provenance is durable server metadata used for routing and
-            # auditing, not part of the player-facing command payload.
+            # Script depth and provenance are durable server metadata used for
+            # routing and auditing, not player-facing command payload.
             public_data = deepcopy(event.data)
             public_data.pop(SCRIPT_COMMAND_DEPTH_KEY, None)
             public_data.pop(SCRIPT_COMMAND_PROVENANCE_KEY, None)
+            public_data.pop(FINAL_TRANSFER_ENTER_KEY, None)
+            public_data.pop(TRANSFER_LOCATION_SEQUENCE_KEY, None)
+            public_data.pop(TRANSFER_RUNTIME_WORLD_KEY, None)
             message["data"] = public_data
         for recipient in event.recipients:
             recipient_connection_id = event.connection_id
@@ -107,16 +212,27 @@ def publish_events(
                 connection_id=recipient_connection_id,
             )
 
-        # A Trigger step may make an embodied subject speak or emote, but that
-        # authored behavior is not voluntary player input. Keep its visible
-        # output while preventing forced commands from progressing quests or
-        # recursively starting more Triggers.
-        if not isinstance(
+        # Speech/social output forced by a Trigger is not voluntary player
+        # input. Structural transfer events are different: the character
+        # really changed rooms, so destination reactions and location quest
+        # refreshes must observe that committed state change.
+        is_trigger_step_event = isinstance(
             event.data.get(SCRIPT_COMMAND_PROVENANCE_KEY),
             dict,
-        ):
-            # Late imports avoid trigger/state payload import cycles during
-            # app bootstrap.
+        )
+        event_type = str(event.type or "").strip().lower()
+        dispatch_trigger_event = (
+            not is_trigger_step_event
+            or event_type == "notification./transfer.enter"
+        )
+        dispatch_quest_event = (
+            not is_trigger_step_event
+            or event_type == "affect.transfer"
+        )
+
+        # Late imports avoid trigger/state payload import cycles during app
+        # bootstrap.
+        if dispatch_trigger_event:
             from spawns.trigger_subscriptions import (
                 dispatch_trigger_subscriptions_for_event,
             )
@@ -128,6 +244,7 @@ def publish_events(
                 connection_id=connection_id,
             )
 
+        if dispatch_quest_event:
             from quests.subscriptions import (
                 dispatch_quest_subscriptions_for_event,
             )
@@ -217,19 +334,17 @@ def flush_game_event_outbox(
 
         batches_examined += 1
         try:
-            for row in claimed_rows:
-                publisher(
-                    [
-                        GameEvent(
-                            type=row.event_type,
-                            recipients=list(row.recipients or []),
-                            data=deepcopy(row.data or {}),
-                            text=row.text,
-                            group=row.group,
-                            connection_id=row.connection_id,
-                        )
-                    ]
+            publisher([
+                GameEvent(
+                    type=row.event_type,
+                    recipients=list(row.recipients or []),
+                    data=deepcopy(row.data or {}),
+                    text=row.text,
+                    group=row.group,
+                    connection_id=row.connection_id,
                 )
+                for row in claimed_rows
+            ])
         except Exception as exc:
             backoff_seconds = min(300, 2 ** min(8, max(row.attempt_count for row in claimed_rows)))
             GameEventOutbox.objects.filter(

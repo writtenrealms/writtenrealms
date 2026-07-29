@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Callable
 import uuid
 
 from django.db import transaction
 
 from config import constants as adv_consts
+from spawns.events import (
+    FINAL_TRANSFER_ENTER_KEY,
+    TRANSFER_LOCATION_SEQUENCE_KEY,
+    TRANSFER_RUNTIME_WORLD_KEY,
+    capture_game_events,
+    enqueue_game_events,
+    flush_game_event_outbox,
+)
 from spawns.models import EventSubscriptionReceipt, Mob, Player
 
 
@@ -22,6 +31,19 @@ def execute_room_event_triggers(*args, **kwargs):
 
 
 TriggerSubscriptionHandler = Callable[[dict, str | None, str | None], None]
+
+
+@contextmanager
+def _release_trigger_gates_on_error(
+    claims: list[tuple[str, str]],
+):
+    try:
+        yield
+    except Exception:
+        from spawns.trigger_steps import release_trigger_gate_claims
+
+        release_trigger_gate_claims(claims)
+        raise
 
 
 def _extract_actor_key(event_data: dict, actor_key: str | None) -> str | None:
@@ -160,26 +182,144 @@ def _on_transfer_enter(
     actor_key: str | None,
     connection_id: str | None,
 ) -> None:
-    actor = _resolve_character(_extract_actor_key(event_data, actor_key))
-    if not actor:
-        return
+    gate_claims: list[tuple[str, str]] = []
+    with _release_trigger_gates_on_error(gate_claims), transaction.atomic():
+        if event_data.get(FINAL_TRANSFER_ENTER_KEY) is False:
+            return
+        actor = _resolve_character(_extract_actor_key(event_data, actor_key))
+        if not actor:
+            return
+        try:
+            event_runtime_world_id = int(
+                event_data.get(
+                    TRANSFER_RUNTIME_WORLD_KEY,
+                    event_data.get("runtime_world_id"),
+                )
+            )
+        except (TypeError, ValueError):
+            event_runtime_world_id = None
+        if (
+            event_runtime_world_id is not None
+            and actor.world_id != event_runtime_world_id
+        ):
+            return
+        if isinstance(actor, Player):
+            if not actor.in_game:
+                return
+            try:
+                event_location_sequence = int(
+                    event_data.get(
+                        TRANSFER_LOCATION_SEQUENCE_KEY,
+                        event_data.get("location_sequence"),
+                    )
+                )
+            except (TypeError, ValueError):
+                event_location_sequence = None
+            if (
+                event_location_sequence is not None
+                and int(actor.location_sequence or 0)
+                != event_location_sequence
+            ):
+                return
+        else:
+            event_location_sequence = None
+            if actor.is_pending_deletion:
+                return
 
-    room_id = None
-    destination = event_data.get("destination_room")
-    if isinstance(destination, dict):
-        room_id = destination.get("id")
-    if not room_id:
-        room_id = getattr(actor, "room_id", None)
-    if not room_id:
-        return
+        room_id = None
+        destination = event_data.get("destination_room")
+        if isinstance(destination, dict):
+            room_id = destination.get("id")
+        if not room_id:
+            room_id = getattr(actor, "room_id", None)
+        try:
+            room_id = int(room_id)
+        except (TypeError, ValueError):
+            return
 
-    execute_mob_event_triggers(
-        event=adv_consts.MOB_REACTION_EVENT_ENTERING,
-        actor=actor,
-        room=room_id,
-        connection_id=connection_id,
-        isolate_runtime_world=True,
-    )
+        if isinstance(actor, Player):
+            # Match typed-step lock order: runtime-room advisory lock, then
+            # Player. This prevents a concurrent movement from slipping
+            # between arrival validation and its reactions/aggro without
+            # introducing the Player -> advisory inversion that would
+            # deadlock against a simultaneous Trigger start.
+            from spawns.trigger_steps import lock_trigger_runtime_room
+
+            lock_trigger_runtime_room(
+                runtime_world_id=actor.world_id,
+                room_id=room_id,
+            )
+            actor = (
+                Player.objects.select_for_update()
+                .filter(pk=actor.id)
+                .first()
+            )
+            if actor is None:
+                return
+            if (
+                event_runtime_world_id is not None
+                and actor.world_id != event_runtime_world_id
+            ):
+                return
+            if (
+                not actor.in_game
+                or actor.room_id != room_id
+                or (
+                    event_location_sequence is not None
+                    and int(actor.location_sequence or 0)
+                    != event_location_sequence
+                )
+            ):
+                return
+
+        # Outbox delivery can be delayed, and one committed step may contain
+        # more than one transfer. React only to the actor's current arrival;
+        # historical intermediate destinations must not act on them remotely
+        # or scan their final room for aggression more than once.
+        if actor.room_id != room_id:
+            return
+
+        with capture_game_events() as reaction_events:
+            execute_mob_event_triggers(
+                event=adv_consts.MOB_REACTION_EVENT_ENTERING,
+                actor=actor,
+                room=room_id,
+                connection_id=connection_id,
+                isolate_runtime_world=True,
+                source_event_data=event_data,
+                capture_output=True,
+                gate_claim_collector=gate_claims,
+            )
+
+        derived_events = list(reaction_events)
+        if isinstance(actor, Player):
+            # Transfer commands publish their lifecycle before destination
+            # aggression. Queue the derived combat output transactionally so
+            # Trigger-step transfers never scan or publish while the original
+            # step still holds its resource locks.
+            from spawns.actions.combat import ScanRoomAggroAction
+
+            actor.refresh_from_db(
+                fields=["room", "location_sequence", "in_game", "world"],
+            )
+            if (
+                actor.in_game
+                and actor.room_id == room_id
+                and (
+                    event_location_sequence is None
+                    or int(actor.location_sequence or 0)
+                    == event_location_sequence
+                )
+            ):
+                aggro_result = ScanRoomAggroAction().execute(actor.id)
+                derived_events.extend(aggro_result.events)
+
+        if derived_events:
+            enqueue_game_events(derived_events)
+            transaction.on_commit(
+                flush_game_event_outbox,
+                robust=True,
+            )
 
 
 def _on_affect_death(

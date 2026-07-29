@@ -654,6 +654,16 @@ rows. A merchant purchase locks the affected Player, merchant runtime/stock,
 Item, and finally balance. Feature code must not debit first and then acquire an
 earlier aggregate lock.
 
+A mixed Trigger step follows the same rule even when its visible action order
+places a command before or after `debit_currency`. It locks the Trigger actor
+and bounded item/mob resources, preflights aggregate affordability, executes
+audited commands that do not branch on or mutate the wallet, and writes balance
+rows last. Step-safe `/transfer` is limited to that Trigger actor as its target;
+it cannot introduce an unplanned character lock before the final wallet phase.
+A transfer may serialize the player's pre-debit wallet in its full state
+snapshot, so the authoritative post-debit wallet event is appended after the
+authored action events.
+
 Player-to-player transfer is not part of the implemented service. A future
 transfer must lock both Player rows before either balance is changed. Locking a
 Player first serializes missing-row creation for that player; the database
@@ -1269,11 +1279,21 @@ Performance requirements:
 - All `debit_currency` actions in one typed Trigger step are aggregated into
   one wallet mutation, so work remains bounded by touched currencies rather
   than action count.
-- Typed steps phase item/mob mutations before all debits, and debits before
-  command/echo output. Mixed steps, including steps without currency, prelock
-  existing Mob then Item candidates consistently before balance rows are
-  acquired. Exact-one mob subjects for event-only `command` actions join the
-  same bounded Mob prelock. Immediate and delayed
+- Typed steps require item/mob mutations as an initial prefix, then allow
+  `debit_currency`, `command`, and `echo` to interleave in authored narrative
+  order. The runtime preflights the aggregate debit while holding the Player
+  lock, captures audited commands that neither branch on nor change the wallet,
+  and writes ordered balance rows last. The authoritative
+  `currency.balances_changed` event is emitted after the authored action events;
+  this supersedes any pre-debit wallet serialized by a full `/transfer`
+  snapshot. A failed command or transfer therefore rolls back without charging,
+  while insufficient funds prevent command execution. Mixed steps, including
+  steps without currency, prelock existing Mob then Item candidates consistently
+  before balance rows are acquired. Exact-one mob subjects for `command`
+  actions join the same bounded Mob prelock. Transactional `/transfer` is
+  restricted to the already identified Trigger actor as its target so it cannot
+  introduce an unplanned player/mob aggregate and balance rows remain the final
+  aggregate lock. Immediate and delayed
   Mob-triggered mutations lock the actor and bounded target-candidate union in
   ascending Mob id order. Immediate starts defer Item selection and locking
   until conditions, duplicate/cap checks, and the Trigger gate have passed.

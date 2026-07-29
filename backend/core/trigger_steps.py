@@ -703,28 +703,21 @@ def normalize_trigger_steps(
             )
             for action_index, action in enumerate(raw_actions)
         ]
-        action_phase = "mutations"
+        mutation_prefix_ended = False
         for action_index, action in enumerate(normalized_actions):
             action_type = action.get("type")
-            if action_type == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
-                if action_phase == "outputs":
-                    raise TriggerStepSpecError(
-                        f"{field_name}.actions[{action_index}] cannot debit "
-                        "currency after a command or echo; order actions as "
-                        "mutations, then debits, then command/echo output."
-                    )
-                action_phase = "debits"
-            elif action_type in {
+            if action_type in {
+                TRIGGER_STEP_ACTION_DEBIT_CURRENCY,
                 TRIGGER_STEP_ACTION_COMMAND,
                 TRIGGER_STEP_ACTION_ECHO,
             }:
-                action_phase = "outputs"
-            elif action_phase != "mutations":
+                mutation_prefix_ended = True
+            elif mutation_prefix_ended:
                 raise TriggerStepSpecError(
                     f"{field_name}.actions[{action_index}] cannot mutate "
-                    "items or mobs after a debit, command, or echo; order "
-                    "actions as mutations, then debits, then command/echo "
-                    "output."
+                    "items or mobs after a debit, command, or echo; item and "
+                    "mob mutations must precede all debit, command, and echo "
+                    "actions."
                 )
         grant_count = sum(
             int(action.get("count") or 1)

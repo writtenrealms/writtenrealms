@@ -45,6 +45,11 @@ Legend:
   nested `/cmd`.
 - `No`: the actor cannot run the command.
 
+This matrix describes ordinary direct and legacy-script issuer permissions.
+Typed Trigger `command` actions have their own narrower audited contract; for
+example, a player `trigger_actor` may execute the step-safe `/transfer self`
+form even though arbitrary player scripts cannot issue `/transfer`.
+
 | Command | Builder Player | Player Script | Mob Actor | Room Script | Zone Script | World Script |
 | --- | --- | --- | --- | --- | --- | --- |
 | `/load` | Direct | Script | Script | Script | No | No |
@@ -668,19 +673,20 @@ Format:
 
 Instantly moves a player or mob without using ordinary movement. Transfer does
 not spend stamina or traverse doors, and it does not run movement policy
-triggers. A direction selector still reads the issuer room's exit topology.
-Moving a character also finishes that character's active combat encounters
-before the room changes.
+triggers. A direction selector reads the executing actor or subject's room
+topology. Moving a character also finishes that character's active combat
+encounters before the room changes, except for the typed Trigger-step PvP
+restriction described below.
 
 Target behavior:
 
 - `player.<id>` selects a player in the current live runtime world
 - an exact active player name can select a player elsewhere in that same
   runtime world; prefixes never select remote players
-- `mob.<id>` selects a mob in the issuer's current room
+- `mob.<id>` selects a mob in the executing actor or subject's current room
 - an untyped keyword or ordinal such as `guard` or `2.guard` uses normal local
-  character order (players first, then mobs) in the issuer's room
-- `self` selects an embodied player or mob issuer
+  character order (players first, then mobs) in that room
+- `self` selects an embodied player or mob execution subject
 
 Player targets must currently be in game. This prevents scripts from producing
 ghost room notifications or starting combat for disconnected characters.
@@ -693,8 +699,9 @@ Destination behavior:
 - `room@x,y,z` is the portable form and should be used in trigger YAML
 - a bare numeric selector is the WR1-compatible, world-relative room id
 - `room.<id>` selects an explicit WR2 room database id for interactive testing
-- a direction such as `north` or `n` uses the issuer room's exit
-- `here` means the issuer's current room
+- a direction such as `north` or `n` uses the executing actor or subject's room
+  exit
+- `here` means that actor or subject's current room
 
 Examples:
 
@@ -709,8 +716,63 @@ Direct use requires a builder player. Mob and room issuers require a trusted
 script context. Player-issued scripts cannot use `/transfer`; room triggers
 should dispatch it through `/cmd room` and pass the triggering character with
 `{{ actor_key }}`. Transfer sends a complete `affect.transfer` room snapshot to
-player targets, refreshes combat-effect state, and runs destination mob
-`entering` reactions in the same runtime world.
+player targets that actually change rooms and refreshes combat-effect state.
+After a moved player or mob arrives, destination mob `entering` reactions run
+in the same runtime world; a moved player still there after those reactions
+also runs hostile-mob aggro. A same-room player transfer returns a normal look
+snapshot, and no same-room transfer runs arrival work.
+
+Typed Trigger `command` actions use a narrower audited contract than ordinary
+player scripts. They may transfer only the Trigger actor, but any supported
+step subject can issue the command. These are the two canonical forms:
+
+```yaml
+- type: command
+  subject: trigger_room
+  command: /transfer {{ actor_key }} room@10,4,0
+
+- type: command
+  subject: trigger_actor
+  command: /transfer self room@10,4,0
+```
+
+An exact-one selected mob can also transfer the Trigger actor by naming that
+actor explicitly:
+
+```yaml
+- type: command
+  subject:
+    type: mob
+    room: trigger_room
+    mob: mobdefinition.charon
+  command: /transfer {{ actor_key }} room@10,4,0
+```
+
+`self` and `me` are accepted only when the resolved command subject is the
+Trigger actor. That is normally `subject: trigger_actor`; a selected-mob
+subject can also qualify when that exact mob is itself the Mob Trigger actor.
+Other room or selected-mob subjects must use the rendered actor key and cannot
+transfer themselves or another character. Relative `here` and direction
+destinations use the subject's room. Thus `trigger_room` uses the original
+Trigger room, `trigger_actor` uses the actor's current room, and a selected mob
+uses that mob's room.
+
+Do not wrap a typed step command in `/cmd`. Always use `room@x,y,z` in authored
+Trigger YAML so export/import preserves the destination. The room change and
+all transfer output participate in the step transaction and roll back if a
+later action fails. A typed transfer that would move a player in active PvP
+fails with `target_busy` and rolls back the whole step; ordinary active
+encounters are finished when the move succeeds.
+
+For an actual move, the durable transfer lifecycle event starts destination
+`entering` reactions after the step commits; a moved player still in that
+destination afterward then runs aggro. Their output is captured and durably
+enqueued outside the original step locks. Within one event batch, only the
+actor's final transfer arrival runs this work. A later player transfer also
+invalidates an earlier pending player arrival; every delivery rechecks the
+actor's current runtime world and room. Inherited scripted reactions remain
+subject to the eight-layer depth limit. A same-room transfer has no arrival
+lifecycle event.
 
 WR2 does not accept WR1's optional trailing command on `/transfer`. Put custom
 feedback before the transfer as explicit script commands. For immediate ordered
@@ -721,8 +783,12 @@ script: /cmd room -- /send {{ actor_key }} -- The wall folds around you. && /cmd
 ```
 
 This explicit form still emits transfer's standard disappearance notification.
-Exporters that relied on WR1's trailing command to suppress that text should
-flag the script for an authoring review.
+In typed steps, express the same sequence with separate `command` actions;
+after an initial item/mob mutation prefix, commands may interleave with
+`debit_currency` and `echo` in authored narrative order. A debit's authoritative
+wallet state event follows all authored action events. Exporters that relied on
+WR1's trailing command to suppress that text should flag the script for an
+authoring review.
 
 ### `/reset`
 
