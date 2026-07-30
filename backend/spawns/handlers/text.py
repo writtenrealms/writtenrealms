@@ -17,8 +17,14 @@ from spawns.handlers.permissions import (
     can_execute_builder_command,
 )
 from spawns.handlers.registry import register_handler, resolve_text_handler
-from spawns.request_segments import append_request_segment
-from spawns.triggers import execute_command_fallback_trigger
+from spawns.request_segments import (
+    append_request_segment,
+    normalize_request_segment,
+)
+from spawns.triggers import (
+    command_trigger_result_message,
+    execute_command_fallback_trigger,
+)
 
 
 def _unknown_command_text(raw_text: str) -> str:
@@ -51,6 +57,18 @@ def _redispatch_payload(
     return payload
 
 
+def _request_correlation(ctx: CommandContext) -> dict[str, str]:
+    request_id = ctx.payload.get("_request_id")
+    if not request_id:
+        return {}
+    return {
+        "request_id": str(request_id),
+        "request_segment": normalize_request_segment(
+            ctx.payload.get("_request_segment")
+        ),
+    }
+
+
 @register_handler
 class TextCommandHandler(CommandHandler):
     """
@@ -76,7 +94,12 @@ class TextCommandHandler(CommandHandler):
             {
                 "type": "cmd.history.error",
                 "text": error,
-                "data": {"error": error, "code": code, **data},
+                "data": {
+                    "error": error,
+                    "code": code,
+                    **data,
+                    **_request_correlation(ctx),
+                },
             }
         )
 
@@ -164,6 +187,7 @@ class TextCommandHandler(CommandHandler):
                     "index": index,
                     "command": resolved_text,
                     "reference": raw_text,
+                    **_request_correlation(ctx),
                 },
             }
         )
@@ -200,6 +224,7 @@ class TextCommandHandler(CommandHandler):
                         "error": result.error,
                         "code": result.code,
                         "chain": result.chain,
+                        **_request_correlation(ctx),
                     },
                 }
             )
@@ -216,6 +241,7 @@ class TextCommandHandler(CommandHandler):
                 "data": {
                     "command": raw_text,
                     "resolved": result.text,
+                    **_request_correlation(ctx),
                 },
             }
         )
@@ -246,14 +272,30 @@ class TextCommandHandler(CommandHandler):
 
         from spawns.handlers.registry import dispatch_command
 
+        request_segments = [
+            append_request_segment(
+                ctx.payload.get("_request_segment"),
+                segment_index,
+            )
+            for segment_index in range(len(segments))
+        ]
+        request_id = ctx.payload.get("_request_id")
+        if request_id:
+            ctx.publish(
+                {
+                    "type": "cmd.request.segments",
+                    "data": {
+                        "request_id": str(request_id),
+                        "request_segments": request_segments,
+                    },
+                }
+            )
+
         for segment_index, segment in enumerate(segments):
             payload = dict(ctx.payload)
             payload["text"] = segment
             payload["suppress_history"] = True
-            payload["_request_segment"] = append_request_segment(
-                ctx.payload.get("_request_segment"),
-                segment_index,
-            )
+            payload["_request_segment"] = request_segments[segment_index]
             dispatch_command(
                 command_type="text",
                 actor_type=ctx.actor_type,
@@ -322,16 +364,23 @@ class TextCommandHandler(CommandHandler):
                             actor=ctx.actor,
                             text=raw_text,
                             connection_id=ctx.connection_id,
+                            request_id=ctx.payload.get("_request_id"),
+                            request_segment=ctx.payload.get(
+                                "_request_segment",
+                                "r",
+                            ),
                         )
                         if trigger_result.handled:
-                            if trigger_result.feedback:
-                                ctx.publish(
-                                    {
-                                        "type": "cmd.text.trigger",
-                                        "text": trigger_result.feedback,
-                                        "data": {"text": trigger_result.feedback},
-                                    }
-                                )
+                            response = command_trigger_result_message(
+                                trigger_result,
+                                request_id=ctx.payload.get("_request_id"),
+                                request_segment=ctx.payload.get(
+                                    "_request_segment",
+                                    "r",
+                                ),
+                            )
+                            if response is not None:
+                                ctx.publish(response)
                             return
 
                     from spawns.handlers.socials import handle_dynamic_social_command

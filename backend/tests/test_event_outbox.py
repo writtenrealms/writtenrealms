@@ -15,6 +15,7 @@ from spawns.actions.combat import resolve_due_character_effects
 from spawns.actions.movement import ChangeRoomAction
 from spawns.events import (
     GameEvent,
+    PRIVATE_CONTROL_EVENT_KEY,
     enqueue_game_events,
     flush_game_event_outbox,
     publish_events,
@@ -27,6 +28,37 @@ from tests.utils import capture_game_messages, create_active_effect
 
 
 class TestGameEventOutbox(WorldTestCase):
+    def test_private_control_event_is_not_dispatched_to_game_subscribers(self):
+        event = GameEvent(
+            type="cmd.trigger.accepted",
+            recipients=[self.player.key],
+            connection_id="connection.original",
+            data={
+                PRIVATE_CONTROL_EVENT_KEY: True,
+                "request_id": str(uuid.uuid4()),
+                "status": "accepted",
+            },
+        )
+
+        with capture_game_messages() as messages, patch(
+            "spawns.trigger_subscriptions.dispatch_trigger_subscriptions_for_event",
+        ) as trigger_dispatch, patch(
+            "quests.subscriptions.dispatch_quest_subscriptions_for_event",
+        ) as quest_dispatch:
+            publish_events([event])
+
+        trigger_dispatch.assert_not_called()
+        quest_dispatch.assert_not_called()
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(
+            messages[0]["connection_id"],
+            "connection.original",
+        )
+        self.assertNotIn(
+            PRIVATE_CONTROL_EVENT_KEY,
+            messages[0]["message"]["data"],
+        )
+
     def test_outbox_insert_failure_rolls_back_effect_pulse(self):
         self.spawn_world.lifecycle = adv_consts.WORLD_LIFECYCLE_RUNNING
         self.spawn_world.save(update_fields=["lifecycle"])

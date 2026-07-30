@@ -666,16 +666,6 @@ def normalize_trigger_steps(
             minimum=0,
             maximum=MAX_TRIGGER_STEP_DELAY_SECONDS,
         )
-        if step_index == 0 and after_seconds != 0:
-            raise TriggerStepSpecError(
-                "spec.steps[0].after_seconds must be 0 so the initial step can "
-                "run atomically with trigger conditions."
-            )
-        if step_index > 0 and after_seconds == 0:
-            raise TriggerStepSpecError(
-                f"{field_name}.after_seconds must be positive; combine immediate "
-                "actions into the preceding step."
-            )
         cumulative_delay_seconds += after_seconds
         if cumulative_delay_seconds > MAX_TRIGGER_SEQUENCE_DURATION_SECONDS:
             raise TriggerStepSpecError(

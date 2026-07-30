@@ -331,8 +331,10 @@ For the full slash command matrix and command-by-command reference, see
 
 `spec.steps` is a small typed sequence for effects that unfold over time. Each
 `after_seconds` value is authored by the builder and is measured from the
-previous step. The first step must use `0`; later steps must use a positive
-value.
+previous step. The first step may use `0` to act immediately or a positive
+value to pause before the world responds. Later steps may also use `0`: they
+start promptly after the preceding step commits, but remain a separate
+transaction and failure boundary.
 
 This is the complete barley-growth sequence. Its portable slugs mirror the
 plural quantities represented by each definition:
@@ -468,9 +470,12 @@ The complete interaction requires six authored item definitions:
 - `itemdefinition.barley-mature-plants`
 - `itemdefinition.harvested-barley`
 
-The initial step checks the trigger conditions, consumes the seed, spawns the
+At invocation, the Trigger checks its conditions and commits the run. Because
+this example's first delay is `0`, it also consumes the seed, spawns the
 seedling, records its exact runtime item id as `crop`, and queues the echo in
-one database transaction. If any action fails, none of that step takes effect.
+that same database transaction. If any action fails, none of that step takes
+effect. With a positive first delay, invocation commits only the eligible run
+and its due time; the first authored actions execute later.
 
 Later steps are durable database work. The offsets above mean `t+0`, `t+20`,
 `t+40`, and `t+60`, even if a worker runs one step late. The sequence remains
@@ -479,6 +484,14 @@ or logs out. A due step normally runs within one game-heartbeat interval; this
 is near-real-time scheduling rather than an exact wall-clock guarantee. After
 worker downtime or backlog, several overdue steps may catch up in one bounded
 worker pass, so their echoes can arrive close together.
+
+When a later step uses `after_seconds: 0`, the runtime queues a continuation
+for that exact run and step as soon as the preceding step commits. It therefore
+does not intentionally wait for the next heartbeat. The periodic worker still
+finds the persisted due row if that queue delivery is lost. Use separate
+zero-delay steps when effects should happen back-to-back but must not share one
+atomic rollback boundary; put actions in one step when they must all succeed
+or fail together.
 
 The `harvest` room action is visible on a full room view only while mature
 barley is present. Scheduled item deltas do not recompute viewer-specific room
@@ -523,6 +536,12 @@ player's current room rather than notifying the room where the Trigger began.
 Invisible or logged-out players receive the private result without a room
 message that would reveal them.
 
+A condition checked when the command is accepted does not reserve a delayed
+charge. The player may spend the obols before that step becomes due. In that
+case the debit step rolls back and the sequence is cancelled with safe private
+feedback. Use `after_seconds: 0` for the debit when accepting payment must
+take the money as part of the initial transaction.
+
 ### Running Commands From Steps
 
 Use one `command` action when a timed step should have the Trigger room, the
@@ -534,7 +553,7 @@ instruction, and transfers that player:
 
 ```yaml
 steps:
-  - after_seconds: 0
+  - after_seconds: 2
     actions:
       - type: command
         subject:
@@ -542,16 +561,22 @@ steps:
           room: trigger_room
           mob: mobdefinition.charon
         command: emote grunts satisfactorily.
+  - after_seconds: 2
+    actions:
       - type: debit_currency
         actor: trigger_actor
         currency: obol
         amount: 10
+  - after_seconds: 2
+    actions:
       - type: command
         subject:
           type: mob
           room: trigger_room
           mob: mobdefinition.charon
         command: say Get on board.
+  - after_seconds: 2
+    actions:
       - type: command
         subject: trigger_room
         command: /transfer {{ actor_key }} room@10,4,0
@@ -699,8 +724,16 @@ typed sequences in one runtime world; another start returns
 Each step is atomic. With `on_step_error: cancel`, a missing or harvested bound
 item, an insufficient currency balance, an unavailable command subject, or a
 rejected command rolls back that entire step and cancels the remaining
-sequence. Completed earlier steps stay completed. Put actions that must
-succeed or fail together in the same step.
+sequence. Completed earlier steps stay completed. For an initiating player
+command, acceptance, completion, rejection, and later cancellation update that
+command input without becoming room prose. A failed player run separately
+sends safe private cancellation prose to the player's current connection, even
+after a reconnect, when the run came from a player command. Event reaction
+runs remain silent on cancellation. None of these lifecycle messages activates
+other Triggers or quests. When one command starts multiple matching sequences,
+only the first successful run owns its correlated input status; failures from
+the others still send the safe private cancellation prose. Put actions that
+must succeed or fail together in the same step.
 
 `set_mob.mob` uses a portable `mobdefinition.<slug>` ref. Its optional `where`
 uses the query-free candidate subset of the shared condition DSL, evaluated
@@ -918,7 +951,7 @@ command with the Trigger actor as its explicit target:
   command: /transfer {{ actor_key }} room@10,4,0
 ```
 
-Any supported subject may issue `/transfer`; the initial step-safe contract
+Any supported subject may issue `/transfer`; the typed-step contract
 restricts the target, not the subject. A builder cannot use a step command to
 select an arbitrary bystander player or mob. `self` and `me` are accepted only
 when the resolved command subject is the Trigger actor. Other subjects must use

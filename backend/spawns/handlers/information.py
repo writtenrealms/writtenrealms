@@ -29,7 +29,10 @@ from spawns.handlers.registry import (
     register_handler,
     resolve_text_handler,
 )
-from spawns.triggers import execute_command_fallback_trigger
+from spawns.triggers import (
+    command_trigger_result_message,
+    execute_command_fallback_trigger,
+)
 
 
 @register_handler
@@ -94,16 +97,23 @@ class InspectHandler(CommandHandler):
                 actor=ctx.actor,
                 text=ctx.payload.get("raw_text", "inspect"),
                 connection_id=ctx.connection_id,
+                request_id=ctx.payload.get("_request_id"),
+                request_segment=ctx.payload.get(
+                    "_request_segment",
+                    "r",
+                ),
             )
             if trigger_result.handled:
-                if trigger_result.feedback:
-                    ctx.publish(
-                        {
-                            "type": "cmd.text.trigger",
-                            "text": trigger_result.feedback,
-                            "data": {"text": trigger_result.feedback},
-                        }
-                    )
+                response = command_trigger_result_message(
+                    trigger_result,
+                    request_id=ctx.payload.get("_request_id"),
+                    request_segment=ctx.payload.get(
+                        "_request_segment",
+                        "r",
+                    ),
+                )
+                if response is not None:
+                    ctx.publish(response)
                 return
 
         opportunities = available_room_prompt_opportunities_for_room(

@@ -1,4 +1,7 @@
+import uuid
+
 from config import constants as adv_consts
+from spawns.handlers.registry import dispatch_command
 from spawns.models import Alias
 from tests.base import WorldTestCase
 from tests.utils import capture_game_messages, dispatch_text_command
@@ -96,6 +99,34 @@ class TestAliasCommands(WorldTestCase):
 
         error_message = self._message_by_type(messages, "cmd.kill.error")
         self.assertIsNotNone(error_message)
+
+    def test_alias_resolution_preserves_command_receipt_identity(self):
+        dispatch_text_command(self.player.id, "alias x = look")
+        request_id = uuid.uuid4()
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                payload={
+                    "text": "x",
+                    "_request_id": str(request_id),
+                    "_request_segment": "r.2",
+                },
+            )
+
+        resolve_message = self._message_by_type(
+            messages,
+            "cmd.alias.resolve",
+        )
+        self.assertEqual(
+            resolve_message["data"]["request_id"],
+            str(request_id),
+        )
+        self.assertEqual(
+            resolve_message["data"]["request_segment"],
+            "r.2",
+        )
 
     def test_player_alias_can_override_builtin_loot_shortcut(self):
         dispatch_text_command(self.player.id, "alias loot = inventory")

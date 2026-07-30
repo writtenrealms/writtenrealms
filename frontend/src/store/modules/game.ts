@@ -4,6 +4,17 @@ import type {
   CurrencyBalancesChangedData,
   PlayerEconomy,
 } from "@/core/economy";
+import {
+  COMMAND_RECEIPT_TIMEOUT_MS,
+  commandResolution,
+  commandResolutionEchoIndex,
+  commandRequestId,
+  commandRequestSegments,
+  commandTerminalResult,
+  createCommandRequestId,
+  initialCommandReceipt,
+  transitionCommandReceipt,
+} from "@/core/commandReceipt";
 import _ from "lodash";
 import router from "@/router";
 
@@ -15,6 +26,55 @@ const MESSAGE_LIMIT = 200;
 const TRIGGER_ITEMS_CHANGED_MESSAGE = "notification.trigger.items_changed";
 const TRIGGER_MOBS_CHANGED_MESSAGE = "notification.trigger.mobs_changed";
 const ABILITY_PREPARATIONS_UPDATE_MESSAGE = "player.ability_preparations.update";
+const COMMAND_REQUEST_QUEUED_MESSAGE = "cmd.request.queued";
+const COMMAND_REQUEST_COMPLETED_MESSAGE = "cmd.request.completed";
+const TRIGGER_ACCEPTED_MESSAGE = "cmd.trigger.accepted";
+const TRIGGER_COMPLETED_MESSAGE = "cmd.trigger.completed";
+const TRIGGER_CANCELLED_MESSAGE = "cmd.trigger.cancelled";
+const TRIGGER_REJECTED_MESSAGE = "cmd.trigger.rejected";
+
+const commandReceiptTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+const clearCommandReceiptTimer = (requestId: string, timerName: string) => {
+  const key = `${requestId}:${timerName}`;
+  const timer = commandReceiptTimers.get(key);
+  if (timer) {
+    clearTimeout(timer);
+    commandReceiptTimers.delete(key);
+  }
+};
+
+const clearCommandReceiptTimers = (requestId?: string) => {
+  for (const [key, timer] of commandReceiptTimers) {
+    if (!requestId || key.startsWith(`${requestId}:`)) {
+      clearTimeout(timer);
+      commandReceiptTimers.delete(key);
+    }
+  }
+};
+
+const scheduleCommandReceiptTransition = (
+  commit,
+  requestId: string,
+  timerName: string,
+  delay: number,
+  transition,
+) => {
+  const key = `${requestId}:${timerName}`;
+  const existingTimer = commandReceiptTimers.get(key);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
+  }
+  const timer = setTimeout(() => {
+    if (commandReceiptTimers.get(key) !== timer) return;
+    commandReceiptTimers.delete(key);
+    commit("command_receipt_update", {
+      request_id: requestId,
+      ...transition,
+    });
+  }, delay);
+  commandReceiptTimers.set(key, timer);
+};
 
 const itemKey = (item: any): string => String(item?.key ?? "");
 
@@ -137,6 +197,8 @@ const set_initial_state = () => {
     is_connected: false,
     websocket: null,
     messages: [],
+    received_event_ids: {},
+    received_event_id_order: [],
 
     // We want to keep track of the last received message for the various
     // message types, so that for example we only make the most recent look rom
@@ -226,6 +288,133 @@ const receiveMessage = async ({
 }) => {
   /* Main process for receiving messages */
   const message_data = JSON.parse(event.data);
+  const eventId = message_data?.data?._event_id;
+  if (eventId && state.received_event_ids[eventId]) {
+    return;
+  }
+  if (eventId) {
+    commit("event_id_seen", eventId);
+  }
+  const requestId = commandRequestId(message_data);
+  const resolution = commandResolution(message_data);
+  const requestSegments = commandRequestSegments(message_data);
+
+  if (resolution) {
+    const echoIndex = commandResolutionEchoIndex(state.messages, resolution);
+    if (echoIndex !== -1) {
+      const echoRequestId = state.messages[echoIndex]?.request_id;
+      if (echoRequestId) {
+        clearCommandReceiptTimer(echoRequestId, "unconfirmed");
+      }
+      commit("command_echo_resolve", {
+        index: echoIndex,
+        resolution: message_data,
+      });
+      commit("last_message_set", message_data);
+      return;
+    }
+  }
+
+  if (requestSegments) {
+    clearCommandReceiptTimer(requestSegments.requestId, "unconfirmed");
+    for (const requestSegment of requestSegments.requestSegments) {
+      commit("command_receipt_update", {
+        request_id: requestSegments.requestId,
+        request_segment: requestSegment,
+        segment_status: "accepted",
+      });
+    }
+    return;
+  }
+
+  // Receipt events update the locally echoed command in place. Gateway and
+  // accepted lifecycle messages are transport control frames, not prose.
+  if (message_data.type === COMMAND_REQUEST_QUEUED_MESSAGE) {
+    if (requestId) {
+      clearCommandReceiptTimer(requestId, "unconfirmed");
+      commit("command_receipt_update", {
+        request_id: requestId,
+        phase: "received",
+      });
+    }
+    return;
+  }
+
+  if (message_data.type === TRIGGER_ACCEPTED_MESSAGE) {
+    if (requestId) {
+      clearCommandReceiptTimer(requestId, "unconfirmed");
+      commit("command_receipt_update", {
+        request_id: requestId,
+        request_segment: message_data.data?.request_segment,
+        segment_status: "accepted",
+      });
+    }
+    return;
+  }
+
+  if (message_data.type === TRIGGER_COMPLETED_MESSAGE) {
+    if (requestId) {
+      clearCommandReceiptTimers(requestId);
+      commit("command_receipt_update", {
+        request_id: requestId,
+        request_segment: message_data.data?.request_segment,
+        segment_status: "completed",
+      });
+    }
+    return;
+  }
+
+  if (message_data.type === TRIGGER_CANCELLED_MESSAGE) {
+    if (requestId) {
+      clearCommandReceiptTimers(requestId);
+      commit("command_receipt_update", {
+        request_id: requestId,
+        request_segment: message_data.data?.request_segment,
+        segment_status: "cancelled",
+        message: message_data.data?.message,
+      });
+    }
+    return;
+  }
+
+  if (message_data.type === TRIGGER_REJECTED_MESSAGE) {
+    if (requestId) {
+      clearCommandReceiptTimers(requestId);
+      commit("command_receipt_update", {
+        request_id: requestId,
+        request_segment: message_data.data?.request_segment,
+        segment_status: "rejected",
+        message: message_data.data?.message || message_data.text,
+      });
+    }
+    if (!message_data.text) {
+      return;
+    }
+  } else if (
+    requestId &&
+    message_data.data?.code === "command_delivery_unconfirmed"
+  ) {
+    clearCommandReceiptTimers(requestId);
+    commit("command_receipt_update", {
+      request_id: requestId,
+      phase: "unconfirmed",
+      message: message_data.data?.error || message_data.text,
+    });
+  } else {
+    const terminalResult = commandTerminalResult(message_data);
+    if (terminalResult) {
+      clearCommandReceiptTimers(terminalResult.requestId);
+      commit("command_receipt_update", {
+        request_id: terminalResult.requestId,
+        request_segment: terminalResult.requestSegment,
+        segment_status: terminalResult.segmentStatus,
+        message: terminalResult.message,
+      });
+      if (message_data.type === COMMAND_REQUEST_COMPLETED_MESSAGE) {
+        return;
+      }
+    }
+  }
 
   // Keep track of communication messages for the coms log
   const com_messages = [
@@ -960,17 +1149,33 @@ const actions = {
 
     const onerror = (error) => {
       console.error('WebSocket Error:', error);
+      commit("command_receipts_unconfirm_pending");
     };
 
-    commit("openWS", { onopen, onmessage, onerror });
+    const onclose = () => {
+      commit("connected_clear");
+      commit("command_receipts_unconfirm_pending");
+    };
+
+    commit("openWS", { onopen, onmessage, onerror, onclose });
   },
 
   sendWSMessage: async ({ rootState, state }, payload) => {
     console.log(`SEND ${payload.type}`);
     console.log(payload);
-    payload.token = rootState.auth.token;
-    if (state.websocket) {
-      state.websocket.send(JSON.stringify(payload));
+    const websocket = state.websocket;
+    if (!websocket || websocket.readyState !== 1) {
+      return false;
+    }
+    try {
+      websocket.send(JSON.stringify({
+        ...payload,
+        token: rootState.auth.token,
+      }));
+      return true;
+    } catch (error) {
+      console.error("Unable to send WebSocket message:", error);
+      return false;
     }
   },
 
@@ -1021,21 +1226,59 @@ const actions = {
       }
     }
 
-    const message = { type: "cmd.text", text: cmd, echo: true };
+    const resolutionKind = isHistoryReplay
+      ? "history"
+      : (hasKnownAlias ? "alias" : null);
+    const shouldEcho = !silent;
 
-    // Echo user input back to console
-    if (!silent && !isHistoryReplay && !hasKnownAlias) {
-      commit("message_add", message);
-    }
-
-    // Quit special case
+    // Quit is a connection operation, not a queued game command. Keep its
+    // existing echo without starting a receipt timer that cannot be fulfilled.
     if (cmd.toLowerCase() === "quit") {
+      if (shouldEcho) {
+        commit("message_add", { type: "cmd.text", text: cmd, echo: true });
+      }
       dispatch("sendWSMessage", { type: "system.disconnect" });
       commit("full_screen_message_set", "Disconnecting...");
       return;
     }
 
-    dispatch("sendWSMessage", message);
+    const requestId = createCommandRequestId();
+    const wireMessage = {
+      type: "cmd.text",
+      text: cmd,
+      echo: true,
+      request_id: requestId,
+    };
+
+    if (shouldEcho) {
+      commit("message_add", {
+        ...wireMessage,
+        command_receipt: initialCommandReceipt(),
+        ...(resolutionKind ? {
+          command_resolution: {
+            kind: resolutionKind,
+            original_text: cmd.trim(),
+            resolved: false,
+          },
+        } : {}),
+      });
+      scheduleCommandReceiptTransition(
+        commit,
+        requestId,
+        "unconfirmed",
+        COMMAND_RECEIPT_TIMEOUT_MS,
+        { phase: "unconfirmed" },
+      );
+    }
+
+    const sent = await dispatch("sendWSMessage", wireMessage);
+    if (!sent && shouldEcho) {
+      clearCommandReceiptTimers(requestId);
+      commit("command_receipt_update", {
+        request_id: requestId,
+        phase: "unconfirmed",
+      });
+    }
     if (state.hint) {
       commit("hint_clear");
     }
@@ -1044,9 +1287,31 @@ const actions = {
   },
 
   cmd_structured: async ({ dispatch, commit, state }, payload) => {
-    payload.echo = true;
-    commit("message_add", payload);
-    dispatch("sendWSMessage", payload);
+    const requestId = createCommandRequestId();
+    const wirePayload = {
+      ...payload,
+      echo: true,
+      request_id: requestId,
+    };
+    commit("message_add", {
+      ...wirePayload,
+      command_receipt: initialCommandReceipt(),
+    });
+    scheduleCommandReceiptTransition(
+      commit,
+      requestId,
+      "unconfirmed",
+      COMMAND_RECEIPT_TIMEOUT_MS,
+      { phase: "unconfirmed" },
+    );
+    const sent = await dispatch("sendWSMessage", wirePayload);
+    if (!sent) {
+      clearCommandReceiptTimers(requestId);
+      commit("command_receipt_update", {
+        request_id: requestId,
+        phase: "unconfirmed",
+      });
+    }
     if (state.hint) {
       commit("hint_clear");
     }
@@ -1121,10 +1386,101 @@ const mutations = {
     state.messages.push(historyMessage);
     const messages_length = state.messages.length;
     if (messages_length > MESSAGE_LIMIT) {
+      const removedMessages = state.messages.slice(
+        0,
+        messages_length - MESSAGE_LIMIT,
+      );
+      for (const removedMessage of removedMessages) {
+        if (removedMessage.request_id) {
+          clearCommandReceiptTimers(removedMessage.request_id);
+        }
+      }
       state.messages = state.messages.slice(
         messages_length - MESSAGE_LIMIT,
         messages_length
       );
+    }
+  },
+
+  command_receipt_update: (state, payload) => {
+    const requestId = payload?.request_id;
+    if (!requestId) return;
+    for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+      const message = state.messages[index];
+      if (
+        message.echo &&
+        message.request_id === requestId &&
+        message.command_receipt
+      ) {
+        message.command_receipt = transitionCommandReceipt(
+          message.command_receipt,
+          payload,
+        );
+        return;
+      }
+    }
+  },
+
+  command_echo_resolve: (state, payload) => {
+    const message = state.messages[payload?.index];
+    const resolution = payload?.resolution;
+    const resolutionData = commandResolution(resolution);
+    if (
+      !message?.echo ||
+      !resolution?.text ||
+      !resolutionData
+    ) {
+      return;
+    }
+    message.type = resolution.type;
+    message.text = resolution.text;
+    message.data = _.cloneDeep(resolution.data || {});
+    message.command_resolution = {
+      ...(message.command_resolution || {}),
+      kind: resolutionData.kind,
+      original_text: resolutionData.originalText,
+      resolved: true,
+      resolved_at: Date.now(),
+    };
+    if (message.command_receipt) {
+      message.command_receipt = transitionCommandReceipt(
+        message.command_receipt,
+        { phase: "received" },
+      );
+    }
+  },
+
+  command_receipts_unconfirm_pending: (state) => {
+    clearCommandReceiptTimers();
+    for (const message of state.messages) {
+      if (
+        message.command_receipt?.phase === "sending" ||
+        message.command_receipt?.phase === "received" ||
+        (
+          message.command_receipt?.phase === "accepted" &&
+          !message.command_receipt.compact
+        )
+      ) {
+        message.command_receipt = transitionCommandReceipt(
+          message.command_receipt,
+          {
+            phase: "unconfirmed",
+            message: "The command outcome could not be confirmed because the connection closed.",
+          },
+        );
+      }
+    }
+  },
+
+  event_id_seen: (state, eventId) => {
+    if (!eventId || state.received_event_ids[eventId]) return;
+    state.received_event_ids[eventId] = true;
+    state.received_event_id_order.push(eventId);
+    if (state.received_event_id_order.length > MESSAGE_LIMIT * 3) {
+      const expiredEventId = state.received_event_id_order.shift();
+      if (expiredEventId) {
+        delete state.received_event_ids[expiredEventId];
+      }
     }
   },
 
@@ -1147,18 +1503,22 @@ const mutations = {
   },
 
   messages_clear: (state) => {
+    clearCommandReceiptTimers();
     state.messages = [];
+    state.received_event_ids = {};
+    state.received_event_id_order = [];
   },
 
   ws_uri_set: (state, uri) => {
     state.uri = uri;
   },
 
-  openWS: (state, { onopen, onmessage, onerror }) => {
+  openWS: (state, { onopen, onmessage, onerror, onclose }) => {
     state.websocket = new WebSocket(state.uri);
     state.websocket.onopen = onopen;
     state.websocket.onmessage = onmessage;
     state.websocket.onerror = onerror;
+    state.websocket.onclose = onclose;
   },
 
   closeWs: (state) => {
@@ -1567,6 +1927,7 @@ const mutations = {
   },
 
   reset_state: (state) => {
+    clearCommandReceiptTimers();
     const new_state = set_initial_state();
     for (const attr in new_state) {
       state[attr] = new_state[attr];

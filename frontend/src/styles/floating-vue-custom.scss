@@ -24,3 +24,13 @@
       }
     }
   }
+
+.command-receipt-tooltip {
+  z-index: 35000 !important;
+
+  .v-popper__inner {
+    max-width: min(20rem, calc(100vw - 2rem));
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+}

@@ -1309,6 +1309,9 @@ class ScheduledTriggerRun(AdventBaseModel):
     actor_type = models.TextField()
     actor_id = models.PositiveBigIntegerField()
     actor_key = models.TextField()
+    request_id = models.UUIDField(**optional)
+    request_segment = models.CharField(max_length=128, default='r')
+    request_connection_id = models.TextField(**optional)
 
     steps = models.JSONField(default=list)
     bindings = models.JSONField(default=dict, blank=True)

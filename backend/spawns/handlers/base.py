@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from spawns.events import correlate_actor_command_message
 from spawns.models import Mob, Player
 from worlds.models import Room, World, Zone
 from fastapi_app.game_ws import publish_to_player
@@ -57,6 +58,10 @@ class CommandContext:
 
     def publish(self, message: dict) -> None:
         """Publish a message to this actor channel (if connected) and optional capture sink."""
+        message = correlate_actor_command_message(
+            message,
+            actor_key=self.actor_key,
+        )
         if self.published_messages is not None:
             self.published_messages.append(message)
         if self.capture_only:

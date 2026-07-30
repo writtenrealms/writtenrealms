@@ -6,6 +6,10 @@ Handlers are automatically discovered when their modules are imported.
 """
 from typing import Type
 
+from spawns.events import (
+    command_request_completed_message,
+    command_request_scope,
+)
 from spawns.handlers.base import CommandActor, CommandHandler, CommandContext
 from spawns.models import Mob, Player
 from worlds.models import Room, World, Zone
@@ -462,29 +466,51 @@ def dispatch_command(
         subject_key=actor.key if subject is not None else None,
     )
 
-    # Guard direct dispatches that target unsupported actor types.
-    if resolved_actor_type not in getattr(handler, "supported_actor_types", ("player",)):
-        ctx.publish(
-            {
-                "type": f"cmd.{command_type}.error",
-                "text": f"{resolved_actor_type.capitalize()}s cannot execute {command_type}.",
-                "data": {
-                    "error": f"Unsupported actor type: {resolved_actor_type}.",
-                    "code": "unsupported_actor",
-                },
-            }
-        )
-        return
+    with command_request_scope(
+        request_id=payload.get("_request_id"),
+        request_segment=payload.get("_request_segment"),
+        actor_key=actor_key,
+        enabled=(
+            resolved_actor_type == "player"
+            and not script_source
+        ),
+    ) as request_scope:
+        # Guard direct dispatches that target unsupported actor types.
+        if resolved_actor_type not in getattr(
+            handler,
+            "supported_actor_types",
+            ("player",),
+        ):
+            ctx.publish(
+                {
+                    "type": f"cmd.{command_type}.error",
+                    "text": (
+                        f"{resolved_actor_type.capitalize()}s cannot execute "
+                        f"{command_type}."
+                    ),
+                    "data": {
+                        "error": (
+                            f"Unsupported actor type: "
+                            f"{resolved_actor_type}."
+                        ),
+                        "code": "unsupported_actor",
+                    },
+                }
+            )
+        elif getattr(handler, "builder_only", False):
+            from spawns.handlers.permissions import (
+                builder_permission_error,
+                can_execute_builder_command,
+            )
 
-    if getattr(handler, "builder_only", False):
-        from spawns.handlers.permissions import (
-            builder_permission_error,
-            can_execute_builder_command,
-        )
+            if not can_execute_builder_command(ctx, handler):
+                ctx.publish(builder_permission_error(command_type))
+            else:
+                handler.handle(ctx)
+        else:
+            handler.handle(ctx)
 
-        if not can_execute_builder_command(ctx, handler):
-            ctx.publish(builder_permission_error(command_type))
-            return
-
-    # Execute
-    handler.handle(ctx)
+        if request_scope.needs_completion_event:
+            ctx.publish(
+                command_request_completed_message(request_scope.scope)
+            )

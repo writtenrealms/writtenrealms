@@ -299,6 +299,48 @@ async def handle_game_websocket(websocket: WebSocket):
             kwargs["connection_id"] = connection_id
         celery_app.send_task('spawns.tasks.handle_game_command', kwargs=kwargs)
 
+    async def queue_client_game_command(
+        command_type: str,
+        payload: dict,
+        *,
+        request_id: str,
+    ) -> bool:
+        """Queue a client command and report its connection-local receipt."""
+        try:
+            queue_game_command(
+                command_type,
+                payload,
+                request_id=request_id,
+            )
+        except Exception:
+            logger.exception(
+                "Unable to queue %s command %s from %s",
+                command_type,
+                request_id,
+                player_key,
+            )
+            error_text = 'Unable to confirm command delivery.'
+            await websocket.send_json({
+                'type': f'cmd.{command_type}.error',
+                'text': error_text,
+                'data': {
+                    'error': error_text,
+                    'code': 'command_delivery_unconfirmed',
+                    'request_id': request_id,
+                    'command_type': command_type,
+                },
+            })
+            return False
+
+        await websocket.send_json({
+            'type': 'cmd.request.queued',
+            'data': {
+                'request_id': request_id,
+                'command_type': command_type,
+            },
+        })
+        return True
+
     def queue_exit_current_world():
         if not player_id:
             return
@@ -403,7 +445,11 @@ async def handle_game_websocket(websocket: WebSocket):
                         },
                     })
                     continue
-                queue_game_command('text', {'text': cmd_text}, request_id=request_id)
+                await queue_client_game_command(
+                    'text',
+                    {'text': cmd_text},
+                    request_id=request_id,
+                )
                 continue
 
             # Handle structured commands
@@ -422,7 +468,11 @@ async def handle_game_websocket(websocket: WebSocket):
                         },
                     })
                     continue
-                queue_game_command(msg_type[4:], command_data, request_id=request_id)
+                await queue_client_game_command(
+                    msg_type[4:],
+                    command_data,
+                    request_id=request_id,
+                )
                 continue
 
             # Unknown message type

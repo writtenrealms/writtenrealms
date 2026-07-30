@@ -1351,7 +1351,67 @@ spec:
         self.assertEqual(resp.status_code, 400)
         self.assertIn("alternatives", str(resp.data))
 
-    def test_apply_trigger_manifest_rejects_invalid_step_timing_and_binding(self):
+    def test_apply_trigger_manifest_allows_delayed_first_step(self):
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  steps:
+    - after_seconds: 2
+      actions:
+        - type: echo
+          room: trigger_room
+          text: Charon considers the offer.
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.trigger.refresh_from_db()
+        self.assertEqual(self.trigger.steps[0]["after_seconds"], 2)
+
+    def test_apply_trigger_manifest_round_trips_later_zero_delay(self):
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: echo
+          room: trigger_room
+          text: Charon grunts.
+    - after_seconds: 0
+      actions:
+        - type: echo
+          room: trigger_room
+          text: Charon gestures toward the ferry.
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.trigger.refresh_from_db()
+        self.assertEqual(
+            [step["after_seconds"] for step in self.trigger.steps],
+            [0, 0],
+        )
+        self.assertEqual(
+            resp.data["trigger"]["manifest"]["spec"]["steps"],
+            self.trigger.steps,
+        )
+
+    def test_apply_trigger_manifest_rejects_delayed_unknown_binding(self):
         ItemDefinition.objects.create(
             world=self.world,
             slug="barley-growing",
@@ -1375,7 +1435,7 @@ spec:
         resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
 
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("after_seconds must be 0", str(resp.data))
+        self.assertIn("binding created by an earlier", str(resp.data))
 
     def test_apply_trigger_manifest_rejects_unknown_step_binding(self):
         ItemDefinition.objects.create(

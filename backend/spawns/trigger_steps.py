@@ -47,6 +47,7 @@ from core.trigger_steps import (
 )
 from spawns.events import (
     GameEvent,
+    PRIVATE_CONTROL_EVENT_KEY,
     enqueue_game_events,
     flush_game_event_outbox,
     publish_events,
@@ -60,6 +61,7 @@ from spawns.models import (
     PlayerCurrencyBalance,
     ScheduledTriggerRun,
 )
+from spawns.request_segments import normalize_request_segment
 from spawns.script_commands import (
     ScriptCommandError,
     ScriptCommandRunner,
@@ -72,6 +74,7 @@ DEFAULT_DUE_RUN_LIMIT = 100
 MAX_ACTIVE_TRIGGER_RUNS_PER_ACTOR = 16
 MAX_TRIGGER_SET_MOB_CANDIDATES = 256
 TRIGGER_GATED_TEXT = "More time is needed."
+TRIGGER_CANCELLED_TEXT = "That action can no longer be completed."
 _TRIGGER_PROVENANCE_BINDING_KEY = "_trigger_provenance"
 
 
@@ -90,6 +93,19 @@ class TriggerStepStartResult:
     run_id: int | None = None
     feedback: str | None = None
     code: str = ""
+
+
+@dataclass(frozen=True)
+class TriggerStepContinuation:
+    run_id: int
+    expected_step_index: int
+
+
+@dataclass(frozen=True)
+class TriggerStepAdvanceResult:
+    status: str
+    run_id: int
+    continuation: TriggerStepContinuation | None = None
 
 
 @dataclass
@@ -133,6 +149,157 @@ class TriggerStepPrelocks:
 
 def _flush_queued_events() -> None:
     flush_game_event_outbox(publisher=publish_events)
+
+
+def _due_run_continuation(
+    run: ScheduledTriggerRun,
+    *,
+    due_at,
+) -> TriggerStepContinuation | None:
+    if (
+        run.status != ScheduledTriggerRun.STATUS_ACTIVE
+        or run.next_run_ts is None
+        or run.next_run_ts > due_at
+    ):
+        return None
+    return TriggerStepContinuation(
+        run_id=run.id,
+        expected_step_index=run.next_step_index,
+    )
+
+
+def _enqueue_trigger_step_continuation(
+    continuation: TriggerStepContinuation,
+) -> None:
+    from spawns.tasks import continue_scheduled_trigger_run
+
+    continue_scheduled_trigger_run.apply_async(
+        kwargs={
+            "run_id": continuation.run_id,
+            "expected_step_index": continuation.expected_step_index,
+        },
+    )
+
+
+def _schedule_trigger_step_continuation(
+    run: ScheduledTriggerRun,
+    *,
+    due_at,
+) -> None:
+    continuation = _due_run_continuation(run, due_at=due_at)
+    if continuation is None:
+        return
+
+    def enqueue() -> None:
+        _enqueue_trigger_step_continuation(continuation)
+
+    transaction.on_commit(enqueue, robust=True)
+
+
+def _request_uuid(value: Any) -> uuid.UUID | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise TriggerStepExecutionError(
+            "Invalid request identifier.",
+            code="invalid_request_id",
+        ) from exc
+
+
+def _trigger_request_status_data(
+    run: ScheduledTriggerRun,
+    *,
+    status: str,
+) -> dict[str, Any]:
+    return {
+        PRIVATE_CONTROL_EVENT_KEY: True,
+        "request_id": str(run.request_id),
+        "request_segment": normalize_request_segment(run.request_segment),
+        "status": status,
+    }
+
+
+def _trigger_accepted_event(
+    run: ScheduledTriggerRun,
+    *,
+    first_step_delay_seconds: int,
+) -> GameEvent | None:
+    if (
+        run.actor_type != "player"
+        or run.request_id is None
+        or not run.request_connection_id
+    ):
+        return None
+    return GameEvent(
+        type="cmd.trigger.accepted",
+        recipients=[run.actor_key],
+        connection_id=run.request_connection_id,
+        data={
+            **_trigger_request_status_data(run, status="accepted"),
+            "delayed": first_step_delay_seconds > 0,
+            "first_step_delay_seconds": first_step_delay_seconds,
+            "first_step_due_at": run.next_run_ts.isoformat(),
+        },
+    )
+
+
+def _trigger_completed_event(
+    run: ScheduledTriggerRun,
+) -> GameEvent | None:
+    if (
+        run.actor_type != "player"
+        or run.request_id is None
+        or not run.request_connection_id
+    ):
+        return None
+    return GameEvent(
+        type="cmd.trigger.completed",
+        recipients=[run.actor_key],
+        connection_id=run.request_connection_id,
+        data={
+            **_trigger_request_status_data(run, status="completed"),
+        },
+    )
+
+
+def _trigger_cancelled_events(
+    run: ScheduledTriggerRun,
+) -> list[GameEvent]:
+    if run.actor_type != "player" or run.request_id is None:
+        return []
+    events: list[GameEvent] = []
+    if run.request_id is not None and run.request_connection_id:
+        events.append(GameEvent(
+            type="cmd.trigger.cancelled",
+            recipients=[run.actor_key],
+            connection_id=run.request_connection_id,
+            data={
+                **_trigger_request_status_data(
+                    run,
+                    status="cancelled",
+                ),
+                "code": "trigger_cancelled",
+                "message": TRIGGER_CANCELLED_TEXT,
+            },
+        ))
+    events.append(
+        GameEvent(
+            type="notification.trigger.cancelled",
+            recipients=[run.actor_key],
+            data={
+                PRIVATE_CONTROL_EVENT_KEY: True,
+                "status": "cancelled",
+                "code": "trigger_cancelled",
+                "message": TRIGGER_CANCELLED_TEXT,
+            },
+            text=TRIGGER_CANCELLED_TEXT,
+        )
+    )
+    return events
 
 
 def _actor_kind(actor: Player | Mob) -> str:
@@ -2034,6 +2201,10 @@ def start_trigger_steps(
     event_data: dict[str, Any] | None = None,
     gate_scope_key: str | None = None,
     gate_claim_collector: list[tuple[str, str]] | None = None,
+    request_id: uuid.UUID | str | None = None,
+    request_segment: str = "r",
+    request_connection_id: str | None = None,
+    emit_acceptance: bool = True,
 ) -> TriggerStepStartResult:
     actor_type = _actor_kind(actor)
     actor_model = _actor_model(actor_type)
@@ -2048,6 +2219,10 @@ def start_trigger_steps(
 
     gate_claim: tuple[str, str] | None = None
     try:
+        parsed_request_id = _request_uuid(request_id)
+        normalized_request_segment = normalize_request_segment(
+            request_segment
+        )
         with transaction.atomic():
             lock_trigger_runtime_room(
                 runtime_world_id=runtime_world_id,
@@ -2106,6 +2281,9 @@ def start_trigger_steps(
                 normalized_steps,
                 authored_world_id=definition_world_id,
             )
+            first_step_delay_seconds = int(
+                snapshot_steps[0]["due_after_seconds"]
+            )
             command_depth = _script_command_depth(event_data)
             initial_bindings = {
                 _TRIGGER_PROVENANCE_BINDING_KEY: {
@@ -2120,17 +2298,18 @@ def start_trigger_steps(
             initial_mob_prelocks: dict[int, tuple[int, ...]] = {}
             prelock_context = None
             if actor_model is Mob:
-                prelock_context = ScheduledTriggerRun(
-                    runtime_world_id=runtime_world_id,
-                    room_id=room.id,
-                    actor_type=actor_type,
-                    actor_id=actor.id,
-                )
-                initial_mob_prelocks = _prelock_step_mobs(
-                    run=prelock_context,
-                    actions=snapshot_steps[0].get("actions") or [],
-                    include_mob_actor=True,
-                )
+                if first_step_delay_seconds == 0:
+                    prelock_context = ScheduledTriggerRun(
+                        runtime_world_id=runtime_world_id,
+                        room_id=room.id,
+                        actor_type=actor_type,
+                        actor_id=actor.id,
+                    )
+                    initial_mob_prelocks = _prelock_step_mobs(
+                        run=prelock_context,
+                        actions=snapshot_steps[0].get("actions") or [],
+                        include_mob_actor=True,
+                    )
                 locked_actor = (
                     Mob.objects.select_for_update(of=("self",))
                     .get(
@@ -2225,25 +2404,67 @@ def start_trigger_steps(
                     actor_type=actor_type,
                     actor_id=locked_actor.id,
                     actor_key=locked_actor.key,
+                    request_id=(
+                        parsed_request_id
+                        if actor_type == "player"
+                        else None
+                    ),
+                    request_segment=normalized_request_segment,
+                    request_connection_id=(
+                        request_connection_id
+                        if (
+                            actor_type == "player"
+                            and parsed_request_id
+                            and emit_acceptance
+                        )
+                        else None
+                    ),
                     steps=snapshot_steps,
                     bindings=initial_bindings,
                     next_step_index=0,
-                    next_run_ts=started_ts,
+                    next_run_ts=(
+                        started_ts
+                        + timedelta(seconds=first_step_delay_seconds)
+                    ),
                     started_ts=started_ts,
                     status=ScheduledTriggerRun.STATUS_ACTIVE,
                     on_step_error=error_policy,
                 )
-                events = _execute_current_step(
-                    run,
-                    runtime_world=runtime_world,
-                    room=room,
-                    trigger_actor=locked_actor,
-                    prelocks=initial_prelocks,
-                    resources_prelocked=resources_prelocked,
-                )
+                events: list[GameEvent] = []
+                if emit_acceptance:
+                    accepted_event = _trigger_accepted_event(
+                        run,
+                        first_step_delay_seconds=(
+                            first_step_delay_seconds
+                        ),
+                    )
+                    if accepted_event is not None:
+                        events.append(accepted_event)
+                if first_step_delay_seconds == 0:
+                    events.extend(
+                        _execute_current_step(
+                            run,
+                            runtime_world=runtime_world,
+                            room=room,
+                            trigger_actor=locked_actor,
+                            prelocks=initial_prelocks,
+                            resources_prelocked=resources_prelocked,
+                        )
+                    )
+                    if (
+                        run.status
+                        == ScheduledTriggerRun.STATUS_COMPLETED
+                    ):
+                        completed_event = _trigger_completed_event(run)
+                        if completed_event is not None:
+                            events.append(completed_event)
                 queued_event_count = enqueue_game_events(events)
                 if queued_event_count:
                     transaction.on_commit(_flush_queued_events, robust=True)
+                _schedule_trigger_step_continuation(
+                    run,
+                    due_at=timezone.now(),
+                )
             except Exception:
                 # Release while the room advisory lock is still held so a
                 # failed claimant cannot delete a successor's cache token.
@@ -2289,9 +2510,14 @@ def start_trigger_steps(
     return TriggerStepStartResult(started=True, run_id=run.id)
 
 
-def _advance_one_due_run(*, due_at) -> str | None:
+def _advance_one_due_run(
+    *,
+    due_at,
+    run_id: int | None = None,
+    expected_step_index: int | None = None,
+) -> TriggerStepAdvanceResult | None:
     with transaction.atomic():
-        run = (
+        runs = (
             ScheduledTriggerRun.objects.select_related(
                 "runtime_world__context__instance_of",
                 "room",
@@ -2302,9 +2528,13 @@ def _advance_one_due_run(*, due_at) -> str | None:
                 status=ScheduledTriggerRun.STATUS_ACTIVE,
                 next_run_ts__lte=due_at,
             )
-            .order_by("next_run_ts", "id")
-            .first()
         )
+        if run_id is not None:
+            runs = runs.filter(
+                pk=run_id,
+                next_step_index=expected_step_index,
+            )
+        run = runs.order_by("next_run_ts", "id").first()
         if run is None:
             return None
 
@@ -2315,6 +2545,10 @@ def _advance_one_due_run(*, due_at) -> str | None:
                     runtime_world=run.runtime_world,
                     room=run.room,
                 )
+                if run.status == ScheduledTriggerRun.STATUS_COMPLETED:
+                    completed_event = _trigger_completed_event(run)
+                    if completed_event is not None:
+                        events.append(completed_event)
                 enqueue_game_events(events)
         except (OperationalError, InterfaceError):
             raise
@@ -2340,8 +2574,50 @@ def _advance_one_due_run(*, due_at) -> str | None:
                     "modified_ts",
                 ]
             )
-            return ScheduledTriggerRun.STATUS_CANCELLED
-        return run.status
+            enqueue_game_events(_trigger_cancelled_events(run))
+            return TriggerStepAdvanceResult(
+                status=ScheduledTriggerRun.STATUS_CANCELLED,
+                run_id=run.id,
+            )
+        return TriggerStepAdvanceResult(
+            status=run.status,
+            run_id=run.id,
+            continuation=_due_run_continuation(
+                run,
+                due_at=due_at,
+            ),
+        )
+
+
+def advance_due_trigger_run(
+    *,
+    run_id: int,
+    expected_step_index: int,
+    now=None,
+) -> str | None:
+    """Advance one expected due step for one run.
+
+    The expected cursor makes duplicate task deliveries idempotent. A
+    concurrent worker that wins the row lock advances the cursor, so every
+    stale duplicate becomes a no-op instead of executing the following step.
+    """
+    advance = _advance_one_due_run(
+        due_at=now or timezone.now(),
+        run_id=run_id,
+        expected_step_index=expected_step_index,
+    )
+    if advance is None:
+        return None
+
+    transaction.on_commit(_flush_queued_events, robust=True)
+    if advance.continuation is not None:
+        transaction.on_commit(
+            lambda: _enqueue_trigger_step_continuation(
+                advance.continuation
+            ),
+            robust=True,
+        )
+    return advance.status
 
 
 def process_due_trigger_runs(
@@ -2356,18 +2632,30 @@ def process_due_trigger_runs(
         "completed": 0,
         "cancelled": 0,
     }
+    continuations: dict[int, TriggerStepContinuation] = {}
     for _ in range(row_limit):
-        status = _advance_one_due_run(due_at=due_at)
-        if status is None:
+        advance = _advance_one_due_run(due_at=due_at)
+        if advance is None:
             break
+        status = advance.status
         result["processed"] += 1
         if status == ScheduledTriggerRun.STATUS_COMPLETED:
             result["completed"] += 1
         elif status == ScheduledTriggerRun.STATUS_CANCELLED:
             result["cancelled"] += 1
+        continuations.pop(advance.run_id, None)
+        if advance.continuation is not None:
+            continuations[advance.run_id] = advance.continuation
 
     if result["processed"]:
         transaction.on_commit(_flush_queued_events, robust=True)
+        for continuation in continuations.values():
+            transaction.on_commit(
+                lambda continuation=continuation: (
+                    _enqueue_trigger_step_continuation(continuation)
+                ),
+                robust=True,
+            )
     return result
 
 

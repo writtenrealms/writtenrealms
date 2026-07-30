@@ -147,6 +147,127 @@ class TestGameWebSocketDisconnect(unittest.TestCase):
                 "connection_id": ANY,
             },
         )
+        receipt = next(
+            message
+            for message in websocket.sent_json
+            if message["type"] == "cmd.request.queued"
+        )
+        self.assertEqual(
+            receipt["data"],
+            {
+                "request_id": request_id,
+                "command_type": "text",
+            },
+        )
+
+    def test_structured_command_sends_connection_local_queued_receipt(self):
+        celery_app = MagicMock()
+        request_id = "d520556a-b03c-47fd-aa36-aa00f896560a"
+        websocket = FakeGameWebSocket(
+            [
+                {
+                    "type": "system.connect",
+                    "token": "token",
+                    "data": {"player_key": "player.42"},
+                },
+                {
+                    "type": "cmd.salvage",
+                    "data": {
+                        "spoils": True,
+                        "request_id": request_id,
+                    },
+                },
+                {"type": "system.disconnect"},
+            ]
+        )
+
+        self._run_socket(websocket, celery_app)
+
+        celery_app.send_task.assert_any_call(
+            "spawns.tasks.handle_game_command",
+            kwargs={
+                "command_type": "salvage",
+                "player_id": 42,
+                "player_key": "player.42",
+                "payload": {
+                    "spoils": True,
+                    "_request_id": request_id,
+                },
+                "connection_id": ANY,
+            },
+        )
+        receipt = next(
+            message
+            for message in websocket.sent_json
+            if message["type"] == "cmd.request.queued"
+        )
+        self.assertEqual(
+            receipt["data"],
+            {
+                "request_id": request_id,
+                "command_type": "salvage",
+            },
+        )
+
+    def test_enqueue_failure_returns_error_without_queued_receipt(self):
+        celery_app = MagicMock()
+        request_id = "682d69f3-d434-4b57-af9a-eb00c554187c"
+
+        def send_task(task_name, *, kwargs):
+            if (
+                task_name == "spawns.tasks.handle_game_command"
+                and kwargs["command_type"] == "text"
+            ):
+                raise RuntimeError("broker unavailable")
+            return MagicMock()
+
+        celery_app.send_task.side_effect = send_task
+        websocket = FakeGameWebSocket(
+            [
+                {
+                    "type": "system.connect",
+                    "token": "token",
+                    "data": {"player_key": "player.42"},
+                },
+                {
+                    "type": "cmd.text",
+                    "text": "pay charon",
+                    "request_id": request_id,
+                },
+                {"type": "system.disconnect"},
+            ]
+        )
+
+        self._run_socket(websocket, celery_app)
+
+        self.assertFalse(
+            any(
+                message["type"] == "cmd.request.queued"
+                for message in websocket.sent_json
+            )
+        )
+        error = next(
+            message
+            for message in websocket.sent_json
+            if message["type"] == "cmd.text.error"
+        )
+        self.assertEqual(
+            error["text"],
+            "Unable to confirm command delivery.",
+        )
+        self.assertEqual(
+            error["data"],
+            {
+                "error": "Unable to confirm command delivery.",
+                "code": "command_delivery_unconfirmed",
+                "request_id": request_id,
+                "command_type": "text",
+            },
+        )
+        self.assertIn(
+            "system.disconnect.success",
+            [message["type"] for message in websocket.sent_json],
+        )
 
     def test_invalid_text_request_id_is_rejected_instead_of_replaced(self):
         celery_app = MagicMock()

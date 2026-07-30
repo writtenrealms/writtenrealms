@@ -26,11 +26,15 @@ When a trigger matches:
 7. Reject a duplicate active run for the same trigger, runtime world, room, and
    trigger actor, or a start beyond the per-actor limit of 16 active sequences
    in that runtime world. Different actors may run sequences concurrently.
-8. Create `ScheduledTriggerRun`, execute step zero, advance the cursor, and
-   enqueue its game events in one transaction.
+8. Create `ScheduledTriggerRun`. If the first `after_seconds` is zero, execute
+   that step, advance the cursor, and enqueue its game events in the same
+   transaction. If it is positive, leave the cursor at zero and set
+   `next_run_ts` to that first due time without executing authored actions.
 
-If step zero fails, the run, consumed items, spawned items, bindings, and events
-all roll back.
+If an immediate first step fails, the run, consumed items, spawned items,
+bindings, and events all roll back. Conditions always run at invocation, but a
+delayed first step does not reserve items, currency, mobs, or command subjects;
+the due-step transaction revalidates those resources.
 
 ## Persisted Context
 
@@ -43,6 +47,8 @@ The run is the source of truth for delayed work. It stores:
 - exact bindings such as `crop -> item.123`
 - concrete currency ids alongside portable authored codes
 - concrete mob-definition ids for exact-one command subjects
+- the originating command request identity, plus the initiating connection
+  only for the lifecycle-owner run
 - status and terminal error information
 
 Deleting or editing the authored trigger does not rewrite an in-flight run.
@@ -67,6 +73,16 @@ due active run with:
 There is no global worker lock and no scan per player, room, or authored
 trigger. Multiple workers can process different runs concurrently. A Celery
 countdown/ETA is not used as durable state.
+
+When a committed step leaves its next step already due, the runtime also
+enqueues one continuation addressed to that run id and expected step cursor.
+The continuation executes at most that one step in a new transaction, then
+queues the next already-due cursor only after commit. The expected cursor makes
+duplicate or stale deliveries no-ops, and `select_for_update(skip_locked=True)`
+keeps competing workers from executing the same step. A sequence is capped at
+32 steps, so this one-at-a-time chain is bounded. The beat scan remains the
+durable recovery path if an immediate continuation is lost or skipped during
+contention.
 
 ## Step Transaction
 
@@ -119,6 +135,11 @@ ambiguity. A filtered `set_mob` may evaluate at most 256 candidates; a larger
 candidate population fails the step instead of taking an unbounded set of row
 locks.
 
+A positive first delay deliberately acquires none of that step's Mob, Item, or
+wallet resource locks during start. This keeps the invocation transaction
+bounded to context, condition, gate, and run creation work; the ordinary due
+worker acquires the same ordered step locks when the action is actually due.
+
 The dedicated `ScriptCommandRunner` renders one command against the original
 Trigger actor and dispatches it with an explicit room issuer and the chosen
 room, player, or mob execution subject. Newlines, `;`/`&&` chains, history
@@ -151,6 +172,14 @@ forwarding.
 Events are written to `GameEventOutbox` before commit and published afterward.
 A process failure before commit leaves the run due and changes nothing. A
 failure after commit cannot lose the event because the outbox remains durable.
+For a player command, the first successfully started matching run owns a
+connection-pinned `cmd.trigger.accepted` control event. Its final step appends
+`cmd.trigger.completed` after all authored events in the same outbox batch.
+Failed starts return `cmd.trigger.rejected`. A later owner failure emits a
+textless correlated `cmd.trigger.cancelled`; every failed command-origin player
+run also emits unpinned safe cancellation prose so reconnecting players still
+see it. Request lifecycle events carry an internal marker that is stripped
+before delivery and prevents Trigger or quest subscription dispatch.
 When an audited transfer actually moves a player or mob, its lifecycle event
 drives destination mob `entering` reactions after commit, outside the step's
 locks. A moved player also runs hostile-mob aggro if its entering reactions
@@ -193,8 +222,11 @@ work remains one bounded mutation and debit text fanout remains bounded.
 
 After success, the cursor advances and `next_run_ts` is calculated as
 `started_ts + cumulative_offset`. Worker lateness therefore does not stretch
-later intervals. If another step is already overdue, the bounded worker loop
-may claim it again immediately.
+later intervals. If another step is already overdue, a specific-run
+continuation is queued after commit; a bounded recovery-worker pass may also
+claim it immediately. An authored `after_seconds: 0` therefore preserves the
+transaction boundary between steps without adding the heartbeat interval to
+their pacing.
 
 ## Failure And Completion
 

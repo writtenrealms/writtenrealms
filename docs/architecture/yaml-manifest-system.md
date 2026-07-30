@@ -298,6 +298,8 @@ Current required mappings:
   `after_seconds` is relative to the preceding step. Group commands with the
   same WR1 offset, sort the groups, and subtract successive offsets. Thus WR1
   offsets `0, 20, 40, 60` become WR2 offsets `0, 20, 20, 20`.
+  Preserve a positive first WR1 offset as the first WR2 `after_seconds`;
+  invocation-time conditions and scheduling still happen immediately.
 - Convert WR1 action conditions `item_in_inv <id>` and `item_in_room <id>` to
   `item_present` with `location: actor_inventory` and `location: room`,
   respectively. Preserve negation and counts. Flag arbitrary or dynamic
@@ -849,9 +851,15 @@ steps:
         command: say I accept the ferryman's price.
 ```
 
-The first step must have `after_seconds: 0`; later offsets are positive and
-relative to the prior step. Each offset and their cumulative total are capped
-at one year. `command`, `debit_currency`, `consume_item`, `consume_room_item`,
+Every step may have `after_seconds: 0` or a positive delay, relative to the
+prior step. Each offset and their cumulative total are capped at one year. A
+zero-delay first step executes atomically with the invocation-time condition
+check; a later zero-delay step begins promptly after the preceding transaction
+commits while retaining its own transaction boundary. A delayed first step
+commits only the eligible run and its due time at invocation; it does not
+reserve or apply the first step's authored resources early. `command`,
+`debit_currency`,
+`consume_item`, `consume_room_item`,
 `grant_item`, `spawn_room_item`, `replace_room_item`, `set_mob`, and `echo` are
 the action whitelist. Item and mob-definition refs are resolved within the
 authored world and stored portably. A debit requires
@@ -910,11 +918,27 @@ rolls back the balance, transfer state, and captured events together.
 Query-backed presence and quest operators belong in the trigger's outer
 conditions. Policy triggers cannot define steps.
 
-Step zero rechecks conditions under a runtime-world/room-scoped transaction
-mutex and commits with its actions. Later steps are persisted in a
-`ScheduledTriggerRun` snapshot with cumulative due offsets, original runtime
-world/room context, exact item bindings, stable currency ids, and the actor
-identity. A separate bounded Celery beat worker claims due rows through the
+Trigger start rechecks conditions under a runtime-world/room-scoped transaction
+mutex and persists a `ScheduledTriggerRun` snapshot with cumulative due
+offsets, original runtime world/room context, exact item bindings, stable
+currency ids, and the actor identity. When the first offset is zero, its
+actions commit in that same transaction. When it is positive, no authored
+action executes until the due worker claims it. For a command that starts one
+or more matching step Triggers, every run retains the validated request
+identity, but only the first successful run retains the initiating connection
+and owns its correlated lifecycle. After commit, that owner's private
+`cmd.trigger.accepted` control event updates only that connection. A
+final successful step emits `cmd.trigger.completed` after its authored events.
+A rejected start emits a correlated `cmd.trigger.rejected` response instead.
+If the owning run later fails, a textless, connection-pinned
+`cmd.trigger.cancelled` updates the original input. Every failed
+command-origin player run also sends one unpinned, player-only
+`notification.trigger.cancelled` with safe generic prose, so the player still
+learns what happened after reconnecting. Event/subscription runs have no
+request identity and remain silent on cancellation.
+These lifecycle events are not room narrative and cannot start Trigger or
+quest subscriptions; detailed failure diagnostics remain only on the run. A
+separate bounded Celery beat worker claims due rows through the
 `(status, next_run_ts)` index with `select_for_update(skip_locked=True)`. Celery
 ETA jobs are not the source of truth. Each step, wallet mutation, and outbox
 events share a transaction; `on_step_error: cancel` rolls back the failed step
@@ -1371,8 +1395,10 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   - `spec.event` must be `before_move_enter` or `before_move_exit`.
   - v1 policy triggers use `scope: room` and a `room` target.
 - `spec.script` and non-empty `spec.steps` are mutually exclusive.
-- `spec.steps[0].after_seconds` must be `0`; later offsets must be positive
-  integers. Every step has a bounded, non-empty `actions` list.
+- Every `spec.steps[*].after_seconds` may be `0` or a positive integer. A later
+  zero offset is an immediate post-commit continuation with its own step
+  transaction, not part of the preceding step's atomic action batch. Every
+  step has a bounded, non-empty `actions` list.
 - Typed step actions reject unknown fields and types. Context refs are limited
   to `trigger_actor` and `trigger_room`; item refs must resolve to an
   `itemdefinition` in the selected world.

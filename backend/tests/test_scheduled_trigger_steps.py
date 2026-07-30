@@ -1,4 +1,5 @@
 import json
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import timedelta
@@ -24,6 +25,7 @@ from core.trigger_steps import (
     normalize_trigger_steps,
 )
 from spawns.events import GameEvent, publish_events
+from spawns.handlers.registry import dispatch_command
 from spawns.models import (
     CombatEncounter,
     GameEventOutbox,
@@ -37,16 +39,19 @@ from spawns.models import (
 from spawns.trigger_steps import (
     MAX_ACTIVE_TRIGGER_RUNS_PER_ACTOR,
     MAX_TRIGGER_SET_MOB_CANDIDATES,
+    TriggerStepStartResult,
     TriggerStepExecutionError,
     TriggerMobChange,
     TriggerMobChanges,
     _consume_room_item,
     _mob_change_events,
     _prelock_step_resources,
+    advance_due_trigger_run,
     process_due_trigger_runs,
     prune_terminal_trigger_runs,
     start_trigger_steps,
 )
+from spawns.triggers import execute_command_fallback_trigger
 from spawns.script_commands import MAX_SCRIPT_COMMAND_DEPTH
 from spawns.wallet import mutate_balances
 from tests.base import WorldTestCase
@@ -362,6 +367,770 @@ class TestScheduledTriggerSteps(WorldTestCase):
                 },
             ],
         )
+
+    def test_positive_first_step_delay_is_normalized(self):
+        normalized = normalize_trigger_steps([
+            {
+                "after_seconds": 2,
+                "actions": [
+                    {
+                        "type": "echo",
+                        "room": "trigger_room",
+                        "text": "Charon considers the offer.",
+                    },
+                ],
+            },
+        ])
+
+        self.assertEqual(normalized[0]["after_seconds"], 2)
+
+    def test_zero_delay_is_allowed_between_distinct_steps(self):
+        normalized = normalize_trigger_steps([
+            {
+                "after_seconds": 0,
+                "actions": [
+                    {
+                        "type": "echo",
+                        "room": "trigger_room",
+                        "text": "Charon grunts.",
+                    },
+                ],
+            },
+            {
+                "after_seconds": 0,
+                "actions": [
+                    {
+                        "type": "echo",
+                        "room": "trigger_room",
+                        "text": "Charon gestures toward the ferry.",
+                    },
+                ],
+            },
+        ])
+
+        self.assertEqual(
+            [step["after_seconds"] for step in normalized],
+            [0, 0],
+        )
+
+    def test_zero_delay_continuations_keep_one_transaction_per_step(self):
+        trigger = self._create_trigger(
+            match="board immediately",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "Charon grunts.",
+                        },
+                    ],
+                },
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "Charon gestures toward the ferry.",
+                        },
+                    ],
+                },
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "The ferry departs.",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with patch(
+            "spawns.tasks.continue_scheduled_trigger_run.apply_async"
+        ) as schedule:
+            with capture_game_messages() as start_messages:
+                with self.captureOnCommitCallbacks(execute=True):
+                    start = start_trigger_steps(
+                        trigger=trigger,
+                        actor=self.player,
+                        room=self.room,
+                    )
+                    schedule.assert_not_called()
+
+            run = ScheduledTriggerRun.objects.get(pk=start.run_id)
+            self.assertEqual(run.next_step_index, 1)
+            self.assertEqual(run.status, ScheduledTriggerRun.STATUS_ACTIVE)
+            self.assertEqual(
+                [
+                    entry["message"]["text"]
+                    for entry in start_messages
+                    if entry["message"]["type"] == "notification./echo"
+                ],
+                ["Charon grunts."],
+            )
+            schedule.assert_called_once_with(
+                kwargs={
+                    "run_id": run.id,
+                    "expected_step_index": 1,
+                },
+            )
+
+            schedule.reset_mock()
+            with capture_game_messages() as middle_messages:
+                with self.captureOnCommitCallbacks(execute=True):
+                    status = advance_due_trigger_run(
+                        run_id=run.id,
+                        expected_step_index=1,
+                        now=run.started_ts,
+                    )
+                    schedule.assert_not_called()
+
+            self.assertEqual(status, ScheduledTriggerRun.STATUS_ACTIVE)
+            run.refresh_from_db()
+            self.assertEqual(run.next_step_index, 2)
+            self.assertEqual(
+                [
+                    entry["message"]["text"]
+                    for entry in middle_messages
+                    if entry["message"]["type"] == "notification./echo"
+                ],
+                ["Charon gestures toward the ferry."],
+            )
+            schedule.assert_called_once_with(
+                kwargs={
+                    "run_id": run.id,
+                    "expected_step_index": 2,
+                },
+            )
+
+            schedule.reset_mock()
+            with capture_game_messages() as duplicate_messages:
+                with self.captureOnCommitCallbacks(execute=True):
+                    duplicate_status = advance_due_trigger_run(
+                        run_id=run.id,
+                        expected_step_index=1,
+                        now=run.started_ts,
+                    )
+
+            self.assertIsNone(duplicate_status)
+            self.assertEqual(duplicate_messages, [])
+            schedule.assert_not_called()
+
+            with capture_game_messages() as final_messages:
+                with self.captureOnCommitCallbacks(execute=True):
+                    final_status = advance_due_trigger_run(
+                        run_id=run.id,
+                        expected_step_index=2,
+                        now=run.started_ts,
+                    )
+
+            self.assertEqual(
+                final_status,
+                ScheduledTriggerRun.STATUS_COMPLETED,
+            )
+            run.refresh_from_db()
+            self.assertEqual(
+                run.status,
+                ScheduledTriggerRun.STATUS_COMPLETED,
+            )
+            self.assertEqual(
+                [
+                    entry["message"]["text"]
+                    for entry in final_messages
+                    if entry["message"]["type"] == "notification./echo"
+                ],
+                ["The ferry departs."],
+            )
+            schedule.assert_not_called()
+
+    def test_periodic_worker_recovers_a_lost_zero_delay_continuation(self):
+        trigger = self._create_trigger(
+            match="recover immediate continuation",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "The first bell rings.",
+                        },
+                    ],
+                },
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "The second bell rings.",
+                        },
+                    ],
+                },
+            ],
+        )
+        with patch(
+            "spawns.tasks.continue_scheduled_trigger_run.apply_async"
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                start = start_trigger_steps(
+                    trigger=trigger,
+                    actor=self.player,
+                    room=self.room,
+                )
+        run = ScheduledTriggerRun.objects.get(pk=start.run_id)
+
+        with capture_game_messages() as messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                result = process_due_trigger_runs(
+                    limit=1,
+                    now=run.started_ts,
+                )
+
+        self.assertEqual(
+            result,
+            {"processed": 1, "completed": 1, "cancelled": 0},
+        )
+        self.assertEqual(
+            [
+                entry["message"]["text"]
+                for entry in messages
+                if entry["message"]["type"] == "notification./echo"
+            ],
+            ["The second bell rings."],
+        )
+
+    def test_delayed_first_step_is_committed_before_authored_actions_run(self):
+        trigger = self._create_trigger(
+            match="wait for charon",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 2,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "Charon considers the offer.",
+                        },
+                    ],
+                },
+            ],
+        )
+        request_id = uuid.uuid4()
+
+        with capture_game_messages() as messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                result = start_trigger_steps(
+                    trigger=trigger,
+                    actor=self.player,
+                    room=self.room,
+                    request_id=request_id,
+                    request_segment="r.2",
+                    request_connection_id="connection.original",
+                )
+
+        self.assertTrue(result.started)
+        run = ScheduledTriggerRun.objects.get(pk=result.run_id)
+        self.assertEqual(run.status, ScheduledTriggerRun.STATUS_ACTIVE)
+        self.assertEqual(run.next_step_index, 0)
+        self.assertEqual(
+            run.next_run_ts,
+            run.started_ts + timedelta(seconds=2),
+        )
+        self.assertEqual(run.request_id, request_id)
+        self.assertEqual(run.request_segment, "r.2")
+        self.assertEqual(
+            run.request_connection_id,
+            "connection.original",
+        )
+        self.assertFalse(any(
+            entry["message"]["type"] == "notification./echo"
+            for entry in messages
+        ))
+        accepted = [
+            entry
+            for entry in messages
+            if entry["message"]["type"] == "cmd.trigger.accepted"
+        ]
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(accepted[0]["player_key"], self.player.key)
+        self.assertEqual(
+            accepted[0]["connection_id"],
+            "connection.original",
+        )
+        self.assertEqual(
+            accepted[0]["message"]["data"],
+            {
+                "_event_id": accepted[0]["message"]["data"]["_event_id"],
+                "request_id": str(request_id),
+                "request_segment": "r.2",
+                "status": "accepted",
+                "delayed": True,
+                "first_step_delay_seconds": 2,
+                "first_step_due_at": run.next_run_ts.isoformat(),
+            },
+        )
+
+        self.assertEqual(
+            process_due_trigger_runs(
+                now=run.next_run_ts - timedelta(microseconds=1),
+            )["processed"],
+            0,
+        )
+        with capture_game_messages() as due_messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                due_result = process_due_trigger_runs(
+                    now=run.next_run_ts,
+                )
+
+        self.assertEqual(due_result["completed"], 1)
+        run.refresh_from_db()
+        self.assertEqual(run.status, ScheduledTriggerRun.STATUS_COMPLETED)
+        self.assertTrue(any(
+            entry["message"]["type"] == "notification./echo"
+            and entry["message"].get("text")
+            == "Charon considers the offer."
+            for entry in due_messages
+        ))
+        self.assertEqual(
+            [
+                entry["message"]["type"]
+                for entry in due_messages
+                if entry["player_key"] == self.player.key
+            ],
+            [
+                "notification./echo",
+                "cmd.trigger.completed",
+            ],
+        )
+        completed = due_messages[-1]
+        self.assertEqual(
+            completed["connection_id"],
+            "connection.original",
+        )
+        self.assertEqual(
+            {
+                key: value
+                for key, value in completed["message"]["data"].items()
+                if key != "_event_id"
+            },
+            {
+                "request_id": str(request_id),
+                "request_segment": "r.2",
+                "status": "completed",
+            },
+        )
+
+    def test_multiple_matching_runs_have_one_correlated_lifecycle_owner(self):
+        owner = self._create_trigger(
+            match="wake ferrymen",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "The first ferryman answers.",
+                        },
+                    ],
+                },
+            ],
+        )
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        failing = self._create_trigger(
+            match="wake ferrymen",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 2,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": obol.code,
+                            "amount": 1,
+                        },
+                    ],
+                },
+            ],
+        )
+        request_id = uuid.uuid4()
+
+        with capture_game_messages() as messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                result = execute_command_fallback_trigger(
+                    actor=self.player,
+                    text="wake ferrymen",
+                    connection_id="connection.original",
+                    request_id=request_id,
+                    request_segment="r",
+                )
+
+        self.assertTrue(result.handled)
+        owner_run = ScheduledTriggerRun.objects.get(trigger=owner)
+        failing_run = ScheduledTriggerRun.objects.get(trigger=failing)
+        self.assertEqual(
+            owner_run.status,
+            ScheduledTriggerRun.STATUS_COMPLETED,
+        )
+        self.assertEqual(owner_run.request_id, request_id)
+        self.assertEqual(
+            owner_run.request_connection_id,
+            "connection.original",
+        )
+        self.assertEqual(
+            failing_run.status,
+            ScheduledTriggerRun.STATUS_ACTIVE,
+        )
+        self.assertEqual(failing_run.request_id, request_id)
+        self.assertIsNone(failing_run.request_connection_id)
+        self.assertEqual(
+            [
+                entry["message"]["type"]
+                for entry in messages
+                if entry["player_key"] == self.player.key
+            ],
+            [
+                "cmd.trigger.accepted",
+                "notification./echo",
+                "cmd.trigger.completed",
+            ],
+        )
+
+        with capture_game_messages() as failure_messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                due_result = process_due_trigger_runs(
+                    now=failing_run.next_run_ts,
+                )
+
+        self.assertEqual(due_result["cancelled"], 1)
+        self.assertFalse(any(
+            entry["message"]["type"].startswith("cmd.trigger.")
+            for entry in failure_messages
+        ))
+        self.assertEqual(len(failure_messages), 1)
+        self.assertEqual(
+            failure_messages[0]["message"]["type"],
+            "notification.trigger.cancelled",
+        )
+        self.assertEqual(
+            failure_messages[0]["message"]["text"],
+            "That action can no longer be completed.",
+        )
+        self.assertIsNone(failure_messages[0]["connection_id"])
+
+    def test_later_step_cancellation_is_private_safe_and_correlated(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: 9},
+            reason="test.setup",
+            emit_event=False,
+        )
+        trigger = self._create_trigger(
+            match="attempt delayed fare",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 2,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                    ],
+                },
+            ],
+        )
+        request_id = uuid.uuid4()
+        with self.captureOnCommitCallbacks(execute=True):
+            start = start_trigger_steps(
+                trigger=trigger,
+                actor=self.player,
+                room=self.room,
+                request_id=request_id,
+                request_segment="r.3",
+                request_connection_id="connection.original",
+            )
+        run = ScheduledTriggerRun.objects.get(pk=start.run_id)
+
+        with capture_game_messages() as messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                result = process_due_trigger_runs(now=run.next_run_ts)
+
+        self.assertEqual(result["cancelled"], 1)
+        run.refresh_from_db()
+        self.assertEqual(run.failure_code, "insufficient_funds")
+        cancellation = [
+            entry
+            for entry in messages
+            if entry["message"]["type"] == "cmd.trigger.cancelled"
+        ]
+        self.assertEqual(len(cancellation), 1)
+        self.assertEqual(cancellation[0]["player_key"], self.player.key)
+        self.assertEqual(
+            cancellation[0]["connection_id"],
+            "connection.original",
+        )
+        message = cancellation[0]["message"]
+        self.assertNotIn("text", message)
+        self.assertEqual(
+            {
+                key: value
+                for key, value in message["data"].items()
+                if key != "_event_id"
+            },
+            {
+                "request_id": str(request_id),
+                "request_segment": "r.3",
+                "status": "cancelled",
+                "code": "trigger_cancelled",
+                "message": "That action can no longer be completed.",
+            },
+        )
+        self.assertNotIn("insufficient", str(message))
+        safe_notifications = [
+            entry
+            for entry in messages
+            if entry["message"]["type"]
+            == "notification.trigger.cancelled"
+        ]
+        self.assertEqual(len(safe_notifications), 1)
+        self.assertIsNone(safe_notifications[0]["connection_id"])
+        self.assertEqual(
+            safe_notifications[0]["message"]["text"],
+            "That action can no longer be completed.",
+        )
+
+    def test_uncorrelated_delayed_failure_emits_no_lifecycle_message(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        trigger = self._create_trigger(
+            match="ambient delayed fare",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 2,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": obol.code,
+                            "amount": 1,
+                        },
+                    ],
+                },
+            ],
+        )
+        start = start_trigger_steps(
+            trigger=trigger,
+            actor=self.player,
+            room=self.room,
+        )
+        run = ScheduledTriggerRun.objects.get(pk=start.run_id)
+
+        with capture_game_messages() as messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                result = process_due_trigger_runs(now=run.next_run_ts)
+
+        self.assertEqual(result["cancelled"], 1)
+        self.assertEqual(messages, [])
+
+    def test_failed_step_start_emits_correlated_rejection(self):
+        trigger = self._create_trigger(
+            match="pay without funds",
+            conditions=json.dumps({
+                "gte": ["actor.balances.obol", 10],
+            }),
+            steps=[
+                {
+                    "after_seconds": 2,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "This never happens.",
+                        },
+                    ],
+                },
+            ],
+        )
+        trigger.show_details_on_failure = True
+        trigger.failure_message = "Charon requires 10 obols."
+        trigger.save(
+            update_fields=[
+                "show_details_on_failure",
+                "failure_message",
+            ]
+        )
+        request_id = uuid.uuid4()
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                connection_id="connection.original",
+                payload={
+                    "text": "pay without funds",
+                    "_request_id": str(request_id),
+                    "_request_segment": "r.4",
+                },
+            )
+
+        self.assertFalse(
+            ScheduledTriggerRun.objects.filter(trigger=trigger).exists()
+        )
+        self.assertEqual(len(messages), 1)
+        rejection = messages[0]
+        self.assertEqual(
+            rejection["message"]["type"],
+            "cmd.trigger.rejected",
+        )
+        self.assertEqual(
+            rejection["connection_id"],
+            "connection.original",
+        )
+        self.assertEqual(
+            rejection["message"]["text"],
+            "Charon requires 10 obols.",
+        )
+        self.assertEqual(
+            rejection["message"]["data"],
+            {
+                "request_id": str(request_id),
+                "request_segment": "r.4",
+                "status": "rejected",
+                "code": "trigger_rejected",
+                "message": "Charon requires 10 obols.",
+            },
+        )
+
+    def test_command_dispatch_defers_receipt_to_trigger_lifecycle(self):
+        self._create_trigger(
+            match="wait for lifecycle",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 2,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "The delayed response arrives.",
+                        },
+                    ],
+                },
+            ],
+        )
+        request_id = uuid.uuid4()
+
+        with capture_game_messages() as messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                dispatch_command(
+                    command_type="text",
+                    player_id=self.player.id,
+                    connection_id="connection.original",
+                    payload={
+                        "text": "wait for lifecycle",
+                        "_request_id": str(request_id),
+                    },
+                )
+
+        self.assertEqual(
+            [
+                entry["message"]["type"]
+                for entry in messages
+                if entry["player_key"] == self.player.key
+            ],
+            ["cmd.trigger.accepted"],
+        )
+
+    def test_legacy_success_is_not_rejected_by_later_gated_step_trigger(self):
+        successful = self._create_trigger(
+            match="wake mixed ferrymen",
+            conditions="",
+            steps=[],
+        )
+        successful.script = (
+            "/cmd room -- /echo -- The first ferryman answers."
+        )
+        successful.save(update_fields=["script"])
+        self._create_trigger(
+            match="wake mixed ferrymen",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 2,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "The second ferryman answers.",
+                        },
+                    ],
+                },
+            ],
+        )
+        request_id = uuid.uuid4()
+
+        with patch(
+            "spawns.trigger_steps.start_trigger_steps",
+            return_value=TriggerStepStartResult(
+                started=False,
+                feedback="More time is needed.",
+                code="gated",
+            ),
+        ), capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                connection_id="connection.original",
+                payload={
+                    "text": "wake mixed ferrymen",
+                    "_request_id": str(request_id),
+                    "_request_segment": "r",
+                },
+            )
+
+        self.assertTrue(any(
+            entry["message"].get("text")
+            == "The first ferryman answers."
+            for entry in messages
+        ))
+        self.assertFalse(any(
+            entry["message"]["type"] == "cmd.trigger.rejected"
+            for entry in messages
+        ))
+        self.assertTrue(any(
+            entry["message"]["type"] == "cmd.text.trigger"
+            for entry in messages
+        ))
 
     def test_debit_currency_action_normalizes_explicit_player_charge(self):
         normalized = normalize_trigger_steps([
@@ -4865,6 +5634,71 @@ class TestConcurrentHarvestTriggerSteps(TransactionTestCase):
         self.assertEqual(
             GameEventOutbox.objects.filter(
                 event_type="notification.trigger.currency_debited",
+            ).count(),
+            1,
+        )
+
+    def test_duplicate_specific_continuations_advance_one_cursor_once(self):
+        continuation_trigger = Trigger.objects.create(
+            world=self.authored_world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=self.room.id,
+            name="Concurrent continuation",
+            match="ring delayed bell",
+            script="",
+            steps=[
+                {
+                    "after_seconds": 1,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "The delayed bell rings.",
+                        },
+                    ],
+                },
+            ],
+            conditions="",
+            display_action_in_room=True,
+        )
+        with patch("spawns.trigger_steps._flush_queued_events"):
+            start = start_trigger_steps(
+                trigger=continuation_trigger,
+                actor=self.first_player,
+                room=self.room,
+            )
+        run = ScheduledTriggerRun.objects.get(pk=start.run_id)
+        barrier = Barrier(2)
+
+        def continue_once(_attempt):
+            close_old_connections()
+            try:
+                barrier.wait(timeout=5)
+                return advance_due_trigger_run(
+                    run_id=run.id,
+                    expected_step_index=0,
+                    now=run.next_run_ts,
+                )
+            finally:
+                close_old_connections()
+
+        with patch("spawns.trigger_steps._flush_queued_events"):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                outcomes = list(executor.map(continue_once, range(2)))
+
+        self.assertEqual(
+            outcomes.count(ScheduledTriggerRun.STATUS_COMPLETED),
+            1,
+        )
+        self.assertEqual(outcomes.count(None), 1)
+        run.refresh_from_db()
+        self.assertEqual(run.status, ScheduledTriggerRun.STATUS_COMPLETED)
+        self.assertEqual(run.next_step_index, 1)
+        self.assertEqual(
+            GameEventOutbox.objects.filter(
+                event_type="notification./echo",
             ).count(),
             1,
         )

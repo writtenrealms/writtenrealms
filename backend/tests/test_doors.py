@@ -468,11 +468,145 @@ class TestDoorCommands(WorldTestCase):
             1,
         )
 
+    def test_delayed_close_keeps_request_pending_until_correlated_result(self):
+        _, _, reverse_face = self._create_door()
+        observer = self._create_active_player(
+            "Observer",
+            room=reverse_face.from_room,
+        )
+        request_id = str(uuid.uuid4())
+        with patch(
+            "spawns.tasks.resolve_prepared_game_action.apply_async"
+        ):
+            with capture_game_messages() as started_messages:
+                with self.captureOnCommitCallbacks(execute=True):
+                    dispatch_command(
+                        command_type="text",
+                        player_id=self.player.id,
+                        payload={
+                            "text": "close east",
+                            "_request_id": request_id,
+                            "_request_segment": "r.5",
+                        },
+                    )
+
+        started = self._messages(
+            started_messages,
+            "cmd.close.started",
+            recipient=self.player.key,
+        )[0]
+        self.assertNotIn("request_id", started["data"])
+        self.assertFalse(
+            self._messages(
+                started_messages,
+                "cmd.request.completed",
+                recipient=self.player.key,
+            )
+        )
+
+        action = PreparedGameAction.objects.get(player=self.player)
+        due_at = self._make_due(action)
+        with capture_game_messages() as completed_messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                process_due_prepared_door_actions(now=due_at)
+
+        completed = self._messages(
+            completed_messages,
+            "cmd.close.success",
+            recipient=self.player.key,
+        )[0]
+        self.assertEqual(completed["data"]["request_id"], request_id)
+        self.assertEqual(completed["data"]["request_segment"], "r.5")
+        observer_event = self._messages(
+            completed_messages,
+            "door.state_changed",
+            recipient=observer.key,
+        )[0]
+        self.assertNotIn("request_id", observer_event["data"])
+        self.assertNotIn("request_segment", observer_event["data"])
+
+    def test_repeated_delayed_close_completes_only_the_new_request(self):
+        self._create_door()
+        first_request_id = str(uuid.uuid4())
+        second_request_id = str(uuid.uuid4())
+        with patch(
+            "spawns.tasks.resolve_prepared_game_action.apply_async"
+        ):
+            with capture_game_messages() as first_messages:
+                with self.captureOnCommitCallbacks(execute=True):
+                    dispatch_command(
+                        command_type="text",
+                        player_id=self.player.id,
+                        payload={
+                            "text": "close east",
+                            "_request_id": first_request_id,
+                        },
+                    )
+            with capture_game_messages() as second_messages:
+                with self.captureOnCommitCallbacks(execute=True):
+                    dispatch_command(
+                        command_type="text",
+                        player_id=self.player.id,
+                        payload={
+                            "text": "close east",
+                            "_request_id": second_request_id,
+                        },
+                    )
+
+        self.assertFalse(
+            self._messages(
+                first_messages,
+                "cmd.request.completed",
+                recipient=self.player.key,
+            )
+        )
+        repeated = self._messages(
+            second_messages,
+            "cmd.close.started",
+            recipient=self.player.key,
+        )[0]
+        self.assertTrue(repeated["data"]["repeated"])
+        second_completed = self._messages(
+            second_messages,
+            "cmd.request.completed",
+            recipient=self.player.key,
+        )[0]
+        self.assertEqual(
+            second_completed["data"]["request_id"],
+            second_request_id,
+        )
+
+        action = PreparedGameAction.objects.get(
+            player=self.player,
+            status=PreparedGameAction.STATUS_PENDING,
+        )
+        due_at = self._make_due(action)
+        with capture_game_messages() as completed_messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                process_due_prepared_door_actions(now=due_at)
+        first_completed = self._messages(
+            completed_messages,
+            "cmd.close.success",
+            recipient=self.player.key,
+        )[0]
+        self.assertEqual(
+            first_completed["data"]["request_id"],
+            first_request_id,
+        )
+
     def test_close_is_cancelled_when_door_revision_becomes_stale(self):
         doorway, _, _ = self._create_door()
+        request_id = str(uuid.uuid4())
         with patch("spawns.tasks.resolve_prepared_game_action.apply_async"):
             with self.captureOnCommitCallbacks(execute=True):
-                dispatch_text_command(self.player.id, "close east")
+                dispatch_command(
+                    command_type="text",
+                    player_id=self.player.id,
+                    payload={
+                        "text": "close east",
+                        "_request_id": request_id,
+                    },
+                )
         action = PreparedGameAction.objects.get(player=self.player)
 
         execute_forced_door_command(
@@ -508,6 +642,8 @@ class TestDoorCommands(WorldTestCase):
             recipient=self.player.key,
         )[0]
         self.assertEqual(cancelled["data"]["code"], "doorway_stale")
+        self.assertEqual(cancelled["data"]["request_id"], request_id)
+        self.assertEqual(cancelled["data"]["request_segment"], "r")
 
     def test_open_noop_does_not_invalidate_another_players_close(self):
         doorway, _, _ = self._create_door()

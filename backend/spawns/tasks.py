@@ -97,6 +97,22 @@ def run_scheduled_trigger_steps(limit: int = 100):
     return process_due_trigger_runs(limit=limit)
 
 
+@shared_task(
+    name="spawns.tasks.continue_scheduled_trigger_run",
+    ignore_result=True,
+)
+def continue_scheduled_trigger_run(
+    run_id: int,
+    expected_step_index: int,
+):
+    from spawns.trigger_steps import advance_due_trigger_run
+
+    return advance_due_trigger_run(
+        run_id=run_id,
+        expected_step_index=expected_step_index,
+    )
+
+
 @shared_task(name="spawns.tasks.prune_scheduled_trigger_runs", ignore_result=True)
 def prune_scheduled_trigger_runs(retention_days: int = 7) -> int:
     from spawns.trigger_steps import prune_terminal_trigger_runs

@@ -29,6 +29,7 @@ from spawns.handlers.registry import (
     resolve_text_handler,
 )
 from spawns.models import Item, Mob, Player
+from spawns.request_segments import normalize_request_segment
 from spawns.trigger_matcher import (
     evaluate_match_expression,
     exact_term_match,
@@ -56,6 +57,41 @@ _scope_content_types_cache: dict[type, ContentType] | None = None
 class TriggerExecutionResult:
     handled: bool
     feedback: str | None = None
+    status: str | None = None
+    code: str = ""
+
+
+def command_trigger_result_message(
+    result: TriggerExecutionResult,
+    *,
+    request_id: uuid.UUID | str | None = None,
+    request_segment: str = "r",
+) -> dict | None:
+    """Build one private response without turning status into room prose."""
+    if result.status == "rejected" and request_id:
+        data = {
+            "request_id": str(request_id),
+            "request_segment": normalize_request_segment(
+                request_segment
+            ),
+            "status": "rejected",
+            "code": "trigger_rejected",
+        }
+        message = {
+            "type": "cmd.trigger.rejected",
+            "data": data,
+        }
+        if result.feedback:
+            data["message"] = result.feedback
+            message["text"] = result.feedback
+        return message
+    if result.feedback:
+        return {
+            "type": "cmd.text.trigger",
+            "text": result.feedback,
+            "data": {"text": result.feedback},
+        }
+    return None
 
 
 @dataclass(frozen=True)
@@ -1339,6 +1375,8 @@ def execute_command_fallback_trigger(
     actor: Player | Mob,
     text: str,
     connection_id: str | None = None,
+    request_id: uuid.UUID | str | None = None,
+    request_segment: str = "r",
 ) -> TriggerExecutionResult:
     command_text = _normalized_text(text)
     if not command_text:
@@ -1352,8 +1390,12 @@ def execute_command_fallback_trigger(
 
     matched_any = False
     executed_any = False
+    succeeded_any = False
     failure_text: str | None = None
     script_errors: list[str] = []
+    acceptance_emitted = False
+    rejected_any = False
+    rejection_code = ""
 
     for trigger in triggers:
         if not _command_match_expression_matches(trigger.match, command_text):
@@ -1377,27 +1419,53 @@ def execute_command_fallback_trigger(
                 room=resolved_room,
                 event_data={"command": command_text},
                 gate_scope_key=scope_key,
+                request_id=request_id,
+                request_segment=request_segment,
+                request_connection_id=connection_id,
+                emit_acceptance=not acceptance_emitted,
             )
             if started.started:
                 executed_any = True
+                succeeded_any = True
+                acceptance_emitted = True
+                # Claim the client receipt immediately. The durable accepted
+                # event may publish only after an enclosing transaction
+                # commits, by which point command dispatch has returned.
+                from spawns.events import defer_actor_command_result
+
+                defer_actor_command_result(actor.key)
             elif started.code == "gated":
+                if succeeded_any:
+                    script_errors.append(TRIGGER_GATED_TEXT)
+                    rejected_any = True
+                    rejection_code = rejection_code or "gated"
+                    continue
                 return TriggerExecutionResult(
                     handled=True,
                     feedback=TRIGGER_GATED_TEXT,
+                    status="rejected",
+                    code="gated",
                 )
             elif started.code == "conditions_failed":
+                rejected_any = True
+                rejection_code = rejection_code or started.code
                 if trigger.show_details_on_failure and not failure_text:
                     failure_text = started.feedback
             elif started.code in {"trigger_missing", "no_steps"}:
-                pass
+                rejected_any = True
+                rejection_code = rejection_code or started.code
             elif started.feedback:
                 script_errors.append(started.feedback)
                 executed_any = True
+                rejected_any = True
+                rejection_code = rejection_code or started.code
             continue
 
         if trigger.conditions:
             evaluated = evaluate_conditions(actor, trigger.conditions)
             if not evaluated.get("result"):
+                rejected_any = True
+                rejection_code = rejection_code or "conditions_failed"
                 if trigger.show_details_on_failure and not failure_text:
                     failure_text = (
                         trigger.failure_message
@@ -1408,14 +1476,27 @@ def execute_command_fallback_trigger(
 
         gate_allowed, _gate_claim = _consume_gate(trigger, scope_key)
         if not gate_allowed:
-            return TriggerExecutionResult(handled=True, feedback=TRIGGER_GATED_TEXT)
+            if succeeded_any:
+                script_errors.append(TRIGGER_GATED_TEXT)
+                rejected_any = True
+                rejection_code = rejection_code or "gated"
+                continue
+            return TriggerExecutionResult(
+                handled=True,
+                feedback=TRIGGER_GATED_TEXT,
+                status="rejected",
+                code="gated",
+            )
 
         script_lines = _split_trigger_script_lines(trigger.script)
         if not script_lines:
             executed_any = True
+            succeeded_any = True
             continue
 
+        prior_error_count = len(script_errors)
         first_line_segments = script_lines[0]
+        attempted_segment_count = len(first_line_segments)
         for dispatched_error in _dispatch_trigger_script_segments(
             actor=actor,
             segments=first_line_segments,
@@ -1425,6 +1506,7 @@ def execute_command_fallback_trigger(
             script_errors.append(dispatched_error)
 
         for line_index, line_segments in enumerate(script_lines[1:], start=1):
+            attempted_segment_count += len(line_segments)
             for dispatched_error in _schedule_trigger_script_line_segments(
                 actor=actor,
                 line_segments=line_segments,
@@ -1434,17 +1516,38 @@ def execute_command_fallback_trigger(
             ):
                 script_errors.append(dispatched_error)
         executed_any = True
+        new_error_count = len(script_errors) - prior_error_count
+        if new_error_count < attempted_segment_count:
+            succeeded_any = True
 
     if executed_any:
         if script_errors:
             error_text = "\n".join(f"Error: {error}" for error in script_errors)
-            return TriggerExecutionResult(handled=True, feedback=error_text)
+            return TriggerExecutionResult(
+                handled=True,
+                feedback=error_text,
+                status=(
+                    None
+                    if succeeded_any
+                    else "rejected"
+                ),
+                code=rejection_code or "trigger_failed",
+            )
         return TriggerExecutionResult(handled=True)
 
     if failure_text:
-        return TriggerExecutionResult(handled=True, feedback=failure_text)
+        return TriggerExecutionResult(
+            handled=True,
+            feedback=failure_text,
+            status="rejected",
+            code=rejection_code or "conditions_failed",
+        )
 
     if matched_any:
-        return TriggerExecutionResult(handled=True)
+        return TriggerExecutionResult(
+            handled=True,
+            status="rejected" if rejected_any else None,
+            code=rejection_code,
+        )
 
     return TriggerExecutionResult(handled=False)

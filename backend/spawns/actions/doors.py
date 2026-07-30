@@ -570,6 +570,39 @@ def _action_command(action_type: str) -> str:
     }[action_type]
 
 
+def _action_request_correlation(
+    action: PreparedGameAction,
+) -> dict[str, str]:
+    if action.request_id is None:
+        return {}
+    return {
+        "request_id": str(action.request_id),
+        "request_segment": normalize_request_segment(
+            action.request_segment
+        ),
+    }
+
+
+def _correlate_action_actor_event(
+    events: list[GameEvent],
+    action: PreparedGameAction,
+) -> list[GameEvent]:
+    """Attach a durable request only to the prepared action's actor event."""
+    correlation = _action_request_correlation(action)
+    if not events or not correlation:
+        return events
+    actor_event = events[0]
+    events[0] = GameEvent(
+        type=actor_event.type,
+        recipients=actor_event.recipients,
+        data={**actor_event.data, **correlation},
+        text=actor_event.text,
+        group=actor_event.group,
+        connection_id=actor_event.connection_id,
+    )
+    return events
+
+
 def _command_action_type(command: str) -> str:
     return {
         "open": PreparedGameAction.ACTION_OPEN_DOOR,
@@ -1065,11 +1098,15 @@ def _mark_cancelled(
     )
     command = _action_command(action.action_type)
     event_type = f"cmd.{command}.cancelled"
+    actor_data = {
+        **data,
+        **_action_request_correlation(action),
+    }
     action.status = PreparedGameAction.STATUS_CANCELLED
     action.failure_code = code
     action.completed_ts = timezone.now()
     action.result = {
-        **data,
+        **actor_data,
         "_event_type": event_type,
         "_event_text": message,
     }
@@ -1086,7 +1123,7 @@ def _mark_cancelled(
         GameEvent(
             type=event_type,
             recipients=[player.key],
-            data=data,
+            data=actor_data,
             text=message,
         )
     ]
@@ -1265,6 +1302,7 @@ def resolve_prepared_door_action(
             changed=changed,
             targeted_face_name=action.target_name,
         )
+        events = _correlate_action_actor_event(events, action)
         actor_event = events[0]
         action.status = PreparedGameAction.STATUS_COMPLETED
         action.completed_ts = due_at

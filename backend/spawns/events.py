@@ -18,6 +18,7 @@ from core.trigger_steps import (
     SCRIPT_COMMAND_PROVENANCE_KEY,
 )
 from fastapi_app.game_ws import publish_to_player
+from spawns.request_segments import normalize_request_segment
 
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,14 @@ FINAL_TRANSFER_ENTER_KEY = "_final_transfer_enter"
 TRANSFER_LOCATION_SEQUENCE_KEY = "_transfer_location_sequence"
 TRANSFER_RUNTIME_WORLD_KEY = "_transfer_runtime_world_id"
 TRANSFER_ENTER_EVENT_TYPE = "notification./transfer.enter"
+PRIVATE_CONTROL_EVENT_KEY = "_private_control_event"
+COMMAND_REQUEST_COMPLETED_EVENT_TYPE = "cmd.request.completed"
+_TRIGGER_REQUEST_EVENT_TYPES = frozenset({
+    "cmd.trigger.accepted",
+    "cmd.trigger.completed",
+    "cmd.trigger.cancelled",
+    "cmd.trigger.rejected",
+})
 
 _captured_game_events: ContextVar[list[GameEvent] | None] = ContextVar(
     "captured_game_events",
@@ -35,6 +44,217 @@ _inherited_script_command_depth: ContextVar[int] = ContextVar(
     "inherited_script_command_depth",
     default=0,
 )
+_command_request_scopes: ContextVar[tuple[CommandRequestScope, ...]] = (
+    ContextVar(
+        "command_request_scopes",
+        default=(),
+    )
+)
+
+
+@dataclass
+class CommandRequestScope:
+    """In-process result ownership for one client command receipt segment."""
+
+    request_id: str
+    request_segment: str
+    actor_key: str
+    terminal_seen: bool = False
+    deferred: bool = False
+    delegated: bool = False
+
+    @property
+    def needs_completion_event(self) -> bool:
+        return not (
+            self.terminal_seen
+            or self.deferred
+            or self.delegated
+        )
+
+
+@dataclass(frozen=True)
+class CommandRequestScopeHandle:
+    scope: CommandRequestScope | None
+    owner: bool = False
+
+    @property
+    def needs_completion_event(self) -> bool:
+        return bool(
+            self.owner
+            and self.scope is not None
+            and self.scope.needs_completion_event
+        )
+
+
+def _normalized_request_id(value) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        return str(uuid.UUID(str(value)))
+    except (TypeError, ValueError, AttributeError):
+        return ""
+
+
+@contextmanager
+def command_request_scope(
+    *,
+    request_id,
+    request_segment,
+    actor_key: str,
+    enabled: bool = True,
+) -> Iterator[CommandRequestScopeHandle]:
+    """
+    Track one client receipt while its command dispatch runs in-process.
+
+    Alias and history redispatches share the same scope. Command-chain child
+    segments get independent scopes and mark their parent as a container so
+    the root cannot settle before the complete segment plan is processed.
+    """
+    normalized_request_id = (
+        _normalized_request_id(request_id)
+        if enabled
+        else ""
+    )
+    if not normalized_request_id:
+        yield CommandRequestScopeHandle(scope=None)
+        return
+
+    normalized_segment = normalize_request_segment(request_segment)
+    scopes = _command_request_scopes.get()
+    active_scope = scopes[-1] if scopes else None
+    scope = (
+        active_scope
+        if (
+            active_scope is not None
+            and active_scope.request_id == normalized_request_id
+            and active_scope.request_segment == normalized_segment
+            and active_scope.actor_key == actor_key
+        )
+        else None
+    )
+    owner = scope is None
+    if scope is None:
+        scope = CommandRequestScope(
+            request_id=normalized_request_id,
+            request_segment=normalized_segment,
+            actor_key=actor_key,
+        )
+        for parent in scopes:
+            if (
+                parent.request_id == normalized_request_id
+                and parent.actor_key == actor_key
+                and parent.request_segment != normalized_segment
+            ):
+                parent.delegated = True
+
+    token = _command_request_scopes.set((*scopes, scope))
+    try:
+        yield CommandRequestScopeHandle(scope=scope, owner=owner)
+    finally:
+        _command_request_scopes.reset(token)
+
+
+def command_request_completed_message(
+    scope: CommandRequestScope,
+) -> dict:
+    """Build a private terminal control for a command with no visible result."""
+    return {
+        "type": COMMAND_REQUEST_COMPLETED_EVENT_TYPE,
+        "data": {
+            "request_id": scope.request_id,
+            "request_segment": scope.request_segment,
+            "status": "completed",
+        },
+    }
+
+
+def _active_command_request_scope(
+    actor_key: str,
+) -> CommandRequestScope | None:
+    scopes = _command_request_scopes.get()
+    if not scopes or scopes[-1].actor_key != actor_key:
+        return None
+    return scopes[-1]
+
+
+def defer_actor_command_result(actor_key: str) -> None:
+    """Give an asynchronous lifecycle ownership of the active receipt."""
+    scope = _active_command_request_scope(actor_key)
+    if scope is not None:
+        scope.deferred = True
+
+
+def _is_terminal_command_event(event_type: str) -> bool:
+    return (
+        event_type.startswith("cmd.")
+        and (
+            event_type.endswith(".success")
+            or event_type.endswith(".error")
+        )
+    )
+
+
+def correlate_actor_command_message(
+    message: dict,
+    *,
+    actor_key: str,
+) -> dict:
+    """
+    Add receipt identity only to the actor's terminal command response.
+
+    This operates on the final recipient message rather than mutating a shared
+    ``GameEvent``, so room and third-party notifications cannot inherit the
+    private correlation fields.
+    """
+    scope = _active_command_request_scope(actor_key)
+    if scope is None:
+        return message
+
+    event_type = str(message.get("type") or "").strip().lower()
+    event_data = message.get("data") or {}
+    event_request_id = _normalized_request_id(
+        event_data.get("request_id")
+    )
+    event_request_segment = normalize_request_segment(
+        event_data.get("request_segment")
+    )
+    if event_request_id and (
+        event_request_id != scope.request_id
+        or event_request_segment != scope.request_segment
+    ):
+        # Durable async actions can finish while an unrelated command is
+        # running. Their stored identity is authoritative and must not settle
+        # the newer command's receipt.
+        return message
+
+    if event_type in _TRIGGER_REQUEST_EVENT_TYPES:
+        scope.deferred = True
+        return message
+    if event_type.startswith("cmd.") and event_type.endswith(".started"):
+        # A repeated prepared action is an immediate answer to the newer
+        # request ("already preparing"), not ownership of the original
+        # action's eventual result.
+        if not event_data.get("repeated"):
+            scope.deferred = True
+        return message
+    if (
+        event_type.startswith("cmd.")
+        and event_type.endswith(".cancelled")
+        and event_request_id
+    ):
+        scope.terminal_seen = True
+        return message
+    if not _is_terminal_command_event(event_type):
+        return message
+
+    scope.terminal_seen = True
+    correlated = dict(message)
+    correlated["data"] = {
+        **event_data,
+        "request_id": scope.request_id,
+        "request_segment": scope.request_segment,
+    }
+    return correlated
 
 
 @dataclass(frozen=True)
@@ -183,6 +403,7 @@ def publish_events(
             or FINAL_TRANSFER_ENTER_KEY in event.data
             or TRANSFER_LOCATION_SEQUENCE_KEY in event.data
             or TRANSFER_RUNTIME_WORLD_KEY in event.data
+            or PRIVATE_CONTROL_EVENT_KEY in event.data
             or isinstance(
                 event.data.get(SCRIPT_COMMAND_PROVENANCE_KEY),
                 dict,
@@ -196,6 +417,7 @@ def publish_events(
             public_data.pop(FINAL_TRANSFER_ENTER_KEY, None)
             public_data.pop(TRANSFER_LOCATION_SEQUENCE_KEY, None)
             public_data.pop(TRANSFER_RUNTIME_WORLD_KEY, None)
+            public_data.pop(PRIVATE_CONTROL_EVENT_KEY, None)
             message["data"] = public_data
         for recipient in event.recipients:
             recipient_connection_id = event.connection_id
@@ -208,7 +430,10 @@ def publish_events(
                 recipient_connection_id = connection_id
             publish_to_player(
                 recipient,
-                message,
+                correlate_actor_command_message(
+                    message,
+                    actor_key=recipient,
+                ),
                 connection_id=recipient_connection_id,
             )
 
@@ -220,14 +445,23 @@ def publish_events(
             event.data.get(SCRIPT_COMMAND_PROVENANCE_KEY),
             dict,
         )
+        is_private_control_event = bool(
+            event.data.get(PRIVATE_CONTROL_EVENT_KEY)
+        )
         event_type = str(event.type or "").strip().lower()
         dispatch_trigger_event = (
-            not is_trigger_step_event
-            or event_type == "notification./transfer.enter"
+            not is_private_control_event
+            and (
+                not is_trigger_step_event
+                or event_type == "notification./transfer.enter"
+            )
         )
         dispatch_quest_event = (
-            not is_trigger_step_event
-            or event_type == "affect.transfer"
+            not is_private_control_event
+            and (
+                not is_trigger_step_event
+                or event_type == "affect.transfer"
+            )
         )
 
         # Late imports avoid trigger/state payload import cycles during app

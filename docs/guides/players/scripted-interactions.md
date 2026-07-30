@@ -4,6 +4,22 @@ World builders can attach timed Trigger sequences to room commands and events.
 Some steps may execute a communication command as your character, such as
 having you say an authored oath after accepting a ferry crossing.
 
+When you enter a command, its dim console echo carries one compact status:
+
+- `…` means the command or a delayed Trigger sequence is not resolved yet
+- `✓` means an ordinary command finished successfully, or the final scheduled
+  Trigger step completed
+- a red `×` means delivery could not be confirmed or the action failed
+
+Hover over the symbol on desktop, focus it from the keyboard, or tap it on
+mobile to see the precise state and any safe failure detail.
+
+The client never automatically resends an unconfirmed command. This matters
+for commands that can spend currency or make another lasting change: loss of
+the acknowledgement does not prove that the original command failed.
+Transport and lifecycle statuses are interface feedback, not authored room
+prose, and other characters do not see them.
+
 When this happens:
 
 - the output is attributed to your character just like an ordinary `say`,
@@ -16,6 +32,12 @@ When this happens:
 - scripted speech is marked as authored behavior: it is visible, but does not
   advance a quest or cause another Trigger reaction as though you voluntarily
   entered the command
+
+A delayed sequence can be accepted before its first visible world response.
+Starting conditions establish eligibility at that moment; they do not reserve
+items or currency for a later step. If the needed state changes before a
+delayed action executes, that step rolls back, the remaining sequence is
+cancelled, and the player receives safe cancellation feedback.
 
 A Trigger step may also use the audited `/transfer` command to move the
 character who activated it. The transfer, any same-step payment, and same-step

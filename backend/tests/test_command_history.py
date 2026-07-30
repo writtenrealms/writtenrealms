@@ -1,3 +1,6 @@
+import uuid
+
+from spawns.handlers.registry import dispatch_command
 from tests.base import WorldTestCase
 from tests.utils import capture_game_messages, dispatch_text_command
 
@@ -88,6 +91,34 @@ class TestCommandHistory(WorldTestCase):
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.command_history, ["say hi"])
+
+    def test_history_replay_preserves_command_receipt_identity(self):
+        dispatch_text_command(self.player.id, "say hi")
+        request_id = uuid.uuid4()
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                payload={
+                    "text": "!1",
+                    "_request_id": str(request_id),
+                    "_request_segment": "r.3",
+                },
+            )
+
+        replay_message = self._message_by_type(
+            messages,
+            "cmd.history.replay",
+        )
+        self.assertEqual(
+            replay_message["data"]["request_id"],
+            str(request_id),
+        )
+        self.assertEqual(
+            replay_message["data"]["request_segment"],
+            "r.3",
+        )
 
     def test_history_replay_rejects_missing_index(self):
         with capture_game_messages() as messages:

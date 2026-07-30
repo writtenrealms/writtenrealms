@@ -9,6 +9,7 @@ from spawns.events import publish_events
 from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.permissions import has_builder_access
 from spawns.handlers.registry import register_handler
+from spawns.triggers import command_trigger_result_message
 
 
 def _selector(ctx: CommandContext):
@@ -54,16 +55,23 @@ def _handle_player(ctx: CommandContext, command: str) -> None:
                 actor=ctx.player,
                 text=raw_text,
                 connection_id=ctx.connection_id,
+                request_id=ctx.payload.get("_request_id"),
+                request_segment=ctx.payload.get(
+                    "_request_segment",
+                    "r",
+                ),
             )
             if fallback.handled:
-                if fallback.feedback:
-                    ctx.publish(
-                        {
-                            "type": "cmd.text.trigger",
-                            "text": fallback.feedback,
-                            "data": {"text": fallback.feedback},
-                        }
-                    )
+                response = command_trigger_result_message(
+                    fallback,
+                    request_id=ctx.payload.get("_request_id"),
+                    request_segment=ctx.payload.get(
+                        "_request_segment",
+                        "r",
+                    ),
+                )
+                if response is not None:
+                    ctx.publish(response)
                 return
         _publish_error(ctx, command, err)
         return
