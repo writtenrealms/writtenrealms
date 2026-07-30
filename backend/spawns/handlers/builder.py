@@ -13,6 +13,7 @@ from spawns.actions.builder import (
     JumpAction,
     LoadDefinitionAction,
     PurgeAction,
+    RepopAction,
     RegenAction,
     SendAction,
     MOB_SET_FIELD_CHOICES,
@@ -292,6 +293,19 @@ def _parse_regen_args(ctx: CommandContext) -> tuple[str | None, str | None]:
     if len(args) == 1:
         return args[0], None
     return " ".join(args[:-1]).strip(), args[-1]
+
+
+def _parse_repop_options(ctx: CommandContext) -> bool | None:
+    args = [
+        str(arg).strip().lower()
+        for arg in (ctx.payload.get("args") or [])
+        if str(arg).strip()
+    ]
+    if not args:
+        return False
+    if args == ["--doors"]:
+        return True
+    return None
 
 
 def _parse_setstat_args(ctx: CommandContext) -> tuple[str | None, str | None, object | None]:
@@ -1047,6 +1061,95 @@ class RegenHandler(CommandHandler):
                     "type": "cmd./regen.error",
                     "text": err.message,
                     "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.actor_key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class RepopHandler(CommandHandler):
+    command_type = "/repop"
+    text_commands = ("/repop",)
+    builder_only = True
+    allow_script_source = True
+    supported_actor_types = ("player", "room")
+    help = {
+        "name": "Repopulate Zone",
+        "format": "/repop [--doors]",
+        "description": (
+            "Immediately refill missing spawn-plan placements throughout the "
+            "current zone."
+        ),
+        "details": [
+            "Respawn wait times and respawn.mode: none are ignored.",
+            "Existing live spawn-plan output is counted and is not duplicated.",
+            (
+                "Doors are unchanged by default; --doors resets runtime "
+                "doorways in the zone to their authored defaults."
+            ),
+            (
+                "A room script repopulates the room's zone in its current "
+                "runtime world."
+            ),
+        ],
+        "examples": [
+            "/repop",
+            "/repop --doors",
+            "/cmd room -- /repop",
+            "/cmd room -- /repop --doors",
+        ],
+    }
+
+    def _can_execute_repop_command(self, ctx: CommandContext) -> bool:
+        if has_builder_access(ctx.player):
+            return True
+        return bool(
+            ctx.script_source
+            and self.allow_script_source
+            and ctx.actor_type == "room"
+        )
+
+    def handle(self, ctx: CommandContext) -> None:
+        if not self._can_execute_repop_command(ctx):
+            ctx.publish(builder_permission_error(self.command_type))
+            return
+
+        reset_doors = _parse_repop_options(ctx)
+        if reset_doors is None:
+            ctx.publish(
+                {
+                    "type": "cmd./repop.error",
+                    "text": "Usage: /repop [--doors]",
+                    "data": {
+                        "error": "The only supported option is --doors.",
+                        "code": "invalid_args",
+                    },
+                }
+            )
+            return
+
+        try:
+            result = RepopAction().execute(
+                actor=ctx.actor,
+                runtime_world=ctx.world,
+                reset_doors=reset_doors,
+            )
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd./repop.error",
+                    "text": err.message,
+                    "data": {
+                        "error": err.message,
+                        "code": err.code,
+                        **err.data,
+                    },
                 }
             )
             return

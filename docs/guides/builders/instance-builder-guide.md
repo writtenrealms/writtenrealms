@@ -374,6 +374,7 @@ game commands from the linked base room.
 | `enter <instance_ref>` | Join an existing active run for the same instance template. |
 | `leave` | Leave the current instance and return to the remembered base-world room. |
 | `instance` | Show the linked entrance, or show the current run's Instance ID while inside. |
+| `/repop [--doors]` | Builder-only: refill missing spawn-plan placements in the current instance zone, optionally resetting its runtime doorways, without rebuilding the run. |
 | `/reset` | Builder-only: reset the current instance run to its initial spawned state. |
 | `duel <player>` | Challenge a player at the same match-arena entrance. |
 | `duel accept [player]` | Accept a pending challenge and enter a fresh private match run. |
@@ -401,6 +402,14 @@ room, world/zone/room state is reseeded from the template's `initial_state`,
 and the instance reruns its initial spawn plans. Player character state is
 preserved. The reset affects only that run; other active runs of the same
 template keep their state.
+
+Use `/repop` for the narrower testing operation: it reconciles only the active
+spawn plans in the builder's current zone, bypassing their normal wait times
+and `respawn.mode: none` while retaining live placement output and scoped
+runtime state. Doors remain unchanged unless `--doors` is supplied; that option
+resets the zone's runtime doorway overrides to authored defaults without
+consuming the normal zone reset timer. Both forms affect only the current
+instance run.
 
 ## Group Play
 

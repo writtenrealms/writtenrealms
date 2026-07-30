@@ -323,6 +323,8 @@ Common commands you will often use in trigger scripts:
 - `/cmd room -- /grantitem {{ actor_key }} <item_slug>`
 - `/cmd room -- /kill {{ actor_key }} -- <private death message>`
 - `/cmd room -- /transfer {{ actor_key }} room@x,y,z`
+- `/cmd room -- /repop`
+- `/cmd room -- /repop --doors`
 
 For the full slash command matrix and command-by-command reference, see
 [builder-command-reference.md](builder-command-reference.md).

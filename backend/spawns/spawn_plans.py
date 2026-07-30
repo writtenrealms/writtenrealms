@@ -63,6 +63,7 @@ class SpawnReconcileContext:
 
     authored_world_id: int
     spawn_world_id: int
+    zone_id: int | None = None
     _no_roam_room_ids: set[int] | None = None
     _live_output_placement_ids: set[int] | None = None
 
@@ -76,24 +77,74 @@ class SpawnReconcileContext:
             )
         return room_id in self._no_roam_room_ids
 
-    def placement_has_live_output(self, placement_id: int) -> bool:
-        if self._live_output_placement_ids is None:
-            from spawns.models import Item, Mob
+    def _ensure_live_output_cache(self) -> bool:
+        """Populate the live-output cache and return whether it was just loaded."""
+        from spawns.models import Item, Mob
 
-            mob_placement_ids = Mob.objects.filter(
-                world_id=self.spawn_world_id,
-                spawn_placement_id__isnull=False,
-                is_pending_deletion=False,
-            ).values_list("spawn_placement_id", flat=True)
-            item_placement_ids = Item.objects.filter(
-                world_id=self.spawn_world_id,
-                spawn_placement_id__isnull=False,
-                is_pending_deletion=False,
-            ).values_list("spawn_placement_id", flat=True)
-            self._live_output_placement_ids = {
-                *mob_placement_ids,
-                *item_placement_ids,
+        if self._live_output_placement_ids is not None:
+            return False
+        mobs = Mob.objects.filter(
+            world_id=self.spawn_world_id,
+            spawn_placement_id__isnull=False,
+            is_pending_deletion=False,
+        )
+        items = Item.objects.filter(
+            world_id=self.spawn_world_id,
+            spawn_placement_id__isnull=False,
+            is_pending_deletion=False,
+        )
+        if self.zone_id is not None:
+            placement_zone_filter = {
+                "spawn_placement__run__plan__zone_id": self.zone_id,
             }
+            mobs = mobs.filter(**placement_zone_filter)
+            items = items.filter(**placement_zone_filter)
+        self._live_output_placement_ids = {
+            *mobs.values_list("spawn_placement_id", flat=True),
+            *items.values_list("spawn_placement_id", flat=True),
+        }
+        return True
+
+    def refresh_live_output_placement_ids(
+        self,
+        placement_ids,
+    ) -> None:
+        """
+        Batch-refresh cached misses after the current plan has been locked.
+
+        The first cache load already occurs under that lock. Later plans need
+        one batched refresh because another runner may have populated them
+        while this reconciliation was processing an earlier plan.
+        """
+        placement_ids = set(placement_ids)
+        if not placement_ids:
+            return
+        initialized_now = self._ensure_live_output_cache()
+        missing_ids = placement_ids - self._live_output_placement_ids
+        if initialized_now or not missing_ids:
+            return
+
+        from spawns.models import Item, Mob
+
+        self._live_output_placement_ids.update(
+            Mob.objects.filter(
+                world_id=self.spawn_world_id,
+                spawn_placement_id__in=missing_ids,
+                is_pending_deletion=False,
+            ).values_list("spawn_placement_id", flat=True)
+        )
+        remaining_ids = missing_ids - self._live_output_placement_ids
+        if remaining_ids:
+            self._live_output_placement_ids.update(
+                Item.objects.filter(
+                    world_id=self.spawn_world_id,
+                    spawn_placement_id__in=remaining_ids,
+                    is_pending_deletion=False,
+                ).values_list("spawn_placement_id", flat=True)
+            )
+
+    def placement_has_live_output(self, placement_id: int) -> bool:
+        self._ensure_live_output_cache()
         return placement_id in self._live_output_placement_ids
 
 
@@ -1724,17 +1775,25 @@ def reconcile_spawn_plan(
         reconcile_context = reconcile_context or SpawnReconcileContext(
             authored_world_id=plan.world_id,
             spawn_world_id=spawn_world.id,
+            zone_id=plan.zone_id,
         )
         entries_by_slug = {
             entry.slug: entry
             for entry in entries
             if entry.is_active
         }
-        placements = active_placements.select_related("room", "run__plan").order_by("id")
+        placements = active_placements.select_related(
+            "room",
+            "run__plan",
+        ).order_by("id")
         if not is_due:
             # A builder edit applies its changed logical slots immediately but
             # does not refill unrelated missing slots before their deadline.
             placements = placements.filter(pk__in=hot_placement_ids)
+        placements = list(placements)
+        reconcile_context.refresh_live_output_placement_ids(
+            placement.id for placement in placements
+        )
         spawned_count = 0
         for placement in placements:
             entry = entries_by_slug.get(placement.entry_slug)
@@ -1771,6 +1830,7 @@ def run_spawn_plans(
     reconcile_context = reconcile_context or SpawnReconcileContext(
         authored_world_id=world.context_id,
         spawn_world_id=world.id,
+        zone_id=zone_id,
     )
     plans = SpawnPlan.objects.filter(world=world.context, is_active=True).select_related("zone", "world")
     if zone_id:

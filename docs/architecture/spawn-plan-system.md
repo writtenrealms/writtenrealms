@@ -81,6 +81,12 @@ prefer portable refs so manifests round-trip across fresh databases.
 - Initial population and deliberate repopulation belong to instance/world
   lifecycle services. Spawn plans have no separate reset policy; ordinary
   replacement timing belongs to their respawn policy.
+- `/repop` is deliberate, zone-scoped reconciliation. It bypasses respawn mode
+  and deadline checks but retains live-output deduplication, active-plan and
+  condition checks, no-roam safety, and active-instance snapshot protection.
+  Doors are unchanged unless `--doors` is supplied; that option resets
+  materialized runtime doorway states in the selected zone to their authored
+  defaults. Neither form consumes the separate authored-zone door-reset timer.
 - Conditional logic must use the WR2 condition DSL in
   `backend/core/condition_dsl.py`.
 
@@ -92,6 +98,8 @@ Current builder-facing flows are:
 - inspect room-scoped plans through room **Spawn Plans**
 - inspect zone-scoped plans through zone **Spawn Plans**
 - export/import spawn plans as YAML manifests
+- force missing-placement reconciliation in the current runtime zone with
+  `/repop`, optionally including runtime doorways with `/repop --doors`
 
 Do not add builder screens or serializers around removed loader/rule tables.
 

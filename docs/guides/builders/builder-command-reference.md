@@ -69,6 +69,7 @@ form even though arbitrary player scripts cannot issue `/transfer`.
 | `/setclass` | Direct | Script | No | Script | No | No |
 | `/cmd`, `/force`, `/rcmd`, `/zcmd`, `/wcmd` | Direct | Script | Script | Script | Script | Script |
 | `/jump` | Direct | No | No | No | No | No |
+| `/repop` | Direct | No | No | Script | No | No |
 | `/reset` | Direct | No | No | No | No | No |
 
 ## Command Details
@@ -824,6 +825,56 @@ after an initial item/mob mutation prefix, commands may interleave with
 wallet state event follows all authored action events. Exporters that relied on
 WR1's trailing command to suppress that text should flag the script for an
 authoring review.
+
+### `/repop`
+
+Format:
+
+```text
+/repop [--doors]
+```
+
+Immediately reconciles every active spawn plan in the current zone. Direct
+builder use selects the zone containing the builder. Trusted room-script use
+selects the room's zone:
+
+```yaml
+script: /cmd room -- /repop
+```
+
+The command ignores each plan's ordinary respawn deadline and also refills
+missing placements from plans configured with `respawn.mode: none`. It still
+checks the generated population: a mob or item that remains live continues to
+satisfy its placement and is not duplicated, killed, moved, or rerolled.
+Inactive plans, plan and entry conditions, no-roam placement safety, and active
+instance snapshot safeguards continue to apply.
+
+Doors are unchanged by default. Add `--doors` to also reset materialized
+runtime doorway states in the selected zone to their authored defaults,
+regardless of the normal door-reset schedule:
+
+```text
+/repop --doors
+```
+
+The equivalent trusted room-script form is:
+
+```yaml
+script: /cmd room -- /repop --doors
+```
+
+Only the issuer's exact runtime world is affected. Inside an instance, `/repop`
+refills missing placements in that run's current zone; it does not change the
+template or another active run. Even with `--doors`, it does not clear combat,
+reset scoped state, consume the zone's door-reset timer, or rebuild the
+instance. Doorways already at their authored default remain sparse rather than
+gaining unnecessary runtime state. Use `/reset` when the entire current
+instance run should be rebuilt.
+
+This command is intended for builder testing and deliberate room interactions,
+not as a replacement for ordinary spawn-plan scheduling. High-frequency room
+triggers should not run it because work scales with the active plans and
+placements in the zone.
 
 ### `/reset`
 

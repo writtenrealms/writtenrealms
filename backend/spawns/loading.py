@@ -22,6 +22,7 @@ def run_spawn_plans_for_world(world, zone_id=None, initial=False, repopulate=Fal
     reconcile_context = SpawnReconcileContext(
         authored_world_id=world.context_id,
         spawn_world_id=world.id,
+        zone_id=zone_id,
     )
 
     if zone_id:
@@ -93,4 +94,69 @@ def run_spawn_plans_for_world(world, zone_id=None, initial=False, repopulate=Fal
     world.last_spawn_plan_run_ts = timezone.now()
     world.save(update_fields=['last_spawn_plan_run_ts'])
 
+    return output
+
+
+def repopulate_spawn_plans_for_zone(
+    *,
+    world,
+    zone_id,
+    reset_doors=False,
+):
+    """
+    Force spawn plans in one runtime zone and optionally reset its doorways.
+
+    Unlike the periodic world lifecycle runner, this deliberate builder/script
+    operation never consumes the authored zone's door-reset timer. Runtime
+    doorway states are reset only when explicitly requested.
+    """
+
+    if not world.context:
+        raise TypeError("Can only repopulate spawn plans on spawn worlds.")
+
+    zone = Zone.objects.filter(
+        pk=zone_id,
+        world_id=world.context_id,
+    ).get()
+
+    from spawns.spawn_plans import SpawnReconcileContext, run_spawn_plans
+
+    door_result = {
+        'requested': bool(reset_doors),
+        'doorways_checked': 0,
+        'door_states_reset': 0,
+    }
+    if reset_doors:
+        doorway_ids = list(
+            Door.objects.filter(
+                from_room__zone_id=zone.id,
+                doorway__world_id=world.context_id,
+            )
+            .order_by('doorway_id')
+            .values_list('doorway_id', flat=True)
+            .distinct()
+        )
+        from spawns.actions.doors import reset_runtime_doorways
+
+        door_result['doorways_checked'] = len(doorway_ids)
+        door_result['door_states_reset'] = reset_runtime_doorways(
+            runtime_world=world,
+            doorway_ids=doorway_ids,
+        )
+
+    output = {
+        'doors': door_result,
+        'spawn_plans': run_spawn_plans(
+            world=world,
+            zone_id=zone.id,
+            repopulate=True,
+            reconcile_context=SpawnReconcileContext(
+                authored_world_id=world.context_id,
+                spawn_world_id=world.id,
+                zone_id=zone.id,
+            ),
+        ),
+    }
+    world.last_spawn_plan_run_ts = timezone.now()
+    world.save(update_fields=['last_spawn_plan_run_ts'])
     return output

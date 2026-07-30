@@ -8,6 +8,7 @@ from builders.models import ItemDefinition, MobDefinition, Path, PathRoom, Spawn
 from config import constants as adv_consts
 from spawns.loading import run_spawn_plans_for_world
 from spawns.models import Item, Mob
+from spawns.spawn_plans import SpawnReconcileContext, run_spawn_plans
 from spawns.tasks import run_mob_roaming
 from tests.base import WorldTestCase
 from worlds.models import Room, RoomFlag, World, WorldConfig
@@ -1200,6 +1201,38 @@ class TestSpawnPlanRuntime(WorldTestCase):
         )
         self.assertEqual(Mob.objects.filter(world=spawn_world).count(), total_placements)
 
+    def test_zone_scoped_repop_honors_no_roam_for_cross_zone_target(self):
+        target_zone = self.world.zones.create(name="Cross-Zone Target")
+        target_room = Room.objects.create(
+            world=self.world,
+            zone=target_zone,
+            name="Cross-Zone Room",
+            x=9,
+            y=0,
+            z=0,
+        )
+        self.entry.target = {"zone": f"zone@{target_zone.relative_id}"}
+        self.entry.save(update_fields=["target"])
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        Mob.objects.get(
+            world=spawn_world,
+            definition=self.mob_definition,
+        ).delete()
+        RoomFlag.objects.create(
+            room=target_room,
+            code=adv_consts.ROOM_FLAG_NO_ROAM,
+        )
+
+        output = run_spawn_plans(
+            world=spawn_world,
+            zone_id=self.zone.id,
+            repopulate=True,
+        )
+
+        self.assertEqual(output[0]["spawned"], 0)
+        self.assertFalse(Mob.objects.filter(world=spawn_world).exists())
+
     def test_spawn_plan_runner_reconciles_missing_spawn_plan_copy(self):
         spawn_world = self.world.create_spawn_world()
         WorldSmith(spawn_world).start()
@@ -1221,6 +1254,50 @@ class TestSpawnPlanRuntime(WorldTestCase):
             1,
         )
         self.assertEqual(SpawnPlacement.objects.filter(run__plan=self.plan).count(), 1)
+
+    def test_stale_live_output_cache_rechecks_before_materializing(self):
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        original = Mob.objects.get(
+            world=spawn_world,
+            definition=self.mob_definition,
+        )
+        placement = original.spawn_placement
+        original.delete()
+        reconcile_context = SpawnReconcileContext(
+            authored_world_id=self.world.id,
+            spawn_world_id=spawn_world.id,
+            zone_id=self.zone.id,
+        )
+        self.assertFalse(
+            reconcile_context.placement_has_live_output(placement.id)
+        )
+        replacement = Mob.objects.create(
+            world=spawn_world,
+            room=self.room,
+            definition=self.mob_definition,
+            definition_slug_snapshot=self.mob_definition.slug,
+            spawn_placement=placement,
+            name=self.mob_definition.name,
+        )
+
+        output = run_spawn_plans(
+            world=spawn_world,
+            zone_id=self.zone.id,
+            repopulate=True,
+            reconcile_context=reconcile_context,
+        )
+
+        self.assertEqual(output[0]["spawned"], 0)
+        self.assertEqual(
+            list(
+                Mob.objects.filter(
+                    world=spawn_world,
+                    spawn_placement=placement,
+                ).values_list("id", flat=True)
+            ),
+            [replacement.id],
+        )
 
     def test_unknown_persisted_respawn_mode_does_not_refill_missing_spawn(self):
         self.plan.respawn_policy = {"mode": "never"}

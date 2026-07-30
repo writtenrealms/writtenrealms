@@ -110,6 +110,7 @@ class TestHelpCommands(WorldTestCase):
             "/transfer <target> <room_id|room@x,y,z|direction|here>",
             message.get("text", ""),
         )
+        self.assertIn("/repop", message.get("text", ""))
         self.assertNotIn("/resync", message.get("text", ""))
 
         commands = message["data"]["commands"]
@@ -161,6 +162,20 @@ class TestHelpCommands(WorldTestCase):
         for field_name in EXPECTED_SET_MOB_FIELDS:
             self.assertIn(field_name, text)
 
+    def test_help_repop_describes_forced_zone_reconciliation(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "help /repop")
+
+        message = self._message_by_type(messages, "cmd.help.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["command"]["command"], "/repop")
+        self.assertIn("/repop [--doors]", message.get("text", ""))
+        self.assertIn("current zone", message.get("text", ""))
+        self.assertIn("respawn.mode: none", message.get("text", ""))
+        self.assertIn("not duplicated", message.get("text", ""))
+        self.assertIn("unchanged by default", message.get("text", ""))
+        self.assertIn("authored defaults", message.get("text", ""))
+
     def test_help_builder_command_requires_builder_permissions(self):
         other_user = self.create_user("other@example.com")
         other_player = self.create_player("Other", user=other_user)
@@ -182,6 +197,7 @@ class TestHelpCommands(WorldTestCase):
         message = self._message_by_type(messages, "cmd.help.success")
         self.assertIsNotNone(message)
         self.assertNotIn("/load <item|mob> <definition_id|slug> [cmd]", message.get("text", ""))
+        self.assertNotIn("/repop", message.get("text", ""))
         self.assertNotIn("/resync", message.get("text", ""))
 
     def test_help_supports_partial_builder_command_lookup(self):

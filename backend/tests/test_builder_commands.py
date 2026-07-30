@@ -13,6 +13,8 @@ from builders.models import (
     ItemDefinition,
     ItemSalvageYield,
     MobDefinition,
+    SpawnEntry,
+    SpawnPlan,
     Trigger,
 )
 from config import constants as api_consts
@@ -29,14 +31,16 @@ from spawns.actions.builder import GrantItemAction
 from spawns.models import (
     ActiveEffect,
     CombatEncounter,
+    DoorState,
     GameEventOutbox,
     Item,
     Mob,
     PlayerCurrencyBalance,
 )
+from spawns.loading import run_spawn_plans_for_world
 from spawns.wallet import balance_map
 from tests.base import WorldTestCase
-from worlds.models import Room, World, WorldConfig
+from worlds.models import Door, Doorway, Room, World, WorldConfig, Zone
 from tests.utils import (
     apply_basic_stat_system,
     capture_game_messages,
@@ -218,6 +222,19 @@ class TestBuilderCommandPermissions(WorldTestCase):
         self.assertFalse(
             PlayerCurrencyBalance.objects.filter(player=self.player).exists()
         )
+
+    def test_script_source_does_not_allow_player_repop_commands(self):
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                payload={"text": "/repop"},
+                script_source=True,
+            )
+
+        message = self._message_by_type(messages, "cmd./repop.error")
+        self.assertIsNotNone(message)
+        self.assertIn("permission", message.get("text", "").lower())
 
 
 class BuilderCommandTestCase(WorldTestCase):
@@ -1436,6 +1453,333 @@ class TestBuilderPurge(BuilderCommandTestCase):
         message = self._message_by_type(messages, "cmd./purge.success")
         self.assertIsNotNone(message)
         self.assertIn("You purge Relic from this world.", message.get("text", ""))
+
+
+class TestBuilderRepop(BuilderCommandTestCase):
+    def setUp(self):
+        super().setUp()
+        self.other_zone = Zone.objects.create(
+            world=self.world,
+            name="Far Annex",
+        )
+        self.other_room = Room.objects.create(
+            world=self.world,
+            zone=self.other_zone,
+            name="Far Annex Room",
+            x=1,
+            y=0,
+            z=0,
+        )
+        self.none_definition = self._create_mob_definition("none-dummy")
+        self.wait_definition = self._create_mob_definition("waiting-dummy")
+        self.other_definition = self._create_mob_definition("other-zone-dummy")
+        self.none_plan = self._create_spawn_plan(
+            slug="none-plan",
+            room=self.room,
+            respawn_policy={"mode": "none"},
+            definition=self.none_definition,
+        )
+        self.wait_plan = self._create_spawn_plan(
+            slug="waiting-plan",
+            room=self.room,
+            respawn_policy={"mode": "fixed", "seconds": 3600},
+            definition=self.wait_definition,
+        )
+        self.other_plan = self._create_spawn_plan(
+            slug="other-zone-plan",
+            room=self.other_room,
+            respawn_policy={"mode": "fixed", "seconds": 3600},
+            definition=self.other_definition,
+        )
+        run_spawn_plans_for_world(
+            world=self.spawn_world,
+            initial=True,
+        )
+
+    def _create_mob_definition(self, slug):
+        return MobDefinition.objects.create(
+            world=self.world,
+            slug=slug,
+            name=slug.replace("-", " ").title(),
+            mob_type=api_consts.MOB_TYPE_CONSTRUCT,
+            base_properties={"health_max": 10},
+        )
+
+    def _create_spawn_plan(
+        self,
+        *,
+        slug,
+        room,
+        respawn_policy,
+        definition,
+    ):
+        plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=room.zone,
+            slug=slug,
+            name=slug.replace("-", " ").title(),
+            respawn_policy=respawn_policy,
+        )
+        SpawnEntry.objects.create(
+            plan=plan,
+            slug=f"{slug}-entry",
+            source=f"mobdefinition.{definition.slug}",
+            target={"room": f"room@{room.x},{room.y},{room.z}"},
+            count=1,
+        )
+        return plan
+
+    def _create_doorway(
+        self,
+        *,
+        from_room,
+        to_room,
+        direction="east",
+    ):
+        doorway = Doorway.objects.create(
+            world=self.world,
+            default_state=api_consts.DOOR_STATE_OPEN,
+        )
+        Door.objects.create(
+            doorway=doorway,
+            direction=direction,
+            from_room=from_room,
+            to_room=to_room,
+            name="test gate",
+        )
+        return doorway
+
+    def _create_runtime_door_state(
+        self,
+        *,
+        from_room,
+        to_room,
+        runtime_world=None,
+        direction="east",
+        revision=7,
+    ):
+        doorway = self._create_doorway(
+            from_room=from_room,
+            to_room=to_room,
+            direction=direction,
+        )
+        state = DoorState.objects.create(
+            world=runtime_world or self.spawn_world,
+            doorway=doorway,
+            state=api_consts.DOOR_STATE_CLOSED,
+            revision=revision,
+        )
+        return doorway, state
+
+    @staticmethod
+    def _message_by_type(messages, message_type):
+        for msg in messages:
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def test_repop_forces_current_zone_waiting_and_none_plans_without_duplicates(self):
+        _, door_state = self._create_runtime_door_state(
+            from_room=self.room,
+            to_room=self.other_room,
+        )
+        Mob.objects.filter(world=self.spawn_world).delete()
+
+        ordinary_output = run_spawn_plans_for_world(world=self.spawn_world)
+
+        self.assertEqual(
+            sum(result["spawned"] for result in ordinary_output["spawn_plans"]),
+            0,
+        )
+        self.assertFalse(Mob.objects.filter(world=self.spawn_world).exists())
+        self.zone.last_respawn_ts = None
+        self.zone.save(update_fields=["last_respawn_ts"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/repop")
+
+        self.assertTrue(
+            Mob.objects.filter(
+                world=self.spawn_world,
+                definition=self.none_definition,
+            ).exists()
+        )
+        self.assertTrue(
+            Mob.objects.filter(
+                world=self.spawn_world,
+                definition=self.wait_definition,
+            ).exists()
+        )
+        self.assertFalse(
+            Mob.objects.filter(
+                world=self.spawn_world,
+                definition=self.other_definition,
+            ).exists()
+        )
+        message = self._message_by_type(messages, "cmd./repop.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["zone"]["id"], self.zone.id)
+        self.assertEqual(message["data"]["spawn_plans_checked"], 2)
+        self.assertEqual(message["data"]["spawn_plans_reconciled"], 2)
+        self.assertEqual(message["data"]["placements_checked"], 2)
+        self.assertEqual(message["data"]["spawned"], 2)
+        self.assertEqual(
+            message["data"]["doors"],
+            {
+                "requested": False,
+                "doorways_checked": 0,
+                "door_states_reset": 0,
+            },
+        )
+        door_state.refresh_from_db()
+        self.assertEqual(door_state.state, api_consts.DOOR_STATE_CLOSED)
+        self.assertEqual(door_state.revision, 7)
+        self.zone.refresh_from_db()
+        self.assertIsNone(self.zone.last_respawn_ts)
+
+        with capture_game_messages() as second_messages:
+            dispatch_text_command(self.player.id, "/repop")
+
+        self.assertEqual(
+            Mob.objects.filter(
+                world=self.spawn_world,
+                definition__in=[
+                    self.none_definition,
+                    self.wait_definition,
+                ],
+            ).count(),
+            2,
+        )
+        second_message = self._message_by_type(
+            second_messages,
+            "cmd./repop.success",
+        )
+        self.assertIsNotNone(second_message)
+        self.assertEqual(second_message["data"]["spawned"], 0)
+
+    def test_repop_doors_resets_only_selected_zone_and_runtime(self):
+        current_doorway, current_state = self._create_runtime_door_state(
+            from_room=self.room,
+            to_room=self.other_room,
+        )
+        _, other_zone_state = self._create_runtime_door_state(
+            from_room=self.other_room,
+            to_room=self.room,
+            direction="south",
+        )
+        sparse_doorway = self._create_doorway(
+            from_room=self.room,
+            to_room=self.other_room,
+            direction="north",
+        )
+        other_runtime = self.world.create_spawn_world()
+        other_runtime_state = DoorState.objects.create(
+            world=other_runtime,
+            doorway=current_doorway,
+            state=api_consts.DOOR_STATE_LOCKED,
+            revision=3,
+        )
+        self.zone.last_respawn_ts = None
+        self.zone.save(update_fields=["last_respawn_ts"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/repop --doors")
+
+        current_state.refresh_from_db()
+        other_zone_state.refresh_from_db()
+        other_runtime_state.refresh_from_db()
+        self.assertEqual(current_state.state, api_consts.DOOR_STATE_OPEN)
+        self.assertEqual(current_state.revision, 8)
+        self.assertEqual(other_zone_state.state, api_consts.DOOR_STATE_CLOSED)
+        self.assertEqual(other_zone_state.revision, 7)
+        self.assertEqual(other_runtime_state.state, api_consts.DOOR_STATE_LOCKED)
+        self.assertEqual(other_runtime_state.revision, 3)
+        self.assertFalse(
+            DoorState.objects.filter(
+                world=self.spawn_world,
+                doorway=sparse_doorway,
+            ).exists()
+        )
+        self.zone.refresh_from_db()
+        self.assertIsNone(self.zone.last_respawn_ts)
+
+        message = self._message_by_type(messages, "cmd./repop.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(
+            message["data"]["doors"],
+            {
+                "requested": True,
+                "doorways_checked": 2,
+                "door_states_reset": 1,
+            },
+        )
+        self.assertIn("Reset 1 runtime door state", message["text"])
+
+    def test_repop_rejects_unknown_or_duplicate_options(self):
+        for command in (
+            "/repop --unknown",
+            "/repop --doors --doors",
+        ):
+            with self.subTest(command=command):
+                with capture_game_messages() as messages:
+                    dispatch_text_command(self.player.id, command)
+
+                message = self._message_by_type(
+                    messages,
+                    "cmd./repop.error",
+                )
+                self.assertIsNotNone(message)
+                self.assertEqual(message["data"]["code"], "invalid_args")
+                self.assertIn("/repop [--doors]", message["text"])
+
+    def test_room_script_repop_uses_issuer_rooms_zone(self):
+        _, door_state = self._create_runtime_door_state(
+            from_room=self.other_room,
+            to_room=self.room,
+            direction="south",
+        )
+        Mob.objects.filter(
+            world=self.spawn_world,
+            definition=self.other_definition,
+        ).delete()
+        script_user = self.create_user("repop-script@example.com")
+        script_player = self.create_player(
+            "Repop Script Actor",
+            user=script_user,
+            room=self.other_room,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=script_player.id,
+                payload={"text": "/cmd room -- /repop --doors"},
+                script_source=True,
+            )
+
+        door_state.refresh_from_db()
+        self.assertEqual(door_state.state, api_consts.DOOR_STATE_OPEN)
+        self.assertEqual(door_state.revision, 8)
+        self.assertTrue(
+            Mob.objects.filter(
+                world=self.spawn_world,
+                definition=self.other_definition,
+            ).exists()
+        )
+        repop_message = self._message_by_type(messages, "cmd./repop.success")
+        self.assertIsNotNone(repop_message)
+        self.assertEqual(repop_message["data"]["actor"]["char_type"], "room")
+        self.assertEqual(repop_message["data"]["zone"]["id"], self.other_zone.id)
+        self.assertEqual(repop_message["data"]["spawn_plans_checked"], 1)
+        self.assertEqual(repop_message["data"]["spawned"], 1)
+        self.assertEqual(repop_message["data"]["doors"]["requested"], True)
+        self.assertEqual(
+            repop_message["data"]["doors"]["door_states_reset"],
+            1,
+        )
+        cmd_message = self._message_by_type(messages, "cmd./cmd.success")
+        self.assertIsNotNone(cmd_message)
+        self.assertEqual(cmd_message["data"]["errors"], [])
 
 
 class TestBuilderTransfer(BuilderCommandTestCase):

@@ -391,6 +391,27 @@ These mode names are strict. `never` is not an alias for `none`, and malformed
 policies, unknown modes, unsupported fields, non-integer seconds, and negative
 seconds are rejected when the manifest is saved.
 
+Builders can run `/repop` to force immediate reconciliation of every active
+spawn plan in their current zone. A trusted room script can do the same for its
+room's zone with:
+
+```yaml
+script: /cmd room -- /repop
+```
+
+Forced reconciliation ignores `fixed` and `inherit_zone` deadlines and
+`respawn.mode: none`, but it does not bypass population counts. Existing live
+output is retained without duplication, while missing deterministic placements
+are refilled. Plan and entry conditions, inactive-plan status, no-roam safety,
+and active-instance snapshot protection still apply.
+
+Doors are unchanged by default. `/repop --doors` also resets materialized
+runtime doorway states in the selected zone to their authored defaults. The
+room-script form is `/cmd room -- /repop --doors`. This explicit reset still
+does not consume the zone's independent door-reset timer and affects only the
+issuer's exact runtime world. Reserve `/repop` for builder testing or an
+intentional room interaction rather than routine high-frequency scheduling.
+
 ### Editing A Running World
 
 Saving a spawn-plan change updates ordinary running worlds on the next

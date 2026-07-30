@@ -1603,6 +1603,101 @@ class PurgeAction:
         ])
 
 
+class RepopAction:
+    """Force zone spawn reconciliation and optionally reset runtime doorways."""
+
+    def execute(
+        self,
+        *,
+        actor: Player | Room,
+        runtime_world: World | None = None,
+        reset_doors: bool = False,
+    ) -> ActionResult:
+        zone = _actor_zone(actor)
+        if zone is None:
+            raise ActionError(
+                "There is no current zone to repopulate.",
+                code="no_zone",
+            )
+
+        spawn_world = _actor_world(actor, runtime_world=runtime_world)
+        if spawn_world is None or spawn_world.context_id is None:
+            raise ActionError(
+                "There is no runtime world to repopulate.",
+                code="no_runtime_world",
+            )
+        if zone.world_id != spawn_world.context_id:
+            raise ActionError(
+                "The current zone is outside this runtime world.",
+                code="invalid_world_context",
+            )
+
+        # Door reset timing remains owned by the periodic lifecycle runner.
+        # The optional manual reset does not advance that shared zone timer.
+        # Reconciliation shares one zone-scoped live-placement cache and
+        # rechecks misses while each plan is locked, preventing duplicate
+        # output under concurrent runs.
+        from spawns.loading import repopulate_spawn_plans_for_zone
+
+        output = repopulate_spawn_plans_for_zone(
+            world=spawn_world,
+            zone_id=zone.id,
+            reset_doors=reset_doors,
+        )
+        plan_results = output["spawn_plans"]
+        plan_count = len(plan_results)
+        reconciled_count = sum(
+            1 for result in plan_results if not result.get("skipped")
+        )
+        placement_count = sum(
+            int(result.get("placements") or 0)
+            for result in plan_results
+        )
+        spawned_count = sum(
+            int(result.get("spawned") or 0)
+            for result in plan_results
+        )
+        plan_label = "plan" if plan_count == 1 else "plans"
+        spawn_label = "spawn" if spawned_count == 1 else "spawns"
+
+        data = {
+            "actor": _actor_summary(actor),
+            "world_id": spawn_world.id,
+            "zone": {
+                "id": zone.id,
+                "key": zone.key,
+                "name": zone.name,
+            },
+            "spawn_plans_checked": plan_count,
+            "spawn_plans_reconciled": reconciled_count,
+            "placements_checked": placement_count,
+            "spawned": spawned_count,
+            "doors": output["doors"],
+        }
+        door_text = ""
+        if reset_doors:
+            doorways_checked = output["doors"]["doorways_checked"]
+            door_states_reset = output["doors"]["door_states_reset"]
+            doorway_label = "doorway" if doorways_checked == 1 else "doorways"
+            state_label = "state" if door_states_reset == 1 else "states"
+            door_text = (
+                f" Reset {door_states_reset} runtime door {state_label} "
+                f"across {doorways_checked} zone {doorway_label}."
+            )
+        return ActionResult(events=[
+            GameEvent(
+                type="cmd./repop.success",
+                recipients=[actor.key],
+                data=data,
+                text=(
+                    f"Repopulated {zone.name}: checked {plan_count} active "
+                    f"spawn {plan_label} and restored {spawned_count} missing "
+                    f"{spawn_label}.{door_text}"
+                ),
+            ),
+        ])
+
+
 class EchoAction:
     def execute(
         self,
