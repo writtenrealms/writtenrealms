@@ -3072,19 +3072,19 @@ def parse_trigger_manifest(
     elif kind == adv_consts.TRIGGER_KIND_EVENT:
         if not event:
             raise serializers.ValidationError("spec.event is required for kind 'event'.")
+        if scope == adv_consts.TRIGGER_SCOPE_ROOM:
+            event_choices = adv_consts.TRIGGER_ROOM_EVENT_EVENTS
+        elif scope == adv_consts.TRIGGER_SCOPE_WORLD:
+            event_choices = adv_consts.MOB_REACTION_EVENTS
+        else:
+            raise serializers.ValidationError(
+                "Event triggers must use scope 'room' or 'world'."
+            )
         event = _coerce_choice(
             event,
-            choices=adv_consts.MOB_REACTION_EVENTS + adv_consts.TRIGGER_ROOM_EVENT_EVENTS,
+            choices=event_choices,
             field_name="spec.event",
         )
-        if event in adv_consts.MOB_REACTION_EVENTS and scope != adv_consts.TRIGGER_SCOPE_WORLD:
-            raise serializers.ValidationError(
-                "Mob reaction event triggers must use scope 'world'."
-            )
-        if event in adv_consts.TRIGGER_ROOM_EVENT_EVENTS and scope != adv_consts.TRIGGER_SCOPE_ROOM:
-            raise serializers.ValidationError(
-                "Room event triggers must use scope 'room'."
-            )
     elif event:
         event = _coerce_choice(
             event,
@@ -3092,7 +3092,10 @@ def parse_trigger_manifest(
             field_name="spec.event",
         )
 
-    if kind == adv_consts.TRIGGER_KIND_EVENT and event in adv_consts.MOB_REACTION_EVENTS:
+    if (
+        kind == adv_consts.TRIGGER_KIND_EVENT
+        and scope == adv_consts.TRIGGER_SCOPE_WORLD
+    ):
         target_type, target_id = _resolve_event_target(
             world=world,
             target_data=spec.get("target"),

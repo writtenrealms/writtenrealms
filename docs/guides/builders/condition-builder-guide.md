@@ -235,21 +235,29 @@ Trigger conditions can read actor, room, zone, world, and `state.*` paths. If a
 trigger shows a room action, the same condition also controls whether that
 action appears in the room action list.
 
-Movement policy and movement event triggers receive extra event paths:
+Movement policies and room-arrival event triggers receive extra event paths:
 
 | Path | Meaning |
 | --- | --- |
-| `event.direction` | Direction the player moved or tried to move. |
-| `event.origin_room.id` | Room id the player moved from. |
-| `event.origin_room.key` | Room key the player moved from. |
-| `event.destination_room.id` | Room id the player moved toward. |
-| `event.destination_room.key` | Room key the player moved toward. |
+| `event.source` | Arrival source for room `enter`: `move`, `flee`, `transfer`, `death`, `jump`, `character_reset`, `instance_enter`, `instance_leave`, or `instance_reset`. |
+| `event.direction` | Normalized attempted or completed direction, when the source is directional. |
+| `event.origin_room.id` | Prior/origin room id. |
+| `event.origin_room.key` | Prior/origin room key. |
+| `event.destination_room.id` | Intended or committed destination room id. |
+| `event.destination_room.key` | Intended or committed destination room key. |
 | `event.target.id` | The room this trigger is attached to. |
 
-For `before_move_enter` and `after_move_enter`, `room.*` and `state.room.*`
-refer to the destination room. For `before_move_exit` and `after_move_exit`,
-they refer to the origin room. `mob_present` and room-located `item_present`
-follow the same context-room rule.
+For room-scoped `enter`, `before_move_enter`, and `after_move_enter`, `room.*`
+and `state.room.*` refer to the destination room. For `before_move_exit` and
+`after_move_exit`, they refer to the origin room. `mob_present` and
+room-located `item_present` follow the same context-room rule.
+
+`event.direction` is populated for ordinary movement, adjacent-room charge,
+flee, and directional `/jump`; it is an empty string for non-directional
+sources. A room event's non-empty `spec.match` also matches this direction, so
+use `event.source` in structured conditions and leave `match` blank when a
+trigger must accept non-directional arrivals. Login/reconnect and offline
+location repair do not emit room-entry events.
 
 For example, a movement policy whose condition is `not: {mob_present:
 mobdefinition.guard}` passes while the guard is absent and blocks movement

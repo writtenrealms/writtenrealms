@@ -2,11 +2,12 @@ from copy import deepcopy
 import math
 from unittest.mock import patch
 
-from builders.models import AbilityDefinition, ItemDefinition, MobDefinition
+from builders.models import AbilityDefinition, ItemDefinition, MobDefinition, Trigger
 from config import constants as adv_consts
 from core.combat_formulas import CombatAttackResult, normalize_combat_system, resolve_attack
 from core.computations import compute_stats
 from core.scoped_state import STATE_SCOPE_CHARACTER, get_state_value
+from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
 from spawns.actions.combat import (
     CombatStepResult,
@@ -25,6 +26,7 @@ from tests.utils import (
     dispatch_text_command,
     replace_active_effects,
 )
+from worlds.models import Room
 
 
 class TestCombatAbilities(WorldTestCase):
@@ -1419,6 +1421,17 @@ class TestCombatAbilities(WorldTestCase):
         self.player.known_abilities = ["charge"]
         self.player.save(update_fields=["known_abilities"])
         dest_room = self.room.create_at(adv_consts.DIRECTION_EAST)
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=dest_room.id,
+            event=adv_consts.TRIGGER_EVENT_ENTER,
+            script="/cmd room -- /echo -- The charge horn sounds.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
         mob = self._mob(room=dest_room, attack_power=4, fights_back=True)
         expected_damage = math.ceil(self.stats["attack_power"] * 1.5)
 
@@ -1451,6 +1464,17 @@ class TestCombatAbilities(WorldTestCase):
         moves = self._messages_by_type(messages, "cmd.move.success")
         self.assertEqual(len(moves), 1)
         self.assertEqual(moves[0]["data"]["direction"], "east")
+        enter_echoes = [
+            entry["message"]
+            for entry in messages
+            if entry["message"].get("type") == "cmd./echo.success"
+            and "charge horn" in entry["message"].get("text", "")
+        ]
+        self.assertEqual(
+            len(enter_echoes),
+            1,
+            [entry["message"] for entry in messages],
+        )
 
         self.assertEqual(self.player.ability_cooldowns, {"charge": 10})
         schedule_mock.assert_called_once()

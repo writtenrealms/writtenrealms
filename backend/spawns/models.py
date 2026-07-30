@@ -287,11 +287,23 @@ class Player(CharMixin, AdventBaseModel):
         "Lookup something in the game by its key."
         raise NotImplementedError("Old game lookup is no longer supported.")
 
-    def initialize(self, reset=False, level=None, include_starting_equipment=True):
+    def initialize(
+        self,
+        reset=False,
+        level=None,
+        include_starting_equipment=True,
+        reset_origin_world_id=None,
+        reset_origin_room_id=None,
+    ):
         from builders.models import FactionAssignment
         from core.economy import economy_world
         from spawns.wallet import replace_balances
 
+        if reset:
+            if reset_origin_world_id is None:
+                reset_origin_world_id = self.world_id
+            if reset_origin_room_id is None:
+                reset_origin_room_id = self.room_id
         leveling_config = get_world_leveling_config(self.world)
         if level is None:
             level = leveling_config.starting_level
@@ -301,7 +313,13 @@ class Player(CharMixin, AdventBaseModel):
             self.level = level
             self.experience = experience_for_level(level, leveling_config)
             self.glory = 0
-            self.room = self.get_starting_room()
+            starting_room = self.get_starting_room()
+            if (
+                reset_origin_world_id != self.world_id
+                or reset_origin_room_id != starting_room.id
+            ):
+                self.location_sequence = int(self.location_sequence or 0) + 1
+            self.room = starting_room
             # Delete factions
             FactionAssignment.objects.filter(
                 faction__world=self.world.context,
@@ -492,6 +510,32 @@ class Player(CharMixin, AdventBaseModel):
             reason="character.reset" if reset else "character.initialize",
             emit_event=False,
         )
+        if (
+            reset
+            and self.in_game
+            and (
+                reset_origin_world_id != self.world_id
+                or reset_origin_room_id != self.room_id
+            )
+        ):
+            from spawns.events import (
+                enqueue_game_events,
+                flush_game_event_outbox,
+                player_room_enter_event,
+            )
+
+            enqueue_game_events([
+                player_room_enter_event(
+                    player=self,
+                    origin_room_id=reset_origin_room_id,
+                    destination_room_id=self.room_id,
+                    source="character_reset",
+                )
+            ])
+            transaction.on_commit(
+                flush_game_event_outbox,
+                robust=True,
+            )
 
         return self
 
@@ -532,11 +576,23 @@ class Player(CharMixin, AdventBaseModel):
         return authored_world.config.starting_room
 
     def reset(self, level=None):
-        player = self
-        if player.world.is_multiplayer:
-            player.initialize(reset=True, level=level)
-            return player
-        else:
+        with transaction.atomic():
+            player = (
+                type(self).objects.select_for_update(of=('self',))
+                .select_related('world', 'world__context')
+                .get(pk=self.pk)
+            )
+            reset_origin_world_id = player.world_id
+            reset_origin_room_id = player.room_id
+            if player.world.is_multiplayer:
+                player.initialize(
+                    reset=True,
+                    level=level,
+                    reset_origin_world_id=reset_origin_world_id,
+                    reset_origin_room_id=reset_origin_room_id,
+                )
+                return player
+
             original_world = player.world
             root_world = player.world.context
             new_spawn_world = root_world.create_spawn_world()
@@ -544,7 +600,12 @@ class Player(CharMixin, AdventBaseModel):
             player.world = new_spawn_world
             player.save()
 
-            player = player.initialize(reset=True, level=level)
+            player = player.initialize(
+                reset=True,
+                level=level,
+                reset_origin_world_id=reset_origin_world_id,
+                reset_origin_room_id=reset_origin_room_id,
+            )
 
             original_world.delete()
 

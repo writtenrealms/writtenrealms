@@ -93,6 +93,16 @@ class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
             args=[self.world.pk],
         )
 
+    def test_trigger_event_choices_include_shared_enter_literal_once(self):
+        self.assertIn(
+            adv_consts.TRIGGER_EVENT_ENTER,
+            adv_consts.TRIGGER_ROOM_EVENT_EVENTS,
+        )
+        self.assertEqual(
+            adv_consts.TRIGGER_EVENTS.count(adv_consts.TRIGGER_EVENT_ENTER),
+            1,
+        )
+
     def test_room_trigger_list_includes_yaml_manifest(self):
         resp = self.client.get(self.list_ep)
         self.assertEqual(resp.status_code, 200)
@@ -1732,6 +1742,57 @@ spec:
         self.assertEqual(created_trigger.event, adv_consts.MOB_REACTION_EVENT_SAYING)
         self.assertEqual(created_trigger.match, "hello and (traveler or friend)")
 
+    def test_apply_trigger_manifest_preserves_mob_enter_event_trigger(self):
+        mob_definition = MobDefinition.objects.create(
+            world=self.world,
+            name="Gatekeeper",
+        )
+
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  name: Gatekeeper Greeting
+spec:
+  scope: world
+  kind: event
+  target:
+    type: mobdefinition
+    key: mobdefinition.{mob_definition.id}
+  event: enter
+  script: say Halt, traveler.
+  display_action_in_room: false
+  gate_delay: 0
+  order: 0
+  is_active: true
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+
+        created_trigger = Trigger.objects.get(pk=resp.data["trigger"]["id"])
+        self.assertEqual(created_trigger.scope, adv_consts.TRIGGER_SCOPE_WORLD)
+        self.assertEqual(
+            created_trigger.target_type,
+            ContentType.objects.get_for_model(MobDefinition),
+        )
+        self.assertEqual(created_trigger.target_id, mob_definition.id)
+        self.assertEqual(
+            created_trigger.event,
+            adv_consts.MOB_REACTION_EVENT_ENTERING,
+        )
+        self.assertEqual(
+            resp.data["trigger"]["manifest"]["spec"]["target"]["type"],
+            "mobdefinition",
+        )
+        self.assertEqual(
+            resp.data["trigger"]["manifest"]["spec"]["event"],
+            adv_consts.MOB_REACTION_EVENT_ENTERING,
+        )
+
     def test_apply_trigger_manifest_can_create_room_policy_trigger(self):
         manifest = f"""
 kind: trigger
@@ -1855,6 +1916,99 @@ spec:
         self.assertEqual(created_trigger.event, adv_consts.TRIGGER_EVENT_AFTER_MOVE_ENTER)
         self.assertIn("/cmd room -- /echo", created_trigger.script)
         self.assertFalse(created_trigger.display_action_in_room)
+
+    def test_apply_trigger_manifest_can_create_room_enter_event_trigger(self):
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  name: Arrival Chime
+spec:
+  scope: room
+  kind: event
+  target:
+    type: room
+    key: room.{self.room.id}
+  event: enter
+  script: |
+    /cmd room -- /echo -- A chime sounds.
+  display_action_in_room: false
+  gate_delay: 0
+  order: 0
+  is_active: true
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+
+        created_trigger = Trigger.objects.get(pk=resp.data["trigger"]["id"])
+        self.assertEqual(created_trigger.scope, adv_consts.TRIGGER_SCOPE_ROOM)
+        self.assertEqual(
+            created_trigger.target_type,
+            ContentType.objects.get_for_model(Room),
+        )
+        self.assertEqual(created_trigger.target_id, self.room.id)
+        self.assertEqual(created_trigger.event, adv_consts.TRIGGER_EVENT_ENTER)
+        self.assertEqual(
+            resp.data["trigger"]["manifest"]["spec"]["target"]["type"],
+            "room",
+        )
+        self.assertEqual(
+            resp.data["trigger"]["manifest"]["spec"]["event"],
+            adv_consts.TRIGGER_EVENT_ENTER,
+        )
+
+    def test_apply_trigger_manifest_rejects_event_from_other_scope_family(self):
+        room_manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  name: Invalid Room Reaction
+spec:
+  scope: room
+  kind: event
+  target:
+    type: room
+    key: room.{self.room.id}
+  event: say
+  script: echo no
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": room_manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("spec.event", str(resp.data))
+
+        mob_definition = MobDefinition.objects.create(
+            world=self.world,
+            name="Invalid Mover",
+        )
+        world_manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  name: Invalid Mob Reaction
+spec:
+  scope: world
+  kind: event
+  target:
+    type: mobdefinition
+    key: mobdefinition.{mob_definition.id}
+  event: after_move_enter
+  script: say no
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": world_manifest},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("spec.event", str(resp.data))
 
     def test_apply_trigger_manifest_can_create_death_room_event_trigger(self):
         manifest = f"""

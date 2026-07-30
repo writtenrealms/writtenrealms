@@ -54,8 +54,10 @@ from spawns.ability_prepare_state import (
 )
 from spawns.events import (
     GameEvent,
+    PLAYER_ROOM_ENTER_EMITTED_KEY,
     TRANSFER_LOCATION_SEQUENCE_KEY,
     TRANSFER_RUNTIME_WORLD_KEY,
+    player_room_enter_event,
 )
 from spawns.handlers.base import ChoiceResolutionError, resolve_unambiguous_choice
 from spawns.handlers.registry import (
@@ -3415,6 +3417,7 @@ class TransferAction:
             movement_data[TRANSFER_LOCATION_SEQUENCE_KEY] = int(
                 updated_target.location_sequence or 0
             )
+            movement_data[PLAYER_ROOM_ENTER_EMITTED_KEY] = True
         events: list[GameEvent] = [
             *door_cancellation_events,
             GameEvent(
@@ -3460,6 +3463,15 @@ class TransferAction:
                     text=f"{target_name} appears." if is_visible else None,
                 )
             )
+            if isinstance(updated_target, Player):
+                events.append(
+                    player_room_enter_event(
+                        player=updated_target,
+                        origin_room_id=origin_room_id,
+                        destination_room_id=destination.id,
+                        source="transfer",
+                    )
+                )
 
         return ActionResult(
             events=events,
@@ -3594,6 +3606,16 @@ class JumpAction:
                 ),
             )
         )
+        if origin_room_id != updated_player.room_id:
+            events.append(
+                player_room_enter_event(
+                    player=updated_player,
+                    origin_room_id=origin_room_id,
+                    destination_room_id=updated_player.room_id,
+                    source="jump",
+                    direction=jump_direction,
+                )
+            )
         events.append(ability_prepare_state_event(updated_player))
 
         if destination_recipients:

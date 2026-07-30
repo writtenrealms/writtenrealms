@@ -4,15 +4,21 @@ from datetime import timedelta
 
 from config import constants as adv_consts
 
+from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
 
 from rest_framework.reverse import reverse
 
 from config import constants as api_consts
 from backend.config.exceptions import ServiceError
-from builders.models import MobDefinition
+from builders.models import MobDefinition, Trigger
 from spawns import serializers as spawns_serializers
+from spawns.events import (
+    PLAYER_ROOM_ENTER_EVENT_TYPE,
+    flush_game_event_outbox,
+)
 from spawns.models import (
+    GameEventOutbox,
     Player,
     PlayerConfig,
     Item,
@@ -21,6 +27,7 @@ from spawns.models import (
 from spawns.services import WorldGate
 from system.models import IntroConfig
 from tests.base import WorldTestCase
+from tests.utils import capture_game_messages
 from users.models import User
 from worlds.models import Room
 
@@ -90,6 +97,62 @@ class TestDeletions(WorldTestCase):
         original_world.delete()
 
         player = Player.objects.get(pk=player.pk)
+
+    def test_reset_enqueues_room_enter_for_new_runtime_world(self):
+        player = self.player
+        origin_room = player.room.create_at('east')
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=self.world.config.starting_room_id,
+            event=adv_consts.TRIGGER_EVENT_ENTER,
+            script='/cmd room -- /echo -- The reset threshold opens.',
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+        player.room = origin_room
+        player.in_game = True
+        player.save(update_fields=['room', 'in_game'])
+        original_runtime_id = player.world_id
+        original_location_sequence = player.location_sequence
+
+        player = player.reset()
+        player.refresh_from_db()
+
+        self.assertNotEqual(player.world_id, original_runtime_id)
+        self.assertEqual(player.room_id, self.world.config.starting_room_id)
+        self.assertEqual(
+            player.location_sequence,
+            original_location_sequence + 1,
+        )
+        event = GameEventOutbox.objects.get(
+            event_type=PLAYER_ROOM_ENTER_EVENT_TYPE,
+        )
+        self.assertEqual(event.data['actor']['key'], player.key)
+        self.assertEqual(event.data['origin_room']['id'], origin_room.id)
+        self.assertEqual(
+            event.data['destination_room']['id'],
+            self.world.config.starting_room_id,
+        )
+        self.assertEqual(event.data['runtime_world_id'], player.world_id)
+        self.assertEqual(
+            event.data['location_sequence'],
+            player.location_sequence,
+        )
+        self.assertEqual(event.data['source'], 'character_reset')
+
+        with capture_game_messages() as messages:
+            flush_game_event_outbox()
+
+        reset_echoes = [
+            entry['message']
+            for entry in messages
+            if entry['message'].get('type') == 'cmd./echo.success'
+            and 'reset threshold' in entry['message'].get('text', '')
+        ]
+        self.assertEqual(len(reset_echoes), 1)
 
     def test_delete_mob_with_inventory(self):
         """

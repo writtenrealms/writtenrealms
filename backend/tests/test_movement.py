@@ -412,3 +412,50 @@ class TestMovementCommands(WorldTestCase):
         echo_message = self._message_by_type(messages, "cmd./echo.success")
         self.assertIsNotNone(echo_message, [msg["message"] for msg in messages])
         self.assertIn("Spears snap out", echo_message["text"])
+
+    def test_enter_room_event_trigger_runs_after_normal_move(self):
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+        dest_room = self.room.create_at(adv_consts.DIRECTION_EAST)
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=self.room.id,
+            event=adv_consts.TRIGGER_EVENT_AFTER_MOVE_EXIT,
+            script="/cmd room -- /echo -- The departure chime rings.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=dest_room.id,
+            event=adv_consts.TRIGGER_EVENT_ENTER,
+            script="/cmd room -- /echo -- The arrival chime rings.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "east")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, dest_room.id)
+        echoes = [
+            entry["message"]
+            for entry in messages
+            if entry["message"].get("type") == "cmd./echo.success"
+            and "arrival chime" in entry["message"].get("text", "")
+        ]
+        self.assertEqual(len(echoes), 1)
+        departure_echoes = [
+            entry["message"]
+            for entry in messages
+            if entry["message"].get("type") == "cmd./echo.success"
+            and "departure chime" in entry["message"].get("text", "")
+        ]
+        self.assertEqual(len(departure_echoes), 1)

@@ -8,7 +8,7 @@ from config import constants as adv_consts
 
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.movement_costs import movement_cost
-from spawns.events import GameEvent
+from spawns.events import GameEvent, player_room_enter_event
 from spawns.models import Player
 from spawns.state_payloads import (
     build_map_payload,
@@ -195,6 +195,14 @@ class BuildMoveEventsAction:
                 text=move_text,
             )
         ]
+        if context.origin_room_id != context.dest_room_id:
+            events.append(player_room_enter_event(
+                player=player,
+                origin_room_id=context.origin_room_id,
+                destination_room_id=context.dest_room_id,
+                source="move",
+                direction=context.direction,
+            ))
 
         if not player.is_invisible:
             actor_char = serialize_char_from_player(player).model_dump()

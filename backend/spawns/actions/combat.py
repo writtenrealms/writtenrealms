@@ -61,7 +61,11 @@ from spawns.ability_prepare_state import (
     ability_prepare_state_event,
     ability_prepare_state_events_for_players,
 )
-from spawns.events import GameEvent, enqueue_game_events
+from spawns.events import (
+    GameEvent,
+    enqueue_game_events,
+    player_room_enter_event,
+)
 from spawns.models import (
     ActiveEffect,
     CharacterState,
@@ -1570,6 +1574,7 @@ def apply_player_death(
                 destination_room=destination_room,
                 exit_reason=InstanceParticipant.EXIT_REASON_DEATH_DELEGATED,
                 expected_origin_world_id=origin_runtime.id,
+                emit_room_enter_event=False,
             )
             updated_player.death_sequence = (
                 int(updated_player.death_sequence or 0) + 1
@@ -1733,6 +1738,16 @@ def apply_player_death(
             recipients=[updated_player.key],
             data=affect_data,
             text=target_text or "You have been slain.",
+        ),
+        player_room_enter_event(
+            player=updated_player,
+            origin_room_id=(
+                committed_origin_room.id
+                if committed_origin_room is not None
+                else None
+            ),
+            destination_room_id=death_room.id,
+            source="death",
         ),
         ability_prepare_state_event(updated_player),
     ]
@@ -2271,7 +2286,14 @@ def _flee_success_events(
             recipients=[player.key],
             data=data,
             text=f"You flee {direction}.",
-        )
+        ),
+        player_room_enter_event(
+            player=player,
+            origin_room_id=origin_room_id,
+            destination_room_id=destination_room_id,
+            source="flee",
+            direction=direction,
+        ),
     ]
 
     if player.is_invisible:

@@ -9,6 +9,8 @@ from django.db import transaction
 from config import constants as adv_consts
 from spawns.events import (
     FINAL_TRANSFER_ENTER_KEY,
+    PLAYER_ROOM_ENTER_EMITTED_KEY,
+    PLAYER_ROOM_ENTER_EVENT_TYPE,
     TRANSFER_LOCATION_SEQUENCE_KEY,
     TRANSFER_RUNTIME_WORLD_KEY,
     capture_game_events,
@@ -124,59 +126,6 @@ def _on_cmd_say_success(
     )
 
 
-def _on_cmd_move_success(
-    event_data: dict,
-    actor_key: str | None,
-    connection_id: str | None,
-) -> None:
-    player = _resolve_player(_extract_actor_key(event_data, actor_key))
-    if not player:
-        return
-
-    room_id = None
-    room_data = event_data.get("room")
-    if isinstance(room_data, dict):
-        room_id = room_data.get("id")
-    if not room_id:
-        room_id = player.room_id
-    if not room_id:
-        return
-
-    direction = event_data.get("direction")
-    origin_room_id = None
-    origin_room_data = event_data.get("origin_room")
-    if isinstance(origin_room_data, dict):
-        origin_room_id = origin_room_data.get("id")
-
-    if origin_room_id:
-        execute_room_event_triggers(
-            event=adv_consts.TRIGGER_EVENT_AFTER_MOVE_EXIT,
-            actor=player,
-            room=origin_room_id,
-            origin_room_id=origin_room_id,
-            destination_room_id=room_id,
-            direction=direction,
-            connection_id=connection_id,
-        )
-
-    execute_mob_event_triggers(
-        event=adv_consts.MOB_REACTION_EVENT_ENTERING,
-        actor=player,
-        room=room_id,
-        connection_id=connection_id,
-    )
-
-    execute_room_event_triggers(
-        event=adv_consts.TRIGGER_EVENT_AFTER_MOVE_ENTER,
-        actor=player,
-        room=room_id,
-        origin_room_id=origin_room_id,
-        destination_room_id=room_id,
-        direction=direction,
-        connection_id=connection_id,
-    )
-
-
 def _on_transfer_enter(
     event_data: dict,
     actor_key: str | None,
@@ -188,6 +137,14 @@ def _on_transfer_enter(
             return
         actor = _resolve_character(_extract_actor_key(event_data, actor_key))
         if not actor:
+            return
+        if (
+            isinstance(actor, Player)
+            and event_data.get(PLAYER_ROOM_ENTER_EMITTED_KEY)
+        ):
+            # New player transfers use the canonical room-entry lifecycle.
+            # Keep this legacy subscriber for queued pre-upgrade events and
+            # transferred mobs.
             return
         try:
             event_runtime_world_id = int(
@@ -279,6 +236,10 @@ def _on_transfer_enter(
         if actor.room_id != room_id:
             return
 
+        source_event_data = {
+            **event_data,
+            "source": str(event_data.get("source") or "transfer"),
+        }
         with capture_game_events() as reaction_events:
             execute_mob_event_triggers(
                 event=adv_consts.MOB_REACTION_EVENT_ENTERING,
@@ -286,10 +247,25 @@ def _on_transfer_enter(
                 room=room_id,
                 connection_id=connection_id,
                 isolate_runtime_world=True,
-                source_event_data=event_data,
+                source_event_data=source_event_data,
                 capture_output=True,
                 gate_claim_collector=gate_claims,
             )
+            if isinstance(actor, Player):
+                execute_room_event_triggers(
+                    event=adv_consts.TRIGGER_EVENT_ENTER,
+                    actor=actor,
+                    room=room_id,
+                    origin_room_id=_event_room_id(
+                        event_data,
+                        "origin_room",
+                    ),
+                    destination_room_id=room_id,
+                    connection_id=connection_id,
+                    source_event_data=source_event_data,
+                    capture_output=True,
+                    gate_claim_collector=gate_claims,
+                )
 
         derived_events = list(reaction_events)
         if isinstance(actor, Player):
@@ -322,37 +298,273 @@ def _on_transfer_enter(
             )
 
 
-def _on_affect_death(
+def _event_room_id(event_data: dict, field: str) -> int | None:
+    room_data = event_data.get(field)
+    value = room_data.get("id") if isinstance(room_data, dict) else None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _event_int(event_data: dict, field: str) -> int | None:
+    try:
+        return int(event_data.get(field))
+    except (TypeError, ValueError):
+        return None
+
+
+def _player_matches_room_entry(
+    player: Player,
+    *,
+    runtime_world_id: int | None,
+    destination_room_id: int,
+    location_sequence: int | None,
+) -> bool:
+    return bool(
+        player.in_game
+        and player.room_id == destination_room_id
+        and (
+            runtime_world_id is None
+            or player.world_id == runtime_world_id
+        )
+        and (
+            location_sequence is None
+            or int(player.location_sequence or 0) == location_sequence
+        )
+    )
+
+
+def _load_player_room_entry_context(
+    *,
+    origin_room_id: int | None,
+    destination_room_id: int,
+):
+    from worlds.models import Room
+
+    room_ids = {destination_room_id}
+    if origin_room_id is not None:
+        room_ids.add(origin_room_id)
+    rooms = {
+        room.id: room
+        for room in Room.objects.select_related("zone", "world").filter(
+            pk__in=room_ids,
+        )
+    }
+    return rooms.get(origin_room_id), rooms.get(destination_room_id)
+
+
+def _execute_player_room_entry_triggers(
+    *,
+    player: Player,
+    origin_room_id: int | None,
+    destination_room_id: int,
+    origin_room_context,
+    destination_room_context,
+    direction: str,
+    source: str,
+    connection_id: str | None,
+    source_event_data: dict,
+    capture_output: bool,
+    gate_claim_collector: list[tuple[str, str]] | None,
+) -> None:
+    if source == "move" and origin_room_id is not None:
+        execute_room_event_triggers(
+            event=adv_consts.TRIGGER_EVENT_AFTER_MOVE_EXIT,
+            actor=player,
+            room=origin_room_context or origin_room_id,
+            origin_room_id=origin_room_id,
+            destination_room_id=destination_room_id,
+            origin_room_context=origin_room_context,
+            destination_room_context=destination_room_context,
+            direction=direction,
+            connection_id=connection_id,
+            source_event_data=source_event_data,
+            capture_output=capture_output,
+            gate_claim_collector=gate_claim_collector,
+        )
+
+    execute_mob_event_triggers(
+        event=adv_consts.MOB_REACTION_EVENT_ENTERING,
+        actor=player,
+        room=destination_room_context,
+        connection_id=connection_id,
+        isolate_runtime_world=True,
+        source_event_data=source_event_data,
+        capture_output=capture_output,
+        gate_claim_collector=gate_claim_collector,
+    )
+    execute_room_event_triggers(
+        event=adv_consts.TRIGGER_EVENT_ENTER,
+        actor=player,
+        room=destination_room_context,
+        origin_room_id=origin_room_id,
+        destination_room_id=destination_room_id,
+        origin_room_context=origin_room_context,
+        destination_room_context=destination_room_context,
+        direction=direction,
+        connection_id=connection_id,
+        source_event_data=source_event_data,
+        capture_output=capture_output,
+        gate_claim_collector=gate_claim_collector,
+    )
+
+    compatibility_event = None
+    compatibility_room_id = destination_room_id
+    if source == "move":
+        compatibility_event = adv_consts.TRIGGER_EVENT_AFTER_MOVE_ENTER
+    elif source == "death":
+        compatibility_event = adv_consts.TRIGGER_EVENT_AFTER_DEATH_ROOM_ENTER
+    if compatibility_event:
+        execute_room_event_triggers(
+            event=compatibility_event,
+            actor=player,
+            room=destination_room_context or compatibility_room_id,
+            origin_room_id=origin_room_id,
+            destination_room_id=destination_room_id,
+            origin_room_context=origin_room_context,
+            destination_room_context=destination_room_context,
+            direction=direction,
+            connection_id=connection_id,
+            source_event_data=source_event_data,
+            capture_output=capture_output,
+            gate_claim_collector=gate_claim_collector,
+        )
+
+
+def _player_room_entry_aggro_events(
+    *,
+    player: Player,
+    source: str,
+    destination_room_id: int,
+    runtime_world_id: int | None,
+    location_sequence: int | None,
+) -> list:
+    if source != "transfer":
+        return []
+
+    from spawns.actions.combat import ScanRoomAggroAction
+
+    player.refresh_from_db(
+        fields=["room", "location_sequence", "in_game", "world"],
+    )
+    if not _player_matches_room_entry(
+        player,
+        runtime_world_id=runtime_world_id,
+        destination_room_id=destination_room_id,
+        location_sequence=location_sequence,
+    ):
+        return []
+    return list(ScanRoomAggroAction().execute(player.id).events)
+
+
+def _on_player_room_enter(
     event_data: dict,
     actor_key: str | None,
     connection_id: str | None,
 ) -> None:
+    destination_room_id = _event_room_id(event_data, "destination_room")
+    if destination_room_id is None:
+        return
+    origin_room_id = _event_room_id(event_data, "origin_room")
+    runtime_world_id = _event_int(event_data, "runtime_world_id")
+    location_sequence = _event_int(event_data, "location_sequence")
+    source = str(event_data.get("source") or "").strip().lower()
+    direction = str(event_data.get("direction") or "").strip().lower()
+
     player = _resolve_player(_extract_actor_key(event_data, actor_key))
-    if not player:
+    if player is None:
         return
 
-    room_id = None
-    room_data = event_data.get("room")
-    if isinstance(room_data, dict):
-        room_id = room_data.get("id")
-    if not room_id:
-        room_id = player.room_id
-    if not room_id:
+    is_durable = bool(event_data.get("_event_id"))
+    requires_serialized_dispatch = is_durable or source == "transfer"
+    if not requires_serialized_dispatch:
+        if not _player_matches_room_entry(
+            player,
+            runtime_world_id=runtime_world_id,
+            destination_room_id=destination_room_id,
+            location_sequence=location_sequence,
+        ):
+            return
+        origin_room, destination_room = _load_player_room_entry_context(
+            origin_room_id=origin_room_id,
+            destination_room_id=destination_room_id,
+        )
+        if destination_room is None:
+            return
+        _execute_player_room_entry_triggers(
+            player=player,
+            origin_room_id=origin_room_id,
+            destination_room_id=destination_room_id,
+            origin_room_context=origin_room,
+            destination_room_context=destination_room,
+            direction=direction,
+            source=source,
+            connection_id=connection_id,
+            source_event_data=event_data,
+            capture_output=False,
+            gate_claim_collector=None,
+        )
         return
 
-    origin_room_id = None
-    origin_room_data = event_data.get("origin_room")
-    if isinstance(origin_room_data, dict):
-        origin_room_id = origin_room_data.get("id")
+    gate_claims: list[tuple[str, str]] = []
+    with _release_trigger_gates_on_error(gate_claims), transaction.atomic():
+        from spawns.trigger_steps import lock_trigger_runtime_room
 
-    execute_room_event_triggers(
-        event=adv_consts.TRIGGER_EVENT_AFTER_DEATH_ROOM_ENTER,
-        actor=player,
-        room=room_id,
-        origin_room_id=origin_room_id,
-        destination_room_id=room_id,
-        connection_id=connection_id,
-    )
+        lock_trigger_runtime_room(
+            runtime_world_id=runtime_world_id or player.world_id,
+            room_id=destination_room_id,
+        )
+        player = (
+            Player.objects.select_for_update()
+            .filter(pk=player.id)
+            .first()
+        )
+        if player is None or not _player_matches_room_entry(
+            player,
+            runtime_world_id=runtime_world_id,
+            destination_room_id=destination_room_id,
+            location_sequence=location_sequence,
+        ):
+            return
+        origin_room, destination_room = _load_player_room_entry_context(
+            origin_room_id=origin_room_id,
+            destination_room_id=destination_room_id,
+        )
+        if destination_room is None:
+            return
+
+        with capture_game_events() as reaction_events:
+            _execute_player_room_entry_triggers(
+                player=player,
+                origin_room_id=origin_room_id,
+                destination_room_id=destination_room_id,
+                origin_room_context=origin_room,
+                destination_room_context=destination_room,
+                direction=direction,
+                source=source,
+                connection_id=connection_id,
+                source_event_data=event_data,
+                capture_output=True,
+                gate_claim_collector=gate_claims,
+            )
+
+        derived_events = list(reaction_events)
+        derived_events.extend(
+            _player_room_entry_aggro_events(
+                player=player,
+                source=source,
+                destination_room_id=destination_room_id,
+                runtime_world_id=runtime_world_id,
+                location_sequence=location_sequence,
+            )
+        )
+        if derived_events:
+            enqueue_game_events(derived_events)
+            transaction.on_commit(
+                flush_game_event_outbox,
+                robust=True,
+            )
 
 
 def _on_affect_social(
@@ -380,11 +592,10 @@ def _on_affect_social(
 
 
 _EVENT_SUBSCRIPTIONS: dict[str, TriggerSubscriptionHandler] = {
-    "affect.death": _on_affect_death,
     "affect.social": _on_affect_social,
     "cmd.say.success": _on_cmd_say_success,
-    "cmd.move.success": _on_cmd_move_success,
     "notification./transfer.enter": _on_transfer_enter,
+    PLAYER_ROOM_ENTER_EVENT_TYPE: _on_player_room_enter,
 }
 
 

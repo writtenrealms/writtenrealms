@@ -76,14 +76,15 @@ This plan remains directional, but several pieces are now implemented:
   events carry internal Trigger/run/issuer/subject provenance that is stripped
   from player payloads. Forced speech and socials are excluded from Trigger and
   quest subscriptions because they are not voluntary player input. When a
-  transfer actually moves its target, the committed lifecycle event runs
-  destination `entering` reactions for a player or mob after commit; a moved
-  player still in that destination after its reactions additionally runs
-  hostile-mob aggro. Reaction and aggro output is captured and durably enqueued
-  outside the original step locks. Only the final arrival for an actor in one
-  event batch runs this work; a later player transfer also invalidates an
-  earlier pending player arrival, and delivery rechecks current runtime and
-  room.
+  transfer actually moves a player, the committed structural lifecycle event
+  runs destination mob-definition `enter` reactions and room-scoped
+  `event: enter` triggers after commit; a moved player still in that
+  destination after its reactions additionally runs hostile-mob aggro.
+  Reaction and aggro output is captured and durably enqueued outside the
+  original step locks. Only the final current player arrival in one event batch
+  runs this work; a later location change invalidates an earlier pending
+  arrival, and delivery rechecks in-game state, runtime, room, and location
+  sequence. Transferred mobs retain their compatibility mob-reaction path.
 - Trigger command actions support the fixed Trigger room, the Trigger actor
   (including a player), or one bounded exact-one room-local mob selector.
   Single-command, nested-dispatch, alias/history, and fallback-trigger guards
@@ -122,7 +123,9 @@ Still future work:
   lifecycle and location-refresh events are the explicit post-commit
   exceptions. Transfer arrival reactions inherit the script depth, are capped
   at eight layers, collapse same-batch intermediate arrivals, and validate the
-  current runtime and room before reacting or scanning for aggro.
+  current runtime, room, and location sequence before reacting or scanning for
+  aggro. Player transfers use the shared room-entry lifecycle; same-room
+  transfers do not emit it.
 - A generic `before_command` policy hook for vetoing already resolved command
   handlers is not implemented.
 

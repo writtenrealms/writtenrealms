@@ -395,6 +395,7 @@ def enter_players_into_run(
     from spawns.models import Player
 
     with transaction.atomic():
+        room_enter_events = []
         run = InstanceRun.objects.select_for_update().select_related(
             'base_world',
             'spawned_world',
@@ -439,6 +440,7 @@ def enter_players_into_run(
 
         now = timezone.now()
         for player in players:
+            origin_room_id = player.room_id
             transfer_from = transfer_rooms_by_player_id[player.id]
             _upsert_assignment(
                 run=run,
@@ -466,9 +468,20 @@ def enter_players_into_run(
                 player,
                 run.spawned_world,
             )
+            from spawns.events import player_room_enter_event
+
+            room_enter_events.append(
+                player_room_enter_event(
+                    player=player,
+                    origin_room_id=origin_room_id,
+                    destination_room_id=entry_room.id,
+                    source="instance_enter",
+                )
+            )
 
         run.last_active_at = now
         run.save(update_fields=['last_active_at'])
+        _enqueue_instance_events(room_enter_events)
 
     return run
 
@@ -687,7 +700,7 @@ def _cancel_pending_door_action(*, player, code, message):
     )
 
 
-def _enqueue_cancellation_events(events):
+def _enqueue_instance_events(events):
     if not events:
         return
     from spawns.events import enqueue_game_events, flush_game_event_outbox
@@ -702,7 +715,8 @@ def transfer_instance_participant(
         destination_room,
         exit_reason,
         expected_origin_world_id=None,
-        exited_at=None):
+        exited_at=None,
+        emit_room_enter_event=True):
     """
     Atomically return one active participant to its recorded base runtime.
 
@@ -787,6 +801,7 @@ def transfer_instance_participant(
                 else "You stop working with the door as you leave the instance."
             ),
         )
+        origin_room_id = locked_player.room_id
         locked_player.world = return_runtime
         locked_player.room = destination_room
         player_update_fields = ['world', 'room']
@@ -803,7 +818,19 @@ def transfer_instance_participant(
             'exit_reason',
             'return_runtime_world',
         ])
-        _enqueue_cancellation_events(cancellation_events)
+        instance_events = list(cancellation_events)
+        if emit_room_enter_event:
+            from spawns.events import player_room_enter_event
+
+            instance_events.append(
+                player_room_enter_event(
+                    player=locked_player,
+                    origin_room_id=origin_room_id,
+                    destination_room_id=destination_room.id,
+                    source="instance_leave",
+                )
+            )
+        _enqueue_instance_events(instance_events)
 
     return locked_player
 
@@ -925,6 +952,7 @@ def enter_instance(
                 "The participant has no recorded return runtime."
             )
 
+        origin_room_id = locked_player.room_id
         locked_player.world = run.spawned_world
         locked_player.room = transfer_to
         player_update_fields = ['world', 'room']
@@ -939,7 +967,17 @@ def enter_instance(
         # passed model instance immediately after entry.
         player.world = run.spawned_world
         player.room = transfer_to
-        _enqueue_cancellation_events(cancellation_events)
+        from spawns.events import player_room_enter_event
+
+        _enqueue_instance_events([
+            *cancellation_events,
+            player_room_enter_event(
+                player=locked_player,
+                origin_room_id=origin_room_id,
+                destination_room_id=transfer_to.id,
+                source="instance_enter",
+            ),
+        ])
 
     return run
 
@@ -1157,6 +1195,7 @@ def reset_instance(*, player) -> InstanceResetResult:
         spawn_plan_runs_reset = _reset_spawn_plan_runs(spawned_world)
 
         player_ids = [active_player.id for active_player in active_players]
+        room_enter_events = []
         if player_ids:
             player.__class__.objects.filter(
                 pk__in=player_ids,
@@ -1164,6 +1203,22 @@ def reset_instance(*, player) -> InstanceResetResult:
                 room=starting_room,
                 location_sequence=F('location_sequence') + 1,
             )
+            from spawns.events import player_room_enter_event
+
+            for active_player in active_players:
+                origin_room_id = active_player.room_id
+                active_player.room_id = starting_room.id
+                active_player.location_sequence = (
+                    int(active_player.location_sequence or 0) + 1
+                )
+                room_enter_events.append(
+                    player_room_enter_event(
+                        player=active_player,
+                        origin_room_id=origin_room_id,
+                        destination_room_id=starting_room.id,
+                        source="instance_reset",
+                    )
+                )
 
         run.progress = {}
         run.outcome = {}
@@ -1175,7 +1230,10 @@ def reset_instance(*, player) -> InstanceResetResult:
         spawned_world.save(update_fields=['is_clean', 'last_spawn_plan_run_ts'])
 
         run_spawn_plans_for_world(world=spawned_world, initial=True)
-        _enqueue_cancellation_events(cancellation_events)
+        _enqueue_instance_events([
+            *cancellation_events,
+            *room_enter_events,
+        ])
 
     return InstanceResetResult(
         run_id=run.id,

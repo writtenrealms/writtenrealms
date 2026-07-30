@@ -27,6 +27,8 @@ FINAL_TRANSFER_ENTER_KEY = "_final_transfer_enter"
 TRANSFER_LOCATION_SEQUENCE_KEY = "_transfer_location_sequence"
 TRANSFER_RUNTIME_WORLD_KEY = "_transfer_runtime_world_id"
 TRANSFER_ENTER_EVENT_TYPE = "notification./transfer.enter"
+PLAYER_ROOM_ENTER_EVENT_TYPE = "lifecycle.player.room.enter"
+PLAYER_ROOM_ENTER_EMITTED_KEY = "_player_room_enter_emitted"
 PRIVATE_CONTROL_EVENT_KEY = "_private_control_event"
 COMMAND_REQUEST_COMPLETED_EVENT_TYPE = "cmd.request.completed"
 COMMAND_RECEIPT_STATUS_COMPLETED = "completed"
@@ -333,6 +335,36 @@ class GameEvent:
         return message
 
 
+def player_room_enter_event(
+    *,
+    player,
+    origin_room_id: int | None,
+    destination_room_id: int,
+    source: str,
+    direction: str | None = None,
+) -> GameEvent:
+    """Build the structural event for one committed player-room arrival."""
+    data = {
+        "actor": {"key": player.key},
+        "origin_room": (
+            {"id": int(origin_room_id)}
+            if origin_room_id is not None
+            else None
+        ),
+        "destination_room": {"id": int(destination_room_id)},
+        "runtime_world_id": int(player.world_id),
+        "location_sequence": int(player.location_sequence or 0),
+        "source": str(source or ""),
+    }
+    if direction:
+        data["direction"] = str(direction)
+    return GameEvent(
+        type=PLAYER_ROOM_ENTER_EVENT_TYPE,
+        recipients=[],
+        data=data,
+    )
+
+
 def _with_inherited_script_command_depth(
     event: GameEvent,
     depth: int,
@@ -460,6 +492,7 @@ def publish_events(
             or FINAL_TRANSFER_ENTER_KEY in event.data
             or TRANSFER_LOCATION_SEQUENCE_KEY in event.data
             or TRANSFER_RUNTIME_WORLD_KEY in event.data
+            or PLAYER_ROOM_ENTER_EMITTED_KEY in event.data
             or PRIVATE_CONTROL_EVENT_KEY in event.data
             or isinstance(
                 event.data.get(SCRIPT_COMMAND_PROVENANCE_KEY),
@@ -474,6 +507,7 @@ def publish_events(
             public_data.pop(FINAL_TRANSFER_ENTER_KEY, None)
             public_data.pop(TRANSFER_LOCATION_SEQUENCE_KEY, None)
             public_data.pop(TRANSFER_RUNTIME_WORLD_KEY, None)
+            public_data.pop(PLAYER_ROOM_ENTER_EMITTED_KEY, None)
             public_data.pop(PRIVATE_CONTROL_EVENT_KEY, None)
             message["data"] = public_data
         for recipient in event.recipients:
@@ -506,15 +540,24 @@ def publish_events(
             event.data.get(PRIVATE_CONTROL_EVENT_KEY)
         )
         event_type = str(event.type or "").strip().lower()
+        uses_canonical_player_entry = bool(
+            event_type == TRANSFER_ENTER_EVENT_TYPE
+            and event.data.get(PLAYER_ROOM_ENTER_EMITTED_KEY)
+        )
         dispatch_trigger_event = (
             not is_private_control_event
+            and not uses_canonical_player_entry
             and (
                 not is_trigger_step_event
-                or event_type == "notification./transfer.enter"
+                or event_type in {
+                    TRANSFER_ENTER_EVENT_TYPE,
+                    PLAYER_ROOM_ENTER_EVENT_TYPE,
+                }
             )
         )
         dispatch_quest_event = (
             not is_private_control_event
+            and event_type != PLAYER_ROOM_ENTER_EVENT_TYPE
             and (
                 not is_trigger_step_event
                 or event_type == "affect.transfer"

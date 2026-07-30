@@ -99,7 +99,15 @@ Supported movement hooks:
 - `before_move_exit`: evaluated against the origin room before leaving it
 - `before_move_enter`: evaluated against the destination room before entering it
 - `after_move_exit`: post-action event hook for leaving a room
-- `after_move_enter`: post-action event hook for entering a room
+- `after_move_enter`: source-specific post-action hook for `source: move`
+  (ordinary movement and adjacent-room charge)
+
+The separate room-scoped `event: enter` lifecycle is the recommended universal
+player-arrival hook. It also covers flee, transfer, death, jump, connected
+character reset to a different room or runtime world, and instance
+entry/leave/reset; those non-policy relocation paths do not become
+movement-policy checks. Login,
+reconnect, and offline location repair do not emit it.
 
 `before_*` hooks are policies and may veto.
 
@@ -193,7 +201,7 @@ This policy applies to normal movement, movement-based abilities such as
 Charge, and flee-route selection. For `before_move_exit`, `mob_present` checks
 the origin room. For `before_move_enter`, it checks the destination room.
 
-### Entry Trap
+### Universal Entry Trap
 
 ```yaml
 kind: trigger
@@ -203,7 +211,7 @@ metadata:
 spec:
   scope: room
   kind: event
-  event: after_move_enter
+  event: enter
   target:
     type: room
     key: room.999
@@ -220,7 +228,9 @@ spec:
 ```
 
 The trap is not a policy because it does not decide whether movement may
-happen. It reacts after entry succeeds.
+happen. It reacts after any supported player arrival succeeds. Use
+`after_move_enter` instead only when the trap is intentionally limited to
+ordinary movement and adjacent-room charge.
 
 ## Runtime Movement Flow
 
@@ -234,7 +244,8 @@ Target flow for player movement:
 5. If any policy fails, publish a movement error and stop.
 6. Change the player's room and charge stamina.
 7. Publish `cmd.move.success`.
-8. Dispatch post-action movement events such as `after_move_exit` and
+8. Publish the canonical room-entry lifecycle, which dispatches
+   `after_move_exit`, destination mob and room `enter`, then
    `after_move_enter`.
 
 Policies should run before mutating room/stamina state.
@@ -417,6 +428,8 @@ Implemented:
 - `after_move_enter` and `after_move_exit` are room event triggers
 - the canonical movement path dispatches them after movement succeeds
 - scripts remain post-action behavior rather than veto logic
+- room-scoped `event: enter` is the universal player-arrival hook shared with
+  non-movement relocation paths
 
 ### Phase 4: Builder UI And WR1 Export Boundary
 

@@ -196,19 +196,25 @@ exception detail is never sent to the player. Every failed command-origin
 player run also emits unpinned safe cancellation prose so reconnecting players
 still see it. Request lifecycle events carry an internal marker that is
 stripped before delivery and prevents Trigger or quest subscription dispatch.
-When an audited transfer actually moves a player or mob, its lifecycle event
-drives destination mob `entering` reactions after commit, outside the step's
-locks. A moved player also runs hostile-mob aggro if its entering reactions
-leave it in that destination. Reaction and aggro output is captured in one
-transaction and enqueued as another durable outbox batch. Before doing that
-work, the subscriber verifies that the actor is still in the stated runtime and
-destination. Only the final arrival for an actor in one event batch runs this
-work, and a later player transfer invalidates an earlier pending player
-arrival. Reaction output inherits the scripted-command depth and remains
-bounded by the eight-layer limit. A same-room transfer emits no arrival
-lifecycle event and runs neither work item. This is an explicit
-transfer-lifecycle continuation, not recursive handling of forced speech or
-socials.
+When an audited transfer actually moves a player, its structural
+`lifecycle.player.room.enter` event drives destination mob-definition `enter`
+reactions and then room-scoped `event: enter` triggers after commit, outside
+the step's locks. A moved player also runs hostile-mob aggro if those reactions
+leave the player in that destination. A transferred mob retains the legacy
+mob-reaction continuation but does not run the player-only room hook.
+
+For a durable player arrival, reaction and aggro output is captured in one
+transaction and enqueued as another bounded outbox batch. Before doing that
+work, the subscriber locks the runtime room and player, then verifies the
+player's in-game state, runtime world, destination, and location sequence.
+Only the final current arrival in one event batch runs; any later location
+change makes an earlier queued arrival stale. Durable subscription receipts
+deduplicate retries, and gate claims are atomic under concurrent arrivals.
+Reaction output inherits scripted-command depth and remains bounded by the
+eight-layer limit. A same-room transfer emits no arrival lifecycle event and
+runs neither work item. This is an explicit structural-location continuation,
+not recursive handling of forced speech or socials.
+
 Room-item additions and removals use a room-scoped delta. Inventory additions
 or removals use a private delta sent only to the triggering player; when that
 player also needs the room delta, the two changes share one private payload.

@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from django.contrib.contenttypes.models import ContentType
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
@@ -10,6 +11,7 @@ from builders.models import (
     SpawnEntry,
     SpawnPlan,
     SpawnPlanRun,
+    Trigger,
 )
 from config import constants as adv_consts
 from core.computations import compute_stats
@@ -29,6 +31,7 @@ from spawns.models import (
     Item,
     Mob,
 )
+from spawns.events import flush_game_event_outbox
 from tests.base import WorldTestCase
 from worlds.models import (
     InstanceAssignment,
@@ -139,6 +142,82 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
 
         assignment = InstanceAssignment.objects.get(instance=spawned_instance, player=self.player)
         self.assertEqual(assignment.transfer_from, self.room)
+
+    def test_room_enter_event_fires_for_instance_entry_and_leave(self):
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+        room_content_type = ContentType.objects.get_for_model(
+            self.instance_room.__class__,
+        )
+        Trigger.objects.create(
+            world=self.instance_template,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=room_content_type,
+            target_id=self.instance_room.id,
+            event=adv_consts.TRIGGER_EVENT_ENTER,
+            script="/cmd room -- /echo -- The instance threshold opens.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=room_content_type,
+            target_id=self.room.id,
+            event=adv_consts.TRIGGER_EVENT_ENTER,
+            script="/cmd room -- /echo -- The return threshold opens.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+
+        with capture_game_messages() as entry_messages:
+            self._enter()
+            flush_game_event_outbox()
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.instance_room.id)
+        entry_echoes = [
+            entry["message"]
+            for entry in entry_messages
+            if entry["message"].get("type") == "cmd./echo.success"
+            and "instance threshold" in entry["message"].get("text", "")
+        ]
+        self.assertEqual(len(entry_echoes), 1)
+
+        location_sequence_before_reset = self.player.location_sequence
+        with capture_game_messages() as reset_messages:
+            reset_instance(player=self.player)
+            flush_game_event_outbox()
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.instance_room.id)
+        self.assertEqual(
+            self.player.location_sequence,
+            location_sequence_before_reset + 1,
+        )
+        reset_echoes = [
+            entry["message"]
+            for entry in reset_messages
+            if entry["message"].get("type") == "cmd./echo.success"
+            and "instance threshold" in entry["message"].get("text", "")
+        ]
+        self.assertEqual(len(reset_echoes), 1)
+
+        with capture_game_messages() as leave_messages:
+            World.leave_instance(player=self.player)
+            flush_game_event_outbox()
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.room.id)
+        leave_echoes = [
+            entry["message"]
+            for entry in leave_messages
+            if entry["message"].get("type") == "cmd./echo.success"
+            and "return threshold" in entry["message"].get("text", "")
+        ]
+        self.assertEqual(len(leave_echoes), 1)
 
     def test_enter_instance_starts_spawn_world_and_runs_spawn_plans(self):
         mob_definition = MobDefinition.objects.create(

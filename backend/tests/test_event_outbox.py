@@ -15,6 +15,7 @@ from spawns.actions.combat import resolve_due_character_effects
 from spawns.actions.movement import ChangeRoomAction
 from spawns.events import (
     GameEvent,
+    PLAYER_ROOM_ENTER_EVENT_TYPE,
     PRIVATE_CONTROL_EVENT_KEY,
     enqueue_game_events,
     flush_game_event_outbox,
@@ -192,27 +193,36 @@ class TestGameEventOutbox(WorldTestCase):
             ["quest.instance.progressed"],
         )
 
-    def test_death_trigger_subscriber_processes_retried_event_once(self):
+    def test_room_enter_subscriber_processes_retried_death_event_once(self):
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
         event_id = str(uuid.uuid4())
         event_data = {
             "_event_id": event_id,
             "actor": {"key": self.player.key},
-            "room": {"id": self.room.id},
+            "origin_room": {"id": self.room.id},
+            "destination_room": {"id": self.room.id},
+            "runtime_world_id": self.player.world_id,
+            "location_sequence": self.player.location_sequence,
+            "source": "death",
         }
 
         with patch(
+            "spawns.trigger_subscriptions.execute_mob_event_triggers"
+        ) as mob_execute_mock, patch(
             "spawns.trigger_subscriptions.execute_room_event_triggers"
-        ) as execute_mock:
+        ) as room_execute_mock:
             dispatch_trigger_subscriptions_for_event(
-                event_type="affect.death",
+                event_type=PLAYER_ROOM_ENTER_EVENT_TYPE,
                 event_data=event_data,
             )
             dispatch_trigger_subscriptions_for_event(
-                event_type="affect.death",
+                event_type=PLAYER_ROOM_ENTER_EVENT_TYPE,
                 event_data=event_data,
             )
 
-        execute_mock.assert_called_once()
+        mob_execute_mock.assert_called_once()
+        self.assertEqual(room_execute_mock.call_count, 2)
         self.assertEqual(
             EventSubscriptionReceipt.objects.filter(
                 event_id=event_id,
@@ -220,6 +230,74 @@ class TestGameEventOutbox(WorldTestCase):
             ).count(),
             1,
         )
+
+    def test_room_enter_subscriber_ignores_stale_location_sequence(self):
+        self.player.in_game = True
+        self.player.location_sequence = 7
+        self.player.save(update_fields=["in_game", "location_sequence"])
+        event_id = str(uuid.uuid4())
+
+        with patch(
+            "spawns.trigger_subscriptions.execute_mob_event_triggers"
+        ) as mob_execute_mock, patch(
+            "spawns.trigger_subscriptions.execute_room_event_triggers"
+        ) as room_execute_mock:
+            dispatch_trigger_subscriptions_for_event(
+                event_type=PLAYER_ROOM_ENTER_EVENT_TYPE,
+                event_data={
+                    "_event_id": event_id,
+                    "actor": {"key": self.player.key},
+                    "origin_room": {"id": self.room.id},
+                    "destination_room": {"id": self.room.id},
+                    "runtime_world_id": self.player.world_id,
+                    "location_sequence": 6,
+                    "source": "jump",
+                },
+            )
+
+        mob_execute_mock.assert_not_called()
+        room_execute_mock.assert_not_called()
+        self.assertEqual(
+            EventSubscriptionReceipt.objects.filter(
+                event_id=event_id,
+                subscriber="triggers",
+            ).count(),
+            1,
+        )
+
+    def test_direct_transfer_room_enter_uses_serialized_dispatch(self):
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+        event_data = {
+            "actor": {"key": self.player.key},
+            "origin_room": {"id": self.room.id},
+            "destination_room": {"id": self.room.id},
+            "runtime_world_id": self.player.world_id,
+            "location_sequence": self.player.location_sequence,
+            "source": "transfer",
+        }
+
+        with patch(
+            "spawns.trigger_steps.lock_trigger_runtime_room"
+        ) as lock_mock, patch(
+            "spawns.trigger_subscriptions.execute_mob_event_triggers"
+        ) as mob_execute_mock, patch(
+            "spawns.trigger_subscriptions.execute_room_event_triggers"
+        ) as room_execute_mock, patch(
+            "spawns.trigger_subscriptions._player_room_entry_aggro_events",
+            return_value=[],
+        ):
+            dispatch_trigger_subscriptions_for_event(
+                event_type=PLAYER_ROOM_ENTER_EVENT_TYPE,
+                event_data=event_data,
+            )
+
+        lock_mock.assert_called_once_with(
+            runtime_world_id=self.player.world_id,
+            room_id=self.room.id,
+        )
+        mob_execute_mock.assert_called_once()
+        room_execute_mock.assert_called_once()
 
     def test_transfer_reaction_loop_is_durable_and_depth_bounded(self):
         self.player.in_game = True

@@ -94,6 +94,36 @@ class TestMobDefinitionTriggerEndpoints(WorldTestCase):
         self.assertEqual(resp.status_code, 201)
         self.assertEqual(self._event_triggers_for_definition().first().conditions, "is_mob")
 
+    def test_update_mob_definition_trigger_rejects_room_event(self):
+        trigger = Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_WORLD,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(MobDefinition),
+            target_id=self.mob_definition.id,
+            event=adv_consts.MOB_REACTION_EVENT_ENTERING,
+            script="say Hello.",
+            display_action_in_room=False,
+        )
+        detail_endpoint = reverse(
+            "builder-mob-definition-reaction-detail",
+            args=[self.world.pk, self.mob_definition.id, trigger.id],
+        )
+
+        resp = self.client.put(
+            detail_endpoint,
+            {
+                "event": adv_consts.TRIGGER_EVENT_AFTER_MOVE_ENTER,
+                "reaction": "say This should not save.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        trigger.refresh_from_db()
+        self.assertEqual(trigger.event, adv_consts.MOB_REACTION_EVENT_ENTERING)
+        self.assertEqual(trigger.script, "say Hello.")
+
     def test_match_is_required_for_say_event(self):
         resp = self.client.post(
             self.endpoint,

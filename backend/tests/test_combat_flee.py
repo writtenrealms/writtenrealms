@@ -838,6 +838,100 @@ class TestCombatFlee(WorldTestCase):
         self.assertEqual(flee_message["text"], "You flee east.")
         self.assertEqual(flee_message["data"]["round_id"], f"encounter:{encounter.id}:2")
 
+    def test_enter_room_event_fires_only_when_prepared_flee_completes(self):
+        self.world.config.combat_resolution_interval = -1
+        self.world.config.save(update_fields=["combat_resolution_interval"])
+        mob = self._mob()
+        watcher_definition = MobDefinition.objects.create(
+            world=self.world,
+            name="Escape Watcher",
+        )
+        watcher = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.escape_room,
+            definition=watcher_definition,
+            name="an escape watcher",
+        )
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_WORLD,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(MobDefinition),
+            target_id=watcher_definition.id,
+            event=adv_consts.MOB_REACTION_EVENT_ENTERING,
+            script="say The path opens.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=self.escape_room.id,
+            event=adv_consts.TRIGGER_EVENT_ENTER,
+            script="/cmd room -- /echo -- The escape bell tolls.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+
+        dispatch_text_command(self.player.id, "kill rat")
+
+        with capture_game_messages() as preparing_messages:
+            dispatch_text_command(self.player.id, "flee")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.room.id)
+        self.assertEqual(
+            [
+                entry["message"]
+                for entry in preparing_messages
+                if entry["message"].get("type") == "cmd./echo.success"
+                and "escape bell" in entry["message"].get("text", "")
+            ],
+            [],
+        )
+        self.assertFalse(
+            any(
+                entry["message"].get("type") == "notification.cmd.say.success"
+                and entry["message"].get("data", {}).get("actor", {}).get("key")
+                == watcher.key
+                for entry in preparing_messages
+            ),
+            [entry["message"] for entry in preparing_messages],
+        )
+
+        with capture_game_messages() as completed_messages:
+            dispatch_text_command(self.player.id, "flee")
+
+        self.player.refresh_from_db()
+        mob.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.escape_room.id)
+        echoes = [
+            entry["message"]
+            for entry in completed_messages
+            if entry["message"].get("type") == "cmd./echo.success"
+            and "escape bell" in entry["message"].get("text", "")
+        ]
+        self.assertEqual(
+            len(echoes),
+            1,
+            [entry["message"] for entry in completed_messages],
+        )
+        watcher_reactions = [
+            entry["message"]
+            for entry in completed_messages
+            if entry["message"].get("type") == "notification.cmd.say.success"
+            and entry["message"].get("data", {}).get("actor", {}).get("key")
+            == watcher.key
+        ]
+        self.assertEqual(
+            len(watcher_reactions),
+            1,
+            [entry["message"] for entry in completed_messages],
+        )
+        self.assertEqual(watcher_reactions[0]["data"]["text"], "The path opens.")
+
     def test_manual_flee_advances_prepare_round_then_completes_on_next_round_command(self):
         self.world.config.combat_resolution_interval = -1
         self.world.config.save(update_fields=["combat_resolution_interval"])

@@ -30,10 +30,13 @@ For room builders, the most common trigger is a room-scoped command trigger:
 - the trigger checks `conditions`
 - the trigger runs either `script` or `steps`
 
-Room triggers also support movement policies and post-move room events. Those
-use the same trigger manifest contract and shared condition system. Movement
-policies are the WR2 replacement for legacy room checks; WR2 has no Room Check
-model or builder screen.
+Room triggers also support movement policies and post-action room events. Use
+a room-scoped `event: enter` trigger for behavior that should run whenever a
+player arrives, regardless of whether the arrival came from ordinary movement,
+an adjacent-room charge, flee, `/transfer`, death routing, `/jump`, instance
+entry or exit, an instance reset, or a connected character reset that changes
+room or runtime world. Movement policies are the WR2 replacement for legacy
+room checks; WR2 has no Room Check model or builder screen.
 
 ## Builder Workflow
 
@@ -72,7 +75,7 @@ notes, type, color, landmark state, exits, flags, details, and doors.
 
 - `kind: command` for an authored room verb
 - `kind: policy` for an entry or exit gate
-- `kind: event` for behavior after movement
+- `kind: event` for behavior after a player arrival or another supported event
 
 Do not add `checks`, `room_checks`, or `triggers` under `kind: room`. Each
 trigger is its own `kind: trigger` document targeting the room. See
@@ -159,7 +162,8 @@ If neither is present, the manifest creates a new trigger.
   no cooldown. Policy triggers ignore this.
 - `order`: lower values run earlier when multiple matching triggers are in play.
 - `is_active`: if `false`, the trigger stays authored but does not run.
-- `event`: required for `kind: policy` and `kind: event` triggers.
+- `event`: required for `kind: policy` and `kind: event` triggers. The
+  recommended player-arrival hook is room-scoped `event: enter`.
 
 ## Matching Commands With `spec.match`
 
@@ -732,16 +736,21 @@ fallback command Triggers are suppressed for forced commands. Published
 output remains visible, while internal durable events carry
 Trigger/run/issuer/subject provenance that is not exposed to players. Forced
 speech and social output does not drive quest progress or another Trigger
-reaction. A transfer that actually moves a player or mob is different: its
-durable lifecycle event runs destination `entering` reactions after commit,
-when no Trigger-step locks are held. A moved player still in that destination
-after its reactions additionally runs hostile-mob aggro. The derived output is
-captured and durably enqueued in a new transaction. Within one event batch,
-only the actor's final transfer arrival runs this work. A later player transfer
-also invalidates an earlier pending player arrival, and every delivery rechecks
-the actor's current runtime world and room. Inherited reaction commands remain
-bounded by the eight-layer depth limit. A same-room transfer runs no arrival
-work.
+reaction. A transfer that actually moves a player is different: its structural
+room-entry lifecycle event runs destination mob-definition `enter` reactions,
+then the destination room's `event: enter` triggers, after commit and outside
+the original Trigger-step locks. A moved player still in that destination after
+the reactions additionally runs hostile-mob aggro. A transferred mob retains
+its existing destination mob-reaction behavior but does not run the
+player-only room trigger.
+
+The derived reaction and aggro output is captured and durably enqueued as one
+bounded follow-up batch. Within one event batch, only the player's final
+arrival remains current; a later location change invalidates an earlier pending
+arrival. Delivery rechecks the player's in-game state, runtime world, room, and
+location sequence before doing destination work. Inherited reaction commands
+remain bounded by the eight-layer depth limit. A same-room transfer returns its
+normal look result but emits no room-entry lifecycle event.
 
 The Trigger room is recorded internally as the command issuer; `subject` is the
 chosen room, player, or mob execution identity. Builders cannot spoof that
@@ -1061,15 +1070,15 @@ fails with `target_busy` if the player target is in active PvP; ordinary active
 encounters are finished on a successful move.
 
 In a typed step, the room change and transfer events remain inside the step
-transaction and roll back if any action fails. After an actual move commits,
-the durable lifecycle event runs destination mob `entering` reactions for a
-player or mob target only in the target's runtime world. A player target still
+transaction and roll back if any action fails. After an actual player move
+commits, the durable lifecycle event runs destination mob-definition `enter`
+reactions followed by the room's `event: enter` triggers. A player target still
 in that destination after its reactions also runs hostile-mob aggro. Those
 derived events are captured and durably enqueued outside the original locks.
-Only the final transfer arrival in one batch runs this work; a later player
-transfer also invalidates an earlier pending player arrival. Reaction command
-depth remains bounded at eight. A same-room transfer has no arrival lifecycle
-work; a same-room player target receives a normal look snapshot.
+Only the final current transfer arrival in one batch runs this work; a later
+location change invalidates an earlier pending arrival. Reaction command depth
+remains bounded at eight. A same-room transfer has no arrival lifecycle work; a
+same-room player target receives a normal look snapshot.
 
 If the transfer needs custom text, run that text before the transfer. Keep both
 independently wrapped room commands on the same script line when they should
@@ -1107,7 +1116,7 @@ spec:
   target:
     type: room
     key: room.<room_id>
-  event: after_move_enter
+  event: enter
   script: |
     /cmd room -- /kill {{ actor_key }} -- The pit swallows you whole.
     /cmd room -- /echo -- The floor seals again.
@@ -1274,10 +1283,11 @@ spawned mob instance. A policy attached to `before_move_enter` checks the
 destination room instead, which is useful when a mob inside the destination
 guards every entrance.
 
-### Entry Trap
+### Player Arrival Trigger
 
-Use an `after_move_enter` event trigger when movement should succeed and then
-the room should react.
+Use a room-scoped `enter` event when the room should react after any committed
+player arrival. This is the recommended hook for entry traps, greetings, scene
+changes, and other “player enters room” behavior.
 
 ```yaml
 kind: trigger
@@ -1287,7 +1297,7 @@ metadata:
 spec:
   scope: room
   kind: event
-  event: after_move_enter
+  event: enter
   target:
     type: room
     key: room.999
@@ -1304,6 +1314,65 @@ spec:
   order: 0
   is_active: true
 ```
+
+The same room hook runs for ordinary movement, movement performed as part of an
+adjacent-room charge, successful flee, `/transfer`, death routing, `/jump`,
+connected character reset to a different room or runtime world, instance entry,
+instance leave, and instance reset. Ordinary movement and charge use the source
+value `move`; the other source values are `flee`, `transfer`, `death`, `jump`,
+`character_reset`, `instance_enter`, `instance_leave`, and `instance_reset`. A
+condition can select one source through `event.source`; leave it unfiltered for
+truly universal arrival behavior.
+
+`event.direction` is the normalized movement direction for directional
+movement, charge, flee, and directional `/jump`. It is an empty string for
+transfer, death, non-directional jump, character reset, and instance lifecycle
+arrivals. A non-empty `spec.match` on a room event is matched against that
+direction, so omit `match` when non-directional arrivals must also run.
+`room.*`, `state.room.*`, and `event.destination_room.*` refer to the destination.
+`event.origin_room.*` identifies the prior room when one is meaningful.
+
+Room `enter` is player-only. The existing world-scoped mob reaction uses the
+same event text but a different target:
+
+```yaml
+spec:
+  scope: world
+  kind: event
+  target:
+    type: mobdefinition
+    key: mobdefinition.22
+  event: enter
+  script: say Welcome, traveler.
+```
+
+That form makes live mobs of the definition react to arrivals; it does not
+attach behavior to the room. Scope and target type disambiguate the two forms.
+
+The older room events remain available for source-specific compatibility:
+
+- `after_move_exit` and `after_move_enter` run only for the `move` source,
+  including adjacent-room charge.
+- `after_death_room_enter` runs only for the `death` source.
+- For movement, execution order is origin `after_move_exit`, destination mob
+  `enter`, destination room `enter`, then destination `after_move_enter`.
+- For death, destination mob `enter` and room `enter` run before
+  `after_death_room_enter`.
+
+Do not author both universal and compatibility hooks with the same effect
+unless both executions are intended.
+
+An ordinary relocation that does not change the player's location epoch is not
+an arrival. Transfers and jumps to the player's current room therefore do not
+count, and a connected character reset emits an arrival only when the room or
+runtime world changes. Death and instance reset deliberately advance the
+player's location epoch and run arrival hooks even if the authored destination
+room id is unchanged. Instance entry and leave likewise count when the runtime
+world changes. Queued arrival work rechecks the player's current runtime world,
+room, in-game state, and location epoch; stale or intermediate arrivals are
+ignored.
+Scripted arrival chains inherit the eight-layer command-depth bound. Login,
+reconnect, and offline location repair do not emit an arrival.
 
 ### One-Time Room Interaction
 
@@ -1455,10 +1524,13 @@ For builder work, the important distinction is:
 
 - room actions usually use `kind: command`
 - movement gates use `kind: policy`
-- room reactions after movement use `kind: event` with `after_move_enter` or
-  `after_move_exit`
+- universal player-arrival behavior uses room-scoped `kind: event` with
+  `event: enter`
+- movement-only compatibility behavior uses `after_move_enter` or
+  `after_move_exit`; death-only compatibility behavior uses
+  `after_death_room_enter`
 - mob reactions use `kind: event` with `scope: world` and a `mobdefinition`
-  target
+  target, including the distinct mob-definition `event: enter`
 
 ## Related Docs
 

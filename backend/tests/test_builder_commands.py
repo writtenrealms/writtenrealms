@@ -2072,6 +2072,52 @@ class TestBuilderTransfer(BuilderCommandTestCase):
     def _room_ref(room):
         return f"room@{room.x},{room.y},{room.z}"
 
+    def test_room_enter_event_fires_for_transfer_but_not_same_room_transfer(self):
+        destination = self.room.create_at("east")
+        Trigger.objects.create(
+            world=self.world,
+            scope=api_consts.TRIGGER_SCOPE_ROOM,
+            kind=api_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=destination.id,
+            event=api_consts.TRIGGER_EVENT_ENTER,
+            script="/cmd room -- /echo -- The transfer sigil flashes.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+
+        with capture_game_messages() as moved_messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                dispatch_text_command(
+                    self.player.id,
+                    f"/transfer self {self._room_ref(destination)}",
+                )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, destination.id)
+        moved_echoes = [
+            entry
+            for entry in self._messages_by_type(
+                moved_messages,
+                "cmd./echo.success",
+            )
+            if "transfer sigil" in entry["message"].get("text", "")
+        ]
+        self.assertEqual(len(moved_echoes), 1)
+
+        with capture_game_messages() as same_room_messages:
+            dispatch_text_command(self.player.id, "/transfer self here")
+
+        same_room_echoes = [
+            entry
+            for entry in self._messages_by_type(
+                same_room_messages,
+                "cmd./echo.success",
+            )
+            if "transfer sigil" in entry["message"].get("text", "")
+        ]
+        self.assertEqual(same_room_echoes, [])
+
     def test_builder_transfers_remote_player_and_refreshes_target_room(self):
         origin = self.room.create_at("west")
         destination = self.room.create_at("east")
@@ -2933,6 +2979,56 @@ class TestBuilderJump(BuilderCommandTestCase):
 
     def _messages_by_type(self, messages, message_type):
         return [msg for msg in messages if msg["message"].get("type") == message_type]
+
+    def test_room_enter_event_fires_for_jump_but_not_same_room_jump(self):
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+        target_room = self.room.create_at("east")
+        Trigger.objects.create(
+            world=self.world,
+            scope=api_consts.TRIGGER_SCOPE_ROOM,
+            kind=api_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=target_room.id,
+            event=api_consts.TRIGGER_EVENT_ENTER,
+            script="/cmd room -- /echo -- The landing rune glows.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+
+        with capture_game_messages() as moved_messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/jump {target_room.id}",
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, target_room.id)
+        moved_echoes = [
+            entry
+            for entry in self._messages_by_type(
+                moved_messages,
+                "cmd./echo.success",
+            )
+            if "landing rune" in entry["message"].get("text", "")
+        ]
+        self.assertEqual(len(moved_echoes), 1)
+
+        with capture_game_messages() as same_room_messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/jump {target_room.id}",
+            )
+
+        same_room_echoes = [
+            entry
+            for entry in self._messages_by_type(
+                same_room_messages,
+                "cmd./echo.success",
+            )
+            if "landing rune" in entry["message"].get("text", "")
+        ]
+        self.assertEqual(same_room_echoes, [])
 
     def test_jump_moves_player_to_target_room(self):
         target_room = self.room.create_at("east")

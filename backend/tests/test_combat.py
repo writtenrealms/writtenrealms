@@ -9,6 +9,7 @@ from builders.currencies import create_currency
 from builders.models import Faction, Trigger
 from config import constants as adv_consts
 from spawns.actions.combat import apply_player_death, mob_should_aggro_player
+from spawns.events import publish_events
 from spawns.models import (
     CombatEncounter,
     Item,
@@ -125,6 +126,57 @@ class TestKillCommand(WorldTestCase):
             container=self.player,
             name=name,
         )
+
+    def test_room_enter_event_fires_after_player_death_relocation(self):
+        death_room = self.room.create_at("east")
+        self.world.config.death_room = death_room
+        self.world.config.save(update_fields=["death_room"])
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=death_room.id,
+            event=adv_consts.TRIGGER_EVENT_ENTER,
+            script="/cmd room -- /echo -- The death-room candle flares.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=death_room.id,
+            event=adv_consts.TRIGGER_EVENT_AFTER_DEATH_ROOM_ENTER,
+            script="/cmd room -- /echo -- The old death hook answers.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+
+        updated_player, events = apply_player_death(
+            player=self.player,
+            origin_room=self.room,
+            death_token="room-enter-death-test",
+        )
+        with capture_game_messages() as messages:
+            publish_events(events, actor_key=self.player.key)
+
+        self.assertEqual(updated_player.room_id, death_room.id)
+        echoes = [
+            entry["message"]
+            for entry in messages
+            if entry["message"].get("type") == "cmd./echo.success"
+            and "death-room candle" in entry["message"].get("text", "")
+        ]
+        self.assertEqual(len(echoes), 1)
+        compatibility_echoes = [
+            entry["message"]
+            for entry in messages
+            if entry["message"].get("type") == "cmd./echo.success"
+            and "old death hook" in entry["message"].get("text", "")
+        ]
+        self.assertEqual(len(compatibility_echoes), 1)
 
     def test_all_death_modes_reset_current_vitals_to_one(self):
         for death_mode in adv_consts.DEATH_MODES:

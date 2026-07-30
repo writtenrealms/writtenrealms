@@ -490,8 +490,21 @@ The existing client event remains `affect.death`. Its room payload is the final
 committed destination, while `origin_room` identifies where the death and
 penalty occurred.
 
-`after_death_room_enter` observes only the final committed destination. It does
-not select or correct the authoritative destination.
+Death also emits the canonical player-room-entry lifecycle with
+`event.source: death`. Destination mob-definition `enter` reactions and the
+room-scoped `event: enter` triggers run first;
+`after_death_room_enter` then runs as the death-only compatibility hook. All
+observe only the final committed destination and cannot select or correct the
+authoritative destination.
+
+Death always advances the player's location sequence, so this lifecycle runs
+even when routing returns the player to the same authored room id. Before
+running destination behavior, queued delivery rechecks the player's in-game
+state, runtime world, room, and location sequence. A later relocation therefore
+suppresses stale death-arrival work, and a retried durable event is deduplicated
+by its subscription receipt. Reaction output inherits the eight-layer
+script-command depth bound and, for durable delivery, is captured into one
+bounded derived outbox batch.
 
 ## Failure Handling
 

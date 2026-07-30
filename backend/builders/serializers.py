@@ -2237,6 +2237,7 @@ def validate_reaction(self, validated_data):
 class MobReactionSerializer(serializers.ModelSerializer):
 
     definition = serializers.SerializerMethodField()
+    event = serializers.ChoiceField(choices=adv_consts.MOB_REACTION_EVENTS)
     match = serializers.CharField(required=False, allow_blank=True)
     reaction = serializers.CharField(source='script')
 

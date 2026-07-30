@@ -570,21 +570,20 @@ def _cached_gate_delay(hook: dict) -> int:
         return 0
 
 
-def _is_cached_gate_allowed(hook: dict, scope_key: str) -> bool:
+def _claim_cached_gate(
+    hook: dict,
+    scope_key: str,
+) -> tuple[bool, tuple[str, str] | None]:
+    """Atomically claim a cached room-hook gate under concurrent arrivals."""
     gate_delay = _cached_gate_delay(hook)
     if gate_delay == 0:
-        return True
-    gate_key = _cached_trigger_gate_cache_key(hook, scope_key)
-    return not bool(cache.get(gate_key))
-
-
-def _consume_cached_gate(hook: dict, scope_key: str) -> None:
-    gate_delay = _cached_gate_delay(hook)
-    if gate_delay == 0:
-        return
+        return True, None
     gate_key = _cached_trigger_gate_cache_key(hook, scope_key)
     timeout = None if gate_delay < 0 else gate_delay
-    cache.set(gate_key, 1, timeout=timeout)
+    token = uuid.uuid4().hex
+    if not cache.add(gate_key, token, timeout=timeout):
+        return False, None
+    return True, (gate_key, token)
 
 
 def _load_movement_rooms(origin_room_id: int, destination_room_id: int) -> tuple[Room | None, Room | None]:
@@ -724,8 +723,13 @@ def execute_room_event_triggers(
     room: Room | int | None,
     origin_room_id: int | None = None,
     destination_room_id: int | None = None,
+    origin_room_context: Room | None = None,
+    destination_room_context: Room | None = None,
     direction: str | None = None,
     connection_id: str | None = None,
+    source_event_data: dict | None = None,
+    capture_output: bool = False,
+    gate_claim_collector: list[tuple[str, str]] | None = None,
 ) -> None:
     normalized_event = _normalized_text(event)
     if normalized_event not in adv_consts.TRIGGER_ROOM_EVENT_EVENTS:
@@ -748,10 +752,15 @@ def execute_room_event_triggers(
     if not hooks:
         return
 
-    origin_room, destination_room = _load_movement_rooms(
-        origin_room_id or resolved_room.id,
-        destination_room_id or resolved_room.id,
-    )
+    origin_room = origin_room_context
+    destination_room = destination_room_context
+    if origin_room is None or destination_room is None:
+        loaded_origin, loaded_destination = _load_movement_rooms(
+            origin_room_id or resolved_room.id,
+            destination_room_id or resolved_room.id,
+        )
+        origin_room = origin_room or loaded_origin
+        destination_room = destination_room or loaded_destination
     origin_room = origin_room or resolved_room
     destination_room = destination_room or resolved_room
     event_data = _movement_event_data(
@@ -761,6 +770,22 @@ def execute_room_event_triggers(
         destination_room=destination_room,
         target_room=resolved_room,
     )
+    command_depth = 0
+    if isinstance(source_event_data, dict):
+        source = str(source_event_data.get("source") or "").strip()
+        if source:
+            event_data["source"] = source
+        try:
+            command_depth = max(
+                0,
+                int(source_event_data.get(SCRIPT_COMMAND_DEPTH_KEY) or 0),
+            )
+        except (TypeError, ValueError):
+            command_depth = 0
+        if command_depth:
+            event_data[SCRIPT_COMMAND_DEPTH_KEY] = command_depth
+    from spawns.script_commands import MAX_SCRIPT_COMMAND_DEPTH
+
     runtime_world_id = getattr(actor, "world_id", None)
     scope_key = (
         f"runtime:{runtime_world_id}:room:{resolved_room.id}"
@@ -782,7 +807,11 @@ def execute_room_event_triggers(
                 room=resolved_room,
                 event_data=event_data,
                 gate_scope_key=scope_key,
+                gate_claim_collector=gate_claim_collector,
             )
+            continue
+
+        if command_depth >= MAX_SCRIPT_COMMAND_DEPTH:
             continue
 
         if conditions and actor:
@@ -797,10 +826,11 @@ def execute_room_event_triggers(
             if not evaluated.get("result"):
                 continue
 
-        if not _is_cached_gate_allowed(hook, scope_key):
+        gate_allowed, gate_claim = _claim_cached_gate(hook, scope_key)
+        if not gate_allowed:
             continue
-
-        _consume_cached_gate(hook, scope_key)
+        if gate_claim is not None and gate_claim_collector is not None:
+            gate_claim_collector.append(gate_claim)
 
         script_lines = _split_trigger_script_lines(hook.get("script"))
         if not script_lines or not actor:
@@ -812,6 +842,8 @@ def execute_room_event_triggers(
             segments=first_line_segments,
             issuer_scope=hook.get("scope"),
             connection_id=connection_id,
+            script_command_depth=command_depth + 1,
+            capture_only=capture_output,
         )
 
         for line_index, line_segments in enumerate(script_lines[1:], start=1):
@@ -821,6 +853,9 @@ def execute_room_event_triggers(
                 line_index=line_index,
                 issuer_scope=hook.get("scope"),
                 connection_id=connection_id,
+                script_command_depth=command_depth + 1,
+                capture_only=capture_output,
+                defer_until_commit=capture_output,
             )
 
 

@@ -705,7 +705,11 @@ Format:
 
 Moves the builder player to another room in the current world. The room can be
 selected by absolute room id, `room.<id>` style key, or a connected direction
-from the current room. Directional jumps bypass normal movement policy triggers.
+from the current room. A jump that changes rooms runs the destination's
+room-scoped `event: enter` triggers with `event.source: jump`. A directional
+jump supplies `event.direction`; an id/key jump leaves it empty. Jumps bypass
+normal movement policies and do not run the movement-only `after_move_enter`
+compatibility hook. Jumping to the current room emits no arrival.
 
 Examples:
 
@@ -772,10 +776,12 @@ script context. Player-issued scripts cannot use `/transfer`; room triggers
 should dispatch it through `/cmd room` and pass the triggering character with
 `{{ actor_key }}`. Transfer sends a complete `affect.transfer` room snapshot to
 player targets that actually change rooms and refreshes combat-effect state.
-After a moved player or mob arrives, destination mob `entering` reactions run
-in the same runtime world; a moved player still there after those reactions
-also runs hostile-mob aggro. A same-room player transfer returns a normal look
-snapshot, and no same-room transfer runs arrival work.
+After a moved player arrives, destination mob-definition `enter` reactions run,
+followed by room-scoped `event: enter` triggers; a player still there after
+those reactions also runs hostile-mob aggro. A transferred mob retains its
+existing mob-reaction behavior but does not run the player-only room hook. A
+same-room player transfer returns a normal look snapshot, and no same-room
+transfer runs arrival work.
 
 Typed Trigger `command` actions use a narrower audited contract than ordinary
 player scripts. They may transfer only the Trigger actor, but any supported
@@ -819,15 +825,24 @@ later action fails. A typed transfer that would move a player in active PvP
 fails with `target_busy` and rolls back the whole step; ordinary active
 encounters are finished when the move succeeds.
 
-For an actual move, the durable transfer lifecycle event starts destination
-`entering` reactions after the step commits; a moved player still in that
-destination afterward then runs aggro. Their output is captured and durably
-enqueued outside the original step locks. Within one event batch, only the
-actor's final transfer arrival runs this work. A later player transfer also
-invalidates an earlier pending player arrival; every delivery rechecks the
-actor's current runtime world and room. Inherited scripted reactions remain
-subject to the eight-layer depth limit. A same-room transfer has no arrival
-lifecycle event.
+For an actual player move, the durable transfer lifecycle event starts
+destination mob-definition `enter` reactions and room-scoped `event: enter`
+triggers after the step commits; a moved player still in that destination
+afterward then runs aggro. Their output is captured and durably enqueued as one
+bounded follow-up batch outside the original step locks. Within one event
+batch, only the player's final current arrival runs this work. A later location
+change invalidates an earlier pending arrival; every delivery rechecks the
+player's in-game state, runtime world, room, and location sequence. Inherited
+scripted reactions remain subject to the eight-layer depth limit. A same-room
+transfer has no arrival lifecycle event.
+
+The same room-scoped `event: enter` contract covers ordinary movement,
+adjacent-room charge, flee, `/transfer`, death, jump, connected character reset
+to a different room or runtime world, instance entry/leave, and instance reset.
+`after_move_enter` remains movement-only compatibility behavior, and
+`after_death_room_enter` remains death-only compatibility behavior. The
+world-scoped `mobdefinition` form of `event: enter` is a separate mob reaction.
+Login, reconnect, and offline location repair do not emit an arrival.
 
 WR2 does not accept WR1's optional trailing command on `/transfer`. Put custom
 feedback before the transfer as explicit script commands. For immediate ordered

@@ -102,6 +102,14 @@ Current required mappings:
   legacy equivalent, and the WR2 default is `false`.
 - Trigger mob reactions target `kind: trigger` with `target.type:
   mobdefinition`, not `mobtemplate`.
+- An authored WR1 room action that is known to run for every player arrival
+  should export as a room-scoped `kind: event` trigger with `event: enter`.
+  Use `after_move_enter` only when the WR1 source is provably limited to
+  directional movement, and `after_death_room_enter` only for a provably
+  death-specific action. Do not translate a mob's legacy `enter` reaction into
+  a room trigger: it remains world-scoped with a `mobdefinition` target. If the
+  WR1 row does not establish which of those semantics it had, flag it for
+  author review instead of guessing.
 - Quest NPC dialogue sources use `mob_definition` / `mob_definition_id`, not
   `mob_template`.
 - Quest room pickups and item grant/spawn effects use `item_definition` /
@@ -687,7 +695,7 @@ spec:
   is_active: true
 ```
 
-### Create Room Movement Event Trigger
+### Create Universal Player-Arrival Trigger
 
 ```yaml
 kind: trigger
@@ -700,7 +708,7 @@ spec:
   target:
     type: room
     key: room.10
-  event: after_move_enter
+  event: enter
   conditions:
     not:
       eq:
@@ -714,6 +722,44 @@ spec:
   order: 0
   is_active: true
 ```
+
+Room-scoped `event: enter` is the canonical “player enters this room” contract.
+It runs for ordinary movement, adjacent-room charge, flee, `/transfer`, death,
+`/jump`, a connected character reset that changes room or runtime world,
+instance entry, instance leave, and instance reset. Scope and target
+disambiguate it from the pre-existing mob reaction with the same event text:
+
+- `scope: room`, `target.type: room`, `event: enter` runs the room behavior for
+  a player arrival.
+- `scope: world`, `target.type: mobdefinition`, `event: enter` runs matching
+  destination mobs' reactions.
+
+The source-specific room events remain valid compatibility hooks.
+`after_move_exit` and `after_move_enter` run only for the `move` source
+(ordinary movement and adjacent-room charge), while
+`after_death_room_enter` runs only for `death`. A source event runs the
+universal hook as well, so identical effects should not be authored in both
+unless two executions are intended.
+
+Arrival condition context includes `event.source`, `event.origin_room`,
+`event.destination_room`, and `event.direction`. Source values are `move`,
+`flee`, `transfer`, `death`, `jump`, `character_reset`, `instance_enter`,
+`instance_leave`, and `instance_reset`. Direction is populated for ordinary
+movement, adjacent-room charge, flee, and directional `/jump`; it is empty for
+non-directional sources. The destination supplies `room.*` and
+`state.room.*`.
+
+An ordinary relocation that does not change the player's location epoch emits
+no arrival. Transfers and jumps to the current room therefore emit none, and
+`character_reset` is emitted only when a connected player's room or runtime
+world changes. Death and instance reset deliberately advance the location epoch
+and emit an arrival even when the authored room id is unchanged; instance entry
+or leave also counts across a runtime-world boundary. The subscriber validates
+the current in-game state, runtime world, destination room, and location epoch,
+so
+stale or intermediate arrivals do not run remotely. Script-derived arrivals
+inherit the eight-layer command-depth bound. Login, reconnect, and offline
+location repair do not emit an arrival.
 
 ### Update Trigger
 
@@ -941,17 +987,21 @@ while the chosen room, player, or mob is recorded as the step subject. Durable
 command events carry internal, unforgeable
 Trigger/run/issuer/subject provenance, which is stripped from the player
 payload. Forced speech and socials remain visible but do not count as voluntary
-input for quest or Trigger subscriptions. When a transfer actually moves its
-target, the committed lifecycle event starts destination `entering` reactions
-for a player or mob after commit. A moved player still in that destination after
-its reactions additionally starts hostile-mob aggro. The derived output is
-captured into another durable outbox batch. Only the actor's final transfer
-arrival in one event batch runs this work. A later player transfer also
-invalidates an earlier pending player arrival, and every delivery rechecks the
-actor's current runtime world and room. Reaction execution preserves the
-bounded eight-layer depth. No lifecycle arrival work runs for a same-room
-transfer. `trigger_actor` is the only player subject in this initial contract;
-typed steps do not select arbitrary bystander players.
+input for quest or Trigger subscriptions. When a transfer actually moves a
+player, the committed structural lifecycle event starts destination
+mob-definition `enter` reactions and then the room-scoped `event: enter`
+triggers after commit. A moved player still in that destination after its
+reactions additionally starts hostile-mob aggro. A transferred mob preserves
+its existing mob-reaction path but does not run the player-only room hook.
+
+The derived reaction and aggro output is captured into one bounded durable
+outbox batch. Only the player's final current arrival in one event batch runs
+this work. A later location change invalidates an earlier pending arrival, and
+delivery rechecks the player's in-game state, runtime world, room, and location
+sequence. Reaction execution preserves the bounded eight-layer depth. No
+lifecycle arrival work runs for a same-room transfer. `trigger_actor` is the
+only player subject in this initial contract; typed steps do not select
+arbitrary bystander players.
 
 Item and mob mutations must form an initial action prefix. After that prefix,
 `debit_currency`, `grant_currency`, `command`, `echo`, `send`, and
@@ -1441,13 +1491,18 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   - `spec.target` is required for room/zone scope.
 - For `spec.kind: event`:
   - `spec.event` is required.
-  - mob reaction events such as `say` use `scope: world` and a `mobdefinition`
-    target.
+  - mob reaction events such as `say` and the mob-definition form of `enter`
+    use `scope: world` and a `mobdefinition` target.
   - `event: social` also requires `spec.match`; its literals compare exactly
     with the resolved social command and run only for a player actor directly
     targeting the mob.
-  - room events such as `after_move_enter`, `after_move_exit`, and
-    `after_death_room_enter` use `scope: room` and a `room` target.
+  - room events use `scope: room` and a `room` target. `event: enter` is the
+    recommended universal player-arrival hook; `after_move_enter`,
+    `after_move_exit`, and `after_death_room_enter` are source-specific
+    compatibility hooks.
+  - the shared text `event: enter` is resolved from scope and target:
+    room/room means player-arrival room behavior, while
+    world/mobdefinition means a mob reaction.
 - For `spec.kind: policy`:
   - `spec.event` is required.
   - `spec.event` must be `before_move_enter` or `before_move_exit`.

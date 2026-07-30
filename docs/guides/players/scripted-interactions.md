@@ -65,13 +65,22 @@ same-step output succeed or fail together. If the step fails, your room and
 balance stay unchanged. A transfer that would move you while you are in active
 player-versus-player combat is rejected and rolls back the whole step.
 
-After an actual move commits, the destination's normal `entering` reactions and
-hostile-mob aggro run from the durable transfer lifecycle event. Aggro runs only
-if the entering reactions leave you in that destination. Their output is queued
-durably after the original step. If several scripted transfers occur in one
-batch, only the final arrival runs this work. A later scripted player transfer
-also invalidates an earlier pending arrival. A transfer to the room you already
-occupy produces no arrival reactions or aggro.
+After an actual move commits, the destination's normal mob reactions and
+player-arrival room behavior run from the structural entry lifecycle event.
+Hostile-mob aggro follows only if those reactions leave you in that destination.
+Their output is queued durably after the original step. If several scripted
+transfers occur in one batch, only your final current arrival runs this work;
+any later location change invalidates an earlier pending arrival. A transfer to
+the room you already occupy produces no arrival behavior or aggro.
+
+Builders can attach the same room arrival behavior to ordinary movement,
+adjacent-room charge, fleeing, `/transfer`, death routing, jumping, instance
+entry or exit, a connected character reset that changes room or runtime world,
+and instance reset. This makes a room greeting, trap, or scene transition
+consistent regardless of how you arrived. Death and instance reset establish a
+new location epoch even when their destination uses the same authored room, so
+arrival behavior may run again for those lifecycle changes. Login, reconnect,
+and offline location repair do not count as room arrivals.
 
 Other movement, combat, inventory changes, and mutating player commands are not
 available through the generic step-command path. Builders use explicit typed
