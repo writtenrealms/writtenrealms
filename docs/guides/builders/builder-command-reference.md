@@ -58,7 +58,7 @@ form even though arbitrary player scripts cannot issue `/transfer`.
 | `/transfer` | Direct | No | Script | Script | No | No |
 | `/purge` | Direct | No | No | No | No | No |
 | `/echo`, `/zecho`, `/wecho` | Direct | Script | Script | Script | Script | Script |
-| `/send` | Direct | No | Script | Script | Script | Script |
+| `/send`, `/sendexcept` | Direct | No | Script | Script | Script | Script |
 | `/state` | Direct | No | Script | Script | Script | Script |
 | `/stats` | Direct | No | No | No | No | No |
 | `/regen` | Direct | No | Mob | No | No | No |
@@ -272,35 +272,52 @@ Examples:
 /cmd room -- /echo -- The altar hums.
 ```
 
-### `/send`
+### `/send`, `/sendexcept`
 
 Formats:
 
 ```text
 /send <player> <message>
 /send <player> -- <message>
+/sendexcept <player> <message>
+/sendexcept <player> -- <message>
 ```
 
-Sends private text to one connected player in the issuer's runtime world.
+`/send` sends private text to one connected player in the issuer's runtime
+world. `/sendexcept` sends text to every other connected player in that
+target's current room, excluding the target. The room audience is constrained
+to the same runtime world, including when parallel instances share the same
+authored room.
+
 Targets can be `player.<id>`, exact player names, or unambiguous name prefixes.
+The target must be connected; `/sendexcept` additionally requires the target
+to be in a room.
 
 Use `/send` when only one player should receive the text. Use `/echo` when the
-message should be visible to a room, zone, or world.
+same message should be visible to a whole room, zone, or world. Pair `/send`
+and `/sendexcept` when the acting player needs second-person text while
+witnesses need separate third-person narration.
 
 Examples:
 
 ```text
 /send aria The altar hums beneath your hand.
 /send player.123 -- You hear distant surf.
+/sendexcept aria -- Aria studies the inscription.
 /cmd room -- /send {{ actor_key }} -- You feel watched.
+/cmd room -- /sendexcept {{ actor_key }} -- {{ actor }} studies the inscription.
 ```
 
-Player-trigger scripts cannot run `/send` directly. Use an explicit ambient
-actor when a trigger should send private text:
+Player-trigger scripts cannot run `/send` or `/sendexcept` directly. Use an
+explicit ambient actor when a legacy `script` Trigger needs either operation:
 
 ```text
-/cmd room -- /send {{ actor_key }} -- The inscription burns behind your eyes.
+/cmd room -- /send {{ actor_key }} -- You pull the lever.
+/cmd room -- /sendexcept {{ actor_key }} -- {{ actor }} pulls the lever.
 ```
+
+Typed Trigger steps should use the native `send` and `send_except` actions
+instead of wrapping these commands in a `command` action.
 
 ### `/state`
 
@@ -819,12 +836,24 @@ script: /cmd room -- /send {{ actor_key }} -- The wall folds around you. && /cmd
 ```
 
 This explicit form still emits transfer's standard disappearance notification.
-In typed steps, express the same sequence with separate `command` actions;
-after an initial item/mob mutation prefix, commands may interleave with
-`debit_currency` and `echo` in authored narrative order. A debit's authoritative
-wallet state event follows all authored action events. Exporters that relied on
-WR1's trailing command to suppress that text should flag the script for an
-authoring review.
+In typed steps, use a native `send` action followed by the audited transfer
+command:
+
+```yaml
+actions:
+  - type: send
+    actor: trigger_actor
+    text: The wall folds around you.
+  - type: command
+    subject: trigger_room
+    command: /transfer {{ actor_key }} room@10,4,0
+```
+
+After an initial item/mob mutation prefix, `command`, `debit_currency`, `echo`,
+`send`, and `send_except` may interleave in authored narrative order. A debit's
+authoritative wallet state event follows all authored action events. Exporters
+that relied on WR1's trailing command to suppress that text should flag the
+script for an authoring review.
 
 ### `/repop`
 
@@ -937,6 +966,15 @@ Set character state on the triggering player:
 
 ```yaml
 script: /cmd room -- /state set character {{ actor_key }} pull_lever true
+```
+
+Give the triggering player private second-person text and everyone else in the
+player's room third-person text:
+
+```yaml
+script: |
+  /cmd room -- /send {{ actor_key }} -- You pull the lever.
+  /cmd room -- /sendexcept {{ actor_key }} -- {{ actor }} pulls the lever.
 ```
 
 Change the triggering player's class:

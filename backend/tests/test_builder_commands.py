@@ -27,7 +27,7 @@ from core.scoped_state import (
 # Register handlers before importing builder Actions; the handler package
 # imports this Action module during registration.
 from spawns.handlers import dispatch_command, get_registered_handlers
-from spawns.actions.builder import GrantItemAction
+from spawns.actions.builder import GrantItemAction, SendExceptAction
 from spawns.models import (
     ActiveEffect,
     CombatEncounter,
@@ -1211,6 +1211,268 @@ class TestBuilderSend(BuilderCommandTestCase):
         error = self._message_for_key_and_type(messages, self.player.key, "cmd./send.error")
         self.assertIsNotNone(error)
         self.assertIn("recipient not found", error.get("text", "").lower())
+
+    def test_builder_sendexcept_uses_target_room_and_excludes_target(self):
+        far_room = self.room.create_at("north")
+        target = self.create_player("Aria", room=far_room)
+        watcher = self.create_player("Watcher", room=far_room)
+        issuer_room_watcher = self.create_player("Near Watcher", room=self.room)
+        offline_watcher = self.create_player("Sleeping Watcher", room=far_room)
+        self._set_online(target, watcher, issuer_room_watcher)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                "/sendexcept ari -- Aria studies the inscription.",
+            )
+
+        success = self._message_for_key_and_type(
+            messages,
+            self.player.key,
+            "cmd./sendexcept.success",
+        )
+        self.assertIsNotNone(success)
+        self.assertEqual(success["data"]["target"]["key"], target.key)
+        self.assertEqual(success["text"], "Aria studies the inscription.")
+
+        watcher_notification = self._message_for_key_and_type(
+            messages,
+            watcher.key,
+            "notification./sendexcept",
+        )
+        self.assertIsNotNone(watcher_notification)
+        self.assertEqual(
+            watcher_notification["text"],
+            "Aria studies the inscription.",
+        )
+        self.assertIsNone(
+            self._message_for_key_and_type(
+                messages,
+                target.key,
+                "notification./sendexcept",
+            )
+        )
+        self.assertIsNone(
+            self._message_for_key_and_type(
+                messages,
+                issuer_room_watcher.key,
+                "notification./sendexcept",
+            )
+        )
+        self.assertIsNone(
+            self._message_for_key_and_type(
+                messages,
+                offline_watcher.key,
+                "notification./sendexcept",
+            )
+        )
+
+    def test_sendexcept_supports_every_ambient_send_actor_type(self):
+        target = self.create_player("Target", room=self.room)
+        watcher = self.create_player("Watcher", room=self.room)
+        self._set_online(target, watcher)
+        issuer_mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Oracle",
+            keywords="oracle",
+        )
+        actors = (
+            ("mob", issuer_mob.id),
+            ("room", self.room.id),
+            ("zone", self.zone.id),
+            ("world", self.spawn_world.id),
+        )
+
+        for actor_type, actor_id in actors:
+            with self.subTest(actor_type=actor_type):
+                with capture_game_messages() as messages:
+                    dispatch_command(
+                        command_type="text",
+                        actor_type=actor_type,
+                        actor_id=actor_id,
+                        payload={
+                            "text": (
+                                f"/sendexcept {target.key} -- "
+                                f"{actor_type} message"
+                            ),
+                            "runtime_world_id": self.spawn_world.id,
+                        },
+                        script_source=True,
+                    )
+
+                notification = self._message_for_key_and_type(
+                    messages,
+                    watcher.key,
+                    "notification./sendexcept",
+                )
+                self.assertIsNotNone(notification)
+                self.assertEqual(
+                    notification["text"],
+                    f"{actor_type} message",
+                )
+                self.assertIsNone(
+                    self._message_for_key_and_type(
+                        messages,
+                        target.key,
+                        "notification./sendexcept",
+                    )
+                )
+
+    def test_player_script_source_cannot_sendexcept_without_ambient_actor(self):
+        trigger_actor = self.create_player(
+            "Triggerer",
+            user=self.create_user("sendexcept-triggerer@example.com"),
+        )
+        target = self.create_player("Target", room=self.room)
+        self._set_online(trigger_actor, target)
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=trigger_actor.id,
+                payload={
+                    "text": (
+                        f"/sendexcept {target.key} -- "
+                        "This should not send."
+                    )
+                },
+                script_source=True,
+            )
+
+        self.assertIsNone(
+            self._message_for_key_and_type(
+                messages,
+                target.key,
+                "notification./sendexcept",
+            )
+        )
+        error = self._message_for_key_and_type(
+            messages,
+            trigger_actor.key,
+            "cmd./sendexcept.error",
+        )
+        self.assertIsNotNone(error)
+        self.assertIn("permission", error.get("text", "").lower())
+
+    def test_sendexcept_isolated_to_target_runtime_world(self):
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+        watcher = self.create_player("Watcher", room=self.room)
+        self._set_online(watcher)
+        other_runtime = self.world.create_spawn_world(
+            instance_ref="sendexcept-other",
+        )
+        other_watcher = self.create_player(
+            "Other Watcher",
+            world=other_runtime,
+            room=self.room,
+        )
+        self._set_online(other_watcher)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                "/sendexcept self -- Joe turns the dial.",
+            )
+
+        success = self._message_for_key_and_type(
+            messages,
+            self.player.key,
+            "cmd./sendexcept.success",
+        )
+        self.assertIsNotNone(success)
+        self.assertEqual(success["text"], "Message sent.")
+        self.assertNotEqual(success["text"], "Joe turns the dial.")
+        self.assertIsNotNone(
+            self._message_for_key_and_type(
+                messages,
+                watcher.key,
+                "notification./sendexcept",
+            )
+        )
+        self.assertIsNone(
+            self._message_for_key_and_type(
+                messages,
+                self.player.key,
+                "notification./sendexcept",
+            )
+        )
+        self.assertIsNone(
+            self._message_for_key_and_type(
+                messages,
+                other_watcher.key,
+                "notification./sendexcept",
+            )
+        )
+
+    def test_sendexcept_rejects_roomless_online_target(self):
+        target = self.create_player("Nowhere", room=self.room)
+        target.in_game = True
+        target.room = None
+        target.save(update_fields=["in_game", "room"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/sendexcept {target.key} -- A distant bell rings.",
+            )
+
+        error = self._message_for_key_and_type(
+            messages,
+            self.player.key,
+            "cmd./sendexcept.error",
+        )
+        self.assertIsNotNone(error)
+        self.assertEqual(error["data"]["code"], "no_room")
+
+    def test_sendexcept_registers_help(self):
+        help_data = get_registered_handlers()["/sendexcept"].get_help_data(
+            command_name="/sendexcept",
+        )
+
+        self.assertEqual(
+            help_data["format"],
+            "/sendexcept <player> <message>",
+        )
+        self.assertIn("every other connected player", help_data["description"])
+
+    def test_sendexcept_recipient_queries_do_not_scale_with_room_population(self):
+        target = self.create_player("Target", room=self.room)
+        self._set_online(target)
+        action = SendExceptAction()
+
+        with CaptureQueriesContext(connection) as empty_room_queries:
+            action.execute(
+                actor=self.player,
+                target_selector=target.key,
+                message="Target turns the dial.",
+                runtime_world=self.spawn_world,
+            )
+
+        observers = [
+            self.create_player(f"Observer {index}", room=self.room)
+            for index in range(20)
+        ]
+        self._set_online(*observers)
+        with CaptureQueriesContext(connection) as populated_room_queries:
+            result = action.execute(
+                actor=self.player,
+                target_selector=target.key,
+                message="Target turns the dial.",
+                runtime_world=self.spawn_world,
+            )
+
+        self.assertEqual(
+            len(populated_room_queries),
+            len(empty_room_queries),
+        )
+        notification = next(
+            event
+            for event in result.events
+            if event.type == "notification./sendexcept"
+        )
+        self.assertEqual(len(notification.recipients), len(observers))
 
 
 class TestBuilderWizKill(BuilderCommandTestCase):

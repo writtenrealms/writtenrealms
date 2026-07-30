@@ -55,9 +55,11 @@ Deleting or editing the authored trigger does not rewrite an in-flight run.
 Deleting an item definition needed by a future step causes that step to cancel
 cleanly rather than resolving a newly created definition with the same slug.
 Player movement or logout does not redirect fixed room actions, echoes, or mob
-selectors. A `command` with `subject: trigger_actor` is intentionally different:
-it follows that actor's current room in the same runtime world, and a missing
-or logged-out player subject fails the step.
+selectors. A `command` with `subject: trigger_actor`, `send`, and `send_except`
+are intentionally different: they follow that actor in the same runtime world.
+A missing or logged-out player fails either send action, and `send_except`
+selects witnesses from the player's current room at its authored action
+position.
 
 ## Due-Step Worker
 
@@ -108,11 +110,18 @@ Every action in one step shares a transaction:
   Only explicitly audited handlers are accepted. Most are event-only;
   transactional `/transfer` is the initial mutating exception.
 - `echo` selects players currently in the original runtime world and room.
+- `send` emits one private actor-templated event to the connected player
+  Trigger actor.
+- `send_except` emits actor-templated text to every other connected player in
+  that actor's current runtime world and room. Its recipient lookup uses the
+  partial `(world, room, id) WHERE in_game` index and returns only player ids;
+  it performs no per-recipient queries or character serialization.
 
 The authoring contract requires item and mob mutations to form one initial
-prefix. After that prefix, `command`, `echo`, and `debit_currency` may
-interleave. Their narrative events are appended in authored order, so a mob
-emote can visibly precede a debit and a transfer can follow it. The
+prefix. After that prefix, `command`, `echo`, `send`, `send_except`, and
+`debit_currency` may interleave. Their narrative events are appended in
+authored order, so a private second-person line can immediately precede its
+third-person witness line. The
 authoritative aggregate wallet event is appended after those action events.
 Step-safe commands do not branch on or mutate the wallet. `/transfer` may still
 serialize the pre-debit wallet in its full player snapshot; the final wallet
@@ -238,7 +247,9 @@ Expected semantic failures—missing actor inventory, missing room items, a
 harvested/moved bound item, a missing actor for a grant, a non-player debit
 actor, insufficient funds, a missing/ambiguous command subject, an unsafe or
 rejected command, an invalid transfer target or destination, an active player
-PvP target, or a deleted definition/currency—roll back the current step. A
+PvP target, a non-player or disconnected send actor, a roomless `send_except`
+actor, invalid rendered send text, or a deleted definition/currency—roll back
+the current step. A
 transfer that ran earlier in the authored action list is rolled back with the
 rest of that step. With `on_step_error: cancel`, the run records the error and
 becomes `cancelled`. Earlier committed steps remain intact; later steps do not

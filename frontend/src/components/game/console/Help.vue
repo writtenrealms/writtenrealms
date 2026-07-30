@@ -198,8 +198,8 @@
             <div class="cmd" @click="cmdHelp('/echo')">/echo</div>
             <div class="cmd" @click="cmdHelp('/wecho')">/wecho</div>
             <div class="cmd" @click="cmdHelp('/zecho')">/zecho</div>
-            <div class="cmd" @click="cmdHelp('send')">/send</div>
-            <div class="cmd" @click="cmdHelp('sendexcept')">/sendexcept</div>
+            <div class="cmd" @click="cmdHelp('/send')">/send</div>
+            <div class="cmd" @click="cmdHelp('/sendexcept')">/sendexcept</div>
           </div>
           <div class="cmds">
             <div class="cmd" @click="cmdHelp('/state')">/state</div>

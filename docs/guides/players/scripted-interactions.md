@@ -41,6 +41,12 @@ When this happens:
   advance a quest or cause another Trigger reaction as though you voluntarily
   entered the command
 
+A builder can also give you private second-person narration such as “You pull
+the lever” while every other connected player in your current room receives a
+separate third-person line such as “Joe pulls the lever.” You do not receive
+the witness copy. Both lines retain their authored order and participate in the
+same step transaction as any payment, item change, or audited command.
+
 A delayed sequence can be accepted before its first visible world response.
 Starting conditions establish eligibility at that moment; they do not reserve
 items or currency for a later step. If the needed state changes before a

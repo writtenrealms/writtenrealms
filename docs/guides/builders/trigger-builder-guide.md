@@ -318,6 +318,7 @@ Common commands you will often use in trigger scripts:
 - `/echo -- ...`
 - `/cmd room -- /echo -- ...`
 - `/cmd room -- /send {{ actor_key }} -- <private message>`
+- `/cmd room -- /sendexcept {{ actor_key }} -- <witness message>`
 - `/cmd room -- /set <target> <field> <value>`
 - `/cmd room -- /load item <item_slug>`
 - `/cmd room -- /grantitem {{ actor_key }} <item_slug>`
@@ -544,6 +545,43 @@ case the debit step rolls back and the sequence is cancelled with safe private
 feedback. Use `after_seconds: 0` for the debit when accepting payment must
 take the money as part of the initial transaction.
 
+### The `send` / `send_except` Pattern
+
+This is the canonical typed-step pattern for perspective-specific narration:
+pair `type: send` with `type: send_except` when the player who activated a
+Trigger should see a second-person message while the other connected players
+in that player's current room see a third-person message. These are native
+action type names without a leading slash; `/send` and `/sendexcept` are the
+equivalent command spellings used in legacy `script` Triggers.
+
+```yaml
+steps:
+  - after_seconds: 0
+    actions:
+      - type: send
+        actor: trigger_actor
+        text: You pull the lever.
+      - type: send_except
+        actor: trigger_actor
+        text: "{{ actor }} pulls the lever."
+```
+
+Both actions require a connected player `trigger_actor`. `send` addresses only
+that player. `send_except` follows the player's live room at its exact authored
+position in the step and addresses every other connected player in the same
+runtime world and room. This matters after a same-step `/transfer`: narration
+after the transfer goes to witnesses in the destination room.
+
+Keep the paired actions adjacent and write the private `send` first when the
+player's second-person line should appear before the room's third-person line.
+The triggering player is excluded from `send_except`, so they receive exactly
+the private line rather than both messages.
+
+The text supports the Trigger actor's `{{ actor }}`, `{{ actor_key }}`,
+`{{ actor_subject_pronoun }}`, `{{ actor_object_pronoun }}`, and related
+pronoun substitutions. It does not expose scoped-state substitutions. The
+rendered text must remain non-empty and at most 4,000 characters.
+
 ### Running Commands From Steps
 
 Use one `command` action when a timed step should have the Trigger room, the
@@ -685,11 +723,14 @@ original Trigger actor before dispatch.
 | `replace_room_item` | `target`, `with` | Replaces the exact bound room item and updates the same binding to the replacement. |
 | `set_mob` | `room: trigger_room`, `mob`, `fields`; optional `where`, `state` | Finds exactly one live mob from the definition in the triggering runtime room, updates supported runtime fields, and writes character state. |
 | `echo` | `room: trigger_room`, `text` | Sends text to players currently in the triggering runtime room. |
+| `send` | `actor: trigger_actor`, `text` | Sends actor-templated private text to the connected triggering player. |
+| `send_except` | `actor: trigger_actor`, `text` | Sends actor-templated text to every other connected player in the triggering player's current runtime room. |
 
 Use portable item refs such as `itemdefinition.barley-seeds`, not database ids.
 `echo.text` is literal text; unlike `script`, it does not render template
-variables such as `{{ actor_key }}`. `command.command` does render those
-variables against the original Trigger actor.
+variables such as `{{ actor_key }}`. `send.text` and `send_except.text` render
+the actor name, key, and pronoun substitutions against the live Trigger actor.
+`command.command` uses the broader Trigger actor template context.
 Binding names use lowercase letters, numbers, and underscores, begin with a
 letter, and are at most 64 characters. A replacement target must refer to a
 binding created by an earlier `spawn_room_item`; `previous_stage` is not an
@@ -704,15 +745,17 @@ A trigger may contain at most 32 steps and each step at most 16 actions. Each
 `9,007,199,254,740,991`. Multiple currency debits in one step are preflighted
 and applied as one wallet batch and increment the wallet revision once. Put all
 item and mob mutations in an initial prefix. After that prefix, `command`,
-`echo`, and `debit_currency` actions may interleave in the exact narrative order
-you want. No item or mob mutation may follow one of those actions. Internally,
+`echo`, `send`, `send_except`, and `debit_currency` actions may interleave in
+the exact narrative order you want. No item or mob mutation may follow one of
+those actions. Internally,
 step-safe commands do not branch on or mutate the wallet, the runtime captures
 their effects transactionally, and balance rows are written last to preserve
 the global lock order. A transfer may serialize a pre-debit wallet in its full
 player snapshot, so the authoritative aggregate wallet state event follows all
 authored action events.
-`command.command` and `echo.text` may each contain at most 4,000
-characters. The complete
+`command.command`, `echo.text`, `send.text`, and `send_except.text` may each
+contain at most 4,000 characters. Send text is checked again after actor
+template rendering. The complete
 normalized `steps` payload may be at most 256 KiB when serialized as UTF-8
 JSON.
 
@@ -996,12 +1039,13 @@ script: /cmd room -- /send {{ actor_key }} -- The wall folds around you. && /cmd
 WR1's `transfer <target> <room> <command>` trailing-command form is not valid
 WR2 syntax. Keep the pre-transfer command explicit as shown above. In
 `spec.script`, repeat the `/cmd room --` wrapper because `&&` segments are
-dispatched independently. In `spec.steps`, use separate `command` actions;
-after any initial item/mob mutation prefix, they may interleave with `echo` and
-`debit_currency` actions in authored narrative order. The authoritative wallet
-state event follows those action events. The WR2 transfer will also emit its
-standard disappearance notification; review migrated scripts that used the WR1
-trailing command to suppress that text.
+dispatched independently. In `spec.steps`, use a native `send` action followed
+by a separate transfer `command` action. After any initial item/mob mutation
+prefix, `command`, `echo`, `send`, `send_except`, and `debit_currency` may
+interleave in authored narrative order. The authoritative wallet state event
+follows those action events. The WR2 transfer will also emit its standard
+disappearance notification; review migrated scripts that used the WR1 trailing
+command to suppress that text.
 
 ## Death Traps
 
@@ -1043,6 +1087,17 @@ them:
 ```yaml
 script: /cmd room -- /send {{ actor_key }} -- The inscription burns behind your eyes.
 ```
+
+Pair it with `/sendexcept` when witnesses need different narration:
+
+```yaml
+script: |
+  /cmd room -- /send {{ actor_key }} -- You pull the lever.
+  /cmd room -- /sendexcept {{ actor_key }} -- {{ actor }} pulls the lever.
+```
+
+For typed `steps`, prefer the native `send` and `send_except` actions shown
+above.
 
 ## Common Patterns
 

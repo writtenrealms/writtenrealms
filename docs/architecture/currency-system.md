@@ -1290,10 +1290,11 @@ Performance requirements:
   one wallet mutation, so work remains bounded by touched currencies rather
   than action count.
 - Typed steps require item/mob mutations as an initial prefix, then allow
-  `debit_currency`, `command`, and `echo` to interleave in authored narrative
-  order. The runtime preflights the aggregate debit while holding the Player
-  lock, captures audited commands that neither branch on nor change the wallet,
-  and writes ordered balance rows last. The authoritative
+  `debit_currency`, `command`, `echo`, `send`, and `send_except` to interleave
+  in authored narrative order. The runtime preflights the aggregate debit while
+  holding the Player lock, captures audited commands and messaging events that
+  neither branch on nor change the wallet, and writes ordered balance rows
+  last. The authoritative
   `currency.balances_changed` event is emitted after the authored action events;
   this supersedes any pre-debit wallet serialized by a full `/transfer`
   snapshot. A failed command or transfer therefore rolls back without charging,

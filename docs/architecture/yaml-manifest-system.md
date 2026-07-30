@@ -310,6 +310,12 @@ Current required mappings:
   `trigger_room`, or exactly one portable room-local mob definition. Emit one
   action per command; do not put WR1 command chains or `/cmd` wrappers inside
   `command.command`.
+- A deterministic WR1 `/send {{ actor }} <text>` maps to native
+  `send` with `actor: trigger_actor`. A deterministic
+  `/sendexcept {{ actor }} <text>` maps to native `send_except` with the same
+  actor ref. Preserve the authored action order and actor-template text.
+  Literal or arbitrary player selectors do not map to typed actions and must be
+  flagged for builder review; WR2 does not migrate runtime users.
 - A deterministic WR1 harvest item action attached to the mature stage may
   export as a separate room-scoped command trigger. Preserve its authored
   command match, set `display_action_in_room: true`, and add an `item_present`
@@ -337,8 +343,8 @@ Current required mappings:
   before `/transfer`. For an immediate `spec.script`, use same-line `&&`
   segments and repeat the ambient wrapper for every segment, for example
   `/cmd room -- /send ... && /cmd room -- /transfer ...`. In `spec.steps`, emit
-  separate `command` actions in their authored narrative order after any
-  initial item/mob mutation prefix.
+  a native `send` action followed by the `/transfer` `command` action in
+  authored narrative order after any initial item/mob mutation prefix.
   Separate script lines are heartbeat-paced and are not equivalent. WR2 still
   emits the standard disappearance notification, whereas WR1 suppressed that
   text when a trailing command was present, so exporters should flag those
@@ -851,6 +857,21 @@ steps:
         command: say I accept the ferryman's price.
 ```
 
+Perspective-specific narration uses native actions rather than an audited
+command wrapper:
+
+```yaml
+steps:
+  - after_seconds: 0
+    actions:
+      - type: send
+        actor: trigger_actor
+        text: You pull the lever.
+      - type: send_except
+        actor: trigger_actor
+        text: "{{ actor }} pulls the lever."
+```
+
 Every step may have `after_seconds: 0` or a positive delay, relative to the
 prior step. Each offset and their cumulative total are capped at one year. A
 zero-delay first step executes atomically with the invocation-time condition
@@ -860,9 +881,9 @@ commits only the eligible run and its due time at invocation; it does not
 reserve or apply the first step's authored resources early. `command`,
 `debit_currency`,
 `consume_item`, `consume_room_item`,
-`grant_item`, `spawn_room_item`, `replace_room_item`, `set_mob`, and `echo` are
-the action whitelist. Item and mob-definition refs are resolved within the
-authored world and stored portably. A debit requires
+`grant_item`, `spawn_room_item`, `replace_room_item`, `set_mob`, `echo`, `send`,
+and `send_except` are the action whitelist. Item and mob-definition refs are
+resolved within the authored world and stored portably. A debit requires
 `actor: trigger_actor`, a positive safe integer amount, and a currency code
 resolved against the base-world catalog; omission never means the current
 default. Bindings must be created before use and identify exact runtime items,
@@ -870,6 +891,15 @@ not keywords or definition matches. `set_mob` resolves exactly one live
 candidate in the current runtime room, may filter it through the query-free
 Boolean/comparison subset of shared `where` conditions, and can atomically
 update its supported runtime fields and character state.
+
+`send` and `send_except` require exactly `actor: trigger_actor` plus `text`.
+They require the Trigger actor to be a connected player. `send` addresses only
+that player. `send_except` resolves the player's current room at its exact
+authored action position and addresses all other connected players in the same
+runtime world and room. Their text renders actor name, key, and pronoun
+substitutions such as `{{ actor }}` without exposing scoped-state
+substitutions, then is revalidated as non-empty and no longer than 4,000
+characters.
 
 `command.subject` is `trigger_room`, `trigger_actor`, or a mapping with
 `type: mob`, `room: trigger_room`, a portable `mobdefinition.<slug>`, and an
@@ -907,8 +937,9 @@ transfer. `trigger_actor` is the only player subject in this initial contract;
 typed steps do not select arbitrary bystander players.
 
 Item and mob mutations must form an initial action prefix. After that prefix,
-`debit_currency`, `command`, and `echo` may interleave, and their narrative
-events retain authored order. The runtime preflights all debit actions as one
+`debit_currency`, `command`, `echo`, `send`, and `send_except` may interleave,
+and their narrative events retain authored order. The runtime preflights all
+debit actions as one
 aggregate, captures approved commands and transactional transfer state, and
 writes balance rows last. Approved commands do not branch on or mutate the
 wallet. `/transfer` may nevertheless serialize a pre-debit wallet as part of
@@ -1413,10 +1444,14 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   Trigger actor may be its target. Relative destinations use the subject's room;
   authored content should use a portable `room@x,y,z` destination. Moving a
   player in active PvP fails with `target_busy`.
+- `send` and `send_except` require exactly `actor: trigger_actor` and `text`.
+  The actor must still be a connected player when the action executes;
+  `send_except` additionally requires a current room. Actor substitutions are
+  rendered before the non-empty, 4,000-character limit is rechecked.
 - Item/mob mutations must be an initial action prefix. After that prefix,
-  `debit_currency`, `command`, and `echo` may interleave in authored narrative
-  order. The aggregate wallet state event follows those action events. No
-  item/mob mutation may follow one of those actions.
+  `debit_currency`, `command`, `echo`, `send`, and `send_except` may interleave
+  in authored narrative order. The aggregate wallet state event follows those
+  action events. No item/mob mutation may follow one of those actions.
 - `spawn_room_item.bind` names are unique and must precede any matching
   `replace_room_item.target`. The current `spec.on_step_error` value is
   `cancel`.

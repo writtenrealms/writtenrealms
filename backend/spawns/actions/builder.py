@@ -531,6 +531,13 @@ def _actor_summary(actor: BuilderCommandActor) -> dict[str, object]:
     }
 
 
+def _message_actor_summary(actor: BuilderCommandActor) -> dict[str, object]:
+    return {
+        "id": actor.id,
+        **_actor_summary(actor),
+    }
+
+
 def _actor_world(actor: BuilderCommandActor, *, runtime_world: World | None = None) -> World | None:
     if runtime_world is not None:
         return runtime_world
@@ -1776,16 +1783,9 @@ class SendAction:
         if not normalized_message:
             raise ActionError("Usage: /send <player> <message>", code="invalid_args")
 
-        if isinstance(actor, Player):
-            updated_actor = get_player_with_related(actor.id)
-            actor_payload = serialize_actor(updated_actor, updated_actor.room).model_dump()
-            recipient_key = updated_actor.key
-        else:
-            actor_payload = _actor_summary(actor)
-            recipient_key = actor.key
-
-        updated_target = get_player_with_related(target.id)
-        target_payload = serialize_actor(updated_target, updated_target.room).model_dump()
+        actor_payload = _message_actor_summary(actor)
+        recipient_key = actor.key
+        target_payload = _message_actor_summary(target)
         data = {
             "actor": actor_payload,
             "target": target_payload,
@@ -1803,12 +1803,106 @@ class SendAction:
                 ),
                 GameEvent(
                     type="notification./send",
-                    recipients=[updated_target.key],
+                    recipients=[target.key],
                     data=data,
                     text=normalized_message,
                 ),
             ]
         )
+
+
+class SendExceptAction:
+    def execute(
+        self,
+        *,
+        actor: BuilderCommandActor,
+        target_selector: str,
+        message: str,
+        runtime_world: World | None = None,
+    ) -> ActionResult:
+        target = _resolve_world_player_target(
+            actor=actor,
+            target_selector=target_selector,
+            runtime_world=runtime_world,
+        )
+        normalized_message = _render_command_segment(
+            str(message or ""),
+            actor=actor,
+            character=target,
+        )
+        if not normalized_message:
+            raise ActionError(
+                "Usage: /sendexcept <player> <message>",
+                code="invalid_args",
+            )
+
+        world = _actor_world(actor, runtime_world=runtime_world)
+        if world is None:
+            raise ActionError(
+                "No runtime world is available for player resolution.",
+                code="no_world",
+            )
+
+        if target.room_id is None:
+            raise ActionError(
+                "Send-except recipient is not in a room.",
+                code="no_room",
+            )
+
+        actor_payload = _message_actor_summary(actor)
+        recipient_key = actor.key
+
+        recipient_ids = list(
+            Player.objects.filter(
+                world=world,
+                room_id=target.room_id,
+                in_game=True,
+            )
+            .exclude(pk=target.id)
+            .order_by("id")
+            .values_list("id", flat=True)
+        )
+        recipient_keys = [
+            f"player.{player_id}"
+            for player_id in recipient_ids
+        ]
+        if isinstance(actor, Player):
+            recipient_keys = [
+                key
+                for key in recipient_keys
+                if key != recipient_key
+            ]
+
+        target_payload = _message_actor_summary(target)
+        data = {
+            "actor": actor_payload,
+            "target": target_payload,
+            "target_type": "player",
+            "room": _room_reference_payload(target.room),
+            "message": normalized_message,
+        }
+        events = [
+            GameEvent(
+                type="cmd./sendexcept.success",
+                recipients=[recipient_key],
+                data=data,
+                text=(
+                    "Message sent."
+                    if recipient_key == target.key
+                    else normalized_message
+                ),
+            ),
+        ]
+        if recipient_keys:
+            events.append(
+                GameEvent(
+                    type="notification./sendexcept",
+                    recipients=recipient_keys,
+                    data=data,
+                    text=normalized_message,
+                )
+            )
+        return ActionResult(events=events)
 
 
 class StateAction:

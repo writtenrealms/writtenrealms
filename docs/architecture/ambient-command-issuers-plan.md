@@ -15,7 +15,8 @@ without forcing those issuers to behave like physical entities (players/mobs).
 This plan remains directional, but several pieces are now implemented:
 
 - Trigger is the authored automation concept in WR2.
-- Builder command primitives are `/echo` and `/cmd`.
+- Builder communication primitives include `/echo`, `/send`, `/sendexcept`,
+  and `/cmd`.
 - Trigger YAML manifest ingestion is in place for create/update/delete.
 - Room builder UI now exposes **Triggers** and a room-tailored new-trigger template.
 - Room builder UI exposes **Edit** in the former **Checks** slot. It loads the
@@ -42,7 +43,10 @@ This plan remains directional, but several pieces are now implemented:
   mob and room issuers. Player targets stay inside one live runtime world, mob
   targets are local to the issuer room, and portable scripts can use
   `room@x,y,z` destinations.
-- `/echo` and `/state` support room, zone, and world actors.
+- `/echo`, `/send`, `/sendexcept`, and `/state` support room, zone, and world
+  actors. `/send` privately addresses one connected player;
+  `/sendexcept` addresses every other connected player in that target's
+  current runtime-isolated room.
 - `/setclass` supports a room actor with an explicit player target, preserving
   trigger patterns such as `/cmd room -- /setclass {{ actor_key }} tidecaller`.
 - `/set` supports direct builder players plus script-gated room issuers. Room
@@ -87,8 +91,10 @@ This plan remains directional, but several pieces are now implemented:
 - The runner reuses the already resolved subject, issuer, and runtime world
   rather than refetching those identities once per command action.
 - Typed steps require item/mob mutations as an initial prefix. After that,
-  `command`, `echo`, and `debit_currency` retain authored narrative-output order
-  while aggregate funds are preflighted and balance rows are written last. The
+  `command`, `echo`, `send`, `send_except`, and `debit_currency` retain
+  authored narrative-output order while aggregate funds are preflighted and
+  balance rows are written last. Native send actions target the connected
+  player Trigger actor; `send_except` follows that actor's current room. The
   authoritative wallet state event follows those action events. Approved
   commands do not branch on or mutate the wallet; `/transfer` may serialize a
   pre-debit wallet snapshot as part of its full player state, so the final
@@ -350,6 +356,9 @@ Status: partially implemented for scoped builder primitives.
    and mob scripts, without treating ambient issuers as physical movers.
 7. Support `/set` as a room-script primitive with room-local, runtime-isolated
    character targeting and target-row locking.
+8. Support `/send` and `/sendexcept` as targeted, runtime-isolated
+   communication primitives for the same direct-builder and script-gated
+   ambient actor contexts.
 
 Exit criteria:
 - A room issuer can produce visible room/zone/world outputs through standard publish paths.

@@ -368,6 +368,481 @@ class TestScheduledTriggerSteps(WorldTestCase):
             ],
         )
 
+    def test_send_actions_normalize_trigger_actor_and_text(self):
+        normalized = normalize_trigger_steps([
+            {
+                "after_seconds": 0,
+                "actions": [
+                    {
+                        "type": "send",
+                        "actor": "trigger_actor",
+                        "text": "  You pull the lever.  ",
+                    },
+                    {
+                        "type": "send_except",
+                        "actor": "trigger_actor",
+                        "text": "  {{ actor }} pulls the lever.  ",
+                    },
+                ],
+            },
+        ])
+
+        self.assertEqual(
+            normalized[0]["actions"],
+            [
+                {
+                    "type": "send",
+                    "actor": "trigger_actor",
+                    "text": "You pull the lever.",
+                },
+                {
+                    "type": "send_except",
+                    "actor": "trigger_actor",
+                    "text": "{{ actor }} pulls the lever.",
+                },
+            ],
+        )
+
+    def test_send_actions_reject_unsupported_fields_and_actor_refs(self):
+        for action in (
+            {
+                "type": "send",
+                "actor": "someone_else",
+                "text": "You pull the lever.",
+            },
+            {
+                "type": "send_except",
+                "actor": "trigger_actor",
+                "room": "trigger_room",
+                "text": "{{ actor }} pulls the lever.",
+            },
+        ):
+            with self.subTest(action_type=action["type"]):
+                with self.assertRaises(TriggerStepSpecError):
+                    normalize_trigger_steps([
+                        {
+                            "after_seconds": 0,
+                            "actions": [action],
+                        },
+                    ])
+
+        for text in (None, "   ", "x" * 4_001):
+            with self.subTest(text=text):
+                with self.assertRaises(TriggerStepSpecError):
+                    normalize_trigger_steps([
+                        {
+                            "after_seconds": 0,
+                            "actions": [
+                                {
+                                    "type": "send",
+                                    "actor": "trigger_actor",
+                                    "text": text,
+                                },
+                            ],
+                        },
+                    ])
+
+    def test_send_and_send_except_deliver_distinct_actor_perspectives(self):
+        observer = self.create_player("Observer", room=self.room)
+        other_room = self.room.create_at("north")
+        other_room_observer = self.create_player(
+            "Other Room Observer",
+            room=other_room,
+        )
+        other_runtime = self.world.create_spawn_world(
+            instance_ref="send-step-other",
+        )
+        other_runtime_observer = self.create_player(
+            "Other Runtime Observer",
+            world=other_runtime,
+            room=self.room,
+        )
+        for player in (
+            observer,
+            other_room_observer,
+            other_runtime_observer,
+        ):
+            player.in_game = True
+            player.save(update_fields=["in_game"])
+        self._create_trigger(
+            match="pull perspective lever",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "send",
+                            "actor": "trigger_actor",
+                            "text": "You pull the lever.",
+                        },
+                        {
+                            "type": "send_except",
+                            "actor": "trigger_actor",
+                            "text": "{{ actor }} pulls the lever.",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        from spawns import trigger_steps as trigger_step_runtime
+
+        with patch(
+            "spawns.trigger_steps._room_recipient_keys_for",
+            wraps=trigger_step_runtime._room_recipient_keys_for,
+        ) as recipient_query:
+            with capture_game_messages() as messages:
+                self._dispatch(
+                    self.player.id,
+                    "pull perspective lever",
+                )
+
+        recipient_query.assert_called_once_with(
+            runtime_world_id=self.spawn_world.id,
+            room_id=self.room.id,
+        )
+
+        actor_send = [
+            entry
+            for entry in messages
+            if entry["player_key"] == self.player.key
+            and entry["message"]["type"] == "notification./send"
+        ]
+        self.assertEqual(
+            [entry["message"]["text"] for entry in actor_send],
+            ["You pull the lever."],
+        )
+        self.assertFalse(any(
+            entry["player_key"] == self.player.key
+            and entry["message"]["type"] == "notification./sendexcept"
+            for entry in messages
+        ))
+
+        observer_send_except = [
+            entry
+            for entry in messages
+            if entry["player_key"] == observer.key
+            and entry["message"]["type"] == "notification./sendexcept"
+        ]
+        self.assertEqual(
+            [entry["message"]["text"] for entry in observer_send_except],
+            ["Joe pulls the lever."],
+        )
+        self.assertFalse(any(
+            entry["player_key"] == observer.key
+            and entry["message"]["type"] == "notification./send"
+            for entry in messages
+        ))
+        self.assertFalse(any(
+            entry["player_key"]
+            in {
+                other_room_observer.key,
+                other_runtime_observer.key,
+            }
+            and entry["message"]["type"] == "notification./sendexcept"
+            for entry in messages
+        ))
+
+    def test_send_template_state_is_isolated_between_actions(self):
+        self._create_trigger(
+            match="test message isolation",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "send",
+                            "actor": "trigger_actor",
+                            "text": (
+                                "{{ actor_state.update({'leaked': true}) "
+                                "or 'First message.' }}"
+                            ),
+                        },
+                        {
+                            "type": "send",
+                            "actor": "trigger_actor",
+                            "text": (
+                                "{{ actor_state.get("
+                                "'leaked', 'State is isolated.') }}"
+                            ),
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "test message isolation")
+
+        actor_messages = [
+            entry["message"]["text"]
+            for entry in messages
+            if entry["player_key"] == self.player.key
+            and entry["message"]["type"] == "notification./send"
+        ]
+        self.assertEqual(
+            actor_messages,
+            ["First message.", "State is isolated."],
+        )
+
+    def test_send_actions_revalidate_rendered_text(self):
+        cases = (
+            ("{% set ignored = actor %}", "invalid_send_text"),
+            ("{{ actor * 2000 }}", "send_text_too_long"),
+        )
+
+        for index, (text, expected_code) in enumerate(cases):
+            with self.subTest(expected_code=expected_code):
+                trigger = self._create_trigger(
+                    match=f"test rendered message {index}",
+                    conditions="",
+                    steps=[
+                        {
+                            "after_seconds": 0,
+                            "actions": [
+                                {
+                                    "type": "send",
+                                    "actor": "trigger_actor",
+                                    "text": text,
+                                },
+                            ],
+                        },
+                    ],
+                )
+
+                with capture_game_messages() as messages:
+                    result = start_trigger_steps(
+                        trigger=trigger,
+                        actor=self.player,
+                        room=self.room,
+                    )
+
+                self.assertFalse(result.started)
+                self.assertEqual(result.code, expected_code)
+                self.assertFalse(any(
+                    entry["message"]["type"] == "notification./send"
+                    for entry in messages
+                ))
+
+    def test_send_except_follows_actor_room_after_same_step_transfer(self):
+        destination = self.room.create_at("east")
+        origin_observer = self.create_player(
+            "Origin Observer",
+            room=self.room,
+        )
+        destination_observer = self.create_player(
+            "Destination Observer",
+            room=destination,
+        )
+        for player in (origin_observer, destination_observer):
+            player.in_game = True
+            player.save(update_fields=["in_game"])
+        self._create_trigger(
+            match="cross perspective threshold",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": "trigger_actor",
+                            "command": (
+                                f"/transfer self "
+                                f"room@{destination.x},"
+                                f"{destination.y},"
+                                f"{destination.z}"
+                            ),
+                        },
+                        {
+                            "type": "send_except",
+                            "actor": "trigger_actor",
+                            "text": "{{ actor }} crosses the threshold.",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            self._dispatch(
+                self.player.id,
+                "cross perspective threshold",
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, destination.id)
+        self.assertTrue(any(
+            entry["player_key"] == destination_observer.key
+            and entry["message"]["type"] == "notification./sendexcept"
+            and entry["message"]["text"] == "Joe crosses the threshold."
+            for entry in messages
+        ))
+        self.assertFalse(any(
+            entry["player_key"] == origin_observer.key
+            and entry["message"]["type"] == "notification./sendexcept"
+            for entry in messages
+        ))
+
+    def test_send_actions_require_connected_player_trigger_actor(self):
+        trigger = self._create_trigger(
+            match="mob perspective",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "send",
+                            "actor": "trigger_actor",
+                            "text": "You move.",
+                        },
+                    ],
+                },
+            ],
+        )
+        mob = self.create_mob("A restless statue")
+
+        result = start_trigger_steps(
+            trigger=trigger,
+            actor=mob,
+            room=self.room,
+        )
+
+        self.assertFalse(result.started)
+        self.assertEqual(result.code, "invalid_actor")
+        self.assertFalse(
+            ScheduledTriggerRun.objects.filter(trigger=trigger).exists()
+        )
+
+        self.player.in_game = False
+        self.player.save(update_fields=["in_game"])
+        disconnected = start_trigger_steps(
+            trigger=trigger,
+            actor=self.player,
+            room=self.room,
+        )
+        self.assertFalse(disconnected.started)
+        self.assertEqual(disconnected.code, "actor_unavailable")
+        self.assertFalse(
+            ScheduledTriggerRun.objects.filter(trigger=trigger).exists()
+        )
+
+    def test_delayed_send_except_follows_player_current_room(self):
+        destination = self.room.create_at("west")
+        origin_observer = self.create_player(
+            "Origin Observer",
+            room=self.room,
+        )
+        destination_observer = self.create_player(
+            "Destination Observer",
+            room=destination,
+        )
+        for player in (origin_observer, destination_observer):
+            player.in_game = True
+            player.save(update_fields=["in_game"])
+        trigger = self._create_trigger(
+            match="delayed perspective",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 2,
+                    "actions": [
+                        {
+                            "type": "send_except",
+                            "actor": "trigger_actor",
+                            "text": "{{ actor }} finishes the ritual.",
+                        },
+                    ],
+                },
+            ],
+        )
+        with self.captureOnCommitCallbacks(execute=True):
+            start = start_trigger_steps(
+                trigger=trigger,
+                actor=self.player,
+                room=self.room,
+            )
+        run = ScheduledTriggerRun.objects.get(pk=start.run_id)
+        self.player.room = destination
+        self.player.save(update_fields=["room"])
+
+        with capture_game_messages() as messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                result = process_due_trigger_runs(now=run.next_run_ts)
+
+        self.assertEqual(result["completed"], 1)
+        self.assertTrue(any(
+            entry["player_key"] == destination_observer.key
+            and entry["message"]["type"] == "notification./sendexcept"
+            and entry["message"]["text"] == "Joe finishes the ritual."
+            for entry in messages
+        ))
+        self.assertFalse(any(
+            entry["player_key"] == origin_observer.key
+            and entry["message"]["type"] == "notification./sendexcept"
+            for entry in messages
+        ))
+
+    def test_send_events_and_prior_mutation_roll_back_on_later_failure(self):
+        observer = self.create_player("Observer", room=self.room)
+        observer.in_game = True
+        observer.save(update_fields=["in_game"])
+        seed_item = self.seed.spawn(self.player, self.spawn_world)
+        trigger = self._create_trigger(
+            match="broken perspective",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "consume_item",
+                            "actor": "trigger_actor",
+                            "item": "itemdefinition.barley-seed",
+                        },
+                        {
+                            "type": "send",
+                            "actor": "trigger_actor",
+                            "text": "You consume the seed.",
+                        },
+                        {
+                            "type": "send_except",
+                            "actor": "trigger_actor",
+                            "text": "{{ actor }} consumes the seed.",
+                        },
+                        {
+                            "type": "command",
+                            "subject": "trigger_actor",
+                            "command": "north",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            result = start_trigger_steps(
+                trigger=trigger,
+                actor=self.player,
+                room=self.room,
+            )
+
+        self.assertFalse(result.started)
+        self.assertEqual(result.code, "command_not_step_safe")
+        self.assertTrue(Item.objects.filter(pk=seed_item.id).exists())
+        self.assertFalse(any(
+            entry["message"]["type"]
+            in {
+                "notification./send",
+                "notification./sendexcept",
+            }
+            for entry in messages
+        ))
+        self.assertFalse(GameEventOutbox.objects.exists())
+
     def test_positive_first_step_delay_is_normalized(self):
         normalized = normalize_trigger_steps([
             {

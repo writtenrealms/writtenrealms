@@ -19,6 +19,8 @@ TRIGGER_STEP_ACTION_SPAWN_ROOM_ITEM = "spawn_room_item"
 TRIGGER_STEP_ACTION_REPLACE_ROOM_ITEM = "replace_room_item"
 TRIGGER_STEP_ACTION_SET_MOB = "set_mob"
 TRIGGER_STEP_ACTION_ECHO = "echo"
+TRIGGER_STEP_ACTION_SEND = "send"
+TRIGGER_STEP_ACTION_SEND_EXCEPT = "send_except"
 TRIGGER_STEP_ACTION_TYPES = (
     TRIGGER_STEP_ACTION_COMMAND,
     TRIGGER_STEP_ACTION_DEBIT_CURRENCY,
@@ -29,6 +31,8 @@ TRIGGER_STEP_ACTION_TYPES = (
     TRIGGER_STEP_ACTION_REPLACE_ROOM_ITEM,
     TRIGGER_STEP_ACTION_SET_MOB,
     TRIGGER_STEP_ACTION_ECHO,
+    TRIGGER_STEP_ACTION_SEND,
+    TRIGGER_STEP_ACTION_SEND_EXCEPT,
 )
 
 TRIGGER_STEP_SET_MOB_FIELD_TYPES = {
@@ -51,6 +55,7 @@ MAX_TRIGGER_GRANT_ITEM_COUNT = 32
 MAX_TRIGGER_GRANT_ITEMS_PER_STEP = 32
 MAX_TRIGGER_COMMAND_LENGTH = 4_000
 MAX_TRIGGER_ECHO_LENGTH = 4_000
+MAX_TRIGGER_SEND_LENGTH = 4_000
 SCRIPT_COMMAND_DEPTH_KEY = "_script_command_depth"
 SCRIPT_COMMAND_PROVENANCE_KEY = "_script_command_provenance"
 # Keeps cached hooks and durable run snapshots bounded even when every action
@@ -434,6 +439,36 @@ def _normalize_action(
             ),
         }
 
+    if action_type in {
+        TRIGGER_STEP_ACTION_SEND,
+        TRIGGER_STEP_ACTION_SEND_EXCEPT,
+    }:
+        _exact_fields(
+            action,
+            field_name=field_name,
+            required={"type", "actor", "text"},
+        )
+        raw_text = action.get("text")
+        if not isinstance(raw_text, str):
+            raise TriggerStepSpecError(f"{field_name}.text must be a string.")
+        text = raw_text.strip()
+        if not text:
+            raise TriggerStepSpecError(f"{field_name}.text is required.")
+        if len(text) > MAX_TRIGGER_SEND_LENGTH:
+            raise TriggerStepSpecError(
+                f"{field_name}.text cannot exceed "
+                f"{MAX_TRIGGER_SEND_LENGTH} characters."
+            )
+        return {
+            "type": action_type,
+            "actor": _context_ref(
+                action.get("actor"),
+                field_name=f"{field_name}.actor",
+                expected=TRIGGER_ACTOR_REF,
+            ),
+            "text": text,
+        }
+
     if action_type == TRIGGER_STEP_ACTION_CONSUME_ITEM:
         _exact_fields(
             action,
@@ -700,14 +735,17 @@ def normalize_trigger_steps(
                 TRIGGER_STEP_ACTION_DEBIT_CURRENCY,
                 TRIGGER_STEP_ACTION_COMMAND,
                 TRIGGER_STEP_ACTION_ECHO,
+                TRIGGER_STEP_ACTION_SEND,
+                TRIGGER_STEP_ACTION_SEND_EXCEPT,
             }:
                 mutation_prefix_ended = True
             elif mutation_prefix_ended:
                 raise TriggerStepSpecError(
                     f"{field_name}.actions[{action_index}] cannot mutate "
-                    "items or mobs after a debit, command, or echo; item and "
-                    "mob mutations must precede all debit, command, and echo "
-                    "actions."
+                    "items or mobs after a debit, command, echo, send, or "
+                    "send_except; item and mob mutations must precede all "
+                    "debit, command, and echo actions, as well as send and "
+                    "send_except actions."
                 )
         grant_count = sum(
             int(action.get("count") or 1)

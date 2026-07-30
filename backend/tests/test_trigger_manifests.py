@@ -523,6 +523,12 @@ spec:
         - type: echo
           room: trigger_room
           text: The ferryman accepts the fare.
+        - type: send
+          actor: trigger_actor
+          text: You step aboard the ferry.
+        - type: send_except
+          actor: trigger_actor
+          text: "{{{{ actor }}}} steps aboard the ferry."
         - type: command
           subject: trigger_actor
           command: say Get on board.
@@ -554,6 +560,16 @@ spec:
                     "type": "echo",
                     "room": "trigger_room",
                     "text": "The ferryman accepts the fare.",
+                },
+                {
+                    "type": "send",
+                    "actor": "trigger_actor",
+                    "text": "You step aboard the ferry.",
+                },
+                {
+                    "type": "send_except",
+                    "actor": "trigger_actor",
+                    "text": "{{ actor }} steps aboard the ferry.",
                 },
                 {
                     "type": "command",

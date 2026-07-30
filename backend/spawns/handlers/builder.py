@@ -16,6 +16,7 @@ from spawns.actions.builder import (
     RepopAction,
     RegenAction,
     SendAction,
+    SendExceptAction,
     MOB_SET_FIELD_CHOICES,
     PLAYER_SET_FIELD_CHOICES,
     SetClassAction,
@@ -79,6 +80,15 @@ def _split_delimited_args(args: list[str]) -> tuple[str, str] | tuple[None, None
     lhs = " ".join(args[:delimiter_idx]).strip()
     rhs = " ".join(args[delimiter_idx + 1 :]).strip()
     return lhs, rhs
+
+
+def _can_execute_send_command(ctx: CommandContext) -> bool:
+    if has_builder_access(ctx.player):
+        return True
+    return bool(
+        ctx.script_source
+        and ctx.actor_type in {"mob", "room", "zone", "world"}
+    )
 
 
 def _parse_echo_scope_and_message(ctx: CommandContext) -> tuple[str | None, str | None]:
@@ -613,17 +623,8 @@ class SendHandler(CommandHandler):
         ],
     }
 
-    def _can_execute_send_command(self, ctx: CommandContext) -> bool:
-        if has_builder_access(ctx.player):
-            return True
-        return bool(
-            ctx.script_source
-            and self.allow_script_source
-            and ctx.actor_type in {"mob", "room", "zone", "world"}
-        )
-
     def handle(self, ctx: CommandContext) -> None:
-        if not self._can_execute_send_command(ctx):
+        if not _can_execute_send_command(ctx):
             ctx.publish(builder_permission_error(self.command_type))
             return
 
@@ -651,6 +652,77 @@ class SendHandler(CommandHandler):
                     "type": "cmd./send.error",
                     "text": err.message,
                     "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.actor_key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class SendExceptHandler(CommandHandler):
+    command_type = "/sendexcept"
+    text_commands = ("/sendexcept",)
+    builder_only = True
+    allow_script_source = True
+    supported_actor_types = ("player", "mob", "room", "zone", "world")
+    help = {
+        "name": "Send Except",
+        "format": "/sendexcept <player> <message>",
+        "description": (
+            "Send text to every other connected player in the target player's "
+            "current runtime room."
+        ),
+        "examples": [
+            "/sendexcept aria Aria studies the inscription.",
+            "/sendexcept player.123 -- Aria studies the inscription.",
+            (
+                "/cmd room -- /sendexcept {{ actor_key }} -- "
+                "{{ actor }} studies the inscription."
+            ),
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        if not _can_execute_send_command(ctx):
+            ctx.publish(builder_permission_error(self.command_type))
+            return
+
+        target, message = _parse_send_args(ctx)
+        if not target or not message:
+            ctx.publish(
+                {
+                    "type": "cmd./sendexcept.error",
+                    "text": "Usage: /sendexcept <player> <message>",
+                    "data": {
+                        "error": "Missing target or message.",
+                        "code": "invalid_args",
+                    },
+                }
+            )
+            return
+
+        try:
+            result = SendExceptAction().execute(
+                actor=ctx.actor,
+                target_selector=target,
+                message=message,
+                runtime_world=ctx.world,
+            )
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd./sendexcept.error",
+                    "text": err.message,
+                    "data": {
+                        "error": err.message,
+                        "code": err.code,
+                        **err.data,
+                    },
                 }
             )
             return

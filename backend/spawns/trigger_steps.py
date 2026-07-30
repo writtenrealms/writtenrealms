@@ -38,13 +38,17 @@ from core.trigger_steps import (
     TRIGGER_STEP_ACTION_ECHO,
     TRIGGER_STEP_ACTION_GRANT_ITEM,
     TRIGGER_STEP_ACTION_REPLACE_ROOM_ITEM,
+    TRIGGER_STEP_ACTION_SEND,
+    TRIGGER_STEP_ACTION_SEND_EXCEPT,
     TRIGGER_STEP_ACTION_SET_MOB,
     TRIGGER_STEP_ACTION_SPAWN_ROOM_ITEM,
+    MAX_TRIGGER_SEND_LENGTH,
     SCRIPT_COMMAND_DEPTH_KEY,
     TriggerStepSpecError,
     normalize_trigger_step_error_policy,
     normalize_trigger_steps,
 )
+from core.utils import format_actor_msg
 from spawns.events import (
     COMMAND_RECEIPT_STATUS_COMPLETED,
     COMMAND_RECEIPT_STATUS_FAILED,
@@ -1765,6 +1769,89 @@ def _echo_event(
     )
 
 
+def _render_trigger_message(*, action: dict[str, Any], actor: Player) -> str:
+    text = str(action.get("text") or "").strip()
+    rendered = format_actor_msg(
+        text,
+        actor,
+        state_context={
+            "world": {},
+            "zone": {},
+            "room": {},
+            "character": {},
+            "quest": {},
+        },
+    )
+    message = str(rendered or "").strip()
+    if not message:
+        raise TriggerStepExecutionError(
+            "The rendered send action text is empty.",
+            code="invalid_send_text",
+        )
+    if len(message) > MAX_TRIGGER_SEND_LENGTH:
+        raise TriggerStepExecutionError(
+            f"The rendered send action text cannot exceed "
+            f"{MAX_TRIGGER_SEND_LENGTH} characters.",
+            code="send_text_too_long",
+        )
+    return message
+
+
+def _trigger_message_data(
+    *,
+    actor: Player,
+    message: str,
+) -> dict[str, Any]:
+    target = {
+        "id": actor.id,
+        "key": actor.key,
+        "char_type": "player",
+        "name": actor.name,
+    }
+    return {
+        "actor": target,
+        "target": target,
+        "target_type": "player",
+        "message": message,
+    }
+
+
+def _send_event(
+    *,
+    action: dict[str, Any],
+    actor: Player,
+) -> GameEvent:
+    message = _render_trigger_message(action=action, actor=actor)
+    return GameEvent(
+        type="notification./send",
+        recipients=[actor.key],
+        data=_trigger_message_data(actor=actor, message=message),
+        text=message,
+    )
+
+
+def _send_except_event(
+    *,
+    action: dict[str, Any],
+    actor: Player,
+    room_recipient_keys: tuple[str, ...],
+) -> GameEvent | None:
+    message = _render_trigger_message(action=action, actor=actor)
+    recipients = tuple(
+        recipient
+        for recipient in room_recipient_keys
+        if recipient != actor.key
+    )
+    if not recipients:
+        return None
+    return GameEvent(
+        type="notification./sendexcept",
+        recipients=recipients,
+        data=_trigger_message_data(actor=actor, message=message),
+        text=message,
+    )
+
+
 def _room_recipient_keys_for(
     *,
     runtime_world_id: int,
@@ -1835,17 +1922,33 @@ def _execute_current_step(
         for action in actions
         if action.get("type") == TRIGGER_STEP_ACTION_COMMAND
     ]
+    message_actions = [
+        action
+        for action in actions
+        if action.get("type")
+        in {
+            TRIGGER_STEP_ACTION_SEND,
+            TRIGGER_STEP_ACTION_SEND_EXCEPT,
+        }
+    ]
     if debit_actions:
         if run.actor_type != "player":
             raise TriggerStepExecutionError(
                 "Only a player trigger actor can be charged currency.",
                 code="invalid_actor",
             )
+    if message_actions and run.actor_type != "player":
+        raise TriggerStepExecutionError(
+            "Only a player trigger actor can receive send actions.",
+            code="invalid_actor",
+        )
     actor_row_actions = {
         TRIGGER_STEP_ACTION_COMMAND,
         TRIGGER_STEP_ACTION_CONSUME_ITEM,
         TRIGGER_STEP_ACTION_GRANT_ITEM,
         TRIGGER_STEP_ACTION_DEBIT_CURRENCY,
+        TRIGGER_STEP_ACTION_SEND,
+        TRIGGER_STEP_ACTION_SEND_EXCEPT,
     }
     if (
         run.actor_type == "player"
@@ -1882,6 +1985,17 @@ def _execute_current_step(
             "The trigger actor is no longer available.",
             code="actor_missing",
         )
+    if message_actions:
+        if not isinstance(trigger_actor, Player):
+            raise TriggerStepExecutionError(
+                "The player trigger actor is no longer available.",
+                code="actor_missing",
+            )
+        if not trigger_actor.in_game:
+            raise TriggerStepExecutionError(
+                "The trigger actor is not currently connected.",
+                code="actor_unavailable",
+            )
     if debit_actions:
         _preflight_step_currency_debits(
             debit_actions=debit_actions,
@@ -1994,7 +2108,11 @@ def _execute_current_step(
             )
             change.mob = updated_mob
             change.fields.update(action["fields"])
-        elif action_type == TRIGGER_STEP_ACTION_ECHO:
+        elif action_type in {
+            TRIGGER_STEP_ACTION_ECHO,
+            TRIGGER_STEP_ACTION_SEND,
+            TRIGGER_STEP_ACTION_SEND_EXCEPT,
+        }:
             continue
         else:
             raise TriggerStepExecutionError(
@@ -2004,7 +2122,11 @@ def _execute_current_step(
 
     # Typed item and mob mutations are an authored prefix. Publish their
     # deltas before any command can emit a full character/room snapshot.
-    mutation_room_recipient_keys = _room_recipient_keys(run)
+    room_recipient_keys_cache: dict[int, tuple[str, ...]] = {}
+    mutation_room_recipient_keys: tuple[str, ...] = ()
+    if item_changes.changed or mob_changes.changed:
+        mutation_room_recipient_keys = _room_recipient_keys(run)
+        room_recipient_keys_cache[room.id] = mutation_room_recipient_keys
     events.extend(
         _item_change_events(
             run=run,
@@ -2024,9 +2146,6 @@ def _execute_current_step(
 
     action_events: dict[int, list[GameEvent]] = {}
     debit_contexts: dict[int, tuple[Room, tuple[str, ...]]] = {}
-    trigger_room_recipient_keys: tuple[str, ...] | None = (
-        mutation_room_recipient_keys
-    )
     debit_context_cache: dict[
         tuple[int | None, bool, bool],
         tuple[Room, tuple[str, ...]],
@@ -2121,18 +2240,53 @@ def _execute_current_step(
             if command_result.mode == TRIGGER_STEP_MODE_TRANSACTIONAL:
                 # The initial transactional command contract can move only
                 # the Trigger actor. Refresh it before later command subjects,
-                # debit witness snapshots, or room echoes are resolved.
+                # debit witness snapshots, room echoes, or send-except
+                # audiences are resolved.
                 trigger_actor.refresh_from_db()
-                trigger_room_recipient_keys = None
+                room_recipient_keys_cache.clear()
                 debit_context_cache.clear()
         elif action_type == TRIGGER_STEP_ACTION_ECHO:
+            trigger_room_recipient_keys = room_recipient_keys_cache.get(room.id)
             if trigger_room_recipient_keys is None:
                 trigger_room_recipient_keys = _room_recipient_keys(run)
+                room_recipient_keys_cache[room.id] = (
+                    trigger_room_recipient_keys
+                )
             event = _echo_event(
                 run=run,
                 action=action,
                 room=room,
                 room_recipient_keys=trigger_room_recipient_keys,
+            )
+            action_events[action_index] = [] if event is None else [event]
+        elif action_type == TRIGGER_STEP_ACTION_SEND:
+            action_events[action_index] = [
+                _send_event(
+                    action=action,
+                    actor=trigger_actor,
+                )
+            ]
+        elif action_type == TRIGGER_STEP_ACTION_SEND_EXCEPT:
+            if trigger_actor.room_id is None:
+                raise TriggerStepExecutionError(
+                    "The trigger actor is not currently in a room.",
+                    code="actor_room_missing",
+                )
+            actor_room_recipient_keys = room_recipient_keys_cache.get(
+                trigger_actor.room_id,
+            )
+            if actor_room_recipient_keys is None:
+                actor_room_recipient_keys = _room_recipient_keys_for(
+                    runtime_world_id=run.runtime_world_id,
+                    room_id=trigger_actor.room_id,
+                )
+                room_recipient_keys_cache[trigger_actor.room_id] = (
+                    actor_room_recipient_keys
+                )
+            event = _send_except_event(
+                action=action,
+                actor=trigger_actor,
+                room_recipient_keys=actor_room_recipient_keys or (),
             )
             action_events[action_index] = [] if event is None else [event]
 
@@ -2164,6 +2318,8 @@ def _execute_current_step(
         elif action_type in {
             TRIGGER_STEP_ACTION_COMMAND,
             TRIGGER_STEP_ACTION_ECHO,
+            TRIGGER_STEP_ACTION_SEND,
+            TRIGGER_STEP_ACTION_SEND_EXCEPT,
         }:
             events.extend(action_events.get(action_index, ()))
 
