@@ -1,12 +1,12 @@
 # WR2 Currency System
 
-Status as of 2026-07-17: implemented WR2 currency foundation. Authored currency
+Status as of 2026-07-30: implemented WR2 currency foundation. Authored currency
 definitions, a customizable world default, relational player balances,
 transactional wallet mutations, manifests, runtime payloads, items, merchants,
-mob rewards, quest rewards, death costs, conditions, and the player
-`currencies` command use the generic system. Generic action receipts,
-player-to-player transfers, exchange rates, and the other items called out as
-deferred below are not implemented.
+mob rewards, quest rewards, typed Trigger currency grants/debits, death costs,
+conditions, and the player `currencies` command use the generic system. Generic
+action receipts, player-to-player transfers, exchange rates, and the other
+items called out as deferred below are not implemented.
 
 ## Purpose
 
@@ -404,8 +404,8 @@ Trigger-step snapshots are intentionally scanned only by the actual delete
 operation, after the economy's editable/stopped requirement passes; ordinary
 builder list and retrieve requests do not deserialize every player's active
 sequence. This keeps deletion safe for both relational references and portable
-`actor.balances.<code>`/typed currency references without repeating the audit
-once per currency on the builder list screen.
+`actor.balances.<code>`/typed grant-or-debit currency references without
+repeating the audit once per currency on the builder list screen.
 
 Foreign keys for canonical monetary references should use `RESTRICT`, not
 `SET_NULL` followed by an implicit Gold or current-default fallback. `RESTRICT`
@@ -566,7 +566,7 @@ Normalized rows provide:
 
 - database nonnegative and uniqueness guarantees
 - row-level locking of the balances touched by an Action
-- atomic conditional debits
+- atomic signed mutations with conditional debits and bounded credits
 - indexed administrative and analytics queries
 - bounded prefetching for player payloads
 - direct foreign-key integrity to authored currencies
@@ -661,14 +661,18 @@ Item, and finally balance. Feature code must not debit first and then acquire an
 earlier aggregate lock.
 
 A mixed Trigger step follows the same rule even when its visible action order
-places a command before or after `debit_currency`. It locks the Trigger actor
-and bounded item/mob resources, preflights aggregate affordability, executes
-audited commands that do not branch on or mutate the wallet, and writes balance
-rows last. Step-safe `/transfer` is limited to that Trigger actor as its target;
-it cannot introduce an unplanned character lock before the final wallet phase.
-A transfer may serialize the player's pre-debit wallet in its full state
-snapshot, so the authoritative post-debit wallet event is appended after the
-authored action events.
+places a command before or after `debit_currency` or `grant_currency`. It locks
+the Trigger actor and bounded item/mob resources, verifies that the starting
+wallet covers every gross debit, and verifies that each final net balance stays
+within the safe-integer limit. Same-step grants never subsidize charges. It
+then executes audited commands that do not branch on or mutate the wallet and
+writes the one signed wallet mutation last. Step-safe `/transfer` is limited to
+that Trigger actor as its target; it cannot introduce an unplanned character
+lock before the final wallet phase. A transfer may serialize the player's
+pre-mutation wallet in its full state snapshot, so a nonzero mutation's
+authoritative wallet event is appended after the authored action events. An
+exact net-zero mutation emits its authored currency narratives but changes no
+revision and emits no wallet-state event.
 
 Player-to-player transfer is not part of the implemented service. A future
 transfer must lock both Player rows before either balance is changed. Locking a
@@ -770,13 +774,16 @@ wallet currently has no generic replay receipt, replaying the mutation itself
 would produce another revision and event. A public room event may say that a
 player received a reward without broadcasting the player's wallet.
 
-Typed Trigger debits use that separation directly. The triggering player gets
-the private balance event plus `You part with <money>.`; other current
-in-game occupants of the actor's current room get
-`<Actor> parts with <money>.` without `wallet_revision`, full balances, or
-before/after values. Invisible or logged-out actors have no public witness
-event. Insufficient funds roll back the step and produce neither success
-message.
+Typed Trigger currency actions use that separation directly. A grant tells the
+triggering player `You receive <money>.` and visible current-room occupants
+`<Actor> receives <money>.`; a debit uses `You part with <money>.` and
+`<Actor> parts with <money>.` Witness events omit `wallet_revision`, full
+balances, and before/after values. Invisible or logged-out actors have no
+public witness event. Insufficient starting funds or an excessive final balance
+roll back the step and produce no success message. All same-step grants and
+debits use one signed mutation. A nonzero net change emits one private balance
+event and increments the revision once; an exact net-zero change keeps the
+authored narratives but emits neither.
 
 Feature events such as `merchant.item.bought`, `quest.completed`, or
 `mob.killed` should still be emitted. Consumers should not parse text to learn
@@ -1021,6 +1028,11 @@ The manifest parser validates the code. Action planning resolves it to a
 currency ID, and effect execution uses the currency service. Quest, instance,
 achievement, and scripted reward systems should share this effect semantics
 rather than each implementing credit logic.
+
+Typed Trigger steps use the same `grant_currency` name and explicit
+amount-plus-code semantics, but their action context is deliberately narrower:
+they require `actor: trigger_actor` rather than quest-effect `scope`, and only a
+player Trigger actor can receive the grant.
 
 The optional WR1 conversion utility maps a WR1 `grant_gold` reward to this
 canonical shape with `currency: gold`. WR2 itself does not need a
@@ -1286,20 +1298,24 @@ Performance requirements:
   or world's whole population in one transaction.
 - A currency mutation is not one Celery task per balance row. One feature
   Action performs its bounded batch in one transaction.
-- All `debit_currency` actions in one typed Trigger step are aggregated into
-  one wallet mutation, so work remains bounded by touched currencies rather
-  than action count.
+- All `debit_currency` and `grant_currency` actions in one typed Trigger step
+  are aggregated into one signed wallet mutation, so work remains bounded by
+  touched currencies rather than action count. Gross debits are checked against
+  starting balances without grant subsidy, and final net balances are checked
+  against the safe-integer cap.
 - Typed steps require item/mob mutations as an initial prefix, then allow
-  `debit_currency`, `command`, `echo`, `send`, and `send_except` to interleave
-  in authored narrative order. The runtime preflights the aggregate debit while
-  holding the Player lock, captures audited commands and messaging events that
-  neither branch on nor change the wallet, and writes ordered balance rows
-  last. The authoritative
-  `currency.balances_changed` event is emitted after the authored action events;
-  this supersedes any pre-debit wallet serialized by a full `/transfer`
-  snapshot. A failed command or transfer therefore rolls back without charging,
-  while insufficient funds prevent command execution. Mixed steps, including
-  steps without currency, prelock existing Mob then Item candidates consistently
+  `debit_currency`, `grant_currency`, `command`, `echo`, `send`, and
+  `send_except` to interleave in authored narrative order. The runtime performs
+  the gross-debit and final-net checks while holding the Player lock, captures
+  audited commands and messaging events that neither branch on nor change the
+  wallet, and writes ordered balance rows last. A nonzero net change emits one
+  authoritative `currency.balances_changed` event after the authored action
+  events; this supersedes any pre-mutation wallet serialized by a full
+  `/transfer` snapshot. An exact net-zero batch retains its narratives but
+  changes no revision and emits no wallet-state event. A failed command or
+  transfer therefore rolls back without changing currency, while insufficient
+  starting funds prevent command execution. Mixed steps, including steps
+  without currency, prelock existing Mob then Item candidates consistently
   before balance rows are acquired. Exact-one mob subjects for `command`
   actions join the same bounded Mob prelock. Transactional `/transfer` is
   restricted to the already identified Trigger actor as its target so it cannot
@@ -1472,18 +1488,18 @@ wallet API.
 - quest and instance reward effects
 - clan/system costs
 - existing currency conditions
-- atomic typed Trigger `debit_currency` steps and perspective-specific success
-  messages
+- atomic typed Trigger `grant_currency`/`debit_currency` steps,
+  perspective-specific success messages, and one signed wallet batch per step
 - direct-builder `/setcurrency` exact balance assignments for testing and
   administrative correction
 - route every writer through the service and remove direct special-field writes
 
-Additive privileged currency awards remain deferred. `/setcurrency` is an
-explicit-code, exact-assignment testing tool rather than a replayable award.
-The Trigger debit is also not a generic administrative command: it is an
-authored positive charge against only `trigger_actor`, requires an explicit
-currency, rejects non-player actors, and cannot credit or arbitrarily set a
-balance.
+Additive privileged builder/admin currency awards remain deferred.
+`/setcurrency` is an explicit-code, exact-assignment testing tool rather than a
+replayable award. Trigger currency actions are authored gameplay effects, not
+generic administrative commands: both target only `trigger_actor`, require an
+explicit currency and positive safe amount, reject non-player actors, and
+cannot arbitrarily set a balance.
 
 ### Implemented Foundation: Builder And Player Surfaces
 
@@ -1529,6 +1545,8 @@ The implementation is not complete until it covers the following.
 - create a character with several starting balances
 - buy, sell, and buy back using a non-Gold settlement currency
 - grant non-Gold mob and quest rewards
+- grant and debit non-Gold currency through one typed Trigger step, including
+  gross-debit rejection and exact net-zero behavior
 - apply a non-Gold death cost
 - evaluate a structured balance condition without N+1 queries
 - transfer atomically between two players

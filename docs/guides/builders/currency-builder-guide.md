@@ -83,9 +83,9 @@ merchant profiles, rewards, or policies.
 
 All canonical money amounts are whole numbers from `0` through
 `9,007,199,254,740,991`. Negative values, fractions, booleans, and larger
-numbers are rejected. Quest grants must be positive. Mob reward manifests
-accept zero as an explicit absence and normalize it away, while stored and
-runtime mob rewards remain positive.
+numbers are rejected. Quest and Trigger grants must be positive. Mob reward
+manifests accept zero as an explicit absence and normalize it away, while stored
+and runtime mob rewards remain positive.
 
 ## Item Values
 
@@ -235,9 +235,21 @@ conditions:
 A missing sparse balance row evaluates as zero. Do not create currency-specific
 condition syntax.
 
-## Trigger Currency Debits
+## Trigger Currency Grants And Debits
 
-A typed Trigger step can charge its triggering player:
+A typed Trigger step can award its triggering player:
+
+```yaml
+steps:
+  - after_seconds: 0
+    actions:
+      - type: grant_currency
+        actor: trigger_actor
+        currency: obol
+        amount: 15
+```
+
+Use the symmetric action when the step should charge the player:
 
 ```yaml
 steps:
@@ -249,32 +261,46 @@ steps:
         amount: 10
 ```
 
-The currency code and positive integer amount are required. Unlike a new
-money-bearing relational field, this stored action never resolves an omitted
-currency from the current default. The code is validated against the base-world
-catalog when the Trigger manifest is applied and snapshotted to the concrete
-currency id when the sequence starts.
+Both actions require exactly `actor: trigger_actor`, an explicit currency code,
+and a positive integer amount no greater than
+`9,007,199,254,740,991`. Only a player Trigger actor may be targeted.
+Unlike a new money-bearing relational field, these stored actions never resolve
+an omitted currency from the current default. The code is validated against the
+base-world catalog when the Trigger manifest is applied and snapshotted to the
+concrete currency id when the sequence starts.
 
 Use an `actor.balances.<code>` condition when the action should be hidden or
 show a builder-authored failure message to players who cannot afford it. That
 condition is not the debit's concurrency guard: execution rechecks the wallet
-under lock, batches all currency debits in the step, and rolls back the entire
-step if any balance is insufficient. The private success text always goes to
-the charged player. The third-person text goes only to in-game witnesses in
-that player's current room and is suppressed while the player is invisible.
+under lock and rolls back the entire step if the starting balance cannot cover
+the gross total of all same-currency debits. Same-step grants never subsidize
+those charges. The final net balance after grants and debits must also remain
+within the safe-integer limit.
+
+On success, a grant tells the player `You receive 15 obols.` and a debit tells
+them `You part with 10 obols.` Visible in-game witnesses in the player's current
+room receive the corresponding third-person text. Witness text is suppressed
+while the player is invisible or logged out, and the full wallet update remains
+private.
+
 Put item and mob mutations first as one uninterrupted prefix. After that,
-`debit_currency`, `command`, `echo`, `send`, and `send_except` may interleave in
-the authored narrative order you want. The runtime preflights all debits as one
-aggregate before executing the step, captures approved commands and messaging
-events transactionally, and writes balance rows last. Step-safe commands do not
-branch on or mutate the wallet.
-`/transfer` can nevertheless serialize the pre-debit wallet inside its full
-player snapshot; the authoritative `currency.balances_changed` state event is
-therefore emitted after every authored action event. Debit witness text still
-uses the actor's room at that action's authored position: a transfer before the
-debit notifies the destination, while a transfer after it leaves the debit text
-in the origin room. If any debit, command, or native messaging action fails, no
-balance, transactional command effect, or success text commits.
+`grant_currency`, `debit_currency`, `command`, `echo`, `send`, and
+`send_except` may interleave in the authored narrative order you want. The
+runtime applies all grants and debits as one signed wallet mutation, captures
+approved commands and messaging events transactionally, and writes balance rows
+last. A nonzero net change increments the wallet revision once and emits one
+authoritative `currency.balances_changed` state event after every authored
+action event. An exact net-zero batch still emits the authored grant/debit
+narratives but changes no revision and emits no wallet-state event.
+
+Step-safe commands do not branch on or mutate the wallet. `/transfer` can
+nevertheless serialize the pre-mutation wallet inside its full player snapshot,
+so the final aggregate wallet event deliberately follows authored action
+output. Currency witness text uses the actor's room at that action's authored
+position: a transfer before the action notifies the destination, while a
+transfer after it leaves the text in the origin room. If any currency action,
+command, or native messaging action fails, no balance, transactional command
+effect, or success text commits.
 
 ## Starting Balances And Reset
 
@@ -301,8 +327,8 @@ revision, sends the target a private update, and uses the wallet event reason
 `builder.set_currency`. Setting the current value again is a no-op.
 
 `/setcurrency` is direct-builder-only. It cannot be used by Triggers or other
-scripts as a gameplay reward or charge; use the authored reward and debit
-features described above for those cases.
+scripts as a gameplay reward or charge; use authored reward effects or typed
+Trigger `grant_currency` and `debit_currency` actions for those cases.
 
 ## Instances
 

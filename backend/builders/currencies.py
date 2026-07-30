@@ -12,6 +12,7 @@ from django.db.models import Count, F, Q
 from builders.models import Currency, WorldStartingCurrencyBalance
 from config import constants as api_consts
 from core.economy import economy_world, resolve_currency, validate_currency_amount
+from core.trigger_steps import TRIGGER_STEP_CURRENCY_ACTION_TYPES
 from worlds.models import World
 
 
@@ -242,7 +243,7 @@ def _payload_references_currency(value, *, code: str) -> bool:
 def _trigger_snapshot_currency_references(
     snapshot,
 ) -> tuple[set[int], set[str]]:
-    """Collect debit refs from one bounded scheduled-step snapshot once."""
+    """Collect currency refs from one bounded scheduled-step snapshot once."""
     currency_ids: set[int] = set()
     currency_codes: set[str] = set()
     if not isinstance(snapshot, list):
@@ -256,7 +257,7 @@ def _trigger_snapshot_currency_references(
         for action in actions:
             if (
                 not isinstance(action, dict)
-                or action.get("type") != "debit_currency"
+                or action.get("type") not in TRIGGER_STEP_CURRENCY_ACTION_TYPES
             ):
                 continue
             raw_currency_id = action.get("currency_id")

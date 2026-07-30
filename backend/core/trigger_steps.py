@@ -12,6 +12,7 @@ TRIGGER_STEP_ERROR_POLICIES = (TRIGGER_STEP_ERROR_POLICY_CANCEL,)
 
 TRIGGER_STEP_ACTION_COMMAND = "command"
 TRIGGER_STEP_ACTION_DEBIT_CURRENCY = "debit_currency"
+TRIGGER_STEP_ACTION_GRANT_CURRENCY = "grant_currency"
 TRIGGER_STEP_ACTION_CONSUME_ITEM = "consume_item"
 TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM = "consume_room_item"
 TRIGGER_STEP_ACTION_GRANT_ITEM = "grant_item"
@@ -21,9 +22,14 @@ TRIGGER_STEP_ACTION_SET_MOB = "set_mob"
 TRIGGER_STEP_ACTION_ECHO = "echo"
 TRIGGER_STEP_ACTION_SEND = "send"
 TRIGGER_STEP_ACTION_SEND_EXCEPT = "send_except"
+TRIGGER_STEP_CURRENCY_ACTION_TYPES = (
+    TRIGGER_STEP_ACTION_DEBIT_CURRENCY,
+    TRIGGER_STEP_ACTION_GRANT_CURRENCY,
+)
 TRIGGER_STEP_ACTION_TYPES = (
     TRIGGER_STEP_ACTION_COMMAND,
     TRIGGER_STEP_ACTION_DEBIT_CURRENCY,
+    TRIGGER_STEP_ACTION_GRANT_CURRENCY,
     TRIGGER_STEP_ACTION_CONSUME_ITEM,
     TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM,
     TRIGGER_STEP_ACTION_GRANT_ITEM,
@@ -393,7 +399,10 @@ def _normalize_action(
             f"{', '.join(TRIGGER_STEP_ACTION_TYPES)}."
         )
 
-    if action_type == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
+    if action_type in {
+        TRIGGER_STEP_ACTION_DEBIT_CURRENCY,
+        TRIGGER_STEP_ACTION_GRANT_CURRENCY,
+    }:
         _exact_fields(
             action,
             field_name=field_name,
@@ -733,6 +742,7 @@ def normalize_trigger_steps(
             action_type = action.get("type")
             if action_type in {
                 TRIGGER_STEP_ACTION_DEBIT_CURRENCY,
+                TRIGGER_STEP_ACTION_GRANT_CURRENCY,
                 TRIGGER_STEP_ACTION_COMMAND,
                 TRIGGER_STEP_ACTION_ECHO,
                 TRIGGER_STEP_ACTION_SEND,
@@ -742,10 +752,10 @@ def normalize_trigger_steps(
             elif mutation_prefix_ended:
                 raise TriggerStepSpecError(
                     f"{field_name}.actions[{action_index}] cannot mutate "
-                    "items or mobs after a debit, command, echo, send, or "
-                    "send_except; item and mob mutations must precede all "
-                    "debit, command, and echo actions, as well as send and "
-                    "send_except actions."
+                    "items or mobs after a currency, command, echo, send, or "
+                    "send_except action; item and mob mutations must precede "
+                    "all currency, command, echo, send, and send_except "
+                    "actions."
                 )
         grant_count = sum(
             int(action.get("count") or 1)

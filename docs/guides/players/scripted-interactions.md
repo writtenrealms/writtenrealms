@@ -23,8 +23,8 @@ acknowledged with `✓`, not treated as a client or server error. Its refusal
 message still appears in the transcript so you know why nothing happened.
 
 The client never automatically resends an unconfirmed command. This matters
-for commands that can spend currency or make another lasting change: loss of
-the acknowledgement does not prove that the original command failed.
+for commands that can award or spend currency or make another lasting change:
+loss of the acknowledgement does not prove that the original command failed.
 Transport and lifecycle statuses are interface feedback, not authored room
 prose, and other characters do not see them.
 
@@ -35,8 +35,8 @@ When this happens:
 - ordinary communication restrictions still apply; for example, a muted
   character cannot be forced to speak
 - a delayed command uses your current room in the same runtime world
-- the command is part of the step transaction, so a failed payment or another
-  failed same-step action prevents the speech or emote
+- the command is part of the step transaction, so a failed currency change or
+  another failed same-step action prevents the speech or emote
 - scripted speech is marked as authored behavior: it is visible, but does not
   advance a quest or cause another Trigger reaction as though you voluntarily
   entered the command
@@ -47,6 +47,12 @@ separate third-person line such as “Joe pulls the lever.” You do not receive
 the witness copy. Both lines retain their authored order and participate in the
 same step transaction as any payment, item change, or audited command.
 
+A typed step may also award currency directly to the player who activated it.
+Successful awards and charges use private second-person messages, while visible
+room witnesses may receive third-person messages without seeing the player's
+wallet. Same-step awards never subsidize charges: the wallet at the start of
+the step must already cover every charge.
+
 A delayed sequence can be accepted before its first visible world response.
 Starting conditions establish eligibility at that moment; they do not reserve
 items or currency for a later step. If the needed state changes before a
@@ -54,9 +60,9 @@ delayed action executes, that step rolls back, the remaining sequence is
 cancelled, and the player receives safe cancellation feedback.
 
 A Trigger step may also use the audited `/transfer` command to move the
-character who activated it. The transfer, any same-step payment, and same-step
-output succeed or fail together. If the step fails, your room and balance stay
-unchanged. A transfer that would move you while you are in active
+character who activated it. The transfer, any same-step currency change, and
+same-step output succeed or fail together. If the step fails, your room and
+balance stay unchanged. A transfer that would move you while you are in active
 player-versus-player combat is rejected and rolls back the whole step.
 
 After an actual move commits, the destination's normal `entering` reactions and

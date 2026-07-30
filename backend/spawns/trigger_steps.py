@@ -23,7 +23,7 @@ from django.utils import timezone
 from builders.models import Currency, ItemDefinition, MobDefinition, Trigger
 from core.condition_dsl import ConditionContext, evaluate_condition
 from core.conditions import evaluate_conditions
-from core.economy import format_currency, money_payload
+from core.economy import MAX_CURRENCY_AMOUNT, format_currency, money_payload
 from core.scoped_state import (
     STATE_SCOPE_CHARACTER,
     normalize_state_snapshot,
@@ -36,12 +36,14 @@ from core.trigger_steps import (
     TRIGGER_STEP_ACTION_CONSUME_ROOM_ITEM,
     TRIGGER_STEP_ACTION_DEBIT_CURRENCY,
     TRIGGER_STEP_ACTION_ECHO,
+    TRIGGER_STEP_ACTION_GRANT_CURRENCY,
     TRIGGER_STEP_ACTION_GRANT_ITEM,
     TRIGGER_STEP_ACTION_REPLACE_ROOM_ITEM,
     TRIGGER_STEP_ACTION_SEND,
     TRIGGER_STEP_ACTION_SEND_EXCEPT,
     TRIGGER_STEP_ACTION_SET_MOB,
     TRIGGER_STEP_ACTION_SPAWN_ROOM_ITEM,
+    TRIGGER_STEP_CURRENCY_ACTION_TYPES,
     MAX_TRIGGER_SEND_LENGTH,
     SCRIPT_COMMAND_DEPTH_KEY,
     TriggerStepSpecError,
@@ -551,7 +553,7 @@ def _snapshot_steps_with_definition_ids(
                 mob_refs.add(
                     _mob_definition_ref_parts(command_subject.get("mob"))
                 )
-            if action.get("type") == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
+            if action.get("type") in TRIGGER_STEP_CURRENCY_ACTION_TYPES:
                 currency_codes.add(str(action.get("currency") or "").strip().lower())
 
     ids = [value for ref_type, value in refs if ref_type == "id"]
@@ -640,7 +642,7 @@ def _snapshot_steps_with_definition_ids(
                 ]
                 command_subject["mob_definition_id"] = definition.id
                 command_subject["mob"] = f"mobdefinition.{definition.slug}"
-            if action.get("type") == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
+            if action.get("type") in TRIGGER_STEP_CURRENCY_ACTION_TYPES:
                 currency = currencies[str(action.get("currency") or "").lower()]
                 action["currency_id"] = currency.id
                 action["currency"] = currency.code
@@ -837,8 +839,8 @@ def _prelock_step_resources(
             TRIGGER_STEP_ACTION_REPLACE_ROOM_ITEM,
         }
     ]
-    has_debit = any(
-        action.get("type") == TRIGGER_STEP_ACTION_DEBIT_CURRENCY
+    has_currency_mutation = any(
+        action.get("type") in TRIGGER_STEP_CURRENCY_ACTION_TYPES
         for action in actions
     )
     actor_model = _actor_model(run.actor_type)
@@ -848,7 +850,7 @@ def _prelock_step_resources(
         include_mob_actor=include_mob_actor,
     )
     needs_prelock = (
-        has_debit
+        has_currency_mutation
         or lock_mob_actor
         or bool(mob_actions)
         or len(existing_item_actions) > 1
@@ -1595,58 +1597,96 @@ def _mob_change_events(
     ]
 
 
-def _debit_deltas(
-    debit_actions: list[dict[str, Any]],
+def _currency_action_deltas(
+    currency_actions: list[dict[str, Any]],
 ) -> dict[int, int]:
     deltas: dict[int, int] = {}
-    for action in debit_actions:
+    for action in currency_actions:
         currency_id = int(action["currency_id"])
+        amount = int(action["amount"])
+        delta = (
+            amount
+            if action.get("type") == TRIGGER_STEP_ACTION_GRANT_CURRENCY
+            else -amount
+        )
         deltas[currency_id] = (
-            deltas.get(currency_id, 0) - int(action["amount"])
+            deltas.get(currency_id, 0) + delta
         )
     return deltas
 
 
-def _preflight_step_currency_debits(
+def _preflight_step_currency_actions(
     *,
-    debit_actions: list[dict[str, Any]],
+    currency_actions: list[dict[str, Any]],
     trigger_actor: Player,
 ) -> None:
-    """Validate aggregate funds without taking balance-row locks.
+    """Validate the wallet batch without taking balance-row locks.
 
     The Trigger step already owns the Player row, and all wallet writers lock
     Player before balances. That makes this read stable while preserving
-    balance rows as the final aggregate lock acquired by the step.
+    balance rows as the final aggregate lock acquired by the step. Gross debits
+    are checked against the starting balance so a same-step grant cannot
+    subsidize a charge; the final net balance is checked for overflow.
     """
-    deltas = _debit_deltas(debit_actions)
-    balances = dict(
-        PlayerCurrencyBalance.objects.filter(
+    deltas = _currency_action_deltas(currency_actions)
+    debit_totals: dict[int, int] = {}
+    for action in currency_actions:
+        if action.get("type") != TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
+            continue
+        currency_id = int(action["currency_id"])
+        debit_totals[currency_id] = (
+            debit_totals.get(currency_id, 0) + int(action["amount"])
+        )
+    balances = {
+        currency_id: int(amount)
+        for currency_id, amount in PlayerCurrencyBalance.objects.filter(
             player_id=trigger_actor.id,
             currency_id__in=sorted(deltas),
         ).values_list("currency_id", "amount")
-    )
-    if any(
-        int(balances.get(currency_id, 0)) + delta < 0
-        for currency_id, delta in deltas.items()
-    ):
-        raise TriggerStepExecutionError(
-            "Insufficient funds.",
-            code="insufficient_funds",
-        )
+    }
+    for currency_id, delta in deltas.items():
+        balance_before = int(balances.get(currency_id, 0))
+        if balance_before < debit_totals.get(currency_id, 0):
+            raise TriggerStepExecutionError(
+                "Insufficient funds.",
+                code="insufficient_funds",
+            )
+        balance_after = balance_before + delta
+        if balance_after > MAX_CURRENCY_AMOUNT:
+            raise TriggerStepExecutionError(
+                "The resulting balance is too large.",
+                code="amount_out_of_range",
+            )
 
 
-def _debit_step_currencies(
+def _currency_step_reason(
+    currency_actions: list[dict[str, Any]],
+) -> str:
+    action_types = {
+        action.get("type")
+        for action in currency_actions
+    }
+    if action_types == {TRIGGER_STEP_ACTION_DEBIT_CURRENCY}:
+        return "trigger.debit_currency"
+    if action_types == {TRIGGER_STEP_ACTION_GRANT_CURRENCY}:
+        return "trigger.grant_currency"
+    return "trigger.currency_actions"
+
+
+def _mutate_step_currencies(
     *,
-    debit_actions: list[dict[str, Any]],
+    currency_actions: list[dict[str, Any]],
     trigger_actor: Player,
-) -> tuple[WalletMutation, dict[int, Currency]]:
-    deltas = _debit_deltas(debit_actions)
+    authored_world_id: int,
+) -> tuple[WalletMutation, dict[int, Currency], str]:
+    deltas = _currency_action_deltas(currency_actions)
+    reason = _currency_step_reason(currency_actions)
 
     try:
         mutation = mutate_balances(
             trigger_actor,
             deltas,
-            reason="trigger.debit_currency",
+            reason=reason,
             emit_event=False,
         )
     except WalletError as exc:
@@ -1654,24 +1694,44 @@ def _debit_step_currencies(
             str(exc),
             code=exc.code,
         ) from exc
-    return (
-        mutation,
-        {
-            change.currency.id: change.currency
-            for change in mutation.changes
-        },
-    )
+    currencies = {
+        change.currency.id: change.currency
+        for change in mutation.changes
+    }
+    action_currency_ids = {
+        int(action["currency_id"])
+        for action in currency_actions
+    }
+    missing_currency_ids = action_currency_ids - set(currencies)
+    if missing_currency_ids:
+        currencies.update({
+            currency.id: currency
+            for currency in Currency.objects.filter(
+                pk__in=missing_currency_ids,
+                world_id=authored_world_id,
+            )
+        })
+    if set(currencies) != action_currency_ids:
+        raise TriggerStepExecutionError(
+            "A currency used by this sequence no longer exists.",
+            code="currency_missing",
+        )
+    return mutation, currencies, reason
 
 
-def _wallet_balance_event(mutation: WalletMutation) -> GameEvent:
+def _wallet_balance_event(
+    mutation: WalletMutation,
+    *,
+    reason: str,
+) -> GameEvent:
     return GameEvent(
         type="currency.balances_changed",
         recipients=[mutation.player.key],
-        data=mutation.payload(reason="trigger.debit_currency"),
+        data=mutation.payload(reason=reason),
     )
 
 
-def _currency_debit_events(
+def _currency_action_events(
     *,
     run: ScheduledTriggerRun,
     action: dict[str, Any],
@@ -1681,6 +1741,7 @@ def _currency_debit_events(
     room_recipient_keys: tuple[str, ...],
 ) -> list[GameEvent]:
     amount = int(action["amount"])
+    is_grant = action.get("type") == TRIGGER_STEP_ACTION_GRANT_CURRENCY
     display = format_currency(amount, currency)
     amount_prefix = f"{amount} "
     currency_label = display[len(amount_prefix):]
@@ -1712,10 +1773,18 @@ def _currency_debit_events(
     }
     events = [
         GameEvent(
-            type="notification.trigger.currency_debited",
+            type=(
+                "notification.trigger.currency_granted"
+                if is_grant
+                else "notification.trigger.currency_debited"
+            ),
             recipients=[run.actor_key],
             data={**data, "perspective": "actor"},
-            text=f"You part with {display}.",
+            text=(
+                f"You receive {display}."
+                if is_grant
+                else f"You part with {display}."
+            ),
         )
     ]
     observer_recipients = tuple(
@@ -1728,11 +1797,16 @@ def _currency_debit_events(
 
         events.append(
             GameEvent(
-                type="notification.trigger.currency_debited",
+                type=(
+                    "notification.trigger.currency_granted"
+                    if is_grant
+                    else "notification.trigger.currency_debited"
+                ),
                 recipients=observer_recipients,
                 data={**data, "perspective": "room"},
                 text=(
-                    f"{safe_capitalize(actor_name)} parts with {display}."
+                    f"{safe_capitalize(actor_name)} "
+                    f"{'receives' if is_grant else 'parts with'} {display}."
                 ),
             )
         )
@@ -1912,10 +1986,10 @@ def _execute_current_step(
     item_changes = TriggerItemChanges()
     mob_changes = TriggerMobChanges()
     actions = step.get("actions") or []
-    debit_actions = [
+    currency_actions = [
         action
         for action in actions
-        if action.get("type") == TRIGGER_STEP_ACTION_DEBIT_CURRENCY
+        if action.get("type") in TRIGGER_STEP_CURRENCY_ACTION_TYPES
     ]
     command_actions = [
         action
@@ -1931,10 +2005,10 @@ def _execute_current_step(
             TRIGGER_STEP_ACTION_SEND_EXCEPT,
         }
     ]
-    if debit_actions:
+    if currency_actions:
         if run.actor_type != "player":
             raise TriggerStepExecutionError(
-                "Only a player trigger actor can be charged currency.",
+                "Only a player trigger actor can have currency changed.",
                 code="invalid_actor",
             )
     if message_actions and run.actor_type != "player":
@@ -1947,6 +2021,7 @@ def _execute_current_step(
         TRIGGER_STEP_ACTION_CONSUME_ITEM,
         TRIGGER_STEP_ACTION_GRANT_ITEM,
         TRIGGER_STEP_ACTION_DEBIT_CURRENCY,
+        TRIGGER_STEP_ACTION_GRANT_CURRENCY,
         TRIGGER_STEP_ACTION_SEND,
         TRIGGER_STEP_ACTION_SEND_EXCEPT,
     }
@@ -1996,15 +2071,15 @@ def _execute_current_step(
                 "The trigger actor is not currently connected.",
                 code="actor_unavailable",
             )
-    if debit_actions:
-        _preflight_step_currency_debits(
-            debit_actions=debit_actions,
+    if currency_actions:
+        _preflight_step_currency_actions(
+            currency_actions=currency_actions,
             trigger_actor=trigger_actor,
         )
 
     for action in actions:
         action_type = action.get("type")
-        if action_type == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
+        if action_type in TRIGGER_STEP_CURRENCY_ACTION_TYPES:
             continue
         elif action_type == TRIGGER_STEP_ACTION_COMMAND:
             continue
@@ -2145,8 +2220,8 @@ def _execute_current_step(
     )
 
     action_events: dict[int, list[GameEvent]] = {}
-    debit_contexts: dict[int, tuple[Room, tuple[str, ...]]] = {}
-    debit_context_cache: dict[
+    currency_contexts: dict[int, tuple[Room, tuple[str, ...]]] = {}
+    currency_context_cache: dict[
         tuple[int | None, bool, bool],
         tuple[Room, tuple[str, ...]],
     ] = {}
@@ -2159,10 +2234,10 @@ def _execute_current_step(
 
     for action_index, action in enumerate(actions):
         action_type = action.get("type")
-        if action_type == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
+        if action_type in TRIGGER_STEP_CURRENCY_ACTION_TYPES:
             if not isinstance(trigger_actor, Player):
                 raise TriggerStepExecutionError(
-                    "Only a player trigger actor can be charged currency.",
+                    "Only a player trigger actor can have currency changed.",
                     code="invalid_actor",
                 )
             context_key = (
@@ -2170,29 +2245,29 @@ def _execute_current_step(
                 bool(trigger_actor.in_game),
                 bool(trigger_actor.is_invisible),
             )
-            debit_context = debit_context_cache.get(context_key)
-            if debit_context is None:
-                debit_room = None
+            currency_context = currency_context_cache.get(context_key)
+            if currency_context is None:
+                currency_room = None
                 if trigger_actor.room_id == room.id:
-                    debit_room = room
+                    currency_room = room
                 elif trigger_actor.room_id is not None:
-                    debit_room = Room.objects.filter(
+                    currency_room = Room.objects.filter(
                         pk=trigger_actor.room_id,
                     ).first()
-                debit_room = debit_room or room
-                debit_recipients: tuple[str, ...] = ()
+                currency_room = currency_room or room
+                currency_recipients: tuple[str, ...] = ()
                 if (
                     trigger_actor.room_id is not None
                     and trigger_actor.in_game
                     and not trigger_actor.is_invisible
                 ):
-                    debit_recipients = _room_recipient_keys_for(
+                    currency_recipients = _room_recipient_keys_for(
                         runtime_world_id=run.runtime_world_id,
-                        room_id=debit_room.id,
+                        room_id=currency_room.id,
                     )
-                debit_context = (debit_room, debit_recipients)
-                debit_context_cache[context_key] = debit_context
-            debit_contexts[action_index] = debit_context
+                currency_context = (currency_room, currency_recipients)
+                currency_context_cache[context_key] = currency_context
+            currency_contexts[action_index] = currency_context
         elif action_type == TRIGGER_STEP_ACTION_COMMAND:
             command_subject = _command_mob_subject(action)
             candidate_ids = None
@@ -2240,11 +2315,11 @@ def _execute_current_step(
             if command_result.mode == TRIGGER_STEP_MODE_TRANSACTIONAL:
                 # The initial transactional command contract can move only
                 # the Trigger actor. Refresh it before later command subjects,
-                # debit witness snapshots, room echoes, or send-except
+                # currency witness snapshots, room echoes, or send-except
                 # audiences are resolved.
                 trigger_actor.refresh_from_db()
                 room_recipient_keys_cache.clear()
-                debit_context_cache.clear()
+                currency_context_cache.clear()
         elif action_type == TRIGGER_STEP_ACTION_ECHO:
             trigger_room_recipient_keys = room_recipient_keys_cache.get(room.id)
             if trigger_room_recipient_keys is None:
@@ -2291,28 +2366,34 @@ def _execute_current_step(
             action_events[action_index] = [] if event is None else [event]
 
     wallet_mutation: WalletMutation | None = None
-    debited_currencies: dict[int, Currency] = {}
-    if debit_actions:
+    action_currencies: dict[int, Currency] = {}
+    wallet_reason = ""
+    if currency_actions:
         # Commands have finished and all of their output remains captured.
-        # Acquire ordered balance rows last, write the complete debit batch
+        # Acquire ordered balance rows last, write the complete currency batch
         # once, and let any later failure roll back every command and mutation.
-        wallet_mutation, debited_currencies = _debit_step_currencies(
-            debit_actions=debit_actions,
+        (
+            wallet_mutation,
+            action_currencies,
+            wallet_reason,
+        ) = _mutate_step_currencies(
+            currency_actions=currency_actions,
             trigger_actor=trigger_actor,
+            authored_world_id=definition_world_id,
         )
 
     for action_index, action in enumerate(actions):
         action_type = action.get("type")
-        if action_type == TRIGGER_STEP_ACTION_DEBIT_CURRENCY:
-            debit_room, debit_recipients = debit_contexts[action_index]
+        if action_type in TRIGGER_STEP_CURRENCY_ACTION_TYPES:
+            currency_room, currency_recipients = currency_contexts[action_index]
             events.extend(
-                _currency_debit_events(
+                _currency_action_events(
                     run=run,
                     action=action,
-                    currency=debited_currencies[int(action["currency_id"])],
+                    currency=action_currencies[int(action["currency_id"])],
                     actor=wallet_mutation.player,
-                    room=debit_room,
-                    room_recipient_keys=debit_recipients,
+                    room=currency_room,
+                    room_recipient_keys=currency_recipients,
                 )
             )
         elif action_type in {
@@ -2323,11 +2404,16 @@ def _execute_current_step(
         }:
             events.extend(action_events.get(action_index, ()))
 
-    if wallet_mutation is not None:
-        # A transfer event contains a full pre-debit character snapshot. Keep
+    if wallet_mutation is not None and wallet_mutation.changes:
+        # A transfer event contains a full pre-mutation character snapshot. Keep
         # the authoritative aggregate wallet state sync last in the batch so
         # clients cannot overwrite the final balance with that snapshot.
-        events.append(_wallet_balance_event(wallet_mutation))
+        events.append(
+            _wallet_balance_event(
+                wallet_mutation,
+                reason=wallet_reason,
+            )
+        )
 
     run.bindings = bindings
     run.next_step_index += 1

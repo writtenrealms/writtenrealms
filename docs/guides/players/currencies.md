@@ -19,12 +19,18 @@ priced at 20 Obols is unrelated to a balance of 20 Guild Marks. WR2 never
 silently exchanges one currency for another, and changing a world's default
 does not convert anything already in your wallet.
 
-World interactions may charge a stated currency through a scripted Trigger.
-After a successful 10-obol charge, you see `You part with 10 obols.` and other
-players in your current room see a message such as
+World interactions may award or charge a stated currency through a scripted
+Trigger. After a successful 10-obol award, you see `You receive 10 obols.` and
+other players in your current room may see `Joe receives 10 obols.` A charge
+similarly tells you `You part with 10 obols.` and may tell the room
 `Joe parts with 10 obols.` Your updated wallet balance remains private. An
-invisible character does not produce the room message. If you cannot afford
-the complete charge, no money is removed and neither success message appears.
+invisible or logged-out character does not produce either room message.
+
+Several awards and charges in one interaction succeed or fail together. Your
+balance at the start of that step must cover all of its charges; an award in
+the same step cannot be used to make an otherwise unaffordable charge succeed.
+If the complete charge is unaffordable, no money changes and no success
+messages appear.
 
 Your wallet follows your character into instances of the same world. Entering
 or leaving an instance does not reapply starting money. An explicit character

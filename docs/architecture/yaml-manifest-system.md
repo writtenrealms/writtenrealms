@@ -824,6 +824,22 @@ steps:
         amount: 10
 ```
 
+For an atomic player award, use the corresponding Trigger action:
+
+```yaml
+steps:
+  - after_seconds: 0
+    actions:
+      - type: grant_currency
+        actor: trigger_actor
+        currency: obol
+        amount: 10
+```
+
+This Trigger-step shape is distinct from a quest `grant_currency` effect:
+Trigger actions identify exactly `actor: trigger_actor`; quest effects remain
+inside their quest reward/effect context.
+
 An audited command can execute as the Trigger room, the Trigger actor
 (including a player), or one exact room-local mob:
 
@@ -879,18 +895,19 @@ check; a later zero-delay step begins promptly after the preceding transaction
 commits while retaining its own transaction boundary. A delayed first step
 commits only the eligible run and its due time at invocation; it does not
 reserve or apply the first step's authored resources early. `command`,
-`debit_currency`,
+`debit_currency`, `grant_currency`,
 `consume_item`, `consume_room_item`,
 `grant_item`, `spawn_room_item`, `replace_room_item`, `set_mob`, `echo`, `send`,
 and `send_except` are the action whitelist. Item and mob-definition refs are
-resolved within the authored world and stored portably. A debit requires
-`actor: trigger_actor`, a positive safe integer amount, and a currency code
-resolved against the base-world catalog; omission never means the current
-default. Bindings must be created before use and identify exact runtime items,
-not keywords or definition matches. `set_mob` resolves exactly one live
-candidate in the current runtime room, may filter it through the query-free
-Boolean/comparison subset of shared `where` conditions, and can atomically
-update its supported runtime fields and character state.
+resolved within the authored world and stored portably. Both currency actions
+require exactly `actor: trigger_actor`, a positive safe integer amount, and a
+currency code resolved against the base-world catalog; omission never means the
+current default. Only a player Trigger actor may use them. Bindings must be
+created before use and identify exact runtime items, not keywords or definition
+matches. `set_mob` resolves exactly one live candidate in the current runtime
+room, may filter it through the query-free Boolean/comparison subset of shared
+`where` conditions, and can atomically update its supported runtime fields and
+character state.
 
 `send` and `send_except` require exactly `actor: trigger_actor` plus `text`.
 They require the Trigger actor to be a connected player. `send` addresses only
@@ -937,15 +954,24 @@ transfer. `trigger_actor` is the only player subject in this initial contract;
 typed steps do not select arbitrary bystander players.
 
 Item and mob mutations must form an initial action prefix. After that prefix,
-`debit_currency`, `command`, `echo`, `send`, and `send_except` may interleave,
-and their narrative events retain authored order. The runtime preflights all
-debit actions as one
-aggregate, captures approved commands and transactional transfer state, and
-writes balance rows last. Approved commands do not branch on or mutate the
-wallet. `/transfer` may nevertheless serialize a pre-debit wallet as part of
-its full player snapshot, so the authoritative `currency.balances_changed`
-event is appended after all authored action events. Any later action failure
-rolls back the balance, transfer state, and captured events together.
+`debit_currency`, `grant_currency`, `command`, `echo`, `send`, and
+`send_except` may interleave, and their narrative events retain authored order.
+The runtime requires the starting wallet to cover the gross total of all
+same-currency debits; same-step grants never subsidize those charges. It also
+validates that the final net balance stays within the safe-integer limit, then
+captures approved commands and transactional transfer state and writes balance
+rows last. All grants and debits settle through one signed wallet mutation.
+Approved commands do not branch on or mutate the wallet. `/transfer` may
+nevertheless serialize a pre-mutation wallet as part of its full player
+snapshot, so a nonzero mutation's authoritative
+`currency.balances_changed` event is appended after all authored action events.
+An exact net-zero batch retains its grant/debit narratives but changes no
+wallet revision and emits no wallet-state event. Any later action failure rolls
+back the balance, transfer state, and captured events together.
+Each successful grant tells the actor `You receive <money>.` and visible
+players in the actor's current room `<Actor> receives <money>.`; debit wording
+uses `part with`/`parts with`. Invisible or logged-out actors produce no room
+witness message, and wallet details remain private.
 Query-backed presence and quest operators belong in the trigger's outer
 conditions. Policy triggers cannot define steps.
 
@@ -973,11 +999,12 @@ separate bounded Celery beat worker claims due rows through the
 `(status, next_run_ts)` index with `select_for_update(skip_locked=True)`. Celery
 ETA jobs are not the source of truth. Each step, wallet mutation, and outbox
 events share a transaction; `on_step_error: cancel` rolls back the failed step
-and cancels the remainder. All debits in one step use one ordered wallet batch.
-Insufficient funds produce no debit or success text. Only one run of the same
-trigger may be active for a given runtime world, room, and trigger actor;
-different actors may run concurrently. A runtime actor is also limited to 16
-active typed sequences in one runtime world.
+and cancels the remainder. All grants and debits in one step use one signed
+wallet batch and at most one revision/state event. Insufficient starting funds
+or an excessive final balance produce no currency change or success text. Only
+one run of the same trigger may be active for a given runtime world, room, and
+trigger actor; different actors may run concurrently. A runtime actor is also
+limited to 16 active typed sequences in one runtime world.
 See `docs/flows/trigger-scheduled-step-execution.md` for the runtime flow.
 
 ### Delete Trigger
@@ -1433,9 +1460,12 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 - Typed step actions reject unknown fields and types. Context refs are limited
   to `trigger_actor` and `trigger_room`; item refs must resolve to an
   `itemdefinition` in the selected world.
-- `debit_currency` requires exactly `actor: trigger_actor`, an explicit
-  base-world currency code, and a positive integer `amount` no greater than
-  `9,007,199,254,740,991`.
+- `debit_currency` and `grant_currency` each require exactly
+  `actor: trigger_actor`, an explicit base-world currency code, and a positive
+  integer `amount` no greater than `9,007,199,254,740,991`. Only player Trigger
+  actors may use them. Gross debits must be affordable from the starting
+  wallet, same-step grants never subsidize them, and every final net balance
+  must remain within the same limit.
 - `command` requires exactly one `command` string and a `subject` of
   `trigger_room`, `trigger_actor`, or an exact-one room-local mob selector.
   Newlines, `;`/`&&` chains, history references, and nested `/cmd` are rejected;
@@ -1449,9 +1479,11 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   `send_except` additionally requires a current room. Actor substitutions are
   rendered before the non-empty, 4,000-character limit is rechecked.
 - Item/mob mutations must be an initial action prefix. After that prefix,
-  `debit_currency`, `command`, `echo`, `send`, and `send_except` may interleave
-  in authored narrative order. The aggregate wallet state event follows those
-  action events. No item/mob mutation may follow one of those actions.
+  `debit_currency`, `grant_currency`, `command`, `echo`, `send`, and
+  `send_except` may interleave in authored narrative order. A nonzero aggregate
+  wallet change emits at most one state event after those action events. Exact
+  net-zero grant/debit batches retain their narratives but emit no wallet
+  revision or state event. No item/mob mutation may follow one of those actions.
 - `spawn_room_item.bind` names are unique and must precede any matching
   `replace_room_item.target`. The current `spec.on_step_error` value is
   `cancel`.

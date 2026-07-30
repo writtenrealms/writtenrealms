@@ -439,6 +439,12 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
                             "amount": 10,
                         },
                         {
+                            "type": "grant_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 3,
+                        },
+                        {
                             "type": "command",
                             "subject": {
                                 "type": "mob",
@@ -688,11 +694,15 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             "obol",
         )
         self.assertEqual(
-            trigger["spec"]["steps"][0]["actions"][3]["subject"]["mob"],
+            trigger["spec"]["steps"][0]["actions"][3]["currency"],
+            "obol",
+        )
+        self.assertEqual(
+            trigger["spec"]["steps"][0]["actions"][4]["subject"]["mob"],
             "mobdefinition.quartermaster",
         )
         self.assertEqual(
-            trigger["spec"]["steps"][0]["actions"][3]["subject"]["where"],
+            trigger["spec"]["steps"][0]["actions"][4]["subject"]["where"],
             {
                 "eq": [
                     "state.character.on_duty",
@@ -930,11 +940,15 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             "obol",
         )
         self.assertEqual(
-            manifest["spec"]["steps"][0]["actions"][3]["subject"]["mob"],
+            manifest["spec"]["steps"][0]["actions"][3]["currency"],
+            "obol",
+        )
+        self.assertEqual(
+            manifest["spec"]["steps"][0]["actions"][4]["subject"]["mob"],
             "mobdefinition.quartermaster",
         )
         self.assertEqual(
-            manifest["spec"]["steps"][0]["actions"][3]["subject"]["where"],
+            manifest["spec"]["steps"][0]["actions"][4]["subject"]["where"],
             {
                 "eq": [
                     "state.character.on_duty",

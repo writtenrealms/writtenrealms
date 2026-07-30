@@ -595,7 +595,9 @@ Examples:
 This command is direct-builder-only and exists for testing and administrative
 correction. Triggers and other scripts cannot invoke it. Use authored quest
 `grant_currency`, mob rewards, merchant transactions, or typed Trigger
-`debit_currency` actions for gameplay economy changes.
+`grant_currency`/`debit_currency` actions for gameplay economy changes. The
+quest effect and Trigger action share explicit amount-plus-currency semantics,
+but the Trigger form also requires `actor: trigger_actor`.
 
 ### `/setlevel`
 
@@ -849,11 +851,13 @@ actions:
     command: /transfer {{ actor_key }} room@10,4,0
 ```
 
-After an initial item/mob mutation prefix, `command`, `debit_currency`, `echo`,
-`send`, and `send_except` may interleave in authored narrative order. A debit's
-authoritative wallet state event follows all authored action events. Exporters
-that relied on WR1's trailing command to suppress that text should flag the
-script for an authoring review.
+After an initial item/mob mutation prefix, `command`, `debit_currency`,
+`grant_currency`, `echo`, `send`, and `send_except` may interleave in authored
+narrative order. A nonzero aggregate currency change emits its authoritative
+wallet state event after all authored action events; an exact net-zero batch
+emits its narratives but no wallet revision/state event. Exporters that relied
+on WR1's trailing command to suppress that text should flag the script for an
+authoring review.
 
 ### `/repop`
 

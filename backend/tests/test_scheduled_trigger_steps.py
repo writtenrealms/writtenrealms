@@ -17,6 +17,7 @@ from django.utils import timezone
 from builders.currencies import create_currency
 from builders.models import ItemDefinition, MobDefinition, Trigger
 from config import constants as adv_consts
+from core.economy import MAX_CURRENCY_AMOUNT
 from core.scoped_state import STATE_SCOPE_CHARACTER, get_state_snapshot
 from core.trigger_steps import (
     SCRIPT_COMMAND_DEPTH_KEY,
@@ -1768,6 +1769,31 @@ class TestScheduledTriggerSteps(WorldTestCase):
             },
         )
 
+    def test_grant_currency_action_normalizes_explicit_player_award(self):
+        normalized = normalize_trigger_steps([
+            {
+                "after_seconds": 0,
+                "actions": [
+                    {
+                        "type": "grant_currency",
+                        "actor": "trigger_actor",
+                        "currency": "ObOl",
+                        "amount": MAX_CURRENCY_AMOUNT,
+                    },
+                ],
+            },
+        ])
+
+        self.assertEqual(
+            normalized[0]["actions"][0],
+            {
+                "type": "grant_currency",
+                "actor": "trigger_actor",
+                "currency": "obol",
+                "amount": MAX_CURRENCY_AMOUNT,
+            },
+        )
+
     def test_command_action_normalizes_room_actor_and_mob_subjects(self):
         normalized = normalize_trigger_steps([
             {
@@ -1925,7 +1951,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
             "say The fare is paid.",
         )
 
-    def test_command_echo_and_debit_actions_can_interleave_in_authored_order(self):
+    def test_command_echo_and_currency_actions_can_interleave_in_authored_order(self):
         actions = [
             {
                 "type": "command",
@@ -1942,6 +1968,12 @@ class TestScheduledTriggerSteps(WorldTestCase):
                 "type": "echo",
                 "room": "trigger_room",
                 "text": "The ferryman accepts the fare.",
+            },
+            {
+                "type": "grant_currency",
+                "actor": "trigger_actor",
+                "currency": "obol",
+                "amount": 2,
             },
             {
                 "type": "command",
@@ -1994,6 +2026,19 @@ class TestScheduledTriggerSteps(WorldTestCase):
             ],
             [
                 {
+                    "type": "grant_currency",
+                    "actor": "trigger_actor",
+                    "currency": "obol",
+                    "amount": 10,
+                },
+                {
+                    "type": "grant_item",
+                    "actor": "trigger_actor",
+                    "item": "itemdefinition.harvested-barley",
+                },
+            ],
+            [
+                {
                     "type": "echo",
                     "room": "trigger_room",
                     "text": "Too soon.",
@@ -2013,8 +2058,8 @@ class TestScheduledTriggerSteps(WorldTestCase):
             with self.subTest(actions=actions):
                 with self.assertRaisesMessage(
                     TriggerStepSpecError,
-                    "item and mob mutations must precede all debit, command, "
-                    "and echo actions",
+                    "item and mob mutations must precede all currency, command, "
+                    "echo, send, and send_except actions",
                 ):
                     normalize_trigger_steps([
                         {
@@ -2082,8 +2127,8 @@ class TestScheduledTriggerSteps(WorldTestCase):
 
         with self.assertRaisesMessage(
             TriggerStepSpecError,
-            "item and mob mutations must precede all debit, command, and echo "
-            "actions",
+            "item and mob mutations must precede all currency, command, echo, "
+            "send, and send_except actions",
         ):
             normalize_trigger_steps([
                 {
@@ -2103,6 +2148,69 @@ class TestScheduledTriggerSteps(WorldTestCase):
                     ],
                 },
             ])
+
+    def test_grant_currency_action_rejects_invalid_fields_and_amounts(self):
+        invalid_actions = [
+            {
+                "type": "grant_currency",
+                "actor": "other_actor",
+                "currency": "obol",
+                "amount": 10,
+            },
+            {
+                "type": "grant_currency",
+                "actor": "trigger_actor",
+                "currency": "",
+                "amount": 10,
+            },
+            {
+                "type": "grant_currency",
+                "actor": "trigger_actor",
+                "currency": "currency.obol",
+                "amount": 10,
+            },
+            {
+                "type": "grant_currency",
+                "actor": "trigger_actor",
+                "currency": "obol",
+                "amount": 0,
+            },
+            {
+                "type": "grant_currency",
+                "actor": "trigger_actor",
+                "currency": "obol",
+                "amount": True,
+            },
+            {
+                "type": "grant_currency",
+                "actor": "trigger_actor",
+                "currency": "obol",
+                "amount": 1.5,
+            },
+            {
+                "type": "grant_currency",
+                "actor": "trigger_actor",
+                "currency": "obol",
+                "amount": MAX_CURRENCY_AMOUNT + 1,
+            },
+            {
+                "type": "grant_currency",
+                "actor": "trigger_actor",
+                "currency": "obol",
+                "amount": 10,
+                "message": "unsupported",
+            },
+        ]
+
+        for action in invalid_actions:
+            with self.subTest(action=action):
+                with self.assertRaises(TriggerStepSpecError):
+                    normalize_trigger_steps([
+                        {
+                            "after_seconds": 0,
+                            "actions": [action],
+                        },
+                    ])
 
     def test_debit_item_prelocks_are_bounded_and_pin_candidate_ids(self):
         actor_items = [
@@ -2414,6 +2522,115 @@ class TestScheduledTriggerSteps(WorldTestCase):
         self.assertEqual(
             [entry["player_key"] for entry in wallet_messages],
             [self.player.key],
+        )
+
+    def test_grant_currency_awards_player_and_notifies_actor_and_room(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="Obol",
+            plural_name="Obols",
+        )
+        self.assertFalse(
+            PlayerCurrencyBalance.objects.filter(
+                player=self.player,
+                currency=obol,
+            ).exists()
+        )
+        observer = self.create_player(
+            "Observer",
+            user=self.create_user("currency-grant-observer@example.com"),
+        )
+        observer.in_game = True
+        observer.save(update_fields=["in_game"])
+        trigger = self._create_trigger(
+            match="claim stipend",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "grant_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                    ],
+                },
+            ],
+        )
+        revision_before = self.player.wallet_revision
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "claim stipend")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.wallet_revision, revision_before + 1)
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.player,
+                currency=obol,
+            ).amount,
+            10,
+        )
+        run = ScheduledTriggerRun.objects.get(trigger=trigger)
+        self.assertEqual(run.status, ScheduledTriggerRun.STATUS_COMPLETED)
+        self.assertEqual(
+            run.steps[0]["actions"][0]["currency_id"],
+            obol.id,
+        )
+        self.assertEqual(
+            run.steps[0]["actions"][0]["currency"],
+            "obol",
+        )
+
+        grant_messages = [
+            entry
+            for entry in messages
+            if (
+                entry["message"]["type"]
+                == "notification.trigger.currency_granted"
+            )
+        ]
+        self.assertEqual(
+            [
+                (entry["player_key"], entry["message"]["text"])
+                for entry in grant_messages
+            ],
+            [
+                (self.player.key, "You receive 10 obols."),
+                (observer.key, "Joe receives 10 obols."),
+            ],
+        )
+        observer_data = grant_messages[1]["message"]["data"]
+        self.assertEqual(
+            observer_data["money"],
+            {
+                "amount": 10,
+                "currency": "obol",
+                "display": "10 Obols",
+            },
+        )
+        self.assertNotIn("before", observer_data)
+        self.assertNotIn("after", observer_data)
+        self.assertNotIn("wallet_revision", observer_data)
+        wallet_messages = [
+            entry
+            for entry in messages
+            if entry["message"]["type"] == "currency.balances_changed"
+        ]
+        self.assertEqual(
+            [entry["player_key"] for entry in wallet_messages],
+            [self.player.key],
+        )
+        self.assertEqual(
+            wallet_messages[0]["message"]["data"]["reason"],
+            "trigger.grant_currency",
+        )
+        self.assertEqual(
+            wallet_messages[0]["message"]["data"]["changes"][0]["delta"],
+            10,
         )
 
     def test_sixth_step_can_force_trigger_player_to_say(self):
@@ -3668,6 +3885,294 @@ class TestScheduledTriggerSteps(WorldTestCase):
             1,
         )
 
+    def test_mixed_currency_actions_share_one_wallet_mutation_and_event_order(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: 10},
+            reason="test.setup",
+            emit_event=False,
+        )
+        self._create_trigger(
+            match="exchange stipend",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "grant_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 7,
+                        },
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "The exchange is recorded.",
+                        },
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 6,
+                        },
+                    ],
+                },
+            ],
+        )
+        revision_before = self.player.wallet_revision
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "exchange stipend")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.wallet_revision, revision_before + 1)
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.player,
+                currency=obol,
+            ).amount,
+            11,
+        )
+        relevant_messages = [
+            entry["message"]
+            for entry in messages
+            if (
+                entry["player_key"] == self.player.key
+                and entry["message"]["type"]
+                in {
+                    "notification.trigger.currency_granted",
+                    "notification./echo",
+                    "notification.trigger.currency_debited",
+                    "currency.balances_changed",
+                }
+            )
+        ]
+        self.assertEqual(
+            [message["type"] for message in relevant_messages],
+            [
+                "notification.trigger.currency_granted",
+                "notification./echo",
+                "notification.trigger.currency_debited",
+                "currency.balances_changed",
+            ],
+        )
+        self.assertEqual(
+            relevant_messages[-1]["data"]["reason"],
+            "trigger.currency_actions",
+        )
+        self.assertEqual(
+            relevant_messages[-1]["data"]["changes"][0]["delta"],
+            1,
+        )
+
+    def test_same_step_grant_cannot_subsidize_currency_debit(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: 5},
+            reason="test.setup",
+            emit_event=False,
+        )
+        trigger = self._create_trigger(
+            match="claim unaffordable rebate",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "grant_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 6,
+                        },
+                    ],
+                },
+            ],
+        )
+        revision_before = self.player.wallet_revision
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "claim unaffordable rebate")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.wallet_revision, revision_before)
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.player,
+                currency=obol,
+            ).amount,
+            5,
+        )
+        self.assertFalse(
+            ScheduledTriggerRun.objects.filter(trigger=trigger).exists()
+        )
+        self.assertFalse(GameEventOutbox.objects.exists())
+        self.assertFalse(any(
+            entry["message"]["type"]
+            in {
+                "notification.trigger.currency_granted",
+                "notification.trigger.currency_debited",
+                "currency.balances_changed",
+            }
+            for entry in messages
+        ))
+        self.assertTrue(any(
+            "insufficient funds" in str(
+                entry["message"].get("text", "")
+            ).lower()
+            for entry in messages
+        ))
+
+    def test_net_zero_currency_actions_emit_narrative_without_wallet_revision(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: 10},
+            reason="test.setup",
+            emit_event=False,
+        )
+        self._create_trigger(
+            match="exchange equal coins",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "debit_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 5,
+                        },
+                        {
+                            "type": "grant_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 5,
+                        },
+                    ],
+                },
+            ],
+        )
+        revision_before = self.player.wallet_revision
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "exchange equal coins")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.wallet_revision, revision_before)
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.player,
+                currency=obol,
+            ).amount,
+            10,
+        )
+        self.assertEqual(
+            [
+                entry["message"]["type"]
+                for entry in messages
+                if (
+                    entry["player_key"] == self.player.key
+                    and entry["message"]["type"]
+                    in {
+                        "notification.trigger.currency_debited",
+                        "notification.trigger.currency_granted",
+                        "currency.balances_changed",
+                    }
+                )
+            ],
+            [
+                "notification.trigger.currency_debited",
+                "notification.trigger.currency_granted",
+            ],
+        )
+
+    def test_grant_currency_overflow_rolls_back_without_success_text(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.player,
+            {obol: MAX_CURRENCY_AMOUNT},
+            reason="test.setup",
+            emit_event=False,
+        )
+        trigger = self._create_trigger(
+            match="claim excessive stipend",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "grant_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 1,
+                        },
+                    ],
+                },
+            ],
+        )
+        revision_before = self.player.wallet_revision
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "claim excessive stipend")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.wallet_revision, revision_before)
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.player,
+                currency=obol,
+            ).amount,
+            MAX_CURRENCY_AMOUNT,
+        )
+        self.assertFalse(
+            ScheduledTriggerRun.objects.filter(trigger=trigger).exists()
+        )
+        self.assertFalse(GameEventOutbox.objects.exists())
+        self.assertFalse(any(
+            entry["message"]["type"]
+            in {
+                "notification.trigger.currency_granted",
+                "currency.balances_changed",
+            }
+            for entry in messages
+        ))
+        self.assertTrue(any(
+            "too large" in str(entry["message"].get("text", "")).lower()
+            for entry in messages
+        ))
+
     def test_delayed_currency_debit_cancels_cleanly_when_funds_are_insufficient(self):
         obol = create_currency(
             world=self.world,
@@ -3748,6 +4253,73 @@ class TestScheduledTriggerSteps(WorldTestCase):
                 for entry in messages
             )
         )
+
+    def test_delayed_currency_grant_awards_player(self):
+        obol = create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        trigger = self._create_trigger(
+            match="start delayed stipend",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "The stipend is being prepared.",
+                        },
+                    ],
+                },
+                {
+                    "after_seconds": 5,
+                    "actions": [
+                        {
+                            "type": "grant_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                    ],
+                },
+            ],
+        )
+        revision_before = self.player.wallet_revision
+        self._dispatch(self.player.id, "start delayed stipend")
+        run = ScheduledTriggerRun.objects.get(trigger=trigger)
+        self.assertEqual(run.status, ScheduledTriggerRun.STATUS_ACTIVE)
+        self.assertFalse(
+            PlayerCurrencyBalance.objects.filter(
+                player=self.player,
+                currency=obol,
+            ).exists()
+        )
+
+        with capture_game_messages() as messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                result = process_due_trigger_runs(now=run.next_run_ts)
+
+        self.assertEqual(result["completed"], 1)
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.wallet_revision, revision_before + 1)
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.player,
+                currency=obol,
+            ).amount,
+            10,
+        )
+        self.assertTrue(any(
+            entry["player_key"] == self.player.key
+            and entry["message"]["type"]
+            == "notification.trigger.currency_granted"
+            and entry["message"]["text"] == "You receive 10 obols."
+            for entry in messages
+        ))
 
     def test_delayed_currency_debit_notifies_players_in_actors_current_room(self):
         obol = create_currency(
@@ -3944,6 +4516,45 @@ class TestScheduledTriggerSteps(WorldTestCase):
             ],
         )
         mob = self.create_mob("Toll Collector")
+
+        result = start_trigger_steps(
+            trigger=trigger,
+            actor=mob,
+            room=self.room,
+        )
+
+        self.assertFalse(result.started)
+        self.assertEqual(result.code, "invalid_actor")
+        self.assertFalse(
+            ScheduledTriggerRun.objects.filter(trigger=trigger).exists()
+        )
+        self.assertFalse(GameEventOutbox.objects.exists())
+
+    def test_currency_grant_rejects_a_mob_trigger_actor(self):
+        create_currency(
+            world=self.world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        trigger = self._create_trigger(
+            match="mob claims stipend",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "grant_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                    ],
+                },
+            ],
+        )
+        mob = self.create_mob("Stipend Collector")
 
         result = start_trigger_steps(
             trigger=trigger,
@@ -6103,6 +6714,99 @@ class TestConcurrentHarvestTriggerSteps(TransactionTestCase):
         self.assertEqual(
             ScheduledTriggerRun.objects.filter(trigger=toll_trigger).count(),
             1,
+        )
+
+    def test_concurrent_currency_grants_cannot_exceed_maximum_balance(self):
+        obol = create_currency(
+            world=self.authored_world,
+            code="obol",
+            name="obol",
+            plural_name="obols",
+        )
+        mutate_balances(
+            self.first_player,
+            {obol: MAX_CURRENCY_AMOUNT - 10},
+            reason="test.setup",
+            emit_event=False,
+        )
+        revision_before = self.first_player.wallet_revision
+        grant_trigger = Trigger.objects.create(
+            world=self.authored_world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=self.room.id,
+            name="Claim concurrent stipend",
+            match="claim stipend",
+            script="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "grant_currency",
+                            "actor": "trigger_actor",
+                            "currency": "obol",
+                            "amount": 10,
+                        },
+                    ],
+                },
+            ],
+            display_action_in_room=True,
+        )
+        barrier = Barrier(2)
+
+        def grant_once(_attempt):
+            close_old_connections()
+            try:
+                actor = Player.objects.get(pk=self.first_player.id)
+                room = Room.objects.get(pk=self.room.id)
+                trigger = Trigger.objects.get(pk=grant_trigger.id)
+                barrier.wait(timeout=5)
+                result = start_trigger_steps(
+                    trigger=trigger,
+                    actor=actor,
+                    room=room,
+                )
+                return "started" if result.started else result.code
+            finally:
+                close_old_connections()
+
+        with patch("spawns.trigger_steps._flush_queued_events"):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                outcomes = list(executor.map(grant_once, range(2)))
+
+        self.assertEqual(
+            sorted(outcomes),
+            ["amount_out_of_range", "started"],
+        )
+        self.assertEqual(
+            PlayerCurrencyBalance.objects.get(
+                player=self.first_player,
+                currency=obol,
+            ).amount,
+            MAX_CURRENCY_AMOUNT,
+        )
+        self.first_player.refresh_from_db()
+        self.assertEqual(
+            self.first_player.wallet_revision,
+            revision_before + 1,
+        )
+        self.assertEqual(
+            ScheduledTriggerRun.objects.filter(trigger=grant_trigger).count(),
+            1,
+        )
+        self.assertEqual(
+            GameEventOutbox.objects.filter(
+                event_type="currency.balances_changed",
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            GameEventOutbox.objects.filter(
+                event_type="notification.trigger.currency_granted",
+            ).count(),
+            2,
         )
 
     def test_concurrent_due_runs_contend_safely_on_one_player_wallet(self):

@@ -18,7 +18,7 @@ When a trigger matches:
 4. Evaluate `spec.conditions`. This closes the race between checking for an
    empty plot and spawning the first crop.
 5. Validate the typed steps, resolve all item/mob-definition refs (including
-   command mob subjects) against the authored world and all debit currency
+   command mob subjects) against the authored world and all grant/debit currency
    codes against the base economy world, then snapshot their stable ids and
    portable slugs/codes.
 6. Convert relative `after_seconds` values to cumulative offsets from the run's
@@ -99,11 +99,12 @@ Every action in one step shares a transaction:
   the exact new item id.
 - `replace_room_item` locks that bound id, verifies its exact world and room,
   spawns the replacement, removes the old item, and updates the binding.
-- `debit_currency` requires a player actor. All debit actions in the step are
-  aggregated into one wallet mutation. The step locks the Player, prelocks any
-  existing Mob and Item candidates in aggregate order, and preflights the
-  complete currency batch. The batch is rejected before commands execute if
-  any balance is insufficient. Ordered balance rows are written last.
+- `debit_currency` and `grant_currency` require a player actor. All currency
+  actions in the step are aggregated into one signed wallet mutation. The step
+  locks the Player, prelocks any existing Mob and Item candidates in aggregate
+  order, and verifies that each starting balance covers its gross debits;
+  same-step grants never subsidize those charges. It also rejects a final net
+  balance above `9,007,199,254,740,991`. Ordered balance rows are written last.
 - `command` resolves `trigger_room`, the current `trigger_actor`, or exactly one
   live mob from a portable definition in the original runtime room. The
   Trigger room is the issuer and an embodied player/mob is the subject.
@@ -118,18 +119,20 @@ Every action in one step shares a transaction:
   it performs no per-recipient queries or character serialization.
 
 The authoring contract requires item and mob mutations to form one initial
-prefix. After that prefix, `command`, `echo`, `send`, `send_except`, and
-`debit_currency` may interleave. Their narrative events are appended in
-authored order, so a private second-person line can immediately precede its
-third-person witness line. The
-authoritative aggregate wallet event is appended after those action events.
-Step-safe commands do not branch on or mutate the wallet. `/transfer` may still
-serialize the pre-debit wallet in its full player snapshot; the final wallet
-event deliberately supersedes that snapshot. This permits aggregate
-affordability preflight and balance writes last without changing command
-decisions or durable wallet state. Command mob subjects join the same bounded
-exact-one Mob prelock used by `set_mob`.
-Non-debit mixed steps use the same Mob-then-Item prelock phase, so concurrent
+prefix. After that prefix, `command`, `echo`, `send`, `send_except`,
+`debit_currency`, and `grant_currency` may interleave. Their narrative events
+are appended in authored order, so a private second-person line can immediately
+precede its third-person witness line. A nonzero aggregate wallet change emits
+one authoritative event after those action events and increments the wallet
+revision once. An exact net-zero grant/debit batch retains its authored
+narratives but changes no revision and emits no wallet-state event. Step-safe
+commands do not branch on or mutate the wallet. `/transfer` may still serialize
+the pre-mutation wallet in its full player snapshot; the final wallet event,
+when present, deliberately supersedes that snapshot. This permits gross-debit
+affordability and final-net validation plus balance writes last without
+changing command decisions or durable wallet state. Command mob subjects join
+the same bounded exact-one Mob prelock used by `set_mob`.
+Non-currency mixed steps use the same Mob-then-Item prelock phase, so concurrent
 runs cannot invert the aggregate order. Immediate and delayed Mob-triggered
 steps lock the actor and all bounded target candidates together in ascending
 Mob id order before Item rows.
@@ -215,23 +218,26 @@ actions are refreshed the next time the client receives a full room view, such
 as after `look`; a scheduled item delta does not force a look or recompute those
 actions.
 
-A successful currency debit also queues the private
-`currency.balances_changed` event and visible perspective-specific text. The
-actor receives `You part with 10 obols.`; current in-game occupants of the
-actor's room other than the actor receive `Joe parts with 10 obols.` using the
-authored currency singular/plural and actor name. A delayed debit therefore
-follows the actor's current location instead of notifying stale occupants of
-the original Trigger room. Within one step, its witness snapshot is taken at
-the debit action's authored position, so a preceding transfer targets the
-destination and a following transfer leaves it in the origin. Invisible or
-logged-out actors produce no witness event. Witness payloads contain the
-charged amount but no private balance,
-revision, or before/after values. These events are constructed only after the
-wallet batch succeeds. Debit perspective text occupies the action's authored
-position; the single authoritative `currency.balances_changed` state event
-follows all authored action events so a pre-debit transfer snapshot cannot
-become the client's final wallet state. With at most 16 actions per step, wallet
-work remains one bounded mutation and debit text fanout remains bounded.
+A successful currency action produces perspective-specific text. A grant tells
+the actor `You receive 10 obols.` and current visible in-game occupants of the
+actor's room `Joe receives 10 obols.` A debit uses `You part with 10 obols.`
+and `Joe parts with 10 obols.` The authored currency singular/plural and actor
+name supply the display text. A delayed currency action follows the actor's
+current location instead of notifying stale occupants of the original Trigger
+room. Its witness snapshot is taken at that action's authored position, so a
+preceding transfer targets the destination and a following transfer leaves the
+text in the origin. Invisible or logged-out actors produce no witness event.
+Witness payloads contain the action amount but no private balance, revision, or
+before/after values.
+
+These narratives are constructed only after the complete wallet batch
+succeeds. Each occupies its action's authored position. When the signed net
+change is nonzero, one authoritative `currency.balances_changed` state event
+follows all authored action events so a pre-mutation transfer snapshot cannot
+become the client's final wallet state. An exact net-zero batch emits the
+grant/debit narratives but no revision or wallet-state event. With at most 16
+actions per step, wallet work remains one bounded mutation and currency-text
+fanout remains bounded.
 
 After success, the cursor advances and `next_run_ts` is calculated as
 `started_ts + cumulative_offset`. Worker lateness therefore does not stretch
@@ -244,10 +250,11 @@ their pacing.
 ## Failure And Completion
 
 Expected semantic failures—missing actor inventory, missing room items, a
-harvested/moved bound item, a missing actor for a grant, a non-player debit
-actor, insufficient funds, a missing/ambiguous command subject, an unsafe or
-rejected command, an invalid transfer target or destination, an active player
-PvP target, a non-player or disconnected send actor, a roomless `send_except`
+harvested/moved bound item, a missing actor for an item grant, a non-player
+currency actor, insufficient starting funds for gross debits, an excessive
+final balance, a missing/ambiguous command subject, an unsafe or rejected
+command, an invalid transfer target or destination, an active player PvP
+target, a non-player or disconnected send actor, a roomless `send_except`
 actor, invalid rendered send text, or a deleted definition/currency—roll back
 the current step. A
 transfer that ran earlier in the authored action list is rolled back with the

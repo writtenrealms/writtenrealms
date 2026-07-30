@@ -91,14 +91,18 @@ This plan remains directional, but several pieces are now implemented:
 - The runner reuses the already resolved subject, issuer, and runtime world
   rather than refetching those identities once per command action.
 - Typed steps require item/mob mutations as an initial prefix. After that,
-  `command`, `echo`, `send`, `send_except`, and `debit_currency` retain
-  authored narrative-output order while aggregate funds are preflighted and
-  balance rows are written last. Native send actions target the connected
-  player Trigger actor; `send_except` follows that actor's current room. The
-  authoritative wallet state event follows those action events. Approved
-  commands do not branch on or mutate the wallet; `/transfer` may serialize a
-  pre-debit wallet snapshot as part of its full player state, so the final
-  wallet event deliberately supersedes it.
+  `command`, `echo`, `send`, `send_except`, `debit_currency`, and
+  `grant_currency` retain authored narrative-output order. The starting wallet
+  must cover gross debits without same-step grant subsidy, final net balances
+  must remain within the safe-integer limit, and all currency actions settle
+  through one signed mutation with balance rows written last. Native send
+  actions target the connected player Trigger actor; `send_except` follows that
+  actor's current room. A nonzero mutation's authoritative wallet state event
+  follows those action events; an exact net-zero mutation changes no revision
+  and emits no wallet-state event. Approved commands do not branch on or mutate
+  the wallet; `/transfer` may serialize a pre-mutation wallet snapshot as part
+  of its full player state, so the final wallet event, when present,
+  deliberately supersedes it.
 
 Current trigger command kind is `command`.
 

@@ -496,7 +496,7 @@ spec:
         self.assertEqual(trigger_payload["manifest"]["spec"]["steps"], self.trigger.steps)
         self.assertEqual(trigger_payload["manifest"]["spec"]["on_step_error"], "cancel")
 
-    def test_apply_trigger_manifest_preserves_interleaved_command_and_debit_order(self):
+    def test_apply_trigger_manifest_preserves_interleaved_currency_action_order(self):
         obol = create_currency(
             world=self.world,
             code="obol",
@@ -523,6 +523,10 @@ spec:
         - type: echo
           room: trigger_room
           text: The ferryman accepts the fare.
+        - type: grant_currency
+          actor: trigger_actor
+          currency: {obol.id}
+          amount: 3
         - type: send
           actor: trigger_actor
           text: You step aboard the ferry.
@@ -560,6 +564,12 @@ spec:
                     "type": "echo",
                     "room": "trigger_room",
                     "text": "The ferryman accepts the fare.",
+                },
+                {
+                    "type": "grant_currency",
+                    "actor": "trigger_actor",
+                    "currency": "obol",
+                    "amount": 3,
                 },
                 {
                     "type": "send",
@@ -646,7 +656,7 @@ spec:
             self.trigger.steps,
         )
 
-    def test_apply_trigger_manifest_rejects_invalid_currency_debit_steps(self):
+    def test_apply_trigger_manifest_rejects_invalid_currency_steps(self):
         create_currency(
             world=self.world,
             code="obol",
@@ -706,7 +716,56 @@ spec:
           actor: trigger_actor
           item: itemdefinition.{late_item.slug}
 """,
-                "item and mob mutations must precede all debit, command, and echo actions",
+                "item and mob mutations must precede all currency, command, echo, send, and send_except actions",
+            ),
+            (
+                """
+        - type: grant_currency
+          actor: trigger_actor
+          currency: missing
+          amount: 10
+""",
+                "unknown currency",
+            ),
+            (
+                """
+        - type: grant_currency
+          actor: trigger_actor
+          currency: obol
+          amount: 0
+""",
+                "must be a positive integer",
+            ),
+            (
+                """
+        - type: grant_currency
+          actor: other_actor
+          currency: obol
+          amount: 10
+""",
+                "must be 'trigger_actor'",
+            ),
+            (
+                """
+        - type: grant_currency
+          actor: trigger_actor
+          currency: obol
+          amount: 10
+          message: custom
+""",
+                "unsupported field",
+            ),
+            (
+                f"""
+        - type: grant_currency
+          actor: trigger_actor
+          currency: obol
+          amount: 10
+        - type: grant_item
+          actor: trigger_actor
+          item: itemdefinition.{late_item.slug}
+""",
+                "item and mob mutations must precede all currency, command, echo, send, and send_except actions",
             ),
         )
 
@@ -1323,6 +1382,10 @@ spec:
           actor: trigger_actor
           currency: {obol.id}
           amount: 10
+        - type: grant_currency
+          actor: trigger_actor
+          currency: currency.{obol.id}
+          amount: 2
 """
 
         resp = self.client.post(
@@ -1337,8 +1400,11 @@ spec:
             name="Pay Instance Toll",
         )
         self.assertEqual(
-            trigger.steps[0]["actions"][0]["currency"],
-            "obol",
+            [
+                action["currency"]
+                for action in trigger.steps[0]["actions"]
+            ],
+            ["obol", "obol"],
         )
 
     def test_apply_trigger_manifest_rejects_script_with_steps(self):

@@ -545,6 +545,42 @@ case the debit step rolls back and the sequence is cancelled with safe private
 feedback. Use `after_seconds: 0` for the debit when accepting payment must
 take the money as part of the initial transaction.
 
+### Awarding The Triggering Player
+
+Use `grant_currency` when the Trigger should award currency directly to the
+player who activated it:
+
+```yaml
+steps:
+  - after_seconds: 0
+    actions:
+      - type: grant_currency
+        actor: trigger_actor
+        currency: obol
+        amount: 10
+```
+
+The action requires exactly `actor: trigger_actor`, an explicit base-world
+currency code, and a positive integer `amount`. The amount may not exceed
+`9,007,199,254,740,991`, and the player's resulting balance must remain within
+that limit. A mob Trigger actor cannot receive a currency grant.
+
+On success, the player sees `You receive 10 obols.` and other visible witnesses
+in the player's current room see `Joe receives 10 obols.` The room message is
+suppressed when the player is invisible or logged out, while the private result
+remains addressed only to that player. A delayed grant follows the player's
+current room in the same way as a delayed debit.
+
+All `grant_currency` and `debit_currency` actions in one step settle through
+one signed wallet mutation. For each currency, the player's starting balance
+must cover the gross total of every debit in the step: same-step grants never
+subsidize charges, regardless of their authored position. The final balance
+after applying the net signed change must also remain within the safe-integer
+limit. A successful nonzero net change increments the wallet revision once and
+emits one aggregate wallet-state event after all authored action output. An
+exact net-zero batch still emits each grant/debit narrative in authored order,
+but it changes no wallet revision and emits no wallet-state event.
+
 ### The `send` / `send_except` Pattern
 
 This is the canonical typed-step pattern for perspective-specific narration:
@@ -623,11 +659,13 @@ steps:
 ```
 
 The authored order is also the narrative-output order. The runtime first
-preflights the complete currency batch, captures every command, and commits all
-effects in one transaction. A debit's authoritative wallet state event is sent
-after the authored action events. If Charon is absent or ambiguous, the player
-has insufficient funds, the transfer target or destination is invalid, or any
-command fails, the debit, transfer, and all same-step output roll back together.
+preflights gross debits against the starting wallet and the final net balance,
+captures every command, and commits all effects in one transaction. Same-step
+grants never fund those debits. The authoritative aggregate wallet-state event
+is sent after the authored action events. If Charon is absent or ambiguous, the
+player has insufficient starting funds, the final balance would be too large,
+the transfer target or destination is invalid, or any command fails, every
+currency change, the transfer, and all same-step output roll back together.
 
 There are three subject forms:
 
@@ -716,6 +754,7 @@ original Trigger actor before dispatch.
 | --- | --- | --- |
 | `command` | `subject`, `command` | Executes one audited command as `trigger_room`, `trigger_actor`, or one exact room-local mob selector. Approved commands are event-only except for transactional `/transfer`, whose target is restricted to the Trigger actor. Command failure rolls back the step. |
 | `debit_currency` | `actor: trigger_actor`, `currency`, `amount` | Atomically removes a positive amount of one explicit currency from the triggering player. Fails if the actor is not a player or has insufficient funds. |
+| `grant_currency` | `actor: trigger_actor`, `currency`, `amount` | Atomically adds a positive amount of one explicit currency to the triggering player. Fails if the actor is not a player or the final balance would exceed the safe-integer limit. |
 | `consume_item` | `actor: trigger_actor`, `item`, optional `count` | Removes exact-definition items from the triggering actor's inventory. `count` defaults to `1`. |
 | `consume_room_item` | `room: trigger_room`, `item`, optional `count` | Removes exact-definition items from the triggering room. `count` defaults to `1`. |
 | `grant_item` | `actor: trigger_actor`, `item`, optional `count` | Spawns exact-definition items directly into the triggering actor's inventory. `count` defaults to `1`. |
@@ -741,18 +780,22 @@ A trigger may contain at most 32 steps and each step at most 16 actions. Each
 `31,536,000` (one year). `consume_item.count` and
 `consume_room_item.count` may each be at most `1,000`;
 `grant_item.count` and the sum of all granted items in one step may be at most
-`32`. `debit_currency.amount` may be at most
-`9,007,199,254,740,991`. Multiple currency debits in one step are preflighted
-and applied as one wallet batch and increment the wallet revision once. Put all
-item and mob mutations in an initial prefix. After that prefix, `command`,
-`echo`, `send`, `send_except`, and `debit_currency` actions may interleave in
-the exact narrative order you want. No item or mob mutation may follow one of
-those actions. Internally,
+`32`. Each `debit_currency.amount` and `grant_currency.amount` may be at most
+`9,007,199,254,740,991`. All currency actions in one step are applied as one
+signed wallet batch and increment the wallet revision at most once. Gross
+debits must be affordable from the starting wallet; same-step grants do not
+fund them. The final net balance must remain within the safe-integer limit.
+An exact net-zero batch emits its authored currency narratives but no wallet
+revision or aggregate wallet-state event. Put all item and mob mutations in an
+initial prefix. After that prefix, `command`, `echo`, `send`, `send_except`,
+`debit_currency`, and `grant_currency` actions may interleave in the exact
+narrative order you want. No item or mob mutation may follow one of those
+actions. Internally,
 step-safe commands do not branch on or mutate the wallet, the runtime captures
 their effects transactionally, and balance rows are written last to preserve
-the global lock order. A transfer may serialize a pre-debit wallet in its full
-player snapshot, so the authoritative aggregate wallet state event follows all
-authored action events.
+the global lock order. A transfer may serialize a pre-mutation wallet in its
+full player snapshot, so a nonzero mutation's authoritative aggregate wallet
+state event follows all authored action events.
 `command.command`, `echo.text`, `send.text`, and `send_except.text` may each
 contain at most 4,000 characters. Send text is checked again after actor
 template rendering. The complete
@@ -1041,11 +1084,12 @@ WR2 syntax. Keep the pre-transfer command explicit as shown above. In
 `spec.script`, repeat the `/cmd room --` wrapper because `&&` segments are
 dispatched independently. In `spec.steps`, use a native `send` action followed
 by a separate transfer `command` action. After any initial item/mob mutation
-prefix, `command`, `echo`, `send`, `send_except`, and `debit_currency` may
-interleave in authored narrative order. The authoritative wallet state event
-follows those action events. The WR2 transfer will also emit its standard
-disappearance notification; review migrated scripts that used the WR1 trailing
-command to suppress that text.
+prefix, `command`, `echo`, `send`, `send_except`, `debit_currency`, and
+`grant_currency` may interleave in authored narrative order. A nonzero
+aggregate currency change emits its authoritative wallet state event after
+those action events. The WR2 transfer will also emit its standard disappearance
+notification; review migrated scripts that used the WR1 trailing command to
+suppress that text.
 
 ## Death Traps
 
