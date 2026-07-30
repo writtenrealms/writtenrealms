@@ -19,3 +19,15 @@ test("console messages do not become nested vertical scroll containers", () => {
     2,
   );
 });
+
+test("say messages inherit the normal console text color", () => {
+  const highlightedMessageRule = consoleSource.match(
+    /\/\/ Chat, yell,[\s\S]*?(?<selectors>&\.notification[\s\S]*?)\{\s*color:\s*\$color-secondary;/,
+  );
+
+  assert.ok(highlightedMessageRule?.groups?.selectors);
+  assert.doesNotMatch(
+    highlightedMessageRule.groups.selectors,
+    /(?:notification\\\.cmd\\\.say|cmd\\\.say)\\\.success/,
+  );
+});

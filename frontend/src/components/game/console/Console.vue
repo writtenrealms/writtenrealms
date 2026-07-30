@@ -243,11 +243,9 @@ const onScroll = _.debounce(updateScroll, 250);
         margin-top: 1rem;
       }
 
-      // Say, Chat, yell, emote, echos have a prominent color
-      &.notification\.cmd\.say\.success,
+      // Chat, yell, and world/zone/game writes have a prominent color.
       &.notification\.cmd\.yell\.success,
       &.notification\.cmd\.chat\.success,
-      &.cmd\.say\.success,
       &.cmd\.chat\.success,
       &.cmd\.yell\.success,
       &.room_write,
