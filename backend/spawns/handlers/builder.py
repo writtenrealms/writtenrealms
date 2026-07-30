@@ -18,6 +18,7 @@ from spawns.actions.builder import (
     MOB_SET_FIELD_CHOICES,
     PLAYER_SET_FIELD_CHOICES,
     SetClassAction,
+    SetCurrencyAction,
     SetLevelAction,
     SetStatAction,
     StateAction,
@@ -239,6 +240,31 @@ def _parse_setclass_args(ctx: CommandContext) -> tuple[str | None, str | None]:
     if len(args) == 1:
         return args[0], None
     return args[-1], " ".join(args[:-1]).strip()
+
+
+def _parse_setcurrency_args(
+    ctx: CommandContext,
+) -> tuple[str | None, str | None, object | None]:
+    currency = ctx.payload.get("currency") or ctx.payload.get("currency_code")
+    amount = ctx.payload.get("amount")
+    target = ctx.payload.get("target")
+    if currency is not None or amount is not None or target is not None:
+        return (
+            str(target).strip() if target is not None else None,
+            str(currency).strip() if currency is not None else None,
+            amount,
+        )
+
+    args = [
+        str(arg).strip()
+        for arg in list(ctx.payload.get("args", []))
+        if str(arg).strip()
+    ]
+    if len(args) == 2:
+        return None, args[0], args[1]
+    if len(args) >= 3:
+        return " ".join(args[:-2]).strip(), args[-2], args[-1]
+    return None, None, None
 
 
 def _parse_stats_args(ctx: CommandContext) -> str | None:
@@ -1156,6 +1182,79 @@ class SetLevelHandler(CommandHandler):
                     "type": "cmd./setlevel.error",
                     "text": err.message,
                     "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.player.key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class SetCurrencyHandler(CommandHandler):
+    command_type = "/setcurrency"
+    text_commands = ("/setcurrency",)
+    builder_only = True
+    help = {
+        "name": "Set Currency",
+        "format": (
+            "/setcurrency <currency_code> <amount> | "
+            "/setcurrency <target> <currency_code> <amount>"
+        ),
+        "description": (
+            "Set your exact balance, or a target player's exact balance, "
+            "for one currency without changing the rest of the wallet."
+        ),
+        "examples": [
+            "/setcurrency obol 100",
+            "/setcurrency aria obol 25",
+            "/setcurrency player.123 guild-mark 0",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        if not can_execute_builder_command(ctx, self):
+            ctx.publish(builder_permission_error(self.command_type))
+            return
+
+        target, currency, amount = _parse_setcurrency_args(ctx)
+        if not currency or amount is None:
+            ctx.publish(
+                {
+                    "type": "cmd./setcurrency.error",
+                    "text": (
+                        "Usage: /setcurrency <currency_code> <amount> or "
+                        "/setcurrency <target> <currency_code> <amount>"
+                    ),
+                    "data": {
+                        "error": "Missing currency or amount.",
+                        "code": "invalid_args",
+                    },
+                }
+            )
+            return
+
+        try:
+            result = SetCurrencyAction().execute(
+                actor=ctx.player,
+                target_selector=target,
+                currency_reference=currency,
+                amount=amount,
+                runtime_world=ctx.world,
+            )
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd./setcurrency.error",
+                    "text": err.message,
+                    "data": {
+                        "error": err.message,
+                        "code": err.code,
+                        **err.data,
+                    },
                 }
             )
             return

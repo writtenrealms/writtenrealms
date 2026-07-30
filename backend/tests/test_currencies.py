@@ -31,7 +31,7 @@ from spawns.models import (
     PlayerCurrencyBalance,
     ScheduledTriggerRun,
 )
-from spawns.wallet import WalletError, balance_map, mutate_balances
+from spawns.wallet import WalletError, balance_map, mutate_balances, set_balance
 from quests.models import QuestTemplate
 from worlds.models import World
 
@@ -877,6 +877,98 @@ class WalletTests(CurrencyTestCase):
         self.player.refresh_from_db()
         self.assertEqual(empty.revision, successful.revision)
         self.assertEqual(self.player.wallet_revision, successful.revision)
+
+    def test_set_balance_assigns_one_exact_amount_and_preserves_other_currencies(self):
+        self.mutate({self.obol: 30, self.drachma: 4})
+        self.player.refresh_from_db()
+        revision_before = self.player.wallet_revision
+
+        mutation = set_balance(
+            self.player,
+            self.obol,
+            7,
+            reason="builder.set_currency",
+            emit_event=False,
+        )
+
+        self.assertEqual(balance_map(self.player), {"obol": 7, "drachma": 4})
+        self.assertEqual(mutation.changes[0].before, 30)
+        self.assertEqual(mutation.changes[0].after, 7)
+        self.assertEqual(mutation.revision, revision_before + 1)
+        self.assertEqual(self.player.wallet_revision, revision_before + 1)
+
+    def test_set_balance_can_zero_one_currency_and_noop_does_not_bump_revision(self):
+        self.mutate({self.obol: 5, self.drachma: 2})
+
+        cleared = set_balance(
+            self.player,
+            self.obol,
+            0,
+            reason="builder.set_currency",
+            emit_event=False,
+        )
+        noop = set_balance(
+            self.player,
+            self.obol,
+            0,
+            reason="builder.set_currency",
+            emit_event=False,
+        )
+
+        self.assertEqual(balance_map(self.player), {"obol": 0, "drachma": 2})
+        self.assertEqual(cleared.changes[0].after, 0)
+        self.assertEqual(noop.changes, ())
+        self.assertEqual(noop.revision, cleared.revision)
+
+    def test_set_balance_rejects_player_that_left_the_expected_runtime(self):
+        original_runtime_id = self.player.world_id
+        parallel_runtime = self.world.create_spawn_world()
+        self.player.world = parallel_runtime
+        self.player.save(update_fields=["world"])
+
+        with self.assertRaises(WalletError) as raised:
+            set_balance(
+                self.player,
+                self.obol,
+                5,
+                reason="builder.set_currency",
+                emit_event=False,
+                expected_world_id=original_runtime_id,
+            )
+
+        self.assertEqual(raised.exception.code, "invalid_target")
+        self.assertEqual(balance_map(self.player)["obol"], 0)
+
+    def test_set_balance_rejects_zero_for_a_cross_world_currency(self):
+        other_world = World.objects.new_world(
+            name="Foreign Economy",
+            author=self.user,
+        )
+        foreign_currency = create_currency(
+            world=other_world,
+            code="token",
+            name="Token",
+        )
+        revision_before = self.player.wallet_revision
+
+        with self.assertRaises(WalletError) as raised:
+            set_balance(
+                self.player,
+                foreign_currency,
+                0,
+                reason="builder.set_currency",
+                emit_event=False,
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(raised.exception.code, "cross_world_currency")
+        self.assertEqual(self.player.wallet_revision, revision_before)
+        self.assertFalse(
+            PlayerCurrencyBalance.objects.filter(
+                player=self.player,
+                currency=foreign_currency,
+            ).exists()
+        )
 
     def test_reset_replaces_wallet_with_configured_starting_balances(self):
         token = create_currency(

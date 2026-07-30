@@ -283,6 +283,26 @@ the mapping affects new characters and explicit character resets; it does not
 change existing wallets immediately. A reset replaces the wallet with the
 configured snapshot rather than adding another grant.
 
+## Testing Existing Wallets
+
+A builder can set one exact live balance without resetting the character:
+
+```text
+/setcurrency obol 100
+/setcurrency player.123 guild-mark 25
+```
+
+The first form targets the builder. The second targets a player by key anywhere
+in the same runtime world; an unambiguous player name in the builder's current
+room also works. The amount is the desired final balance, may be zero, and does
+not affect the player's other currencies. A real change increments the wallet
+revision, sends the target a private update, and uses the wallet event reason
+`builder.set_currency`. Setting the current value again is a no-op.
+
+`/setcurrency` is direct-builder-only. It cannot be used by Triggers or other
+scripts as a gameplay reward or charge; use the authored reward and debit
+features described above for those cases.
+
 ## Instances
 
 Currency definitions, the default, starting balances, and player wallets belong

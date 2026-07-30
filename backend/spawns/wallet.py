@@ -176,6 +176,84 @@ def mutate_balances(
         return mutation
 
 
+def set_balance(
+    player_or_id: Player | int,
+    currency_or_id: Currency | int,
+    amount: int,
+    *,
+    reason: str,
+    emit_event: bool = True,
+    expected_world_id: int | None = None,
+) -> WalletMutation:
+    """Atomically set one balance without replacing the rest of the wallet."""
+    try:
+        target_amount = validate_currency_amount(amount)
+        currency_id = (
+            currency_or_id.pk
+            if isinstance(currency_or_id, Currency)
+            else int(currency_or_id)
+        )
+    except (TypeError, ValueError, ValidationError):
+        raise WalletError(
+            "Invalid replacement balance.",
+            code="invalid_amount",
+        )
+
+    player_id = (
+        player_or_id.pk
+        if isinstance(player_or_id, Player)
+        else int(player_or_id)
+    )
+    with transaction.atomic():
+        # Every canonical wallet mutation takes the Player lock first. Holding
+        # it while reading the current amount makes the absolute assignment
+        # serialize correctly with concurrent credits, debits, and resets.
+        try:
+            player = Player.objects.select_for_update().get(pk=player_id)
+        except Player.DoesNotExist:
+            raise WalletError(
+                "Target player no longer exists.",
+                code="invalid_target",
+            )
+        if (
+            expected_world_id is not None
+            and player.world_id != int(expected_world_id)
+        ):
+            raise WalletError(
+                "Target player is no longer in this runtime world.",
+                code="invalid_target",
+            )
+        base_world = economy_world(player.world)
+        currency = Currency.objects.filter(pk=currency_id).first()
+        if currency is None or currency.world_id != base_world.pk:
+            raise WalletError(
+                "A currency does not belong to this player's world.",
+                code="cross_world_currency",
+            )
+
+        current_amount = (
+            PlayerCurrencyBalance.objects.select_for_update()
+            .filter(player=player, currency_id=currency_id)
+            .values_list("amount", flat=True)
+            .first()
+        )
+        before = int(current_amount or 0)
+        mutation = mutate_balances(
+            player,
+            {currency_id: target_amount - before},
+            reason=reason,
+            emit_event=emit_event,
+        )
+        if isinstance(player_or_id, Player):
+            player_or_id.wallet_revision = mutation.revision
+            if hasattr(player_or_id, "_currency_condition_snapshot"):
+                delattr(player_or_id, "_currency_condition_snapshot")
+            prefetched = getattr(player_or_id, "_prefetched_objects_cache", None)
+            if prefetched is not None:
+                prefetched.pop("currency_balances", None)
+        return mutation
+
+
 def replace_balances(
     player_or_id: Player | int,
     amounts: Mapping[Currency | int, int],

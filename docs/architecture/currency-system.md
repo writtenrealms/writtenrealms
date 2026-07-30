@@ -597,6 +597,8 @@ The implemented service in `backend/spawns/wallet.py` exposes:
 
 - `mutate_balances(player, deltas, reason, emit_event=True)` for one atomic
   signed-delta batch on one player
+- `set_balance(player, currency, amount, reason, emit_event=True)` for an exact
+  assignment of one currency while preserving every other balance
 - `replace_balances(player, amounts, reason, emit_event=True)` for an exact
   snapshot replacement; omitted existing currencies become zero
 - `balance_map(player, include_zero=True)` for a code-keyed snapshot; missing
@@ -619,6 +621,10 @@ signed delta, balance before, and balance after.
 Debits fail atomically when funds are insufficient. No partial batch is
 committed. `mutate_balances` rejects boolean, fractional, malformed,
 cross-economy, negative-result, and greater-than-safe-integer deltas.
+`set_balance` validates and reads the selected balance while holding the Player
+lock, then applies its computed delta through the same mutation path. Callers
+may also supply an expected runtime-world ID so target resolution cannot race a
+move into a parallel runtime that shares the same base economy.
 `replace_balances` is an internal trusted-snapshot API; callers must pass
 already-validated integers (authoring and manifest paths do so).
 
@@ -1051,9 +1057,13 @@ language.
 Any clan registration fee or other system charge becomes an amount plus an
 explicit currency and uses the service.
 
-Builder/admin award commands should accept a currency code and may default it
-only during command planning. Administrative adjustments require permission,
-an audit reason, and an idempotency key.
+The direct-builder-only `/setcurrency` testing command accepts an explicit
+currency code and desired final amount. It uses `builder.set_currency` as its
+wallet-event reason, rejects scripts and non-player targets, and rechecks the
+target's runtime world under the Player lock. Because it assigns an exact final
+amount, repeating the same command against unchanged state is a no-op rather
+than a duplicate award. A future additive builder/admin award command would
+still require a durable idempotency key.
 
 Player-to-player currency transfer is safe to expose later because the service
 already defines ordered two-player locking. Trade escrow and multi-asset trades
@@ -1463,14 +1473,16 @@ wallet API.
 - existing currency conditions
 - atomic typed Trigger `debit_currency` steps and perspective-specific success
   messages
+- direct-builder `/setcurrency` exact balance assignments for testing and
+  administrative correction
 - route every writer through the service and remove direct special-field writes
 
-Privileged generic currency adjustments/awards are deferred. The former
-Gold-specific `/award` help entries have been removed until a permissioned,
-audited command with an explicit currency code is designed and implemented.
-The Trigger debit is not that generic command: it is an authored positive
-charge against only `trigger_actor`, requires an explicit currency, rejects
-non-player actors, and cannot credit or arbitrarily set a balance.
+Additive privileged currency awards remain deferred. `/setcurrency` is an
+explicit-code, exact-assignment testing tool rather than a replayable award.
+The Trigger debit is also not a generic administrative command: it is an
+authored positive charge against only `trigger_actor`, requires an explicit
+currency, rejects non-player actors, and cannot credit or arbitrarily set a
+balance.
 
 ### Implemented Foundation: Builder And Player Surfaces
 

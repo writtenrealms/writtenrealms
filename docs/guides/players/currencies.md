@@ -30,6 +30,11 @@ Your wallet follows your character into instances of the same world. Entering
 or leaving an instance does not reapply starting money. An explicit character
 reset replaces balances with that world's configured starting balances.
 
+For testing or an administrative correction, an authorized world builder can
+set one of your balances directly. You receive a private message identifying
+the currency and new amount, and the normal wallet update follows. This changes
+only the selected currency and does not reset any other character progress.
+
 Wallet updates carry a revision number so the client can ignore older balance
 snapshots that arrive out of order. If the display ever appears stale, a fresh
 state sync or the `currencies` command supplies the current authoritative

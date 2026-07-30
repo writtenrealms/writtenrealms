@@ -6,6 +6,14 @@ import re
 
 from builders.models import ItemDefinition
 from config import constants as adv_consts
+from core.economy import (
+    EconomyConfigurationError,
+    MAX_CURRENCY_AMOUNT,
+    currency_payload,
+    format_currency,
+    money_payload,
+    resolve_currency,
+)
 from core.leveling import (
     LevelingConfigError,
     clamp_level,
@@ -77,6 +85,7 @@ from spawns.state_payloads import (
     serialize_room,
     serialize_world,
 )
+from spawns.wallet import WalletError, set_balance
 from quests.entity_refs import resolve_room_ref_id
 from worlds.models import Room, World, Zone
 
@@ -1392,6 +1401,116 @@ class GrantItemAction:
                 )
             )
 
+        return ActionResult(events=events)
+
+
+class SetCurrencyAction:
+    def execute(
+        self,
+        *,
+        actor: Player,
+        target_selector: str | None,
+        currency_reference: str | int,
+        amount: object,
+        runtime_world: World | None = None,
+    ) -> ActionResult:
+        target = _resolve_builder_character_target(
+            actor=actor,
+            target_selector=target_selector,
+            runtime_world=runtime_world,
+            allow_self=True,
+        )
+        if not isinstance(target, Player):
+            raise ActionError(
+                "Currency balances can only be set on players.",
+                code="invalid_target",
+            )
+
+        try:
+            currency = resolve_currency(target.world, currency_reference)
+        except EconomyConfigurationError:
+            raise ActionError(
+                f"Currency '{currency_reference}' was not found in this world.",
+                code="invalid_currency",
+            )
+
+        try:
+            expected_world = _actor_world(
+                actor,
+                runtime_world=runtime_world,
+            )
+            mutation = set_balance(
+                target,
+                currency,
+                amount,
+                reason="builder.set_currency",
+                expected_world_id=expected_world.pk if expected_world else None,
+            )
+        except WalletError as error:
+            message = (
+                "Amount must be a nonnegative whole number no greater than "
+                f"{MAX_CURRENCY_AMOUNT:,}."
+                if error.code == "invalid_amount"
+                else str(error)
+            )
+            raise ActionError(message, code=error.code)
+
+        if mutation.changes:
+            change = mutation.changes[0]
+            before = change.before
+            after = change.after
+        else:
+            before = after = int(amount)
+
+        actor_payload = _actor_summary(actor)
+        target_payload = _actor_summary(target)
+        data = {
+            "actor": actor_payload,
+            "target": target_payload,
+            "target_type": "player",
+            "currency": currency_payload(currency),
+            "before": before,
+            "after": after,
+            "delta": after - before,
+            "money": money_payload(after, currency),
+            "wallet_revision": mutation.revision,
+            "changed": bool(mutation.changes),
+        }
+        text = (
+            f"Set {target.name}'s {currency.name} balance to "
+            f"{format_currency(after, currency)}."
+        )
+        events = [
+            GameEvent(
+                type="cmd./setcurrency.success",
+                recipients=[actor.key],
+                data=data,
+                text=text,
+            )
+        ]
+        if mutation.changes and target.key != actor.key:
+            events.append(
+                GameEvent(
+                    type="notification./setcurrency",
+                    recipients=[target.key],
+                    data={
+                        "actor": target_payload,
+                        "issuer": actor_payload,
+                        "target": target_payload,
+                        "target_type": "player",
+                        "currency": currency_payload(currency),
+                        "before": before,
+                        "after": after,
+                        "delta": after - before,
+                        "money": money_payload(after, currency),
+                        "wallet_revision": mutation.revision,
+                    },
+                    text=(
+                        f"Your {currency.name} balance was set to "
+                        f"{format_currency(after, currency)}."
+                    ),
+                )
+            )
         return ActionResult(events=events)
 
 

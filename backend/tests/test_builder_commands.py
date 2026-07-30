@@ -9,6 +9,7 @@ from django.utils import timezone
 from builders.models import (
     AbilityDefinition,
     CraftMaterial,
+    Currency,
     ItemDefinition,
     ItemSalvageYield,
     MobDefinition,
@@ -21,9 +22,19 @@ from core.scoped_state import (
     STATE_SCOPE_WORLD,
     get_state_snapshot,
 )
-from spawns.actions.builder import GrantItemAction
+# Register handlers before importing builder Actions; the handler package
+# imports this Action module during registration.
 from spawns.handlers import dispatch_command, get_registered_handlers
-from spawns.models import ActiveEffect, CombatEncounter, Item, Mob
+from spawns.actions.builder import GrantItemAction
+from spawns.models import (
+    ActiveEffect,
+    CombatEncounter,
+    GameEventOutbox,
+    Item,
+    Mob,
+    PlayerCurrencyBalance,
+)
+from spawns.wallet import balance_map
 from tests.base import WorldTestCase
 from worlds.models import Room, World, WorldConfig
 from tests.utils import (
@@ -188,6 +199,25 @@ class TestBuilderCommandPermissions(WorldTestCase):
         message = self._message_by_type(messages, "cmd./kill.error")
         self.assertIsNotNone(message)
         self.assertIn("permission", message.get("text", "").lower())
+
+    def test_script_source_does_not_allow_currency_assignments(self):
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                payload={"text": "/setcurrency obol 10"},
+                script_source=True,
+            )
+
+        message = self._message_by_type(
+            messages,
+            "cmd./setcurrency.error",
+        )
+        self.assertIsNotNone(message)
+        self.assertIn("permission", message.get("text", "").lower())
+        self.assertFalse(
+            PlayerCurrencyBalance.objects.filter(player=self.player).exists()
+        )
 
 
 class BuilderCommandTestCase(WorldTestCase):
@@ -817,6 +847,241 @@ class TestBuilderGrantItem(BuilderCommandTestCase):
         message = self._message_by_type(messages, "cmd./grantitem.error")
         self.assertIsNotNone(message)
         self.assertIn("permission", message.get("text", "").lower())
+
+
+class TestBuilderSetCurrency(BuilderCommandTestCase):
+    def setUp(self):
+        super().setUp()
+        self.obol = Currency.objects.create(
+            world=self.world,
+            code="obol",
+            name="Obol",
+            plural_name="Obols",
+        )
+        self.drachma = Currency.objects.create(
+            world=self.world,
+            code="drachma",
+            name="Drachma",
+            plural_name="Drachmas",
+        )
+
+    @staticmethod
+    def _message_by_type(messages, message_type):
+        for entry in messages:
+            if entry["message"].get("type") == message_type:
+                return entry["message"]
+        return None
+
+    @staticmethod
+    def _message_for_key_and_type(messages, player_key, message_type):
+        for entry in messages:
+            if (
+                entry["player_key"] == player_key
+                and entry["message"].get("type") == message_type
+            ):
+                return entry["message"]
+        return None
+
+    def test_builder_sets_own_exact_currency_balance(self):
+        revision_before = self.player.wallet_revision
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/setcurrency obol 25")
+
+        self.player.refresh_from_db()
+        self.assertEqual(balance_map(self.player)["obol"], 25)
+        self.assertEqual(self.player.wallet_revision, revision_before + 1)
+
+        message = self._message_by_type(messages, "cmd./setcurrency.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target"]["key"], self.player.key)
+        self.assertEqual(message["data"]["currency"]["code"], "obol")
+        self.assertEqual(message["data"]["before"], 0)
+        self.assertEqual(message["data"]["after"], 25)
+        self.assertEqual(message["data"]["delta"], 25)
+        self.assertTrue(message["data"]["changed"])
+        self.assertEqual(
+            message["text"],
+            "Set Joe's Obol balance to 25 Obols.",
+        )
+
+        wallet_event = GameEventOutbox.objects.get(
+            event_type="currency.balances_changed",
+        )
+        self.assertEqual(wallet_event.recipients, [self.player.key])
+        self.assertEqual(wallet_event.data["reason"], "builder.set_currency")
+        self.assertEqual(wallet_event.data["changes"][0]["after"], 25)
+
+    def test_builder_sets_keyed_player_outside_room_and_preserves_other_balances(self):
+        far_room = self.room.create_at("north")
+        target = self.create_player("Target Friend", room=far_room)
+        PlayerCurrencyBalance.objects.bulk_create(
+            [
+                PlayerCurrencyBalance(
+                    player=target,
+                    currency=self.obol,
+                    amount=40,
+                ),
+                PlayerCurrencyBalance(
+                    player=target,
+                    currency=self.drachma,
+                    amount=3,
+                ),
+            ]
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/setcurrency {target.key} obol 7",
+            )
+
+        target.refresh_from_db()
+        self.assertEqual(
+            balance_map(target),
+            {"obol": 7, "drachma": 3},
+        )
+        message = self._message_by_type(messages, "cmd./setcurrency.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target"]["key"], target.key)
+        self.assertEqual(message["data"]["before"], 40)
+        self.assertEqual(message["data"]["after"], 7)
+        self.assertEqual(message["data"]["delta"], -33)
+        notification = self._message_for_key_and_type(
+            messages,
+            target.key,
+            "notification./setcurrency",
+        )
+        self.assertIsNotNone(notification)
+        self.assertEqual(notification["data"]["currency"]["code"], "obol")
+        self.assertEqual(notification["data"]["after"], 7)
+        self.assertEqual(
+            notification["text"],
+            "Your Obol balance was set to 7 Obols.",
+        )
+        self.assertEqual(
+            GameEventOutbox.objects.get(
+                event_type="currency.balances_changed",
+            ).recipients,
+            [target.key],
+        )
+
+    def test_builder_can_use_multiword_local_player_name(self):
+        target = self.create_player("Target Friend", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                "/setcurrency Target Friend drachma 11",
+            )
+
+        self.assertEqual(balance_map(target)["drachma"], 11)
+        message = self._message_by_type(messages, "cmd./setcurrency.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target"]["key"], target.key)
+
+    def test_structured_setcurrency_defaults_to_self(self):
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="/setcurrency",
+                player_id=self.player.id,
+                payload={"currency": "obol", "amount": 8},
+            )
+
+        self.assertEqual(balance_map(self.player)["obol"], 8)
+        self.assertIsNotNone(
+            self._message_by_type(messages, "cmd./setcurrency.success")
+        )
+
+    def test_setting_same_amount_is_a_noop(self):
+        PlayerCurrencyBalance.objects.create(
+            player=self.player,
+            currency=self.obol,
+            amount=9,
+        )
+        revision_before = self.player.wallet_revision
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/setcurrency obol 9")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.wallet_revision, revision_before)
+        self.assertFalse(GameEventOutbox.objects.exists())
+        message = self._message_by_type(messages, "cmd./setcurrency.success")
+        self.assertIsNotNone(message)
+        self.assertFalse(message["data"]["changed"])
+        self.assertEqual(message["data"]["delta"], 0)
+
+    def test_invalid_amounts_and_unknown_currency_do_not_mutate_wallet(self):
+        invalid_commands = [
+            ("/setcurrency obol -1", "invalid_amount"),
+            ("/setcurrency obol 1.5", "invalid_amount"),
+            ("/setcurrency obol 9007199254740992", "invalid_amount"),
+            ("/setcurrency missing 1", "invalid_currency"),
+        ]
+
+        for command, error_code in invalid_commands:
+            with self.subTest(command=command):
+                with capture_game_messages() as messages:
+                    dispatch_text_command(self.player.id, command)
+
+                message = self._message_by_type(
+                    messages,
+                    "cmd./setcurrency.error",
+                )
+                self.assertIsNotNone(message)
+                self.assertEqual(message["data"]["code"], error_code)
+                self.assertEqual(balance_map(self.player)["obol"], 0)
+                self.assertFalse(GameEventOutbox.objects.exists())
+
+    def test_mob_target_is_rejected(self):
+        target = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Treasurer",
+            keywords="treasurer",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/setcurrency {target.key} obol 10",
+            )
+
+        message = self._message_by_type(messages, "cmd./setcurrency.error")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["code"], "invalid_target")
+        self.assertFalse(GameEventOutbox.objects.exists())
+
+    def test_player_in_parallel_runtime_is_rejected(self):
+        parallel_world = self.world.create_spawn_world()
+        target = self.create_player(
+            "Parallel Target",
+            world=parallel_world,
+            room=parallel_world.effective_config.starting_room,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/setcurrency {target.key} obol 10",
+            )
+
+        message = self._message_by_type(messages, "cmd./setcurrency.error")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["code"], "invalid_target")
+        self.assertFalse(
+            PlayerCurrencyBalance.objects.filter(player=target).exists()
+        )
+        self.assertFalse(GameEventOutbox.objects.exists())
+
+    def test_command_registers_help(self):
+        help_data = get_registered_handlers()["/setcurrency"].get_help_data(
+            command_name="/setcurrency",
+        )
+
+        self.assertIn("<currency_code>", help_data["format"])
+        self.assertIn("exact balance", help_data["description"])
 
 
 class TestBuilderSend(BuilderCommandTestCase):

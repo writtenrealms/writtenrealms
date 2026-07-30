@@ -64,6 +64,7 @@ form even though arbitrary player scripts cannot issue `/transfer`.
 | `/regen` | Direct | No | Mob | No | No | No |
 | `/open`, `/close`, `/lock`, `/unlock` | Direct | No | Script | Script | No | No |
 | `/set` | Direct | No | No | Script | No | No |
+| `/setcurrency` | Direct | No | No | No | No | No |
 | `/setlevel` | Direct | No | No | No | No | No |
 | `/setclass` | Direct | Script | No | Script | No | No |
 | `/cmd`, `/force`, `/rcmd`, `/zcmd`, `/wcmd` | Direct | Script | Script | Script | Script | Script |
@@ -543,6 +544,40 @@ override, so display falls back to the definition's authored text or generated
 room text. A mob's `name` cannot be blank. `attackable` accepts `true` or
 `false`. Changing `aggression` does not itself start combat. The new setting is
 used the next time normal aggression evaluation runs.
+
+### `/setcurrency`
+
+Formats:
+
+```text
+/setcurrency <currency_code> <amount>
+/setcurrency <target> <currency_code> <amount>
+```
+
+Sets one player's exact balance in an authored currency. Omitting the target
+sets the builder's own balance. A bare target name resolves one unambiguous
+player in the builder's current room; a `player.<id>` key can select a player
+elsewhere in the same runtime world. Mob targets and players in parallel
+runtime worlds are rejected.
+
+The amount is the desired final balance, not an award or deduction. It must be
+a whole number from `0` through `9,007,199,254,740,991`. Setting one currency
+does not change any other currency. Setting the current amount again succeeds
+as a no-op without changing the wallet revision, while an actual change emits
+the target player's normal private wallet update.
+
+Examples:
+
+```text
+/setcurrency obol 100
+/setcurrency aria obol 25
+/setcurrency player.123 guild-mark 0
+```
+
+This command is direct-builder-only and exists for testing and administrative
+correction. Triggers and other scripts cannot invoke it. Use authored quest
+`grant_currency`, mob rewards, merchant transactions, or typed Trigger
+`debit_currency` actions for gameplay economy changes.
 
 ### `/setlevel`
 
