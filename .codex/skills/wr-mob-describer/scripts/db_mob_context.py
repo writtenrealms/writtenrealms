@@ -149,7 +149,7 @@ def run_django(payload: dict[str, Any]) -> dict[str, Any]:
                 "world__context__instance_of",
             )
             if for_update:
-                queryset = queryset.select_for_update()
+                queryset = queryset.select_for_update(of=("self",))
             return queryset
 
         def load_mob(mob_definition_id, world_id=None, for_update=False):
