@@ -326,6 +326,7 @@ async def handle_game_websocket(websocket: WebSocket):
                 'data': {
                     'error': error_text,
                     'code': 'command_delivery_unconfirmed',
+                    'receipt_status': 'unconfirmed',
                     'request_id': request_id,
                     'command_type': command_type,
                 },

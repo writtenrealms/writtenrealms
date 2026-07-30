@@ -726,6 +726,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
                 "request_id": str(request_id),
                 "request_segment": "r.2",
                 "status": "completed",
+                "receipt_status": "completed",
             },
         )
 
@@ -908,6 +909,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
                 "status": "cancelled",
                 "code": "trigger_cancelled",
                 "message": "That action can no longer be completed.",
+                "receipt_status": "completed",
             },
         )
         self.assertNotIn("insufficient", str(message))
@@ -923,6 +925,71 @@ class TestScheduledTriggerSteps(WorldTestCase):
             safe_notifications[0]["message"]["text"],
             "That action can no longer be completed.",
         )
+
+    def test_unhandled_later_step_failure_marks_receipt_failed(self):
+        trigger = self._create_trigger(
+            match="encounter internal failure",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 2,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "This never becomes visible.",
+                        },
+                    ],
+                },
+            ],
+        )
+        request_id = uuid.uuid4()
+        with self.captureOnCommitCallbacks(execute=True):
+            start = start_trigger_steps(
+                trigger=trigger,
+                actor=self.player,
+                room=self.room,
+                request_id=request_id,
+                request_segment="r.8",
+                request_connection_id="connection.original",
+            )
+        run = ScheduledTriggerRun.objects.get(pk=start.run_id)
+        private_detail = "private trigger exception detail"
+
+        with patch(
+            "spawns.trigger_steps._execute_current_step",
+            side_effect=RuntimeError(private_detail),
+        ), capture_game_messages() as messages:
+            with self.assertLogs("spawns.trigger_steps", level="ERROR"):
+                with self.captureOnCommitCallbacks(execute=True):
+                    result = process_due_trigger_runs(
+                        now=run.next_run_ts,
+                    )
+
+        self.assertEqual(result["cancelled"], 1)
+        run.refresh_from_db()
+        self.assertEqual(run.failure_code, "step_exception")
+        cancellation = next(
+            entry["message"]
+            for entry in messages
+            if entry["message"]["type"] == "cmd.trigger.cancelled"
+        )
+        self.assertEqual(
+            {
+                key: value
+                for key, value in cancellation["data"].items()
+                if key != "_event_id"
+            },
+            {
+                "request_id": str(request_id),
+                "request_segment": "r.8",
+                "status": "cancelled",
+                "code": "trigger_cancelled",
+                "message": "That action can no longer be completed.",
+                "receipt_status": "failed",
+            },
+        )
+        self.assertNotIn(private_detail, str(cancellation))
 
     def test_uncorrelated_delayed_failure_emits_no_lifecycle_message(self):
         obol = create_currency(
@@ -962,7 +1029,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
         self.assertEqual(result["cancelled"], 1)
         self.assertEqual(messages, [])
 
-    def test_failed_step_start_emits_correlated_rejection(self):
+    def test_failed_step_condition_acknowledges_processed_command(self):
         trigger = self._create_trigger(
             match="pay without funds",
             conditions=json.dumps({
@@ -1007,29 +1074,98 @@ class TestScheduledTriggerSteps(WorldTestCase):
             ScheduledTriggerRun.objects.filter(trigger=trigger).exists()
         )
         self.assertEqual(len(messages), 1)
-        rejection = messages[0]
+        feedback = messages[0]
         self.assertEqual(
-            rejection["message"]["type"],
+            feedback["message"]["type"],
             "cmd.trigger.rejected",
         )
         self.assertEqual(
-            rejection["connection_id"],
+            feedback["connection_id"],
             "connection.original",
         )
         self.assertEqual(
-            rejection["message"]["text"],
+            feedback["message"]["text"],
             "Charon requires 10 obols.",
         )
         self.assertEqual(
-            rejection["message"]["data"],
+            feedback["message"]["data"],
             {
                 "request_id": str(request_id),
                 "request_segment": "r.4",
                 "status": "rejected",
                 "code": "trigger_rejected",
+                "reason_code": "conditions_failed",
+                "receipt_status": "completed",
                 "message": "Charon requires 10 obols.",
             },
         )
+
+    def test_handled_failure_reason_overrides_earlier_condition_refusal(self):
+        refused = self._create_trigger(
+            match="mixed trigger outcome",
+            conditions=json.dumps({
+                "gte": ["actor.balances.obol", 10],
+            }),
+            steps=[
+                {
+                    "after_seconds": 2,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "This condition prevents this.",
+                        },
+                    ],
+                },
+            ],
+        )
+        refused.show_details_on_failure = True
+        refused.failure_message = "The authored condition declines."
+        refused.save(
+            update_fields=[
+                "show_details_on_failure",
+                "failure_message",
+            ]
+        )
+        self._create_trigger(
+            match="mixed trigger outcome",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "not_a_real_trigger_action",
+                        },
+                    ],
+                },
+            ],
+        )
+        request_id = uuid.uuid4()
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                connection_id="connection.original",
+                payload={
+                    "text": "mixed trigger outcome",
+                    "_request_id": str(request_id),
+                },
+            )
+
+        rejection = next(
+            entry["message"]
+            for entry in messages
+            if entry["message"]["type"] == "cmd.trigger.rejected"
+        )
+        self.assertEqual(rejection["data"]["request_id"], str(request_id))
+        self.assertEqual(rejection["data"]["reason_code"], "invalid_steps")
+        self.assertEqual(
+            rejection["data"]["receipt_status"],
+            "completed",
+        )
+        self.assertIn("Error:", rejection["text"])
 
     def test_command_dispatch_defers_receipt_to_trigger_lifecycle(self):
         self._create_trigger(

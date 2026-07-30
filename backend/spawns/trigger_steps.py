@@ -46,6 +46,8 @@ from core.trigger_steps import (
     normalize_trigger_steps,
 )
 from spawns.events import (
+    COMMAND_RECEIPT_STATUS_COMPLETED,
+    COMMAND_RECEIPT_STATUS_FAILED,
     GameEvent,
     PRIVATE_CONTROL_EVENT_KEY,
     enqueue_game_events,
@@ -262,6 +264,7 @@ def _trigger_completed_event(
         connection_id=run.request_connection_id,
         data={
             **_trigger_request_status_data(run, status="completed"),
+            "receipt_status": COMMAND_RECEIPT_STATUS_COMPLETED,
         },
     )
 
@@ -284,6 +287,11 @@ def _trigger_cancelled_events(
                 ),
                 "code": "trigger_cancelled",
                 "message": TRIGGER_CANCELLED_TEXT,
+                "receipt_status": (
+                    COMMAND_RECEIPT_STATUS_FAILED
+                    if run.failure_code == "step_exception"
+                    else COMMAND_RECEIPT_STATUS_COMPLETED
+                ),
             },
         ))
     events.append(

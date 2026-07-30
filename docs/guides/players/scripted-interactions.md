@@ -7,12 +7,20 @@ having you say an authored oath after accepting a ferry crossing.
 When you enter a command, its dim console echo carries one compact status:
 
 - `…` means the command or a delayed Trigger sequence is not resolved yet
-- `✓` means an ordinary command finished successfully, or the final scheduled
-  Trigger step completed
-- a red `×` means delivery could not be confirmed or the action failed
+- `✓` means the server finished processing the command and reached an
+  authoritative outcome. That outcome can be a completed action or an
+  expected authored refusal such as “you do not have enough obols”; the mark
+  does not by itself mean the requested world action occurred.
+- a red `×` means delivery could not be confirmed or the server could not
+  finish processing the command
 
-Hover over the symbol on desktop, focus it from the keyboard, or tap it on
-mobile to see the precise state and any safe failure detail.
+The pending and acknowledgement marks stay non-interactive. If a red `×`
+appears, hover over it on desktop, focus it from the keyboard, or tap it on
+mobile to see the safe failure detail.
+
+An expected Trigger refusal caused by its authored conditions or gate is
+acknowledged with `✓`, not treated as a client or server error. Its refusal
+message still appears in the transcript so you know why nothing happened.
 
 The client never automatically resends an unconfirmed command. This matters
 for commands that can spend currency or make another lasting change: loss of

@@ -175,11 +175,15 @@ failure after commit cannot lose the event because the outbox remains durable.
 For a player command, the first successfully started matching run owns a
 connection-pinned `cmd.trigger.accepted` control event. Its final step appends
 `cmd.trigger.completed` after all authored events in the same outbox batch.
-Failed starts return `cmd.trigger.rejected`. A later owner failure emits a
-textless correlated `cmd.trigger.cancelled`; every failed command-origin player
-run also emits unpinned safe cancellation prose so reconnecting players still
-see it. Request lifecycle events carry an internal marker that is stripped
-before delivery and prevents Trigger or quest subscription dispatch.
+Failed starts return `cmd.trigger.rejected` with a completed command receipt:
+the Trigger refusal is an authoritative domain outcome. A later controlled
+owner failure emits a textless correlated `cmd.trigger.cancelled` with the
+same completed receipt status. An unexpected internal step exception uses the
+same safe lifecycle shape but explicitly marks the receipt failed; its stored
+exception detail is never sent to the player. Every failed command-origin
+player run also emits unpinned safe cancellation prose so reconnecting players
+still see it. Request lifecycle events carry an internal marker that is
+stripped before delivery and prevents Trigger or quest subscription dispatch.
 When an audited transfer actually moves a player or mob, its lifecycle event
 drives destination mob `entering` reactions after commit, outside the step's
 locks. A moved player also runs hostile-mob aggro if its entering reactions

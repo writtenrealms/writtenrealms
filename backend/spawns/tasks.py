@@ -1,5 +1,6 @@
-import os
+import logging
 import math
+import os
 import random
 import uuid
 from datetime import timedelta
@@ -27,13 +28,19 @@ from spawns.models import (
     Player,
 )
 from spawns.serializers import PlayerConfigSerializer
-from spawns.events import GameEvent, flush_game_event_outbox, publish_events
+from spawns.events import (
+    COMMAND_RECEIPT_STATUS_FAILED,
+    GameEvent,
+    flush_game_event_outbox,
+    publish_events,
+)
 from spawns.handlers import (
     ActorNotFoundError,
     dispatch_command,
     HandlerNotFoundError,
     PlayerNotFoundError,
 )
+from spawns.request_segments import normalize_request_segment
 from spawns.state_payloads import safe_capitalize, serialize_char_from_player
 from spawns.state_payloads import door_state_lookup, serialize_char_from_mob
 from worlds.models import Room, RoomFlag, World, Zone
@@ -46,6 +53,9 @@ WR2_STANDING_REGEN_RATE = adv_config.PLAYER_STARTING_STAMINA_REGEN
 WR2_RESTING_REGEN_MULTIPLIER = 3
 DEFAULT_MOB_ROAM_CHANCE = getattr(adv_config, "DEFAULT_MOB_ROAM_CHANCE", 10)
 GAME_HEARTBEAT_LOCK_KEY = "heartbeat_regen_lock"
+
+
+logger = logging.getLogger(__name__)
 
 
 @shared_task(ignore_result=True)
@@ -1092,8 +1102,31 @@ def _parse_player_id(player_key: str | None) -> int | None:
     return actor_id
 
 
-def _publish_game_error(player_key: str | None, command_type: str, text: str, connection_id: str | None = None):
-    """Publish an error message to a player's WebSocket connection."""
+def _task_request_correlation(payload: dict | None) -> dict[str, str]:
+    """Return safe client receipt identity from a queued task payload."""
+    payload = payload or {}
+    try:
+        request_id = str(uuid.UUID(str(payload.get("_request_id"))))
+    except (TypeError, ValueError, AttributeError):
+        return {}
+    return {
+        "request_id": request_id,
+        "request_segment": normalize_request_segment(
+            payload.get("_request_segment")
+        ),
+    }
+
+
+def _publish_game_error(
+    player_key: str | None,
+    command_type: str,
+    text: str,
+    *,
+    payload: dict | None = None,
+    code: str = "command_processing_failed",
+    connection_id: str | None = None,
+):
+    """Publish a sanitized, correlated processing failure."""
     if not player_key:
         return
     publish_to_player(
@@ -1101,7 +1134,12 @@ def _publish_game_error(player_key: str | None, command_type: str, text: str, co
         {
             "type": f"cmd.{command_type}.error",
             "text": text,
-            "data": {"error": text},
+            "data": {
+                "error": text,
+                "code": code,
+                "receipt_status": COMMAND_RECEIPT_STATUS_FAILED,
+                **_task_request_correlation(payload),
+            },
         },
         connection_id=connection_id,
     )
@@ -1217,6 +1255,8 @@ def handle_game_command(
             player_key,
             command_type,
             "Missing player_id for command.",
+            payload=payload,
+            code="missing_player_id",
             connection_id=connection_id,
         )
         return
@@ -1234,12 +1274,33 @@ def handle_game_command(
             player_key,
             command_type,
             str(e),
+            payload=payload,
+            code="player_not_found",
             connection_id=connection_id,
         )
-    except HandlerNotFoundError as e:
+    except HandlerNotFoundError:
         _publish_game_error(
             player_key,
             command_type,
             f"Unhandled command: {command_type}",
+            payload=payload,
+            code="handler_not_found",
             connection_id=connection_id,
         )
+    except Exception:
+        logger.exception(
+            "Unhandled %s command processing failure for %s.",
+            command_type,
+            player_key,
+        )
+        _publish_game_error(
+            player_key,
+            command_type,
+            "The command could not be processed.",
+            payload=payload,
+            code="command_processing_failed",
+            connection_id=connection_id,
+        )
+        # Keep the task visibly failed for Celery monitoring. Commands are not
+        # retried here because a handler may have mutated state before raising.
+        raise

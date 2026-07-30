@@ -40,6 +40,7 @@ export interface CommandReceiptTransition {
 export interface CommandReceiptPresentation {
   text: string;
   ariaLabel: string;
+  failureDetail?: string;
   problem: boolean;
   state: "pending" | "success" | "error";
 }
@@ -234,10 +235,11 @@ export const commandRequestId = (message: any): string | null => {
 
 /**
  * Return the authoritative terminal result for one correlated command
- * segment. Trigger lifecycle frames deliberately do not match; alias/history
- * resolution frames are redispatch metadata rather than the result of the
- * resolved command. `cmd.request.completed` is the private terminal result
- * used when a command has no actor-facing success output.
+ * segment. An explicit receipt_status is authoritative and takes precedence
+ * over message-type suffixes. Without one, legacy terminal command responses
+ * still mean that the server processed the command, even when the authored
+ * outcome was an error or cancellation. Only an explicit failed status means
+ * command processing itself failed.
  */
 export const commandTerminalResult = (
   message: any,
@@ -250,28 +252,40 @@ export const commandTerminalResult = (
   const messageType = typeof message?.type === "string"
     ? message.type
     : "";
-  if (messageType.startsWith("cmd.trigger.")) return null;
+  if (!requestId || !requestSegment) return null;
 
-  const succeeded = (
-    messageType === "cmd.request.completed" ||
+  const explicitStatus = message?.data?.receipt_status;
+  const hasExplicitStatus = explicitStatus !== undefined;
+  if (explicitStatus === "completed") {
+    return {
+      requestId,
+      requestSegment,
+      segmentStatus: "completed",
+    };
+  }
+
+  const explicitlyFailed = explicitStatus === "failed";
+  if (hasExplicitStatus && !explicitlyFailed) return null;
+  const legacyTerminal = (
+    !hasExplicitStatus &&
     (
-      messageType.startsWith("cmd.") &&
-      messageType.endsWith(".success")
+      messageType === "cmd.request.completed" ||
+      (
+        messageType.startsWith("cmd.") &&
+        (
+          messageType.endsWith(".success") ||
+          messageType.endsWith(".error") ||
+          messageType.endsWith(".cancelled")
+        )
+      )
     )
   );
-  const failed = (
-    messageType.startsWith("cmd.") &&
-    (
-      messageType.endsWith(".error") ||
-      messageType.endsWith(".cancelled")
-    )
-  );
 
-  if (!requestId || !requestSegment || (!succeeded && !failed)) {
+  if (!explicitlyFailed && !legacyTerminal) {
     return null;
   }
 
-  if (succeeded) {
+  if (!explicitlyFailed) {
     return {
       requestId,
       requestSegment,
@@ -294,6 +308,36 @@ export const commandTerminalResult = (
     requestSegment,
     segmentStatus: "rejected",
     ...(safeMessage ? { message: safeMessage } : {}),
+  };
+};
+
+/**
+ * Classify the receipt outcome of a Trigger refusal separately from its
+ * authored domain outcome. A legacy refusal without an explicit receipt
+ * status is authoritative output and therefore completes the receipt.
+ */
+export const commandTriggerRejectionResult = (
+  message: any,
+): CommandTerminalResult | null => {
+  if (message?.type !== "cmd.trigger.rejected") return null;
+
+  const explicitResult = commandTerminalResult(message);
+  if (explicitResult) return explicitResult;
+  if (message?.data?.receipt_status !== undefined) return null;
+
+  const requestId = commandRequestId(message);
+  if (!requestId) return null;
+  const rawSegment = message?.data?.request_segment;
+  const requestSegment = (
+    typeof rawSegment === "string" && rawSegment.trim()
+  )
+    ? rawSegment.trim()
+    : "r";
+
+  return {
+    requestId,
+    requestSegment,
+    segmentStatus: "completed",
   };
 };
 
@@ -388,24 +432,28 @@ export const commandReceiptPresentation = (
     };
   }
   if (receipt.phase === "unconfirmed") {
+    const ariaLabel = receipt.message
+      ? `${receipt.message} The command was not retried automatically.`
+      : (
+        "Command delivery could not be confirmed. "
+        + "The command was not retried automatically."
+      );
     return {
       text: "×",
-      ariaLabel: receipt.message
-        ? `${receipt.message} The command was not retried automatically.`
-        : (
-          "Command delivery could not be confirmed. "
-          + "The command was not retried automatically."
-        ),
+      ariaLabel,
+      failureDetail: ariaLabel,
       problem: true,
       state: "error",
     };
   }
   if (receipt.phase === "cancelled") {
+    const ariaLabel = receipt.message
+      ? `Command processing failed. ${receipt.message}`
+      : "Command processing failed.";
     return {
       text: "×",
-      ariaLabel: receipt.message
-        ? `Action failed. ${receipt.message}`
-        : "Action failed.",
+      ariaLabel,
+      failureDetail: ariaLabel,
       problem: true,
       state: "error",
     };
@@ -413,9 +461,7 @@ export const commandReceiptPresentation = (
   if (receipt.compact) {
     return {
       text: "✓",
-      ariaLabel: receipt.phase === "accepted"
-        ? "Action completed successfully."
-        : "Command received by the server.",
+      ariaLabel: "Command processed.",
       problem: false,
       state: "success",
     };

@@ -517,6 +517,10 @@ class TestDoorCommands(WorldTestCase):
         )[0]
         self.assertEqual(completed["data"]["request_id"], request_id)
         self.assertEqual(completed["data"]["request_segment"], "r.5")
+        self.assertEqual(
+            completed["data"]["receipt_status"],
+            "completed",
+        )
         observer_event = self._messages(
             completed_messages,
             "door.state_changed",
@@ -644,6 +648,10 @@ class TestDoorCommands(WorldTestCase):
         self.assertEqual(cancelled["data"]["code"], "doorway_stale")
         self.assertEqual(cancelled["data"]["request_id"], request_id)
         self.assertEqual(cancelled["data"]["request_segment"], "r")
+        self.assertEqual(
+            cancelled["data"]["receipt_status"],
+            "completed",
+        )
 
     def test_open_noop_does_not_invalidate_another_players_close(self):
         doorway, _, _ = self._create_door()

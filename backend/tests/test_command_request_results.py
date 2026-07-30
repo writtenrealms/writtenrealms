@@ -1,6 +1,7 @@
 import uuid
 from unittest.mock import patch
 
+from spawns.events import GameEvent, publish_events
 from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.registry import dispatch_command
 from tests.base import WorldTestCase
@@ -63,6 +64,10 @@ class TestCommandRequestResults(WorldTestCase):
         )[0]["message"]
         self.assertEqual(actor_result["data"]["request_id"], request_id)
         self.assertEqual(actor_result["data"]["request_segment"], "r.2")
+        self.assertEqual(
+            actor_result["data"]["receipt_status"],
+            "completed",
+        )
 
         observer_result = self._messages(
             messages,
@@ -71,6 +76,7 @@ class TestCommandRequestResults(WorldTestCase):
         )[0]["message"]
         self.assertNotIn("request_id", observer_result["data"])
         self.assertNotIn("request_segment", observer_result["data"])
+        self.assertNotIn("receipt_status", observer_result["data"])
         self.assertFalse(
             self._messages(messages, "cmd.request.completed")
         )
@@ -95,9 +101,112 @@ class TestCommandRequestResults(WorldTestCase):
         )[0]["message"]
         self.assertEqual(error["data"]["request_id"], request_id)
         self.assertEqual(error["data"]["request_segment"], "r")
+        self.assertEqual(error["data"]["receipt_status"], "completed")
         self.assertFalse(
             self._messages(messages, "cmd.request.completed")
         )
+
+    def test_expected_movement_error_completes_command_receipt(self):
+        request_id = str(uuid.uuid4())
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                player_id=self.player.id,
+                payload={
+                    "text": "north",
+                    "_request_id": request_id,
+                },
+            )
+
+        error = self._messages(
+            messages,
+            "cmd.move.error",
+            recipient=self.player.key,
+        )[0]["message"]
+        self.assertEqual(error["data"]["request_id"], request_id)
+        self.assertEqual(error["data"]["request_segment"], "r")
+        self.assertEqual(error["data"]["receipt_status"], "completed")
+
+    def test_pre_correlated_async_cancellation_completes_receipt(self):
+        request_id = str(uuid.uuid4())
+
+        with capture_game_messages() as messages:
+            publish_events([
+                GameEvent(
+                    type="cmd.close.cancelled",
+                    recipients=[self.player.key],
+                    data={
+                        "request_id": request_id,
+                        "request_segment": "r.3",
+                        "code": "actor_moved",
+                    },
+                    text="You move away before finishing.",
+                )
+            ])
+
+        cancelled = self._messages(
+            messages,
+            "cmd.close.cancelled",
+            recipient=self.player.key,
+        )[0]["message"]
+        self.assertEqual(cancelled["data"]["request_id"], request_id)
+        self.assertEqual(cancelled["data"]["request_segment"], "r.3")
+        self.assertEqual(
+            cancelled["data"]["receipt_status"],
+            "completed",
+        )
+
+    def test_explicit_internal_failure_is_not_reclassified(self):
+        request_id = str(uuid.uuid4())
+
+        with capture_game_messages() as messages:
+            publish_events([
+                GameEvent(
+                    type="cmd.test.error",
+                    recipients=[self.player.key],
+                    data={
+                        "request_id": request_id,
+                        "request_segment": "r.7",
+                        "receipt_status": "failed",
+                        "code": "command_processing_failed",
+                    },
+                    text="The command could not be processed.",
+                )
+            ])
+
+        error = self._messages(
+            messages,
+            "cmd.test.error",
+            recipient=self.player.key,
+        )[0]["message"]
+        self.assertEqual(error["data"]["request_id"], request_id)
+        self.assertEqual(error["data"]["request_segment"], "r.7")
+        self.assertEqual(error["data"]["receipt_status"], "failed")
+
+    def test_unknown_terminal_receipt_status_is_normalized_to_completed(self):
+        request_id = str(uuid.uuid4())
+
+        with capture_game_messages() as messages:
+            publish_events([
+                GameEvent(
+                    type="cmd.test.error",
+                    recipients=[self.player.key],
+                    data={
+                        "request_id": request_id,
+                        "request_segment": "r.9",
+                        "receipt_status": "complted",
+                    },
+                    text="The request was declined.",
+                )
+            ])
+
+        error = self._messages(
+            messages,
+            "cmd.test.error",
+            recipient=self.player.key,
+        )[0]["message"]
+        self.assertEqual(error["data"]["receipt_status"], "completed")
 
     def test_alias_expanded_chain_is_planned_before_terminal_results(self):
         observer = self.create_player("Observer", room=self.room)
@@ -150,6 +259,10 @@ class TestCommandRequestResults(WorldTestCase):
             entry["message"]["data"]["request_id"] == request_id
             for entry in actor_results
         ))
+        self.assertTrue(all(
+            entry["message"]["data"]["receipt_status"] == "completed"
+            for entry in actor_results
+        ))
         self.assertLess(
             messages.index(plan_entries[0]),
             messages.index(actor_results[0]),
@@ -191,6 +304,7 @@ class TestCommandRequestResults(WorldTestCase):
         )[0]["message"]
         self.assertEqual(result["data"]["request_id"], request_id)
         self.assertEqual(result["data"]["request_segment"], "r.4")
+        self.assertEqual(result["data"]["receipt_status"], "completed")
         self.assertFalse(
             self._messages(messages, "cmd.request.completed")
         )
@@ -223,6 +337,7 @@ class TestCommandRequestResults(WorldTestCase):
                 "request_id": request_id,
                 "request_segment": "r",
                 "status": "completed",
+                "receipt_status": "completed",
             },
         )
         self.assertEqual(

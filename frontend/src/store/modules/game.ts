@@ -11,6 +11,7 @@ import {
   commandRequestId,
   commandRequestSegments,
   commandTerminalResult,
+  commandTriggerRejectionResult,
   createCommandRequestId,
   initialCommandReceipt,
   transitionCommandReceipt,
@@ -365,26 +366,28 @@ const receiveMessage = async ({
   }
 
   if (message_data.type === TRIGGER_CANCELLED_MESSAGE) {
-    if (requestId) {
-      clearCommandReceiptTimers(requestId);
+    const cancellationResult = commandTerminalResult(message_data);
+    if (cancellationResult) {
+      clearCommandReceiptTimers(cancellationResult.requestId);
       commit("command_receipt_update", {
-        request_id: requestId,
-        request_segment: message_data.data?.request_segment,
-        segment_status: "cancelled",
-        message: message_data.data?.message,
+        request_id: cancellationResult.requestId,
+        request_segment: cancellationResult.requestSegment,
+        segment_status: cancellationResult.segmentStatus,
+        message: cancellationResult.message,
       });
     }
     return;
   }
 
   if (message_data.type === TRIGGER_REJECTED_MESSAGE) {
-    if (requestId) {
-      clearCommandReceiptTimers(requestId);
+    const rejectionResult = commandTriggerRejectionResult(message_data);
+    if (rejectionResult) {
+      clearCommandReceiptTimers(rejectionResult.requestId);
       commit("command_receipt_update", {
-        request_id: requestId,
-        request_segment: message_data.data?.request_segment,
-        segment_status: "rejected",
-        message: message_data.data?.message || message_data.text,
+        request_id: rejectionResult.requestId,
+        request_segment: rejectionResult.requestSegment,
+        segment_status: rejectionResult.segmentStatus,
+        message: rejectionResult.message,
       });
     }
     if (!message_data.text) {

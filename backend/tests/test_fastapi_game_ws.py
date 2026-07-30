@@ -260,6 +260,7 @@ class TestGameWebSocketDisconnect(unittest.TestCase):
             {
                 "error": "Unable to confirm command delivery.",
                 "code": "command_delivery_unconfirmed",
+                "receipt_status": "unconfirmed",
                 "request_id": request_id,
                 "command_type": "text",
             },

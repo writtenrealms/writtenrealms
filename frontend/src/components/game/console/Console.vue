@@ -228,9 +228,12 @@ const onScroll = _.debounce(updateScroll, 250);
     -webkit-overflow-scrolling: touch;
 
     .message {
-      overflow-x: hidden;
+      // `hidden` on only one axis makes the other axis compute to `auto`,
+      // turning every transcript entry into a nested vertical scroller.
+      // Clip horizontal paint without creating those scroll containers.
+      overflow-x: clip;
       > div {
-        overflow-x: hidden;
+        overflow-x: clip;
       }
 
       // Standalone console entries are separate visual blocks by default.

@@ -22,6 +22,7 @@ from core.conditions import evaluate_conditions
 from core.trigger_steps import SCRIPT_COMMAND_DEPTH_KEY
 from core.trigger_policy_cache import get_trigger_policy_cache_version
 from core.utils import format_actor_msg
+from spawns.events import COMMAND_RECEIPT_STATUS_COMPLETED
 from spawns.handlers.registry import (
     ActorNotFoundError,
     HandlerNotFoundError,
@@ -61,6 +62,29 @@ class TriggerExecutionResult:
     code: str = ""
 
 
+ACKNOWLEDGED_TRIGGER_REFUSAL_CODES = frozenset({
+    "conditions_failed",
+    "gated",
+})
+
+
+def _merge_trigger_rejection_code(
+    current: str,
+    candidate: str,
+) -> str:
+    """Keep a genuine failure ahead of normal authored refusals."""
+    if not candidate:
+        return current
+    if not current:
+        return candidate
+    if (
+        current in ACKNOWLEDGED_TRIGGER_REFUSAL_CODES
+        and candidate not in ACKNOWLEDGED_TRIGGER_REFUSAL_CODES
+    ):
+        return candidate
+    return current
+
+
 def command_trigger_result_message(
     result: TriggerExecutionResult,
     *,
@@ -76,6 +100,8 @@ def command_trigger_result_message(
             ),
             "status": "rejected",
             "code": "trigger_rejected",
+            "reason_code": result.code or "trigger_rejected",
+            "receipt_status": COMMAND_RECEIPT_STATUS_COMPLETED,
         }
         message = {
             "type": "cmd.trigger.rejected",
@@ -1438,7 +1464,10 @@ def execute_command_fallback_trigger(
                 if succeeded_any:
                     script_errors.append(TRIGGER_GATED_TEXT)
                     rejected_any = True
-                    rejection_code = rejection_code or "gated"
+                    rejection_code = _merge_trigger_rejection_code(
+                        rejection_code,
+                        "gated",
+                    )
                     continue
                 return TriggerExecutionResult(
                     handled=True,
@@ -1448,24 +1477,36 @@ def execute_command_fallback_trigger(
                 )
             elif started.code == "conditions_failed":
                 rejected_any = True
-                rejection_code = rejection_code or started.code
+                rejection_code = _merge_trigger_rejection_code(
+                    rejection_code,
+                    started.code,
+                )
                 if trigger.show_details_on_failure and not failure_text:
                     failure_text = started.feedback
             elif started.code in {"trigger_missing", "no_steps"}:
                 rejected_any = True
-                rejection_code = rejection_code or started.code
+                rejection_code = _merge_trigger_rejection_code(
+                    rejection_code,
+                    started.code,
+                )
             elif started.feedback:
                 script_errors.append(started.feedback)
                 executed_any = True
                 rejected_any = True
-                rejection_code = rejection_code or started.code
+                rejection_code = _merge_trigger_rejection_code(
+                    rejection_code,
+                    started.code or "trigger_failed",
+                )
             continue
 
         if trigger.conditions:
             evaluated = evaluate_conditions(actor, trigger.conditions)
             if not evaluated.get("result"):
                 rejected_any = True
-                rejection_code = rejection_code or "conditions_failed"
+                rejection_code = _merge_trigger_rejection_code(
+                    rejection_code,
+                    "conditions_failed",
+                )
                 if trigger.show_details_on_failure and not failure_text:
                     failure_text = (
                         trigger.failure_message
@@ -1479,7 +1520,10 @@ def execute_command_fallback_trigger(
             if succeeded_any:
                 script_errors.append(TRIGGER_GATED_TEXT)
                 rejected_any = True
-                rejection_code = rejection_code or "gated"
+                rejection_code = _merge_trigger_rejection_code(
+                    rejection_code,
+                    "gated",
+                )
                 continue
             return TriggerExecutionResult(
                 handled=True,
@@ -1504,6 +1548,10 @@ def execute_command_fallback_trigger(
             connection_id=connection_id,
         ):
             script_errors.append(dispatched_error)
+            rejection_code = _merge_trigger_rejection_code(
+                rejection_code,
+                "trigger_failed",
+            )
 
         for line_index, line_segments in enumerate(script_lines[1:], start=1):
             attempted_segment_count += len(line_segments)
@@ -1515,6 +1563,10 @@ def execute_command_fallback_trigger(
                 connection_id=connection_id,
             ):
                 script_errors.append(dispatched_error)
+                rejection_code = _merge_trigger_rejection_code(
+                    rejection_code,
+                    "trigger_failed",
+                )
         executed_any = True
         new_error_count = len(script_errors) - prior_error_count
         if new_error_count < attempted_segment_count:

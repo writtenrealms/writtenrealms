@@ -1,4 +1,5 @@
 import json
+import uuid
 from unittest.mock import patch
 
 from django.contrib.contenttypes.models import ContentType
@@ -14,6 +15,10 @@ from core.scoped_state import (
 from spawns.events import GameEvent, publish_events
 from spawns.handlers import dispatch_command
 from spawns.models import Item, Mob
+from spawns.triggers import (
+    TriggerExecutionResult,
+    command_trigger_result_message,
+)
 from tests.base import WorldTestCase
 from worlds.models import Room
 from tests.utils import capture_game_messages, dispatch_text_command
@@ -298,6 +303,64 @@ class TestCommandFallbackTriggers(WorldTestCase):
         self.assertIn("Name does not match", failure_message.get("text", ""))
         self.assertIsNone(self._message_by_type(messages, "cmd.text.echo"))
         self.assertIsNone(self._message_by_type(messages, "cmd./echo.success"))
+
+    def test_handled_trigger_execution_failure_completes_receipt(self):
+        request_id = str(uuid.uuid4())
+        rejection = command_trigger_result_message(
+            TriggerExecutionResult(
+                handled=True,
+                feedback="The Trigger command could not be dispatched.",
+                status="rejected",
+                code="trigger_failed",
+            ),
+            request_id=request_id,
+            request_segment="r.2",
+        )
+
+        self.assertIsNotNone(rejection)
+        self.assertEqual(rejection["type"], "cmd.trigger.rejected")
+        self.assertEqual(rejection["data"]["request_id"], request_id)
+        self.assertEqual(rejection["data"]["request_segment"], "r.2")
+        self.assertEqual(rejection["data"]["status"], "rejected")
+        self.assertEqual(rejection["data"]["code"], "trigger_rejected")
+        self.assertEqual(rejection["data"]["reason_code"], "trigger_failed")
+        self.assertEqual(
+            rejection["data"]["receipt_status"],
+            "completed",
+        )
+        self.assertEqual(
+            rejection["text"],
+            "The Trigger command could not be dispatched.",
+        )
+
+    def test_expected_refusals_are_acknowledged_without_detail(self):
+        request_id = str(uuid.uuid4())
+
+        for reason_code in ("conditions_failed", "gated"):
+            with self.subTest(reason_code=reason_code):
+                rejection = command_trigger_result_message(
+                    TriggerExecutionResult(
+                        handled=True,
+                        status="rejected",
+                        code=reason_code,
+                    ),
+                    request_id=request_id,
+                )
+
+                self.assertEqual(
+                    rejection["type"],
+                    "cmd.trigger.rejected",
+                )
+                self.assertNotIn("text", rejection)
+                self.assertEqual(
+                    rejection["data"]["reason_code"],
+                    reason_code,
+                )
+                self.assertEqual(
+                    rejection["data"]["receipt_status"],
+                    "completed",
+                )
+                self.assertNotIn("message", rejection["data"])
 
     def test_trigger_supports_structured_state_conditions(self):
         replace_state_snapshot(STATE_SCOPE_WORLD, self.spawn_world, {"weather": "rainy"})

@@ -7,6 +7,17 @@ const source = await readFile(
   new URL("../src/core/commandReceipt.ts", import.meta.url),
   "utf8",
 );
+const messageComponentSource = await readFile(
+  new URL(
+    "../src/components/game/console/Message.vue",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const gameStoreSource = await readFile(
+  new URL("../src/store/modules/game.ts", import.meta.url),
+  "utf8",
+);
 const compiled = ts.transpileModule(source, {
   compilerOptions: {
     module: ts.ModuleKind.ESNext,
@@ -27,6 +38,72 @@ test("secure fallback generates a version 4 UUID", () => {
   });
 
   assert.equal(requestId, "00010203-0405-4607-8809-0a0b0c0d0e0f");
+});
+
+test("receipt failure disclosure is teleported out of row layout", () => {
+  assert.doesNotMatch(messageComponentSource, /<VTooltip/);
+  assert.doesNotMatch(messageComponentSource, /Tooltip as VTooltip/);
+  assert.doesNotMatch(messageComponentSource, /v-tooltip/);
+  assert.doesNotMatch(messageComponentSource, /failureTooltipOptions/);
+  assert.doesNotMatch(messageComponentSource, /document\.addEventListener/);
+  assert.doesNotMatch(messageComponentSource, /ref="failureDetail/);
+  assert.match(
+    messageComponentSource,
+    /document\.getElementById\(failureDetailId\.value\)/,
+  );
+  assert.match(messageComponentSource, /<Teleport v-if="failureDetailVisible"/);
+  assert.match(messageComponentSource, /class="command-receipt-detail"/);
+  assert.match(
+    messageComponentSource,
+    /\.command-receipt-detail\s*\{[^}]*position:\s*fixed/s,
+  );
+  assert.match(
+    messageComponentSource,
+    /v-else-if="receiptPresentation\.state === 'success'"/,
+  );
+  assert.match(messageComponentSource, /@pointerenter="showFailureDetailOnHover"/);
+  assert.match(messageComponentSource, /@focus="showFailureDetailOnFocus"/);
+  assert.match(messageComponentSource, /@click\.stop=/);
+  assert.match(messageComponentSource, /@keydown\.esc/);
+  assert.match(messageComponentSource, /min-width:\s*1\.5rem/);
+  assert.match(messageComponentSource, /min-height:\s*1\.5rem/);
+});
+
+test("visible Trigger refusal text falls through to transcript handling", () => {
+  const branchStart = gameStoreSource.indexOf(
+    "if (message_data.type === TRIGGER_REJECTED_MESSAGE)",
+  );
+  const nextBranch = gameStoreSource.indexOf("} else if (", branchStart);
+  const transcriptAdd = gameStoreSource.indexOf(
+    'commit("message_add", message_data)',
+    nextBranch,
+  );
+  const rejectionBranch = gameStoreSource.slice(branchStart, nextBranch);
+
+  assert.ok(branchStart !== -1);
+  assert.ok(nextBranch > branchStart);
+  assert.match(rejectionBranch, /commandTriggerRejectionResult/);
+  assert.match(
+    rejectionBranch,
+    /if \(!message_data\.text\)\s*\{\s*return;\s*\}/,
+  );
+  assert.ok(transcriptAdd > nextBranch);
+});
+
+test("Trigger cancellation uses the shared terminal receipt contract", () => {
+  const branchStart = gameStoreSource.indexOf(
+    "if (message_data.type === TRIGGER_CANCELLED_MESSAGE)",
+  );
+  const nextBranch = gameStoreSource.indexOf(
+    "if (message_data.type === TRIGGER_REJECTED_MESSAGE)",
+    branchStart,
+  );
+  const cancellationBranch = gameStoreSource.slice(branchStart, nextBranch);
+
+  assert.ok(branchStart !== -1);
+  assert.ok(nextBranch > branchStart);
+  assert.match(cancellationBranch, /commandTerminalResult\(message_data\)/);
+  assert.doesNotMatch(cancellationBranch, /segment_status:\s*"cancelled"/);
 });
 
 test("accepted does not regress when the gateway receipt arrives late", () => {
@@ -125,7 +202,7 @@ test("private completion control completes a silent command segment", () => {
   );
 });
 
-test("correlated command error rejects its request segment with safe prose", () => {
+test("correlated move refusal completes its request segment", () => {
   const result = receipt.commandTerminalResult({
     type: "cmd.move.error",
     text: "You cannot go that way.",
@@ -139,27 +216,25 @@ test("correlated command error rejects its request segment with safe prose", () 
   assert.deepEqual(result, {
     requestId: "request-1",
     requestSegment: "r",
-    segmentStatus: "rejected",
-    message: "You cannot go that way.",
+    segmentStatus: "completed",
   });
 
-  const rejected = receipt.transitionCommandReceipt(
+  const completed = receipt.transitionCommandReceipt(
     receipt.initialCommandReceipt(1),
     {
       request_segment: result.requestSegment,
       segment_status: result.segmentStatus,
-      message: result.message,
     },
     2,
   );
-  assert.equal(receipt.commandReceiptPresentation(rejected).text, "×");
-  assert.match(
-    receipt.commandReceiptPresentation(rejected).ariaLabel,
-    /You cannot go that way/,
+  assert.equal(receipt.commandReceiptPresentation(completed).text, "✓");
+  assert.equal(
+    receipt.commandReceiptPresentation(completed).failureDetail,
+    undefined,
   );
 });
 
-test("correlated command cancellation rejects its request segment", () => {
+test("correlated command cancellation completes its request segment", () => {
   assert.deepEqual(
     receipt.commandTerminalResult({
       type: "cmd.door.cancelled",
@@ -172,10 +247,216 @@ test("correlated command cancellation rejects its request segment", () => {
     {
       requestId: "request-1",
       requestSegment: "r",
-      segmentStatus: "rejected",
-      message: "The door action was interrupted.",
+      segmentStatus: "completed",
     },
   );
+});
+
+test("explicit completed status overrides an error-shaped response", () => {
+  const messages = [
+    {
+      type: "cmd.buy.error",
+      text: "The merchant does not sell that.",
+      data: {
+        request_id: "request-1",
+        request_segment: "r",
+        receipt_status: "completed",
+      },
+    },
+    {
+      type: "cmd.door.cancelled",
+      text: "That door is already closed.",
+      data: {
+        request_id: "request-1",
+        request_segment: "r",
+        receipt_status: "completed",
+      },
+    },
+    {
+      type: "domain.authoritative.response",
+      text: "Nothing answers.",
+      data: {
+        request_id: "request-1",
+        request_segment: "r",
+        receipt_status: "completed",
+      },
+    },
+  ];
+
+  for (const message of messages) {
+    assert.deepEqual(receipt.commandTerminalResult(message), {
+      requestId: "request-1",
+      requestSegment: "r",
+      segmentStatus: "completed",
+    });
+  }
+});
+
+test("explicit failed status overrides a success-shaped response", () => {
+  assert.deepEqual(
+    receipt.commandTerminalResult({
+      type: "cmd.move.success",
+      text: "The movement transaction failed.",
+      data: {
+        request_id: "request-1",
+        request_segment: "r.3",
+        receipt_status: "failed",
+        error: "The movement transaction failed.",
+      },
+    }),
+    {
+      requestId: "request-1",
+      requestSegment: "r.3",
+      segmentStatus: "rejected",
+      message: "The movement transaction failed.",
+    },
+  );
+});
+
+test("unsupported explicit receipt status does not fall back to suffix inference", () => {
+  assert.equal(
+    receipt.commandTerminalResult({
+      type: "cmd.look.error",
+      data: {
+        request_id: "request-1",
+        request_segment: "r",
+        receipt_status: "pending",
+      },
+    }),
+    null,
+  );
+});
+
+test("legacy terminal suffix inference remains available without explicit status", () => {
+  const messages = [
+    {
+      type: "cmd.look.success",
+      data: { request_id: "request-1", request_segment: "r" },
+    },
+    {
+      type: "cmd.text.error",
+      text: "What?",
+      data: { request_id: "request-1", request_segment: "r" },
+    },
+    {
+      type: "cmd.craft.error",
+      text: "You lack the materials.",
+      data: { request_id: "request-1", request_segment: "r" },
+    },
+    {
+      type: "cmd.close.cancelled",
+      data: {
+        request_id: "request-1",
+        request_segment: "r",
+        message: "The door action was interrupted.",
+      },
+    },
+  ];
+
+  for (const message of messages) {
+    assert.deepEqual(receipt.commandTerminalResult(message), {
+      requestId: "request-1",
+      requestSegment: "r",
+      segmentStatus: "completed",
+    });
+  }
+});
+
+test("expected Trigger refusal completes its receipt while retaining its prose", () => {
+  const message = {
+    type: "cmd.trigger.rejected",
+    text: "Charon requires 10 obols.",
+    data: {
+      request_id: "request-1",
+      request_segment: "r.4",
+      status: "rejected",
+      reason_code: "conditions_failed",
+      receipt_status: "completed",
+      message: "Charon requires 10 obols.",
+    },
+  };
+  const result = receipt.commandTriggerRejectionResult(message);
+
+  assert.deepEqual(result, {
+    requestId: "request-1",
+    requestSegment: "r.4",
+    segmentStatus: "completed",
+  });
+  assert.equal(message.text, "Charon requires 10 obols.");
+
+  const completed = receipt.transitionCommandReceipt(
+    receipt.initialCommandReceipt(1),
+    {
+      request_segment: result.requestSegment,
+      segment_status: result.segmentStatus,
+    },
+    2,
+  );
+  const presentation = receipt.commandReceiptPresentation(completed);
+  assert.equal(presentation.text, "✓");
+  assert.equal(presentation.failureDetail, undefined);
+});
+
+test("legacy Trigger refusal completes as authoritative output", () => {
+  const result = receipt.commandTriggerRejectionResult({
+    type: "cmd.trigger.rejected",
+    text: "The Trigger command could not be dispatched.",
+    data: {
+      request_id: "request-1",
+      request_segment: "r.2",
+      status: "rejected",
+      reason_code: "trigger_failed",
+    },
+  });
+
+  assert.deepEqual(result, {
+    requestId: "request-1",
+    requestSegment: "r.2",
+    segmentStatus: "completed",
+  });
+
+  const completed = receipt.transitionCommandReceipt(
+    receipt.initialCommandReceipt(1),
+    {
+      request_segment: result.requestSegment,
+      segment_status: result.segmentStatus,
+    },
+    2,
+  );
+  assert.equal(receipt.commandReceiptPresentation(completed).text, "✓");
+});
+
+test("explicitly failed Trigger refusal remains a receipt error", () => {
+  const result = receipt.commandTriggerRejectionResult({
+    type: "cmd.trigger.rejected",
+    text: "The Trigger command could not be dispatched.",
+    data: {
+      request_id: "request-1",
+      request_segment: "r.2",
+      receipt_status: "failed",
+      message: "The Trigger command could not be dispatched.",
+    },
+  });
+
+  assert.deepEqual(result, {
+    requestId: "request-1",
+    requestSegment: "r.2",
+    segmentStatus: "rejected",
+    message: "The Trigger command could not be dispatched.",
+  });
+
+  const failed = receipt.transitionCommandReceipt(
+    receipt.initialCommandReceipt(1),
+    {
+      request_segment: result.requestSegment,
+      segment_status: result.segmentStatus,
+      message: result.message,
+    },
+    2,
+  );
+  const presentation = receipt.commandReceiptPresentation(failed);
+  assert.equal(presentation.text, "×");
+  assert.match(presentation.failureDetail, /could not be dispatched/);
 });
 
 test("uncorrelated output and control or resolution frames are not terminal", () => {
@@ -190,10 +471,6 @@ test("uncorrelated output and control or resolution frames are not terminal", ()
     },
     {
       type: "cmd.trigger.completed",
-      data: { request_id: "request", request_segment: "r" },
-    },
-    {
-      type: "cmd.trigger.cancelled",
       data: { request_id: "request", request_segment: "r" },
     },
     {
@@ -443,6 +720,12 @@ test("presentation uses only compact pending, success, and error symbols", () =>
     [sending.state, completed.state, unconfirmed.state, cancelled.state],
     ["pending", "success", "error", "error"],
   );
+  assert.equal(sending.failureDetail, undefined);
+  assert.equal(completed.failureDetail, undefined);
+  assert.equal(completed.ariaLabel, "Command processed.");
+  assert.equal(unconfirmed.failureDetail, unconfirmed.ariaLabel);
+  assert.equal(cancelled.failureDetail, cancelled.ariaLabel);
+  assert.match(cancelled.failureDetail, /Command processing failed/);
   assert.match(unconfirmed.ariaLabel, /not retried automatically/i);
   assert.match(
     cancelled.ariaLabel,

@@ -29,6 +29,8 @@ TRANSFER_RUNTIME_WORLD_KEY = "_transfer_runtime_world_id"
 TRANSFER_ENTER_EVENT_TYPE = "notification./transfer.enter"
 PRIVATE_CONTROL_EVENT_KEY = "_private_control_event"
 COMMAND_REQUEST_COMPLETED_EVENT_TYPE = "cmd.request.completed"
+COMMAND_RECEIPT_STATUS_COMPLETED = "completed"
+COMMAND_RECEIPT_STATUS_FAILED = "failed"
 _TRIGGER_REQUEST_EVENT_TYPES = frozenset({
     "cmd.trigger.accepted",
     "cmd.trigger.completed",
@@ -164,6 +166,7 @@ def command_request_completed_message(
             "request_id": scope.request_id,
             "request_segment": scope.request_segment,
             "status": "completed",
+            "receipt_status": COMMAND_RECEIPT_STATUS_COMPLETED,
         },
     }
 
@@ -186,12 +189,56 @@ def defer_actor_command_result(actor_key: str) -> None:
 
 def _is_terminal_command_event(event_type: str) -> bool:
     return (
-        event_type.startswith("cmd.")
-        and (
-            event_type.endswith(".success")
-            or event_type.endswith(".error")
+        event_type == COMMAND_REQUEST_COMPLETED_EVENT_TYPE
+        or event_type == "cmd.trigger.rejected"
+        or (
+            event_type.startswith("cmd.")
+            and (
+                event_type.endswith(".success")
+                or event_type.endswith(".error")
+                or event_type.endswith(".cancelled")
+                or event_type.endswith(".completed")
+            )
         )
     )
+
+
+def _with_terminal_command_receipt(
+    message: dict,
+    *,
+    event_type: str,
+    request_id: str,
+    request_segment: str,
+) -> dict:
+    """
+    Stamp the actor-authoritative terminal result independently of its domain
+    outcome.
+
+    A ``cmd.*.error`` or ``cmd.*.cancelled`` normally means the server
+    processed the command and declined or stopped the requested game action.
+    Callers that caught a genuine processing failure must set
+    ``receipt_status=failed`` explicitly; this boundary preserves it.
+    """
+    if not request_id or not _is_terminal_command_event(event_type):
+        return message
+
+    event_data = message.get("data") or {}
+    explicit_status = str(
+        event_data.get("receipt_status") or ""
+    ).strip().lower()
+    receipt_status = (
+        COMMAND_RECEIPT_STATUS_FAILED
+        if explicit_status == COMMAND_RECEIPT_STATUS_FAILED
+        else COMMAND_RECEIPT_STATUS_COMPLETED
+    )
+    correlated = dict(message)
+    correlated["data"] = {
+        **event_data,
+        "request_id": request_id,
+        "request_segment": request_segment,
+        "receipt_status": receipt_status,
+    }
+    return correlated
 
 
 def correlate_actor_command_message(
@@ -206,10 +253,6 @@ def correlate_actor_command_message(
     ``GameEvent``, so room and third-party notifications cannot inherit the
     private correlation fields.
     """
-    scope = _active_command_request_scope(actor_key)
-    if scope is None:
-        return message
-
     event_type = str(message.get("type") or "").strip().lower()
     event_data = message.get("data") or {}
     event_request_id = _normalized_request_id(
@@ -218,6 +261,18 @@ def correlate_actor_command_message(
     event_request_segment = normalize_request_segment(
         event_data.get("request_segment")
     )
+
+    scope = _active_command_request_scope(actor_key)
+    if scope is None:
+        # Durable asynchronous command results carry their stored identity
+        # outside the original in-process ContextVar scope.
+        return _with_terminal_command_receipt(
+            message,
+            event_type=event_type,
+            request_id=event_request_id,
+            request_segment=event_request_segment,
+        )
+
     if event_request_id and (
         event_request_id != scope.request_id
         or event_request_segment != scope.request_segment
@@ -225,11 +280,21 @@ def correlate_actor_command_message(
         # Durable async actions can finish while an unrelated command is
         # running. Their stored identity is authoritative and must not settle
         # the newer command's receipt.
-        return message
+        return _with_terminal_command_receipt(
+            message,
+            event_type=event_type,
+            request_id=event_request_id,
+            request_segment=event_request_segment,
+        )
 
     if event_type in _TRIGGER_REQUEST_EVENT_TYPES:
         scope.deferred = True
-        return message
+        return _with_terminal_command_receipt(
+            message,
+            event_type=event_type,
+            request_id=event_request_id,
+            request_segment=event_request_segment,
+        )
     if event_type.startswith("cmd.") and event_type.endswith(".started"):
         # A repeated prepared action is an immediate answer to the newer
         # request ("already preparing"), not ownership of the original
@@ -237,24 +302,16 @@ def correlate_actor_command_message(
         if not event_data.get("repeated"):
             scope.deferred = True
         return message
-    if (
-        event_type.startswith("cmd.")
-        and event_type.endswith(".cancelled")
-        and event_request_id
-    ):
-        scope.terminal_seen = True
-        return message
     if not _is_terminal_command_event(event_type):
         return message
 
     scope.terminal_seen = True
-    correlated = dict(message)
-    correlated["data"] = {
-        **event_data,
-        "request_id": scope.request_id,
-        "request_segment": scope.request_segment,
-    }
-    return correlated
+    return _with_terminal_command_receipt(
+        message,
+        event_type=event_type,
+        request_id=scope.request_id,
+        request_segment=scope.request_segment,
+    )
 
 
 @dataclass(frozen=True)
