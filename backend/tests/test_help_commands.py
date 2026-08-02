@@ -107,7 +107,7 @@ class TestHelpCommands(WorldTestCase):
         self.assertIn("scan <direction>", message.get("text", ""))
         self.assertIn("/load <item|mob> <definition_id|slug> [cmd]", message.get("text", ""))
         self.assertIn(
-            "/transfer <target> <room_id|room@x,y,z|direction|here>",
+            "/transfer <target> <room@relative_id|room_id|room@x,y,z|direction|here>",
             message.get("text", ""),
         )
         self.assertIn("/repop", message.get("text", ""))
@@ -216,7 +216,7 @@ class TestHelpCommands(WorldTestCase):
         message = self._message_by_type(messages, "cmd.help.success")
         self.assertIsNotNone(message)
         self.assertEqual(message["data"]["command"]["command"], "/transfer")
-        self.assertIn("Use room@x,y,z", message.get("text", ""))
+        self.assertIn("Use room@relative_id", message.get("text", ""))
 
     def test_help_known_ability_uses_authored_help_text(self):
         self._ability(

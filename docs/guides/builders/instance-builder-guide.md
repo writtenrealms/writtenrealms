@@ -120,9 +120,13 @@ spec:
 ---
 kind: room
 metadata:
-  ref: room@4,2,0
+  ref: room@12
   name: Command Tent
 spec:
+  coordinates:
+    x: 4
+    y: 2
+    z: 0
   zone: zone@1
   initial_state:
     map_taken: false
@@ -191,6 +195,125 @@ inside a spawned instance. Ability definitions cannot be authored on instance
 templates; define them on the base world and use requirements or conditions when
 an ability should only matter in a particular instance.
 
+## Stable Template Identity And Family Export
+
+Every direct authored instance template has an immutable `instance_slug`.
+This is the template's portable identity inside its base-world family, not its
+database id and not the runtime Instance ID shown to players.
+
+For example, a template named **Hades** may have the stable scope
+`instance.hades`. Renaming the template later changes its display name but not
+that scope. A second sibling with the same generated name receives a suffixed
+slug. Slugs are unique only inside their base family; they do not need to be
+globally unique across WR2. Treat the exported slug as read-only. Changing it
+in a hand-edited import selects or creates a different template; it is not how
+you rename the existing template.
+
+When a base world has one or more authored instance templates, exporting the
+base produces a world-family bundle. Its first document declares the stable
+scopes:
+
+```yaml
+apiVersion: writtenrealms.com/v1alpha3
+kind: worldbundle
+metadata:
+  name: Phalanx
+spec:
+  worlds:
+    - ref: world@base
+      role: base
+      name: Phalanx
+    - ref: instance.hades
+      role: instance
+      slug: hades
+      name: Hades
+      parent: world@base
+  links_mode: replace
+  links: []
+```
+
+Every following content document identifies its scope:
+
+```yaml
+---
+kind: room
+metadata:
+  world_ref: world@base
+  ref: room@12
+  name: Hades Gate
+spec:
+  coordinates: {x: 4, y: 2, z: 0}
+---
+kind: room
+metadata:
+  world_ref: instance.hades
+  ref: room@12
+  name: Palace of Hades
+spec:
+  coordinates: {x: 0, y: 0, z: 0}
+```
+
+These two `room@12` refs do not collide. A stable room ref is local to its
+`world_ref`; the bundle scope supplies the missing half of the address.
+Ordinary refs inside each document—zones, paths, room exits, spawn targets,
+Trigger targets, and structured conditions—remain local to that scope. A
+literal `/transfer room@N` resolves later in the command issuer's current
+authored runtime world; it is also not a cross-world address.
+
+Supported relationships that actually cross the base/instance boundary are
+stored centrally in `worldbundle.spec.links`:
+
+- `room.enters_instance`: base room to instance template
+- `room.transfer_to`: base room to a specific instance room
+- `room.exits_to`: instance room back to a base room
+- `world_config.exits_to`: instance config back to a base room
+
+Each link endpoint names both its world scope and, where needed, its stable
+room ref. These fields are intentionally absent from the individual scoped
+room and world-config documents. Do not put a cross-world database id or an
+assumed globally unique `room@N` in a Trigger or script; add a typed bundle
+relation when the supported instance-link behavior is intended.
+
+For the full header and link examples, see
+[yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md#world-family-bundles).
+
+## Moving A Family From Development To Production
+
+Use the base world as the unit of portability:
+
+1. In development, export the authored base world, not an individual linked
+   instance template.
+2. Keep the complete YAML stream together. The first document is the
+   `worldbundle` header, followed by the base and template content documents.
+3. On the destination installation, create or select the multiplayer authored
+   base world that should receive the family. WR2 rejects a family bundle
+   applied to a single-player target instead of risking an unsafe conversion
+   of existing runtime state.
+4. As a rank 3+ builder, apply the complete stream through
+   **World > Edit World**.
+5. Verify the base and each instance template, then re-export the destination
+   family if you want a canonical comparison.
+
+The destination's selected base world becomes `world@base`. WR2 matches an
+existing direct template by `instance_slug` or creates a missing one, so no
+development database world id has to match production. The declaration name
+is descriptive; the slug is identity.
+
+The complete bundle is atomic. WR2 reserves stable rooms independently within
+each scope, applies every scoped document, then resolves the central links in
+one batched pass. A failure anywhere rolls back content changes, newly created
+templates, and link replacement. `links_mode: replace` means the declared
+scopes' managed cross-world link fields become exactly the header's link list;
+an empty list clears them. Existing instance templates omitted from a
+hand-authored bundle are not deleted, although canonical export includes every
+direct template.
+
+Only non-archived authored templates are portable content. Spawned instance worlds,
+runtime `instance_ref` values, runs, participants, live room/world state,
+players, and inventory are never exported. A base with no templates keeps the
+ordinary single-world format. An instance template cannot be exported safely
+by itself; export its base family instead.
+
 ## Configuring Death Routing
 
 Instance templates support two destination-policy sources:
@@ -198,26 +321,28 @@ Instance templates support two destination-policy sources:
 ```yaml
 kind: world
 spec:
-  starting_room: room@0,0,0
-  death_room: room@0,1,0
+  starting_room: room@1
+  death_room: room@2
   death_routing_source: local
   death_routing:
     routes:
       - when:
           eq: [zone.id, zone@3]
-        destination: room@0,1,0
+        destination: room@2
       - when:
           gte: [player.level, 20]
-        destination: room@2,1,0
+        destination: room@4
       - when:
           eq: [player.archetype, warlord]
-        destination: room@1,1,0
+        destination: room@3
 ```
 
 `local` is the default. The template's compiled policy and `death_room`
 determine the destination, and the player stays inside the current run. Route
 conditions may inspect the player's faction, class, level, or character state,
 plus the room zone where the player died. The first matching route wins.
+These stable refs are scoped to the instance template and continue to identify
+the same authored rooms if their map coordinates change.
 
 Level thresholds use inclusive `gte` and `lte` comparisons. For example,
 `gte: [player.level, 20]` means level 20 or higher.
@@ -228,7 +353,7 @@ To route through the base world instead:
 kind: world
 spec:
   death_routing_source: base_world
-  death_room: room@0,1,0
+  death_room: room@2
 ```
 
 `base_world` selects the base world's complete policy, including its fail-safe
@@ -528,8 +653,8 @@ metadata:
   slug: blackfin-hideout
   name: Blackfin Hideout
 spec:
-  entry_room: room@0,0,0
-  death_room: room@0,1,0
+  entry_room: room@1
+  death_room: room@2
 
   goal:
     starts_on: first_entry
@@ -681,8 +806,7 @@ spec:
   entries:
     - slug: blackfin-raiders
       source: mobdefinition.blackfin-cutthroat
-      target:
-        zone: zone@1
+      target: zone@1
       count:
         min: 8
         max: 12
@@ -693,8 +817,7 @@ spec:
 
     - slug: blackfin-captain
       source: mobdefinition.blackfin-captain
-      target:
-        room: room@4,2,0
+      target: room@12
       count: 1
       traits:
         guaranteed:
@@ -719,8 +842,8 @@ metadata:
   slug: blackfin-hideout
   name: Blackfin Hideout
 spec:
-  entry_room: room@0,0,0
-  death_room: room@0,1,0
+  entry_room: room@1
+  death_room: room@2
 
   goal:
     starts_on: first_entry
@@ -813,8 +936,7 @@ source: mobdefinition.sparabara
 The target side is local to the instance template:
 
 ```yaml
-target:
-  path: path@1
+target: path@1
 ```
 
 For future clear-all goals:

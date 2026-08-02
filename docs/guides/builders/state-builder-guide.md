@@ -136,9 +136,7 @@ metadata:
 spec:
   scope: room
   kind: command
-  target:
-    type: room
-    key: room.<room_id>
+  target: room@<room_relative_id>
   match: ring bell
   conditions:
     eq:
@@ -324,9 +322,13 @@ Room example:
 ```yaml
 kind: room
 metadata:
-  ref: room@4,2,0
+  ref: room@12
   name: Prison Cell
 spec:
+  coordinates:
+    x: 4
+    y: 2
+    z: 0
   zone: zone@1
   initial_state:
     cell_door_open: false
@@ -364,8 +366,7 @@ spec:
   entries:
     - slug: greek-commander
       source: mobdefinition.greek-captive-commander
-      target:
-        room: room@4,2,0
+      target: room@12
       count: 1
       initial_state:
         captive: true

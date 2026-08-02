@@ -1,5 +1,7 @@
 from django.contrib.contenttypes.models import ContentType
 
+import yaml
+
 from rest_framework.reverse import reverse
 
 from builders.models import MobDefinition, Trigger
@@ -51,6 +53,23 @@ class TestMobDefinitionTriggerEndpoints(WorldTestCase):
         self.assertIn("match:", resp.data["new_trigger_template"]["yaml"])
         self.assertIn("match:", resp.data["triggers"][0]["yaml"])
         self.assertEqual(resp.data["data"][0]["match"], "hello")
+        template_manifest = resp.data["new_trigger_template"]["manifest"]
+        self.assertEqual(
+            template_manifest["apiVersion"],
+            "writtenrealms.com/v1alpha3",
+        )
+        self.assertEqual(
+            template_manifest["spec"]["target"],
+            f"mobdefinition.{self.mob_definition.slug}",
+        )
+        self.assertEqual(
+            yaml.safe_load(resp.data["new_trigger_template"]["yaml"])["spec"]["target"],
+            f"mobdefinition.{self.mob_definition.slug}",
+        )
+        self.assertEqual(
+            resp.data["triggers"][0]["manifest"]["spec"]["target"],
+            f"mobdefinition.{self.mob_definition.slug}",
+        )
 
     def test_add_mob_definition_trigger(self):
         resp = self.client.post(

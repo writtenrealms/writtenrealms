@@ -6,8 +6,10 @@ import yaml
 from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
 
+from rest_framework import serializers
 from rest_framework.reverse import reverse
 
+from builders import manifests as builder_manifests
 from builders.currencies import create_currency
 from builders.models import (
     BuilderAssignment,
@@ -130,10 +132,13 @@ class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
         self.assertNotIn("key", template_manifest["metadata"])
         self.assertEqual(template_manifest["spec"]["scope"], adv_consts.TRIGGER_SCOPE_ROOM)
         self.assertEqual(template_manifest["spec"]["kind"], adv_consts.TRIGGER_KIND_COMMAND)
-        self.assertEqual(template_manifest["spec"]["target"]["type"], "room")
         self.assertEqual(
-            template_manifest["spec"]["target"]["key"],
-            f"room.{self.room.id}",
+            template_manifest["spec"]["target"],
+            f"room@{self.room.relative_id}",
+        )
+        self.assertEqual(
+            template_manifest["apiVersion"],
+            "writtenrealms.com/v1alpha3",
         )
         self.assertIn("match", template_manifest["spec"])
         self.assertIn("script", template_manifest["spec"])
@@ -141,7 +146,10 @@ class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
         parsed_template_yaml = yaml.safe_load(template["yaml"])
         self.assertEqual(parsed_template_yaml["kind"], "trigger")
         self.assertEqual(parsed_template_yaml["metadata"]["world"], f"world.{self.world.id}")
-        self.assertEqual(parsed_template_yaml["spec"]["target"]["key"], f"room.{self.room.id}")
+        self.assertEqual(
+            parsed_template_yaml["spec"]["target"],
+            f"room@{self.room.relative_id}",
+        )
 
     def test_room_trigger_detail_includes_yaml_manifest(self):
         resp = self.client.get(self.detail_ep)
@@ -150,8 +158,52 @@ class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(resp.data["key"], self.trigger.key)
         self.assertEqual(resp.data["target"]["type"], "room")
         self.assertEqual(resp.data["target"]["key"], self.room.key)
+        self.assertEqual(
+            resp.data["target"]["ref"],
+            f"room@{self.room.relative_id}",
+        )
+        self.assertEqual(resp.data["target"]["name"], self.room.name)
+        self.assertEqual(
+            resp.data["manifest"]["spec"]["target"],
+            f"room@{self.room.relative_id}",
+        )
+        self.assertEqual(
+            resp.data["manifest"]["apiVersion"],
+            "writtenrealms.com/v1alpha3",
+        )
         self.assertIn("kind: trigger", resp.data["yaml"])
         self.assertIn("operation: delete", resp.data["delete_yaml"])
+
+    def test_trigger_export_rejects_invalid_stored_targets(self):
+        cases = (
+            (None, None, "is missing"),
+            (
+                ContentType.objects.get_for_model(Room),
+                2_147_483_647,
+                "is dangling",
+            ),
+            (
+                ContentType.objects.get_for_model(WorldConfig),
+                self.world.config_id,
+                "uses unsupported type",
+            ),
+        )
+
+        for target_type, target_id, message in cases:
+            with self.subTest(message=message):
+                Trigger.objects.filter(pk=self.trigger.pk).update(
+                    target_type=target_type,
+                    target_id=target_id,
+                )
+                trigger = Trigger.objects.select_related("target_type").get(
+                    pk=self.trigger.pk,
+                )
+
+                with self.assertRaisesMessage(
+                    serializers.ValidationError,
+                    message,
+                ):
+                    builder_manifests.serialize_trigger_manifest(trigger)
 
     def test_room_trigger_list_supports_filters_and_search(self):
         other_room = Room.objects.create(
@@ -230,6 +282,10 @@ class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(mob_trigger_data["kind"], adv_consts.TRIGGER_KIND_EVENT)
         self.assertEqual(mob_trigger_data["target"]["type"], "mobdefinition")
         self.assertEqual(mob_trigger_data["target"]["name"], "Lorekeeper")
+        self.assertEqual(
+            mob_trigger_data["manifest"]["spec"]["target"],
+            f"mobdefinition.{mob_definition.slug}",
+        )
         self.assertFalse(mob_trigger_data["is_active"])
         self.assertIn("kind: trigger", mob_trigger_data["yaml"])
         self.assertIn(f"key: {mob_trigger.key}", mob_trigger_data["yaml"])
@@ -291,7 +347,7 @@ class TestTriggerManifests(AuthenticatedBuilderWorldTestCase):
 
     def test_apply_trigger_manifest_updates_trigger(self):
         manifest = f"""
-apiVersion: writtenrealms.com/v1alpha1
+apiVersion: writtenrealms.com/v1alpha3
 kind: Trigger
 metadata:
   world: world.{self.world.id}
@@ -300,9 +356,7 @@ metadata:
 spec:
   scope: room
   kind: command
-  target:
-    type: room
-    key: {self.room.key}
+  target: room@{self.room.relative_id}
   match: pull lever or pull chain
   script: /cmd room -- /echo -- The lever clicks.
   conditions: level 1
@@ -336,7 +390,7 @@ spec:
 
     def test_apply_trigger_manifest_can_create_trigger(self):
         manifest = f"""
-apiVersion: writtenrealms.com/v1alpha1
+apiVersion: writtenrealms.com/v1alpha3
 kind: Trigger
 metadata:
   world: world.{self.world.id}
@@ -344,9 +398,7 @@ metadata:
 spec:
   scope: room
   kind: command
-  target:
-    type: room
-    key: {self.room.key}
+  target: room@{self.room.relative_id}
   match: touch statue
   script: /cmd room -- /echo -- The statue vibrates.
   conditions: level 1
@@ -380,6 +432,245 @@ spec:
         self.assertEqual(created_trigger.gate_delay, 3)
         self.assertEqual(created_trigger.order, 12)
         self.assertTrue(created_trigger.is_active)
+
+    def test_apply_trigger_manifest_accepts_all_scalar_target_types(self):
+        mob_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="scalar-guardian",
+            name="Scalar Guardian",
+        )
+        item_definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="scalar-key",
+            name="a scalar key",
+        )
+        cases = (
+            (
+                "zone",
+                {
+                    "scope": "zone",
+                    "kind": "command",
+                    "target": f"zone@{self.zone.relative_id}",
+                    "match": "survey zone",
+                },
+                self.zone,
+            ),
+            (
+                "world",
+                {
+                    "scope": "world",
+                    "kind": "command",
+                    "target": "world",
+                    "match": "survey world",
+                },
+                self.world,
+            ),
+            (
+                "mobdefinition",
+                {
+                    "scope": "world",
+                    "kind": "event",
+                    "target": f"mobdefinition.{mob_definition.slug}",
+                    "event": "say",
+                    "match": "hello guardian",
+                },
+                mob_definition,
+            ),
+            (
+                "itemdefinition",
+                {
+                    "scope": "world",
+                    "kind": "command",
+                    "target": f"itemdefinition.{item_definition.slug}",
+                    "match": "inspect scalar key",
+                },
+                item_definition,
+            ),
+        )
+
+        for target_type, spec, expected_target in cases:
+            with self.subTest(target_type=target_type):
+                manifest = {
+                    "apiVersion": "writtenrealms.com/v1alpha3",
+                    "kind": "trigger",
+                    "metadata": {
+                        "world": f"world.{self.world.id}",
+                        "name": f"Scalar {target_type} target",
+                    },
+                    "spec": {
+                        **spec,
+                        "script": "",
+                        "display_action_in_room": False,
+                    },
+                }
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": yaml.safe_dump(manifest, sort_keys=False)},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 201, resp.data)
+                created_trigger = Trigger.objects.get(
+                    pk=resp.data["trigger"]["id"]
+                )
+                self.assertEqual(created_trigger.target, expected_target)
+                self.assertEqual(
+                    resp.data["trigger"]["manifest"]["spec"]["target"],
+                    spec["target"],
+                )
+                self.assertEqual(
+                    resp.data["trigger"]["target"]["type"],
+                    target_type,
+                )
+                self.assertEqual(
+                    resp.data["trigger"]["target"]["key"],
+                    expected_target.key,
+                )
+                self.assertEqual(
+                    resp.data["trigger"]["target"]["ref"],
+                    spec["target"],
+                )
+
+    def test_apply_trigger_manifest_accepts_legacy_target_mappings(self):
+        mob_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="legacy-guardian",
+            name="Legacy Guardian",
+        )
+        item_definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="legacy-key",
+            name="a legacy key",
+        )
+        cases = (
+            (
+                "room ref and ignored name",
+                "writtenrealms.com/v1alpha1",
+                "room",
+                "command",
+                {
+                    "type": "room",
+                    "ref": f"room@{self.room.relative_id}",
+                    "name": "Stale display name",
+                },
+                {"match": "legacy room ref"},
+                self.room,
+                f"room@{self.room.relative_id}",
+            ),
+            (
+                "room key",
+                "writtenrealms.com/v1alpha2",
+                "room",
+                "command",
+                {"type": "room", "key": self.room.key},
+                {"match": "legacy room key"},
+                self.room,
+                f"room@{self.room.relative_id}",
+            ),
+            (
+                "room id",
+                "writtenrealms.com/v1alpha2",
+                "room",
+                "command",
+                {"type": "room", "id": self.room.id},
+                {"match": "legacy room id"},
+                self.room,
+                f"room@{self.room.relative_id}",
+            ),
+            (
+                "zone ref and ignored name",
+                "writtenrealms.com/v1alpha1",
+                "zone",
+                "command",
+                {
+                    "type": "zone",
+                    "ref": f"zone@{self.zone.relative_id}",
+                    "name": "Stale zone name",
+                },
+                {"match": "legacy zone ref"},
+                self.zone,
+                f"zone@{self.zone.relative_id}",
+            ),
+            (
+                "world ref",
+                "writtenrealms.com/v1alpha1",
+                "world",
+                "command",
+                {"type": "world", "ref": "world"},
+                {"match": "legacy world ref"},
+                self.world,
+                "world",
+            ),
+            (
+                "mob type alias",
+                "writtenrealms.com/v1alpha2",
+                "world",
+                "event",
+                {
+                    "type": "mob_definition",
+                    "ref": f"mobdefinition.{mob_definition.slug}",
+                },
+                {"event": "say", "match": "legacy mob alias"},
+                mob_definition,
+                f"mobdefinition.{mob_definition.slug}",
+            ),
+            (
+                "item type alias",
+                "writtenrealms.com/v1alpha2",
+                "world",
+                "command",
+                {
+                    "type": "item_definition",
+                    "key": f"itemdefinition.{item_definition.id}",
+                },
+                {"match": "legacy item alias"},
+                item_definition,
+                f"itemdefinition.{item_definition.slug}",
+            ),
+        )
+
+        for (
+            label,
+            api_version,
+            scope,
+            kind,
+            target,
+            extra_spec,
+            expected_target,
+            expected_ref,
+        ) in cases:
+            with self.subTest(label=label):
+                manifest = {
+                    "apiVersion": api_version,
+                    "kind": "trigger",
+                    "metadata": {
+                        "world": f"world.{self.world.id}",
+                        "name": f"Legacy {label}",
+                    },
+                    "spec": {
+                        "scope": scope,
+                        "kind": kind,
+                        "target": target,
+                        "script": "",
+                        "display_action_in_room": False,
+                        **extra_spec,
+                    },
+                }
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": yaml.safe_dump(manifest, sort_keys=False)},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 201, resp.data)
+                created_trigger = Trigger.objects.get(
+                    pk=resp.data["trigger"]["id"]
+                )
+                self.assertEqual(created_trigger.target, expected_target)
+                self.assertEqual(
+                    resp.data["trigger"]["manifest"]["spec"]["target"],
+                    expected_ref,
+                )
 
     def test_apply_trigger_manifest_accepts_structured_conditions(self):
         manifest = f"""
@@ -1268,6 +1559,8 @@ spec:
         )
 
     def test_instance_trigger_steps_resolve_base_world_item_definitions(self):
+        self.world.is_multiplayer = True
+        self.world.save(update_fields=["is_multiplayer"])
         seed = ItemDefinition.objects.create(
             world=self.world,
             slug="barley-seed",
@@ -1292,9 +1585,7 @@ metadata:
 spec:
   scope: room
   kind: command
-  target:
-    type: room
-    key: room.{instance_room.id}
+  target: room@{instance_room.relative_id}
   match: plant seed
   conditions:
     item_present:
@@ -1335,7 +1626,7 @@ spec:
         trigger.steps[0]["actions"][0]["item"] = seed.id
         trigger.save(update_fields=["conditions", "steps"])
         export_resp = self.client.get(
-            reverse("builder-world-export", args=[instance_world.id])
+            reverse("builder-world-export", args=[self.world.id])
         )
 
         self.assertEqual(export_resp.status_code, 200, export_resp.data)
@@ -1381,9 +1672,7 @@ metadata:
 spec:
   scope: room
   kind: command
-  target:
-    type: room
-    key: room.{instance_room.id}
+  target: room@{instance_room.relative_id}
   match: pay toll
   steps:
     - after_seconds: 0
@@ -1637,9 +1926,7 @@ metadata:
 spec:
   scope: room
   kind: command
-  target:
-    type: room
-    key: {self.room.key}
+  target: room@{self.room.relative_id}
 """
         resp = self.client.post(
             self.apply_ep,
@@ -1683,6 +1970,296 @@ spec:
         self.assertEqual(self.trigger.target_id, trigger_target_id)
         self.assertEqual(self.trigger.gate_delay, trigger_gate_delay)
 
+    def test_apply_trigger_manifest_omitted_target_preserves_existing_target(self):
+        original_target_type_id = self.trigger.target_type_id
+        original_target_id = self.trigger.target_id
+        manifest = {
+            "apiVersion": "writtenrealms.com/v1alpha3",
+            "kind": "trigger",
+            "metadata": {
+                "world": f"world.{self.world.id}",
+                "key": self.trigger.key,
+            },
+            "spec": {"match": "updated without a target"},
+        }
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": yaml.safe_dump(manifest, sort_keys=False)},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.trigger.refresh_from_db()
+        self.assertEqual(self.trigger.target_type_id, original_target_type_id)
+        self.assertEqual(self.trigger.target_id, original_target_id)
+
+    def test_legacy_zone_target_update_inherits_omitted_scope(self):
+        zone_trigger = Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ZONE,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=ContentType.objects.get_for_model(self.zone),
+            target_id=self.zone.id,
+            name="Legacy Zone Trigger",
+            match="survey old zone",
+            script="",
+        )
+        manifest = {
+            "apiVersion": "writtenrealms.com/v1alpha2",
+            "kind": "trigger",
+            "metadata": {
+                "world": f"world.{self.world.id}",
+                "key": zone_trigger.key,
+            },
+            "spec": {
+                "target": {"ref": self.zone.name},
+                "match": "survey updated zone",
+            },
+        }
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": yaml.safe_dump(manifest, sort_keys=False)},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        zone_trigger.refresh_from_db()
+        self.assertEqual(zone_trigger.scope, adv_consts.TRIGGER_SCOPE_ZONE)
+        self.assertEqual(zone_trigger.target, self.zone)
+        self.assertEqual(zone_trigger.match, "survey updated zone")
+        self.assertEqual(
+            resp.data["trigger"]["manifest"]["spec"]["target"],
+            f"zone@{self.zone.relative_id}",
+        )
+
+    def test_apply_trigger_manifest_rejects_explicit_null_target_on_update(self):
+        manifest = {
+            "apiVersion": "writtenrealms.com/v1alpha3",
+            "kind": "trigger",
+            "metadata": {
+                "world": f"world.{self.world.id}",
+                "key": self.trigger.key,
+            },
+            "spec": {"target": None},
+        }
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": yaml.safe_dump(manifest, sort_keys=False)},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400, resp.data)
+        self.assertIn("spec.target", str(resp.data))
+
+    def test_apply_trigger_manifest_rejects_malformed_scalar_targets(self):
+        invalid_targets = (
+            "",
+            "room.123",
+            "room@",
+            "zone@not-a-relative-id",
+            "unknown.target",
+        )
+
+        for index, target in enumerate(invalid_targets):
+            with self.subTest(target=target):
+                manifest = {
+                    "apiVersion": "writtenrealms.com/v1alpha3",
+                    "kind": "trigger",
+                    "metadata": {
+                        "world": f"world.{self.world.id}",
+                        "name": f"Malformed target {index}",
+                    },
+                    "spec": {
+                        "scope": "room",
+                        "kind": "command",
+                        "target": target,
+                        "match": f"malformed target {index}",
+                    },
+                }
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": yaml.safe_dump(manifest, sort_keys=False)},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 400, resp.data)
+                self.assertIn("spec.target", str(resp.data))
+
+    def test_apply_trigger_manifest_rejects_target_scope_and_kind_mismatches(self):
+        mob_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="mismatched-guardian",
+            name="Mismatched Guardian",
+        )
+        cases = (
+            (
+                "room scope with zone target",
+                {
+                    "scope": "room",
+                    "kind": "command",
+                    "target": f"zone@{self.zone.relative_id}",
+                    "match": "mismatched zone",
+                },
+            ),
+            (
+                "room event with mob target",
+                {
+                    "scope": "room",
+                    "kind": "event",
+                    "target": f"mobdefinition.{mob_definition.slug}",
+                    "event": "after_move_enter",
+                },
+            ),
+            (
+                "world event with room target",
+                {
+                    "scope": "world",
+                    "kind": "event",
+                    "target": f"room@{self.room.relative_id}",
+                    "event": "say",
+                    "match": "mismatched room",
+                },
+            ),
+        )
+
+        for label, spec in cases:
+            with self.subTest(label=label):
+                manifest = {
+                    "apiVersion": "writtenrealms.com/v1alpha3",
+                    "kind": "trigger",
+                    "metadata": {
+                        "world": f"world.{self.world.id}",
+                        "name": f"Invalid {label}",
+                    },
+                    "spec": {**spec, "script": ""},
+                }
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": yaml.safe_dump(manifest, sort_keys=False)},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 400, resp.data)
+                self.assertIn("target", str(resp.data).lower())
+
+    def test_apply_trigger_manifest_rejects_cross_world_and_conflicting_legacy_targets(self):
+        other_world = World.objects.new_world(
+            name="Foreign Trigger World",
+            author=self.user,
+            config=WorldConfig.objects.create(),
+        )
+        other_room = other_world.config.starting_room
+
+        targets = (
+            {
+                "type": "room",
+                "key": other_room.key,
+            },
+            {
+                "type": "room",
+                "ref": f"room@{self.room.relative_id}",
+                "key": other_room.key,
+            },
+        )
+        for index, target in enumerate(targets):
+            with self.subTest(target=target):
+                manifest = {
+                    "apiVersion": "writtenrealms.com/v1alpha2",
+                    "kind": "trigger",
+                    "metadata": {
+                        "world": f"world.{self.world.id}",
+                        "name": f"Foreign target {index}",
+                    },
+                    "spec": {
+                        "scope": "room",
+                        "kind": "command",
+                        "target": target,
+                        "match": f"foreign target {index}",
+                    },
+                }
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": yaml.safe_dump(manifest, sort_keys=False)},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 400, resp.data)
+                self.assertIn("target", str(resp.data).lower())
+
+    def test_instance_triggers_resolve_base_world_definition_scalar_targets(self):
+        self.world.is_multiplayer = True
+        self.world.save(update_fields=["is_multiplayer"])
+        base_mob = MobDefinition.objects.create(
+            world=self.world,
+            slug="instance-guardian",
+            name="Instance Guardian",
+        )
+        base_item = ItemDefinition.objects.create(
+            world=self.world,
+            slug="instance-key",
+            name="an instance key",
+        )
+        instance_world = World.objects.new_world(
+            name="Scalar Target Instance",
+            author=self.user,
+            config=WorldConfig.objects.create(),
+            instance_of=self.world,
+        )
+        apply_ep = reverse(
+            "builder-world-manifest-apply",
+            args=[instance_world.id],
+        )
+        cases = (
+            (
+                base_mob,
+                {
+                    "scope": "world",
+                    "kind": "event",
+                    "target": f"mobdefinition.{base_mob.slug}",
+                    "event": "say",
+                    "match": "hello instance guardian",
+                },
+            ),
+            (
+                base_item,
+                {
+                    "scope": "world",
+                    "kind": "command",
+                    "target": f"itemdefinition.{base_item.slug}",
+                    "match": "inspect instance key",
+                },
+            ),
+        )
+
+        for expected_target, spec in cases:
+            with self.subTest(target=spec["target"]):
+                manifest = {
+                    "apiVersion": "writtenrealms.com/v1alpha3",
+                    "kind": "trigger",
+                    "metadata": {
+                        "world": f"world.{instance_world.id}",
+                        "name": f"Instance {spec['target']}",
+                    },
+                    "spec": {**spec, "script": ""},
+                }
+                resp = self.client.post(
+                    apply_ep,
+                    {"manifest": yaml.safe_dump(manifest, sort_keys=False)},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 201, resp.data)
+                trigger = Trigger.objects.get(pk=resp.data["trigger"]["id"])
+                self.assertEqual(trigger.world, instance_world)
+                self.assertEqual(trigger.target, expected_target)
+                self.assertEqual(
+                    resp.data["trigger"]["manifest"]["spec"]["target"],
+                    spec["target"],
+                )
+
     def test_apply_trigger_manifest_can_delete_trigger(self):
         manifest = f"""
 kind: trigger
@@ -1715,9 +2292,7 @@ metadata:
 spec:
   scope: world
   kind: event
-  target:
-    type: mobdefinition
-    key: mobdefinition.{mob_definition.id}
+  target: mobdefinition.{mob_definition.slug}
   event: say
   match: hello and (traveler or friend)
   script: say Welcome, seeker.
@@ -1756,9 +2331,7 @@ metadata:
 spec:
   scope: world
   kind: event
-  target:
-    type: mobdefinition
-    key: mobdefinition.{mob_definition.id}
+  target: mobdefinition.{mob_definition.slug}
   event: enter
   script: say Halt, traveler.
   display_action_in_room: false
@@ -1785,8 +2358,8 @@ spec:
             adv_consts.MOB_REACTION_EVENT_ENTERING,
         )
         self.assertEqual(
-            resp.data["trigger"]["manifest"]["spec"]["target"]["type"],
-            "mobdefinition",
+            resp.data["trigger"]["manifest"]["spec"]["target"],
+            f"mobdefinition.{mob_definition.slug}",
         )
         self.assertEqual(
             resp.data["trigger"]["manifest"]["spec"]["event"],
@@ -1802,9 +2375,7 @@ metadata:
 spec:
   scope: room
   kind: policy
-  target:
-    type: room
-    key: room.{self.room.id}
+  target: room@{self.room.relative_id}
   event: before_move_enter
   conditions:
     eq:
@@ -1845,9 +2416,7 @@ metadata:
 spec:
   scope: room
   kind: policy
-  target:
-    type: room
-    key: room.{self.room.id}
+  target: room@{self.room.relative_id}
   event: before_move_exit
   match: east
   conditions:
@@ -1885,9 +2454,7 @@ metadata:
 spec:
   scope: room
   kind: event
-  target:
-    type: room
-    key: room.{self.room.id}
+  target: room@{self.room.relative_id}
   event: after_move_enter
   conditions:
     not:
@@ -1926,9 +2493,7 @@ metadata:
 spec:
   scope: room
   kind: event
-  target:
-    type: room
-    key: room.{self.room.id}
+  target: room@{self.room.relative_id}
   event: enter
   script: |
     /cmd room -- /echo -- A chime sounds.
@@ -1953,8 +2518,8 @@ spec:
         self.assertEqual(created_trigger.target_id, self.room.id)
         self.assertEqual(created_trigger.event, adv_consts.TRIGGER_EVENT_ENTER)
         self.assertEqual(
-            resp.data["trigger"]["manifest"]["spec"]["target"]["type"],
-            "room",
+            resp.data["trigger"]["manifest"]["spec"]["target"],
+            f"room@{self.room.relative_id}",
         )
         self.assertEqual(
             resp.data["trigger"]["manifest"]["spec"]["event"],
@@ -1970,9 +2535,7 @@ metadata:
 spec:
   scope: room
   kind: event
-  target:
-    type: room
-    key: room.{self.room.id}
+  target: room@{self.room.relative_id}
   event: say
   script: echo no
 """
@@ -1996,9 +2559,7 @@ metadata:
 spec:
   scope: world
   kind: event
-  target:
-    type: mobdefinition
-    key: mobdefinition.{mob_definition.id}
+  target: mobdefinition.{mob_definition.slug}
   event: after_move_enter
   script: say no
 """
@@ -2019,9 +2580,7 @@ metadata:
 spec:
   scope: room
   kind: event
-  target:
-    type: room
-    key: room.{self.room.id}
+  target: room@{self.room.relative_id}
   event: after_death_room_enter
   script: |
     /cmd room -- /echo -- Death releases you into the quiet chamber.
@@ -2084,9 +2643,7 @@ metadata:
 spec:
   scope: room
   kind: event
-  target:
-    type: room
-    key: {self.room.key}
+  target: room@{self.room.relative_id}
   event: after_move_enter
   script: {new_script}
   display_action_in_room: false
@@ -2217,9 +2774,7 @@ metadata:
 spec:
   scope: world
   kind: policy
-  target:
-    type: world
-    key: world.{self.world.id}
+  target: world
   event: before_move_enter
   conditions:
     always: true

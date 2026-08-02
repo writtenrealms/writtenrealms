@@ -15,24 +15,18 @@ import { useRoute } from "vue-router";
 import ElementList from "@/components/elementlist/ElementList.vue";
 import { BUILDER_FORMS } from "@/core/forms.ts";
 import { formatRelativeModifiedDate } from "@/core/utils.ts";
-
+import { builderZoneIndexRoute } from "@/core/builderRoutes";
 
 const store = useStore();
 const route = useRoute();
 
 const endpoint = computed(() => `/builder/worlds/${route.params.world_id}/zones/`);
 const resolve_route = element => {
-  return {
-    name: 'builder_zone_index',
-    params: {
-      world_id: store.state.builder.world.id,
-      zone_id: element.id
-    }
-  };
+  return builderZoneIndexRoute(route.params.world_id, element);
 };
 
 const list_schema: any[] = [
-  { name: "id", label: "ID", sortable: true },
+  { name: "manifest_ref", label: "Zone", nowrap: true },
   { name: "name", label: "Name", nowrap: true, sortable: true },
   { name: "num_rooms", label: "Rooms" },
   {

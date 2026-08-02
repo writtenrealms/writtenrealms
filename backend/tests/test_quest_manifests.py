@@ -48,6 +48,72 @@ class TestQuestManifests(AuthenticatedBuilderWorldTestCase):
         self.assertNotIn("lead", template["yaml"])
         self.assertNotIn("stakes", template["yaml"])
 
+    def test_quest_list_and_detail_canonicalize_room_refs(self):
+        legacy_ref = f"room.{self.room.id}"
+        canonical_ref = f"room@{self.room.relative_id}"
+        quest = QuestTemplate.objects.create(
+            world=self.world,
+            slug="room-bound-quest",
+            name="Room-Bound Quest",
+            status="active",
+            discovery_policy={
+                "sources": [
+                    {
+                        "type": "room_prompt",
+                        "room": legacy_ref,
+                        "callout": "A sealed notice waits here.",
+                    },
+                ],
+                "visible_if": {
+                    "eq": ["actor.room_id", legacy_ref],
+                },
+            },
+            graph={
+                "steps": [
+                    {
+                        "id": "resolved",
+                        "kind": "resolution",
+                        "recap": "Done.",
+                    },
+                ],
+            },
+            reward_policy={
+                "complete": [],
+                "compromised": [],
+                "failed_forward": [],
+                "expired": [],
+            },
+        )
+
+        list_response = self.client.get(self.quest_list_ep)
+        self.assertEqual(list_response.status_code, 200, list_response.data)
+        list_manifest = list_response.data["quests"][0]["manifest"]
+        self.assertEqual(
+            list_manifest["spec"]["discovery"]["sources"][0]["room"],
+            canonical_ref,
+        )
+        self.assertEqual(
+            list_manifest["spec"]["discovery"]["visible_if"]["eq"][1],
+            canonical_ref,
+        )
+        self.assertNotIn(
+            legacy_ref,
+            list_response.data["quests"][0]["yaml"],
+        )
+
+        detail_response = self.client.get(
+            reverse(
+                "builder-quest-template-detail",
+                args=[self.world.pk, quest.pk],
+            )
+        )
+        self.assertEqual(detail_response.status_code, 200, detail_response.data)
+        self.assertEqual(detail_response.data["manifest"], list_manifest)
+        self.assertEqual(
+            yaml.safe_load(detail_response.data["yaml"]),
+            list_manifest,
+        )
+
     def test_item_and_mob_definitions_generate_unique_world_slugs(self):
         mob_one = MobDefinition.objects.create(world=self.world, name="Quartermaster")
         mob_two = MobDefinition.objects.create(world=self.world, name="Quartermaster")
@@ -370,7 +436,10 @@ spec:
         room_item = quest.graph["steps"][0]["room_items"][0]
         self.assertEqual(room_item["id"], "saloon_keg")
         self.assertEqual(room_item["item_definition"], quest_item.slug)
-        self.assertEqual(room_item["room"], f"room.{self.room.id}")
+        self.assertEqual(
+            room_item["room"],
+            f"room@{self.room.relative_id}",
+        )
         self.assertEqual(
             room_item["room_description"],
             "A full saloon keg rests here.",

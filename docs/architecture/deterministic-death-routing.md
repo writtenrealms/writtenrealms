@@ -56,38 +56,43 @@ that changes them.
 ```yaml
 kind: world
 spec:
-  death_room: room@99,0,0
+  death_room: room@99
 
   death_routing:
     routes:
       # Zone overrides everything below it.
       - when:
           eq: [zone.id, zone@7]
-        destination: room@10,0,0
+        destination: room@10
 
       # Levels 20 and above use the veteran infirmary.
       - when:
           gte: [player.level, 20]
-        destination: room@11,0,0
+        destination: room@11
 
       # A consequence recorded earlier by gameplay.
       - when:
           eq: [state.character.divine_patron, poseidon]
-        destination: room@12,0,0
+        destination: room@12
 
       # Class/profile keys are stored on Player.archetype.
       - when:
           eq: [player.archetype, warlord]
-        destination: room@13,0,0
+        destination: room@13
 
       - when:
           eq: [player.core_faction, orc]
-        destination: room@14,0,0
+        destination: room@14
 ```
 
 The resolver examines routes from top to bottom and stops at the first match.
 Overlapping conditions are valid and intentional. If no route matches, the
 player goes to `death_room`.
+
+Room destinations use the canonical `room@<relative_id>` form. The relative
+id is stable when a builder moves the room and portable across world
+export/import. Legacy coordinate and database-key forms are accepted only as
+import aliases.
 
 Setting `death_routing: null` or supplying `routes: []` disables conditional
 routing. Omitting `death_routing` from a patch preserves the current policy.
@@ -195,15 +200,15 @@ Given:
 routes:
   - when:
       eq: [zone.id, zone@7]
-    destination: room@1,0,0
+    destination: room@1
 
   - when:
       eq: [player.core_faction, orc]
-    destination: room@2,0,0
+    destination: room@2
 ```
 
-an orc dying in `zone@7` goes to `room@1,0,0`. Reversing the two routes sends
-that player to `room@2,0,0`.
+an orc dying in `zone@7` goes to `room@1`. Reversing the two routes sends that
+player to `room@2`.
 
 The compiler does not reject overlaps or reorder rules by specificity.
 Manifest export preserves route order.

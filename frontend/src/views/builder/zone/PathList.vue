@@ -11,6 +11,7 @@
 
 
 <script lang='ts' setup>
+import { computed } from "vue";
 import { useStore } from "vuex";
 import { useRoute } from "vue-router";
 import ElementList from "@/components/elementlist/ElementList.vue";
@@ -20,13 +21,15 @@ import { formatRelativeModifiedDate } from "@/core/utils.ts";
 const store = useStore();
 const route = useRoute();
 
-const endpoint = `/builder/worlds/${route.params.world_id}/zones/${route.params.zone_id}/paths/`;
+const endpoint = computed(() => (
+  `/builder/worlds/${route.params.world_id}/zones/${store.state.builder.zone.id}/paths/`
+));
 const resolve_route = (element: any) => {
   return {
     name: 'builder_zone_path_details',
     params: {
       world_id: store.state.builder.world.id,
-      zone_id: route.params.zone_id,
+      zone_relative_id: route.params.zone_relative_id,
       path_id: element.id
     }
   };

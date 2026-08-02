@@ -32,6 +32,7 @@
 
 <script lang='ts' setup>
 import { useRoute } from "vue-router";
+import { builderRoomIndexRoute } from "@/core/builderRoutes";
 
 const route = useRoute();
 
@@ -40,13 +41,7 @@ defineProps<{
 }>();
 
 const room_link = (room: any) => {
-  return {
-    name: 'builder_room_index',
-    params: {
-      world_id: route.params.world_id,
-      room_id: room.id
-    }
-  };
+  return builderRoomIndexRoute(route.params.world_id, room);
 };
 
 const faction_ranks_link = (faction: any) => {

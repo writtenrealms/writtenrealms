@@ -54,6 +54,7 @@ import { useStore } from "vuex";
 import { useRouter } from "vue-router";
 import FormField from "@/components/forms/FormField.vue";
 import { FormElement } from "@/core/forms.ts";
+import { builderRoomIndexRoute } from "@/core/builderRoutes";
 
 const store = useStore();
 const router = useRouter();
@@ -111,13 +112,7 @@ const create = async () => {
       "ui/notification_set",
       `Successfully created ${world_name.value}`
     );
-    router.push({
-      name: 'builder_room_index',
-      params: {
-        world_id: world.id,
-        room_id: world.last_viewed_room.id
-      }
-    });
+    router.push(builderRoomIndexRoute(world.id, world.last_viewed_room));
   } catch (error: any) {
     const data = error?.response?.data;
     if (data && typeof data === "object" && !Array.isArray(data)) {

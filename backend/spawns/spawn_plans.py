@@ -164,9 +164,28 @@ def _spec_digest(value: Any) -> str:
     return hashlib.sha256(_stable_json(value).encode("utf-8")).hexdigest()
 
 
+def _target_identity(entry: SpawnEntry) -> dict[str, Any]:
+    for target_type, target_id in (
+        ("room", entry.target_room_id),
+        ("zone", entry.target_zone_id),
+        ("path", entry.target_path_id),
+        ("entry", entry.target_entry_id),
+    ):
+        if target_id:
+            return {"type": target_type, "id": target_id}
+    return {}
+
+
 def _plan_spec_hash(plan: SpawnPlan, *, entries: list[SpawnEntry] | None = None) -> str:
     if entries is None:
-        entries = list(plan.entries.all().order_by("order", "created_ts", "id"))
+        entries = list(
+            plan.entries.select_related(
+                "target_room",
+                "target_zone",
+                "target_path",
+                "target_entry",
+            ).order_by("order", "created_ts", "id")
+        )
     hashed_entries = []
     for entry in entries:
         entry_payload = {
@@ -174,7 +193,7 @@ def _plan_spec_hash(plan: SpawnPlan, *, entries: list[SpawnEntry] | None = None)
             "order": entry.order,
             "is_active": entry.is_active,
             "source": entry.source,
-            "target": entry.target,
+            "target": _target_identity(entry),
             "count": entry.count,
             "placement": entry.placement,
             "traits": entry.traits,
@@ -217,7 +236,7 @@ def _entry_spec_hashes(
         }),
         "target": _spec_digest({
             "randomization": randomization,
-            "target": entry.target,
+            "target": _target_identity(entry),
             "parent_anchor": parent_anchor_hash,
         }),
         "traits": _spec_digest({
@@ -290,72 +309,6 @@ def _parse_key_ref(value: Any, *, expected_prefixes: set[str] | None = None) -> 
         return None, None
     ref_value = raw_value.strip()
     return normalized_prefix, ref_value
-
-
-def _resolve_zone(*, world: World, value: Any, field_name: str = "spec.zone") -> Zone:
-    text = str(value or "").strip()
-    if not text:
-        raise serializers.ValidationError(f"{field_name} is required.")
-    if text.startswith("zone@"):
-        raw_relative_id = text[len("zone@"):].strip()
-        try:
-            relative_id = int(raw_relative_id)
-        except ValueError:
-            raise serializers.ValidationError(f"{field_name} must use integer zone@<relative_id>.")
-        zone = Zone.objects.filter(world=world, relative_id=relative_id).first()
-    else:
-        prefix, ref_value = _parse_key_ref(text, expected_prefixes={"zone"})
-        if prefix == "zone" and ref_value and ref_value.isdigit():
-            zone = Zone.objects.filter(world=world, pk=int(ref_value)).first()
-        else:
-            zone = Zone.objects.filter(world=world, name=text).order_by("id").first()
-    if zone is None:
-        raise serializers.ValidationError(f"{field_name} does not resolve to a zone in this world.")
-    return zone
-
-
-def _resolve_room(*, world: World, value: Any, field_name: str = "room") -> Room:
-    text = str(value or "").strip()
-    if not text:
-        raise serializers.ValidationError(f"{field_name} is required.")
-    if text.startswith("room@"):
-        raw_coords = text[len("room@"):]
-        parts = [part.strip() for part in raw_coords.split(",")]
-        if len(parts) != 3:
-            raise serializers.ValidationError(f"{field_name} must use room@x,y,z.")
-        try:
-            x, y, z = [int(part) for part in parts]
-        except ValueError:
-            raise serializers.ValidationError(f"{field_name} must use integer room coordinates.")
-        room = Room.objects.filter(world=world, x=x, y=y, z=z).first()
-    else:
-        prefix, ref_value = _parse_key_ref(text, expected_prefixes={"room"})
-        if prefix == "room" and ref_value and ref_value.isdigit():
-            room = Room.objects.filter(world=world, pk=int(ref_value)).first()
-        else:
-            room = Room.objects.filter(world=world, name=text).order_by("id").first()
-    if room is None:
-        raise serializers.ValidationError(f"{field_name} does not resolve to a room in this world.")
-    return room
-
-
-def _resolve_path(*, world: World, value: Any, field_name: str = "path") -> Path:
-    text = str(value or "").strip()
-    if not text:
-        raise serializers.ValidationError(f"{field_name} is required.")
-    if not text.startswith("path@"):
-        raise serializers.ValidationError(f"{field_name} must use path@<relative_id>.")
-    raw_relative_id = text[len("path@"):].strip()
-    try:
-        relative_id = int(raw_relative_id)
-    except ValueError:
-        raise serializers.ValidationError(f"{field_name} must use integer path@<relative_id>.")
-    if relative_id <= 0:
-        raise serializers.ValidationError(f"{field_name} relative id must be positive.")
-    path = Path.objects.filter(world=world, relative_id=relative_id).first()
-    if path is None:
-        raise serializers.ValidationError(f"{field_name} does not resolve to a path in this world.")
-    return path
 
 
 def _source_ref_from_value(source_spec: Any) -> str:
@@ -492,15 +445,6 @@ def _rooms_for_path_target(path: Path, *, source_type: str) -> list[Room]:
     return list(rooms_qs.order_by("z", "y", "x", "id"))
 
 
-def _target_mapping(entry: SpawnEntry) -> dict[str, Any]:
-    target = entry.target
-    if isinstance(target, str):
-        return {"room": target}
-    if isinstance(target, dict):
-        return target
-    return {}
-
-
 def _choose_room_for_entry(
     *,
     world: World,
@@ -508,11 +452,19 @@ def _choose_room_for_entry(
     source_type: str,
     rng: random.Random,
     room_choice_cache: dict[
-        tuple[int, str],
+        tuple[str, int, str],
         tuple[list[Room], dict[str, Any]],
     ] | None = None,
 ) -> tuple[Room, dict[str, Any]]:
-    cache_key = (entry.id, source_type)
+    target_identity = _target_identity(entry)
+    target_type = str(target_identity.get("type") or "")
+    target_id = int(target_identity.get("id") or 0)
+    eligibility_family = (
+        ""
+        if target_type == "room"
+        else "mob" if source_type.startswith("mob") else "other"
+    )
+    cache_key = (target_type, target_id, eligibility_family)
     if room_choice_cache is not None and cache_key in room_choice_cache:
         rooms, state = room_choice_cache[cache_key]
         if state["target_type"] == "room":
@@ -523,31 +475,21 @@ def _choose_room_for_entry(
         if room_choice_cache is not None:
             room_choice_cache[cache_key] = (rooms, state)
 
-    target = _target_mapping(entry)
-    if target.get("room"):
-        room = _resolve_room(
-            world=world,
-            value=target.get("room"),
-            field_name=f"entries.{entry.slug}.target.room",
-        )
+    if entry.target_room_id:
+        room = entry.target_room
+        if room.world_id != world.id:
+            raise serializers.ValidationError(
+                f"Spawn entry '{entry.slug}' targets a room outside this world."
+            )
         state = {"target_type": "room", "target_id": room.id}
         remember([room], state)
         return room, dict(state)
-    if target.get("room_ref"):
-        room = _resolve_room(
-            world=world,
-            value=target.get("room_ref"),
-            field_name=f"entries.{entry.slug}.target.room_ref",
-        )
-        state = {"target_type": "room", "target_id": room.id}
-        remember([room], state)
-        return room, dict(state)
-    if target.get("zone"):
-        zone = _resolve_zone(
-            world=world,
-            value=target.get("zone"),
-            field_name=f"entries.{entry.slug}.target.zone",
-        )
+    if entry.target_zone_id:
+        zone = entry.target_zone
+        if zone.world_id != world.id:
+            raise serializers.ValidationError(
+                f"Spawn entry '{entry.slug}' targets a zone outside this world."
+            )
         rooms = _rooms_for_zone_target(zone, source_type=source_type)
         if not rooms:
             raise serializers.ValidationError(f"Spawn entry '{entry.slug}' zone target has no eligible rooms.")
@@ -555,12 +497,12 @@ def _choose_room_for_entry(
         remember(rooms, state)
         room = rooms[rng.randrange(0, len(rooms))]
         return room, dict(state)
-    if target.get("path"):
-        path = _resolve_path(
-            world=world,
-            value=target.get("path"),
-            field_name=f"entries.{entry.slug}.target.path",
-        )
+    if entry.target_path_id:
+        path = entry.target_path
+        if path.world_id != world.id:
+            raise serializers.ValidationError(
+                f"Spawn entry '{entry.slug}' targets a path outside this world."
+            )
         rooms = _rooms_for_path_target(path, source_type=source_type)
         if not rooms:
             raise serializers.ValidationError(f"Spawn entry '{entry.slug}' path target has no eligible rooms.")
@@ -572,9 +514,22 @@ def _choose_room_for_entry(
 
 
 def _target_entry_slug(entry: SpawnEntry) -> str:
-    target = _target_mapping(entry)
-    raw_target = target.get("entry") or target.get("parent_entry")
-    return str(raw_target or "").strip()
+    if not entry.target_entry_id:
+        return ""
+    target_entry = entry.target_entry
+    if target_entry.plan_id != entry.plan_id:
+        raise serializers.ValidationError(
+            f"Spawn entry '{entry.slug}' targets an entry outside its spawn plan."
+        )
+    if target_entry.order >= entry.order:
+        raise serializers.ValidationError(
+            f"Spawn entry '{entry.slug}' must target an entry with a lower order."
+        )
+    if entry.is_active and not target_entry.is_active:
+        raise serializers.ValidationError(
+            f"Active spawn entry '{entry.slug}' must target an active entry."
+        )
+    return str(target_entry.slug or "").strip()
 
 
 def _entry_placement_mapping(entry: SpawnEntry) -> dict[str, Any]:
@@ -991,7 +946,7 @@ def _sync_placements_for_run(
     }
     generated_by_entry: dict[str, list[SpawnPlacement]] = {}
     room_choice_cache: dict[
-        tuple[int, str],
+        tuple[str, int, str],
         tuple[list[Room], dict[str, Any]],
     ] = {}
     desired_ids: set[int] = set()
@@ -1722,7 +1677,14 @@ def reconcile_spawn_plan(
             return {"plan": plan.slug, "placements": 0, "spawned": 0, "skipped": True}
         if not _plan_conditions_pass(spawn_world=spawn_world, plan=plan):
             return {"plan": plan.slug, "placements": 0, "spawned": 0, "skipped": True}
-        entries = list(plan.entries.all().order_by("order", "created_ts", "id"))
+        entries = list(
+            plan.entries.select_related(
+                "target_room",
+                "target_zone",
+                "target_path",
+                "target_entry",
+            ).order_by("order", "created_ts", "id")
+        )
         resolution = _active_run_for_plan(
             spawn_world=spawn_world,
             plan=plan,

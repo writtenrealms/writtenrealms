@@ -4,7 +4,8 @@ from typing import Any
 
 from builders.models import ItemDefinition, MobDefinition
 from quests.models import QuestTemplate
-from worlds.models import Room, World
+from worlds.models import World
+from worlds.room_refs import resolve_room_reference_id
 
 
 _ENTITY_TYPE_ALIASES = {
@@ -21,9 +22,6 @@ _ENTITY_MODELS = {
     "mobdefinition": MobDefinition,
     "questtemplate": QuestTemplate,
 }
-
-_ROOM_REF_PREFIX = "room@"
-
 
 def canonical_entity_type(value: str | None) -> str | None:
     text = str(value or "").strip().lower()
@@ -85,25 +83,6 @@ def resolve_entity_ref_id(
     return model_cls.objects.filter(world=world, slug=text).values_list("id", flat=True).first()
 
 
-
-def _parse_room_coords_ref(value: Any) -> tuple[int, int, int] | None:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text.startswith(_ROOM_REF_PREFIX):
-        return None
-
-    raw_coords = text[len(_ROOM_REF_PREFIX):]
-    parts = [part.strip() for part in raw_coords.split(",")]
-    if len(parts) != 3:
-        return None
-
-    try:
-        return tuple(int(part) for part in parts)
-    except ValueError:
-        return None
-
-
 def resolve_room_ref_id(
     *,
     world: World | None,
@@ -113,26 +92,15 @@ def resolve_room_ref_id(
         return None
     if isinstance(value, bool):
         return None
-    if isinstance(value, int):
-        return value
     if is_dynamic_reference(value):
         return None
 
     text = str(value).strip()
     if not text:
         return None
+    # Bare numeric values retain the legacy database-id meaning in quest
+    # payloads. New manifest references should always use room@<relative_id>.
     if text.isdigit():
-        return int(text)
+        text = f"room.{text}"
 
-    coords = _parse_room_coords_ref(text)
-    if coords is not None:
-        if not world:
-            return None
-        x, y, z = coords
-        return Room.objects.filter(world=world, x=x, y=y, z=z).values_list("id", flat=True).first()
-
-    prefix, sep, raw = text.partition(".")
-    if sep == "." and prefix == "room" and raw.isdigit():
-        return int(raw)
-
-    return None
+    return resolve_room_reference_id(world, text)

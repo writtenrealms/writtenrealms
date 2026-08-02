@@ -151,8 +151,7 @@ spec:
     - slug: elite-bandits
       source_pool:
         - ref: mobdefinition.bandit
-      target:
-        zone: zone@3
+      target: zone@3
       count: 3
       traits:
         guaranteed:

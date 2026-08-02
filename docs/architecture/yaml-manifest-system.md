@@ -10,6 +10,8 @@ WR2 world editing is moving toward an authored-manifest workflow inspired by Kub
 
 Implemented manifest kinds currently include the current WR2 authoring path:
 
+- `worldbundle` (the first-document wrapper for a base world and its authored
+  instance templates)
 - `trigger`
 - `world`
 - `currency`
@@ -100,8 +102,9 @@ Current required mappings:
   `match`, or `allow_pvp: true` with `disabled`) rather than preserving both
   fields. WR1 conversion should omit `spec.announce_duel_results`; there is no
   legacy equivalent, and the WR2 default is `false`.
-- Trigger mob reactions target `kind: trigger` with `target.type:
-  mobdefinition`, not `mobtemplate`.
+- Trigger mob reactions target `kind: trigger` with a canonical scalar
+  `spec.target` such as `mobdefinition.<slug>`, not `mobtemplate` or a database
+  id.
 - An authored WR1 room action that is known to run for every player arrival
   should export as a room-scoped `kind: event` trigger with `event: enter`.
   Use `after_move_enter` only when the WR1 source is provably limited to
@@ -149,6 +152,16 @@ Current required mappings:
 - WR1 `Loader` / `Rule` rows export as `kind: spawnplan` entries. WR2 no longer
   imports or stores loader/rule rows, and runtime item/mob rows no longer keep
   `rule_id` or source-template FKs.
+- Each converted WR1 rule must emit exactly one scalar spawn target:
+  `room@<relative_id>`, `zone@<relative_id>`, `path@<relative_id>`, or the
+  plan-local `entry.<slug>`. Resolve WR1 numeric and coordinate destinations in
+  the source world before export; never emit a WR1 database id or one of the
+  legacy target mapping aliases as canonical WR2 YAML.
+- Each converted WR1 Trigger must likewise emit exactly one canonical scalar
+  `spec.target`: `room@<relative_id>`, `zone@<relative_id>`, `world`,
+  `mobdefinition.<slug>`, or `itemdefinition.<slug>`. Resolve legacy database
+  ids before export and never emit the legacy `{type, ref}`, `{type, key}`, or
+  `{type, id}` target mappings as canonical WR2 YAML.
 - Map WR1 authored default world facts to `kind: world`
   `spec.initial_state` and authored zone defaults to `kind: zone`
   `spec.initial_state` only when the converter can distinguish authored seed
@@ -181,9 +194,10 @@ Current required mappings:
   Celery schedules `worlds.tasks.run_world_spawn_plans`, the world timestamp is
   `last_spawn_plan_run_ts`, and the removed system endpoint
   `/game/system/run_loaders/` has no WR2 replacement.
-- Builder read-only spawn-plan inspection APIs are `/zones/<id>/spawn-plans/`
-  and `/rooms/<id>/spawn-plans/`; do not export/import or call the removed
-  `/loads/` endpoints.
+- Builder read-only spawn-plan inspection APIs are
+  `/zones/<zone_pk>/spawn-plans/` and
+  `/rooms/<database_room_pk>/spawn-plans/`; do not export/import or call the
+  removed `/loads/` endpoints.
 - WR1 door keys export as WR2 `itemdefinition.<slug>` refs. The WR2 manifest
   surface remains one `spec.doors[]` entry on each originating room; exporters
   must not emit an internal `Doorway` id, a doorway ref, or a separate manifest
@@ -202,7 +216,8 @@ Current required mappings:
   door's current open, closed, or locked state, a pending close, a key held by a
   player, or any other runtime state.
 - WR1 room or loader-authored room inventory exports as `kind: spawnplan`
-  entries targeting WR2 room refs and `itemdefinition` / `itembundle` refs.
+  entries using `target: room@<relative_id>` and `itemdefinition` /
+  `itembundle` source refs.
 - WR1 `RandomItemProfile` rows do not export as a WR2 model or manifest kind.
   Rewrite each authored reference into explicit `kind: itemdefinition`
   documents, using `spec.randomization` only for supported authored attribute
@@ -248,9 +263,33 @@ Current required mappings:
 - WR2 has no `RoomCheck`, `RoomCommandCheck`, or `RoomCommandCheckState` model,
   API, runtime payload, or builder screen. These WR1 rows are exporter input
   only; do not recreate them as a WR2 manifest kind or compatibility table.
+- WR1 room conversion must assign every authored room one deterministic,
+  positive world-relative id and preserve it throughout the converted
+  manifest stream. Emit canonical `room@<relative_id>` references; never use a
+  WR1 database id as that relative id by accident.
+- When one WR1 authored export contains a base world plus authored instance
+  templates, emit one `kind: worldbundle` stream. Give each direct template a
+  deterministic lowercase `instance_slug` that is unique within that base
+  family, and use `instance.<instance_slug>` as its bundle scope. Do not use a
+  WR1 world database id as a bundle ref.
+- Put `metadata.world_ref` on every converted content document so a local ref
+  such as `room@1` is resolved in the correct converted world. The same
+  relative room id may legitimately occur in the base world and an instance
+  template.
+- Convert supported authored base/instance relationships into the bundle
+  header's `spec.links`: `room.transfer_to`, `room.enters_instance`,
+  `room.exits_to`, and `world_config.exits_to`. Do not embed cross-world
+  database ids in room, world-config, Trigger, or script documents. Flag a
+  legacy cross-world script for builder review when it does not have the exact
+  semantics of one of those typed relations.
+- Convert only direct authored instance templates. Never include spawned
+  runtime worlds, `instance_ref` values, instance runs or participants,
+  players, or mutable runtime world/room state. This remains an optional
+  authored-content conversion into a fresh WR2 database, not an in-place
+  WR1-to-WR2 migration.
 - WR1 `RoomCheck` rows export as room-scoped `kind: trigger` documents with
-  `spec.kind: policy`. Use the checked room's portable `room@x,y,z` ref as the
-  full-world export target (`spec.target: {type: room, ref: room@x,y,z}`). Map
+  `spec.kind: policy`. Use the checked room's stable `room@<relative_id>` ref
+  as the full-world export target (`spec.target: room@<relative_id>`). Map
   `prevent: enter` to the `before_move_enter` event, `prevent: exit` to the
   `before_move_exit` event, and `prevent: all` to two policy documents, one for
   each event. Copy a non-empty direction to `spec.match`, `failure_msg` to
@@ -337,16 +376,18 @@ Current required mappings:
   room-item deltas do not recompute viewer-specific actions, and the maturity
   message can direct the player to refresh the room normally.
 - WR1 room-action `transfer {{ actor }} <numeric_room_id>` scripts should
-  export as `/cmd room -- /transfer {{ actor_key }} room@x,y,z`. Resolve the
-  legacy room id to the imported room's coordinates; never copy a WR1 or WR2
-  database id into portable trigger YAML. Normalize slashless `transfer` to
-  `/transfer`. For mob-authored scripts, keep the mob as issuer and use the same
-  portable destination. When the surrounding WR1 action maps to typed
+  export as
+  `/cmd room -- /transfer {{ actor_key }} room@<relative_id>`. Resolve the
+  legacy room id to the converted room's assigned relative id; never copy a
+  WR1 or WR2 database id into portable trigger YAML. Normalize slashless
+  `transfer` to `/transfer`. For mob-authored scripts, keep the mob as issuer
+  and use the same portable destination. When the surrounding WR1 action maps to typed
   `spec.steps`, the canonical forms are `subject: trigger_room` with
-  `/transfer {{ actor_key }} room@x,y,z` and `subject: trigger_actor` with
-  `/transfer self room@x,y,z`. Any supported step subject may issue the command
-  provided the target is the Trigger actor; for example, an exact-one selected
-  mob can use `/transfer {{ actor_key }} room@x,y,z`. WR1's optional trailing
+  `/transfer {{ actor_key }} room@<relative_id>` and
+  `subject: trigger_actor` with
+  `/transfer self room@<relative_id>`. Any supported step subject may issue
+  the command provided the target is the Trigger actor; for example, an exact-one selected
+  mob can use `/transfer {{ actor_key }} room@<relative_id>`. WR1's optional trailing
   transfer command does not map directly: export it as an explicit command
   before `/transfer`. For an immediate `spec.script`, use same-line `&&`
   segments and repeat the ambient wrapper for every segment, for example
@@ -440,6 +481,9 @@ Room **Spawn Plans** is a read-only view of spawn plans targeting that room.
 A new world-level **Edit World** view accepts a YAML manifest textarea.
 
 - Submitting YAML currently supports one or more YAML documents in sequence.
+- A `kind: worldbundle` is accepted only as the first document of a complete
+  base-family stream. It is a scope/link wrapper around the supported content
+  kinds below, not a standalone per-world content document.
 - Supported kinds:
   - `kind: world`
   - `kind: currency`
@@ -488,10 +532,11 @@ the catalog read-only. Canonical `kind: social` YAML can also be applied through
 **World > Edit World**, and world export emits the same portable contract.
 
 Zone manifests exported by the system include `metadata.ref` in the portable
-form `zone@<relative_id>`. Path manifests use `metadata.ref` in the portable
-form `path@<relative_id>`. Spawn plans and exported room/path manifests use
-those portable refs instead of names or database ids, so duplicate names do not
-make imports ambiguous and prod/dev database ids do not need to match.
+form `zone@<relative_id>`. Room and path manifests use `room@<relative_id>` and
+`path@<relative_id>`, respectively. Spawn plans and exported room/path
+manifests use those stable refs instead of names, coordinates, or database ids,
+so moving a room does not break authored references and prod/dev database ids
+do not need to match.
 
 Quest authoring details, including field-by-field manifest docs and current
 runtime behavior notes, live in:
@@ -571,9 +616,13 @@ spec:
 ---
 kind: room
 metadata:
-  ref: room@4,2,0
+  ref: room@12
   name: Prison Cell
 spec:
+  coordinates:
+    x: 4
+    y: 2
+    z: 0
   zone: zone@1
   initial_state:
     cell_door_open: false
@@ -611,8 +660,7 @@ spec:
   entries:
     - slug: greek-commander
       source: mobdefinition.greek-captive-commander
-      target:
-        room: room@4,2,0
+      target: room@12
       count: 1
       initial_state:
         captive: true
@@ -625,6 +673,24 @@ current state of a surviving mob.
 
 ## Trigger Manifest Shapes
 
+Trigger manifests use one typed scalar `spec.target`. Canonical values are:
+
+- `room@<relative_id>` for an authored room
+- `zone@<relative_id>` for an authored zone
+- `world` for the selected world
+- `mobdefinition.<slug>` for a mob definition
+- `itemdefinition.<slug>` for an item definition
+
+The prefix or reserved `world` literal identifies the target type, so
+canonical YAML does not repeat it in `type`, `ref`, `key`, or `name` fields.
+Imports continue to accept the legacy `{type, ref}`, `{type, key}`, and
+`{type, id}` mappings, including a display-only `name`, but export always
+normalizes them to a scalar. Database-local keys and ids are compatibility
+inputs only and must never appear in portable full-world output. When an
+update identifies an existing Trigger and omits `spec.target`, the existing
+target is preserved; create manifests still require a target except for the
+existing world-command default.
+
 ### Create Trigger
 
 ```yaml
@@ -635,9 +701,7 @@ metadata:
 spec:
   scope: room
   kind: command
-  target:
-    type: room
-    key: room.10
+  target: room@10
   match: pull lever or pull chain
   script: /cmd room -- /echo -- The lever clicks.
   conditions: level 1
@@ -659,9 +723,7 @@ metadata:
 spec:
   scope: world
   kind: event
-  target:
-    type: mobdefinition
-    key: mobdefinition.22
+  target: mobdefinition.archive-greeter
   event: say
   match: hello and (traveler or friend)
   script: say Welcome to the archive.
@@ -682,9 +744,7 @@ metadata:
 spec:
   scope: room
   kind: policy
-  target:
-    type: room
-    key: room.10
+  target: room@10
   event: before_move_enter
   conditions:
     eq:
@@ -705,9 +765,7 @@ metadata:
 spec:
   scope: room
   kind: event
-  target:
-    type: room
-    key: room.10
+  target: room@10
   event: enter
   conditions:
     not:
@@ -729,9 +787,9 @@ It runs for ordinary movement, adjacent-room charge, flee, `/transfer`, death,
 instance entry, instance leave, and instance reset. Scope and target
 disambiguate it from the pre-existing mob reaction with the same event text:
 
-- `scope: room`, `target.type: room`, `event: enter` runs the room behavior for
-  a player arrival.
-- `scope: world`, `target.type: mobdefinition`, `event: enter` runs matching
+- `scope: room`, `target: room@<relative_id>`, `event: enter` runs the room
+  behavior for a player arrival.
+- `scope: world`, `target: mobdefinition.<slug>`, `event: enter` runs matching
   destination mobs' reactions.
 
 The source-specific room events remain valid compatibility hooks.
@@ -773,9 +831,7 @@ metadata:
 spec:
   scope: room
   kind: command
-  target:
-    type: room
-    key: room.10
+  target: room@10
   match: pull lever or pull chain
   script: /cmd room -- /echo -- The lever clicks.
 ```
@@ -823,9 +879,7 @@ metadata:
 spec:
   scope: room
   kind: command
-  target:
-    type: room
-    key: room.10
+  target: room@10
   match: plant seeds
   script: ""
   conditions:
@@ -911,7 +965,7 @@ steps:
         command: say Get on board.
       - type: command
         subject: trigger_room
-        command: /transfer {{ actor_key }} room@10,4,0
+        command: /transfer {{ actor_key }} room@42
   - after_seconds: 10
     actions:
       - type: command
@@ -972,15 +1026,17 @@ runner accepts only explicitly audited handlers. Current coverage is room-local
 `say`, `emote`, `talk`, authored socials, room-subject, room-scoped `/echo`,
 and transactional `/transfer`. The transfer target must be the Trigger actor,
 but any supported step subject may issue the command. The canonical forms are
-`subject: trigger_room` with `/transfer {{ actor_key }} room@x,y,z` and
-`subject: trigger_actor` with `/transfer self room@x,y,z`; an exact-one selected
-mob may also use the explicit `{{ actor_key }}` target. `self` or `me` is valid
+`subject: trigger_room` with
+`/transfer {{ actor_key }} room@<relative_id>` and
+`subject: trigger_actor` with `/transfer self room@<relative_id>`; an exact-one
+selected mob may also use the explicit `{{ actor_key }}` target. `self` or `me` is valid
 only when the resolved subject is the Trigger actor; a selected mob can qualify
 when it is itself the Mob Trigger actor. Relative `here` and direction
 destinations are resolved from the subject's room: the fixed Trigger room, the
-Trigger actor's current room, or the selected mob's room respectively. Portable
-manifests should use `room@x,y,z`, not a database room id, to avoid both that
-context dependence and database-id instability. A typed transfer that would
+Trigger actor's current room, or the selected mob's room respectively.
+Portable manifests should use `room@<relative_id>`, not a coordinate or
+database room id, so the destination survives room moves and cross-instance
+imports. A typed transfer that would
 move a player in active PvP fails with `target_busy`; a successful move finishes
 ordinary active encounters. The Trigger room is retained as the recorded issuer
 while the chosen room, player, or mob is recorded as the step subject. Durable
@@ -1130,17 +1186,399 @@ Instances inherit the base-world catalog and cannot fork it. See
 [social-builder-guide.md](../guides/builders/social-builder-guide.md)
 for message variables, player resolution, mob reactions, and scaling behavior.
 
-## Room Manifest Shape
+## Stable Room References
 
-Rooms use coordinate refs as their portable identity. The selected room's
-**Rooms > Edit** screen exposes this complete shape:
+Rooms separate immutable authored identity from mutable map position:
+
+- `room@<relative_id>` is the canonical, world-scoped manifest identity.
+- `spec.coordinates` is the room's current `x`, `y`, `z` position.
+- Moving a room changes only `spec.coordinates`; every semantic reference keeps
+  the same `room@<relative_id>`.
+- Relative ids are positive, immutable, and never reused after deletion.
+- Database keys such as `room.187` and legacy coordinate refs such as
+  `room@10,4,0` are accepted only as import compatibility forms. Import
+  resolves them in the selected authored world and canonical export emits the
+  stable relative ref. A database key is not portable to another installation.
+
+The stable-room rollout first assigns room relative ids, then runs a one-time,
+idempotent authored-data canonicalization migration. It rewrites resolvable
+legacy database and coordinate aliases inside semantic JSON and command-text
+fields for spawn plans, Triggers and legacy room actions, quests, abilities,
+crafting conditions, death-routing conditions, and mob/item command or
+condition data. Updates are world-scoped and batched; an alias that does not
+resolve in its authored world is left unchanged for manual review.
+Runtime/player state, quest progress, authored state seeds, and ordinary prose
+are intentionally not rewritten.
+The reverse migration is a no-op because the original database or coordinate
+spelling cannot be reconstructed safely from a stable room ref.
+
+Known semantic room-reference fields—including world/faction rooms, exits,
+doors, paths, spawn targets, quest data, Trigger targets and conditions, and
+supported command destinations—use the same resolver. Syntactically recognized
+literal aliases in semantic scripts and command text are canonicalized when
+they resolve; computed or dynamic strings cannot be rewritten reliably and
+must resolve at runtime.
+
+### Builder Room URLs And Operational Identity
+
+The builder-facing canonical room route is
+`/build/worlds/<world_pk>/rooms/<relative_id>`. The resource path supplies the
+room type, so the final segment is the bare positive relative id; for example,
+room `room@42` in database world 23 appears at
+`/build/worlds/23/rooms/42`. Builder navigation and breadcrumbs must generate
+this route from `Room.relative_id`, not `Room.id`, so the URL remains stable
+when rooms move and the visible/hovered value is the one builders use in
+authored content.
+
+Manifest references remain explicitly typed as `room@<relative_id>`. Unlike a
+room URL, a manifest value can appear in a generic `ref`, command, condition,
+or mixed resource field without surrounding type context. `room.<database_pk>`
+therefore remains a legacy, installation-local import alias and is not
+repurposed as portable syntax.
+
+The troubleshooting route
+`/build/worlds/<world_pk>/rooms/db/<database_pk>` resolves the database row
+within the selected world and immediately replaces the browser location with
+the canonical relative-id route. The ordinary room screen gives the portable
+`room@<relative_id>` identity primary emphasis and exposes both the relative
+id and database id in less-prominent technical details. Database ids remain
+useful for relational storage, logs, and staff diagnostics; builders should
+not need them for normal navigation or authoring.
+
+This is an intentional pre-launch breaking cutover. A bare
+`/rooms/<number>` segment always means a relative id, while
+`/rooms/db/<number>` always means a database id. The router and API must not
+fall back from one namespace to the other: the same integer can validly name
+different rooms, so a heuristic fallback could silently open or mutate the
+wrong resource. Former `/rooms/<database_pk>` development bookmarks are not
+retained as ambiguous aliases.
+
+### Builder Zone URLs And Operational Identity
+
+Zones use the same builder-facing identity contract. The canonical zone route
+is `/build/worlds/<world_pk>/zones/<relative_id>`, so `zone@5` in database
+world 23 appears at `/build/worlds/23/zones/5`. Every route nested beneath the
+zone keeps that relative-id segment. Builder navigation must therefore be
+generated from `Zone.relative_id`, while API calls resolve the zone once and
+continue using `Zone.id` for relational database operations.
+
+The troubleshooting route
+`/build/worlds/<world_pk>/zones/db/<database_pk>` resolves the database row
+inside the selected world and immediately replaces the browser location with
+the canonical relative-id route. The ordinary zone screen presents
+`zone@<relative_id>` as the authored identity and keeps the database id in
+collapsed technical details.
+
+A bare `/zones/<number>` segment always means a relative id, while
+`/zones/db/<number>` always means a database id. There is no fallback between
+the namespaces and no compatibility alias for the former database-id route.
+
+### Relational Spawn-Entry Targets
+
+Every `spec.entries[]` row has exactly one canonical scalar target:
 
 ```yaml
+target: room@22
+target: zone@1
+target: path@4
+target: entry.patrol-leader
+```
+
+The scalar prefix is the target discriminator, so manifests do not repeat a
+`type`, `ref`, or display name. `entry.<slug>` is local to the containing spawn
+plan and identifies one other `spec.entries[].slug`; it is not a world-wide
+resource ref. The referenced entry must have a lower authored order, and it
+must also be active whenever the dependent entry is active. Cohort follower
+validation continues to require a compatible leader entry.
+
+Canonical database storage uses nullable `target_room`, `target_zone`,
+`target_path`, and `target_entry` foreign keys with an exact-one constraint.
+Those relations—not a copied JSON locator—are the database source of truth.
+Room, zone, and path deletion is restricted while referenced. Service
+validation enforces that location targets belong to the plan's authored world
+and that `target_entry` belongs to the same spawn plan. Runtime target loading
+must use the indexed relations with bounded eager loading rather than parsing
+JSON or issuing one lookup per placement.
+
+Export derives one scalar from the populated foreign key. Room, zone, and path
+relative ids are portable across database instances; a room move updates its
+coordinates without changing either the room FK or its immutable
+`room@<relative_id>` export identity. Import resolves the scalar in the selected
+authored world and stores the destination database's local FK. It must know the
+complete entry slug set before resolving and validating `entry.<slug>`; the
+referenced entry must still have a lower authored order.
+
+Legacy mappings keyed by `room`, `room_ref`, `zone`, `path`, `entry`, or
+`parent_entry` remain import aliases. Import normalizes any valid alias to one
+relation, strips display-only target metadata, and rejects mappings containing
+multiple target kinds instead of choosing one by key precedence. Canonical
+export never emits those mappings. The data migration resolves existing
+`SpawnEntry.target` JSON locators before removing the duplicated JSON field;
+the two representations must not remain jointly authoritative. Polymorphic and
+weighted spawn sources remain a separate concern.
+
+A multi-document import first reserves all declared room identities and
+coordinates, then applies relationships and behavior. This two-phase process
+lets zones, exits, doors, paths, and Triggers reference rooms declared later in
+the stream, handles circular room links, and keeps the complete apply atomic.
+Only a `kind: room` document may establish a new stable room identity; an
+unknown reference does not silently create an untitled room.
+Creating a stable room requires `spec.coordinates`; an update may omit it to
+preserve the room's current position, while canonical export always includes
+it. Importing an explicit new relative id advances the world's persistent room
+id high-water mark, so a deleted or skipped lower id cannot later be reused.
+On a pristine newly created world, the existing `room@1` starting-room row is
+the only placeholder identity eligible for direct adoption as `room@1`.
+
+## World-Family Bundles
+
+A stable room ref solves movement and database portability only within one
+authored world. It is deliberately world-scoped: the base world and every
+instance template may each have a different `room@1`. A world-family bundle
+adds a stable scope to those local refs without making room ids global.
+The relational models still store normal database foreign keys; export maps
+them to stable scope/room identities, and import resolves those identities
+back to destination-local foreign keys.
+
+Exporting an authored base world with direct instance templates produces one
+flat multi-document stream. The first document is the family header:
+
+```yaml
+apiVersion: writtenrealms.com/v1alpha3
+kind: worldbundle
+metadata:
+  name: Phalanx
+spec:
+  worlds:
+    - ref: world@base
+      role: base
+      name: Phalanx
+    - ref: instance.hades
+      role: instance
+      slug: hades
+      name: Hades
+      parent: world@base
+  links_mode: replace
+  links:
+    - relation: room.enters_instance
+      source:
+        world: world@base
+        room: room@42
+      target:
+        world: instance.hades
+    - relation: room.transfer_to
+      source:
+        world: world@base
+        room: room@43
+      target:
+        world: instance.hades
+        room: room@1
+    - relation: room.exits_to
+      source:
+        world: instance.hades
+        room: room@9
+      target:
+        world: world@base
+        room: room@42
+    - relation: world_config.exits_to
+      source:
+        world: instance.hades
+      target:
+        world: world@base
+        room: room@42
+```
+
+The remaining documents use the ordinary per-world contracts and add only
+`metadata.world_ref`:
+
+```yaml
+---
+apiVersion: writtenrealms.com/v1alpha3
+kind: world
+metadata:
+  world_ref: world@base
+spec:
+  name: Phalanx
+---
+apiVersion: writtenrealms.com/v1alpha3
 kind: room
 metadata:
-  ref: room@10,4,0
+  world_ref: world@base
+  ref: room@42
+  name: Hades Gate
+spec:
+  coordinates: {x: 8, y: 3, z: 0}
+---
+apiVersion: writtenrealms.com/v1alpha3
+kind: world
+metadata:
+  world_ref: instance.hades
+spec:
+  name: Hades
+---
+apiVersion: writtenrealms.com/v1alpha3
+kind: room
+metadata:
+  world_ref: instance.hades
+  ref: room@1
+  name: The Far Bank
+spec:
+  coordinates: {x: 0, y: 0, z: 0}
+```
+
+`metadata.world_ref` is stream-routing metadata. The bundle importer removes
+it before passing a document to the ordinary per-world manifest loader.
+Consequently, manifest foreign keys inside a document—rooms, zones, paths,
+spawn targets, Trigger targets, and structured conditions—resolve within that
+document's authored scope. Literal room refs executed later by commands such
+as `/transfer` retain their normal runtime rule: they resolve inside the
+issuer's current authored runtime world. Neither form is a cross-world
+address; supported base/instance transitions use the central link table.
+
+### Stable Instance Scope
+
+`World.instance_slug` is the authored instance template's portable identity
+within one base-world family:
+
+- only a direct authored instance template has an `instance_slug`
+- the slug is lowercase, at most 120 characters, and unique among that base
+  world's direct templates
+- creation derives it from the template name and adds a deterministic suffix
+  when needed, unless an explicit valid slug is supplied
+- the slug, parent relation, and authored/runtime role are immutable after
+  creation
+- renaming an instance template does not change its bundle ref
+- a spawned runtime instance uses `instance_ref`, not `instance_slug`, and is
+  never part of an authored bundle
+
+The canonical scope is `instance.<instance_slug>`. Import maps `world@base` to
+the selected target base world, matches an existing direct template by
+`instance_slug`, and creates a missing template with that slug. Database world
+ids may therefore differ between development and production. Declaration
+`name` is descriptive and supplies the initial name for a newly created
+template; it is not identity.
+
+Bundles represent exactly one base world and its non-archived direct authored
+instance templates. Nested instance families and spawned runtime worlds are
+rejected.
+An existing template not declared by a hand-authored bundle is not deleted.
+Canonical base-world export declares every non-archived direct authored
+template, so a normal export/import round trip covers the active family.
+
+### Central Cross-World Links
+
+Per-world manifests keep `room@<relative_id>` local. Supported cross-world
+foreign keys are therefore removed from the scoped room/world documents and
+serialized once in `worldbundle.spec.links`.
+
+| Relation | Source | Target |
+| --- | --- | --- |
+| `room.enters_instance` | Base `world` + base `room` | Direct instance `world` |
+| `room.transfer_to` | Base `world` + base `room` | Direct instance `world` + instance `room` |
+| `room.exits_to` | Direct instance `world` + instance `room` | Base `world` + base `room` |
+| `world_config.exits_to` | Direct instance `world` | Base `world` + base `room` |
+
+Room endpoints must use canonical `room@<relative_id>` refs; database and
+coordinate aliases are not accepted in the bundle link table. Every endpoint
+room must also have a `kind: room` document in that endpoint's declared scope,
+so a bundle cannot accidentally depend on a row that happens to exist only in
+the destination database. Export rejects links outside the declared family or
+in the wrong direction instead of silently producing a non-portable file. A
+base world's
+`WorldConfig.exits_to` is likewise invalid because that relation is defined
+only from an instance back to its base.
+
+Each relation may occur at most once for a given source world/source room
+pair. Future cross-world concepts should add an explicit, validated bundle
+relation rather than inventing a globally resolved room ref or hiding a
+database id in a script.
+
+`links_mode: replace` is the only supported mode. On import, WR2 clears the
+managed cross-world link fields in the declared scopes and recreates them from
+the header. An empty `links` list therefore means “no managed family links,”
+not “preserve whatever is in the destination database.” This replacement
+happens inside the same transaction as content import. The importer defaults
+an omitted mode to `replace` and omitted links to an empty list for compatible
+hand-authored input; canonical export always emits both fields explicitly.
+
+### Validation And Atomic Import
+
+A bundle must be applied to an authored base world by a rank 3+ builder. The
+stream is validated and applied as one unit:
+
+1. The first document must be the one `worldbundle` header.
+2. The header must declare exactly one `world@base`; every other scope must be
+   a direct `instance.<slug>` child with `parent: world@base`.
+3. A bundle that declares instances must target a multiplayer authored base
+   world. Import does not silently convert a single-player world that may
+   already have runtime state.
+4. Every content document must name one declared
+   `metadata.world_ref`, and every declared scope must contain exactly one
+   `kind: world` document.
+5. WR2 locks and resolves the base family, then matches or creates instance
+   templates by their stable slug. A declared slug that belongs to an archived
+   template is rejected; import never mutates or silently reactivates archived
+   content.
+6. Room identities and coordinates are reserved independently in each scope
+   before ordinary documents are applied, so forward and circular references
+   work within that world.
+7. Cross-world links are resolved in a batched pass only after all scoped
+   content exists.
+
+Any parse, permission, identity, room, content, or link error rolls back the
+whole transaction, including newly created templates and link replacement.
+The header is not a partial-update mechanism for family links. Individual
+content documents retain their normal apply/delete semantics, but undeclared
+instance templates are not pruned implicitly.
+
+A newly created target's untouched `Starting Room` may be removed when its
+identity is absent from a complete incoming stream. The importer proves that it
+is still disposable scaffold data first: authored fields, state, links,
+inventory, triggers, assignments, and all dependent records make the room
+ineligible for cleanup. Existing authored rooms are preserved, never
+heuristically deleted.
+
+The canonical format has explicit safety bounds: at most 50 authored worlds
+including the base, 10,000 total documents including the header, and 20,000
+cross-world links. Every declared scope must contain content; nested
+`worldbundle` documents and undeclared `world_ref` values are rejected.
+
+### Export Behavior And Scale
+
+- Export a family from its base world. A base with at least one non-archived
+  authored instance template always exports a bundle, even when
+  `spec.links` is empty.
+- A base with no authored templates retains the ordinary single-world export
+  stream.
+- A standalone instance template is never exported independently. Export its
+  base-world family so inherited catalogs, its stable scope, and both sides of
+  every relationship remain available.
+- Header declarations, content scopes, and links are emitted in deterministic
+  order for useful version-control diffs.
+
+Export/import is an administrative authoring path, not per-player runtime work.
+Stable room lookup uses the indexed world/relative-id identity, instance scope
+lookup uses the unique base/slug identity, cross-world room endpoints are
+resolved in batches, and link writes use bulk updates rather than one query per
+link. The explicit family/document/link limits bound the family-wide work
+admitted by this path. No bundle scan, serialization, or link fan-out is added
+to movement, combat, ticks, or other concurrent gameplay paths.
+
+## Room Manifest Shape
+
+The selected room's **Rooms > Edit** screen exposes this complete shape:
+
+```yaml
+apiVersion: writtenrealms.com/v1alpha3
+kind: room
+metadata:
+  ref: room@42
   name: North Gate
 spec:
+  coordinates:
+    x: 10
+    y: 4
+    z: 0
   zone: zone@2
   description: An ironbound gate closes the northern road.
   note: Builder-only note.
@@ -1150,9 +1588,9 @@ spec:
   initial_state:
     gate_alarm_raised: false
   exits:
-    north: room@10,5,0
+    north: room@43
     east: null
-    south: room@10,3,0
+    south: room@44
     west: null
     up: null
     down: null
@@ -1165,15 +1603,16 @@ spec:
   doors:
     - direction: north
       name: ironbound gate
-      to_room: room@10,5,0
+      to_room: room@43
       key: itemdefinition.north-gate-key
       destroy_key: false
       default_state: locked
 ```
 
-Room manifests currently support `operation: apply` only. Preserve
-`metadata.ref` when editing an existing room: changing the coordinate ref means
-"apply a room at these other coordinates," not "rename this room's id."
+Room manifests currently support `operation: apply` only. Preserve the stable
+`metadata.ref` when editing an existing room. Change `spec.coordinates` to move
+that room; its exits, spawn targets, Triggers, and other semantic references
+continue to identify it.
 Including `flags`, `details`, or `doors` replaces that complete collection for
 the room. The canonical YAML shown after a save includes every exit direction,
 so copy/edit/save round trips do not depend on hidden form state.
@@ -1270,7 +1709,11 @@ examples.
 
 ## World Config Manifest Shape
 
-World config edits are update-only manifests (no create/delete mode). The config screen and the full world export emit the same single world document shape:
+World config edits are update-only manifests (no create/delete mode). The
+config screen and per-world export emit the same world document shape. Inside
+a family bundle, the document additionally carries `metadata.world_ref`;
+cross-world `WorldConfig.exits_to` remains in the bundle header rather than
+this `spec`:
 
 For a full field reference, see
 [world-config-builder-guide.md](../guides/builders/world-config-builder-guide.md).
@@ -1319,8 +1762,8 @@ spec:
     - 1000
   combat_resolution_interval: 0
   default_roam_chance: 10
-  starting_room: room@0,0,0
-  death_room: room@10,0,0
+  starting_room: room@1
+  death_room: room@18
   death_mode: lose_currency
   death_currency: crowns
   death_currency_penalty: 0.2
@@ -1435,7 +1878,15 @@ those canonical fields directly.
 - If provided, accepted values are:
   - `v1alpha1`
   - `writtenrealms.com/v1alpha1` (legacy-compatible)
-- For approachability, the exported YAML omits `apiVersion` by default.
+  - `v1alpha2`
+  - `writtenrealms.com/v1alpha2` (stable-room compatibility contract)
+  - `v1alpha3`
+  - `writtenrealms.com/v1alpha3` (canonical scalar Trigger-target contract)
+- Canonical full-world exports emit `writtenrealms.com/v1alpha3` on every
+  document. Canonical room, spawn-plan, Trigger, and world-config YAML uses the
+  same version. Older and hand-authored manifests may omit the field; their
+  legacy target mappings and room-reference forms are normalized during
+  import.
 
 ## `metadata.id` vs `metadata.key`
 
@@ -1454,11 +1905,20 @@ those canonical fields directly.
 
 No, but its role should be narrow and explicit in WR2:
 
-- `key` is still useful as a typed reference format across entities (`room.10`, `zone.3`, `trigger.42`) and is already widely used in builder/game payloads.
+- `key` is still useful as a typed local reference format across runtime and
+  API payloads (`room.10`, `zone.3`, `trigger.42`), but room keys are
+  database-local and are not canonical authored manifest refs.
 - `id` is simpler for update targeting.
 - For WR2 manifests, treat `id` as the primary update identifier and `key` as an interoperability/reference-friendly alias.
+- Room manifests are the deliberate exception: `metadata.ref:
+  room@<relative_id>` is their portable update identity, while coordinates
+  remain mutable spec data.
 
-Long term, if we want portable manifests across worlds/environments, neither raw `id` nor `trigger.<id>` is ideal alone; we should add stable authored identifiers (for example `metadata.slug` or `metadata.uid`) and map those at import time.
+For entity types that still use database identity, neither raw `id` nor
+`trigger.<id>` is portable alone; add a stable authored identifier (for
+example `metadata.slug` or `metadata.uid`) and map it at import time. Rooms and
+instance-template scopes now follow that pattern through
+`room@<relative_id>` and `instance.<instance_slug>`.
 
 ## Is `kind: trigger` redundant with `key: trigger.42`?
 
@@ -1489,6 +1949,11 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 - For create:
   - `spec.scope` is required.
   - `spec.target` is required for room/zone scope.
+- For update, omitting `spec.target` preserves the existing target. Supplying
+  it resolves and replaces the target.
+- Canonical `spec.target` is a scalar whose prefix or reserved `world` literal
+  determines its type. Legacy target mappings are import-only compatibility
+  aliases; conflicting `type`, `ref`, `key`, or `id` locators are rejected.
 - For `spec.kind: event`:
   - `spec.event` is required.
   - mob reaction events such as `say` and the mob-definition form of `enter`
@@ -1527,7 +1992,7 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   the resolved handler must explicitly support Trigger-step execution.
   Any supported subject may issue transactional `/transfer`, but only the
   Trigger actor may be its target. Relative destinations use the subject's room;
-  authored content should use a portable `room@x,y,z` destination. Moving a
+  authored content should use a stable `room@<relative_id>` destination. Moving a
   player in active PvP fails with `target_busy`.
 - `send` and `send_except` require exactly `actor: trigger_actor` and `text`.
   The actor must still be a connected player when the action executes;
@@ -1543,8 +2008,11 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   `replace_room_item.target`. The current `spec.on_step_error` value is
   `cancel`.
 - Policy triggers cannot define `spec.steps`.
-- For command triggers, `spec.target` must match scope type (`room`, `zone`, `world`) and exist in world.
-- For event triggers, `spec.target.type` must match the event family and exist in world.
+- For command triggers, `spec.target` must match the scope type (`room`,
+  `zone`, or `world`) or a supported definition-target form and must resolve in
+  the selected world.
+- For event triggers, the scalar target type must match the event family and
+  resolve in the selected world.
 - structured `conditions` are validated through the shared WR2 condition DSL in
   `backend/core/condition_dsl.py`; legacy trigger text conditions still pass
   through `backend/core/conditions.py`.
@@ -1613,19 +2081,37 @@ Permission checks are applied when editing via manifest:
 - rank 1-2 builders cannot edit world config manifests (`world`)
 - only rank 3+ builders can apply or delete social manifests, and only on the
   base world
+- only rank 3+ builders can import a `worldbundle`, and the selected target
+  must be an authored base world
 
 ## Implementation Notes
 
 - Manifest helpers live in `backend/builders/manifests.py`.
+- Full world or world-family export endpoint:
+  - `GET /api/v1/builder/worlds/<world_pk>/export/`
+  - a base with direct authored templates returns one `worldbundle` stream;
+    a world without templates returns the ordinary content stream
 - World config read/export endpoint:
   - `GET /api/v1/builder/worlds/<world_pk>/config/`
 - Selected-room manifest endpoint:
-  - `GET /api/v1/builder/worlds/<world_pk>/rooms/<pk>/manifest/`
+  - `GET /api/v1/builder/worlds/<world_pk>/rooms/<database_room_pk>/manifest/`
   - Django route name: `builder-room-manifest`
   - this is loaded on demand by **Rooms > Edit**; ordinary room/map payloads
     do not carry YAML
+- Portable room lookup used to resolve a canonical builder URL:
+  - `GET /api/v1/builder/worlds/<world_pk>/rooms/by-relative-id/<relative_id>/`
+  - Django route name: `builder-room-relative-detail`
+  - lookup is always scoped to the selected authored world; its response
+    includes both `id` for internal API operations and `relative_id` plus
+    `manifest_ref` for navigation and authoring
+- Portable zone lookup used to resolve a canonical builder URL:
+  - `GET /api/v1/builder/worlds/<world_pk>/zones/by-relative-id/<relative_id>/`
+  - Django route name: `builder-zone-relative-detail`
+  - lookup is always scoped to the selected authored world; its response
+    includes both `id` for internal API operations and `relative_id` plus
+    `manifest_ref` for navigation and authoring
 - Trigger list + YAML serialization endpoint:
-  - `GET /api/v1/builder/worlds/<world_pk>/rooms/<room_pk>/triggers/`
+  - `GET /api/v1/builder/worlds/<world_pk>/rooms/<database_room_pk>/triggers/`
 - Manifest apply endpoint:
   - `POST /api/v1/builder/worlds/<world_pk>/manifests/apply/`
   - trigger returns `operation: created`, `operation: updated`, or `operation: deleted`

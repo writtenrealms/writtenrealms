@@ -146,8 +146,10 @@ class TestDropCommand(WorldTestCase):
     def test_drop_success_room_key_matches_actor_room_key(self):
         self.player.in_game = True
         self.player.save(update_fields=["in_game"])
-        self.room.relative_id = self.room.id + 3000
-        self.room.save(update_fields=["relative_id"])
+        self.use_imported_room(
+            relative_id=self.room.id + 3000,
+            x=self.room.x + 1,
+        )
 
         create_test_item(self.world, self.spawn_world, self.player, "Compass")
 

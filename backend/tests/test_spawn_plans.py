@@ -1,14 +1,23 @@
+import random
+
 import yaml
 
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
+from rest_framework import serializers
 
+from builders import world_export as builder_world_export
 from builders.models import ItemDefinition, MobDefinition, Path, PathRoom, SpawnEntry, SpawnPlan, SpawnPlacement, SpawnPlanRun
 from config import constants as adv_consts
 from spawns.loading import run_spawn_plans_for_world
 from spawns.models import Item, Mob
-from spawns.spawn_plans import SpawnReconcileContext, run_spawn_plans
+from spawns.spawn_plans import (
+    SpawnReconcileContext,
+    _choose_room_for_entry,
+    _target_entry_slug,
+    run_spawn_plans,
+)
 from spawns.tasks import run_mob_roaming
 from tests.base import WorldTestCase
 from worlds.models import Room, RoomFlag, World, WorldConfig
@@ -35,6 +44,170 @@ class TestSpawnPlanManifests(WorldTestCase):
         self.assertEqual(resp.status_code, 200, resp.data)
         self.assertEqual(resp.data["relative_id"], self.zone.relative_id)
         self.assertEqual(resp.data["manifest_ref"], f"zone@{self.zone.relative_id}")
+
+    def test_world_export_canonicalizes_legacy_numeric_spawn_source(self):
+        plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug="numeric-source",
+            name="Numeric Source",
+        )
+        SpawnEntry.objects.create(
+            plan=plan,
+            slug="practice-dummy",
+            source=f"mobdefinition.{self.mob_definition.id}",
+            target_room=self.room,
+        )
+
+        documents = builder_world_export.serialize_world_documents(self.world)
+        exported = next(
+            document
+            for document in documents
+            if document["kind"] == "spawnplan"
+            and document["metadata"]["slug"] == plan.slug
+        )
+
+        self.assertEqual(
+            exported["spec"]["entries"][0]["source"],
+            f"mobdefinition.{self.mob_definition.slug}",
+        )
+
+    def test_world_export_rejects_stale_spawn_source(self):
+        plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug="stale-source",
+            name="Stale Source",
+        )
+        SpawnEntry.objects.create(
+            plan=plan,
+            slug="missing-mob",
+            source="mobdefinition.missing-mob",
+            target_room=self.room,
+        )
+
+        with self.assertRaises(serializers.ValidationError) as raised:
+            builder_world_export.serialize_world_documents(self.world)
+
+        self.assertIn(
+            "Spawn plan 'stale-source' entry 'missing-mob' source",
+            str(raised.exception),
+        )
+        self.assertIn(
+            "does not resolve to authored content",
+            str(raised.exception),
+        )
+
+    def test_world_export_emits_scalar_spawn_targets(self):
+        path = Path.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Training Route",
+            entry_room=self.room,
+        )
+        PathRoom.objects.create(path=path, room=self.room)
+        plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug="scalar-targets",
+            name="Scalar Targets",
+        )
+        room_entry = SpawnEntry.objects.create(
+            plan=plan,
+            slug="room-target",
+            order=1,
+            source=f"mobdefinition.{self.mob_definition.slug}",
+            target_room=self.room,
+        )
+        SpawnEntry.objects.create(
+            plan=plan,
+            slug="zone-target",
+            order=2,
+            source=f"mobdefinition.{self.mob_definition.slug}",
+            target_zone=self.zone,
+        )
+        SpawnEntry.objects.create(
+            plan=plan,
+            slug="path-target",
+            order=3,
+            source=f"mobdefinition.{self.mob_definition.slug}",
+            target_path=path,
+        )
+        SpawnEntry.objects.create(
+            plan=plan,
+            slug="entry-target",
+            order=4,
+            source=f"mobdefinition.{self.mob_definition.slug}",
+            target_entry=room_entry,
+        )
+
+        documents = builder_world_export.serialize_world_documents(self.world)
+        exported = next(
+            document
+            for document in documents
+            if document["kind"] == "spawnplan"
+            and document["metadata"]["slug"] == plan.slug
+        )
+        targets = {
+            entry["slug"]: entry["target"]
+            for entry in exported["spec"]["entries"]
+        }
+
+        self.assertEqual(targets["room-target"], f"room@{self.room.relative_id}")
+        self.assertEqual(targets["zone-target"], f"zone@{self.zone.relative_id}")
+        self.assertEqual(targets["path-target"], f"path@{path.relative_id}")
+        self.assertEqual(targets["entry-target"], "entry.room-target")
+
+    def test_spawn_plan_export_rejects_invalid_entry_dependencies(self):
+        plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug="dependency-validation",
+        )
+        parent = SpawnEntry.objects.create(
+            plan=plan,
+            slug="parent",
+            order=1,
+            source=f"mobdefinition.{self.mob_definition.slug}",
+            target_room=self.room,
+        )
+        child = SpawnEntry.objects.create(
+            plan=plan,
+            slug="child",
+            order=2,
+            source=f"mobdefinition.{self.mob_definition.slug}",
+            target_entry=parent,
+        )
+        other_plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug="other-plan",
+        )
+        outside_parent = SpawnEntry.objects.create(
+            plan=other_plan,
+            slug="outside-parent",
+            order=0,
+            source=f"mobdefinition.{self.mob_definition.slug}",
+            target_room=self.room,
+        )
+
+        child.target_entry = outside_parent
+        child.save(update_fields=["target_entry"])
+        with self.assertRaisesRegex(serializers.ValidationError, "outside its spawn plan"):
+            builder_world_export.serialize_spawn_plan_payload(plan)
+
+        child.target_entry = parent
+        child.order = 1
+        child.save(update_fields=["target_entry", "order"])
+        with self.assertRaisesRegex(serializers.ValidationError, "lower order"):
+            builder_world_export.serialize_spawn_plan_payload(plan)
+
+        child.order = 2
+        child.save(update_fields=["order"])
+        parent.is_active = False
+        parent.save(update_fields=["is_active"])
+        with self.assertRaisesRegex(serializers.ValidationError, "active entry"):
+            builder_world_export.serialize_spawn_plan_payload(plan)
 
     def test_apply_spawn_plan_manifest_creates_plan_and_entries(self):
         manifest = f"""
@@ -64,8 +237,123 @@ spec:
         self.assertEqual(plan.respawn_policy["seconds"], 0)
         entry = plan.entries.get(slug="practice-dummy")
         self.assertEqual(entry.source, "mobdefinition.practice-dummy")
-        self.assertEqual(entry.target["room"], f"room@{self.room.x},{self.room.y},{self.room.z}")
+        self.assertEqual(entry.target_room, self.room)
+        self.assertIsNone(entry.target_zone)
+        self.assertIsNone(entry.target_path)
+        self.assertIsNone(entry.target_entry)
         self.assertEqual(entry.count, 1)
+        self.assertEqual(
+            resp.data["spawn_plan"]["manifest"]["spec"]["entries"][0]["target"],
+            f"room@{self.room.relative_id}",
+        )
+
+    def test_apply_spawn_plan_manifest_accepts_all_scalar_target_types(self):
+        path = Path.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Training Route",
+            entry_room=self.room,
+        )
+        PathRoom.objects.create(path=path, room=self.room)
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: scalar-targets
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: room-target
+      order: 1
+      source: mobdefinition.{self.mob_definition.slug}
+      target: room@{self.room.relative_id}
+    - slug: zone-target
+      order: 2
+      source: mobdefinition.{self.mob_definition.slug}
+      target: zone@{self.zone.relative_id}
+    - slug: path-target
+      order: 3
+      source: mobdefinition.{self.mob_definition.slug}
+      target: path@{path.relative_id}
+    - slug: entry-target
+      order: 4
+      source: mobdefinition.{self.mob_definition.slug}
+      target: entry.room-target
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        plan = SpawnPlan.objects.get(world=self.world, slug="scalar-targets")
+        room_entry = plan.entries.get(slug="room-target")
+        self.assertEqual(room_entry.target_room, self.room)
+        self.assertEqual(plan.entries.get(slug="zone-target").target_zone, self.zone)
+        self.assertEqual(plan.entries.get(slug="path-target").target_path, path)
+        self.assertEqual(
+            plan.entries.get(slug="entry-target").target_entry,
+            room_entry,
+        )
+        exported_targets = {
+            entry["slug"]: entry["target"]
+            for entry in resp.data["spawn_plan"]["manifest"]["spec"]["entries"]
+        }
+        self.assertEqual(
+            exported_targets,
+            {
+                "room-target": f"room@{self.room.relative_id}",
+                "zone-target": f"zone@{self.zone.relative_id}",
+                "path-target": f"path@{path.relative_id}",
+                "entry-target": "entry.room-target",
+            },
+        )
+
+    def test_apply_spawn_plan_manifest_rejects_conflicting_legacy_targets(self):
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: conflicting-targets
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: practice-dummy
+      source: mobdefinition.{self.mob_definition.slug}
+      target:
+        room: room@{self.room.relative_id}
+        zone: zone@{self.zone.relative_id}
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400, resp.data)
+        self.assertIn("exactly one", str(resp.data))
+        self.assertFalse(
+            SpawnPlan.objects.filter(
+                world=self.world,
+                slug="conflicting-targets",
+            ).exists()
+        )
+
+    def test_apply_spawn_plan_manifest_requires_exactly_one_target(self):
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: missing-target
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: practice-dummy
+      source: mobdefinition.{self.mob_definition.slug}
+"""
+
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400, resp.data)
+        self.assertIn("target must be", str(resp.data))
+        self.assertFalse(
+            SpawnPlan.objects.filter(
+                world=self.world,
+                slug="missing-target",
+            ).exists()
+        )
 
     def test_apply_spawn_plan_manifest_rejects_invalid_respawn_policies(self):
         invalid_policies = (
@@ -258,7 +546,7 @@ spec:
         exported_manifest = yaml.safe_load(detail_resp.data["yaml"])
         self.assertNotIn("reset", exported_manifest["spec"])
 
-    def test_apply_spawn_plan_manifest_accepts_transition_metadata_and_source_pool(self):
+    def test_apply_spawn_plan_manifest_accepts_legacy_target_metadata_but_drops_name(self):
         manifest = f"""
 kind: spawnplan
 metadata:
@@ -292,8 +580,10 @@ spec:
         entry = plan.entries.get(slug="dummy-patrol")
         self.assertEqual(entry.source["pool"][0]["ref"], "mobdefinition.practice-dummy")
         self.assertEqual(entry.source["pool"][0]["weight"], 2)
-        self.assertEqual(entry.target["room_ref"], f"room.{self.room.id}")
-        self.assertEqual(entry.target["name"], self.room.name)
+        self.assertEqual(entry.target_room, self.room)
+        exported_entry = resp.data["spawn_plan"]["manifest"]["spec"]["entries"][0]
+        self.assertEqual(exported_entry["target"], f"room@{self.room.relative_id}")
+        self.assertNotIn("name", exported_entry)
         self.assertEqual(entry.count, {"min": 1, "max": 1})
         self.assertEqual(entry.traits["guaranteed"], [{"key": "sturdy"}])
 
@@ -392,7 +682,7 @@ spec:
         leader = plan.entries.get(slug="patrol-leaders")
         follower = plan.entries.get(slug="patrol-followers")
         self.assertEqual(leader.count, 4)
-        self.assertEqual(follower.target["entry"], "patrol-leaders")
+        self.assertEqual(follower.target_entry, leader)
         self.assertEqual(follower.placement["cohort_role"], "follower")
 
     def test_spawn_plan_manifest_rejects_follower_without_entry_target(self):
@@ -442,7 +732,7 @@ spec:
         resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
 
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("earlier active entry", str(resp.data))
+        self.assertIn("earlier entry", str(resp.data))
         self.assertFalse(SpawnPlan.objects.filter(world=self.world, slug="late-parent").exists())
 
     def test_spawn_plan_manifest_rejects_entry_target_to_inactive_parent(self):
@@ -591,7 +881,7 @@ spec:
             plan=plan,
             slug="old-entry",
             source="mobdefinition.practice-dummy",
-            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            target_room=self.room,
             count=1,
         )
         manifest = f"""
@@ -678,7 +968,7 @@ spec:
         self.assertEqual(plan.zone, instance_zone)
         entry = plan.entries.get(slug="practice-dummy")
         self.assertEqual(entry.source, "mobdefinition.practice-dummy")
-        self.assertEqual(entry.target["room"], f"room@{instance_room.x},{instance_room.y},{instance_room.z}")
+        self.assertEqual(entry.target_room, instance_room)
 
     def test_apply_spawn_plan_manifest_accepts_path_ref_target(self):
         path = Path.objects.create(
@@ -706,7 +996,7 @@ spec:
 
         self.assertEqual(resp.status_code, 201, resp.data)
         plan = SpawnPlan.objects.get(world=self.world, slug="path-plan")
-        self.assertEqual(plan.entries.get().target["path"], f"path@{path.relative_id}")
+        self.assertEqual(plan.entries.get().target_path, path)
 
     def test_apply_spawn_plan_manifest_rejects_path_names(self):
         Path.objects.create(
@@ -746,7 +1036,7 @@ spec:
             plan=plan,
             slug="practice-dummy",
             source=f"mobdefinition.{self.mob_definition.slug}",
-            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            target_room=self.room,
             count=1,
         )
         list_ep = reverse("builder-zone-spawn-plans", args=[self.world.pk, self.zone.pk])
@@ -810,7 +1100,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
             plan=self.plan,
             slug="practice-dummy",
             source=f"mobdefinition.{self.mob_definition.slug}",
-            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            target_room=self.room,
             count=1,
             traits={
                 "guaranteed": ["sturdy"],
@@ -851,6 +1141,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
                 "health_max_multiplier": 1.5,
             },
         )
+
         self.assertEqual(mob.armor, 2)
         self.assertEqual(mob.health_max, 15)
         self.assertEqual(mob.health, 15)
@@ -867,7 +1158,61 @@ class TestSpawnPlanRuntime(WorldTestCase):
         placement = run.placements.get()
         self.assertEqual(placement.entry_slug, self.entry.slug)
         self.assertEqual(placement.room, self.room)
-        self.assertEqual([trait["key"] for trait in placement.traits], ["sturdy", "armored"])
+        self.assertEqual(
+            [trait["key"] for trait in placement.traits],
+            ["sturdy", "armored"],
+        )
+
+    def test_runtime_rejects_cross_plan_entry_target(self):
+        other_plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug="other-plan",
+        )
+        outside_parent = SpawnEntry.objects.create(
+            plan=other_plan,
+            slug="practice-dummy",
+            order=-1,
+            target_room=self.room,
+        )
+        self.entry.target_room = None
+        self.entry.target_entry = outside_parent
+        self.entry.save(update_fields=["target_room", "target_entry"])
+
+        with self.assertRaisesRegex(serializers.ValidationError, "outside its spawn plan"):
+            _target_entry_slug(self.entry)
+
+    def test_entries_sharing_zone_target_reuse_eligible_room_query(self):
+        self.entry.target_room = None
+        self.entry.target_zone = self.zone
+        self.entry.save(update_fields=["target_room", "target_zone"])
+        second_entry = SpawnEntry.objects.create(
+            plan=self.plan,
+            slug="second-dummy",
+            source=f"mobdefinition.{self.mob_definition.slug}",
+            target_zone=self.zone,
+            count=1,
+        )
+        room_choice_cache = {}
+
+        with self.assertNumQueries(1):
+            first_room, _first_state = _choose_room_for_entry(
+                world=self.world,
+                entry=self.entry,
+                source_type="mobdefinition",
+                rng=random.Random(1),
+                room_choice_cache=room_choice_cache,
+            )
+            second_room, _second_state = _choose_room_for_entry(
+                world=self.world,
+                entry=second_entry,
+                source_type="mobdefinition",
+                rng=random.Random(2),
+                room_choice_cache=room_choice_cache,
+            )
+
+        self.assertEqual(first_room, self.room)
+        self.assertEqual(second_room, self.room)
 
     def test_world_start_merges_definition_and_spawn_entry_loot(self):
         ItemDefinition.objects.create(
@@ -920,8 +1265,9 @@ class TestSpawnPlanRuntime(WorldTestCase):
             name="Patrol Loop",
         )
         PathRoom.objects.create(path=path, room=self.room)
-        self.entry.target = {"path": f"path@{path.relative_id}"}
-        self.entry.save(update_fields=["target"])
+        self.entry.target_room = None
+        self.entry.target_path = path
+        self.entry.save(update_fields=["target_room", "target_path"])
         spawn_world = self.world.create_spawn_world()
 
         WorldSmith(spawn_world).start()
@@ -945,9 +1291,10 @@ class TestSpawnPlanRuntime(WorldTestCase):
             room=self.room,
             code=adv_consts.ROOM_FLAG_NO_ROAM,
         )
-        self.entry.target = {"zone": f"zone@{self.zone.relative_id}"}
+        self.entry.target_room = None
+        self.entry.target_zone = self.zone
         self.entry.count = 8
-        self.entry.save(update_fields=["target", "count"])
+        self.entry.save(update_fields=["target_room", "target_zone", "count"])
         spawn_world = self.world.create_spawn_world()
 
         WorldSmith(spawn_world).start()
@@ -980,9 +1327,10 @@ class TestSpawnPlanRuntime(WorldTestCase):
             room=self.room,
             code=adv_consts.ROOM_FLAG_NO_ROAM,
         )
-        self.entry.target = {"path": f"path@{path.relative_id}"}
+        self.entry.target_room = None
+        self.entry.target_path = path
         self.entry.count = 8
-        self.entry.save(update_fields=["target", "count"])
+        self.entry.save(update_fields=["target_room", "target_path", "count"])
         spawn_world = self.world.create_spawn_world()
 
         WorldSmith(spawn_world).start()
@@ -1016,8 +1364,9 @@ class TestSpawnPlanRuntime(WorldTestCase):
             room=self.room,
             code=adv_consts.ROOM_FLAG_NO_ROAM,
         )
-        self.entry.target = {"path": f"path@{path.relative_id}"}
-        self.entry.save(update_fields=["target"])
+        self.entry.target_room = None
+        self.entry.target_path = path
+        self.entry.save(update_fields=["target_room", "target_path"])
         spawn_world = self.world.create_spawn_world()
 
         WorldSmith(spawn_world).start()
@@ -1028,8 +1377,9 @@ class TestSpawnPlanRuntime(WorldTestCase):
         self.assertEqual(mob.roams, path)
 
     def test_world_start_resolves_zone_ref_targets(self):
-        self.entry.target = {"zone": f"zone@{self.zone.relative_id}"}
-        self.entry.save(update_fields=["target"])
+        self.entry.target_room = None
+        self.entry.target_zone = self.zone
+        self.entry.save(update_fields=["target_room", "target_zone"])
         spawn_world = self.world.create_spawn_world()
 
         WorldSmith(spawn_world).start()
@@ -1061,7 +1411,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
             plan=plan,
             slug="practice-dummy",
             source=f"mobdefinition.{self.mob_definition.slug}",
-            target={"room": f"room@{instance_room.x},{instance_room.y},{instance_room.z}"},
+            target_room=instance_room,
             count=1,
         )
         spawned_instance = instance_template.create_spawn_world(
@@ -1085,15 +1435,18 @@ class TestSpawnPlanRuntime(WorldTestCase):
             name="a training crate",
         )
         self.entry.source = f"itemdefinition.{item_definition.slug}"
-        self.entry.target = {"zone": f"zone@{self.zone.relative_id}"}
+        self.entry.target_room = None
+        self.entry.target_zone = self.zone
         self.entry.traits = {}
-        self.entry.save(update_fields=["source", "target", "traits"])
+        self.entry.save(
+            update_fields=["source", "target_room", "target_zone", "traits"]
+        )
         SpawnEntry.objects.create(
             plan=self.plan,
             slug="crate-guard",
             order=2,
             source=f"mobdefinition.{self.mob_definition.slug}",
-            target={"entry": self.entry.slug},
+            target_entry=self.entry,
             count=1,
         )
         RoomFlag.objects.create(
@@ -1133,9 +1486,10 @@ class TestSpawnPlanRuntime(WorldTestCase):
     def test_stale_zone_placements_use_one_no_roam_query_and_skip_respawn(self):
         placement_count = 12
         second_placement_count = 3
-        self.entry.target = {"zone": f"zone@{self.zone.relative_id}"}
+        self.entry.target_room = None
+        self.entry.target_zone = self.zone
         self.entry.count = placement_count
-        self.entry.save(update_fields=["target", "count"])
+        self.entry.save(update_fields=["target_room", "target_zone", "count"])
         second_plan = SpawnPlan.objects.create(
             world=self.world,
             zone=self.zone,
@@ -1147,7 +1501,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
             plan=second_plan,
             slug="annex-dummy",
             source=f"mobdefinition.{self.mob_definition.slug}",
-            target={"zone": f"zone@{self.zone.relative_id}"},
+            target_zone=self.zone,
             count=second_placement_count,
         )
         spawn_world = self.world.create_spawn_world()
@@ -1211,8 +1565,9 @@ class TestSpawnPlanRuntime(WorldTestCase):
             y=0,
             z=0,
         )
-        self.entry.target = {"zone": f"zone@{target_zone.relative_id}"}
-        self.entry.save(update_fields=["target"])
+        self.entry.target_room = None
+        self.entry.target_zone = target_zone
+        self.entry.save(update_fields=["target_room", "target_zone"])
         spawn_world = self.world.create_spawn_world()
         WorldSmith(spawn_world).start()
         Mob.objects.get(
@@ -1348,7 +1703,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
             slug="practice-archer",
             order=2,
             source=f"mobdefinition.{archer_definition.slug}",
-            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            target_room=self.room,
             count=1,
         )
 
@@ -1403,7 +1758,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
             slug="practice-archer",
             order=2,
             source=f"mobdefinition.{archer_definition.slug}",
-            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            target_room=self.room,
             count=1,
         )
 
@@ -1429,7 +1784,8 @@ class TestSpawnPlanRuntime(WorldTestCase):
         self.plan.randomization = {"seed_scope": "explicit", "seed": "stable-plan"}
         self.plan.respawn_policy = {"mode": "none"}
         self.plan.save(update_fields=["randomization", "respawn_policy"])
-        self.entry.target = {"zone": f"zone@{self.zone.relative_id}"}
+        self.entry.target_room = None
+        self.entry.target_zone = self.zone
         self.entry.count = {"min": 2, "max": 4}
         self.entry.traits = {
             "chance": 100,
@@ -1438,7 +1794,9 @@ class TestSpawnPlanRuntime(WorldTestCase):
                 {"key": "swift", "weight": 1},
             ],
         }
-        self.entry.save(update_fields=["target", "count", "traits"])
+        self.entry.save(
+            update_fields=["target_room", "target_zone", "count", "traits"]
+        )
         spawn_world = self.world.create_spawn_world()
         WorldSmith(spawn_world).start()
         run = SpawnPlanRun.objects.get(spawn_world=spawn_world, plan=self.plan)
@@ -1466,7 +1824,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
             slug="practice-archer",
             order=-1,
             source=f"mobdefinition.{archer_definition.slug}",
-            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            target_room=self.room,
             count=1,
         )
 
@@ -1512,7 +1870,8 @@ class TestSpawnPlanRuntime(WorldTestCase):
                 {"ref": f"mobdefinition.{alternate_definition.slug}", "weight": 1},
             ],
         }
-        self.entry.target = {"zone": f"zone@{self.zone.relative_id}"}
+        self.entry.target_room = None
+        self.entry.target_zone = self.zone
         self.entry.count = 2
         self.entry.traits = {
             "chance": 100,
@@ -1521,7 +1880,15 @@ class TestSpawnPlanRuntime(WorldTestCase):
                 {"key": "swift", "weight": 1},
             ],
         }
-        self.entry.save(update_fields=["source", "target", "count", "traits"])
+        self.entry.save(
+            update_fields=[
+                "source",
+                "target_room",
+                "target_zone",
+                "count",
+                "traits",
+            ]
+        )
         spawn_world = self.world.create_spawn_world()
         WorldSmith(spawn_world).start()
         run = SpawnPlanRun.objects.get(spawn_world=spawn_world, plan=self.plan)
@@ -1597,7 +1964,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
             slug="practice-archer",
             order=2,
             source=f"mobdefinition.{archer_definition.slug}",
-            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            target_room=self.room,
             count=1,
         )
 
@@ -1665,13 +2032,13 @@ class TestSpawnPlanRuntime(WorldTestCase):
         mob = Mob.objects.get(world=spawn_world, definition=self.mob_definition)
         placement_id = mob.spawn_placement_id
         self.entry.source = f"mobdefinition.{archer_definition.slug}"
-        self.entry.target = {"room": f"room@{east_room.x},{east_room.y},{east_room.z}"}
+        self.entry.target_room = east_room
         self.entry.traits = {
             "guaranteed": [
                 {"key": "reinforced", "modifiers": {"armor": 3}},
             ],
         }
-        self.entry.save(update_fields=["source", "target", "traits"])
+        self.entry.save(update_fields=["source", "target_room", "traits"])
 
         output = run_spawn_plans_for_world(world=spawn_world)
 
@@ -1706,7 +2073,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
             slug="practice-archer",
             order=2,
             source=f"mobdefinition.{archer_definition.slug}",
-            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            target_room=self.room,
             count=1,
         )
         spawn_world = self.world.create_spawn_world()
@@ -1802,7 +2169,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
             slug="crate-token",
             order=2,
             source=f"itemdefinition.{token_definition.slug}",
-            target={"entry": self.entry.slug},
+            target_entry=self.entry,
             count=1,
         )
         spawn_world = self.world.create_spawn_world()
@@ -1859,7 +2226,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
             plan=plan,
             slug="practice-dummy",
             source=f"mobdefinition.{self.mob_definition.slug}",
-            target={"room": f"room@{instance_room.x},{instance_room.y},{instance_room.z}"},
+            target_room=instance_room,
             count=1,
         )
         spawned_instance = instance_template.create_spawn_world(
@@ -1881,7 +2248,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
             slug="instance-archer",
             order=2,
             source=f"mobdefinition.{archer_definition.slug}",
-            target={"room": f"room@{instance_room.x},{instance_room.y},{instance_room.z}"},
+            target_room=instance_room,
             count=1,
         )
 
@@ -1931,19 +2298,20 @@ class TestSpawnPlanRuntime(WorldTestCase):
             mob_type=adv_consts.MOB_TYPE_HUMANOID,
             base_properties={"health_max": 10},
         )
-        self.entry.target = {"path": f"path@{path.relative_id}"}
+        self.entry.target_room = None
+        self.entry.target_path = path
         self.entry.placement = {
             "cohort": "west-patrol",
             "cohort_role": "leader",
             "cohort_policy": "refill_missing",
         }
-        self.entry.save(update_fields=["target", "placement"])
+        self.entry.save(update_fields=["target_room", "target_path", "placement"])
         SpawnEntry.objects.create(
             plan=self.plan,
             slug="practice-archer",
             order=2,
             source=f"mobdefinition.{archer_definition.slug}",
-            target={"entry": self.entry.slug},
+            target_entry=self.entry,
             count=1,
             placement={
                 "cohort": "west-patrol",
@@ -2032,7 +2400,7 @@ class TestSpawnPlanExport(WorldTestCase):
             plan=self.plan,
             slug="practice-dummy",
             source=f"mobdefinition.{self.mob_definition.slug}",
-            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            target_room=self.room,
             count=1,
             traits={
                 "guaranteed": [
@@ -2054,6 +2422,10 @@ class TestSpawnPlanExport(WorldTestCase):
         self.assertEqual(spawn_doc["metadata"]["slug"], "training-grounds")
         self.assertEqual(spawn_doc["spec"]["zone"], f"zone@{self.zone.relative_id}")
         self.assertEqual(spawn_doc["spec"]["entries"][0]["source"], "mobdefinition.practice-dummy")
+        self.assertEqual(
+            spawn_doc["spec"]["entries"][0]["target"],
+            f"room@{self.room.relative_id}",
+        )
         self.assertEqual(
             spawn_doc["spec"]["entries"][0]["traits"]["guaranteed"][0]["key"],
             "armored",

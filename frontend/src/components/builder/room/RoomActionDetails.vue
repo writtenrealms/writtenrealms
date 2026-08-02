@@ -36,9 +36,11 @@
 <script lang='ts' setup>
 import { computed } from "vue";
 import { useRoute } from "vue-router";
+import { useStore } from "vuex";
 import axios from "axios";
 
 const route = useRoute();
+const store = useStore();
 const props = defineProps<{
   resource: any;
 }>();
@@ -49,7 +51,7 @@ const commands = computed(() => props.resource.commands.split("\n"));
 const clone = async (resource) => {
   if (!confirm(`Clone this room action?`)) return;
   const world_id = route.params.world_id;
-  const room_id = route.params.room_id;
+  const room_id = store.state.builder.room.id;
   const action_id = resource.id;
   const endpoint = `/builder/worlds/${world_id}/rooms/${room_id}/actions/${action_id}/clone/`;
   const resp = await axios.post(endpoint);

@@ -223,7 +223,7 @@ Arc authoring should use `kind: questarc`.
 At a high level:
 
 ```yaml
-apiVersion: v1alpha1
+apiVersion: writtenrealms.com/v1alpha3
 kind: quest
 metadata:
   world: world.1
@@ -378,7 +378,7 @@ This is the smallest useful example: one opportunity, one choice, one
 resolution.
 
 ```yaml
-apiVersion: v1alpha1
+apiVersion: writtenrealms.com/v1alpha3
 kind: quest
 metadata:
   world: world.1
@@ -393,7 +393,7 @@ spec:
   discovery:
     sources:
       - type: room_prompt
-        room: room.12
+        room: room@12
     visible_if:
       not:
         fact:
@@ -433,7 +433,7 @@ This is a standard authored quest with one offer, one investigation objective,
 one decision point, and two outcomes.
 
 ```yaml
-apiVersion: v1alpha1
+apiVersion: writtenrealms.com/v1alpha3
 kind: quest
 metadata:
   world: world.1
@@ -561,7 +561,7 @@ hidden objectives, timers, fail-forward, repeatability, and multiple possible
 outcomes.
 
 ```yaml
-apiVersion: v1alpha1
+apiVersion: writtenrealms.com/v1alpha3
 kind: quest
 metadata:
   world: world.1
@@ -579,7 +579,7 @@ spec:
   discovery:
     sources:
       - type: bulletin_board
-        room: room.88
+        room: room@88
       - type: npc_dialogue
         mob_definition: mobdefinition.201
     visible_if:

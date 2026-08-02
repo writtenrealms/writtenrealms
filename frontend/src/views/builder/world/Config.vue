@@ -127,8 +127,9 @@
 <script lang="ts" setup>
 import { computed, onMounted, ref } from "vue";
 import { useStore } from "vuex";
-import { useRouter, useRoute, RouteLocationRaw } from "vue-router";
+import { useRouter, useRoute } from "vue-router";
 import ManifestValue from "@/components/builder/world/ManifestValue.vue";
+import { builderRoomIndexRoute, builderZoneIndexRoute } from "@/core/builderRoutes";
 
 const store = useStore();
 const router = useRouter();
@@ -158,13 +159,7 @@ const baseWorldConfigLink = computed(() => ({
 const roomLinkForKey = (key: string) => {
   const room = configData.value?.[key];
   if (!room?.id) return null;
-  return {
-    name: "builder_room_index",
-    params: {
-      world_id: route.params.world_id,
-      room_id: room.id,
-    },
-  };
+  return builderRoomIndexRoute(route.params.world_id, room);
 };
 
 const roomDisplayForKey = (key: string, fallback: any) => {
@@ -514,21 +509,9 @@ const deleteWorld = async () => {
 
 const assignment_link = (assignment) => {
   if (assignment.model_type === "room") {
-    return {
-      name: "builder_room_index",
-      params: {
-        world_id: route.params.world_id,
-        room_id: assignment.id,
-      },
-    } as RouteLocationRaw;
+    return builderRoomIndexRoute(route.params.world_id, assignment);
   }
-  return {
-    name: "builder_zone_index",
-    params: {
-      world_id: route.params.world_id,
-      zone_id: assignment.id,
-    },
-  } as RouteLocationRaw;
+  return builderZoneIndexRoute(route.params.world_id, assignment);
 };
 </script>
 

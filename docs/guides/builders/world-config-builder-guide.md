@@ -25,8 +25,8 @@ spec:
   initial_state:
     weather: clear
     invasion_active: false
-  starting_room: room@0,0,0
-  death_room: room@0,0,0
+  starting_room: room@1
+  death_room: room@1
   default_currency: crowns
   starting_balances:
     crowns: 0
@@ -49,16 +49,16 @@ spec:
     routes:
       - when:
           gte: [player.level, 20]
-        destination: room@9,0,0
+        destination: room@9
       - when:
           eq: [player.archetype, warlord]
-        destination: room@10,0,0
+        destination: room@10
       - when:
           eq: [player.core_faction, orc]
-        destination: room@11,0,0
+        destination: room@11
       - when:
           eq: [state.character.divine_patron, poseidon]
-        destination: room@12,0,0
+        destination: room@12
   pvp_mode: free_for_all
   announce_duel_results: false
   auto_equip: true
@@ -71,15 +71,18 @@ spec:
 
 ## Room References
 
-Use exported room coordinate refs when editing normal exported YAML:
+Use the stable room refs shown in exported YAML:
 
 ```yaml
-starting_room: room@0,0,0
-death_room: room@2,0,0
+starting_room: room@1
+death_room: room@2
 ```
 
-The import path also accepts database refs such as `room.123`, but those are not
-portable across databases.
+`room@<relative_id>` identifies the same authored room after it moves and after
+world export/import. The import path also accepts legacy coordinate refs such
+as `room@2,0,0` and database refs such as `room.123`; both are import-only
+aliases and canonical YAML rewrites them to the stable form. Database refs are
+not portable across installations.
 
 ## Field Reference
 
@@ -104,8 +107,24 @@ portable across databases.
 | `death_room` | room ref | first room | Used by death handling when death routing resolves here. |
 | `initial_state` | mapping | `{}` | Seed state copied into each new runtime world; it is not live runtime state. |
 
-`exits_to` exists on `WorldConfig` for instance transfer behavior, but it is not
-currently authored through `kind: world` manifests.
+`exits_to` exists on `WorldConfig` for instance transfer behavior, but it is
+not a local `kind: world` field. A base/instance family export represents it
+centrally in the `kind: worldbundle` header:
+
+```yaml
+spec:
+  links:
+    - relation: world_config.exits_to
+      source:
+        world: instance.hades
+      target:
+        world: world@base
+        room: room@42
+```
+
+The source must be a direct authored instance template and the target must be
+a stable room in its base world. The bundle importer applies this link only
+after both scopes and their rooms exist.
 
 `initial_state` contains authored defaults for `state.world.*`. Applying a
 manifest changes the seed for future runtime worlds; it does not overwrite a
@@ -268,23 +287,23 @@ death_routing:
   routes:
     - when:
         eq: [zone.id, zone@7]
-      destination: room@10,0,0
+      destination: room@10
 
     - when:
         gte: [player.level, 20]
-      destination: room@9,0,0
+      destination: room@9
 
     - when:
         eq: [player.archetype, warlord]
-      destination: room@11,0,0
+      destination: room@11
 
     - when:
         in: [player.core_faction, [human, orc]]
-      destination: room@12,0,0
+      destination: room@12
 
     - when:
         eq: [state.character.divine_patron, poseidon]
-      destination: room@13,0,0
+      destination: room@13
 ```
 
 Omitting `death_routing` from an update preserves the current policy. Setting
@@ -343,7 +362,7 @@ manifests.
 | `is_classless` | Legacy compatibility field accepted by import. | Configure `stats.class_profiles`; absence of class profiles means classless. |
 | `death_route` | Legacy authored field retained for compatibility; deterministic routing does not interpret it. | Configure `death_routing`. |
 | `starting_eq` | Stored many-to-many starter equipment. | Not currently authored through `kind: world`. |
-| `exits_to` | Instance transfer field. | Configure instance entry/exit behavior through instance-specific workflows. |
+| `exits_to` | Cross-world instance transfer field; not accepted inside `kind: world`. | Configure it through the family bundle's `world_config.exits_to` link. |
 
 ## Instance Templates
 
@@ -368,6 +387,14 @@ Core systems such as `stats`, `combat`, `equipment`, `ability_progression`,
 `leveling_curve`, `starting_level`, `max_level`, `combat_resolution_interval`,
 `default_roam_chance`, and `announce_duel_results` are inherited from the base
 world.
+
+In a family bundle, every instance `kind: world` document has
+`metadata.world_ref: instance.<instance_slug>`. Its `starting_room`,
+`death_room`, local death-routing destinations, and any other room refs resolve
+only inside that instance template. The instance slug is the stable portable
+scope; its database world id and spawned runtime `instance_ref` are not
+manifest identity. Cross-world return behavior remains in the bundle header,
+not in this document.
 
 For instance authoring, see
 [instance-builder-guide.md](instance-builder-guide.md).

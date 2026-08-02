@@ -23,7 +23,9 @@ const store = useStore();
 const route = useRoute();
 
 const room = computed(() => store.state.builder.room);
-const endpoint = `/builder/worlds/${route.params.world_id}/rooms/${route.params.room_id}/details/`;
+const endpoint = computed(() => (
+  `/builder/worlds/${route.params.world_id}/rooms/${store.state.builder.room.id}/details/`
+));
 const display_component = RoomDetailsDetails;
 const schema: FormElement[] = [
   {

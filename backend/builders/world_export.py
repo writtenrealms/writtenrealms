@@ -6,8 +6,9 @@ from typing import Any
 
 import yaml
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
-from django.db.models import Prefetch
+from django.db.models import Prefetch, Q
 from django.db.models.deletion import RestrictedError
 from django.utils.text import slugify
 from rest_framework import serializers
@@ -23,6 +24,7 @@ from builders.models import (
     CraftingRecipe,
     Currency,
     Faction,
+    FactionAssignment,
     ItemBundle,
     ItemDefinition,
     ItemSalvageYield,
@@ -37,6 +39,7 @@ from builders.models import (
 )
 from builders.loot_tables import normalize_loot_table
 from config import constants as adv_consts
+from core.abilities import AbilityValidationError, normalize_ability_definition
 from core.condition_dsl import validate_condition_payload
 from core.death_routing import (
     acquire_death_routing_config_locks,
@@ -53,18 +56,44 @@ from core.scoped_state import (
 from quests import entity_refs as quest_entity_refs
 from quests import manifests as quest_manifests
 from quests.models import QuestArcTemplate, QuestTemplate
-from worlds.models import Door, Room, RoomDetail, RoomFlag, World, Zone
+from worlds.models import (
+    Door,
+    Room,
+    RoomDetail,
+    RoomFlag,
+    World,
+    WorldConfig,
+    Zone,
+)
+from worlds.room_refs import (
+    RoomReferenceError,
+    build_room_reference_object_cache,
+    canonicalize_room_reference,
+    canonicalize_room_references_in_text,
+    format_room_manifest_ref,
+    parse_room_reference,
+    refresh_room_reference_object_cache,
+    resolve_room_reference,
+    use_room_reference_object_caches,
+)
 
 
 WORLD_MANIFEST_KIND = "world"
+WORLD_BUNDLE_MANIFEST_KIND = "worldbundle"
 CURRENCY_MANIFEST_KIND = "currency"
 ZONE_MANIFEST_KIND = "zone"
 ROOM_MANIFEST_KIND = "room"
 PATH_MANIFEST_KIND = "path"
 SPAWN_PLAN_MANIFEST_KIND = "spawnplan"
 SOCIAL_MANIFEST_KIND = builder_manifests.SOCIAL_MANIFEST_KIND
+CANONICAL_MANIFEST_API_VERSION = builder_manifests.CANONICAL_MANIFEST_API_VERSION
 
 _WORLD_KIND_ALIASES = {"world"}
+_WORLD_BUNDLE_KIND_ALIASES = {
+    WORLD_BUNDLE_MANIFEST_KIND,
+    "world-bundle",
+    "world_bundle",
+}
 _ZONE_KIND_ALIASES = {"zone"}
 _ROOM_KIND_ALIASES = {"room"}
 _PATH_KIND_ALIASES = {"path"}
@@ -92,6 +121,9 @@ _ABILITIES_KIND_ALIASES = {builder_manifests.ABILITIES_MANIFEST_KIND}
 _ROOM_REF_PREFIX = "room@"
 _ZONE_REF_PREFIX = "zone@"
 _PATH_REF_PREFIX = "path@"
+_SPAWN_ENTRY_REF_PREFIX = "entry."
+_BASE_WORLD_BUNDLE_REF = "world@base"
+_INSTANCE_BUNDLE_REF_PREFIX = "instance."
 _ITEM_DEFINITION_REF_PREFIX = "itemdefinition."
 _ITEM_BUNDLE_REF_PREFIX = "itembundle."
 _MERCHANT_PROFILE_REF_PREFIX = "merchantprofile."
@@ -136,6 +168,8 @@ def manifest_stream_to_yaml(manifests: list[dict[str, Any]]) -> str:
 def parse_document_kind(manifest: dict[str, Any]) -> str:
     builder_manifests._validate_api_version(manifest)
     raw_kind = str(manifest.get("kind") or "").strip().lower()
+    if raw_kind in _WORLD_BUNDLE_KIND_ALIASES:
+        return WORLD_BUNDLE_MANIFEST_KIND
     if raw_kind in _WORLD_KIND_ALIASES:
         return WORLD_MANIFEST_KIND
     if raw_kind in _CURRENCY_KIND_ALIASES:
@@ -178,7 +212,9 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
         return builder_manifests.ABILITIES_MANIFEST_KIND
     raise serializers.ValidationError(
         "Unsupported manifest kind. Supported kinds: "
-        "world, currency, zone, room, path, itemdefinition, itembundle, merchantprofile, faction, mobdefinition, spawnplan, social, questarc, quest, trigger, ability, abilities."
+        "worldbundle, world, currency, zone, room, path, itemdefinition, "
+        "itembundle, merchantprofile, faction, mobdefinition, spawnplan, "
+        "social, questarc, quest, trigger, ability, abilities."
     )
 
 
@@ -186,10 +222,23 @@ def _room_ref_from_coords(*, x: int, y: int, z: int) -> str:
     return f"{_ROOM_REF_PREFIX}{x},{y},{z}"
 
 
-def _room_ref(room: Room | None) -> str:
+def _room_ref(
+    room: Room | None,
+    *,
+    world: World | int | None = None,
+    field_name: str = "Room reference",
+) -> str:
     if room is None:
         return ""
-    return _room_ref_from_coords(x=room.x, y=room.y, z=room.z)
+    expected_world_id = world.id if isinstance(world, World) else world
+    if expected_world_id is not None and room.world_id != expected_world_id:
+        raise serializers.ValidationError(
+            f"{field_name} points to a room outside this world."
+        )
+    try:
+        return format_room_manifest_ref(room)
+    except RoomReferenceError as exc:
+        raise serializers.ValidationError(str(exc)) from exc
 
 
 def _zone_ref(zone: Zone | None) -> str:
@@ -207,22 +256,59 @@ def _path_ref(path: Path | None) -> str:
 
 
 def _parse_room_ref(value: Any) -> tuple[int, int, int]:
+    """Parse the legacy coordinate form retained for v1alpha1 imports."""
+
     text = str(value or "").strip()
-    if not text.startswith(_ROOM_REF_PREFIX):
+    parsed = parse_room_reference(text)
+    if parsed is None or parsed.kind != "coordinates":
         raise serializers.ValidationError(
             "Room references must use the form 'room@x,y,z'."
         )
-    raw_coords = text[len(_ROOM_REF_PREFIX):]
-    parts = [part.strip() for part in raw_coords.split(",")]
-    if len(parts) != 3:
+    return parsed.x, parsed.y, parsed.z
+
+
+def _resolve_room_reference_or_error(
+    *,
+    world: World,
+    value: Any,
+    field_name: str,
+) -> Room:
+    parsed = parse_room_reference(value)
+    if parsed is None:
         raise serializers.ValidationError(
-            "Room references must use the form 'room@x,y,z'."
+            f"{field_name} must use 'room@<relative_id>', legacy "
+            "'room@x,y,z', or legacy 'room.<database_id>'."
+        )
+    room = resolve_room_reference(world, value)
+    if room is None:
+        raise serializers.ValidationError(
+            f"{field_name} references an unknown room in this world."
+        )
+    return room
+
+
+def _coerce_room_coordinates(
+    value: Any,
+    *,
+    field_name: str = "spec.coordinates",
+) -> tuple[int, int, int]:
+    if not isinstance(value, dict):
+        raise serializers.ValidationError(f"{field_name} must be a mapping.")
+    unknown_fields = sorted(set(value) - {"x", "y", "z"})
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported {field_name} field(s): {', '.join(unknown_fields)}."
+        )
+    missing_fields = [axis for axis in ("x", "y", "z") if axis not in value]
+    if missing_fields:
+        raise serializers.ValidationError(
+            f"{field_name} requires x, y, and z."
         )
     try:
-        return tuple(int(part) for part in parts)
-    except ValueError:
+        return tuple(int(value[axis]) for axis in ("x", "y", "z"))
+    except (TypeError, ValueError):
         raise serializers.ValidationError(
-            "Room references must use integer coordinates in the form 'room@x,y,z'."
+            f"{field_name}.x, y, and z must be integers."
         )
 
 
@@ -383,7 +469,11 @@ def _serialize_zone_manifest(zone: Zone) -> dict[str, Any]:
             "initial_state": get_initial_state_snapshot(STATE_SCOPE_ZONE, zone),
             "respawn_wait": int(zone.respawn_wait),
             "pvp_zone": bool(zone.pvp_zone),
-            "center": _room_ref(zone.center),
+            "center": _room_ref(
+                zone.center,
+                world=zone.world_id,
+                field_name=f"Zone '{zone.name}' center",
+            ),
         },
     }
 
@@ -425,7 +515,11 @@ def serialize_zone_payload(
         "notes": zone.notes or "",
         "respawn_wait": int(zone.respawn_wait),
         "pvp_zone": bool(zone.pvp_zone),
-        "center": _room_ref(zone.center),
+        "center": _room_ref(
+            zone.center,
+            world=zone.world_id,
+            field_name=f"Zone '{zone.name}' center",
+        ),
     }
     if include_yaml:
         payload.update(serialize_zone_manifest_payload(zone))
@@ -433,6 +527,9 @@ def serialize_zone_payload(
 
 
 def _room_door_faces_for_export(room: Room) -> list[Door]:
+    export_faces = getattr(room, "_export_door_faces", None)
+    if export_faces is not None:
+        return export_faces
     cached_faces = getattr(
         room,
         "_prefetched_objects_cache",
@@ -449,13 +546,29 @@ def _room_door_faces_for_export(room: Room) -> list[Door]:
 
 
 def _serialize_room_manifest(room: Room) -> dict[str, Any]:
+    export_flags = getattr(room, "_export_flags", None)
+    if export_flags is None:
+        flag_codes = sorted(room.flags.values_list("code", flat=True))
+    else:
+        flag_codes = [flag.code for flag in export_flags]
+
+    export_details = getattr(room, "_export_details", None)
+    if export_details is None:
+        export_details = room.details.all().order_by("created_ts", "id")
+
     return {
+        "apiVersion": CANONICAL_MANIFEST_API_VERSION,
         "kind": ROOM_MANIFEST_KIND,
         "metadata": {
-            "ref": _room_ref(room),
+            "ref": _room_ref(room, world=room.world_id),
             "name": room.name or "",
         },
         "spec": {
+            "coordinates": {
+                "x": room.x,
+                "y": room.y,
+                "z": room.z,
+            },
             "zone": _zone_ref(room.zone),
             "description": room.description or "",
             "note": room.note or "",
@@ -464,23 +577,33 @@ def _serialize_room_manifest(room: Room) -> dict[str, Any]:
             "initial_state": get_initial_state_snapshot(STATE_SCOPE_ROOM, room),
             "is_landmark": bool(room.is_landmark),
             "exits": {
-                direction: _room_ref(getattr(room, direction, None))
+                direction: _room_ref(
+                    getattr(room, direction, None),
+                    world=room.world_id,
+                    field_name=f"Room '{room.name}' {direction} exit",
+                )
                 for direction in adv_consts.DIRECTIONS
             },
-            "flags": sorted(room.flags.values_list("code", flat=True)),
+            "flags": flag_codes,
             "details": [
                 {
                     "keywords": detail.keywords,
                     "description": detail.description,
                     "is_hidden": bool(detail.is_hidden),
                 }
-                for detail in room.details.all().order_by("created_ts", "id")
+                for detail in export_details
             ],
             "doors": [
                 {
                     "direction": door.direction,
                     "name": door.name or "",
-                    "to_room": _room_ref(door.to_room),
+                    "to_room": _room_ref(
+                        door.to_room,
+                        world=room.world_id,
+                        field_name=(
+                            f"Room '{room.name}' {door.direction} door target"
+                        ),
+                    ),
                     "key": _item_definition_ref(door.key),
                     "destroy_key": bool(door.destroy_key),
                     "default_state": door.default_state,
@@ -510,6 +633,13 @@ def serialize_room_manifest_payload(room: Room) -> dict[str, Any]:
 
 
 def _serialize_path_manifest(path: Path) -> dict[str, Any]:
+    export_path_rooms = getattr(path, "_export_path_rooms", None)
+    if export_path_rooms is None:
+        export_path_rooms = (
+            PathRoom.objects.filter(path=path)
+            .select_related("room")
+            .order_by("id")
+        )
     return {
         "kind": PATH_MANIFEST_KIND,
         "metadata": {
@@ -519,12 +649,20 @@ def _serialize_path_manifest(path: Path) -> dict[str, Any]:
         "spec": {
             "zone": _zone_ref(path.zone),
             "notes": path.notes or "",
-            "entry_room": _room_ref(path.entry_room),
+            "entry_room": _room_ref(
+                path.entry_room,
+                world=path.world_id,
+                field_name=f"Path '{path.name}' entry room",
+            ),
             "max_per_room": path.max_per_room,
             "max_per_path": path.max_per_path,
             "rooms": [
-                _room_ref(path_room.room)
-                for path_room in PathRoom.objects.filter(path=path).select_related("room").order_by("id")
+                _room_ref(
+                    path_room.room,
+                    world=path.world_id,
+                    field_name=f"Path '{path.name}' room",
+                )
+                for path_room in export_path_rooms
             ],
         },
     }
@@ -589,7 +727,7 @@ def _serialize_crafting_profile_manifest(profile: CraftingProfile) -> dict[str, 
 def _serialize_faction_manifest(faction: Faction) -> dict[str, Any]:
     manifest = builder_manifests.faction_to_manifest(
         faction,
-        room_reference_mode="coords",
+        room_reference_mode="manifest",
     )
     manifest["metadata"].pop("world", None)
     manifest["metadata"].pop("id", None)
@@ -605,18 +743,160 @@ def _serialize_mob_definition_manifest(mob_definition: MobDefinition) -> dict[st
     return manifest
 
 
-def _serialize_spawn_entry(entry: SpawnEntry) -> dict[str, Any]:
+def _canonicalize_spawn_source_for_export(
+    *,
+    world: World,
+    source: Any,
+    field_name: str,
+    source_ref_cache: dict[tuple[str, str, Any], str] | None = None,
+) -> Any:
+    if source_ref_cache is None:
+        resolved_sources = _validate_spawn_source(
+            world=world,
+            source=source,
+            field_name=field_name,
+        )
+        canonical_refs = [
+            f"{resolved.source_type}.{resolved.source_slug}"
+            for resolved in resolved_sources
+        ]
+    else:
+        canonical_refs = []
+        aliases = {
+            "itembundle": "itembundle",
+            "item_bundle": "itembundle",
+            "itemdefinition": "itemdefinition",
+            "item_definition": "itemdefinition",
+            "mobdefinition": "mobdefinition",
+            "mob_definition": "mobdefinition",
+        }
+        for index, source_ref in enumerate(_spawn_source_refs(source)):
+            text = str(source_ref or "").strip()
+            prefix, separator, raw_value = text.partition(".")
+            source_type = aliases.get(prefix.strip().lower()) if separator else None
+            raw_value = raw_value.strip()
+            ref_field = (
+                f"{field_name}[{index}]"
+                if isinstance(source, dict) and "pool" in source
+                else field_name
+            )
+            if source_type is None or not raw_value:
+                raise serializers.ValidationError(
+                    f"{ref_field} must use a supported ref such as "
+                    "mobdefinition.slug or itemdefinition.slug."
+                )
+            cache_key = (
+                source_type,
+                "id" if raw_value.isdigit() else "slug",
+                int(raw_value) if raw_value.isdigit() else raw_value,
+            )
+            canonical_ref = source_ref_cache.get(cache_key)
+            if canonical_ref is None:
+                raise serializers.ValidationError(
+                    f"{ref_field} does not resolve to authored content in "
+                    f"{'the inherited base world' if world.instance_of_id else 'this world'}."
+                )
+            canonical_refs.append(canonical_ref)
+
+    if isinstance(source, dict) and "pool" in source:
+        canonical_pool = []
+        for pool_entry, canonical_ref in zip(
+            source.get("pool") or [],
+            canonical_refs,
+        ):
+            if isinstance(pool_entry, dict):
+                canonical_entry = copy.deepcopy(pool_entry)
+                if "ref" in canonical_entry:
+                    canonical_entry["ref"] = canonical_ref
+                elif "source" in canonical_entry:
+                    canonical_entry["source"] = canonical_ref
+                else:
+                    canonical_entry["ref"] = canonical_ref
+                canonical_pool.append(canonical_entry)
+            else:
+                canonical_pool.append(canonical_ref)
+        return {"pool": canonical_pool}
+
+    if isinstance(source, dict):
+        canonical = copy.deepcopy(source)
+        field = "ref" if "ref" in canonical else "source"
+        canonical[field] = canonical_refs[0]
+        return canonical
+    return canonical_refs[0]
+
+
+def _serialize_spawn_entry(
+    entry: SpawnEntry,
+    *,
+    world: World,
+    room_ref_cache: dict[tuple[Any, ...], str],
+    source_ref_cache: dict[tuple[str, str, Any], str],
+) -> dict[str, Any]:
+    targets = [
+        ("room", entry.target_room_id),
+        ("zone", entry.target_zone_id),
+        ("path", entry.target_path_id),
+        ("entry", entry.target_entry_id),
+    ]
+    populated_targets = [target_type for target_type, target_id in targets if target_id]
+    if len(populated_targets) != 1:
+        raise serializers.ValidationError(
+            f"Spawn entry '{entry.slug}' must have exactly one target."
+        )
+
+    target_type = populated_targets[0]
+    if target_type == "room":
+        if entry.target_room.world_id != world.id:
+            raise serializers.ValidationError(
+                f"Spawn entry '{entry.slug}' targets a room outside this world."
+            )
+        target = _room_ref(entry.target_room)
+    elif target_type == "zone":
+        if entry.target_zone.world_id != world.id:
+            raise serializers.ValidationError(
+                f"Spawn entry '{entry.slug}' targets a zone outside this world."
+            )
+        target = _zone_ref(entry.target_zone)
+    elif target_type == "path":
+        if entry.target_path.world_id != world.id:
+            raise serializers.ValidationError(
+                f"Spawn entry '{entry.slug}' targets a path outside this world."
+            )
+        target = _path_ref(entry.target_path)
+    else:
+        target_entry = entry.target_entry
+        if target_entry.plan_id != entry.plan_id:
+            raise serializers.ValidationError(
+                f"Spawn entry '{entry.slug}' targets an entry outside its spawn plan."
+            )
+        if target_entry.order >= entry.order:
+            raise serializers.ValidationError(
+                f"Spawn entry '{entry.slug}' must target an entry with a lower order."
+            )
+        if entry.is_active and not target_entry.is_active:
+            raise serializers.ValidationError(
+                f"Active spawn entry '{entry.slug}' must target an active entry."
+            )
+        target = f"{_SPAWN_ENTRY_REF_PREFIX}{target_entry.slug}"
+
     data: dict[str, Any] = {
         "slug": entry.slug,
         "order": int(entry.order),
-        "target": copy.deepcopy(entry.target),
+        "target": target,
         "count": copy.deepcopy(entry.count),
     }
     if entry.name:
         data["name"] = entry.name
     if not entry.is_active:
         data["is_active"] = False
-    source = copy.deepcopy(entry.source)
+    source = _canonicalize_spawn_source_for_export(
+        world=world,
+        source=copy.deepcopy(entry.source),
+        field_name=(
+            f"Spawn plan '{entry.plan.slug}' entry '{entry.slug}' source"
+        ),
+        source_ref_cache=source_ref_cache,
+    )
     if isinstance(source, dict) and "pool" in source:
         data["source_pool"] = source["pool"]
     else:
@@ -652,32 +932,89 @@ def _serialize_spawn_entry(entry: SpawnEntry) -> dict[str, Any]:
     if placement:
         data["placement"] = placement
     if entry.traits:
-        data["traits"] = copy.deepcopy(entry.traits)
+        data["traits"] = _canonicalize_nested_conditions(
+            copy.deepcopy(entry.traits),
+            world=world,
+            entity_ref_cache=source_ref_cache,
+            room_ref_cache=room_ref_cache,
+        )
     if entry.initial_state:
         data["initial_state"] = copy.deepcopy(entry.initial_state)
     if entry.loot:
-        data["loot"] = copy.deepcopy(entry.loot)
+        data["loot"] = _canonicalize_nested_conditions(
+            copy.deepcopy(entry.loot),
+            world=world,
+            entity_ref_cache=source_ref_cache,
+            room_ref_cache=room_ref_cache,
+        )
     if entry.conditions:
-        data["conditions"] = copy.deepcopy(entry.conditions)
+        data["conditions"] = _canonicalize_condition_refs(
+            copy.deepcopy(entry.conditions),
+            world=world,
+            room_ref_cache=room_ref_cache,
+        )
     return data
 
 
-def _serialize_spawn_plan_manifest(spawn_plan: SpawnPlan) -> dict[str, Any]:
+def _serialize_spawn_plan_manifest(
+    spawn_plan: SpawnPlan,
+    *,
+    room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+    source_ref_cache: dict[tuple[str, str, Any], str] | None = None,
+) -> dict[str, Any]:
+    if room_ref_cache is None:
+        room_ref_cache = _build_room_ref_cache(spawn_plan.world)
+    if source_ref_cache is None:
+        source_world = (
+            spawn_plan.world.instance_of
+            if spawn_plan.world.instance_of_id
+            else spawn_plan.world
+        )
+        source_ref_cache = _build_entity_ref_cache(
+            item_definitions=list(
+                source_world.item_definitions.only("id", "slug")
+            ),
+            item_bundles=list(
+                source_world.item_bundles.only("id", "slug")
+            ),
+            mob_definitions=list(
+                source_world.mob_definitions.only("id", "slug")
+            ),
+        )
+    entries = getattr(spawn_plan, "_export_entries", None)
+    if entries is None:
+        entries = spawn_plan.entries.select_related(
+            "plan",
+            "target_room",
+            "target_zone",
+            "target_path",
+            "target_entry",
+        ).order_by("order", "created_ts", "id")
     spec: dict[str, Any] = {
         "zone": _zone_ref(spawn_plan.zone),
         "order": int(spawn_plan.order),
         "is_active": bool(spawn_plan.is_active),
         "respawn": copy.deepcopy(spawn_plan.respawn_policy),
         "entries": [
-            _serialize_spawn_entry(entry)
-            for entry in spawn_plan.entries.all().order_by("order", "created_ts", "id")
+            _serialize_spawn_entry(
+                entry,
+                world=spawn_plan.world,
+                room_ref_cache=room_ref_cache,
+                source_ref_cache=source_ref_cache,
+            )
+            for entry in entries
         ],
     }
     if spawn_plan.randomization:
         spec["randomization"] = copy.deepcopy(spawn_plan.randomization)
     if spawn_plan.conditions:
-        spec["conditions"] = copy.deepcopy(spawn_plan.conditions)
+        spec["conditions"] = _canonicalize_condition_refs(
+            copy.deepcopy(spawn_plan.conditions),
+            world=spawn_plan.world,
+            room_ref_cache=room_ref_cache,
+        )
     return {
+        "apiVersion": CANONICAL_MANIFEST_API_VERSION,
         "kind": SPAWN_PLAN_MANIFEST_KIND,
         "metadata": {
             "slug": spawn_plan.slug,
@@ -691,6 +1028,8 @@ def serialize_spawn_plan_payload(
     spawn_plan: SpawnPlan,
     *,
     include_yaml: bool = True,
+    room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+    source_ref_cache: dict[tuple[str, str, Any], str] | None = None,
 ) -> dict[str, Any]:
     zone = spawn_plan.zone
     zone_ref = _zone_ref(zone)
@@ -720,7 +1059,11 @@ def serialize_spawn_plan_payload(
         "respawn_seconds": respawn_policy.get("seconds"),
     }
     if include_yaml:
-        manifest = _serialize_spawn_plan_manifest(spawn_plan)
+        manifest = _serialize_spawn_plan_manifest(
+            spawn_plan,
+            room_ref_cache=room_ref_cache,
+            source_ref_cache=source_ref_cache,
+        )
         delete_manifest = {
             "kind": SPAWN_PLAN_MANIFEST_KIND,
             "operation": builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE,
@@ -739,6 +1082,16 @@ def _serialize_ability_manifest(ability: AbilityDefinition) -> dict[str, Any]:
     manifest["metadata"].pop("world", None)
     manifest["metadata"].pop("id", None)
     manifest["metadata"].pop("key", None)
+    try:
+        manifest["spec"] = normalize_ability_definition(
+            manifest["spec"],
+            slug=ability.slug,
+            name=ability.name,
+        )
+    except AbilityValidationError as exc:
+        raise serializers.ValidationError(
+            f"Ability '{ability.slug}' cannot be exported: {exc}"
+        ) from exc
     return manifest
 
 
@@ -751,11 +1104,13 @@ def _serialize_social_manifest(social: Social) -> dict[str, Any]:
 def _build_entity_ref_cache(
     *,
     item_definitions: list[ItemDefinition],
+    item_bundles: list[ItemBundle] | None = None,
     mob_definitions: list[MobDefinition],
 ) -> dict[tuple[str, str, Any], str]:
     cache: dict[tuple[str, str, Any], str] = {}
     for entity_type, definitions in (
         ("itemdefinition", item_definitions),
+        ("itembundle", item_bundles or []),
         ("mobdefinition", mob_definitions),
     ):
         for definition in definitions:
@@ -765,6 +1120,35 @@ def _build_entity_ref_cache(
             cache[(entity_type, "id", definition.id)] = canonical
             cache[(entity_type, "slug", definition.slug)] = canonical
     return cache
+
+
+def build_manifest_semantic_ref_caches(
+    world: World,
+) -> tuple[
+    dict[tuple[str, str, Any], str],
+    dict[tuple[Any, ...], str],
+]:
+    """Preload portable semantic-reference caches for list serializers."""
+
+    definition_world_id = world.instance_of_id or world.id
+    entity_ref_cache = _build_entity_ref_cache(
+        item_definitions=list(
+            ItemDefinition.objects.filter(
+                world_id=definition_world_id,
+            ).only("id", "slug")
+        ),
+        item_bundles=list(
+            ItemBundle.objects.filter(
+                world_id=definition_world_id,
+            ).only("id", "slug")
+        ),
+        mob_definitions=list(
+            MobDefinition.objects.filter(
+                world_id=definition_world_id,
+            ).only("id", "slug")
+        ),
+    )
+    return entity_ref_cache, _build_room_ref_cache(world)
 
 
 def _entity_ref_cache_key(
@@ -829,19 +1213,86 @@ def _canonicalize_entity_ref(
     return f"{expected_type}.{entity.slug}"
 
 
-def _canonicalize_room_ref(value: Any, *, world: World) -> Any:
+def _build_room_ref_cache(
+    world: World,
+    *,
+    rooms: list[Room] | None = None,
+) -> dict[tuple[Any, ...], str]:
+    if rooms is None:
+        rooms = list(
+            Room.objects.filter(world=world).only(
+                "id",
+                "relative_id",
+                "name",
+                "x",
+                "y",
+                "z",
+            )
+        )
+    cache: dict[tuple[Any, ...], str] = {}
+    for room in sorted(rooms, key=lambda candidate: candidate.id):
+        canonical = _room_ref(room)
+        cache[("database_id", room.id)] = canonical
+        cache[("relative_id", room.relative_id)] = canonical
+        cache[("coordinates", room.x, room.y, room.z)] = canonical
+        if room.name:
+            cache.setdefault(("name", room.name), canonical)
+    return cache
+
+
+def _room_ref_cache_key(value: Any) -> tuple[Any, ...] | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return ("database_id", value)
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return ("database_id", int(text))
+    parsed = parse_room_reference(text)
+    if parsed is None:
+        return None
+    if parsed.kind == "relative_id":
+        return ("relative_id", parsed.relative_id)
+    if parsed.kind == "database_id":
+        return ("database_id", parsed.database_id)
+    return ("coordinates", parsed.x, parsed.y, parsed.z)
+
+
+def _canonicalize_room_ref(
+    value: Any,
+    *,
+    world: World,
+    room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+) -> Any:
     if value in (None, "", [], {}):
         return value
     if quest_entity_refs.is_dynamic_reference(value):
         return value
 
+    cache_key = _room_ref_cache_key(value)
+    if room_ref_cache is not None and cache_key is not None:
+        canonical = room_ref_cache.get(cache_key)
+        if canonical is not None:
+            return canonical
+        raise serializers.ValidationError(
+            f"Room reference '{value}' does not resolve in this world."
+        )
+
     room_id = quest_entity_refs.resolve_room_ref_id(world=world, value=value)
     if room_id is None:
+        if cache_key is not None:
+            raise serializers.ValidationError(
+                f"Room reference '{value}' does not resolve in this world."
+            )
         return value
 
     room = Room.objects.filter(world=world, pk=room_id).first()
     if room is None:
-        return value
+        raise serializers.ValidationError(
+            f"Room reference '{value}' does not resolve in this world."
+        )
     return _room_ref(room)
 
 
@@ -851,6 +1302,8 @@ def _canonicalize_condition_refs(
     world: World,
     event_target_is_room: bool = False,
     entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
+    room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+    canonicalize_entities: bool = True,
 ) -> Any:
     if condition in (None, {}, []):
         return condition
@@ -861,6 +1314,8 @@ def _canonicalize_condition_refs(
                 world=world,
                 event_target_is_room=event_target_is_room,
                 entity_ref_cache=entity_ref_cache,
+                room_ref_cache=room_ref_cache,
+                canonicalize_entities=canonicalize_entities,
             )
             for item in condition
         ]
@@ -869,7 +1324,7 @@ def _canonicalize_condition_refs(
 
     canonical = copy.deepcopy(condition)
 
-    if "mob_present" in canonical:
+    if "mob_present" in canonical and canonicalize_entities:
         spec = canonical.get("mob_present")
         if isinstance(spec, dict):
             canonical_spec = {
@@ -887,6 +1342,8 @@ def _canonicalize_condition_refs(
                     world=world,
                     event_target_is_room=event_target_is_room,
                     entity_ref_cache=entity_ref_cache,
+                    room_ref_cache=room_ref_cache,
+                    canonicalize_entities=canonicalize_entities,
                 )
             canonical["mob_present"] = canonical_spec
         else:
@@ -897,7 +1354,22 @@ def _canonicalize_condition_refs(
                 entity_ref_cache=entity_ref_cache,
             )
 
-    if "item_present" in canonical:
+    elif isinstance(canonical.get("mob_present"), dict):
+        spec = canonical["mob_present"]
+        if "where" in spec:
+            canonical["mob_present"] = {
+                **spec,
+                "where": _canonicalize_condition_refs(
+                    spec.get("where"),
+                    world=world,
+                    event_target_is_room=event_target_is_room,
+                    entity_ref_cache=entity_ref_cache,
+                    room_ref_cache=room_ref_cache,
+                    canonicalize_entities=canonicalize_entities,
+                ),
+            }
+
+    if "item_present" in canonical and canonicalize_entities:
         spec = canonical.get("item_present")
         if isinstance(spec, dict):
             canonical["item_present"] = {
@@ -917,6 +1389,8 @@ def _canonicalize_condition_refs(
             world=world,
             event_target_is_room=event_target_is_room or quest_manifests._condition_list_targets_room(child_conditions),
             entity_ref_cache=entity_ref_cache,
+            room_ref_cache=room_ref_cache,
+            canonicalize_entities=canonicalize_entities,
         )
     if "any" in canonical:
         canonical["any"] = _canonicalize_condition_refs(
@@ -924,6 +1398,8 @@ def _canonicalize_condition_refs(
             world=world,
             event_target_is_room=event_target_is_room,
             entity_ref_cache=entity_ref_cache,
+            room_ref_cache=room_ref_cache,
+            canonicalize_entities=canonicalize_entities,
         )
     if "not" in canonical:
         canonical["not"] = _canonicalize_condition_refs(
@@ -931,6 +1407,8 @@ def _canonicalize_condition_refs(
             world=world,
             event_target_is_room=event_target_is_room,
             entity_ref_cache=entity_ref_cache,
+            room_ref_cache=room_ref_cache,
+            canonicalize_entities=canonicalize_entities,
         )
 
     for operator in ("eq", "ne", "gte", "lte", "in"):
@@ -940,7 +1418,12 @@ def _canonicalize_condition_refs(
 
         left_path = raw_args[0]
         right_value = raw_args[1]
-        uses_room_ref = quest_manifests._condition_uses_room_ref(
+        uses_room_ref = str(left_path or "").strip() in {
+            "actor.room_id",
+            "actor.room.id",
+            "player.room_id",
+            "player.room.id",
+        } or quest_manifests._condition_uses_room_ref(
             left_path,
             right_value,
             event_target_is_room=event_target_is_room,
@@ -963,15 +1446,26 @@ def _canonicalize_condition_refs(
                 canonical[operator] = [
                     left_path,
                     [
-                        _canonicalize_room_ref(candidate, world=world)
+                        _canonicalize_room_ref(
+                            candidate,
+                            world=world,
+                            room_ref_cache=room_ref_cache,
+                        )
                         for candidate in right_value
                     ],
                 ]
             else:
                 canonical[operator] = [
                     left_path,
-                    _canonicalize_room_ref(right_value, world=world),
+                    _canonicalize_room_ref(
+                        right_value,
+                        world=world,
+                        room_ref_cache=room_ref_cache,
+                    ),
                 ]
+            continue
+
+        if not canonicalize_entities:
             continue
 
         expected_type = quest_manifests._condition_expected_entity_type(left_path, right_value)
@@ -983,7 +1477,7 @@ def _canonicalize_condition_refs(
         if operator == "in" and isinstance(right_value, list):
             canonical[operator] = [
                 left_path,
-                    [
+                [
                     _canonicalize_entity_ref(
                         candidate,
                         world=world,
@@ -1007,11 +1501,158 @@ def _canonicalize_condition_refs(
     return canonical
 
 
+def _canonicalize_nested_conditions(
+    value: Any,
+    *,
+    world: World,
+    entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
+    room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+    canonicalize_entities: bool = True,
+) -> Any:
+    """Canonicalize semantic refs embedded in authored JSON structures."""
+
+    if isinstance(value, list):
+        return [
+            _canonicalize_nested_conditions(
+                item,
+                world=world,
+                entity_ref_cache=entity_ref_cache,
+                room_ref_cache=room_ref_cache,
+                canonicalize_entities=canonicalize_entities,
+            )
+            for item in value
+        ]
+    if not isinstance(value, dict):
+        return value
+    if any(
+        operator in value
+        for operator in ("all", "any", "not", "eq", "ne", "gte", "lte", "in")
+    ):
+        return _canonicalize_condition_refs(
+            value,
+            world=world,
+            entity_ref_cache=entity_ref_cache,
+            room_ref_cache=room_ref_cache,
+            canonicalize_entities=canonicalize_entities,
+        )
+    canonical: dict[str, Any] = {}
+    for key, child in value.items():
+        if key in {"conditions", "when"}:
+            if isinstance(child, (dict, list)):
+                canonical[key] = _canonicalize_condition_refs(
+                    child,
+                    world=world,
+                    entity_ref_cache=entity_ref_cache,
+                    room_ref_cache=room_ref_cache,
+                    canonicalize_entities=canonicalize_entities,
+                )
+            elif isinstance(child, str):
+                canonical[key] = _canonicalize_semantic_command_value(
+                    child,
+                    world=world,
+                    room_ref_cache=room_ref_cache,
+                )
+            else:
+                canonical[key] = child
+        elif key in {
+            "command",
+            "commands",
+            "script",
+            "on_use_cmd",
+            "combat_script",
+        }:
+            canonical[key] = _canonicalize_semantic_command_value(
+                child,
+                world=world,
+                room_ref_cache=room_ref_cache,
+            )
+        elif (
+            key in {"room", "room_ref", "room_id", "destination", "to_room"}
+            and _room_ref_cache_key(child) is not None
+        ):
+            canonical[key] = _canonicalize_room_ref(
+                child,
+                world=world,
+                room_ref_cache=room_ref_cache,
+            )
+        else:
+            canonical[key] = _canonicalize_nested_conditions(
+                child,
+                world=world,
+                entity_ref_cache=entity_ref_cache,
+                room_ref_cache=room_ref_cache,
+                canonicalize_entities=canonicalize_entities,
+            )
+    return canonical
+
+
+def _canonicalize_semantic_command_value(
+    value: Any,
+    *,
+    world: World,
+    room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+) -> Any:
+    if isinstance(value, str):
+        try:
+            return canonicalize_room_references_in_text(
+                world,
+                value,
+                strict=True,
+                canonical_ref_cache=room_ref_cache,
+            )
+        except RoomReferenceError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+    if isinstance(value, list):
+        return [
+            _canonicalize_semantic_command_value(
+                item,
+                world=world,
+                room_ref_cache=room_ref_cache,
+            )
+            for item in value
+        ]
+    if isinstance(value, dict):
+        return {
+            key: _canonicalize_semantic_command_value(
+                child,
+                world=world,
+                room_ref_cache=room_ref_cache,
+            )
+            for key, child in value.items()
+        }
+    return value
+
+
+def canonicalize_manifest_for_export(
+    *,
+    manifest: dict[str, Any],
+    world: World,
+    entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
+    room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+    include_api_version: bool = False,
+) -> dict[str, Any]:
+    """Return one authored manifest with portable semantic references."""
+
+    canonical = copy.deepcopy(manifest)
+    spec = canonical.get("spec")
+    if isinstance(spec, dict):
+        canonical["spec"] = _canonicalize_nested_conditions(
+            spec,
+            world=world,
+            entity_ref_cache=entity_ref_cache,
+            room_ref_cache=room_ref_cache,
+        )
+    if include_api_version:
+        canonical["apiVersion"] = CANONICAL_MANIFEST_API_VERSION
+    return canonical
+
+
 def _canonicalize_trigger_steps(
     steps: Any,
     *,
     world: World,
     entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
+    room_ref_cache: dict[tuple[Any, ...], str] | None = None,
 ) -> list[dict[str, Any]]:
     if not isinstance(steps, list):
         return []
@@ -1051,7 +1692,18 @@ def _canonicalize_trigger_steps(
                     action.get("where"),
                     world=world,
                     entity_ref_cache=entity_ref_cache,
+                    room_ref_cache=room_ref_cache,
                 )
+            if isinstance(action.get("command"), str):
+                try:
+                    action["command"] = canonicalize_room_references_in_text(
+                        world,
+                        action["command"],
+                        strict=True,
+                        canonical_ref_cache=room_ref_cache,
+                    )
+                except RoomReferenceError as exc:
+                    raise serializers.ValidationError(str(exc)) from exc
             subject = action.get("subject")
             if (
                 isinstance(subject, dict)
@@ -1068,44 +1720,88 @@ def _canonicalize_trigger_steps(
                         subject.get("where"),
                         world=world,
                         entity_ref_cache=entity_ref_cache,
+                        room_ref_cache=room_ref_cache,
                     )
     return canonical_steps
 
 
-def _canonicalize_quest_node(node: Any, *, world: World) -> Any:
+def _canonicalize_quest_node(
+    node: Any,
+    *,
+    world: World,
+    entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
+    room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+    canonicalize_entities: bool = True,
+) -> Any:
     if isinstance(node, list):
-        return [_canonicalize_quest_node(item, world=world) for item in node]
+        return [
+            _canonicalize_quest_node(
+                item,
+                world=world,
+                entity_ref_cache=entity_ref_cache,
+                room_ref_cache=room_ref_cache,
+                canonicalize_entities=canonicalize_entities,
+            )
+            for item in node
+        ]
 
     if not isinstance(node, dict):
         return node
 
     if any(key in node for key in ("all", "any", "not", "eq", "ne", "gte", "lte", "in")):
-        return _canonicalize_condition_refs(node, world=world)
+        return _canonicalize_condition_refs(
+            node,
+            world=world,
+            entity_ref_cache=entity_ref_cache,
+            room_ref_cache=room_ref_cache,
+            canonicalize_entities=canonicalize_entities,
+        )
 
     canonical = {}
     for key, value in node.items():
+        if (
+            key == "command"
+            and isinstance(value, str)
+            and str(node.get("type") or "").strip().lower().endswith("_command")
+        ):
+            try:
+                canonical[key] = canonicalize_room_references_in_text(
+                    world,
+                    value,
+                    strict=True,
+                    canonical_ref_cache=room_ref_cache,
+                )
+            except RoomReferenceError as exc:
+                raise serializers.ValidationError(str(exc)) from exc
+            continue
         if key in {"room", "room_id"} and (
             str(node.get("type") or "").strip().lower() == "room_prompt"
             or "item_definition" in node
             or "item_definition_id" in node
         ):
-            canonical["room"] = _canonicalize_room_ref(value, world=world)
+            canonical["room"] = _canonicalize_room_ref(
+                value,
+                world=world,
+                room_ref_cache=room_ref_cache,
+            )
             continue
-        if key in {"mob_definition", "mob_definition_id"}:
+        if canonicalize_entities and key in {"mob_definition", "mob_definition_id"}:
             canonical["mob_definition"] = _canonicalize_entity_ref(
                 value,
                 world=world,
                 expected_type="mobdefinition",
+                entity_ref_cache=entity_ref_cache,
             )
             continue
-        if key in {"item_definition", "item_definition_id"}:
+        if canonicalize_entities and key in {"item_definition", "item_definition_id"}:
             canonical["item_definition"] = _canonicalize_entity_ref(
                 value,
                 world=world,
                 expected_type="itemdefinition",
+                entity_ref_cache=entity_ref_cache,
             )
             continue
-        if key in {"entity", "value"} and isinstance(value, str):
+        if canonicalize_entities and key in {"entity", "value"} and isinstance(value, str):
             prefix, sep, _ = value.strip().partition(".")
             expected_type = quest_entity_refs.canonical_entity_type(prefix) if sep == "." else None
             if expected_type:
@@ -1113,9 +1809,16 @@ def _canonicalize_quest_node(node: Any, *, world: World) -> Any:
                     value,
                     world=world,
                     expected_type=expected_type,
+                    entity_ref_cache=entity_ref_cache,
                 )
                 continue
-        canonical[key] = _canonicalize_quest_node(value, world=world)
+        canonical[key] = _canonicalize_quest_node(
+            value,
+            world=world,
+            entity_ref_cache=entity_ref_cache,
+            room_ref_cache=room_ref_cache,
+            canonicalize_entities=canonicalize_entities,
+        )
     return canonical
 
 
@@ -1131,9 +1834,20 @@ def _serialize_quest_arc_manifest(quest_arc: QuestArcTemplate) -> dict[str, Any]
     }
 
 
-def _serialize_quest_manifest(quest: QuestTemplate, *, world: World) -> dict[str, Any]:
+def _serialize_quest_manifest(
+    quest: QuestTemplate,
+    *,
+    world: World,
+    entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
+    room_ref_cache: dict[tuple[Any, ...], str],
+) -> dict[str, Any]:
     manifest = quest_manifests.quest_template_to_manifest(quest)
-    spec = _canonicalize_quest_node(copy.deepcopy(manifest["spec"]), world=world)
+    spec = _canonicalize_quest_node(
+        copy.deepcopy(manifest["spec"]),
+        world=world,
+        entity_ref_cache=entity_ref_cache,
+        room_ref_cache=room_ref_cache,
+    )
     spec = quest_manifests.QuestSpec.model_validate(spec).model_dump()
     return {
         "kind": quest_manifests.QUEST_MANIFEST_KIND,
@@ -1145,29 +1859,79 @@ def _serialize_quest_manifest(quest: QuestTemplate, *, world: World) -> dict[str
     }
 
 
-def _serialize_trigger_target(trigger: Trigger) -> dict[str, Any]:
+def _serialize_trigger_target(trigger: Trigger, *, world: World) -> str:
+    field_name = f"Trigger '{trigger.name}' target"
+    if trigger.world_id != world.id:
+        raise serializers.ValidationError(
+            f"{field_name} does not belong to the selected world."
+        )
     if not trigger.target_type_id or not trigger.target_id:
-        return {"type": "world", "ref": "world"}
+        raise serializers.ValidationError(f"{field_name} is missing.")
 
     target_model = trigger.target_type.model_class()
+    target = trigger.target
+    if target_model is None or target is None:
+        raise serializers.ValidationError(f"{field_name} is dangling.")
+
     if target_model == Room:
-        return {"type": "room", "ref": _room_ref(trigger.target)}
+        return _room_ref(
+            target,
+            world=trigger.world_id,
+            field_name=field_name,
+        )
     if target_model == Zone:
-        return {"type": "zone", "ref": trigger.target.name if trigger.target else ""}
+        if target.world_id != trigger.world_id:
+            raise serializers.ValidationError(
+                f"{field_name} points to a zone outside this world."
+            )
+        relative_id = target.relative_id
+        if (
+            isinstance(relative_id, bool)
+            or not isinstance(relative_id, int)
+            or relative_id <= 0
+        ):
+            raise serializers.ValidationError(
+                f"{field_name} zone must have a positive relative_id."
+            )
+        return f"{_ZONE_REF_PREFIX}{relative_id}"
     if target_model == World:
-        return {"type": "world", "ref": "world"}
+        if target.id != trigger.world_id:
+            raise serializers.ValidationError(
+                f"{field_name} must point to the trigger's world."
+            )
+        return "world"
+
+    definition_world_id = world.instance_of_id or world.id
     if target_model == MobDefinition:
-        return {"type": "mobdefinition", "ref": _mob_definition_ref(trigger.target)}
-    if target_model == ItemDefinition:
-        return {"type": "itemdefinition", "ref": _item_definition_ref(trigger.target)}
-    return {"type": trigger.target_type.model, "ref": ""}
+        if target.world_id != definition_world_id:
+            raise serializers.ValidationError(
+                f"{field_name} points outside the authored definition world."
+            )
+        target_ref = _mob_definition_ref(target)
+    elif target_model == ItemDefinition:
+        if target.world_id != definition_world_id:
+            raise serializers.ValidationError(
+                f"{field_name} points outside the authored definition world."
+            )
+        target_ref = _item_definition_ref(target)
+    else:
+        raise serializers.ValidationError(
+            f"{field_name} uses unsupported type "
+            f"'{trigger.target_type.model}'."
+        )
+    if not target_ref:
+        raise serializers.ValidationError(
+            f"{field_name} must have a portable slug."
+        )
+    return target_ref
 
 
 def _serialize_trigger_manifest(
     trigger: Trigger,
     *,
     world: World,
-    entity_ref_cache: dict[tuple[str, str, Any], str],
+    entity_ref_cache: dict[tuple[str, str, Any], str] | None,
+    room_ref_cache: dict[tuple[Any, ...], str] | None = None,
 ) -> dict[str, Any]:
     conditions = builder_manifests._deserialize_conditions_payload(
         trigger.conditions,
@@ -1177,7 +1941,19 @@ def _serialize_trigger_manifest(
             conditions,
             world=world,
             entity_ref_cache=entity_ref_cache,
+            room_ref_cache=room_ref_cache,
         )
+    script = trigger.script or ""
+    if script:
+        try:
+            script = canonicalize_room_references_in_text(
+                world,
+                script,
+                strict=True,
+                canonical_ref_cache=room_ref_cache,
+            )
+        except RoomReferenceError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
     return {
         "kind": builder_manifests.TRIGGER_MANIFEST_KIND,
         "metadata": {
@@ -1186,13 +1962,14 @@ def _serialize_trigger_manifest(
         "spec": {
             "scope": trigger.scope,
             "kind": builder_manifests._canonical_trigger_kind(trigger.kind),
-            "target": _serialize_trigger_target(trigger),
+            "target": _serialize_trigger_target(trigger, world=world),
             "match": trigger.match or "",
-            "script": trigger.script or "",
+            "script": script,
             "steps": _canonicalize_trigger_steps(
                 copy.deepcopy(trigger.steps or []),
                 world=world,
                 entity_ref_cache=entity_ref_cache,
+                room_ref_cache=room_ref_cache,
             ),
             "on_step_error": trigger.on_step_error or "cancel",
             "conditions": conditions,
@@ -1212,7 +1989,7 @@ def _serialize_world_manifest(world: World) -> dict[str, Any]:
         world=world,
         manifest_kind=WORLD_MANIFEST_KIND,
         include_metadata=False,
-        room_reference_mode="coords",
+        room_reference_mode="manifest",
     )
 
 
@@ -1221,7 +1998,7 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
         raise serializers.ValidationError("World has no config to export.")
 
     item_definitions = list(
-        world.item_definitions.prefetch_related(
+        world.item_definitions.select_related("currency").prefetch_related(
             Prefetch(
                 "salvage_yields",
                 queryset=ItemSalvageYield.objects.select_related("material"),
@@ -1232,7 +2009,18 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
         world.mob_definitions.select_related(
             "merchant_profile",
             "crafting_profile",
-        ).prefetch_related("currency_rewards__currency").order_by("slug", "id")
+        ).prefetch_related(
+            "currency_rewards__currency",
+            Prefetch(
+                "faction_assignments",
+                queryset=FactionAssignment.objects.select_related("faction"),
+            ),
+        ).order_by("slug", "id")
+    )
+    item_bundles = list(
+        world.item_bundles.prefetch_related(
+            "entries__item_definition",
+        ).order_by("slug", "id")
     )
     if world.instance_of_id:
         ref_item_definitions = list(
@@ -1247,15 +2035,82 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
                 "slug",
             )
         )
+        ref_item_bundles = list(
+            ItemBundle.objects.filter(world_id=world.instance_of_id).only(
+                "id",
+                "slug",
+            )
+        )
     else:
         ref_item_definitions = item_definitions
+        ref_item_bundles = item_bundles
         ref_mob_definitions = mob_definitions
     entity_ref_cache = _build_entity_ref_cache(
         item_definitions=ref_item_definitions,
+        item_bundles=ref_item_bundles,
         mob_definitions=ref_mob_definitions,
     )
+    rooms = list(
+        world.rooms.prefetch_related(
+            Prefetch(
+                "flags",
+                queryset=RoomFlag.objects.order_by("code", "id"),
+                to_attr="_export_flags",
+            ),
+            Prefetch(
+                "details",
+                queryset=RoomDetail.objects.order_by("created_ts", "id"),
+                to_attr="_export_details",
+            ),
+            Prefetch(
+                "doors_from",
+                queryset=Door.objects.select_related(
+                    "doorway__key",
+                    "to_room",
+                ).order_by("direction", "id"),
+                to_attr="_export_door_faces",
+            ),
+        ).select_related(
+            "zone",
+            "north",
+            "east",
+            "south",
+            "west",
+            "up",
+            "down",
+            "crafting_profile",
+        ).order_by("z", "y", "x", "id")
+    )
+    room_ref_cache = _build_room_ref_cache(world, rooms=rooms)
+    zones = list(
+        world.zones.select_related("center").order_by("name", "id")
+    )
+    paths = list(
+        world.paths.select_related("zone", "entry_room").prefetch_related(
+            Prefetch(
+                "path_rooms",
+                queryset=PathRoom.objects.select_related("room").order_by("id"),
+                to_attr="_export_path_rooms",
+            ),
+        ).order_by("zone__name", "relative_id", "id")
+    )
+    spawn_plans = list(
+        world.spawn_plans.select_related("zone").prefetch_related(
+            Prefetch(
+                "entries",
+                queryset=SpawnEntry.objects.select_related(
+                    "plan",
+                    "target_room",
+                    "target_zone",
+                    "target_path",
+                    "target_entry",
+                ).order_by("order", "created_ts", "id"),
+                to_attr="_export_entries",
+            ),
+        ).order_by("zone__name", "order", "slug", "id")
+    )
 
-    return [
+    documents = [
         *[
             _serialize_currency_manifest(currency)
             for currency in world.currencies.all().order_by("code", "id")
@@ -1270,9 +2125,7 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
         ],
         *[
             _serialize_item_bundle_manifest(item_bundle)
-            for item_bundle in world.item_bundles.prefetch_related(
-                "entries__item_definition",
-            ).order_by("slug", "id")
+            for item_bundle in item_bundles
         ],
         *[
             _serialize_merchant_profile_manifest(merchant_profile)
@@ -1311,50 +2164,31 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
         ],
         *[
             _serialize_zone_manifest(zone)
-            for zone in world.zones.all().order_by("name", "id")
+            for zone in zones
         ],
         *[
             _serialize_room_manifest(room)
-            for room in world.rooms.prefetch_related(
-                "flags",
-                "details",
-                Prefetch(
-                    "doors_from",
-                    queryset=Door.objects.select_related(
-                        "doorway__key",
-                        "to_room",
-                    ).order_by("direction", "id"),
-                ),
-            ).select_related(
-                "zone",
-                "north",
-                "east",
-                "south",
-                "west",
-                "up",
-                "down",
-                "crafting_profile",
-            ).order_by("z", "y", "x", "id")
+            for room in rooms
         ],
         *[
             _serialize_path_manifest(path)
-            for path in world.paths.select_related("zone", "entry_room").order_by(
-                "zone__name", "relative_id", "id"
-            )
+            for path in paths
+        ],
+        *[
+            _serialize_ability_manifest(ability)
+            for ability in world.ability_definitions.all().order_by("slug", "id")
         ],
         *[
             _serialize_mob_definition_manifest(mob_definition)
             for mob_definition in mob_definitions
         ],
         *[
-            _serialize_spawn_plan_manifest(spawn_plan)
-            for spawn_plan in world.spawn_plans.prefetch_related("entries").select_related("zone").order_by(
-                "zone__name", "order", "slug", "id"
+            _serialize_spawn_plan_manifest(
+                spawn_plan,
+                room_ref_cache=room_ref_cache,
+                source_ref_cache=entity_ref_cache,
             )
-        ],
-        *[
-            _serialize_ability_manifest(ability)
-            for ability in world.ability_definitions.all().order_by("slug", "id")
+            for spawn_plan in spawn_plans
         ],
         *[
             _serialize_social_manifest(social)
@@ -1365,7 +2199,12 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             for quest_arc in world.quest_arc_templates.all().order_by("slug", "id")
         ],
         *[
-            _serialize_quest_manifest(quest, world=world)
+            _serialize_quest_manifest(
+                quest,
+                world=world,
+                entity_ref_cache=entity_ref_cache,
+                room_ref_cache=room_ref_cache,
+            )
             for quest in world.quest_templates.select_related("arc").all().order_by("slug", "id")
         ],
         *[
@@ -1373,6 +2212,7 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
                 trigger,
                 world=world,
                 entity_ref_cache=entity_ref_cache,
+                room_ref_cache=room_ref_cache,
             )
             for trigger in world.triggers.select_related(
                 "target_type"
@@ -1382,6 +2222,38 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
         ],
         _serialize_world_manifest(world),
     ]
+    return [
+        canonicalize_manifest_for_export(
+            manifest=document,
+            world=world,
+            entity_ref_cache=entity_ref_cache,
+            room_ref_cache=room_ref_cache,
+            include_api_version=True,
+        )
+        for document in documents
+    ]
+
+
+def normalize_manifest_room_references_for_import(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+    room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+) -> dict[str, Any]:
+    """Normalize condition DSL room refs before any manifest parser stores JSON."""
+
+    if room_ref_cache is None:
+        room_ref_cache = _build_room_ref_cache(world)
+    normalized = copy.deepcopy(manifest)
+    spec = normalized.get("spec")
+    if isinstance(spec, dict):
+        normalized["spec"] = _canonicalize_nested_conditions(
+            spec,
+            world=world,
+            room_ref_cache=room_ref_cache,
+            canonicalize_entities=False,
+        )
+    return normalized
 
 
 def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
@@ -1500,12 +2372,906 @@ def validate_room_door_stream_consistency(documents: list[dict[str, Any]]) -> No
             )
 
 
+def _authored_instance_templates(base_world: World) -> list[World]:
+    return list(
+        World.objects.filter(
+            instance_of=base_world,
+            context__isnull=True,
+        )
+        .exclude(lifecycle=adv_consts.WORLD_STATE_ARCHIVED)
+        .select_related("config", "config__exits_to")
+        .order_by("instance_slug", "id")
+    )
+
+
+def _bundle_world_ref(world: World, *, base_world: World) -> str:
+    if world.id == base_world.id:
+        return _BASE_WORLD_BUNDLE_REF
+    if (
+        world.instance_of_id != base_world.id
+        or world.context_id is not None
+        or not world.instance_slug
+    ):
+        raise serializers.ValidationError(
+            "World bundles may reference only their base world and direct "
+            "authored instance templates with stable slugs."
+        )
+    return f"{_INSTANCE_BUNDLE_REF_PREFIX}{world.instance_slug}"
+
+
+def _scoped_world_documents(
+    world: World,
+    *,
+    world_ref: str,
+) -> list[dict[str, Any]]:
+    scoped_documents = []
+    for document in serialize_world_documents(world):
+        scoped = copy.deepcopy(document)
+        metadata = scoped.get("metadata")
+        if metadata is None:
+            metadata = {}
+            scoped["metadata"] = metadata
+        if not isinstance(metadata, dict):
+            raise serializers.ValidationError(
+                "Manifest metadata must be a mapping."
+            )
+        metadata["world_ref"] = world_ref
+        scoped_documents.append(scoped)
+    return scoped_documents
+
+
+def _serialize_world_family_links(
+    *,
+    base_world: World,
+    templates: list[World],
+) -> list[dict[str, Any]]:
+    worlds = [base_world, *templates]
+    world_ids = {world.id for world in worlds}
+    ref_by_world_id = {
+        world.id: _bundle_world_ref(
+            world,
+            base_world=base_world,
+        )
+        for world in worlds
+    }
+    template_ids = {template.id for template in templates}
+    links: list[dict[str, Any]] = []
+
+    rooms = (
+        Room.objects.filter(world_id__in=world_ids)
+        .select_related(
+            "transfer_to__world",
+            "exits_to__world",
+            "enters_instance",
+        )
+        .only(
+            "id",
+            "world_id",
+            "relative_id",
+            "transfer_to_id",
+            "transfer_to__world_id",
+            "transfer_to__relative_id",
+            "exits_to_id",
+            "exits_to__world_id",
+            "exits_to__relative_id",
+            "enters_instance_id",
+        )
+        .order_by("world_id", "relative_id", "id")
+    )
+    for room in rooms:
+        source = {
+            "world": ref_by_world_id[room.world_id],
+            "room": format_room_manifest_ref(room),
+        }
+        if room.transfer_to_id:
+            target = room.transfer_to
+            if (
+                room.world_id != base_world.id
+                or target.world_id not in template_ids
+            ):
+                raise serializers.ValidationError(
+                    "room.transfer_to links must point from the bundled base "
+                    "world to one of its direct instance templates."
+                )
+            links.append(
+                {
+                    "relation": "room.transfer_to",
+                    "source": source,
+                    "target": {
+                        "world": ref_by_world_id[target.world_id],
+                        "room": format_room_manifest_ref(target),
+                    },
+                }
+            )
+        if room.exits_to_id:
+            target = room.exits_to
+            if (
+                room.world_id not in template_ids
+                or target.world_id != base_world.id
+            ):
+                raise serializers.ValidationError(
+                    "room.exits_to links must point from a bundled instance "
+                    "template back to its base world."
+                )
+            links.append(
+                {
+                    "relation": "room.exits_to",
+                    "source": source,
+                    "target": {
+                        "world": _BASE_WORLD_BUNDLE_REF,
+                        "room": format_room_manifest_ref(target),
+                    },
+                }
+            )
+        if room.enters_instance_id:
+            if (
+                room.world_id != base_world.id
+                or room.enters_instance_id not in template_ids
+            ):
+                raise serializers.ValidationError(
+                    "room.enters_instance links must point from the bundled "
+                    "base world to one of its direct instance templates."
+                )
+            links.append(
+                {
+                    "relation": "room.enters_instance",
+                    "source": source,
+                    "target": {
+                        "world": ref_by_world_id[
+                            room.enters_instance_id
+                        ],
+                    },
+                }
+            )
+
+    for template in templates:
+        config = template.config
+        if config is None or not config.exits_to_id:
+            continue
+        exit_room = config.exits_to
+        if exit_room.world_id != base_world.id:
+            raise serializers.ValidationError(
+                "world_config.exits_to must point from an instance template "
+                "back to its bundled base world."
+            )
+        links.append(
+            {
+                "relation": "world_config.exits_to",
+                "source": {
+                    "world": ref_by_world_id[template.id],
+                },
+                "target": {
+                    "world": _BASE_WORLD_BUNDLE_REF,
+                    "room": format_room_manifest_ref(exit_room),
+                },
+            }
+        )
+
+    base_config = base_world.config
+    if base_config is not None and base_config.exits_to_id:
+        raise serializers.ValidationError(
+            "A base world's config.exits_to cannot be represented as an "
+            "instance-family link."
+        )
+    return sorted(
+        links,
+        key=lambda link: (
+            link["relation"],
+            link["source"].get("world", ""),
+            link["source"].get("room", ""),
+            link["target"].get("world", ""),
+            link["target"].get("room", ""),
+        ),
+    )
+
+
+def serialize_world_bundle_documents(
+    base_world: World,
+) -> list[dict[str, Any]]:
+    if base_world.context_id or base_world.instance_of_id:
+        raise serializers.ValidationError(
+            "Instance templates and runtime worlds cannot be exported "
+            "independently. Export the authored base world so the complete "
+            "world family and its inherited references remain portable."
+        )
+
+    templates = _authored_instance_templates(base_world)
+    if templates and not base_world.is_multiplayer:
+        raise serializers.ValidationError(
+            "A world with authored instance templates must be multiplayer "
+            "before it can be exported."
+        )
+    links = _serialize_world_family_links(
+        base_world=base_world,
+        templates=templates,
+    )
+    if not templates:
+        return serialize_world_documents(base_world)
+
+    worlds = [
+        {
+            "ref": _BASE_WORLD_BUNDLE_REF,
+            "role": "base",
+            "name": base_world.name or "",
+        },
+        *[
+            {
+                "ref": _bundle_world_ref(
+                    template,
+                    base_world=base_world,
+                ),
+                "role": "instance",
+                "slug": template.instance_slug,
+                "name": template.name or "",
+                "parent": _BASE_WORLD_BUNDLE_REF,
+            }
+            for template in templates
+        ],
+    ]
+    header = {
+        "apiVersion": CANONICAL_MANIFEST_API_VERSION,
+        "kind": WORLD_BUNDLE_MANIFEST_KIND,
+        "metadata": {
+            "name": base_world.name or "",
+        },
+        "spec": {
+            "worlds": worlds,
+            "links_mode": "replace",
+            "links": links,
+        },
+    }
+    documents = [header]
+    documents.extend(
+        _scoped_world_documents(
+            base_world,
+            world_ref=_BASE_WORLD_BUNDLE_REF,
+        )
+    )
+    for template in templates:
+        documents.extend(
+            _scoped_world_documents(
+                template,
+                world_ref=_bundle_world_ref(
+                    template,
+                    base_world=base_world,
+                ),
+            )
+        )
+    return documents
+
+
+def _summarize_world_bundle_documents(
+    documents: list[dict[str, Any]],
+) -> dict[str, int]:
+    content_documents = [
+        document
+        for document in documents
+        if parse_document_kind(document) != WORLD_BUNDLE_MANIFEST_KIND
+    ]
+    summary = _summarize_documents(content_documents)
+    summary["documents"] = len(documents)
+    header = documents[0]
+    header_spec = header.get("spec") or {}
+    worlds = header_spec.get("worlds") or []
+    summary["worlds"] = len(worlds)
+    summary["instances"] = max(0, len(worlds) - 1)
+    summary["links"] = len(header_spec.get("links") or [])
+    return summary
+
+
+def parse_world_bundle_stream(
+    documents: list[dict[str, Any]],
+) -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, list[dict[str, Any]]],
+    list[dict[str, Any]],
+]:
+    """Validate and partition one flat world-family manifest stream."""
+
+    if not documents or parse_document_kind(
+        documents[0]
+    ) != WORLD_BUNDLE_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            "A world bundle stream must begin with kind: worldbundle."
+        )
+    if len(documents) > 10_000:
+        raise serializers.ValidationError(
+            "World bundles cannot exceed 10,000 documents."
+        )
+    header = documents[0]
+    spec = header.get("spec") or {}
+    if not isinstance(spec, dict):
+        raise serializers.ValidationError(
+            "worldbundle.spec must be a mapping."
+        )
+    unknown_fields = sorted(
+        set(spec) - {"worlds", "links_mode", "links"}
+    )
+    if unknown_fields:
+        raise serializers.ValidationError(
+            "worldbundle.spec has unsupported field(s): "
+            f"{', '.join(unknown_fields)}."
+        )
+    if spec.get("links_mode", "replace") != "replace":
+        raise serializers.ValidationError(
+            "worldbundle.spec.links_mode must be replace."
+        )
+    raw_worlds = spec.get("worlds")
+    if not isinstance(raw_worlds, list) or not raw_worlds:
+        raise serializers.ValidationError(
+            "worldbundle.spec.worlds must be a non-empty list."
+        )
+    if len(raw_worlds) > 50:
+        raise serializers.ValidationError(
+            "World bundles cannot exceed 50 authored worlds."
+        )
+
+    declarations: dict[str, dict[str, Any]] = {}
+    base_count = 0
+    for index, declaration in enumerate(raw_worlds):
+        field_name = f"worldbundle.spec.worlds[{index}]"
+        if not isinstance(declaration, dict):
+            raise serializers.ValidationError(
+                f"{field_name} must be a mapping."
+            )
+        world_ref = str(declaration.get("ref") or "").strip()
+        role = str(declaration.get("role") or "").strip().lower()
+        name = str(declaration.get("name") or "").strip()
+        if not world_ref or world_ref in declarations:
+            raise serializers.ValidationError(
+                f"{field_name}.ref must be unique and non-empty."
+            )
+        normalized = {
+            "ref": world_ref,
+            "role": role,
+            "name": name,
+        }
+        if role == "base":
+            unknown_declaration_fields = sorted(
+                set(declaration) - {"ref", "role", "name"}
+            )
+            if unknown_declaration_fields:
+                raise serializers.ValidationError(
+                    f"{field_name} has unsupported field(s): "
+                    f"{', '.join(unknown_declaration_fields)}."
+                )
+            base_count += 1
+            if world_ref != _BASE_WORLD_BUNDLE_REF:
+                raise serializers.ValidationError(
+                    f"{field_name}.ref must be "
+                    f"{_BASE_WORLD_BUNDLE_REF} for the base world."
+                )
+        elif role == "instance":
+            unknown_declaration_fields = sorted(
+                set(declaration)
+                - {"ref", "role", "slug", "name", "parent"}
+            )
+            if unknown_declaration_fields:
+                raise serializers.ValidationError(
+                    f"{field_name} has unsupported field(s): "
+                    f"{', '.join(unknown_declaration_fields)}."
+                )
+            prefix = _INSTANCE_BUNDLE_REF_PREFIX
+            if not world_ref.startswith(prefix):
+                raise serializers.ValidationError(
+                    f"{field_name}.ref must use instance.<slug>."
+                )
+            instance_slug = str(
+                declaration.get("slug") or ""
+            ).strip()
+            if (
+                not instance_slug
+                or len(instance_slug) > 120
+                or slugify(instance_slug) != instance_slug
+                or world_ref != f"{prefix}{instance_slug}"
+            ):
+                raise serializers.ValidationError(
+                    f"{field_name}.slug must be a valid lowercase slug "
+                    "matching its ref."
+                )
+            if declaration.get("parent") != _BASE_WORLD_BUNDLE_REF:
+                raise serializers.ValidationError(
+                    f"{field_name}.parent must be "
+                    f"{_BASE_WORLD_BUNDLE_REF}."
+                )
+            normalized["slug"] = instance_slug
+        else:
+            raise serializers.ValidationError(
+                f"{field_name}.role must be base or instance."
+            )
+        declarations[world_ref] = normalized
+    if base_count != 1:
+        raise serializers.ValidationError(
+            "A world bundle must declare exactly one base world."
+        )
+
+    grouped_documents = {
+        world_ref: []
+        for world_ref in declarations
+    }
+    for index, document in enumerate(documents[1:], start=2):
+        if parse_document_kind(document) == WORLD_BUNDLE_MANIFEST_KIND:
+            raise serializers.ValidationError(
+                f"Document {index} cannot contain another worldbundle."
+            )
+        metadata = document.get("metadata")
+        if not isinstance(metadata, dict):
+            raise serializers.ValidationError(
+                f"Document {index} metadata must include world_ref."
+            )
+        world_ref = str(metadata.get("world_ref") or "").strip()
+        if world_ref not in declarations:
+            raise serializers.ValidationError(
+                f"Document {index} references undeclared bundle world "
+                f"'{world_ref}'."
+            )
+        unscoped = copy.deepcopy(document)
+        unscoped_metadata = unscoped["metadata"]
+        unscoped_metadata.pop("world_ref", None)
+        if not unscoped_metadata:
+            unscoped.pop("metadata")
+        grouped_documents[world_ref].append(unscoped)
+
+    for world_ref, scoped_documents in grouped_documents.items():
+        world_documents = [
+            document
+            for document in scoped_documents
+            if parse_document_kind(document) == WORLD_MANIFEST_KIND
+        ]
+        if len(world_documents) != 1:
+            raise serializers.ValidationError(
+                f"Bundle scope '{world_ref}' must contain exactly one world "
+                "document."
+            )
+
+    declared_room_refs: dict[str, set[str]] = {
+        world_ref: set()
+        for world_ref in declarations
+    }
+    for world_ref, scoped_documents in grouped_documents.items():
+        for document in scoped_documents:
+            if parse_document_kind(document) != ROOM_MANIFEST_KIND:
+                continue
+            if (
+                builder_manifests.parse_manifest_operation(document)
+                != builder_manifests.TRIGGER_MANIFEST_OPERATION_APPLY
+            ):
+                continue
+            metadata = _manifest_metadata(document)
+            room_ref = str(metadata.get("ref") or "").strip()
+            parsed = parse_room_reference(room_ref)
+            if (
+                parsed is None
+                or parsed.kind != "relative_id"
+                or not parsed.relative_id
+                or parsed.relative_id <= 0
+            ):
+                raise serializers.ValidationError(
+                    f"Room documents in bundle scope '{world_ref}' must use "
+                    "metadata.ref: room@<relative_id>."
+                )
+            declared_room_refs[world_ref].add(
+                f"{_ROOM_REF_PREFIX}{parsed.relative_id}"
+            )
+
+    links = spec.get("links", [])
+    if links is None:
+        links = []
+    if not isinstance(links, list):
+        raise serializers.ValidationError(
+            "worldbundle.spec.links must be a list."
+        )
+    if len(links) > 20_000:
+        raise serializers.ValidationError(
+            "World bundles cannot exceed 20,000 cross-world links."
+        )
+    normalized_links = []
+    seen_sources = set()
+    allowed_relations = {
+        "room.transfer_to",
+        "room.exits_to",
+        "room.enters_instance",
+        "world_config.exits_to",
+    }
+    for index, link in enumerate(links):
+        field_name = f"worldbundle.spec.links[{index}]"
+        if not isinstance(link, dict):
+            raise serializers.ValidationError(
+                f"{field_name} must be a mapping."
+            )
+        unknown_link_fields = sorted(
+            set(link) - {"relation", "source", "target"}
+        )
+        if unknown_link_fields:
+            raise serializers.ValidationError(
+                f"{field_name} has unsupported field(s): "
+                f"{', '.join(unknown_link_fields)}."
+            )
+        relation = str(link.get("relation") or "").strip()
+        source = link.get("source")
+        target = link.get("target")
+        if relation not in allowed_relations:
+            raise serializers.ValidationError(
+                f"{field_name}.relation is unsupported."
+            )
+        if not isinstance(source, dict) or not isinstance(target, dict):
+            raise serializers.ValidationError(
+                f"{field_name}.source and target must be mappings."
+            )
+        unknown_source_fields = sorted(
+            set(source) - {"world", "room"}
+        )
+        unknown_target_fields = sorted(
+            set(target) - {"world", "room"}
+        )
+        if unknown_source_fields or unknown_target_fields:
+            endpoint_errors = []
+            if unknown_source_fields:
+                endpoint_errors.append(
+                    "source: " + ", ".join(unknown_source_fields)
+                )
+            if unknown_target_fields:
+                endpoint_errors.append(
+                    "target: " + ", ".join(unknown_target_fields)
+                )
+            raise serializers.ValidationError(
+                f"{field_name} has unsupported endpoint field(s) "
+                f"({'; '.join(endpoint_errors)})."
+            )
+        source_world = str(source.get("world") or "").strip()
+        target_world = str(target.get("world") or "").strip()
+        if (
+            source_world not in declarations
+            or target_world not in declarations
+        ):
+            raise serializers.ValidationError(
+                f"{field_name} references an undeclared bundle world."
+            )
+        source_room = str(source.get("room") or "").strip()
+        target_room = str(target.get("room") or "").strip()
+        source_role = declarations[source_world]["role"]
+        target_role = declarations[target_world]["role"]
+        if relation.startswith("room.") and not source_room:
+            raise serializers.ValidationError(
+                f"{field_name}.source.room is required."
+            )
+        if relation == "world_config.exits_to" and source_room:
+            raise serializers.ValidationError(
+                f"{field_name}.source.room is not allowed."
+            )
+        if relation == "room.enters_instance" and target_room:
+            raise serializers.ValidationError(
+                f"{field_name}.target.room is not allowed."
+            )
+        if relation != "room.enters_instance" and not target_room:
+            raise serializers.ValidationError(
+                f"{field_name}.target.room is required."
+            )
+        if relation in {
+            "room.transfer_to",
+            "room.enters_instance",
+        }:
+            expected_roles = ("base", "instance")
+        else:
+            expected_roles = ("instance", "base")
+        if (source_role, target_role) != expected_roles:
+            raise serializers.ValidationError(
+                f"{field_name} must point from {expected_roles[0]} to "
+                f"{expected_roles[1]}."
+            )
+        for label, room_ref in (
+            ("source.room", source_room),
+            ("target.room", target_room),
+        ):
+            if not room_ref:
+                continue
+            parsed = parse_room_reference(room_ref)
+            if (
+                parsed is None
+                or parsed.kind != "relative_id"
+                or not parsed.relative_id
+                or parsed.relative_id <= 0
+            ):
+                raise serializers.ValidationError(
+                    f"{field_name}.{label} must use "
+                    "room@<relative_id>."
+                )
+            endpoint_world = (
+                source_world
+                if label == "source.room"
+                else target_world
+            )
+            canonical_room_ref = (
+                f"{_ROOM_REF_PREFIX}{parsed.relative_id}"
+            )
+            if canonical_room_ref not in declared_room_refs[endpoint_world]:
+                raise serializers.ValidationError(
+                    f"{field_name}.{label} must reference a room document "
+                    f"declared in bundle scope '{endpoint_world}'."
+                )
+        source_key = (relation, source_world, source_room)
+        if source_key in seen_sources:
+            raise serializers.ValidationError(
+                f"{field_name} duplicates a relation source."
+            )
+        seen_sources.add(source_key)
+        normalized_links.append(
+            {
+                "relation": relation,
+                "source": {
+                    "world": source_world,
+                    **({"room": source_room} if source_room else {}),
+                },
+                "target": {
+                    "world": target_world,
+                    **({"room": target_room} if target_room else {}),
+                },
+            }
+        )
+    return declarations, grouped_documents, normalized_links
+
+
+def resolve_or_create_world_bundle_scopes(
+    *,
+    base_world: World,
+    declarations: dict[str, dict[str, Any]],
+    author,
+) -> dict[str, World]:
+    """Lock and materialize the authored worlds declared by a bundle."""
+
+    if base_world.context_id or base_world.instance_of_id:
+        raise serializers.ValidationError(
+            "World bundles can only be imported into an authored base world."
+        )
+    World.objects.select_for_update().get(pk=base_world.pk)
+    instance_declarations = [
+        declaration
+        for declaration in declarations.values()
+        if declaration["role"] == "instance"
+    ]
+    if instance_declarations and not base_world.is_multiplayer:
+        raise serializers.ValidationError(
+            "This bundle contains instance templates. Import it into a "
+            "multiplayer base world; converting a single-player world with "
+            "runtime state is not safe."
+        )
+
+    existing_templates = {
+        template.instance_slug: template
+        for template in (
+            World.objects.select_for_update(of=("self",))
+            .filter(
+                instance_of=base_world,
+                context__isnull=True,
+            )
+            .select_related("config")
+            .order_by("id")
+        )
+    }
+    scope_worlds = {
+        _BASE_WORLD_BUNDLE_REF: base_world,
+    }
+    from builders.instance_templates import create_instance_template
+
+    for declaration in sorted(
+        instance_declarations,
+        key=lambda candidate: candidate["slug"],
+    ):
+        template = existing_templates.get(declaration["slug"])
+        if (
+            template is not None
+            and template.lifecycle == adv_consts.WORLD_STATE_ARCHIVED
+        ):
+            raise serializers.ValidationError(
+                "Bundle instance slug "
+                f"'{declaration['slug']}' conflicts with an archived "
+                "instance template. Restore or permanently remove that "
+                "template before importing this bundle."
+            )
+        if template is None:
+            template = create_instance_template(
+                base_world=base_world,
+                author=author,
+                name=declaration["name"] or declaration["slug"],
+                instance_slug=declaration["slug"],
+            )
+        scope_worlds[declaration["ref"]] = template
+    return scope_worlds
+
+
+@transaction.atomic
+def apply_world_bundle_links(
+    *,
+    scope_worlds: dict[str, World],
+    links: list[dict[str, Any]],
+) -> int:
+    """Replace all managed cross-world links using batched room lookups."""
+
+    base_world = scope_worlds[_BASE_WORLD_BUNDLE_REF]
+    room_ids_by_world: dict[int, set[int]] = {}
+    for link in links:
+        for endpoint in ("source", "target"):
+            spec = link[endpoint]
+            room_ref = spec.get("room")
+            if not room_ref:
+                continue
+            parsed = parse_room_reference(room_ref)
+            room_ids_by_world.setdefault(
+                scope_worlds[spec["world"]].id,
+                set(),
+            ).add(parsed.relative_id)
+
+    room_lookup: dict[tuple[int, int], Room] = {}
+    if room_ids_by_world:
+        room_filter = Q()
+        for world_id, relative_ids in room_ids_by_world.items():
+            room_filter |= Q(
+                world_id=world_id,
+                relative_id__in=relative_ids,
+            )
+        for room in Room.objects.filter(room_filter).only(
+            "id",
+            "world_id",
+            "relative_id",
+            "transfer_to_id",
+            "exits_to_id",
+            "enters_instance_id",
+        ):
+            room_lookup[(room.world_id, room.relative_id)] = room
+
+    def endpoint_room(endpoint, *, field_name):
+        world = scope_worlds[endpoint["world"]]
+        parsed = parse_room_reference(endpoint["room"])
+        room = room_lookup.get((world.id, parsed.relative_id))
+        if room is None:
+            raise serializers.ValidationError(
+                f"{field_name} does not resolve inside its bundle world."
+            )
+        return room
+
+    family_world_ids = [
+        world.id
+        for world in scope_worlds.values()
+    ]
+    Room.objects.filter(
+        world_id__in=family_world_ids,
+    ).exclude(transfer_to__isnull=True).update(transfer_to=None)
+    Room.objects.filter(
+        world_id__in=family_world_ids,
+    ).exclude(exits_to__isnull=True).update(exits_to=None)
+    Room.objects.filter(
+        world_id__in=family_world_ids,
+    ).exclude(enters_instance__isnull=True).update(
+        enters_instance=None,
+    )
+    for room in room_lookup.values():
+        room.transfer_to_id = None
+        room.exits_to_id = None
+        room.enters_instance_id = None
+    configs = list(
+        WorldConfig.objects.filter(
+            pk__in=[
+                world.config_id
+                for world in scope_worlds.values()
+                if world.config_id
+            ]
+        )
+    )
+    for config in configs:
+        config.exits_to = None
+
+    changed_rooms: dict[int, Room] = {}
+    config_by_world_id = {
+        world.id: next(
+            (
+                config
+                for config in configs
+                if config.id == world.config_id
+            ),
+            None,
+        )
+        for world in scope_worlds.values()
+    }
+    for index, link in enumerate(links):
+        relation = link["relation"]
+        source_world = scope_worlds[link["source"]["world"]]
+        target_world = scope_worlds[link["target"]["world"]]
+        if relation == "room.transfer_to":
+            if (
+                source_world.id != base_world.id
+                or target_world.instance_of_id != base_world.id
+            ):
+                raise serializers.ValidationError(
+                    "room.transfer_to must point from the bundle base to a "
+                    "direct instance template."
+                )
+            source_room = endpoint_room(
+                link["source"],
+                field_name=f"links[{index}].source.room",
+            )
+            target_room = endpoint_room(
+                link["target"],
+                field_name=f"links[{index}].target.room",
+            )
+            source_room.transfer_to = target_room
+            changed_rooms[source_room.id] = source_room
+        elif relation == "room.exits_to":
+            if (
+                source_world.instance_of_id != base_world.id
+                or target_world.id != base_world.id
+            ):
+                raise serializers.ValidationError(
+                    "room.exits_to must point from an instance template back "
+                    "to the bundle base."
+                )
+            source_room = endpoint_room(
+                link["source"],
+                field_name=f"links[{index}].source.room",
+            )
+            source_room.exits_to = endpoint_room(
+                link["target"],
+                field_name=f"links[{index}].target.room",
+            )
+            changed_rooms[source_room.id] = source_room
+        elif relation == "room.enters_instance":
+            if (
+                source_world.id != base_world.id
+                or target_world.instance_of_id != base_world.id
+            ):
+                raise serializers.ValidationError(
+                    "room.enters_instance must point from the bundle base to "
+                    "a direct instance template."
+                )
+            source_room = endpoint_room(
+                link["source"],
+                field_name=f"links[{index}].source.room",
+            )
+            source_room.enters_instance = target_world
+            changed_rooms[source_room.id] = source_room
+        else:
+            if (
+                source_world.instance_of_id != base_world.id
+                or target_world.id != base_world.id
+            ):
+                raise serializers.ValidationError(
+                    "world_config.exits_to must point from an instance "
+                    "template back to the bundle base."
+                )
+            config = config_by_world_id.get(source_world.id)
+            if config is None:
+                raise serializers.ValidationError(
+                    "world_config.exits_to source has no world config."
+                )
+            config.exits_to = endpoint_room(
+                link["target"],
+                field_name=f"links[{index}].target.room",
+            )
+
+    if changed_rooms:
+        Room.objects.bulk_update(
+            list(changed_rooms.values()),
+            ["transfer_to", "exits_to", "enters_instance"],
+        )
+    if configs:
+        WorldConfig.objects.bulk_update(configs, ["exits_to"])
+    return len(links)
+
+
 def serialize_world_export_payload(world: World) -> dict[str, Any]:
-    documents = serialize_world_documents(world)
+    documents = serialize_world_bundle_documents(world)
+    is_bundle = (
+        bool(documents)
+        and parse_document_kind(documents[0])
+        == WORLD_BUNDLE_MANIFEST_KIND
+    )
     return {
         "documents": documents,
         "yaml": manifest_stream_to_yaml(documents),
-        "summary": _summarize_documents(documents),
+        "summary": (
+            _summarize_world_bundle_documents(documents)
+            if is_bundle
+            else _summarize_documents(documents)
+        ),
     }
 
 
@@ -1528,25 +3294,122 @@ def _find_placeholder_zone(world: World) -> Zone | None:
     return zone
 
 
+def _placeholder_room_has_dependents(
+    *,
+    room: Room,
+    config: WorldConfig,
+    placeholder_zone: Zone,
+) -> bool:
+    """
+    Detect records that make a default-looking room authored or runtime data.
+
+    The target config's starting/death pointers are the only expected
+    dependents: reservation detaches those immediately before deleting a
+    proven scaffold room. The untouched starting zone may also point at it as
+    its center.
+    """
+
+    database = room._state.db
+    for relation in Room._meta.related_objects:
+        queryset = relation.related_model._base_manager.using(database).filter(
+            **{relation.field.name: room}
+        )
+        if (
+            relation.related_model is WorldConfig
+            and relation.field.name in {"starting_room", "death_room"}
+        ):
+            queryset = queryset.exclude(pk=config.pk)
+        elif (
+            relation.related_model is Zone
+            and relation.field.name == "center"
+        ):
+            queryset = queryset.exclude(pk=placeholder_zone.pk)
+        if queryset.exists():
+            return True
+
+    if room.inventory.exists():
+        return True
+
+    room_content_type = ContentType.objects.get_for_model(Room)
+    generic_dependents = (
+        room_content_type.assignment_types.filter(
+            assignment_id=room.id,
+        ),
+        room_content_type.trigger_target_types.filter(
+            target_id=room.id,
+        ),
+        room_content_type.faction_assignments.filter(
+            member_id=room.id,
+        ),
+    )
+    if any(queryset.exists() for queryset in generic_dependents):
+        return True
+
+    # Mob.roams is a GenericForeignKey without a reverse GenericRelation.
+    from spawns.models import Mob
+
+    return Mob.objects.filter(
+        roams_type=room_content_type,
+        roams_id=room.id,
+    ).exists()
+
+
 def _find_placeholder_room(world: World) -> Room | None:
     if world.rooms.count() != 1:
         return None
     room = world.rooms.order_by("id").first()
     if not room:
         return None
+    if room.relative_id != 1:
+        return None
+    allocator = (
+        World.objects.filter(pk=world.pk)
+        .values_list("next_room_relative_id", flat=True)
+        .first()
+    )
+    if allocator != 2:
+        return None
     if room.name != "Starting Room":
         return None
     if (room.x, room.y, room.z) != (0, 0, 0):
         return None
+    if room.type != adv_consts.ROOM_TYPE_INDOOR:
+        return None
     if room.description or room.note or room.color or room.is_landmark:
+        return None
+    if get_initial_state_snapshot(STATE_SCOPE_ROOM, room):
+        return None
+    if (
+        room.crafting_profile_id
+        or room.enters_instance_id
+        or room.transfer_to_id
+        or room.exits_to_id
+        or room.housing_block_id
+        or room.ownership_type
+        != adv_consts.ROOM_OWNERSHIP_TYPE_PRIVATE
+    ):
         return None
     if any(getattr(room, direction + "_id") for direction in adv_consts.DIRECTIONS):
         return None
-    if room.flags.exists() or room.details.exists() or room.doors_from.exists():
+    if (
+        room.flags.exists()
+        or room.details.exists()
+        or room.doors_from.exists()
+        or room.doors_to.exists()
+    ):
         return None
     config = world.config
-    if config and (
+    if config is None or (
         config.starting_room_id != room.id or config.death_room_id != room.id
+    ):
+        return None
+    placeholder_zone = _find_placeholder_zone(world)
+    if placeholder_zone is None or room.zone_id != placeholder_zone.id:
+        return None
+    if _placeholder_room_has_dependents(
+        room=room,
+        config=config,
+        placeholder_zone=placeholder_zone,
     ):
         return None
     return room
@@ -1585,7 +3448,24 @@ def _get_or_create_zone(*, world: World, zone_name: str, zone_ref: Any = None) -
 
 
 def _get_or_create_room(*, world: World, room_ref: Any, zone: Zone | None = None) -> Room:
-    x, y, z = _parse_room_ref(room_ref)
+    parsed = parse_room_reference(room_ref)
+    if parsed is None:
+        raise serializers.ValidationError(
+            "Room references must use 'room@<relative_id>', legacy "
+            "'room@x,y,z', or legacy 'room.<database_id>'."
+        )
+    if parsed.kind != "coordinates":
+        room = resolve_room_reference(world, room_ref)
+        if room is None:
+            raise serializers.ValidationError(
+                f"Room reference '{room_ref}' does not resolve in this world."
+            )
+        if zone is not None and room.zone_id != zone.id:
+            room.zone = zone
+            room.save(update_fields=["zone"])
+        return room
+
+    x, y, z = parsed.x, parsed.y, parsed.z
     room = Room.objects.filter(world=world, x=x, y=y, z=z).first()
     if room:
         if zone is not None and room.zone_id != zone.id:
@@ -1705,15 +3585,9 @@ def _resolve_spawn_plan_room(*, world: World, value: Any, field_name: str) -> Ro
     text = str(value or "").strip()
     if not text:
         raise serializers.ValidationError(f"{field_name} is required.")
-    if text.startswith(_ROOM_REF_PREFIX):
-        x, y, z = _parse_room_ref(text)
-        room = Room.objects.filter(world=world, x=x, y=y, z=z).first()
-    else:
-        prefix, sep, raw = text.partition(".")
-        if sep == "." and prefix == "room" and raw.isdigit():
-            room = Room.objects.filter(world=world, pk=int(raw)).first()
-        else:
-            room = Room.objects.filter(world=world, name=text).order_by("id").first()
+    room = resolve_room_reference(world, text)
+    if room is None and parse_room_reference(text) is None:
+        room = Room.objects.filter(world=world, name=text).order_by("id").first()
     if room is None:
         raise serializers.ValidationError(f"{field_name} references an unknown room.")
     return room
@@ -1985,36 +3859,145 @@ def _entry_traits_spec(entry_spec: dict[str, Any], *, field_name: str) -> Any:
     return entry_spec.get("affixes")
 
 
-def _validate_spawn_target(*, world: World, target: Any, entry_slugs: set[str], field_name: str) -> dict[str, Any]:
+def _validate_spawn_target(
+    *,
+    world: World,
+    target: Any,
+    entry_slugs: set[str],
+    field_name: str,
+) -> dict[str, Any]:
+    """Resolve one portable target while accepting transition-era mappings."""
+
     if isinstance(target, str):
-        target = {"room": target}
+        target_ref = target.strip()
+        if not target_ref:
+            raise serializers.ValidationError(
+                f"{field_name} must target a room, zone, path, or entry."
+            )
+        if target_ref.startswith(_SPAWN_ENTRY_REF_PREFIX):
+            target = {
+                "entry": target_ref[len(_SPAWN_ENTRY_REF_PREFIX):],
+            }
+        elif target_ref.startswith(_ZONE_REF_PREFIX):
+            target = {"zone": target_ref}
+        elif target_ref.startswith(_PATH_REF_PREFIX):
+            target = {"path": target_ref}
+        else:
+            # Bare strings and historical room refs were the original scalar
+            # form. Keep them as import aliases, but never emit them.
+            target = {"room": target_ref}
     if not isinstance(target, dict):
-        raise serializers.ValidationError(f"{field_name} must be a mapping.")
-    normalized = copy.deepcopy(target)
-    if normalized.get("room"):
-        _resolve_spawn_plan_room(world=world, value=normalized.get("room"), field_name=f"{field_name}.room")
-        return normalized
-    if normalized.get("room_ref"):
-        _resolve_spawn_plan_room(world=world, value=normalized.get("room_ref"), field_name=f"{field_name}.room_ref")
-        return normalized
-    if normalized.get("zone"):
-        _resolve_spawn_plan_zone(world=world, value=normalized.get("zone"), field_name=f"{field_name}.zone")
-        return normalized
-    if normalized.get("path"):
-        _resolve_spawn_plan_path(world=world, value=normalized.get("path"), field_name=f"{field_name}.path")
-        return normalized
-    entry_slug = str(normalized.get("entry") or normalized.get("parent_entry") or "").strip()
-    if entry_slug:
-        if entry_slug not in entry_slugs:
-            raise serializers.ValidationError(f"{field_name}.entry references an unknown entry slug.")
-        return normalized
-    raise serializers.ValidationError(f"{field_name} must target a room, zone, path, or entry.")
+        raise serializers.ValidationError(
+            f"{field_name} must be a typed reference or legacy target mapping."
+        )
+
+    supported_fields = {
+        "room",
+        "room_ref",
+        "zone",
+        "path",
+        "entry",
+        "parent_entry",
+        "name",
+    }
+    unsupported_fields = sorted(set(target) - supported_fields)
+    if unsupported_fields:
+        raise serializers.ValidationError(
+            f"{field_name} has unsupported field(s): "
+            f"{', '.join(unsupported_fields)}."
+        )
+
+    room_values = [
+        (room_field, target.get(room_field))
+        for room_field in ("room", "room_ref")
+        if target.get(room_field) not in (None, "")
+    ]
+    entry_values = [
+        (entry_field, target.get(entry_field))
+        for entry_field in ("entry", "parent_entry")
+        if target.get(entry_field) not in (None, "")
+    ]
+    target_families = [
+        target_family
+        for target_family, is_present in (
+            ("room", bool(room_values)),
+            ("zone", target.get("zone") not in (None, "")),
+            ("path", target.get("path") not in (None, "")),
+            ("entry", bool(entry_values)),
+        )
+        if is_present
+    ]
+    if len(target_families) != 1:
+        raise serializers.ValidationError(
+            f"{field_name} must contain exactly one room, zone, path, or entry target."
+        )
+
+    target_family = target_families[0]
+    if target_family == "room":
+        resolved_rooms = [
+            _resolve_spawn_plan_room(
+                world=world,
+                value=room_value,
+                field_name=f"{field_name}.{room_field}",
+            )
+            for room_field, room_value in room_values
+        ]
+        if len({room.id for room in resolved_rooms}) != 1:
+            raise serializers.ValidationError(
+                f"{field_name}.room and {field_name}.room_ref must reference the same room."
+            )
+        return {"kind": "room", "room": resolved_rooms[0]}
+    if target_family == "zone":
+        return {
+            "kind": "zone",
+            "zone": _resolve_spawn_plan_zone(
+                world=world,
+                value=target.get("zone"),
+                field_name=f"{field_name}.zone",
+            ),
+        }
+    if target_family == "path":
+        return {
+            "kind": "path",
+            "path": _resolve_spawn_plan_path(
+                world=world,
+                value=target.get("path"),
+                field_name=f"{field_name}.path",
+            ),
+        }
+
+    normalized_entry_slugs = {
+        _slug_or_error(
+            (
+                str(entry_value).strip()[len(_SPAWN_ENTRY_REF_PREFIX):]
+                if str(entry_value).strip().startswith(_SPAWN_ENTRY_REF_PREFIX)
+                else entry_value
+            ),
+            f"{field_name}.{entry_field}",
+        )
+        for entry_field, entry_value in entry_values
+    }
+    if len(normalized_entry_slugs) != 1:
+        raise serializers.ValidationError(
+            f"{field_name}.entry and {field_name}.parent_entry must reference the same entry."
+        )
+    entry_slug = normalized_entry_slugs.pop()
+    if entry_slug not in entry_slugs:
+        raise serializers.ValidationError(
+            f"{field_name}.entry references an unknown entry slug."
+        )
+    return {"kind": "entry", "entry_slug": entry_slug}
 
 
 def _spawn_target_entry_slug(target: Any) -> str:
     if not isinstance(target, dict):
         return ""
-    return str(target.get("entry") or target.get("parent_entry") or "").strip()
+    return str(
+        target.get("entry_slug")
+        or target.get("entry")
+        or target.get("parent_entry")
+        or ""
+    ).strip()
 
 
 def _effective_spawn_cohort_role(entry: dict[str, Any]) -> str:
@@ -2031,17 +4014,13 @@ def _effective_spawn_cohort_role(entry: dict[str, Any]) -> str:
 
 
 def _validate_spawn_entry_relationships(entries: list[dict[str, Any]]) -> None:
-    active_entries = {
+    entries_by_slug = {
         entry["slug"]: entry
         for entry in entries
-        if entry.get("is_active")
     }
     leader_by_cohort = {}
 
     for index, entry in enumerate(entries):
-        if not entry.get("is_active"):
-            continue
-
         entry_field = f"spec.entries[{index}]"
         target_entry_slug = _spawn_target_entry_slug(entry.get("target"))
         placement = entry.get("placement") if isinstance(entry.get("placement"), dict) else {}
@@ -2049,14 +4028,14 @@ def _validate_spawn_entry_relationships(entries: list[dict[str, Any]]) -> None:
         role = _effective_spawn_cohort_role(entry)
 
         if target_entry_slug:
-            parent = active_entries.get(target_entry_slug)
-            if parent is None:
+            parent = entries_by_slug[target_entry_slug]
+            if entry.get("is_active") and not parent.get("is_active"):
                 raise serializers.ValidationError(
                     f"{entry_field}.target.entry must reference an active entry."
                 )
             if int(parent["order"]) >= int(entry["order"]):
                 raise serializers.ValidationError(
-                    f"{entry_field}.target.entry must reference an earlier active entry with a lower order."
+                    f"{entry_field}.target.entry must reference an earlier entry with a lower order."
                 )
             parent_placement = (
                 parent.get("placement")
@@ -2068,6 +4047,9 @@ def _validate_spawn_entry_relationships(entries: list[dict[str, Any]]) -> None:
                 raise serializers.ValidationError(
                     f"{entry_field}.cohort must match the target entry cohort."
                 )
+
+        if not entry.get("is_active"):
+            continue
 
         if role == "follower" and not target_entry_slug:
             raise serializers.ValidationError(
@@ -2248,9 +4230,294 @@ def delete_zone_manifest(*, world: World, manifest: dict[str, Any]) -> Zone:
             zone.delete()
         except RestrictedError as exc:
             raise serializers.ValidationError(
-                "Cannot delete a zone referenced by death routing."
+                "Cannot delete a zone referenced by death routing or a spawn plan."
             ) from exc
         return zone
+
+
+def _room_manifest_coordinates(
+    *,
+    room_ref: str,
+    spec: dict[str, Any],
+    existing: Room | None,
+) -> tuple[int, int, int]:
+    parsed = parse_room_reference(room_ref)
+    if parsed is None:
+        raise serializers.ValidationError(
+            "metadata.ref must use 'room@<relative_id>', legacy "
+            "'room@x,y,z', or legacy 'room.<database_id>'."
+        )
+
+    explicit_coordinates = None
+    if "coordinates" in spec:
+        explicit_coordinates = _coerce_room_coordinates(spec.get("coordinates"))
+
+    if parsed.kind == "coordinates":
+        referenced_coordinates = (parsed.x, parsed.y, parsed.z)
+        if (
+            explicit_coordinates is not None
+            and explicit_coordinates != referenced_coordinates
+        ):
+            raise serializers.ValidationError(
+                "spec.coordinates must match the legacy coordinates in metadata.ref."
+            )
+        return referenced_coordinates
+
+    if explicit_coordinates is not None:
+        return explicit_coordinates
+    if existing is not None:
+        return existing.x, existing.y, existing.z
+    raise serializers.ValidationError(
+        "spec.coordinates is required when creating a room with a stable reference."
+    )
+
+
+def _existing_room_for_manifest_ref(*, world: World, room_ref: str) -> Room | None:
+    parsed = parse_room_reference(room_ref)
+    if parsed is None:
+        raise serializers.ValidationError(
+            "metadata.ref must use 'room@<relative_id>', legacy "
+            "'room@x,y,z', or legacy 'room.<database_id>'."
+        )
+    if parsed.kind == "relative_id" and (
+        parsed.relative_id is None or parsed.relative_id <= 0
+    ):
+        raise serializers.ValidationError(
+            "metadata.ref relative id must be a positive integer."
+        )
+    if parsed.kind == "database_id" and (
+        parsed.database_id is None or parsed.database_id <= 0
+    ):
+        raise serializers.ValidationError(
+            "metadata.ref database id must be a positive integer."
+        )
+    return resolve_room_reference(world, room_ref)
+
+
+def _create_stable_manifest_room(
+    *,
+    world: World,
+    relative_id: int,
+    coordinates: tuple[int, int, int],
+    name: str,
+    coordinates_prevalidated: bool = False,
+) -> Room:
+    x, y, z = coordinates
+    if not coordinates_prevalidated:
+        coordinate_owner = Room.objects.filter(
+            world=world,
+            x=x,
+            y=y,
+            z=z,
+        ).first()
+        if coordinate_owner is not None:
+            raise serializers.ValidationError(
+                "spec.coordinates is already occupied by "
+                f"{_room_ref(coordinate_owner)}."
+            )
+    try:
+        return Room.objects.create_with_imported_relative_id(
+            world=world,
+            relative_id=relative_id,
+            name=name or "Untitled Room",
+            x=x,
+            y=y,
+            z=z,
+        )
+    except DjangoValidationError as exc:
+        raise serializers.ValidationError(exc.messages) from exc
+
+
+_ROOM_COORDINATE_MAX = 2_147_483_647
+_ROOM_COORDINATE_MIN = -2_147_483_648
+
+
+def _temporary_room_coordinates(
+    *,
+    occupied: set[tuple[int, int, int]],
+    count: int,
+) -> list[tuple[int, int, int]]:
+    """Choose deterministic, collision-free staging coordinates."""
+
+    coordinates = []
+    x = _ROOM_COORDINATE_MAX
+    y = _ROOM_COORDINATE_MAX
+    z = _ROOM_COORDINATE_MAX
+    while len(coordinates) < count:
+        candidate = (x, y, z)
+        if candidate not in occupied:
+            coordinates.append(candidate)
+            occupied.add(candidate)
+        z -= 1
+        if z < _ROOM_COORDINATE_MIN:
+            z = _ROOM_COORDINATE_MAX
+            y -= 1
+        if y < _ROOM_COORDINATE_MIN:
+            y = _ROOM_COORDINATE_MAX
+            x -= 1
+        if x < _ROOM_COORDINATE_MIN:
+            raise serializers.ValidationError(
+                "No temporary room coordinates are available for this import."
+            )
+    return coordinates
+
+
+def reserve_room_manifest_references(
+    *,
+    world: World,
+    documents: list[dict[str, Any]],
+) -> set[int]:
+    """
+    Reserve stable room identities before applying a manifest stream.
+
+    Export order intentionally places factions and zones before rooms. This
+    bounded prepass also makes circular room exits safe without creating
+    identity-less ghost rooms.
+    """
+
+    with transaction.atomic():
+        current_rooms = list(
+            Room.objects.select_for_update()
+            .filter(world=world)
+            .only("id", "world_id", "relative_id", "x", "y", "z")
+            .order_by("relative_id", "id")
+        )
+        existing_by_relative_id = {
+            room.relative_id: room
+            for room in current_rooms
+        }
+
+        room_specs: dict[int, tuple[tuple[int, int, int], str]] = {}
+        coordinate_refs: dict[tuple[int, int, int], int] = {}
+        has_world_document = False
+        for document in documents:
+            kind = parse_document_kind(document)
+            if kind == WORLD_MANIFEST_KIND:
+                has_world_document = True
+            if kind != ROOM_MANIFEST_KIND:
+                continue
+            if (
+                builder_manifests.parse_manifest_operation(document)
+                != builder_manifests.TRIGGER_MANIFEST_OPERATION_APPLY
+            ):
+                continue
+            metadata = _manifest_metadata(document)
+            spec = _manifest_spec(document)
+            room_ref = str(metadata.get("ref") or "").strip()
+            parsed = parse_room_reference(room_ref)
+            if parsed is None or parsed.kind != "relative_id":
+                continue
+            relative_id = parsed.relative_id
+            if relative_id is None or relative_id <= 0:
+                raise serializers.ValidationError(
+                    "Room manifest relative ids must be positive integers."
+                )
+            existing = existing_by_relative_id.get(relative_id)
+            coordinates = _room_manifest_coordinates(
+                room_ref=room_ref,
+                spec=spec,
+                existing=existing,
+            )
+            prior = room_specs.get(relative_id)
+            definition = (
+                coordinates,
+                str(metadata.get("name") or "").strip(),
+            )
+            if prior is not None and prior != definition:
+                raise serializers.ValidationError(
+                    f"Manifest stream defines room@{relative_id} more than "
+                    "once with conflicting values."
+                )
+            coordinate_ref = coordinate_refs.get(coordinates)
+            if coordinate_ref is not None and coordinate_ref != relative_id:
+                raise serializers.ValidationError(
+                    "Manifest stream assigns the same room coordinates to "
+                    f"room@{coordinate_ref} and room@{relative_id}."
+                )
+            room_specs[relative_id] = definition
+            coordinate_refs[coordinates] = relative_id
+
+        placeholder = _find_placeholder_room(world)
+        if (
+            has_world_document
+            and placeholder is not None
+            and placeholder.relative_id not in room_specs
+        ):
+            config = world.config
+            if config is not None:
+                update_fields = []
+                if config.starting_room_id == placeholder.id:
+                    config.starting_room = None
+                    update_fields.append("starting_room")
+                if config.death_room_id == placeholder.id:
+                    config.death_room = None
+                    update_fields.append("death_room")
+                if update_fields:
+                    config.save(update_fields=update_fields)
+            placeholder.delete()
+            current_rooms = [
+                room for room in current_rooms if room.id != placeholder.id
+            ]
+            existing_by_relative_id.pop(placeholder.relative_id, None)
+
+        represented_relative_ids = set(room_specs)
+        for room in current_rooms:
+            desired_owner = coordinate_refs.get((room.x, room.y, room.z))
+            if (
+                desired_owner is not None
+                and room.relative_id not in represented_relative_ids
+            ):
+                raise serializers.ValidationError(
+                    "Manifest room coordinates are occupied by an existing "
+                    f"room not present in the stream: {_room_ref(room)}."
+                )
+
+        movers = [
+            existing_by_relative_id[relative_id]
+            for relative_id, (coordinates, _name) in room_specs.items()
+            if relative_id in existing_by_relative_id
+            and (
+                existing_by_relative_id[relative_id].x,
+                existing_by_relative_id[relative_id].y,
+                existing_by_relative_id[relative_id].z,
+            ) != coordinates
+        ]
+        occupied = {
+            (room.x, room.y, room.z)
+            for room in current_rooms
+        } | set(coordinate_refs)
+        staging_coordinates = _temporary_room_coordinates(
+            occupied=occupied,
+            count=len(movers),
+        )
+        for room, (x, y, z) in zip(movers, staging_coordinates):
+            room.x = x
+            room.y = y
+            room.z = z
+        if movers:
+            Room.objects.bulk_update(movers, ["x", "y", "z"])
+
+        created_relative_ids: set[int] = set()
+        for relative_id in sorted(room_specs):
+            if relative_id in existing_by_relative_id:
+                continue
+            coordinates, name = room_specs[relative_id]
+            room = _create_stable_manifest_room(
+                world=world,
+                relative_id=relative_id,
+                coordinates=coordinates,
+                name=name,
+                coordinates_prevalidated=True,
+            )
+            existing_by_relative_id[relative_id] = room
+            created_relative_ids.add(relative_id)
+
+        for room in movers:
+            room.x, room.y, room.z = room_specs[room.relative_id][0]
+        if movers:
+            Room.objects.bulk_update(movers, ["x", "y", "z"])
+
+        return created_relative_ids
 
 
 def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room, bool]:
@@ -2266,8 +4533,25 @@ def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room
         raise serializers.ValidationError("metadata.ref is required.")
     room_name = str(metadata.get("name") or "").strip()
 
-    x, y, z = _parse_room_ref(room_ref)
-    existing = Room.objects.filter(world=world, x=x, y=y, z=z).first()
+    parsed_room_ref = parse_room_reference(room_ref)
+    existing = _existing_room_for_manifest_ref(
+        world=world,
+        room_ref=room_ref,
+    )
+    if (
+        parsed_room_ref is not None
+        and parsed_room_ref.kind == "database_id"
+        and existing is None
+    ):
+        raise serializers.ValidationError(
+            "Legacy database-id room manifests can only update an existing "
+            "room in this world."
+        )
+    x, y, z = _room_manifest_coordinates(
+        room_ref=room_ref,
+        spec=spec,
+        existing=existing,
+    )
     created = existing is None
 
     crafting_profile = None
@@ -2303,7 +4587,21 @@ def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room
             else:
                 zone = _get_or_create_zone(world=world, zone_name=zone_ref)
 
-        room = existing or _get_or_create_room(world=world, room_ref=room_ref, zone=zone)
+        if existing is not None:
+            room = existing
+        elif parsed_room_ref is not None and parsed_room_ref.kind == "relative_id":
+            room = _create_stable_manifest_room(
+                world=world,
+                relative_id=parsed_room_ref.relative_id,
+                coordinates=(x, y, z),
+                name=room_name,
+            )
+        else:
+            room = _get_or_create_room(
+                world=world,
+                room_ref=room_ref,
+                zone=zone,
+            )
         if zone is not None or "zone" in spec:
             room.zone = zone
         room.name = room_name or room.name or "Untitled Room"
@@ -2323,9 +4621,19 @@ def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room
         if "is_landmark" in spec or created:
             room.is_landmark = bool(spec.get("is_landmark", room.is_landmark if existing else False))
 
-        room.x = x
-        room.y = y
-        room.z = z
+        coordinate_owner = resolve_room_reference(
+            world,
+            f"{_ROOM_REF_PREFIX}{x},{y},{z}",
+        )
+        if (
+            coordinate_owner is not None
+            and coordinate_owner.pk != room.pk
+        ):
+            raise serializers.ValidationError(
+                "spec.coordinates is already occupied by "
+                f"{_room_ref(coordinate_owner)}."
+            )
+        room.x, room.y, room.z = x, y, z
         if update_crafting:
             room.crafting_profile = crafting_profile
         room.save()
@@ -2496,17 +4804,27 @@ def apply_path_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Path
         seen_room_refs = set()
         for index, room_ref in enumerate(rooms):
             room_ref_text = str(room_ref or "").strip()
-            _parse_room_ref(room_ref_text)
-            if room_ref_text in seen_room_refs:
-                raise serializers.ValidationError(f"spec.rooms[{index}] duplicates room ref '{room_ref_text}'.")
-            seen_room_refs.add(room_ref_text)
-            resolved_rooms.append(_get_or_create_room(world=world, room_ref=room_ref_text))
+            room = _resolve_room_reference_or_error(
+                world=world,
+                value=room_ref_text,
+                field_name=f"spec.rooms[{index}]",
+            )
+            canonical_ref = _room_ref(room)
+            if canonical_ref in seen_room_refs:
+                raise serializers.ValidationError(
+                    f"spec.rooms[{index}] duplicates room ref '{room_ref_text}'."
+                )
+            seen_room_refs.add(canonical_ref)
+            resolved_rooms.append(room)
 
         entry_room = None
         entry_room_ref = str(spec.get("entry_room") or "").strip()
         if entry_room_ref:
-            _parse_room_ref(entry_room_ref)
-            entry_room = _get_or_create_room(world=world, room_ref=entry_room_ref)
+            entry_room = _resolve_room_reference_or_error(
+                world=world,
+                value=entry_room_ref,
+                field_name="spec.entry_room",
+            )
 
         path = existing or Path(world=world)
         path.relative_id = relative_id
@@ -2538,11 +4856,22 @@ def delete_path_manifest(*, world: World, manifest: dict[str, Any]) -> Path:
     if not path_ref:
         raise serializers.ValidationError("metadata.ref is required.")
     relative_id = _parse_path_ref(path_ref, field_name="metadata.ref")
-    path = Path.objects.filter(world=world, relative_id=relative_id).first()
-    if path is None:
-        raise serializers.ValidationError("Path delete manifest does not resolve to an existing path.")
-    path.delete()
-    return path
+    with transaction.atomic():
+        path = Path.objects.select_for_update().filter(
+            world=world,
+            relative_id=relative_id,
+        ).first()
+        if path is None:
+            raise serializers.ValidationError(
+                "Path delete manifest does not resolve to an existing path."
+            )
+        try:
+            path.delete()
+        except RestrictedError as exc:
+            raise serializers.ValidationError(
+                "Cannot delete a path referenced by a spawn plan."
+            ) from exc
+        return path
 
 
 def apply_item_definition_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[ItemDefinition, bool]:
@@ -2713,7 +5042,12 @@ def delete_faction_manifest(*, world: World, manifest: dict[str, Any]) -> Factio
         return faction
 
 
-def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[SpawnPlan, bool]:
+def apply_spawn_plan_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+    room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+) -> tuple[SpawnPlan, bool]:
     if parse_document_kind(manifest) != SPAWN_PLAN_MANIFEST_KIND:
         raise serializers.ValidationError("Unsupported manifest kind. Expected 'spawnplan'.")
     if builder_manifests.parse_manifest_operation(manifest) != builder_manifests.TRIGGER_MANIFEST_OPERATION_APPLY:
@@ -2734,6 +5068,13 @@ def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tupl
             raise serializers.ValidationError("spec.zone_ref must match spec.zone when provided.")
     conditions = copy.deepcopy(spec.get("conditions") or {})
     _validate_condition_payload_or_error(conditions, field_name="spec.conditions")
+    if room_ref_cache is None:
+        room_ref_cache = _build_room_ref_cache(world)
+    conditions = _canonicalize_condition_refs(
+        conditions,
+        world=world,
+        room_ref_cache=room_ref_cache,
+    )
     respawn_policy = _normalize_spawn_respawn_policy(spec.get("respawn"))
 
     entries = spec.get("entries") or []
@@ -2787,6 +5128,31 @@ def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tupl
         )
         entry_conditions = copy.deepcopy(entry_spec.get("conditions") or {})
         _validate_condition_payload_or_error(entry_conditions, field_name=f"{entry_field}.conditions")
+        entry_conditions = _canonicalize_condition_refs(
+            entry_conditions,
+            world=world,
+            room_ref_cache=room_ref_cache,
+        )
+        traits = _normalize_spawn_traits(
+            _entry_traits_spec(entry_spec, field_name=entry_field),
+            field_name=f"{entry_field}.traits",
+        )
+        traits = _canonicalize_nested_conditions(
+            traits,
+            world=world,
+            room_ref_cache=room_ref_cache,
+        )
+        loot = normalize_loot_table(
+            entry_spec.get("loot", {}),
+            world=world,
+            field_name=f"{entry_field}.loot",
+            allow_inherit_definition=True,
+        )
+        loot = _canonicalize_nested_conditions(
+            loot,
+            world=world,
+            room_ref_cache=room_ref_cache,
+        )
         normalized_entries.append({
             "slug": entry_slug,
             "name": str(entry_spec.get("name") or ""),
@@ -2797,16 +5163,8 @@ def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tupl
             "count": _normalize_spawn_count(entry_spec.get("count", 1), field_name=f"{entry_field}.count"),
             "placement": _normalize_spawn_cohort(entry_spec, field_name=entry_field),
             "initial_state": initial_state,
-            "traits": _normalize_spawn_traits(
-                _entry_traits_spec(entry_spec, field_name=entry_field),
-                field_name=f"{entry_field}.traits",
-            ),
-            "loot": normalize_loot_table(
-                entry_spec.get("loot", {}),
-                world=world,
-                field_name=f"{entry_field}.loot",
-                allow_inherit_definition=True,
-            ),
+            "traits": traits,
+            "loot": loot,
             "conditions": entry_conditions,
         })
 
@@ -2827,10 +5185,21 @@ def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tupl
         spawn_plan.conditions = conditions
         spawn_plan.save()
 
-        seen_entry_slugs = []
-        for normalized in normalized_entries:
-            seen_entry_slugs.append(normalized["slug"])
-            entry = SpawnEntry.objects.filter(plan=spawn_plan, slug=normalized["slug"]).first()
+        existing_entries = {
+            entry.slug: entry
+            for entry in spawn_plan.entries.select_for_update()
+        }
+        saved_entries: dict[str, SpawnEntry] = {}
+        seen_entry_slugs = {entry["slug"] for entry in normalized_entries}
+        ordered_entries = [
+            normalized
+            for _, normalized in sorted(
+                enumerate(normalized_entries),
+                key=lambda item: (int(item[1]["order"]), item[0]),
+            )
+        ]
+        for normalized in ordered_entries:
+            entry = existing_entries.get(normalized["slug"])
             if entry is None:
                 entry = SpawnEntry(plan=spawn_plan, slug=normalized["slug"])
             for field_name in (
@@ -2838,7 +5207,6 @@ def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tupl
                 "order",
                 "is_active",
                 "source",
-                "target",
                 "count",
                 "placement",
                 "initial_state",
@@ -2847,7 +5215,29 @@ def apply_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> tupl
                 "conditions",
             ):
                 setattr(entry, field_name, normalized[field_name])
+
+            entry.target_room = None
+            entry.target_zone = None
+            entry.target_path = None
+            entry.target_entry = None
+            target = normalized["target"]
+            target_kind = target["kind"]
+            if target_kind == "room":
+                entry.target_room = target["room"]
+            elif target_kind == "zone":
+                entry.target_zone = target["zone"]
+            elif target_kind == "path":
+                entry.target_path = target["path"]
+            else:
+                parent_slug = target["entry_slug"]
+                parent_entry = saved_entries.get(parent_slug)
+                if parent_entry is None:
+                    raise serializers.ValidationError(
+                        f"Spawn entry '{entry.slug}' target entry must have a lower order."
+                    )
+                entry.target_entry = parent_entry
             entry.save()
+            saved_entries[entry.slug] = entry
         spawn_plan.entries.exclude(slug__in=seen_entry_slugs).delete()
 
     return spawn_plan, created
@@ -2928,73 +5318,20 @@ def apply_quest_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Que
     if parse_document_kind(manifest) != quest_manifests.QUEST_MANIFEST_KIND:
         raise serializers.ValidationError("Unsupported manifest kind. Expected 'quest'.")
     with transaction.atomic():
-        parsed = quest_manifests.parse_quest_manifest(world=world, manifest=manifest)
+        normalized = copy.deepcopy(manifest)
+        normalized["spec"] = _canonicalize_quest_node(
+            _manifest_spec(normalized),
+            world=world,
+            room_ref_cache=_build_room_ref_cache(world),
+            canonicalize_entities=False,
+        )
+        parsed = quest_manifests.parse_quest_manifest(
+            world=world,
+            manifest=normalized,
+        )
         created = parsed.quest is None
         quest = quest_manifests.apply_quest_manifest(parsed)
     return quest, created
-
-
-def _resolve_trigger_target(
-    *,
-    world: World,
-    target: dict[str, Any] | None,
-) -> tuple[ContentType, int]:
-    target = target or {}
-    if not isinstance(target, dict):
-        raise serializers.ValidationError("spec.target must be a mapping.")
-
-    target_key = str(target.get("key") or "").strip()
-    target_ref = str(target.get("ref") or "").strip()
-    target_type = str(target.get("type") or "world").strip().lower()
-
-    if target_key and not target_ref:
-        if target_type == "room":
-            return ContentType.objects.get_for_model(Room), builder_manifests._parse_entity_ref(
-                target_key, "room", "spec.target.key"
-            )
-        if target_type == "zone":
-            return ContentType.objects.get_for_model(Zone), builder_manifests._parse_entity_ref(
-                target_key, "zone", "spec.target.key"
-            )
-        if target_type == "world":
-            return ContentType.objects.get_for_model(World), builder_manifests._parse_entity_ref(
-                target_key, "world", "spec.target.key"
-            )
-        if target_type in {"mobdefinition", "mob_definition"}:
-            return ContentType.objects.get_for_model(MobDefinition), builder_manifests._parse_entity_ref(
-                target_key, "mobdefinition", "spec.target.key"
-            )
-        if target_type in {"itemdefinition", "item_definition"}:
-            return ContentType.objects.get_for_model(ItemDefinition), builder_manifests._parse_entity_ref(
-                target_key, "itemdefinition", "spec.target.key"
-            )
-
-    if target_type == "world":
-        return ContentType.objects.get_for_model(World), world.id
-    if target_type == "room":
-        return ContentType.objects.get_for_model(Room), _get_or_create_room(
-            world=world,
-            room_ref=target_ref,
-        ).id
-    if target_type == "zone":
-        zone = _get_or_create_zone(world=world, zone_name=target_ref)
-        if zone is None:
-            raise serializers.ValidationError("spec.target.ref is required for zone targets.")
-        return ContentType.objects.get_for_model(Zone), zone.id
-    if target_type in {"mobdefinition", "mob_definition"}:
-        return ContentType.objects.get_for_model(MobDefinition), _get_mob_definition(
-            world=world,
-            value=target_ref,
-            field_name="spec.target.ref",
-        ).id
-    if target_type in {"itemdefinition", "item_definition"}:
-        return ContentType.objects.get_for_model(ItemDefinition), _get_item_definition(
-            world=world,
-            value=target_ref,
-            field_name="spec.target.ref",
-        ).id
-
-    raise serializers.ValidationError(f"Unsupported trigger target type '{target_type}'.")
 
 
 def _match_existing_trigger(
@@ -3022,22 +5359,73 @@ def _match_existing_trigger(
     return narrowed.first()
 
 
-def normalize_trigger_manifest_for_import(*, world: World, manifest: dict[str, Any]) -> dict[str, Any]:
+def normalize_trigger_manifest_for_import(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+    room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+) -> dict[str, Any]:
     normalized = copy.deepcopy(manifest)
     if builder_manifests.parse_manifest_operation(normalized) == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
         return normalized
 
     metadata = _manifest_metadata(normalized)
     spec = _manifest_spec(normalized)
-    target = spec.get("target")
-    if not isinstance(target, dict):
-        return normalized
-    if not str(target.get("ref") or "").strip():
+    if room_ref_cache is None:
+        room_ref_cache = _build_room_ref_cache(world)
+    raw_conditions = spec.get("conditions")
+    if isinstance(raw_conditions, str):
+        raw_conditions = builder_manifests._deserialize_conditions_payload(
+            raw_conditions
+        )
+    if isinstance(raw_conditions, (dict, list)):
+        spec["conditions"] = _canonicalize_condition_refs(
+            raw_conditions,
+            world=world,
+            room_ref_cache=room_ref_cache,
+        )
+    if isinstance(spec.get("script"), str) and spec["script"]:
+        try:
+            spec["script"] = canonicalize_room_references_in_text(
+                world,
+                spec["script"],
+                strict=True,
+                canonical_ref_cache=room_ref_cache,
+            )
+        except RoomReferenceError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+    if isinstance(spec.get("steps"), list):
+        spec["steps"] = _canonicalize_trigger_steps(
+            _canonicalize_nested_conditions(
+                spec["steps"],
+                world=world,
+                room_ref_cache=room_ref_cache,
+            ),
+            world=world,
+            room_ref_cache=room_ref_cache,
+        )
+
+    if "target" not in spec:
         return normalized
 
-    target_type, target_id = _resolve_trigger_target(
+    # Identified updates inherit omitted scope/kind fields from the stored
+    # Trigger. Leave their target shape intact for the shared parser so legacy
+    # untyped locators are resolved against that effective scope rather than a
+    # create-time default.
+    if any(
+        metadata.get(field_name) not in (None, "")
+        for field_name in ("id", "key")
+    ):
+        return normalized
+
+    scope = str(
+        spec.get("scope") or adv_consts.TRIGGER_SCOPE_ROOM
+    ).strip().lower()
+    default_type = builder_manifests._SCOPE_TO_TARGET_TYPE.get(scope)
+    target_type, target_id = builder_manifests.resolve_trigger_manifest_target(
         world=world,
-        target=target,
+        target_data=spec.get("target"),
+        default_type=default_type,
     )
     manifest_target_type = target_type.model
     spec["target"] = {

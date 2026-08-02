@@ -161,10 +161,15 @@ spec:
   type: core
   description: Humans are adaptable and numerous.
   playable: true
-  starting_room: room@0,0,0
+  starting_room: room@1
   default_languages:
     - common
 ```
+
+`starting_room` uses the canonical, world-relative room identity. It remains
+`room@1` if the builder moves that room and remains portable when the world is
+imported into a database with different primary keys. Legacy coordinate and
+database-key room references are import-only aliases.
 
 Reputation faction example:
 

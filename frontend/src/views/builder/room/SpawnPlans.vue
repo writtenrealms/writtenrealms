@@ -25,16 +25,18 @@
 <script lang='ts' setup>
 import { ref, onMounted } from "vue";
 import { useRoute } from "vue-router";
+import { useStore } from "vuex";
 import axios from "axios";
 
 const route = useRoute();
+const store = useStore();
 
 const spawnPlans = ref<any[]>([]);
 const fetched = ref(false);
 
 onMounted(async () => {
   const resp = await axios.get(
-    `/builder/worlds/${route.params.world_id}/rooms/${route.params.room_id}/spawn-plans/`
+    `/builder/worlds/${route.params.world_id}/rooms/${store.state.builder.room.id}/spawn-plans/`
   );
   spawnPlans.value = resp.data.spawn_plans || [];
   fetched.value = true;

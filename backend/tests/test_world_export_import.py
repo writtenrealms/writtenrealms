@@ -1,6 +1,8 @@
 import json
 
 from django.contrib.contenttypes.models import ContentType
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 
 import yaml
 
@@ -10,12 +12,15 @@ from rest_framework.reverse import reverse
 from builders import world_export as builder_world_export
 from builders.currencies import create_currency, replace_starting_balances
 from builders.models import (
+    AbilityDefinition,
     BuilderAssignment,
     Currency,
     ItemDefinition,
     MobDefinition,
     Path,
     PathRoom,
+    SpawnEntry,
+    SpawnPlan,
     Trigger,
     WorldBuilder,
 )
@@ -213,6 +218,27 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             description="Keeps the harbor ledgers.",
             base_properties={"level": 4},
         )
+        self.harbor_bash = AbilityDefinition.objects.create(
+            world=self.world,
+            slug="harbor-bash",
+            name="Harbor Bash",
+            command_verbs=["harbor_bash"],
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "stun",
+                    "apply": "on_hit",
+                    "target": "ability.target",
+                    "category": "debuff",
+                    "duration": {"rounds": 1},
+                    "text": {"label": "Harbor Bash"},
+                },
+            ],
+        )
+        self.quartermaster.combat_abilities = [
+            {"ability": self.harbor_bash.slug, "weight": 1},
+        ]
+        self.quartermaster.save(update_fields=["combat_abilities"])
 
         self.quest_arc = QuestArcTemplate.objects.create(
             world=self.world,
@@ -494,6 +520,42 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             order=2,
             is_active=True,
         )
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ZONE,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=ContentType.objects.get_for_model(Zone),
+            target_id=self.harbor_zone.id,
+            name="Survey Harbor Zone",
+            match="survey harbor zone",
+            script="/cmd room -- /echo -- The harbor is busy.",
+            display_action_in_room=True,
+            is_active=True,
+        )
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_WORLD,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=ContentType.objects.get_for_model(self.world.__class__),
+            target_id=self.world.id,
+            name="Survey Export World",
+            match="survey export world",
+            script="/cmd room -- /echo -- The whole world listens.",
+            display_action_in_room=True,
+            is_active=True,
+        )
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_WORLD,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=ContentType.objects.get_for_model(ItemDefinition),
+            target_id=self.brass_key.id,
+            name="Inspect Brass Key",
+            match="inspect brass key",
+            script="/cmd room -- /echo -- The key is brightly polished.",
+            display_action_in_room=True,
+            is_active=True,
+        )
 
     def test_world_export_endpoint_returns_multi_document_yaml(self):
         resp = self.client.get(self.export_ep)
@@ -514,15 +576,35 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             + ["zone"] * resp.data["summary"]["zones"]
             + ["room"] * resp.data["summary"]["rooms"]
             + ["path"] * resp.data["summary"]["paths"]
+            + ["ability"] * resp.data["summary"]["abilities"]
             + ["mobdefinition"] * resp.data["summary"]["mob_definitions"]
             + ["spawnplan"] * resp.data["summary"]["spawn_plans"]
-            + ["ability"] * resp.data["summary"]["abilities"]
             + ["questarc"] * resp.data["summary"]["quest_arcs"]
             + ["quest"] * resp.data["summary"]["quests"]
             + ["trigger"] * resp.data["summary"]["triggers"]
             + ["world"]
         )
         self.assertEqual([doc["kind"] for doc in exported_docs], expected_kinds)
+        ability_doc = next(
+            doc
+            for doc in exported_docs
+            if doc["kind"] == "ability"
+            and doc["metadata"]["slug"] == self.harbor_bash.slug
+        )
+        mob_doc = next(
+            doc
+            for doc in exported_docs
+            if doc["kind"] == "mobdefinition"
+            and doc["metadata"]["slug"] == self.quartermaster.slug
+        )
+        self.assertLess(
+            exported_docs.index(ability_doc),
+            exported_docs.index(mob_doc),
+        )
+        self.assertEqual(
+            ability_doc["spec"]["components"][0]["scope"],
+            "encounter",
+        )
 
         zone_docs = [doc for doc in exported_docs if doc["kind"] == "zone"]
         self.assertEqual(
@@ -545,9 +627,18 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         )
         room_doc = next(
             doc for doc in exported_docs
-            if doc["kind"] == "room" and doc["metadata"]["ref"] == f"room@{self.harbor_room.x},{self.harbor_room.y},{self.harbor_room.z}"
+            if doc["kind"] == "room"
+            and doc["metadata"]["ref"] == f"room@{self.harbor_room.relative_id}"
         )
         self.assertEqual(room_doc["spec"]["zone"], f"zone@{self.harbor_zone.relative_id}")
+        self.assertEqual(
+            room_doc["spec"]["coordinates"],
+            {
+                "x": self.harbor_room.x,
+                "y": self.harbor_room.y,
+                "z": self.harbor_room.z,
+            },
+        )
         world_doc = exported_docs[-1]
         self.assertEqual(world_doc["spec"]["initial_state"], {"weather": "windy"})
         start_room_doc = next(
@@ -555,7 +646,7 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             for doc in exported_docs
             if doc["kind"] == "room"
             and doc["metadata"]["ref"]
-            == f"room@{self.start_room.x},{self.start_room.y},{self.start_room.z}"
+            == f"room@{self.start_room.relative_id}"
         )
         self.assertEqual(
             start_room_doc["spec"]["initial_state"],
@@ -566,13 +657,37 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(path_doc["metadata"]["ref"], f"path@{self.patrol_path.relative_id}")
         self.assertEqual(path_doc["metadata"]["name"], "Patrol Loop")
         self.assertEqual(path_doc["spec"]["zone"], f"zone@{self.harbor_zone.relative_id}")
-        self.assertEqual(path_doc["spec"]["entry_room"], f"room@{self.harbor_room.x},{self.harbor_room.y},{self.harbor_room.z}")
+        self.assertEqual(path_doc["spec"]["entry_room"], f"room@{self.harbor_room.relative_id}")
         self.assertEqual(
             path_doc["spec"]["rooms"],
             [
-                f"room@{self.start_room.x},{self.start_room.y},{self.start_room.z}",
-                f"room@{self.harbor_room.x},{self.harbor_room.y},{self.harbor_room.z}",
+                f"room@{self.start_room.relative_id}",
+                f"room@{self.harbor_room.relative_id}",
             ],
+        )
+        trigger_targets = {
+            document["metadata"]["name"]: document["spec"]["target"]
+            for document in exported_docs
+            if document["kind"] == "trigger"
+        }
+        self.assertEqual(
+            trigger_targets,
+            {
+                "Open Harbor Gate": f"room@{self.start_room.relative_id}",
+                "Plant Barley": f"room@{self.start_room.relative_id}",
+                "Quartermaster Greeting": (
+                    f"mobdefinition.{self.quartermaster.slug}"
+                ),
+                "Survey Harbor Zone": f"zone@{self.harbor_zone.relative_id}",
+                "Survey Export World": "world",
+                "Inspect Brass Key": f"itemdefinition.{self.brass_key.slug}",
+            },
+        )
+        self.assertTrue(
+            all(
+                document["apiVersion"] == "writtenrealms.com/v1alpha3"
+                for document in exported_docs
+            )
         )
 
     def test_world_export_round_trips_into_fresh_world(self):
@@ -606,6 +721,219 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         target_docs = [doc for doc in yaml.safe_load_all(target_export_resp.data["yaml"]) if doc is not None]
 
         self.assertEqual(source_docs, target_docs)
+        imported_harbor = target_world.rooms.get(
+            relative_id=self.harbor_room.relative_id,
+        )
+        self.assertNotEqual(imported_harbor.id, self.harbor_room.id)
+        imported_open_gate = target_world.triggers.get(name="Open Harbor Gate")
+        self.assertNotEqual(imported_open_gate.target_id, self.start_room.id)
+        self.assertEqual(
+            imported_open_gate.target.relative_id,
+            self.start_room.relative_id,
+        )
+        imported_item_trigger = target_world.triggers.get(
+            name="Inspect Brass Key"
+        )
+        self.assertNotEqual(imported_item_trigger.target_id, self.brass_key.id)
+        self.assertEqual(imported_item_trigger.target.slug, self.brass_key.slug)
+
+    def test_batch_preflights_room_create_permission_before_zone_center_reservation(self):
+        builder_user = self.create_user("assigned-zone-builder@example.com")
+        builder = WorldBuilder.objects.create(
+            world=self.world,
+            user=builder_user,
+            builder_rank=2,
+        )
+        BuilderAssignment.objects.create(
+            builder=builder,
+            assignment=self.harbor_zone,
+        )
+        self.client.force_authenticate(builder_user)
+
+        original_center_id = self.harbor_zone.center_id
+        new_relative_id = (
+            max(self.world.rooms.values_list("relative_id", flat=True)) + 100
+        )
+        manifest = yaml.safe_dump_all(
+            [
+                {
+                    "apiVersion": "writtenrealms.com/v1alpha2",
+                    "kind": "zone",
+                    "metadata": {
+                        "ref": f"zone@{self.harbor_zone.relative_id}",
+                        "name": self.harbor_zone.name,
+                    },
+                    "spec": {
+                        "center": f"room@{new_relative_id}",
+                    },
+                },
+                {
+                    "apiVersion": "writtenrealms.com/v1alpha2",
+                    "kind": "room",
+                    "metadata": {
+                        "ref": f"room@{new_relative_id}",
+                        "name": "Unauthorized Reserved Room",
+                    },
+                    "spec": {
+                        "coordinates": {
+                            "x": 500,
+                            "y": 500,
+                            "z": 500,
+                        },
+                    },
+                },
+            ],
+            sort_keys=False,
+        )
+
+        response = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403, response.data)
+        self.assertIn("create rooms", str(response.data).lower())
+        self.assertFalse(
+            self.world.rooms.filter(relative_id=new_relative_id).exists()
+        )
+        self.harbor_zone.refresh_from_db()
+        self.assertEqual(self.harbor_zone.center_id, original_center_id)
+
+    def test_import_stages_moved_placeholder_before_reusing_origin(self):
+        self.start_room.x = 20
+        self.start_room.save(update_fields=["x"])
+        origin_room = Room.objects.create(
+            world=self.world,
+            zone=self.start_zone,
+            name="Reoccupied Origin",
+            x=0,
+            y=0,
+            z=0,
+        )
+
+        source_response = self.client.get(self.export_ep)
+        self.assertEqual(source_response.status_code, 200, source_response.data)
+        source_documents = [
+            document
+            for document in yaml.safe_load_all(source_response.data["yaml"])
+            if document is not None
+        ]
+
+        target_world = self.world.__class__.objects.new_world(
+            name="Moved Placeholder Import",
+            author=self.user,
+            config=WorldConfig.objects.create(),
+        )
+        response = self.client.post(
+            reverse(
+                "builder-world-manifest-apply",
+                args=[target_world.pk],
+            ),
+            {"manifest": source_response.data["yaml"]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        imported_start = target_world.rooms.get(
+            relative_id=self.start_room.relative_id,
+        )
+        imported_origin = target_world.rooms.get(
+            relative_id=origin_room.relative_id,
+        )
+        self.assertEqual(
+            (imported_start.x, imported_start.y, imported_start.z),
+            (20, 0, 0),
+        )
+        self.assertEqual(
+            (imported_origin.x, imported_origin.y, imported_origin.z),
+            (0, 0, 0),
+        )
+
+        reexport = self.client.get(
+            reverse("builder-world-export", args=[target_world.pk]),
+        )
+        self.assertEqual(reexport.status_code, 200, reexport.data)
+        self.assertEqual(
+            [
+                document
+                for document in yaml.safe_load_all(reexport.data["yaml"])
+                if document is not None
+            ],
+            source_documents,
+        )
+
+    def test_room_move_updates_coordinates_without_changing_manifest_references(self):
+        spawn_plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.harbor_zone,
+            slug="charon-ferry",
+            name="Charon Ferry",
+            respawn_policy={"mode": "inherit_zone"},
+        )
+        SpawnEntry.objects.create(
+            plan=spawn_plan,
+            slug="charon-entrance",
+            source=f"mobdefinition.{self.quartermaster.slug}",
+            target_room=self.harbor_room,
+            count=1,
+        )
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=self.harbor_room.id,
+            name="Moved Harbor Trigger",
+            match="inspect moved harbor",
+            script="/cmd room -- /echo -- Still here.",
+            display_action_in_room=True,
+        )
+        stable_ref = f"room@{self.harbor_room.relative_id}"
+
+        self.harbor_room.x = 12
+        self.harbor_room.y = 3
+        self.harbor_room.save(update_fields=["x", "y"])
+
+        response = self.client.get(self.export_ep)
+        self.assertEqual(response.status_code, 200, response.data)
+        documents = [
+            document
+            for document in yaml.safe_load_all(response.data["yaml"])
+            if document is not None
+        ]
+        room_manifest = next(
+            document
+            for document in documents
+            if document["kind"] == "room"
+            and document["metadata"]["ref"] == stable_ref
+        )
+        spawn_manifest = next(
+            document
+            for document in documents
+            if document["kind"] == "spawnplan"
+            and document["metadata"]["slug"] == "charon-ferry"
+        )
+        trigger_manifest = next(
+            document
+            for document in documents
+            if document["kind"] == "trigger"
+            and document["metadata"]["name"] == "Moved Harbor Trigger"
+        )
+
+        self.assertEqual(
+            room_manifest["spec"]["coordinates"],
+            {"x": 12, "y": 3, "z": 0},
+        )
+        self.assertEqual(
+            spawn_manifest["spec"]["entries"][0]["target"],
+            stable_ref,
+        )
+        self.assertEqual(trigger_manifest["spec"]["target"], stable_ref)
+        self.assertEqual(
+            documents[-1]["spec"]["starting_room"],
+            stable_ref,
+        )
 
     def test_batch_rejects_conflicting_reciprocal_door_settings(self):
         room_a = "room@0,0,0"
@@ -651,8 +979,8 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         exported_docs = [doc for doc in yaml.safe_load_all(resp.data["yaml"]) if doc is not None]
         survey_manifest = next(doc for doc in exported_docs if doc["kind"] == "quest" and doc["metadata"]["slug"] == "harbor_survey")
 
-        expected_start_ref = f"room@{self.start_room.x},{self.start_room.y},{self.start_room.z}"
-        expected_harbor_ref = f"room@{self.harbor_room.x},{self.harbor_room.y},{self.harbor_room.z}"
+        expected_start_ref = f"room@{self.start_room.relative_id}"
+        expected_harbor_ref = f"room@{self.harbor_room.relative_id}"
 
         self.assertEqual(
             survey_manifest["spec"]["discovery"]["sources"][0]["room"],
@@ -957,6 +1285,40 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             },
         )
 
+    def test_world_export_room_queries_do_not_scale_per_room(self):
+        # Warm process-level caches before comparing the two export shapes.
+        builder_world_export.serialize_world_documents(self.world)
+        with CaptureQueriesContext(connection) as baseline_queries:
+            builder_world_export.serialize_world_documents(self.world)
+
+        for index in range(8):
+            room = Room.objects.create(
+                world=self.world,
+                zone=self.zone,
+                name=f"Query Regression Room {index}",
+                x=100 + index,
+                y=100,
+                z=0,
+            )
+            RoomFlag.objects.create(
+                room=room,
+                code=adv_consts.ROOM_FLAG_NO_ROAM,
+            )
+            RoomDetail.objects.create(
+                room=room,
+                keywords=f"detail-{index}",
+                description="A query-regression detail.",
+            )
+
+        with CaptureQueriesContext(connection) as expanded_queries:
+            builder_world_export.serialize_world_documents(self.world)
+
+        self.assertLessEqual(
+            len(expanded_queries),
+            len(baseline_queries) + 1,
+            "Room export query count grew with the number of rooms.",
+        )
+
     def test_zone_detail_returns_apply_and_delete_yaml(self):
         detail_ep = reverse(
             "builder-zone-detail",
@@ -991,13 +1353,21 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(manifest["kind"], "room")
         self.assertEqual(
             manifest["metadata"]["ref"],
-            f"room@{self.start_room.x},{self.start_room.y},{self.start_room.z}",
+            f"room@{self.start_room.relative_id}",
+        )
+        self.assertEqual(
+            manifest["spec"]["coordinates"],
+            {
+                "x": self.start_room.x,
+                "y": self.start_room.y,
+                "z": self.start_room.z,
+            },
         )
         self.assertEqual(manifest["metadata"]["name"], "Old Gate")
         self.assertEqual(manifest["spec"]["zone"], f"zone@{self.start_zone.relative_id}")
         self.assertEqual(
             manifest["spec"]["exits"]["east"],
-            f"room@{self.harbor_room.x},{self.harbor_room.y},{self.harbor_room.z}",
+            f"room@{self.harbor_room.relative_id}",
         )
 
         detail_resp = self.client.get(
@@ -1056,6 +1426,18 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         )
         self.assertEqual(apply_resp.status_code, 200, apply_resp.data)
         self.assertEqual(apply_resp.data["operation"], "updated")
+        self.assertEqual(
+            apply_resp.data["room"]["relative_id"],
+            self.start_room.relative_id,
+        )
+        self.assertEqual(
+            apply_resp.data["room"]["manifest_ref"],
+            f"room@{self.start_room.relative_id}",
+        )
+        self.assertEqual(
+            apply_resp.data["room"]["ref"],
+            apply_resp.data["room"]["manifest_ref"],
+        )
 
     def test_room_manifest_apply_rejects_non_mapping_metadata(self):
         resp = self.client.post(

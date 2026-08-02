@@ -14,6 +14,7 @@
 
 <script lang='ts' setup>
 import { useRoute } from "vue-router";
+import { builderRoomIndexRoute } from "@/core/builderRoutes";
 
 const route = useRoute();
 
@@ -21,13 +22,7 @@ const props = defineProps<{
   resource: any;
 }>();
 
-const death_room_link = {
-  name: 'builder_room_index',
-  params: {
-    world_id: route.params.world_id,
-    room_id: props.resource.room.id
-  }
-};
+const death_room_link = builderRoomIndexRoute(route.params.world_id, props.resource.room);
 
 const factions_link = {
   name: 'builder_world_faction_list',

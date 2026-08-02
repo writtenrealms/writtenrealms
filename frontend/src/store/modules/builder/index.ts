@@ -6,6 +6,7 @@ import axios, { AxiosRequestConfig } from "axios";
 import { Room } from "@/core/interfaces";
 import router from "@/router";
 import { get_room_index_key } from "@/core/map.ts";
+import { builderRoomDetailEndpoint } from "@/core/builderRoutes";
 import _ from "lodash";
 
 // import builder_rooms from "@/store/modules/builder/rooms/index.ts";
@@ -202,7 +203,7 @@ const actions = {
   },
 
   // Assumes that a world is in the store
-  zone_fetch: async ({ commit }, { world_id, zone_id, cancelToken }) => {
+  zone_fetch: async ({ commit }, { world_id, zone_id, cancelToken, throw_on_error = false }) => {
 
     try {
       const config: AxiosRequestConfig = {
@@ -224,17 +225,58 @@ const actions = {
         if (error.response && error.response.status === 403) {
           commit("zone_clear");
         }
+        if (throw_on_error) throw error;
       }
     }
   },
 
-  zone_rooms_fetch: async ({ commit }, { world_id, zone_id }) => {
+  zone_relative_fetch: async ({ commit }, {
+    world_id,
+    zone_relative_id,
+    cancelToken,
+    commit_zone = true,
+    throw_on_error = false,
+  }) => {
+    try {
+      const config: AxiosRequestConfig = {
+        method: 'get',
+        url: `/builder/worlds/${world_id}/zones/by-relative-id/${zone_relative_id}/`,
+      };
+
+      if (cancelToken) {
+        config.cancelToken = cancelToken;
+      }
+
+      const resp = await axios(config);
+      const zone = resp.data;
+      if (commit_zone) commit("zone_set", zone);
+      return zone;
+    } catch (error: any) {
+      if (!axios.isCancel(error)) {
+        console.error('Error fetching zone by relative ID:', error);
+        if (error.response && error.response.status === 403) {
+          commit("zone_clear");
+        }
+        if (throw_on_error) throw error;
+      }
+    }
+  },
+
+  zone_rooms_fetch: async ({ commit }, {
+    world_id,
+    zone_id,
+    cancelToken,
+    commit_zone_rooms = true,
+  }) => {
     const resp = await axios.get(
-      `builder/worlds/${world_id}/zones/${zone_id}/map/`
+      `builder/worlds/${world_id}/zones/${zone_id}/map/`,
+      cancelToken ? { cancelToken } : undefined,
     );
     const rooms = resp.data.rooms;
-    commit("zone_rooms_set", rooms);
-    commit("map_add", rooms);
+    if (commit_zone_rooms) {
+      commit("zone_rooms_set", rooms);
+      commit("map_add", rooms);
+    }
     return rooms;
   },
 
@@ -246,7 +288,7 @@ const actions = {
       name: 'builder_zone_index',
       params: {
         world_id: world_id,
-        zone_id: resp.data.id
+        zone_relative_id: resp.data.relative_id
       }
     });
   },
@@ -305,7 +347,9 @@ const actions = {
     // Dispatch fetch
     dispatch("room_fetch", {
       world_id: state.world.id,
-      room_id: room.id,
+      room_relative_id: room.relative_id,
+      room_manifest_ref: room.manifest_ref || room.ref,
+      room_database_id: room.id,
       cancelToken: source.token
     });
 
@@ -322,12 +366,28 @@ const actions = {
     }
   },
 
-  room_fetch: async ({ commit }, { world_id, room_id, cancelToken }) => {
+  room_fetch: async ({ commit }, {
+    world_id,
+    room_relative_id,
+    room_manifest_ref,
+    room_database_id,
+    cancelToken,
+    commit_room = true,
+    throw_on_error = false,
+  }) => {
     try {
+      const endpoint = builderRoomDetailEndpoint(world_id, {
+        id: room_database_id,
+        relative_id: room_relative_id,
+        manifest_ref: room_manifest_ref,
+      });
+      if (!endpoint) {
+        throw new Error("Room lookup requires a relative ID or database ID.");
+      }
 
       const config: AxiosRequestConfig = {
         method: 'get',
-        url: `/builder/worlds/${world_id}/rooms/${room_id}/`,
+        url: endpoint,
       }
 
       if (cancelToken) {
@@ -336,7 +396,7 @@ const actions = {
       const resp = await axios(config);
       const room_data = resp.data;
       delete room_data["map"];
-      commit("room_set", room_data);
+      if (commit_room) commit("room_set", room_data);
       return room_data;
     } catch (error: any) {
       if (!axios.isCancel(error)) {
@@ -344,6 +404,7 @@ const actions = {
         if (error.response && error.response.status === 403) {
           commit("room_clear");
         }
+        if (throw_on_error) throw error;
       }
     }
   },
@@ -421,7 +482,7 @@ const actions = {
       name: 'builder_room_index',
       params: {
         world_id: state.world.id,
-        room_id: nextRoom.id
+        room_relative_id: nextRoom.relative_id
       }
     });
   },
@@ -478,7 +539,7 @@ const actions = {
       name: 'builder_zone_path_details',
       params: {
         world_id: state.world.id,
-        zone_id: state.zone.id,
+        zone_relative_id: state.zone.relative_id,
         path_id: resp.data.id
       }
     });
@@ -493,7 +554,7 @@ const actions = {
       name: 'builder_zone_index',
       params: {
         world_id: state.world.id,
-        zone_id: state.zone.id
+        zone_relative_id: state.zone.relative_id
       }
     });
   }

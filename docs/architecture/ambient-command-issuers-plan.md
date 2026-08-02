@@ -42,7 +42,8 @@ This plan remains directional, but several pieces are now implemented:
 - `/transfer <target> <room>` supports direct builder players plus script-gated
   mob and room issuers. Player targets stay inside one live runtime world, mob
   targets are local to the issuer room, and portable scripts can use
-  `room@x,y,z` destinations.
+  move-stable `room@<relative_id>` destinations. Legacy coordinate and
+  database-key selectors remain import compatibility aliases.
 - `/echo`, `/send`, `/sendexcept`, and `/state` support room, zone, and world
   actors. `/send` privately addresses one connected player;
   `/sendexcept` addresses every other connected player in that target's
@@ -461,7 +462,7 @@ The first compatibility slice is:
 6. `/grantitem <target> <slug>` under a room or mob actor loads the item into
    the target character inventory and sends player targets an inventory-updating
    notification.
-7. `/transfer <target> <room@x,y,z>` under a room or mob actor relocates a
+7. `/transfer <target> room@<relative_id>` under a room or mob actor relocates a
    character within the current runtime world, emits the legacy-compatible
    exit/enter flow plus a transfer-state snapshot for player targets, runs
    runtime-isolated destination mob reactions, and terminates active combat

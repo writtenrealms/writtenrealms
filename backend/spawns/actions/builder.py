@@ -88,8 +88,8 @@ from spawns.state_payloads import (
     serialize_world,
 )
 from spawns.wallet import WalletError, set_balance
-from quests.entity_refs import resolve_room_ref_id
 from worlds.models import Room, World, Zone
+from worlds.room_refs import resolve_room_reference
 
 ECHO_SCOPES = ("room", "zone", "world")
 CMD_SCOPE_TARGETS = ("room", "zone", "world")
@@ -2885,7 +2885,7 @@ class TransferAction:
         normalized = str(selector or "").strip().lower()
         if not normalized:
             raise ActionError(
-                "Usage: /transfer <target> <room_id|room@x,y,z|direction|here>",
+                "Usage: /transfer <target> <room@relative_id|room_id|room@x,y,z|direction|here>",
                 code="invalid_args",
             )
 
@@ -2909,9 +2909,7 @@ class TransferAction:
             ).first()
 
         if destination is None:
-            room_id = resolve_room_ref_id(world=issuer_room.world, value=normalized)
-            if room_id is not None:
-                destination = issuer_room.world.rooms.filter(pk=room_id).first()
+            destination = resolve_room_reference(issuer_room.world, normalized)
 
         if destination is None:
             raise ActionError(

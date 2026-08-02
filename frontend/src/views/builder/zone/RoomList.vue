@@ -10,25 +10,25 @@
 </template>
 
 <script lang='ts' setup>
+import { computed } from "vue";
 import { useRoute } from "vue-router";
+import { useStore } from "vuex";
 import ElementList from "@/components/elementlist/ElementList.vue";
 import { formatRelativeModifiedDate } from "@/core/utils.ts";
+import { builderRoomIndexRoute } from "@/core/builderRoutes";
 
 const route = useRoute();
+const store = useStore();
 
-const endpoint = `/builder/worlds/${route.params.world_id}/zones/${route.params.zone_id}/rooms/`;
+const endpoint = computed(() => (
+  `/builder/worlds/${route.params.world_id}/zones/${store.state.builder.zone.id}/rooms/`
+));
 const resolve_route = element => {
-  return {
-    name: "builder_room_index",
-    params: {
-      world_id: route.params.world_id,
-      room_id: element.id
-    }
-  };
+  return builderRoomIndexRoute(route.params.world_id, element);
 };
 
 const list_schema: any[] = [
-  { name: "id", label: "ID", sortable: true },
+  { name: "manifest_ref", label: "Room", nowrap: true },
   { name: "name", label: "Name", nowrap: true, sortable: true },
   {
     name: "modified_ts",

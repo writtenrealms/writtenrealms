@@ -159,22 +159,24 @@ references, nested `/cmd`, aliases, and fallback Trigger matching are disabled.
 Approved handlers publish output only as `GameEvent` objects. The audited
 `/transfer` handler may also change the Trigger actor's room inside the
 transaction. Any supported subject may issue it, but no other transfer target
-is step-safe. The
-canonical forms are `subject: trigger_room` with
-`/transfer {{ actor_key }} room@x,y,z` and `subject: trigger_actor` with
-`/transfer self room@x,y,z`; an exact-one selected mob may instead use the
-explicit `{{ actor_key }}` target. `self` or `me` is accepted only when the
-resolved subject is the Trigger actor; a selected mob can qualify when it is
-itself the Mob Trigger actor. Relative `here` or direction destinations use
+is step-safe. The canonical forms are `subject: trigger_room` with
+`/transfer {{ actor_key }} room@<relative_id>` and `subject: trigger_actor`
+with `/transfer self room@<relative_id>`; an exact-one selected mob may instead
+use the explicit `{{ actor_key }}` target. `self` or `me` is accepted only when
+the resolved subject is the Trigger actor; a selected mob can qualify when it
+is itself the Mob Trigger actor. Relative `here` or direction destinations use
 the subject's room, so they use the original Trigger room for `trigger_room`,
 the actor's current room for `trigger_actor`, and the selected mob's room for a
-mob subject. Portable content should use an absolute `room@x,y,z`. A context-local
-capture intercepts events and direct command-result messages without touching
-WebSockets or subscriptions inside the transaction. A transfer that would move
-a player in active PvP fails with `target_busy`; a successful move finishes
-ordinary active encounters. A handler error becomes a structured step error,
-and a later failure rolls back both the transfer row change and its captured
-events. Durable command events carry internal
+mob subject. Portable content should use the move-stable
+`room@<relative_id>` form. Legacy coordinate selectors such as
+`room@10,4,0` and database keys such as `room.187` are import compatibility
+aliases, not canonical authored destinations. A context-local capture
+intercepts events and direct command-result messages without touching
+WebSockets or subscriptions inside the transaction. A transfer that would
+move a player in active PvP fails with `target_busy`; a successful move
+finishes ordinary active encounters. A handler error becomes a structured
+step error, and a later failure rolls back both the transfer row change and
+its captured events. Durable command events carry internal
 Trigger/run/issuer/subject provenance, which is stripped from the WebSocket
 payload. Player-visible speech and socials are delivered normally, but Trigger
 and quest subscribers skip them because forced output is not voluntary player

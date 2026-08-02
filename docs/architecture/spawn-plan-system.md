@@ -1,6 +1,6 @@
 # WR2 Spawn Plan System
 
-Status as of 2026-07-06: `SpawnPlan`, `SpawnEntry`, `SpawnPlanRun`, and
+Status as of 2026-07-31: `SpawnPlan`, `SpawnEntry`, `SpawnPlanRun`, and
 `SpawnPlacement` are the canonical WR2 population system.
 
 Legacy loader/rule rows are not a WR2 runtime or builder concept. WR1 export
@@ -38,6 +38,14 @@ immutable. Consequently, increasing an entry's count does not reroll the
 source, room, or traits of its existing slots, and changing one entry does not
 perturb another entry's random stream.
 
+An authored `SpawnEntry` stores its target through exactly one of
+`target_room`, `target_zone`, `target_path`, or `target_entry`. These foreign
+keys are the database source of truth; there is no duplicate JSON locator to
+drift out of sync. Room, zone, and path targets must belong to the plan's
+authored world. An entry target must belong to the same spawn plan and have a
+lower authored order so its placement is generated first. When the dependent
+entry is active, its target entry must also be active.
+
 ## Manifest Contract
 
 Spawn plans are authored through `kind: spawnplan` YAML.
@@ -48,15 +56,46 @@ Supported source families should remain definition-backed:
 - `itemdefinition.<slug>`
 - `itembundle.<slug>`
 
-Supported target families should use portable manifest refs where possible:
+Every entry has exactly one target. Canonical manifests express the closed
+target union as one typed scalar:
 
-- `world`
+- `room@<relative_id>`
 - `zone@<relative_id>`
-- `room@<x>,<y>,<z>`
 - `path@<relative_id>`
+- `entry.<slug>`
+
+For example:
+
+```yaml
+entries:
+  - slug: patrol-leader
+    source: mobdefinition.guard-captain
+    target: path@4
+  - slug: patrol-guard
+    source: mobdefinition.guard
+    target: entry.patrol-leader
+```
+
+`entry.<slug>` is plan-local: it identifies one other entry by its
+`spec.entries[].slug`, not a world-wide resource. The reference type determines
+placement semantics, including zone/path roaming and entry-parent placement;
+no separate target type or display name is required.
+
+Import accepts the former mapping forms keyed by `room`, `room_ref`, `zone`,
+`path`, `entry`, or `parent_entry`, then resolves them to the same relational
+target fields. Those mappings are compatibility aliases, not canonical output.
+Import must reject a legacy mapping containing multiple target kinds instead
+of selecting one by key precedence. Export always reads the target foreign key
+and emits one scalar portable ref.
 
 Builder APIs may expose database IDs for inspection, but import/export should
-prefer portable refs so manifests round-trip across fresh databases.
+use portable refs so manifests round-trip across fresh databases. Relative ids
+for rooms, zones, and paths are independent of destination database keys. A
+room's relative id is also immutable and independent of its mutable
+coordinates, so moving the room does not change its target foreign key or
+exported reference. Legacy `room@x,y,z` and `room.<database_pk>` values are
+accepted only as import aliases, resolved inside the selected authored world,
+and rewritten by canonical export as `room@<relative_id>`.
 
 ## Runtime Rules
 
@@ -110,7 +149,9 @@ WR1 loader/rule export remains a one-way translation concern:
 - WR1 loader identity becomes spawn-plan `metadata.slug` / `metadata.name`.
 - WR1 rule rows become entries under `spec.entries`.
 - WR1 source item/mob templates become `itemdefinition` / `mobdefinition` refs.
-- WR1 room/path targets become portable WR2 room/path refs where available.
+- Each WR1 rule emits exactly one scalar WR2 target. Room, zone, and path
+  destinations become portable `room@`, `zone@`, or `path@` refs; a dependency
+  on another converted entry becomes its plan-local `entry.<slug>` ref.
 - Unsupported condition strings should be reported as exporter warnings unless
   they can be expressed in the WR2 condition DSL.
 

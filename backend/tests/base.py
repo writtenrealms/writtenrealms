@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 
 from spawns.models import Player, Mob
-from worlds.models import World, WorldConfig
+from worlds.models import Room, World, WorldConfig
 
 User = get_user_model()
 
@@ -47,3 +47,35 @@ class WorldTestCase(APITestCase):
             world=self.spawn_world,
             room=self.room,
             **kwargs)
+
+    def create_imported_room(
+        self,
+        *,
+        relative_id,
+        x,
+        y=0,
+        z=0,
+        name='Imported Room',
+        zone=None,
+    ):
+        return Room.objects.create_with_imported_relative_id(
+            world=self.world,
+            zone=zone or self.zone,
+            relative_id=relative_id,
+            name=name,
+            x=x,
+            y=y,
+            z=z,
+        )
+
+    def use_imported_room(self, *, relative_id, x, y=0, z=0):
+        room = self.create_imported_room(
+            relative_id=relative_id,
+            x=x,
+            y=y,
+            z=z,
+        )
+        self.room = room
+        self.player.room = room
+        self.player.save(update_fields=['room'])
+        return room

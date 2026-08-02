@@ -74,9 +74,7 @@ The room form is:
 spec:
   scope: room
   kind: event
-  target:
-    type: room
-    key: room.<id>
+  target: room@<relative_id>
   event: enter
 ```
 
@@ -86,14 +84,12 @@ It is distinct from the existing mob form:
 spec:
   scope: world
   kind: event
-  target:
-    type: mobdefinition
-    key: mobdefinition.<id>
+  target: mobdefinition.<slug>
   event: enter
 ```
 
-Scope and target type disambiguate the shared event text. On a canonical
-arrival the executor runs, in order:
+Scope and the scalar target prefix disambiguate the shared event text. On a
+canonical arrival the executor runs, in order:
 
 1. origin `after_move_exit`, but only for `source: move`;
 2. destination mob-definition `enter` reactions;

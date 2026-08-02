@@ -50,11 +50,12 @@
 <script lang="ts" setup>
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useStore } from "vuex";
-import { useRoute, RouteLocationRaw } from "vue-router";
+import { useRoute } from "vue-router";
 import { MAP_CONFIG } from "@/config";
 import { get_map_dimensions } from "@/core/map";
 import Map from "@/components/ui/Map.vue";
 import _ from "lodash";
+import { builderRoomIndexRoute, builderZoneIndexRoute } from "@/core/builderRoutes";
 
 const store = useStore();
 const route = useRoute();
@@ -115,22 +116,9 @@ onUnmounted(() => {
 
 const assignment_link = (assignment) => {
   if (assignment.model_type === 'room') {
-    return {
-      name: 'builder_room_index',
-      params: {
-        world_id: route.params.world_id,
-        room_id: assignment.id
-      }
-    } as RouteLocationRaw;
+    return builderRoomIndexRoute(route.params.world_id, assignment);
   }
-  // Assume it's a zone
-  return {
-    name: 'builder_zone_index',
-    params: {
-      world_id: route.params.world_id,
-      zone_id: assignment.id
-    }
-  } as RouteLocationRaw;
+  return builderZoneIndexRoute(route.params.world_id, assignment);
 }
 </script>
 

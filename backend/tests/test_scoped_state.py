@@ -368,9 +368,7 @@ class TestScopedRuntimeState(WorldTestCase):
             plan=plan,
             slug="greek-commander",
             source=f"mobdefinition.{definition.slug}",
-            target={
-                "room": f"room@{self.room.x},{self.room.y},{self.room.z}",
-            },
+            target_room=self.room,
             count=1,
             initial_state={"captive": False, "guarded": True},
         )

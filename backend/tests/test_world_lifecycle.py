@@ -40,7 +40,7 @@ class TestStartWorld(WorldTestCase):
             plan=plan,
             slug="sentinel",
             source="mobdefinition.sentinel",
-            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            target_room=self.room,
             count=2,
         )
         spawn_world = self.world.create_spawn_world()
@@ -71,7 +71,7 @@ class TestStartWorld(WorldTestCase):
             plan=plan,
             slug="sentinel",
             source="mobdefinition.sentinel",
-            target={"room": f"room@{self.room.x},{self.room.y},{self.room.z}"},
+            target_room=self.room,
             count=2,
         )
         spawn_world = self.world.create_spawn_world()

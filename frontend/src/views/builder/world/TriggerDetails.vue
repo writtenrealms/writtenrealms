@@ -32,6 +32,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useStore } from "vuex";
 import ManifestYamlEditor from "@/components/builder/world/ManifestYamlEditor.vue";
+import { roomRelativeIdFromRef } from "@/core/builderRoutes";
 
 const route = useRoute();
 const router = useRouter();
@@ -43,8 +44,8 @@ const isSubmitting = ref(false);
 const manifestText = ref("");
 const loadedYaml = ref("");
 const endpoint = computed(() => (
-  route.params.room_id
-    ? `/builder/worlds/${route.params.world_id}/rooms/${route.params.room_id}/triggers/${route.params.trigger_id}/`
+  route.params.room_relative_id
+    ? `/builder/worlds/${route.params.world_id}/rooms/${store.state.builder.room.id}/triggers/${route.params.trigger_id}/`
     : `/builder/worlds/${route.params.world_id}/triggers/${route.params.trigger_id}/`
 ));
 const manifestApplyEndpoint = computed(() => `/builder/worlds/${route.params.world_id}/manifests/apply/`);
@@ -94,22 +95,17 @@ const copyDeleteYaml = async () => {
   }
 };
 
-const parseEntityIdFromKey = (key: any): string | null => {
-  const match = String(key || "").match(/(?:^|\.)(\d+)$/);
-  return match ? match[1] : null;
-};
-
 const routeForTrigger = (payload: any) => {
   const id = payload?.id;
   if (!id) return null;
   const target = payload?.target || {};
-  const targetRoomId = target.type === "room" ? parseEntityIdFromKey(target.key) : null;
-  if (route.params.room_id && targetRoomId) {
+  const targetRoomRelativeId = target.type === "room" ? roomRelativeIdFromRef(target.ref) : null;
+  if (route.params.room_relative_id && targetRoomRelativeId) {
     return {
       name: "builder_room_trigger_details",
       params: {
         world_id: route.params.world_id,
-        room_id: targetRoomId,
+        room_relative_id: targetRoomRelativeId,
         trigger_id: id,
       },
     };
@@ -129,7 +125,7 @@ const syncRouteToTrigger = async (payload: any) => {
   const params = targetRoute.params as Record<string, any>;
   if (
     String(route.params.trigger_id) === String(params.trigger_id)
-    && String(route.params.room_id || "") === String(params.room_id || "")
+    && String(route.params.room_relative_id || "") === String(params.room_relative_id || "")
   ) {
     return;
   }
@@ -138,10 +134,12 @@ const syncRouteToTrigger = async (payload: any) => {
 
 const redirectAfterDelete = async () => {
   await router.push({
-    name: route.params.room_id ? "builder_room_trigger_list" : "builder_world_trigger_list",
+    name: route.params.room_relative_id ? "builder_room_trigger_list" : "builder_world_trigger_list",
     params: {
       world_id: route.params.world_id,
-      ...(route.params.room_id ? { room_id: route.params.room_id } : {}),
+      ...(route.params.room_relative_id
+        ? { room_relative_id: route.params.room_relative_id }
+        : {}),
     },
   });
 };

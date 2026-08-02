@@ -38,8 +38,8 @@ spec:
   type: core
   description: Humans are adaptable and numerous.
   playable: true
-  starting_room: room@0,0,0
-  death_room: room@0,0,0
+  starting_room: room@1
+  death_room: room@1
   default_languages:
     - common
 ```
@@ -49,7 +49,9 @@ Fields:
 - `metadata.code` is the stable builder-facing faction code.
 - `spec.type` is `core` or `reputation`.
 - `playable` controls whether character creation may offer this core faction.
-- `starting_room` and `death_room` are optional room references.
+- `starting_room` and `death_room` are optional stable
+  `room@<relative_id>` references. They continue to identify the same rooms
+  when those rooms move.
 - `default_languages` records language seeds for future communication behavior.
 
 ## Create A Reputation Faction

@@ -132,6 +132,12 @@ class MobDefinitionAdmin(BaseAdmin):
 
 class SpawnEntryInline(admin.TabularInline):
     model = SpawnEntry
+    raw_id_fields = [
+        'target_room',
+        'target_zone',
+        'target_path',
+        'target_entry',
+    ]
     extra = 0
 
 

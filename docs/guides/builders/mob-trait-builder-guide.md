@@ -64,8 +64,7 @@ spec:
           weight: 70
         - ref: mobdefinition.crypt-scout
           weight: 30
-      target:
-        zone: zone@3
+      target: zone@3
       count:
         min: 4
         max: 7

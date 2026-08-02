@@ -1579,24 +1579,24 @@ class TransferHandler(CommandHandler):
     trigger_step_mode = TRIGGER_STEP_MODE_TRANSACTIONAL
     help = {
         "name": "Transfer",
-        "format": "/transfer <target> <room_id|room@x,y,z|direction|here>",
+        "format": "/transfer <target> <room@relative_id|room_id|room@x,y,z|direction|here>",
         "description": (
             "Instantly move a player or mob to a room in the current runtime world. "
             "Player keys and active player names resolve across that runtime; mob targets "
             "must be in the issuer's room. Transfer bypasses ordinary movement rules."
         ),
         "details": [
-            "Use room@x,y,z in portable trigger YAML.",
+            "Use room@relative_id in portable trigger YAML.",
             "Put custom feedback before /transfer in an earlier same-line && segment.",
             "Room and mob issuers are available only to trusted trigger scripts.",
             (
                 "Trigger steps may transfer only the Trigger actor. Use "
-                "/transfer {{ actor_key }} room@x,y,z from a room or selected "
-                "mob subject, or /transfer self room@x,y,z from the Trigger actor."
+                "/transfer {{ actor_key }} room@relative_id from a room or selected "
+                "mob subject, or /transfer self room@relative_id from the Trigger actor."
             ),
         ],
         "examples": [
-            "/transfer player.123 room@10,4,0",
+            "/transfer player.123 room@17",
             "/transfer aria 50201",
             "/transfer guard north",
         ],
@@ -1622,7 +1622,7 @@ class TransferHandler(CommandHandler):
             or tokens[0].lower() not in {"/transfer", "transfer"}
         ):
             return (
-                "Usage: /transfer <trigger actor> <room@x,y,z|direction|here>.",
+                "Usage: /transfer <trigger actor> <room@relative_id|room@x,y,z|direction|here>.",
                 "invalid_args",
             )
 
@@ -1682,7 +1682,7 @@ class TransferHandler(CommandHandler):
             ctx.publish(
                 {
                     "type": "cmd./transfer.error",
-                    "text": "Usage: /transfer <target> <room_id|room@x,y,z|direction|here>",
+                    "text": "Usage: /transfer <target> <room@relative_id|room_id|room@x,y,z|direction|here>",
                     "data": {
                         "error": "Missing target or destination room.",
                         "code": "invalid_args",

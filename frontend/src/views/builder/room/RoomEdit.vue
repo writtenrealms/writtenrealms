@@ -18,7 +18,7 @@
         <template #header>
           <h2 class="room-title">{{ room.name }}</h2>
           <div class="room-meta color-text-60">
-            {{ room.id }} - ({{ room.x }}, {{ room.y }}, {{ room.z }})
+            {{ room.manifest_ref || `room@${room.relative_id}` }} - ({{ room.x }}, {{ room.y }}, {{ room.z }})
           </div>
         </template>
       </ManifestYamlEditor>
@@ -32,6 +32,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useStore } from "vuex";
 import ManifestYamlEditor from "@/components/builder/world/ManifestYamlEditor.vue";
+import { roomRelativeIdFromRef } from "@/core/builderRoutes";
 
 const route = useRoute();
 const router = useRouter();
@@ -44,7 +45,7 @@ const loadedYaml = ref("");
 
 const room = computed(() => {
   const currentRoom = store.state.builder.room;
-  if (String(currentRoom?.id) !== String(route.params.room_id)) return null;
+  if (String(currentRoom?.relative_id) !== String(route.params.room_relative_id)) return null;
   return currentRoom;
 });
 const roomDetailEndpoint = (roomId: string | number | string[]) => (
@@ -112,20 +113,19 @@ const requestRoomManifest = async (roomId: string | number | string[]) => {
 const fetchRoom = async () => {
   isLoading.value = true;
   try {
-    const roomId = route.params.room_id;
-    const currentRoom = store.state.builder.room;
-    const needsRoomContext = (
-      String(currentRoom?.id) !== String(roomId)
+    const relativeId = route.params.room_relative_id;
+    let currentRoom = store.state.builder.room;
+    if (
+      String(currentRoom?.relative_id) !== String(relativeId)
       || typeof currentRoom?.has_assignment !== "boolean"
-    );
-    if (needsRoomContext) {
-      await Promise.all([
-        requestRoomContext(roomId),
-        requestRoomManifest(roomId),
-      ]);
-    } else {
-      await requestRoomManifest(roomId);
+    ) {
+      currentRoom = await store.dispatch("builder/room_fetch", {
+        world_id: route.params.world_id,
+        room_relative_id: relativeId,
+      });
     }
+    if (!currentRoom?.id) throw new Error("Room could not be loaded.");
+    await requestRoomManifest(currentRoom.id);
   } catch (error: any) {
     loadedYaml.value = "";
     manifestText.value = "";
@@ -148,14 +148,19 @@ const submitManifest = async () => {
     }
     manifestApplied = true;
 
-    const appliedRoomId = resp.data.room.id;
-    if (String(appliedRoomId) !== String(route.params.room_id)) {
+    const appliedRoom = resp.data.room;
+    const appliedRoomId = appliedRoom.id;
+    const appliedRoomRelativeId = roomRelativeIdFromRef(appliedRoom.ref);
+    if (!appliedRoomRelativeId) {
+      throw new Error("Manifest apply did not return a portable room reference.");
+    }
+    if (String(appliedRoomRelativeId) !== String(route.params.room_relative_id)) {
       store.commit("ui/notification_set", `Room ${resp.data.operation}.`);
       await router.replace({
         name: "builder_room_edit",
         params: {
           world_id: route.params.world_id,
-          room_id: appliedRoomId,
+          room_relative_id: appliedRoomRelativeId,
         },
       });
       return;
@@ -187,7 +192,7 @@ const submitManifest = async () => {
 onMounted(fetchRoom);
 
 watch(
-  () => [route.params.world_id, route.params.room_id],
+  () => [route.params.world_id, route.params.room_relative_id],
   async (nextValue, previousValue) => {
     if (
       String(nextValue[0]) === String(previousValue[0])

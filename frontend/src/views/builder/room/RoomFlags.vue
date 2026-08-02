@@ -15,10 +15,12 @@
 <script lang='ts' setup>
 import { ref, onMounted } from "vue";
 import { useRoute } from "vue-router";
+import { useStore } from "vuex";
 import axios from "axios";
 import Help from "@/components/Help.vue";
 
 const route = useRoute();
+const store = useStore();
 
 interface RoomFlag {
   code: string;
@@ -30,14 +32,14 @@ const flags = ref<RoomFlag[]>([]);
 
 onMounted(async () => {
   const world_id = route.params.world_id;
-  const room_id = route.params.room_id;
+  const room_id = store.state.builder.room.id;
   const resp = await axios.get(`/builder/worlds/${world_id}/rooms/${room_id}/flags/`);
   flags.value = resp.data;
 });
 
 const onChangeFlag = async (code: string) => {
   const world_id = route.params.world_id;
-  const room_id = route.params.room_id;
+  const room_id = store.state.builder.room.id;
   for (let flag of flags.value) {
     if (flag.code == code) {
       const resp = await axios.post(`/builder/worlds/${world_id}/rooms/${room_id}/flags/${code}/`);

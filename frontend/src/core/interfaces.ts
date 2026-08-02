@@ -26,6 +26,8 @@ export interface Player {
 
 export interface Room {
   id: number;
+  relative_id?: number;
+  manifest_ref?: string;
   key: string;
   name: string;
   description?: string;

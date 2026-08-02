@@ -40,11 +40,6 @@ logger = logging.getLogger(__name__)
 
 _CODE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _STATE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-_ROOM_COORD_REF_RE = re.compile(
-    r"^room@(?P<x>-?\d+),(?P<y>-?\d+),(?P<z>-?\d+)$",
-    re.IGNORECASE,
-)
-_ROOM_ID_REF_RE = re.compile(r"^room\.(?P<id>\d+)$", re.IGNORECASE)
 _ZONE_PORTABLE_REF_RE = re.compile(r"^zone@(?P<relative_id>\d+)$", re.IGNORECASE)
 _ZONE_ID_REF_RE = re.compile(r"^zone\.(?P<id>\d+)$", re.IGNORECASE)
 
@@ -677,6 +672,7 @@ def compile_death_routing_policy_value(
 
 def _resolve_destination_for_world(world, value: Any, field_name: str) -> int:
     from worlds.models import Room
+    from worlds.room_refs import resolve_room_reference
 
     room = None
     if isinstance(value, Room):
@@ -684,21 +680,7 @@ def _resolve_destination_for_world(world, value: Any, field_name: str) -> int:
     elif isinstance(value, int) and not isinstance(value, bool):
         room = Room.objects.filter(world=world, pk=value).only("id", "world_id").first()
     else:
-        text = str(value or "").strip()
-        id_match = _ROOM_ID_REF_RE.fullmatch(text)
-        coord_match = _ROOM_COORD_REF_RE.fullmatch(text)
-        if id_match:
-            room = Room.objects.filter(
-                world=world,
-                pk=int(id_match.group("id")),
-            ).only("id", "world_id").first()
-        elif coord_match:
-            room = Room.objects.filter(
-                world=world,
-                x=int(coord_match.group("x")),
-                y=int(coord_match.group("y")),
-                z=int(coord_match.group("z")),
-            ).only("id", "world_id").first()
+        room = resolve_room_reference(world, value)
     if room is None or room.world_id != world.id:
         raise DeathRoutingValidationError(
             f"{field_name} must reference a room in this world."

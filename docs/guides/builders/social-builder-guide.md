@@ -139,9 +139,7 @@ metadata:
 spec:
   scope: world
   kind: event
-  target:
-    type: mobdefinition
-    key: mobdefinition.22
+  target: mobdefinition.guard
   event: social
   match: salute
   script: say Your courtesy is noted.

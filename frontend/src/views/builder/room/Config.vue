@@ -27,7 +27,7 @@
 
       <div v-if="transfer_to && transfer_to_world" class="mb-4">
         Links to:
-        <a :href="instanceRoomLink(transfer_to_world.id, transfer_to.id)">
+        <a :href="instanceRoomLink(transfer_to_world.id, transfer_to)">
           {{ transfer_to.name }}
         </a>
       </div>
@@ -46,6 +46,7 @@ import axios from "axios";
 import Help from "@/components/Help.vue";
 import ReferenceField from "@/components/forms/ReferenceField.vue";
 import { Entity } from "@/core/interfaces.ts";
+import { builderRoomIndexRoute } from "@/core/builderRoutes";
 
 const route = useRoute();
 const router = useRouter();
@@ -65,7 +66,7 @@ const loaded = ref(false);
 
 onMounted(async () => {
   const world_id = route.params.world_id;
-  const room_id = route.params.room_id;
+  const room_id = store.state.builder.room.id;
 
   const flags_promise = axios.get(`/builder/worlds/${world_id}/rooms/${room_id}/flags/`);
   const config_promise = axios.get(`/builder/worlds/${world_id}/rooms/${room_id}/config/`);
@@ -83,7 +84,7 @@ onMounted(async () => {
 
 const onChangeFlag = async (code: string) => {
   const world_id = route.params.world_id;
-  const room_id = route.params.room_id;
+  const room_id = store.state.builder.room.id;
   for (let flag of flags.value) {
     if (flag.code == code) {
       const resp = await axios.post(`/builder/worlds/${world_id}/rooms/${room_id}/flags/${code}/`);
@@ -113,7 +114,7 @@ const onUpdateTransferTo = (value) => {
 const transfer_to_endpoint = `builder/worlds/${store.state.builder.world.id}/instancerooms/`;
 
 const onSaveInstanceLink = async () => {
-  const resp = await axios.patch(`/builder/worlds/${route.params.world_id}/rooms/${route.params.room_id}/config/`, {
+  const resp = await axios.patch(`/builder/worlds/${route.params.world_id}/rooms/${store.state.builder.room.id}/config/`, {
     transfer_to: transfer_to.value ? transfer_to.value.id : null
   });
   if (resp.status == 200) {
@@ -123,11 +124,8 @@ const onSaveInstanceLink = async () => {
   }
 };
 
-const instanceRoomLink = (instance_id, room_id) => {
-  return router.resolve({
-    name: 'builder_room_index',
-    params: { world_id: instance_id, room_id: room_id }
-  }).href;
+const instanceRoomLink = (instance_id, room) => {
+  return router.resolve(builderRoomIndexRoute(instance_id, room)).href;
 };
 </script>
 

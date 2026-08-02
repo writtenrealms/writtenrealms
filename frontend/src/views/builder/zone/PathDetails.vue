@@ -54,6 +54,7 @@ import Map from "@/components/ui/Map.vue";
 import { Room } from "@/core/interfaces";
 import InColumnList from "@/components/incolumnlist/List.vue";
 import { BUILDER_FORMS } from "@/core/forms.ts";
+import { builderZoneIndexRoute } from "@/core/builderRoutes";
 /*
   This view is tricky because the ElementList handles the PathRoom
   intermediary objects as the element, whereas in this view the path_rooms
@@ -77,7 +78,7 @@ const initial_data = computed<any>(() => {
 
 const path_rooms_endpoint = `builder/worlds/${route.params.world_id}/paths/${route.params.path_id}/rooms/`;
 
-const endpoint_filters = { zone: route.params.zone_id };
+const endpoint_filters = computed(() => ({ zone: zone.value.id }));
 const path_room_schema = BUILDER_FORMS.ZONE_PATH_ROOM;
 const room = computed(() => store.state.builder.room);
 const zone = computed(() => store.state.builder.zone);
@@ -99,21 +100,8 @@ const mapReady = computed(() => map.value && zone.value && room.value && path.va
 const onClickRoom = async (room) => {
   store.commit('builder/room_set', room);
 
-  if (room.zone.id != route.params.zone_id) {
-    // Update route
-    router.push({
-      name: 'builder_zone_index',
-      params: {
-        zone_id: room.zone.id,
-        world_id: route.params.world_id
-      }
-    });
-
-    // Update zone
-    store.dispatch('builder/zone_fetch', {
-      world_id: route.params.world_id,
-      zone_id: route.params.zone_id
-    });
+  if (String(room.zone.relative_id) !== String(route.params.zone_relative_id)) {
+    router.push(builderZoneIndexRoute(route.params.world_id, room.zone));
   }
 };
 
@@ -121,7 +109,7 @@ onMounted(async () => {
 
   const zone_rooms_promise = store.dispatch('builder/zone_rooms_fetch', {
     world_id: route.params.world_id,
-    zone_id: route.params.zone_id,
+    zone_id: zone.value.id,
   });
   const fetchPathPromise = store.dispatch('builder/path_fetch', {
     world_id: route.params.world_id,

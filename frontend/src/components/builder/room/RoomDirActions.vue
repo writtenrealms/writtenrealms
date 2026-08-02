@@ -88,6 +88,7 @@ import { useRoute, useRouter } from "vue-router";
 import { DIRECTIONS } from "@/constants";
 import { DIRECTION } from "@/core/forms.ts";
 import { onOutsideClick } from "@/composables/onOutsideClick";
+import { builderRoomIndexRoute } from "@/core/builderRoutes";
 
 const store = useStore();
 const route = useRoute();
@@ -167,16 +168,7 @@ const onClickRoomAction = async (direction, action) => {
     });
 
     const new_room = resp_data["exit"];
-    store.dispatch('builder/room_select', new_room);
-
-    router.push({
-      name: 'builder_room_index',
-      params: {
-        world_id: route.params.world_id,
-        //zone_id: route.params.zone_id,
-        room_id: new_room.id
-      }
-    });
+    router.push(builderRoomIndexRoute(route.params.world_id, new_room));
   } else if (action == "set_exit") {
     const modal = {
       title: `${direction} exit`,
@@ -193,14 +185,9 @@ const onClickRoomAction = async (direction, action) => {
     };
     store.commit('ui/modal/open_form', modal);
   } else if (action == "goto_exit") {
-    const exit_room_id = store.state.builder.room[direction].id;
-    router.push({
-      name: 'builder_room_index',
-      params: {
-        world_id: route.params.world_id,
-        room_id: exit_room_id
-      }
-    });
+    const exitRoomRef = store.state.builder.room[direction];
+    const exitRoom = store.state.builder.map?.[exitRoomRef.key] || exitRoomRef;
+    router.push(builderRoomIndexRoute(route.params.world_id, exitRoom));
   } else if (action === "set_door") {
     let data, title;
     if (store.state.builder.room.doors[direction]) {

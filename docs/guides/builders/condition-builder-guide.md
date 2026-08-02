@@ -220,9 +220,7 @@ metadata:
 spec:
   scope: room
   kind: command
-  target:
-    type: room
-    key: room.<room_id>
+  target: room@<room_relative_id>
   match: ring bell
   conditions:
     eq:

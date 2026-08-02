@@ -637,9 +637,13 @@ A room should be able to expose one crafting profile directly:
 ```yaml
 kind: room
 metadata:
-  ref: room@0,0,0
+  ref: room@42
   name: Town Forge
 spec:
+  coordinates:
+    x: 0
+    y: 0
+    z: 0
   crafting:
     profile: craftingprofile.town-forge
 ```

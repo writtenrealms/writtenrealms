@@ -14,6 +14,7 @@ from builders.models import (
 from spawns.models import Mob, Player, Item
 from users.models import User
 from worlds.models import Zone, Room
+from worlds.room_refs import format_room_manifest_ref
 
 class KeyNameSerializer(serializers.Serializer):
     key = serializers.CharField()
@@ -47,12 +48,23 @@ class ReferenceField(Field):
     """
 
     def to_representation(self, obj):
-        return {
+        representation = {
             'model_type': obj.__class__.__name__.lower(),
             'key': obj.key,
             'name': obj.name,
             'id': obj.id,
         }
+        if isinstance(obj, Room):
+            representation.update({
+                'relative_id': obj.relative_id,
+                'manifest_ref': format_room_manifest_ref(obj),
+            })
+        elif isinstance(obj, Zone):
+            representation.update({
+                'relative_id': obj.relative_id,
+                'manifest_ref': f'zone@{obj.relative_id or obj.id}',
+            })
+        return representation
 
     def to_internal_value(self, data):
         if data is None or data == 'None' or not data:

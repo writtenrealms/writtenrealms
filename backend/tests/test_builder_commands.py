@@ -1786,7 +1786,7 @@ class TestBuilderRepop(BuilderCommandTestCase):
             plan=plan,
             slug=f"{slug}-entry",
             source=f"mobdefinition.{definition.slug}",
-            target={"room": f"room@{room.x},{room.y},{room.z}"},
+            target_room=room,
             count=1,
         )
         return plan
@@ -2845,12 +2845,17 @@ class TestBuilderTransfer(BuilderCommandTestCase):
         self.assertEqual(remote_player.room_id, remote_room.id)
 
     def test_bare_numeric_room_selector_prefers_legacy_relative_id(self):
+        filler_world = World.objects.create(name="Room ID filler")
+        for index in range(3):
+            Room.objects.create(
+                world=filler_world,
+                name=f"Filler {index}",
+                x=index,
+                y=0,
+                z=0,
+            )
         absolute_room = self.room.create_at("east")
-        absolute_room.relative_id = 900000 + absolute_room.id
-        absolute_room.save(update_fields=["relative_id"])
-        legacy_room = Room.objects.create(
-            world=self.world,
-            zone=self.zone,
+        legacy_room = self.create_imported_room(
             name="Legacy numbered room",
             x=self.room.x,
             y=self.room.y + 1,
@@ -3141,11 +3146,23 @@ class TestBuilderJump(BuilderCommandTestCase):
         self.assertIn("invalid room id", message.get("text", "").lower())
 
     def test_jump_prefers_template_room_id_over_relative_id_collision(self):
+        filler_world = World.objects.create(name="Jump ID filler")
+        for index in range(3):
+            Room.objects.create(
+                world=filler_world,
+                name=f"Filler {index}",
+                x=index,
+                y=0,
+                z=0,
+            )
         target_room = self.room.create_at("east")
-        colliding_room = self.room.create_at("west")
-
-        colliding_room.relative_id = target_room.id
-        colliding_room.save(update_fields=["relative_id"])
+        self.create_imported_room(
+            name="Colliding relative room",
+            relative_id=target_room.id,
+            x=self.room.x - 1,
+            y=self.room.y,
+            z=self.room.z,
+        )
 
         with capture_game_messages():
             dispatch_text_command(self.player.id, f"/jump {target_room.id}")

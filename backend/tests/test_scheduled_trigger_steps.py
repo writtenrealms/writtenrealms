@@ -4784,8 +4784,10 @@ class TestScheduledTriggerSteps(WorldTestCase):
                     ])
 
     def test_set_mob_atomically_updates_runtime_mob_state_and_consumes_item(self):
-        self.room.relative_id = self.room.id + 5000
-        self.room.save(update_fields=["relative_id"])
+        self.use_imported_room(
+            relative_id=self.room.id + 5000,
+            x=self.room.x + 1,
+        )
         commander_definition = MobDefinition.objects.create(
             world=self.world,
             slug="captive-commander",
@@ -4880,7 +4882,6 @@ class TestScheduledTriggerSteps(WorldTestCase):
             for entry in messages
             if entry["message"]["type"] == "notification.trigger.mobs_changed"
         )
-        self.assertNotEqual(self.room.relative_id, self.room.id)
         self.assertEqual(
             mob_change["data"]["room"]["key"],
             f"room.{self.room.relative_id}",

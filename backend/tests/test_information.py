@@ -654,8 +654,10 @@ class TestStateSyncMapKeys(WorldTestCase):
         return None
 
     def test_state_sync_actor_room_key_matches_map_when_relative_id_differs(self):
-        self.room.relative_id = self.room.id + 5000
-        self.room.save(update_fields=["relative_id"])
+        self.use_imported_room(
+            relative_id=self.room.id + 5000,
+            x=self.room.x + 1,
+        )
 
         with capture_game_messages() as messages:
             dispatch_command(
@@ -678,9 +680,16 @@ class TestStateSyncMapKeys(WorldTestCase):
 
     def test_state_sync_map_room_keeps_exit_to_unvisited_room(self):
         west_room = self.room.create_at("west")
-        unvisited_room = west_room.create_at("west")
-        unvisited_room.relative_id = unvisited_room.id + 7000
-        unvisited_room.save(update_fields=["relative_id"])
+        unvisited_room = self.create_imported_room(
+            relative_id=west_room.id + 7000,
+            x=west_room.x - 1,
+            y=west_room.y,
+            z=west_room.z,
+        )
+        west_room.west = unvisited_room
+        west_room.save(update_fields=["west"])
+        unvisited_room.east = west_room
+        unvisited_room.save(update_fields=["east"])
         self.player.viewed_rooms.add(west_room)
 
         with capture_game_messages() as messages:
@@ -721,8 +730,10 @@ class TestStateSyncMapKeys(WorldTestCase):
             self.assertEqual(room_key_lookup[exit_room.id], exit_key)
 
     def test_state_sync_world_room_refs_use_relative_key(self):
-        self.room.relative_id = self.room.id + 9000
-        self.room.save(update_fields=["relative_id"])
+        self.use_imported_room(
+            relative_id=self.room.id + 9000,
+            x=self.room.x + 1,
+        )
 
         self.world.config.starting_room = self.room
         self.world.config.death_room = self.room

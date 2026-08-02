@@ -1,9 +1,10 @@
+import collections
 import copy
 import json
 import re
 
 from django.contrib.contenttypes.models import ContentType
-from django.db import transaction
+from django.db import models, transaction
 from django.db.models import Count, F, Q
 from django.db.utils import IntegrityError
 from django.utils import timezone
@@ -78,6 +79,7 @@ from builders.models import (
     ItemDefinition,
     MobDefinition,
     MerchantProfile,
+    SpawnEntry,
     FACTION_TYPE_CORE,
     FACTION_TYPE_REPUTATION,
     Faction,
@@ -100,6 +102,7 @@ from builders.doors import (
     remove_door_face,
     upsert_door_face,
 )
+from builders.instance_templates import clone_world_config_for_instance
 from spawns import serializers as spawn_serializers
 from spawns import trigger_matcher
 from spawns.models import Player, PlayerConfig, Mob, Item, Equipment
@@ -118,6 +121,7 @@ from worlds.models import (
     RoomDetail,
     Door,
     WorldLocks)
+from worlds.room_refs import format_room_manifest_ref
 from worlds.services import is_recoverable_lifecycle
 
 
@@ -217,30 +221,6 @@ def _normalize_template_slug(serializer, value, *, model_cls, field_label):
             )
 
     return normalized
-
-
-_INSTANCE_CONFIG_LOCAL_ROOM_FIELDS = {"starting_room", "death_room", "exits_to"}
-_WORLD_CONFIG_CLONE_SKIP_FIELDS = {
-    "id",
-    "created_ts",
-    "modified_ts",
-    *_INSTANCE_CONFIG_LOCAL_ROOM_FIELDS,
-    *INSTANCE_INHERITED_CONFIG_FIELDS,
-    "death_routing_generation",
-    "death_routing_source",
-    "death_routing_source_generation",
-}
-
-
-def _clone_world_config_for_instance(base_config):
-    values = {}
-    for field in WorldConfig._meta.fields:
-        if field.primary_key or field.name in _WORLD_CONFIG_CLONE_SKIP_FIELDS:
-            continue
-        values[field.name] = copy.deepcopy(getattr(base_config, field.name))
-
-    config = WorldConfig.objects.create(**values)
-    return config
 
 
 class WorldSerializer(serializers.ModelSerializer):
@@ -462,7 +442,7 @@ class WorldSerializer(serializers.ModelSerializer):
                 validated_data['instance_of'] = instance_of
                 validated_data['is_multiplayer'] = True
                 if instance_of.config_id:
-                    validated_data['config'] = _clone_world_config_for_instance(
+                    validated_data['config'] = clone_world_config_for_instance(
                         instance_of.config)
 
             world = World.objects.new_world(**validated_data)
@@ -1455,6 +1435,124 @@ class RoomFlagField(serializers.Field):
         return data
 
 
+def _set_spawn_plan_entry_counts(rooms):
+    """Attach room-affecting spawn-entry counts in a fixed query count."""
+    rooms = list(rooms)
+    if not rooms:
+        return rooms
+
+    room_by_scope = {
+        (room.world_id, room.id): room
+        for room in rooms
+    }
+    rooms_by_zone_scope = collections.defaultdict(list)
+    for room in rooms:
+        room._num_spawn_plan_entries = 0
+        if room.zone_id:
+            rooms_by_zone_scope[(room.world_id, room.zone_id)].append(room)
+
+    world_ids = {world_id for world_id, _room_id in room_by_scope}
+    room_ids = {room_id for _world_id, room_id in room_by_scope}
+    zone_ids = {
+        zone_id
+        for _world_id, zone_id in rooms_by_zone_scope
+    }
+
+    direct_counts = (
+        SpawnEntry.objects
+        .filter(
+            plan__world_id__in=world_ids,
+            target_room_id__in=room_ids,
+        )
+        .order_by()
+        .values('plan__world_id', 'target_room_id')
+        .annotate(total=Count('id', distinct=True))
+    )
+    for row in direct_counts:
+        room = room_by_scope.get((
+            row['plan__world_id'],
+            row['target_room_id'],
+        ))
+        if room is not None:
+            room._num_spawn_plan_entries += row['total']
+
+    if zone_ids:
+        zone_counts = (
+            SpawnEntry.objects
+            .filter(
+                plan__world_id__in=world_ids,
+                target_zone_id__in=zone_ids,
+            )
+            .order_by()
+            .values('plan__world_id', 'target_zone_id')
+            .annotate(total=Count('id'))
+        )
+        for row in zone_counts:
+            for room in rooms_by_zone_scope.get((
+                row['plan__world_id'],
+                row['target_zone_id'],
+            ), ()):
+                room._num_spawn_plan_entries += row['total']
+
+    path_membership_counts = (
+        SpawnEntry.objects
+        .filter(
+            plan__world_id__in=world_ids,
+            target_path__path_rooms__room_id__in=room_ids,
+        )
+        .order_by()
+        .values(
+            'plan__world_id',
+            'target_path_id',
+        )
+        .annotate(room_id=F('target_path__path_rooms__room_id'))
+        .annotate(total=Count('id', distinct=True))
+    )
+    path_entry_room_counts = (
+        SpawnEntry.objects
+        .filter(
+            plan__world_id__in=world_ids,
+            target_path__entry_room_id__in=room_ids,
+        )
+        .order_by()
+        .values(
+            'plan__world_id',
+            'target_path_id',
+        )
+        .annotate(room_id=F('target_path__entry_room_id'))
+        .annotate(total=Count('id', distinct=True))
+    )
+    path_targets = {}
+    for row in path_membership_counts.union(
+        path_entry_room_counts,
+        all=True,
+    ):
+        target_key = (
+            row['plan__world_id'],
+            row['target_path_id'],
+        )
+        target = path_targets.setdefault(target_key, {
+            'total': row['total'],
+            'room_ids': set(),
+        })
+        target['room_ids'].add(row['room_id'])
+    for (world_id, _path_id), target in path_targets.items():
+        for room_id in target['room_ids']:
+            room = room_by_scope.get((world_id, room_id))
+            if room is not None:
+                room._num_spawn_plan_entries += target['total']
+
+    return rooms
+
+
+class RoomBuilderListSerializer(serializers.ListSerializer):
+    def to_representation(self, data):
+        iterable = data.all() if isinstance(data, models.Manager) else data
+        return super().to_representation(
+            _set_spawn_plan_entry_counts(iterable)
+        )
+
+
 class RoomBuilderSerializer(serializers.ModelSerializer):
 
     zone = ReferenceField(required=False)
@@ -1476,11 +1574,14 @@ class RoomBuilderSerializer(serializers.ModelSerializer):
     details = serializers.SerializerMethodField()
     doors = serializers.SerializerMethodField()
     has_assignment = serializers.SerializerMethodField()
+    manifest_ref = serializers.SerializerMethodField()
 
     class Meta:
         model = Room
+        list_serializer_class = RoomBuilderListSerializer
         fields = [
-            'id', 'key', 'model_type', 'name',
+            'id', 'key', 'relative_id', 'manifest_ref',
+            'model_type', 'name',
             'type', 'description', 'note', 'color',
             'initial_state',
             'x', 'y', 'z',
@@ -1488,7 +1589,10 @@ class RoomBuilderSerializer(serializers.ModelSerializer):
             'num_actions', 'num_triggers', 'num_spawn_plan_entries', 'details', 'doors',
             'has_assignment',
         ] + list(adv_consts.DIRECTIONS)
-        read_only_fields = ('initial_state',)
+        read_only_fields = ('relative_id', 'manifest_ref', 'initial_state')
+
+    def get_manifest_ref(self, room):
+        return format_room_manifest_ref(room)
 
     def validate_color(self, color):
         if color and re.search('[^a-zA-Z0-9#\s]', color):
@@ -1517,25 +1621,19 @@ class RoomBuilderSerializer(serializers.ModelSerializer):
         ).count()
 
     def get_num_spawn_plan_entries(self, room):
-        room_entries = 0
-        for plan in room.world.spawn_plans.all():
-            room_entries += sum(
-                1 for entry in plan.entries.all()
-                if isinstance(entry.target, dict)
-                and entry.target.get('room') in {room.key, f'room.{room.id}'}
-            )
-        path_ids = PathRoom.objects.filter(
-            room=room
-        ).values_list('path_id', flat=True)
-        path_refs = {f'path@{path_id}' for path_id in path_ids}
-        path_entries = 0
-        for plan in room.world.spawn_plans.all():
-            path_entries += sum(
-                1 for entry in plan.entries.all()
-                if isinstance(entry.target, dict)
-                and entry.target.get('path') in path_refs
-            )
-        return room_entries + path_entries
+        prefetched_count = getattr(room, '_num_spawn_plan_entries', None)
+        if prefetched_count is not None:
+            return prefetched_count
+        target_filter = (
+            Q(target_room_id=room.id)
+            | Q(target_path__path_rooms__room_id=room.id)
+            | Q(target_path__entry_room_id=room.id)
+        )
+        if room.zone_id:
+            target_filter |= Q(target_zone_id=room.zone_id)
+        return SpawnEntry.objects.filter(
+            plan__world_id=room.world_id,
+        ).filter(target_filter).distinct().count()
 
     def get_fields(self):
         fields = super().get_fields()
@@ -1648,15 +1746,21 @@ class MapRoomSerializer(serializers.ModelSerializer):
     up = ReferenceField(required=False, allow_null=True)
     down = ReferenceField(required=False, allow_null=True)
     flags = serializers.SlugRelatedField(many=True, slug_field='code', read_only=True)
+    manifest_ref = serializers.SerializerMethodField()
 
     class Meta:
         model = Room
         fields = [
-            'id', 'key', 'name', 'model_type', 'modified_ts',
+            'id', 'key', 'relative_id', 'manifest_ref',
+            'name', 'model_type', 'modified_ts',
             'type', 'zone', 'note', 'flags',
             'description',
             'x', 'y', 'z',
         ] + list(adv_consts.DIRECTIONS)
+        read_only_fields = ('relative_id', 'manifest_ref')
+
+    def get_manifest_ref(self, room):
+        return format_room_manifest_ref(room)
 
     @staticmethod
     def prefetch_map(qs):

@@ -25,11 +25,16 @@ triggers, and spawn plans.
 ## Complete Example
 
 ```yaml
+apiVersion: writtenrealms.com/v1alpha3
 kind: room
 metadata:
-  ref: room@10,4,0
+  ref: room@42
   name: North Gate
 spec:
+  coordinates:
+    x: 10
+    y: 4
+    z: 0
   zone: zone@2
   description: An ironbound gate closes the northern road.
   note: Builder-only note about the gate encounter.
@@ -39,9 +44,9 @@ spec:
   initial_state:
     gate_alarm_raised: false
   exits:
-    north: room@10,5,0
+    north: room@43
     east: null
-    south: room@10,3,0
+    south: room@44
     west: null
     up: null
     down: null
@@ -54,7 +59,7 @@ spec:
   doors:
     - direction: north
       name: ironbound gate
-      to_room: room@10,5,0
+      to_room: room@43
       key: itemdefinition.north-gate-key
       destroy_key: false
       default_state: locked
@@ -62,17 +67,78 @@ spec:
 
 ## Identity And Location
 
-`metadata.ref` is the room's portable coordinate identity:
+`metadata.ref` is the room's stable, world-relative identity:
 
 ```yaml
 metadata:
-  ref: room@10,4,0
+  ref: room@42
 ```
 
-Coordinates are world-relative and survive export/import even when database
-ids differ. Changing this ref does not move the currently selected row. It
-means "apply a room at these coordinates" and may create or update a different
-room. Preserve it during ordinary edits.
+The positive relative id is immutable and is not reused after deletion.
+Preserve it during ordinary edits. Move the room by changing its separate
+coordinates:
+
+```yaml
+spec:
+  coordinates:
+    x: 12
+    y: 4
+    z: 0
+```
+
+Exits, spawn targets, Triggers, quests, and other semantic references continue
+to use `room@42` after the move. Database keys such as `room.187` and legacy
+coordinate refs such as `room@10,4,0` are import-only aliases. They resolve
+inside the selected authored world and canonical YAML rewrites them as stable
+relative refs; database keys are not portable to another installation.
+
+The builder uses that same stable identity in its canonical room URL, without
+repeating the `room@` type prefix that is already supplied by the path:
+
+```text
+/build/worlds/23/rooms/42
+```
+
+Here `23` is the installation-local world database id and `42` is the room's
+world-relative id. Moving the room does not change this URL. Hovering a room
+link in the world, zone, and room breadcrumb navigation therefore exposes the
+relative id a builder should use, while the room screen presents `room@42` as
+the primary manifest identity and keeps its copy action in Technical details.
+
+For staff troubleshooting, a room can also be opened by database id:
+
+```text
+/build/worlds/23/rooms/db/187
+```
+
+That path is a lookup alias, not a second canonical identity. After resolving
+the room inside the selected world, the builder replaces it with
+`/build/worlds/23/rooms/42`. The room screen keeps the database id in its
+less-prominent technical details alongside the relative id.
+
+Do not interpret a bare room URL segment as either kind of id depending on
+what happens to exist. `/rooms/42` always means relative id 42, and
+`/rooms/db/42` always means database id 42. This is an intentional pre-launch
+breaking cutover from the former `/rooms/<database_id>` route; old development
+bookmarks are not compatibility aliases because an ambiguous fallback could
+open the wrong room.
+
+Zones follow the same rule. A zone whose manifest reference is `zone@5` uses
+the canonical builder route `/build/worlds/23/zones/5`, where `23` is the
+installation-local world database id and `5` is the zone's world-relative id.
+The zone's Rooms, Paths, Spawns, Config, and Processions routes retain that
+same relative-id segment. Staff can use `/build/worlds/23/zones/db/38` to look
+up database zone 38; the builder immediately replaces that alias with the
+canonical relative-id route. The zone screen exposes the database id only in
+its collapsed technical details.
+
+As with rooms, `/zones/5` never falls back to database zone 5. Keeping the
+relative and database namespaces explicit prevents a valid number in one
+namespace from silently selecting a different zone in the other.
+
+New rooms require all three coordinates. An update may omit
+`spec.coordinates` to preserve the current position, although canonical room
+YAML always includes it.
 
 `metadata.name` is the player-facing room name. `spec.zone` uses a portable
 `zone@<relative_id>` ref. Copy that value from the zone screen or an existing
@@ -83,6 +149,7 @@ room rather than using a database id or a possibly duplicated zone name.
 | Field | Purpose |
 | --- | --- |
 | `metadata.name` | Player-facing room name. |
+| `spec.coordinates` | Current map position as integer `x`, `y`, and `z`. |
 | `spec.zone` | Owning zone as `zone@<relative_id>`, or blank for no zone. |
 | `spec.description` | Main room prose shown to players. |
 | `spec.note` | Builder-only authoring note. |
@@ -107,14 +174,14 @@ differently.
 
 ## Exits
 
-Exit values use `room@x,y,z` refs. Set a direction to `null` when there is no
-exit:
+Exit values use stable `room@<relative_id>` refs. Set a direction to `null`
+when there is no exit:
 
 ```yaml
 exits:
-  north: room@10,5,0
+  north: room@43
   east: null
-  south: room@10,3,0
+  south: room@44
   west: null
   up: null
   down: null
@@ -123,6 +190,61 @@ exits:
 An exit is directional. When both rooms should link to each other, make sure
 the neighboring room has the reverse exit as well. For coordinated layout
 changes, apply both room documents together through **World > Edit World**.
+
+## Cross-World Instance Links
+
+The room refs in a `kind: room` document are local to that room's authored
+world. Ordinary exits and doors do not use a database id or a bare `room@N` to
+cross from a base world into an instance template.
+
+When a base world and its instance templates are exported together, supported
+cross-world fields live in the first `kind: worldbundle` document:
+
+```yaml
+kind: worldbundle
+spec:
+  worlds:
+    - ref: world@base
+      role: base
+      name: Phalanx
+    - ref: instance.hades
+      role: instance
+      slug: hades
+      name: Hades
+      parent: world@base
+  links_mode: replace
+  links:
+    - relation: room.transfer_to
+      source:
+        world: world@base
+        room: room@42
+      target:
+        world: instance.hades
+        room: room@1
+    - relation: room.enters_instance
+      source:
+        world: world@base
+        room: room@42
+      target:
+        world: instance.hades
+    - relation: room.exits_to
+      source:
+        world: instance.hades
+        room: room@9
+      target:
+        world: world@base
+        room: room@42
+```
+
+The explicit world scope disambiguates identical local refs in different
+worlds. Family export gathers these links from the authored foreign keys;
+family import restores them after all rooms have been applied. Individual room
+documents intentionally omit `transfer_to`, `enters_instance`, and
+cross-world `exits_to`.
+
+Export every instance through its base-world bundle. A standalone instance
+export is rejected because it cannot carry the stable family scope, inherited
+catalogs, and both sides of cross-world relationships portably.
 
 ## Flags, Details, And Doors Replace Their Lists
 
@@ -221,9 +343,7 @@ spec:
   scope: room
   kind: policy
   event: before_move_enter
-  target:
-    type: room
-    key: room.120
+  target: room@120
   conditions:
     eq:
       - actor.archetype
@@ -247,6 +367,12 @@ and
 Room manifests support `operation: apply` only. They do not have a room-delete
 operation. Saving validates refs, room types, flags, directions, item keys, and
 door states before applying the document.
+
+For a multi-document import, WR2 reserves every declared room identity and
+coordinate before applying relationships. Rooms may therefore reference rooms
+declared later in the stream, including reciprocal exits and doors. The whole
+stream remains atomic, and an unknown stable ref does not create an untitled
+room unless a matching `kind: room` document declares it.
 
 Rank 1-2 builders may edit rooms covered by their room or zone assignment.
 Creating a room through YAML requires rank 3 or higher. The same permission

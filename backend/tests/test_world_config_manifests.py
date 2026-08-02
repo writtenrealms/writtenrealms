@@ -115,8 +115,14 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(world_manifest["spec"]["starting_level"], 1)
         self.assertEqual(world_manifest["spec"]["max_level"], 20)
         self.assertEqual(world_manifest["spec"]["leveling_curve"][1], 30)
-        self.assertEqual(world_manifest["spec"]["starting_room"], "room@0,0,0")
-        self.assertEqual(world_manifest["spec"]["death_room"], "room@0,0,0")
+        self.assertEqual(
+            world_manifest["spec"]["starting_room"],
+            f"room@{self.room.relative_id}",
+        )
+        self.assertEqual(
+            world_manifest["spec"]["death_room"],
+            f"room@{self.room.relative_id}",
+        )
         self.assertEqual(world_manifest["spec"]["combat_resolution_interval"], 0)
         self.assertEqual(world_manifest["spec"]["default_roam_chance"], 10)
         self.assertEqual(
@@ -137,6 +143,35 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
             adv_config.PLAYER_STARTING_STAMINA_REGEN,
         )
         self.assertNotIn("combat", world_manifest["spec"])
+
+    def test_world_config_yaml_canonicalizes_nested_room_conditions(self):
+        legacy_ref = f"room.{self.room.id}"
+        canonical_ref = f"room@{self.room.relative_id}"
+        self.world.config.ability_progression = {
+            "max_known": 10,
+            "starting_abilities": [
+                {
+                    "ability": "room-sense",
+                    "conditions": {
+                        "eq": ["actor.room_id", legacy_ref],
+                    },
+                },
+            ],
+        }
+        self.world.config.save(update_fields=["ability_progression"])
+
+        response = self.client.get(self.config_ep)
+
+        self.assertEqual(response.status_code, 200, response.data)
+        condition = response.data["manifest"]["spec"]["ability_progression"][
+            "starting_abilities"
+        ][0]["conditions"]
+        self.assertEqual(condition["eq"][1], canonical_ref)
+        self.assertEqual(
+            yaml.safe_load(response.data["yaml"]),
+            response.data["manifest"],
+        )
+        self.assertNotIn(legacy_ref, response.data["yaml"])
 
     def test_world_config_endpoint_rejects_foreign_world_currencies(self):
         other_world = World.objects.new_world(
@@ -892,7 +927,7 @@ spec:
         )
         self.assertEqual(
             exported["routes"][0]["destination"],
-            f"room@{first_death.x},{first_death.y},{first_death.z}",
+            f"room@{first_death.relative_id}",
         )
 
     def test_death_routing_manifest_compiles_core_faction_ids_without_expansion(self):
@@ -1075,17 +1110,11 @@ spec:
             [
                 {
                     "when": {"lte": ["player.level", 9]},
-                    "destination": (
-                        f"room@{lower_destination.x},"
-                        f"{lower_destination.y},{lower_destination.z}"
-                    ),
+                    "destination": f"room@{lower_destination.relative_id}",
                 },
                 {
                     "when": {"gte": ["player.level", 10]},
-                    "destination": (
-                        f"room@{upper_destination.x},"
-                        f"{upper_destination.y},{upper_destination.z}"
-                    ),
+                    "destination": f"room@{upper_destination.relative_id}",
                 },
             ],
         )
@@ -1661,7 +1690,7 @@ spec:
         self.assertEqual(spec["death_routing_source"], "base_world")
         self.assertEqual(
             spec["death_routing"]["routes"][0]["destination"],
-            f"room@{destination.x},{destination.y},{destination.z}",
+            f"room@{destination.relative_id}",
         )
 
         response = self.client.post(

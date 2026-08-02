@@ -7,10 +7,12 @@ import traceback
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericRelation
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.db.models import Q
 from django.utils import timezone
+from django.utils.text import slugify
 
 from config import constants as adv_consts
 from core.utils import CamelCase__to__camel_case
@@ -34,6 +36,12 @@ from worlds.managers import (
 
 
 lifecycle_logger = logging.getLogger('lifecycle')
+
+BIGINT_MAX = 9_223_372_036_854_775_807
+MAX_ALLOCATABLE_ROOM_RELATIVE_ID = BIGINT_MAX - 1
+INSTANCE_SLUG_DB_PATTERN = (
+    r'^([a-z0-9]|[a-z0-9][a-z0-9_-]*[a-z0-9])$'
+)
 
 
 class World(AdventBaseModel):
@@ -80,12 +88,166 @@ class World(AdventBaseModel):
     last_extraction_ts = models.DateTimeField(**optional)
     last_entered_ts = models.DateTimeField(**optional)
 
+    # Persistent high-water mark for authored room identities. Unlike MAX + 1,
+    # this does not reuse a room reference after the highest-numbered room is
+    # deleted. It is touched only on builder/import room creation paths.
+    next_room_relative_id = models.PositiveBigIntegerField(
+        default=1,
+        editable=False,
+    )
+
     full_map = models.TextField(**optional)
 
     facts = models.TextField(**optional)
     # Authored defaults copied into each spawned runtime world. Live state is
     # stored in WorldState and never written back to this definition field.
     initial_state = models.JSONField(default=dict, blank=True)
+
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        world = super().from_db(db, field_names, values)
+        loaded_values = dict(zip(field_names, values))
+        identity_fields = (
+            'instance_of_id',
+            'context_id',
+            'instance_slug',
+        )
+        if all(field in loaded_values for field in identity_fields):
+            world._loaded_manifest_identity = tuple(
+                loaded_values[field]
+                for field in identity_fields
+            )
+        return world
+
+    def _assert_manifest_identity_unchanged(self, *, using):
+        loaded_identity = getattr(
+            self,
+            '_loaded_manifest_identity',
+            None,
+        )
+        if loaded_identity is None:
+            loaded_identity = (
+                World.objects.using(using)
+                .filter(pk=self.pk)
+                .values_list(
+                    'instance_of_id',
+                    'context_id',
+                    'instance_slug',
+                )
+                .first()
+            )
+        if loaded_identity is None:
+            return
+        current_identity = (
+            self.instance_of_id,
+            self.context_id,
+            self.instance_slug,
+        )
+        if current_identity != loaded_identity:
+            raise ValidationError(
+                'A world manifest scope is immutable after creation.')
+
+    def _allocate_instance_slug(self, *, using):
+        if not self.instance_of_id or self.context_id:
+            if self.instance_slug not in (None, ''):
+                raise ValidationError(
+                    'Only authored instance templates may have an '
+                    'instance slug.')
+            self.instance_slug = None
+            return
+
+        parent = World.objects.using(using).select_for_update().only(
+            'id',
+            'context_id',
+            'instance_of_id',
+        ).get(
+            pk=self.instance_of_id,
+        )
+        if parent.context_id or parent.instance_of_id:
+            raise ValidationError(
+                'Authored instance templates must belong directly to a '
+                'base world.')
+        raw_slug = str(self.instance_slug or '').strip()
+        if raw_slug:
+            if len(raw_slug) > 120:
+                raise ValidationError(
+                    'Instance slugs cannot exceed 120 characters.')
+            normalized = slugify(raw_slug)
+            if not normalized or normalized != raw_slug:
+                raise ValidationError(
+                    'Instance slugs must already be lowercase slug values.')
+            self.instance_slug = normalized
+            return
+
+        base_slug = slugify(self.name or '')[:100] or 'instance'
+        sibling_slugs = set(
+            World.objects.using(using)
+            .filter(
+                instance_of_id=self.instance_of_id,
+                context__isnull=True,
+            )
+            .exclude(instance_slug__isnull=True)
+            .values_list('instance_slug', flat=True)
+        )
+        candidate = base_slug
+        suffix = 2
+        while candidate in sibling_slugs:
+            suffix_text = f'-{suffix}'
+            candidate = (
+                f'{base_slug[:120 - len(suffix_text)]}{suffix_text}'
+            )
+            suffix += 1
+        self.instance_slug = candidate
+
+    def save(self, *args, **kwargs):
+        using = kwargs.get('using') or router.db_for_write(
+            self.__class__,
+            instance=self,
+        )
+        if self._state.adding:
+            with transaction.atomic(using=using):
+                self._allocate_instance_slug(using=using)
+                result = super().save(*args, **kwargs)
+            self._loaded_manifest_identity = (
+                self.instance_of_id,
+                self.context_id,
+                self.instance_slug,
+            )
+            return result
+
+        self._assert_manifest_identity_unchanged(using=using)
+        # Room allocation advances this field with an atomic queryset update.
+        # A previously loaded World instance must never write an older value
+        # back during an unrelated full save. Lock the same world row used by
+        # Room.save() so an allocation cannot commit between this refresh and
+        # the subsequent UPDATE.
+        update_fields = kwargs.get('update_fields')
+        writes_allocator = update_fields is None or (
+            'next_room_relative_id' in update_fields
+        )
+        if not self._state.adding and self.pk and writes_allocator:
+            with transaction.atomic(using=using):
+                persisted_value = (
+                    World.objects.using(using)
+                    .select_for_update()
+                    .filter(pk=self.pk)
+                    .values_list('next_room_relative_id', flat=True)
+                    .first()
+                )
+                if (
+                    persisted_value is not None
+                    and self.next_room_relative_id < persisted_value
+                ):
+                    self.next_room_relative_id = persisted_value
+                result = super().save(*args, **kwargs)
+        else:
+            result = super().save(*args, **kwargs)
+        self._loaded_manifest_identity = (
+            self.instance_of_id,
+            self.context_id,
+            self.instance_slug,
+        )
+        return result
 
     # References
 
@@ -106,6 +268,13 @@ class World(AdventBaseModel):
                                     on_delete=models.CASCADE,
                                     related_name='instances',
                                     **optional)
+    # Stable authored identity within one base world's instance-template
+    # family. Runtime spawned worlds use instance_ref instead.
+    instance_slug = models.SlugField(
+        max_length=120,
+        editable=False,
+        **optional,
+    )
     # Instance ref
     instance_ref = models.TextField(db_index=True, **optional)
     # Instance leader
@@ -145,7 +314,39 @@ class World(AdventBaseModel):
                                       through='builders.WorldBuilder')
 
     class Meta:
+        base_manager_name = 'objects'
         ordering = ('-created_ts',)
+        constraints = [
+            models.UniqueConstraint(
+                fields=['instance_of', 'instance_slug'],
+                condition=Q(
+                    context__isnull=True,
+                    instance_of__isnull=False,
+                    instance_slug__isnull=False,
+                ),
+                name='worlds_instance_template_slug_unique',
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        context__isnull=True,
+                        instance_of__isnull=False,
+                        instance_slug__isnull=False,
+                        instance_slug__regex=INSTANCE_SLUG_DB_PATTERN,
+                    )
+                    & ~Q(instance_slug__contains='--')
+                    | Q(
+                        instance_slug__isnull=True,
+                        instance_of__isnull=True,
+                    )
+                    | Q(
+                        instance_slug__isnull=True,
+                        context__isnull=False,
+                    )
+                ),
+                name='worlds_instance_slug_authored_template',
+            ),
+        ]
 
     def __str__(self):
         return "%s - %s" % (self.id, self.name)
@@ -1412,6 +1613,10 @@ class Room(AdventWorldBaseModel):
 
     objects = RoomManager()
 
+    # Coordinates are mutable placement. This world-scoped number is the
+    # room's permanent authored identity and portable manifest reference.
+    relative_id = models.PositiveBigIntegerField(editable=False)
+
     world = models.ForeignKey(World,
                               on_delete=models.CASCADE,
                               related_name='rooms')
@@ -1488,10 +1693,113 @@ class Room(AdventWorldBaseModel):
                                  **optional)
 
     class Meta:
+        base_manager_name = 'objects'
         unique_together = [
             AdventWorldBaseModel.Meta.unique_together,
             ['world', 'x', 'y', 'z'],
         ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(relative_id__gt=0),
+                name='worlds_room_relative_id_positive',
+            ),
+        ]
+
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        room = super().from_db(db, field_names, values)
+        loaded_values = dict(zip(field_names, values))
+        if 'world_id' in loaded_values and 'relative_id' in loaded_values:
+            room._loaded_room_identity = (
+                loaded_values['world_id'],
+                loaded_values['relative_id'],
+            )
+        return room
+
+    @staticmethod
+    def _coerce_relative_id(value):
+        if isinstance(value, bool):
+            raise ValidationError(
+                'Room relative IDs must be positive integers.')
+        try:
+            relative_id = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(
+                'Room relative IDs must be positive integers.') from exc
+        if relative_id <= 0:
+            raise ValidationError(
+                'Room relative IDs must be positive integers.')
+        return relative_id
+
+    def _assert_identity_unchanged(self, *, using):
+        loaded_identity = getattr(self, '_loaded_room_identity', None)
+        if loaded_identity is None:
+            loaded_identity = (
+                Room.objects.using(using)
+                .filter(pk=self.pk)
+                .values_list('world_id', 'relative_id')
+                .first()
+            )
+        if loaded_identity is None:
+            return
+        current_identity = (self.world_id, self.relative_id)
+        if current_identity != loaded_identity:
+            raise ValidationError(
+                'A room world and relative ID are immutable after creation.')
+
+    def save(self, *args, **kwargs):
+        using = kwargs.get('using') or router.db_for_write(
+            self.__class__,
+            instance=self,
+        )
+
+        if not self._state.adding:
+            self._assert_identity_unchanged(using=using)
+            result = super().save(*args, **kwargs)
+            self._loaded_room_identity = (self.world_id, self.relative_id)
+            return result
+
+        if self.world_id is None:
+            raise ValidationError(
+                'A room must belong to a world before it can be created.')
+
+        with transaction.atomic(using=using):
+            world = (
+                World.objects.using(using)
+                .select_for_update()
+                .only('id', 'next_room_relative_id')
+                .get(pk=self.world_id)
+            )
+            next_relative_id = int(world.next_room_relative_id)
+            if next_relative_id > MAX_ALLOCATABLE_ROOM_RELATIVE_ID:
+                raise ValidationError(
+                    'Room relative ID space is exhausted for this world.')
+            if self.relative_id is None:
+                self.relative_id = next_relative_id
+            else:
+                self.relative_id = self._coerce_relative_id(self.relative_id)
+                if self.relative_id > MAX_ALLOCATABLE_ROOM_RELATIVE_ID:
+                    raise ValidationError(
+                        'Room relative ID space is exhausted for this world.')
+                if self.relative_id < next_relative_id:
+                    raise ValidationError(
+                        'Room relative ID '
+                        f'{self.relative_id} was already allocated or retired.')
+
+            result = super().save(*args, **kwargs)
+            # PostgreSQL also enforces this invariant in a BEFORE INSERT
+            # trigger so raw SQL and alternate managers cannot reuse retired
+            # identities. Keep the model update for other database backends.
+            World.objects.db_manager(using).advance_room_identity_allocator(
+                world_id=self.world_id,
+                next_relative_id=self.relative_id + 1,
+            )
+            cached_world = self._state.fields_cache.get('world')
+            if cached_world is not None:
+                cached_world.next_room_relative_id = self.relative_id + 1
+
+        self._loaded_room_identity = (self.world_id, self.relative_id)
+        return result
 
     @property
     def key(self):
@@ -1509,8 +1817,8 @@ class Room(AdventWorldBaseModel):
     def data(self):
         "Returns core room data serialization"
         simple_fields = [
-            'id', 'key', 'name', 'model_type', 'type', 'note', 'description',
-            'x', 'y', 'z', 'color',
+            'id', 'key', 'relative_id', 'name', 'model_type', 'type', 'note',
+            'description', 'x', 'y', 'z', 'color',
         ]
         ref_fields = [
             'north', 'east', 'south', 'west', 'up', 'down', 'zone',
@@ -1518,6 +1826,7 @@ class Room(AdventWorldBaseModel):
         data = {}
         for field in simple_fields:
             data[field] = getattr(self, field)
+        data['manifest_ref'] = f'room@{self.relative_id}'
         for field in ref_fields:
             data[field + '_id'] = getattr(self, field + '_id')
         return data
@@ -1618,6 +1927,15 @@ class RoomState(BaseModel):
 # On room save, empty out the world's full map
 def post_room_save(sender, **kwargs):
     room = kwargs['instance']
+    if kwargs.get('raw') and room.relative_id is not None:
+        # Fixture loading bypasses Room.save(). Keep the allocator coherent for
+        # any rooms created after a fixture has been installed.
+        World.objects.db_manager(
+            kwargs.get('using'),
+        ).advance_room_identity_allocator(
+            world_id=room.world_id,
+            next_relative_id=room.relative_id + 1,
+        )
     room.world.full_map = None
     room.world.save(update_fields=['full_map'])
 models.signals.post_save.connect(post_room_save, Room)

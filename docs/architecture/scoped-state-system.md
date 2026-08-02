@@ -71,9 +71,13 @@ spec:
 ---
 kind: room
 metadata:
-  ref: room@4,2,0
+  ref: room@42
   name: Prison Cell
 spec:
+  coordinates:
+    x: 4
+    y: 2
+    z: 0
   zone: zone@1
   initial_state:
     cell_door_open: false
@@ -167,8 +171,7 @@ spec:
   entries:
     - slug: greek-commander
       source: mobdefinition.greek-captive-commander
-      target:
-        room: room@4,2,0
+      target: room@42
       count: 1
       initial_state:
         captive: true

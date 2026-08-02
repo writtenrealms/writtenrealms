@@ -652,7 +652,26 @@ class SpawnEntry(AdventBaseModel):
     order = models.IntegerField(default=0)
     is_active = models.BooleanField(default=True)
     source = models.JSONField(default=dict, blank=True)
-    target = models.JSONField(default=dict, blank=True)
+    target_room = models.ForeignKey(
+        'worlds.Room',
+        on_delete=models.RESTRICT,
+        related_name='spawn_entries',
+        **optional)
+    target_zone = models.ForeignKey(
+        'worlds.Zone',
+        on_delete=models.RESTRICT,
+        related_name='spawn_entries',
+        **optional)
+    target_path = models.ForeignKey(
+        'builders.Path',
+        on_delete=models.RESTRICT,
+        related_name='spawn_entries',
+        **optional)
+    target_entry = models.ForeignKey(
+        'self',
+        on_delete=models.RESTRICT,
+        related_name='dependent_entries',
+        **optional)
     count = models.JSONField(default=dict, blank=True)
     placement = models.JSONField(default=dict, blank=True)
     initial_state = models.JSONField(default=dict, blank=True)
@@ -662,6 +681,67 @@ class SpawnEntry(AdventBaseModel):
 
     class Meta(AdventBaseModel.Meta):
         unique_together = [('plan', 'slug')]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        target_room__isnull=False,
+                        target_zone__isnull=True,
+                        target_path__isnull=True,
+                        target_entry__isnull=True,
+                    )
+                    | models.Q(
+                        target_room__isnull=True,
+                        target_zone__isnull=False,
+                        target_path__isnull=True,
+                        target_entry__isnull=True,
+                    )
+                    | models.Q(
+                        target_room__isnull=True,
+                        target_zone__isnull=True,
+                        target_path__isnull=False,
+                        target_entry__isnull=True,
+                    )
+                    | models.Q(
+                        target_room__isnull=True,
+                        target_zone__isnull=True,
+                        target_path__isnull=True,
+                        target_entry__isnull=False,
+                    )
+                ),
+                name='builders_spawn_entry_exactly_one_target',
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        if not self.plan_id:
+            return
+
+        errors = {}
+        target_worlds = (
+            ('target_room', self.target_room),
+            ('target_zone', self.target_zone),
+            ('target_path', self.target_path),
+        )
+        for field_name, target in target_worlds:
+            if target is not None and target.world_id != self.plan.world_id:
+                errors[field_name] = 'Target must belong to the spawn plan world.'
+
+        if self.target_entry_id:
+            if self.target_entry.plan_id != self.plan_id:
+                errors['target_entry'] = (
+                    'Target entry must belong to the same spawn plan.'
+                )
+            elif self.target_entry.order >= self.order:
+                errors['target_entry'] = (
+                    'Target entry must have a lower order.'
+                )
+            elif self.is_active and not self.target_entry.is_active:
+                errors['target_entry'] = 'An active entry must target an active entry.'
+
+        if errors:
+            raise ValidationError(errors)
 
 
 class SpawnPlanRun(AdventBaseModel):

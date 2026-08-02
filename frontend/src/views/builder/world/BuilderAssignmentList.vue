@@ -63,9 +63,10 @@ import axios from "axios";
 import { ref, onMounted, watch } from "vue";
 import { computed } from "vue";
 import { useStore } from "vuex";
-import { useRoute, RouteLocationRaw } from "vue-router";
+import { useRoute } from "vue-router";
 import FormField from "@/components/forms/FormField.vue";
 import { Entity } from "@/core/interfaces.ts";
+import { builderRoomIndexRoute, builderZoneIndexRoute } from "@/core/builderRoutes";
 
 
 const store = useStore();
@@ -144,22 +145,9 @@ const delete_assignment = async (assignment_id) => {
 
 const assignment_link = (assignment) => {
   if (assignment.model_type === 'room') {
-    return {
-      name: 'builder_room_index',
-      params: {
-        world_id: route.params.world_id,
-        room_id: assignment.id
-      }
-    } as RouteLocationRaw;
+    return builderRoomIndexRoute(route.params.world_id, assignment);
   }
-  // Assume it's a zone
-  return {
-    name: 'builder_zone_index',
-    params: {
-      world_id: route.params.world_id,
-      zone_id: assignment.id
-    }
-  } as RouteLocationRaw;
+  return builderZoneIndexRoute(route.params.world_id, assignment);
 }
 
 const assignment_type_name = (assignment) => {

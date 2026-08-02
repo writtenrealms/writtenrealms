@@ -197,6 +197,10 @@ spec:
 
 Manifest B:
 
+Room-bearing quest fields use stable `room@<relative_id>` refs. These refs
+survive room moves and world export/import; database and coordinate aliases
+are accepted only while importing older manifests.
+
 ```yaml
 kind: quest
 metadata:
@@ -213,7 +217,7 @@ spec:
   discovery:
     sources:
       - type: room_prompt
-        room: room.<training_room_id>
+        room: room@<training_room_relative_id>
     visible_if:
       quest_completed: first_steps
     accept_if:
@@ -307,7 +311,7 @@ spec:
   discovery:
     sources:
       - type: room_prompt
-        room: room.<courier_room_id>
+        room: room@<courier_room_relative_id>
     visible_if: {}
     accept_if: {}
     salience: 20
@@ -678,7 +682,7 @@ spec:
   discovery:
     sources:
       - type: room_prompt
-        room: room.<survey_room_id>
+        room: room@<survey_room_relative_id>
     visible_if: {}
     accept_if: {}
     salience: 20
@@ -708,7 +712,7 @@ spec:
           tracker:
             event: cmd.look.success
             where:
-              in: [event.target.id, [<east_shrine_room_id>, <west_shrine_room_id>]]
+              in: [event.target.id, [room@<east_shrine_relative_id>, room@<west_shrine_relative_id>]]
           progress:
             mode: unique_count
             target: 2

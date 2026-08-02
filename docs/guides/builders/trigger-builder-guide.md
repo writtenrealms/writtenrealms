@@ -94,9 +94,7 @@ metadata:
 spec:
   scope: room
   kind: command
-  target:
-    type: room
-    key: room.10
+  target: room@10
   match: pull lever
   script: /cmd room -- /echo -- The lever clicks.
   steps: []
@@ -121,8 +119,9 @@ What this does:
 
 ### Top-Level Fields
 
-- `apiVersion`: optional. `writtenrealms.com/v1alpha1` is accepted, but current
-  builder exports often omit it.
+- `apiVersion`: optional. The v1alpha1, v1alpha2, and v1alpha3 short or
+  `writtenrealms.com/` forms are accepted; full-world exports use
+  `writtenrealms.com/v1alpha3`.
 - `kind`: must be `trigger`.
 - `operation`: omit for create or update. Use `delete` for delete manifests.
 - `metadata`: trigger identity and display metadata.
@@ -142,7 +141,9 @@ If neither is present, the manifest creates a new trigger.
 
 - `scope`: where the trigger lives. The room template uses `room`.
 - `kind`: `command`, `policy`, or `event`.
-- `target`: what object the trigger is attached to. In room templates, this
+- `target`: typed scalar identifying what the Trigger is attached to. Use
+  `room@<relative_id>`, `zone@<relative_id>`, `world`,
+  `mobdefinition.<slug>`, or `itemdefinition.<slug>`. In room templates this
   points at the current room and usually should stay that way.
 - `match`: the authored matcher expression. Required for command triggers and
   mob `say`, `receive`, `periodic`, and `social` event triggers.
@@ -162,6 +163,12 @@ If neither is present, the manifest creates a new trigger.
   no cooldown. Policy triggers ignore this.
 - `order`: lower values run earlier when multiple matching triggers are in play.
 - `is_active`: if `false`, the trigger stays authored but does not run.
+
+Canonical Trigger YAML always writes `target` as one scalar. Imports still
+accept the older `{type, ref}`, `{type, key}`, and `{type, id}` mappings, but
+database-local keys and ids are not portable and are never emitted by export.
+On an update, omitting `spec.target` preserves the Trigger's existing target;
+create manifests still require a target except for the world-command default.
 - `event`: required for `kind: policy` and `kind: event` triggers. The
   recommended player-arrival hook is room-scoped `event: enter`.
 
@@ -327,7 +334,7 @@ Common commands you will often use in trigger scripts:
 - `/cmd room -- /load item <item_slug>`
 - `/cmd room -- /grantitem {{ actor_key }} <item_slug>`
 - `/cmd room -- /kill {{ actor_key }} -- <private death message>`
-- `/cmd room -- /transfer {{ actor_key }} room@x,y,z`
+- `/cmd room -- /transfer {{ actor_key }} room@<relative_id>`
 - `/cmd room -- /repop`
 - `/cmd room -- /repop --doors`
 
@@ -354,9 +361,7 @@ metadata:
 spec:
   scope: room
   kind: command
-  target:
-    type: room
-    key: room.128377
+  target: room@128377
   match: plant seeds
   script: ""
   conditions:
@@ -435,9 +440,7 @@ metadata:
 spec:
   scope: room
   kind: command
-  target:
-    type: room
-    key: room.128377
+  target: room@128377
   match: harvest
   script: ""
   conditions:
@@ -659,7 +662,7 @@ steps:
     actions:
       - type: command
         subject: trigger_room
-        command: /transfer {{ actor_key }} room@10,4,0
+        command: /transfer {{ actor_key }} room@42
 ```
 
 The authored order is also the narrative-output order. The runtime first
@@ -687,7 +690,7 @@ There are three subject forms:
 # The triggering player transfers themself.
 - type: command
   subject: trigger_actor
-  command: /transfer self room@10,4,0
+  command: /transfer self room@42
 
 # Exactly one live mob of this definition in the original Trigger room acts.
 - type: command
@@ -716,13 +719,13 @@ audited transactional `/transfer` command. Most approved handlers are
 event-only. `/transfer` is the intentional mutating exception: it can target
 only the Trigger actor, but any of the three supported subject forms may issue
 it. The canonical forms are `subject: trigger_room` with
-`/transfer {{ actor_key }} room@x,y,z` and `subject: trigger_actor` with
-`/transfer self room@x,y,z`. An exact-one selected mob may also issue
-`/transfer {{ actor_key }} room@x,y,z`. `self` or `me` is accepted only when
-the resolved subject is the Trigger actor. That is normally
+`/transfer {{ actor_key }} room@<relative_id>` and `subject: trigger_actor` with
+`/transfer self room@<relative_id>`. An exact-one selected mob may also issue
+`/transfer {{ actor_key }} room@<relative_id>`. `self` or `me` is accepted only
+when the resolved subject is the Trigger actor. That is normally
 `subject: trigger_actor`, but a selected mob can also qualify when it is itself
 the Mob Trigger actor. Other room and selected-mob subjects must name the
-rendered actor key. Always use the portable `room@x,y,z` destination form in
+rendered actor key. Always use the stable `room@<relative_id>` destination form in
 authored YAML.
 Zone-wide `yell` and zone/world echoes are excluded because they can create
 large fanout while a step transaction is open. Other movement, combat,
@@ -1016,7 +1019,7 @@ without ordinary movement checks. In an immediate `script`, use the room
 wrapper:
 
 ```yaml
-script: /cmd room -- /transfer {{ actor_key }} room@10,4,0
+script: /cmd room -- /transfer {{ actor_key }} room@42
 ```
 
 In a typed Trigger step, do not use `/cmd`. Either have the Trigger room
@@ -1025,7 +1028,7 @@ transfer the Trigger actor:
 ```yaml
 - type: command
   subject: trigger_room
-  command: /transfer {{ actor_key }} room@10,4,0
+  command: /transfer {{ actor_key }} room@42
 ```
 
 Or have an embodied Trigger actor transfer themself:
@@ -1033,7 +1036,7 @@ Or have an embodied Trigger actor transfer themself:
 ```yaml
 - type: command
   subject: trigger_actor
-  command: /transfer self room@10,4,0
+  command: /transfer self room@42
 ```
 
 Those are the canonical forms, but an exact-one selected mob may also issue the
@@ -1045,7 +1048,7 @@ command with the Trigger actor as its explicit target:
     type: mob
     room: trigger_room
     mob: mobdefinition.charon
-  command: /transfer {{ actor_key }} room@10,4,0
+  command: /transfer {{ actor_key }} room@42
 ```
 
 Any supported subject may issue `/transfer`; the typed-step contract
@@ -1054,9 +1057,12 @@ select an arbitrary bystander player or mob. `self` and `me` are accepted only
 when the resolved command subject is the Trigger actor. Other subjects must use
 `{{ actor_key }}`.
 
-Always use the portable `room@x,y,z` destination form in trigger YAML. Database
-room ids can differ after export and import. The Trigger room, execution
-subject, target, and destination must remain in the same live runtime world;
+Always use the stable `room@<relative_id>` destination form in Trigger YAML.
+It survives both room moves and export/import. Resolvable legacy
+`room@x,y,z` and `room.<database_pk>` tokens in semantic script and command
+fields are rewritten during normalization; computed or dynamic strings cannot
+be rewritten ahead of time and must resolve at runtime. The Trigger room,
+execution subject, target, and destination must remain in the same live runtime world;
 transfer cannot cross instance runs.
 
 Transfer bypasses stamina, door traversal checks, and movement policy triggers.
@@ -1085,7 +1091,7 @@ independently wrapped room commands on the same script line when they should
 happen immediately:
 
 ```yaml
-script: /cmd room -- /send {{ actor_key }} -- The wall folds around you. && /cmd room -- /transfer {{ actor_key }} room@10,4,0
+script: /cmd room -- /send {{ actor_key }} -- The wall folds around you. && /cmd room -- /transfer {{ actor_key }} room@42
 ```
 
 WR1's `transfer <target> <room> <command>` trailing-command form is not valid
@@ -1113,9 +1119,7 @@ metadata:
 spec:
   scope: room
   kind: event
-  target:
-    type: room
-    key: room.<room_id>
+  target: room@<room_relative_id>
   event: enter
   script: |
     /cmd room -- /kill {{ actor_key }} -- The pit swallows you whole.
@@ -1167,10 +1171,7 @@ metadata:
 spec:
   scope: room
   kind: command
-  target:
-    type: room
-    key: room.185
-    name: Altar of Poseidon
+  target: room@185
   match: Pledge or Pledge to Poseidon
   script: |
     /cmd room -- /echo -- You feel Poseidon's tide answer in your blood.
@@ -1207,9 +1208,7 @@ spec:
   scope: room
   kind: policy
   event: before_move_enter
-  target:
-    type: room
-    key: room.999
+  target: room@999
   conditions:
     eq:
       - actor.archetype
@@ -1231,9 +1230,7 @@ spec:
   scope: room
   kind: policy
   event: before_move_exit
-  target:
-    type: room
-    key: room.120
+  target: room@120
   match: north
   conditions:
     eq:
@@ -1260,9 +1257,7 @@ spec:
   scope: room
   kind: policy
   event: before_move_exit
-  target:
-    type: room
-    key: room.120
+  target: room@120
   match: east
   conditions:
     not:
@@ -1298,9 +1293,7 @@ spec:
   scope: room
   kind: event
   event: enter
-  target:
-    type: room
-    key: room.999
+  target: room@999
   conditions:
     not:
       eq:
@@ -1339,9 +1332,7 @@ same event text but a different target:
 spec:
   scope: world
   kind: event
-  target:
-    type: mobdefinition
-    key: mobdefinition.22
+  target: mobdefinition.archive-greeter
   event: enter
   script: say Welcome, traveler.
 ```
@@ -1384,9 +1375,7 @@ metadata:
 spec:
   scope: room
   kind: command
-  target:
-    type: room
-    key: room.10
+  target: room@10
   match: pull lever
   conditions:
     not:
@@ -1462,7 +1451,8 @@ WR2 mob definitions with `mobdefinition` refs.
 
 The reacting mob remains the command issuer, while actor templates such as
 `{{ actor_key }}` refer to the character that caused the event. This lets an
-`entering` reaction issue `/transfer {{ actor_key }} room@x,y,z` without moving
+`entering` reaction issue
+`/transfer {{ actor_key }} room@<relative_id>` without moving
 the reacting mob itself.
 
 Example:
@@ -1475,9 +1465,7 @@ metadata:
 spec:
   scope: world
   kind: event
-  target:
-    type: mobdefinition
-    key: mobdefinition.22
+  target: mobdefinition.archive-greeter
   event: say
   match: hello and (traveler or friend)
   script: say Welcome to the archive.
@@ -1498,9 +1486,7 @@ metadata:
 spec:
   scope: world
   kind: event
-  target:
-    type: mobdefinition
-    key: mobdefinition.22
+  target: mobdefinition.guard
   event: social
   match: salute
   script: say Your courtesy is noted.

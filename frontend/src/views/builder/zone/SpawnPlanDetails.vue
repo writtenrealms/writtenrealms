@@ -52,7 +52,7 @@ const zoneManifestRef = computed(() => {
   return "zone@ZONE_RELATIVE_ID";
 });
 const endpoint = computed(() => (
-  `/builder/worlds/${route.params.world_id}/zones/${route.params.zone_id}/spawn-plans/${route.params.spawn_plan_id}/`
+  `/builder/worlds/${route.params.world_id}/zones/${zone.value.id}/spawn-plans/${route.params.spawn_plan_id}/`
 ));
 const manifestApplyEndpoint = computed(() => `/builder/worlds/${route.params.world_id}/manifests/apply/`);
 const headerTitle = computed(() => spawnPlan.value?.name || "New Spawn Plan");
@@ -103,14 +103,6 @@ spec:
 `;
 };
 
-const ensureRouteZone = async () => {
-  if (String(zone.value?.id || "") === String(route.params.zone_id)) return;
-  await store.dispatch("builder/zone_fetch", {
-    world_id: route.params.world_id,
-    zone_id: route.params.zone_id,
-  });
-};
-
 const setLoadedState = (payload: any) => {
   spawnPlan.value = payload;
   loadedYaml.value = payload?.yaml || "";
@@ -119,20 +111,19 @@ const setLoadedState = (payload: any) => {
 
 const setNewState = async () => {
   spawnPlan.value = null;
-  await ensureRouteZone();
   const yaml = newSpawnPlanYaml();
   loadedYaml.value = "";
   manifestText.value = yaml;
 };
 
 const fetchSpawnPlan = async () => {
+  if (String(zone.value?.relative_id) !== String(route.params.zone_relative_id)) return;
   if (isNew.value) {
     await setNewState();
     return;
   }
   isLoading.value = true;
   try {
-    await ensureRouteZone();
     const resp = await axios.get(endpoint.value);
     setLoadedState(resp.data);
   } catch (error: any) {
@@ -157,10 +148,10 @@ const copyDeleteYaml = async () => {
 const syncRouteToSpawnPlan = async (payload: any) => {
   const id = payload?.id;
   if (!id) return;
-  const targetZoneId = payload?.zone?.id || route.params.zone_id;
+  const targetZoneRelativeId = payload?.zone?.relative_id || route.params.zone_relative_id;
   if (
     String(route.params.spawn_plan_id) === String(id)
-    && String(route.params.zone_id) === String(targetZoneId)
+    && String(route.params.zone_relative_id) === String(targetZoneRelativeId)
   ) {
     return;
   }
@@ -168,7 +159,7 @@ const syncRouteToSpawnPlan = async (payload: any) => {
     name: "builder_zone_spawn_plan_details",
     params: {
       world_id: route.params.world_id,
-      zone_id: targetZoneId,
+      zone_relative_id: targetZoneRelativeId,
       spawn_plan_id: id,
     },
   });
@@ -193,7 +184,7 @@ const submitManifest = async () => {
         name: "builder_zone_spawn_plan_list",
         params: {
           world_id: route.params.world_id,
-          zone_id: route.params.zone_id,
+          zone_relative_id: route.params.zone_relative_id,
         },
       });
       return;
@@ -218,7 +209,7 @@ const submitManifest = async () => {
 onMounted(fetchSpawnPlan);
 
 watch(
-  () => [route.params.zone_id, route.params.spawn_plan_id],
+  () => [route.params.zone_relative_id, route.params.spawn_plan_id],
   async (nextValue, prevValue) => {
     if (String(nextValue) === String(prevValue)) return;
     await fetchSpawnPlan();

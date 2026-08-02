@@ -80,11 +80,26 @@ class QuestTemplateSerializer(serializers.ModelSerializer):
             'name': obj.arc.name,
         }
 
+    def _portable_manifest(self, obj):
+        cache = self.context.setdefault('_portable_manifest_cache', {})
+        cache_key = obj.pk if obj.pk is not None else id(obj)
+        manifest = cache.get(cache_key)
+        if manifest is None:
+            manifest = quest_manifests.quest_template_to_portable_manifest(
+                obj,
+                entity_ref_cache=self.context.get('entity_ref_cache'),
+                room_ref_cache=self.context.get('room_ref_cache'),
+            )
+            cache[cache_key] = manifest
+        return manifest
+
     def get_manifest(self, obj):
-        return quest_manifests.quest_template_to_manifest(obj)
+        return self._portable_manifest(obj)
 
     def get_yaml(self, obj):
-        return quest_manifests.manifest_to_yaml(self.get_manifest(obj))
+        return quest_manifests.manifest_to_yaml(
+            self._portable_manifest(obj)
+        )
 
     def get_delete_manifest(self, obj):
         return quest_manifests.quest_template_delete_manifest(obj)

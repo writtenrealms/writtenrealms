@@ -72,7 +72,12 @@ To keep map + room + actor payloads consistent across spawned worlds, WR2 treats
 room keys as world-local identifiers:
 
 - Public room key format: `room.<relative_id>`
-- Internal DB identity: `room.id` (never used as a client-facing room key)
+- Authored manifest reference: `room@<relative_id>`
+- Internal database identity: `Room.id` (never used as either public identity)
+
+The public dotted key and manifest `@` reference carry the same immutable
+world-relative id. The syntax differs because runtime entity keys and authored
+manifest references are separate contracts.
 
 For state payloads, these fields must always agree:
 
@@ -84,8 +89,8 @@ For state payloads, these fields must always agree:
 Notes:
 
 - `relative_id` is unique per world and remains stable for world-local references.
-- If `relative_id` is unexpectedly missing, backend falls back to `room.<id>` as a
-  safety net, but this should be treated as a data integrity issue.
+- `relative_id` is required and positive; a missing value is a data-integrity
+  error rather than a reason to expose the database primary key.
 - Frontend uses `data.room.key` as the primary active-room key and falls back to
   other known map keys only for resilience.
 

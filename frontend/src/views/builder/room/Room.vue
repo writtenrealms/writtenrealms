@@ -10,7 +10,7 @@
     <div v-if="isMapReady" class="info-and-map">
       <div class="id-map-coords">
         <div class="id-and-coords">
-          <div class="room-id" :title="room.key">{{ room.id }}</div>
+          <div class="room-reference">{{ manifestRef }}</div>
           <div class="room-coordinates">({{ room.x }}, {{ room.y }}, {{ room.z}})</div>
         </div>
         <Map
@@ -55,6 +55,27 @@
       <h3>ROOM NOTE</h3>
       <div>{{ room.note }}</div>
     </div>
+
+    <details class="technical-details mt-8">
+      <summary>Technical details</summary>
+      <dl>
+        <div>
+          <dt>Room reference</dt>
+          <dd class="technical-room-reference">
+            {{ manifestRef }}
+            <button class="btn-thin copy-room-reference" @click="copyManifestRef">COPY</button>
+          </dd>
+        </div>
+        <div>
+          <dt>Relative ID</dt>
+          <dd>{{ room.relative_id }}</dd>
+        </div>
+        <div>
+          <dt>Database ID</dt>
+          <dd>{{ room.id }}</dd>
+        </div>
+      </dl>
+    </details>
   </div>
 </template>
 
@@ -67,6 +88,7 @@ import { DIRECTIONS } from "@/constants";
 import RoomDirActions from "@/components/builder/room/RoomDirActions.vue";
 import { BUILDER_FORMS } from "@/core/forms";
 import { getMovementDirectionFromArrowKey } from "@/core/keyboard";
+import { builderRoomIndexRoute } from "@/core/builderRoutes";
 import RoomDescription from "@/components/builder/room/RoomDescription.vue";
 
 const store = useStore();
@@ -76,6 +98,7 @@ const router = useRouter();
 const map = computed(() => store.state.builder.map);
 const center_key = computed(() => store.state.builder.room.key);
 const room = computed(() => store.state.builder.room);
+const manifestRef = computed(() => room.value?.manifest_ref || `room@${room.value?.relative_id}`);
 const roomDoors = computed<any[]>(() => {
   if (!room.value.doors) return [];
   const doors: {}[] = [];
@@ -107,20 +130,8 @@ const isEditableTarget = (target: EventTarget | null) => {
 };
 
 const goToRoom = (nextRoom) => {
-  if (!nextRoom?.id) return;
-
-  if (nextRoom.zone) {
-    store.dispatch("builder/room_select", nextRoom);
-  }
-
-  router.push({
-    name: 'builder_room_index',
-    params: {
-      world_id: route.params.world_id,
-      zone_id: route.params.zone_id,
-      room_id: nextRoom.id
-    }
-  });
+  if (!nextRoom?.id && !nextRoom?.relative_id && !nextRoom?.manifest_ref) return;
+  router.push(builderRoomIndexRoute(route.params.world_id, nextRoom));
 };
 
 const moveToDirection = (direction: string) => {
@@ -151,21 +162,8 @@ const onKeyDown = (e: KeyboardEvent) => {
   }
 };
 
-onMounted(async () => {
+onMounted(() => {
   window.addEventListener("keydown", onKeyDown);
-  if (!store.state.builder.room || store.state.builder.room != route.params.room_id) {
-    const room = await store.dispatch("builder/room_fetch", {
-      world_id: route.params.world_id,
-      room_id: route.params.room_id
-    });
-
-    if (!store.state.builder.zone || store.state.builder.zone != room.zone.id) {
-      await store.dispatch("builder/zone_fetch", {
-        world_id: route.params.world_id,
-        zone_id: room.zone.id
-      });
-    }
-  }
 });
 
 onUnmounted(() => {
@@ -183,10 +181,20 @@ const editInfo = () => {
 
 const deleteRoom = async () => {
   const room_id = store.state.builder.room.id;
-  const c = confirm(`Are you sure you want to delete Room ${room_id}?`);
+  const room_ref = manifestRef.value;
+  const c = confirm(`Are you sure you want to delete ${room_ref}?`);
   if (!c) return;
   await store.dispatch("builder/room_delete");
-  store.commit("ui/notification_set", `Deleted Room ${room_id}`);
+  store.commit("ui/notification_set", `Deleted ${room_ref} (database ID ${room_id})`);
+};
+
+const copyManifestRef = async () => {
+  try {
+    await navigator.clipboard.writeText(manifestRef.value);
+    store.commit("ui/notification_set", `${manifestRef.value} copied.`);
+  } catch {
+    store.commit("ui/notification_set_error", "Unable to copy room reference to clipboard.");
+  }
 };
 
 const onEditDescription = () => {
@@ -224,7 +232,7 @@ const onMapClickRoom = (room) => {
         justify-content: space-between;
         margin-bottom: 0.5em;
 
-        .room-id {
+        .room-reference {
           color: $color-text-70;
         }
       }
@@ -245,6 +253,44 @@ const onMapClickRoom = (room) => {
       button {
         margin-top: 8px;
       }
+    }
+  }
+
+  .technical-details {
+    color: $color-text-70;
+
+    summary {
+      cursor: pointer;
+    }
+
+    dl {
+      margin: 0.75rem 0 0;
+    }
+
+    dl > div {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 0.25rem;
+    }
+
+    dt {
+      min-width: 105px;
+    }
+
+    dd {
+      color: $color-text;
+      margin: 0;
+    }
+
+    .technical-room-reference {
+      align-items: center;
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .copy-room-reference {
+      font-size: 0.65rem;
+      padding: 1px 4px;
     }
   }
 

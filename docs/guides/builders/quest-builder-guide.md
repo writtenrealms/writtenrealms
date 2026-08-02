@@ -136,7 +136,7 @@ supports, that difference is called out explicitly.
 
 | Field        | Required             | Values                                   | Notes                                                        |
 | ------------ | -------------------- | ---------------------------------------- | ------------------------------------------------------------ |
-| `apiVersion` | no                   | `v1alpha1`, `writtenrealms.com/v1alpha1` | Optional. Exported quest YAML currently omits it by default. |
+| `apiVersion` | no                   | `v1alpha1`, `v1alpha2`, `v1alpha3`, or their `writtenrealms.com/` forms | Optional. Full-world export uses `writtenrealms.com/v1alpha3`. |
 | `kind`       | yes                  | `quest`                                  | Case-insensitive on ingest.                                  |
 | `operation`  | no                   | `apply`, `delete`                        | Defaults to `apply`. Use `delete` for delete manifests.      |
 | `metadata`   | yes                  | mapping                                  | Quest identity and display metadata.                         |
@@ -219,7 +219,7 @@ Supported discovery source shapes:
 | `type`         | Required fields                     | Behavior                                                                                                                      |
 | -------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `auto_start`   | none                                | Starts automatically on `cmd.state.sync.success`, `cmd.look.success`, or `cmd.move.success`.                                  |
-| `room_prompt`  | `room` or `room_id`, plus `callout`     | Shows as an opportunity when the player is in that room. The room reference can be an integer id, `room.<id>`, or portable `room@x,y,z`. The room view shows the authored callout line with `[ ! ]` and the player can use `inspect` to see the quest pitch. |
+| `room_prompt`  | `room` or `room_id`, plus `callout`     | Shows as an opportunity when the player is in that room. Use canonical `room@<relative_id>`; legacy integer ids, `room.<database_pk>`, and `room@x,y,z` are import aliases. The room view shows the authored callout line with `[ ! ]` and the player can use `inspect` to see the quest pitch. |
 | `npc_dialogue` | `mob_definition` or `mob_definition_id` | Shows through NPC dialogue and room UI markers. Mob refs can be ids, `mobdefinition.<id>`, `mobdefinition.<slug>`, or bare slugs. |
 
 Quest item and mob references use WR2 definitions. Do not author new quest
@@ -494,7 +494,7 @@ spec:
           "I can't leave the bar unattended."
       room_items:
         - id: saloon_keg
-          room: room@1,0,0
+          room: room@2
           item_definition: saloon_keg
           room_description: A full saloon keg rests here.
       objectives:

@@ -38,7 +38,7 @@ const route = useRoute();
 
 const processions_list_link = {
   name: 'builder_zone_procession_list',
-  params: { zone_id: route.params.zone_id }
+  params: { zone_relative_id: route.params.zone_relative_id }
 };
 
 const moveZone = async () => {

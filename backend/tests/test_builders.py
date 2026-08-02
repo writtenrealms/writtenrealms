@@ -27,6 +27,8 @@ from builders.models import (
     ItemDefinition,
     Path,
     PathRoom,
+    SpawnEntry,
+    SpawnPlan,
     Faction,
     FactionAssignment,
     FactionRank,
@@ -489,6 +491,32 @@ class TestZoneEndpoints(BuilderTestCase):
         with self.assertRaises(Zone.DoesNotExist):
             Zone.objects.get(pk=zone.pk)
 
+    def test_cannot_delete_zone_targeted_by_spawn_entry(self):
+        target_zone = Zone.objects.create(
+            world=self.world,
+            name='Spawn Target Zone',
+        )
+        plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug='zone-target-plan',
+        )
+        entry = SpawnEntry.objects.create(
+            plan=plan,
+            slug='zone-target-entry',
+            target_zone=target_zone,
+        )
+
+        resp = self.client.delete(reverse(
+            'builder-zone-detail',
+            args=[self.world.pk, target_zone.pk],
+        ))
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertTrue(Zone.objects.filter(pk=target_zone.pk).exists())
+        entry.refresh_from_db()
+        self.assertEqual(entry.target_zone_id, target_zone.id)
+
 
 class TestMoveZone(BuilderTestCase):
 
@@ -594,6 +622,36 @@ class TestRoomEndpoints(BuilderTestCase):
 
         # north_room is still there, but has its south exit nulled out
         north_room = Room.objects.get(pk=north_room.pk)
+
+    def test_cannot_delete_room_targeted_by_spawn_entry(self):
+        target_room = Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name='Spawn Target Room',
+            x=1,
+            y=0,
+            z=0,
+        )
+        plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug='room-target-plan',
+        )
+        entry = SpawnEntry.objects.create(
+            plan=plan,
+            slug='room-target-entry',
+            target_room=target_room,
+        )
+
+        resp = self.client.delete(reverse(
+            'builder-room-detail',
+            args=[self.world.pk, target_room.pk],
+        ))
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertTrue(Room.objects.filter(pk=target_room.pk).exists())
+        entry.refresh_from_db()
+        self.assertEqual(entry.target_room_id, target_room.id)
 
     def test_cannot_delete_room_with_online_player_in_it(self):
         spawned_world = self.world.create_spawn_world()
@@ -1415,6 +1473,34 @@ class PathTests(BuilderTestCase):
         self.assertEqual(resp.status_code, 204)
         self.assertEqual(self.path.rooms.count(), 0)
         self.assertTrue(mock_update_live_instances.called)
+
+    def test_cannot_delete_path_targeted_by_spawn_entry(self):
+        path_room = PathRoom.objects.create(
+            path=self.path,
+            room=self.room,
+        )
+        plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug='path-target-plan',
+        )
+        entry = SpawnEntry.objects.create(
+            plan=plan,
+            slug='path-target-entry',
+            target_path=self.path,
+        )
+
+        resp = self.client.delete(reverse(
+            'builder-path-details',
+            args=[self.world.pk, self.path.pk],
+        ))
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertTrue(Path.objects.filter(pk=self.path.pk).exists())
+        self.assertTrue(PathRoom.objects.filter(pk=path_room.pk).exists())
+        self.assertEqual(self.path.rooms.count(), 1)
+        entry.refresh_from_db()
+        self.assertEqual(entry.target_path_id, self.path.id)
 
 
 class WorldBuildersTests(BuilderTestCase):

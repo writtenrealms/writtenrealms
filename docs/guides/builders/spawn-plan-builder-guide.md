@@ -23,8 +23,7 @@ spec:
   entries:
     - slug: practice-dummy
       source: mobdefinition.practice-dummy
-      target:
-        room: room@1,0,0
+      target: room@2
       count: 1
 ```
 
@@ -100,8 +99,7 @@ spec:
   entries:
     - slug: greek-commander
       source: mobdefinition.greek-captive-commander
-      target:
-        room: room@4,2,0
+      target: room@12
       count: 1
       initial_state:
         captive: true
@@ -138,8 +136,7 @@ spec:
   entries:
     - slug: sewer-rats
       source: mobdefinition.cave-rat
-      target:
-        path: path@2
+      target: path@2
       count: 6
       loot:
         inherit_definition: true
@@ -172,15 +169,17 @@ A target says where the spawned copy should appear.
 Spawn in one fixed room:
 
 ```yaml
-target:
-  room: room@2,0,2
+target: room@22
 ```
+
+The stable `room@<relative_id>` ref follows that authored room when a builder
+moves it. Legacy `room@x,y,z` and `room.<database_pk>` targets are accepted
+during import and normalized to `target: room@<relative_id>`.
 
 Spawn somewhere eligible in the plan's zone or another zone:
 
 ```yaml
-target:
-  zone: zone@1
+target: zone@1
 ```
 
 For mob entries, a zone target also becomes the mob's roaming area. The mob
@@ -191,8 +190,7 @@ both at spawn time and while wandering.
 Spawn on a path:
 
 ```yaml
-target:
-  path: path@4
+target: path@4
 ```
 
 Path names are not accepted in spawn-plan targets because they are not
@@ -211,11 +209,10 @@ generated, WR2 keeps the placement but skips loading the mob there. Removing
 the flag makes that placement eligible again. The check is shared across the
 whole world reconciliation, so it does not add one room-flag query per mob.
 
-A fixed room target is static:
+A fixed room target selects one authored room identity:
 
 ```yaml
-target:
-  room: room@2,0,2
+target: room@22
 ```
 
 Mobs loaded into a specific room do not roam by default. Ambient roam chance is
@@ -236,12 +233,12 @@ metadata:
 spec:
   zone: zone@1
   notes: Harbor patrol route.
-  entry_room: room@1,0,0
+  entry_room: room@1
   max_per_room: 2
   max_per_path: 5
   rooms:
-    - room@1,0,0
-    - room@2,0,0
+    - room@1
+    - room@2
 ```
 
 `metadata.ref` is the portable path identity. It uses the same relative-id
@@ -254,15 +251,30 @@ Spawn inside or on the same room as another entry by using that entry slug:
 entries:
   - slug: chest
     source: itemdefinition.iron-chest
-    target:
-      room: room@3,0,0
+    target: room@3
     count: 1
   - slug: chest-loot
     source: itembundle.training-loot
-    target:
-      entry: chest
+    target: entry.chest
     count: 2
 ```
+
+`entry.<slug>` is local to the containing spawn plan and resolves exactly one
+other `spec.entries[].slug`; it is not a world-wide resource reference. The
+referenced entry must have a lower `order`, so its placement exists before the
+dependent entry is generated. If the dependent entry is active, the referenced
+entry must also be active.
+
+Every spawn entry has exactly one target. Canonical manifests and exports use
+one typed scalar: `room@<relative_id>`, `zone@<relative_id>`,
+`path@<relative_id>`, or `entry.<slug>`. Older mapping forms using `room`,
+`room_ref`, `zone`, `path`, `entry`, or `parent_entry` are accepted only as
+import aliases and are rewritten to the scalar form. A legacy mapping that
+declares more than one target kind is invalid rather than order-dependent.
+
+Room, zone, and path targets resolve to relational identities when imported.
+Their portable relative refs survive export to a fresh database, and moving a
+room changes only its coordinates—not the target or the room's relative id.
 
 Current first-pass placement supports fixed room, zone, path, and entry targets.
 Room tag selectors and deeper spacing rules are planned for guided dungeons but
@@ -287,8 +299,7 @@ spec:
   entries:
     - slug: sparabara
       source: mobdefinition.sparabara
-      target:
-        path: path@4
+      target: path@4
       count: 1
       cohort: west-harbor-patrol
       cohort_role: leader
@@ -296,8 +307,7 @@ spec:
 
     - slug: archer
       source: mobdefinition.harbor-archer
-      target:
-        entry: sparabara
+      target: entry.sparabara
       count: 1
       cohort: west-harbor-patrol
       cohort_role: follower
@@ -306,7 +316,7 @@ spec:
 
 The leader's `path` or `zone` target is inherited by follower mobs that target
 the leader entry, so the archer above roams on `path@4` even though its direct
-target is `entry: sparabara`. If the leader targets a fixed room, the cohort
+target is `entry.sparabara`. If the leader targets a fixed room, the cohort
 spawns together but stays static.
 
 `cohort` is the authored patrol name. It is not the runtime group id; each
@@ -317,12 +327,12 @@ patrol template do not merge.
 `leader` for predictable roaming. If no live leader exists, the runtime picks
 the first surviving member as the temporary anchor.
 
-Follower entries must target another entry with `target.entry`. The target
-entry must be active and have a lower `order` than the follower, because the
-runtime generates parent placements before child placements. When both entries
-declare a `cohort`, the cohort values must match. A cohort template can have
-only one leader entry; increase that leader entry's `count` to create multiple
-copies of the same patrol.
+Active follower entries must target another active entry with
+`target: entry.<slug>`. The target entry must have a lower `order` than the
+follower, because the runtime generates parent placements before child
+placements. When both entries declare a `cohort`, the cohort values must match.
+A cohort template can have only one leader entry; increase that leader entry's
+`count` to create multiple copies of the same patrol.
 
 `cohort_policy` currently supports `refill_missing`, which is also the default.
 When a cohort is due to respawn:
@@ -470,8 +480,7 @@ spec:
           weight: 70
         - ref: mobdefinition.crypt-scout
           weight: 30
-      target:
-        zone: zone@3
+      target: zone@3
       count:
         min: 4
         max: 7

@@ -150,7 +150,14 @@ def _validate_api_version(manifest: dict[str, Any]) -> None:
         return
 
     api_version = str(raw_version).strip()
-    allowed_versions = {MANIFEST_API_VERSION, LEGACY_MANIFEST_API_VERSION}
+    allowed_versions = {
+        MANIFEST_API_VERSION,
+        LEGACY_MANIFEST_API_VERSION,
+        "v1alpha2",
+        "writtenrealms.com/v1alpha2",
+        "v1alpha3",
+        "writtenrealms.com/v1alpha3",
+    }
     if api_version not in allowed_versions:
         raise serializers.ValidationError(
             f"Unsupported apiVersion '{api_version}'. Allowed: {', '.join(sorted(allowed_versions))}."
@@ -235,8 +242,8 @@ def _validate_entity_ref(world: World, value: Any, expected_type: str, field_nam
 
 def _room_ref_error(field_name: str) -> str:
     return (
-        f"{field_name} must be an integer id, a 'room.<id>' key, "
-        "or a 'room@x,y,z' coordinate ref."
+        f"{field_name} must be a canonical 'room@<relative_id>' ref, "
+        "a legacy integer/database key, or a legacy 'room@x,y,z' coordinate ref."
     )
 
 
@@ -303,7 +310,12 @@ def _condition_uses_room_ref(
     event_target_is_room: bool = False,
 ) -> bool:
     path = str(left_path or "").strip()
-    if path in {"player.room_id", "player.room.id"}:
+    if path in {
+        "actor.room_id",
+        "actor.room.id",
+        "player.room_id",
+        "player.room.id",
+    }:
         return True
     if path == "event.target.id" and event_target_is_room:
         return True
@@ -1037,8 +1049,28 @@ def quest_template_delete_manifest(quest: QuestTemplate) -> dict[str, Any]:
     }
 
 
+def quest_template_to_portable_manifest(
+    quest: QuestTemplate,
+    *,
+    entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
+    room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+) -> dict[str, Any]:
+    """Serialize one quest with the same refs used by a world export."""
+
+    # Lazy import avoids a module cycle: world_export builds source documents
+    # from quest_template_to_manifest().
+    from builders import world_export as builder_world_export
+
+    return builder_world_export.canonicalize_manifest_for_export(
+        manifest=quest_template_to_manifest(quest),
+        world=quest.world,
+        entity_ref_cache=entity_ref_cache,
+        room_ref_cache=room_ref_cache,
+    )
+
+
 def serialize_quest_template_payload(quest: QuestTemplate) -> dict[str, Any]:
-    manifest = quest_template_to_manifest(quest)
+    manifest = quest_template_to_portable_manifest(quest)
     delete_manifest = quest_template_delete_manifest(quest)
     return {
         "id": quest.id,

@@ -127,9 +127,7 @@ spec:
   scope: room
   kind: policy
   event: before_move_enter
-  target:
-    type: room
-    key: room.999
+  target: room@999
   conditions:
     eq:
       - actor.archetype
@@ -154,9 +152,7 @@ spec:
   scope: room
   kind: policy
   event: before_move_exit
-  target:
-    type: room
-    key: room.120
+  target: room@120
   match: north
   conditions:
     eq:
@@ -185,9 +181,7 @@ spec:
   scope: room
   kind: policy
   event: before_move_exit
-  target:
-    type: room
-    key: room.120
+  target: room@120
   match: east
   conditions:
     not:
@@ -212,9 +206,7 @@ spec:
   scope: room
   kind: event
   event: enter
-  target:
-    type: room
-    key: room.999
+  target: room@999
   conditions:
     not:
       eq:

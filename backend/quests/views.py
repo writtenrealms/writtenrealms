@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.views import APIView
 
+from builders import world_export as builder_world_export
 from builders.views import BaseWorldBuilderView
 from core.permissions import IsPlayerInGame
 from quests import manifests as quest_manifests
@@ -35,11 +36,29 @@ def _apply_query(qs, query):
     return qs.filter(Q(name__icontains=query) | Q(slug__icontains=query))
 
 
+def _quest_manifest_serializer_context(world):
+    entity_ref_cache, room_ref_cache = (
+        builder_world_export.build_manifest_semantic_ref_caches(world)
+    )
+    return {
+        'entity_ref_cache': entity_ref_cache,
+        'room_ref_cache': room_ref_cache,
+    }
+
+
 class QuestTemplateListView(BaseWorldBuilderView):
     def get(self, request, world_pk, format=None):
-        qs = QuestTemplate.objects.filter(world=self.world).select_related('arc').order_by('name', 'created_ts')
+        qs = (
+            QuestTemplate.objects.filter(world=self.world)
+            .select_related('arc', 'world')
+            .order_by('name', 'created_ts')
+        )
         qs = _apply_query(qs, request.query_params.get('query'))
-        serializer = quest_serializers.QuestTemplateSerializer(qs, many=True)
+        serializer = quest_serializers.QuestTemplateSerializer(
+            qs,
+            many=True,
+            context=_quest_manifest_serializer_context(self.world),
+        )
         return Response(
             {
                 'new_quest_template': quest_manifests.serialize_quest_template_template(
@@ -52,12 +71,18 @@ class QuestTemplateListView(BaseWorldBuilderView):
 
 class QuestTemplateDetailView(BaseWorldBuilderView):
     def get(self, request, world_pk, pk, format=None):
-        qs = QuestTemplate.objects.filter(world=self.world).select_related('arc')
+        qs = QuestTemplate.objects.filter(world=self.world).select_related(
+            'arc',
+            'world',
+        )
         if str(pk).isdigit():
             quest = get_object_or_404(qs, pk=int(pk))
         else:
             quest = get_object_or_404(qs, slug=pk)
-        serializer = quest_serializers.QuestTemplateSerializer(quest)
+        serializer = quest_serializers.QuestTemplateSerializer(
+            quest,
+            context=_quest_manifest_serializer_context(self.world),
+        )
         return Response(serializer.data)
 
 

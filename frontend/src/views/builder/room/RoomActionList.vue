@@ -15,12 +15,14 @@
 
 <script lang='ts' setup>
 import { useRoute } from "vue-router";
+import { useStore } from "vuex";
 import RoomActionDetails from "@/components/builder/room/RoomActionDetails.vue";
 import EditableCollection from "@/components/editablecollection/EditableCollection.vue";
 import { BUILDER_FORMS } from "@/core/forms.ts";
 
 const route = useRoute();
-const endpoint = `/builder/worlds/${route.params.world_id}/rooms/${route.params.room_id}/actions/`;
+const store = useStore();
+const endpoint = `/builder/worlds/${route.params.world_id}/rooms/${store.state.builder.room.id}/actions/`;
 const display_component = RoomActionDetails;
 const schema = BUILDER_FORMS.ROOM_ACTION;
 </script>

@@ -204,7 +204,7 @@ Example world manifest fragment:
 ```yaml
 kind: world
 spec:
-  death_room: room@0,0,0
+  death_room: room@1
   death_mode: lose_currency
   death_currency: obol
   death_currency_penalty: 0.2
@@ -727,7 +727,7 @@ This command is direct-builder-only.
 Format:
 
 ```text
-/transfer <target> <room_id|room@x,y,z|direction|here>
+/transfer <target> <room@relative_id|room_id|room@x,y,z|direction|here>
 ```
 
 Instantly moves a player or mob without using ordinary movement. Transfer does
@@ -755,7 +755,9 @@ runs, and they do not replace the instance enter/leave workflow.
 
 Destination behavior:
 
-- `room@x,y,z` is the portable form and should be used in trigger YAML
+- `room@<relative_id>` is the portable, move-stable form and should be used in
+  Trigger YAML
+- `room@x,y,z` is a legacy coordinate selector
 - a bare numeric selector is the WR1-compatible, world-relative room id
 - `room.<id>` selects an explicit WR2 room database id for interactive testing
 - a direction such as `north` or `n` uses the executing actor or subject's room
@@ -765,10 +767,10 @@ Destination behavior:
 Examples:
 
 ```text
-/transfer player.123 room@10,4,0
+/transfer player.123 room@42
 /transfer aria 50201
 /transfer guard north
-/cmd room -- /transfer {{ actor_key }} room@10,4,0
+/cmd room -- /transfer {{ actor_key }} room@42
 ```
 
 Direct use requires a builder player. Mob and room issuers require a trusted
@@ -790,11 +792,11 @@ step subject can issue the command. These are the two canonical forms:
 ```yaml
 - type: command
   subject: trigger_room
-  command: /transfer {{ actor_key }} room@10,4,0
+  command: /transfer {{ actor_key }} room@42
 
 - type: command
   subject: trigger_actor
-  command: /transfer self room@10,4,0
+  command: /transfer self room@42
 ```
 
 An exact-one selected mob can also transfer the Trigger actor by naming that
@@ -806,7 +808,7 @@ actor explicitly:
     type: mob
     room: trigger_room
     mob: mobdefinition.charon
-  command: /transfer {{ actor_key }} room@10,4,0
+  command: /transfer {{ actor_key }} room@42
 ```
 
 `self` and `me` are accepted only when the resolved command subject is the
@@ -818,8 +820,9 @@ destinations use the subject's room. Thus `trigger_room` uses the original
 Trigger room, `trigger_actor` uses the actor's current room, and a selected mob
 uses that mob's room.
 
-Do not wrap a typed step command in `/cmd`. Always use `room@x,y,z` in authored
-Trigger YAML so export/import preserves the destination. The room change and
+Do not wrap a typed step command in `/cmd`. Always use
+`room@<relative_id>` in authored Trigger YAML so export/import and later room
+moves preserve the destination. The room change and
 all transfer output participate in the step transaction and roll back if a
 later action fails. A typed transfer that would move a player in active PvP
 fails with `target_busy` and rolls back the whole step; ordinary active
@@ -849,7 +852,7 @@ feedback before the transfer as explicit script commands. For immediate ordered
 room behavior, repeat the room wrapper for each chained segment:
 
 ```yaml
-script: /cmd room -- /send {{ actor_key }} -- The wall folds around you. && /cmd room -- /transfer {{ actor_key }} room@10,4,0
+script: /cmd room -- /send {{ actor_key }} -- The wall folds around you. && /cmd room -- /transfer {{ actor_key }} room@42
 ```
 
 This explicit form still emits transfer's standard disappearance notification.
@@ -863,7 +866,7 @@ actions:
     text: The wall folds around you.
   - type: command
     subject: trigger_room
-    command: /transfer {{ actor_key }} room@10,4,0
+    command: /transfer {{ actor_key }} room@42
 ```
 
 After an initial item/mob mutation prefix, `command`, `debit_currency`,
@@ -1011,7 +1014,7 @@ script: /cmd room -- /kill {{ actor_key }} -- The pit swallows you whole.
 Transfer the triggering player to another room:
 
 ```yaml
-script: /cmd room -- /transfer {{ actor_key }} room@10,4,0
+script: /cmd room -- /transfer {{ actor_key }} room@42
 ```
 
 Have a scripted mob restore health:

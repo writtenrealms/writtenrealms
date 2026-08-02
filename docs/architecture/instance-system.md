@@ -169,7 +169,8 @@ runtime should stop treating the instance template config as an entirely
 separate root-world config. Instead, the meaning should be:
 
 - base config supplies inherited systems
-- instance config supplies required local room references
+- instance config supplies required local room references using immutable
+  `room@<relative_id>` identities rather than mutable coordinates
 - instance overrides supply the allowed local differences
 
 ### Required Instance-Local Config
@@ -1091,7 +1092,8 @@ links. Completion is an instance lifecycle event.
 
 Instance authoring should fit the WR2 manifest workflow.
 
-The canonical target document is `apiVersion: v1alpha1`, `kind: instance`.
+The canonical target document is `apiVersion: writtenrealms.com/v1alpha3`,
+`kind: instance`.
 It owns instance template metadata, config, goals, timers, and cleanup. During
 the transition, `kind: world` plus `metadata.instance_of` remains accepted
 compatibility input and may remain the internal editing/storage primitive, but
@@ -1109,18 +1111,18 @@ policy's relink contract.
 Example:
 
 ```yaml
-apiVersion: v1alpha1
+apiVersion: writtenrealms.com/v1alpha3
 kind: instance
 metadata:
   world: world.1
   slug: sunken_hold
   name: Sunken Hold
 spec:
-  entry_room: room@0,0,0
-  death_room: room@0,1,0
+  entry_room: room@10
+  death_room: room@11
   # Omit or use local for the default in-instance behavior.
   death_routing_source: base_world
-  exit_room: room.42
+  exit_room: room@42
 
   overrides:
     death_mode: destroy_eq
@@ -1172,9 +1174,13 @@ spec:
 ---
 kind: room
 metadata:
-  ref: room@4,2,0
+  ref: room@42
   name: Prison Cell
 spec:
+  coordinates:
+    x: 4
+    y: 2
+    z: 0
   zone: zone@1
   initial_state:
     cell_door_open: false

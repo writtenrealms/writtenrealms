@@ -430,7 +430,7 @@ def currency_usage_map(
     add_structured(
         "spawn entry",
         SpawnEntry.objects.filter(plan__world__in=authored_worlds),
-        ("source", "target", "count", "placement", "traits", "loot", "conditions"),
+        ("source", "count", "placement", "traits", "loot", "conditions"),
     )
     add_structured(
         "ability",

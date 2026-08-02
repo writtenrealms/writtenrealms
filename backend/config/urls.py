@@ -159,6 +159,7 @@ api_v1_urls = [
 
     # Zones
     path('builder/worlds/<world_pk>/zones/', builder_views.zone_list, name='builder-zone-list'),
+    path('builder/worlds/<world_pk>/zones/by-relative-id/<int:relative_id>/', builder_views.zone_relative_detail, name='builder-zone-relative-detail'),
     path('builder/worlds/<world_pk>/zones/<pk>/', builder_views.zone_detail, name='builder-zone-detail'),
     path('builder/worlds/<world_pk>/zones/<pk>/rooms/', builder_views.zone_room_list, name='builder-zone-room-list'),
     path('builder/worlds/<world_pk>/zones/<pk>/paths/', builder_views.zone_path_list, name='builder-zone-path-list'),
@@ -172,6 +173,7 @@ api_v1_urls = [
 
     # Rooms
     path('builder/worlds/<world_pk>/rooms/', builder_views.room_list, name='builder-room-list'),
+    path('builder/worlds/<world_pk>/rooms/by-relative-id/<int:relative_id>/', builder_views.room_relative_detail, name='builder-room-relative-detail'),
     path('builder/worlds/<world_pk>/rooms/<pk>/', builder_views.room_detail, name='builder-room-detail'),
     path('builder/worlds/<world_pk>/rooms/<pk>/manifest/', builder_views.room_manifest, name='builder-room-manifest'),
     path('builder/worlds/<world_pk>/rooms/<pk>/legacy/', builder_views.room_detail_legacy, name='builder-room-detail-legacy'),

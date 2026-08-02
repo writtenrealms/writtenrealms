@@ -212,7 +212,8 @@ spec:
 
         room_doc = next(
             doc for doc in documents
-            if doc["kind"] == "room" and doc["metadata"]["ref"] == room_ref
+            if doc["kind"] == "room"
+            and doc["metadata"]["ref"] == f"room@{self.room.relative_id}"
         )
         self.assertEqual(
             room_doc["spec"]["crafting"]["profile"],
@@ -636,6 +637,37 @@ spec:
         self.assertEqual(profile_detail.status_code, 200, profile_detail.data)
         self.assertEqual(profile_detail.data["recipe_count"], 1)
         self.assertIn("craftingrecipe.t2-hoplite-head", profile_detail.data["yaml"])
+
+    def test_recipe_detail_canonicalizes_room_refs_in_conditions(self):
+        legacy_ref = f"room.{self.room.id}"
+        canonical_ref = f"room@{self.room.relative_id}"
+        recipe = CraftingRecipe.objects.create(
+            world=self.world,
+            slug="room-bound-recipe",
+            group="hoplite",
+            output_item_definition=self.output,
+            conditions={
+                "eq": ["actor.room_id", legacy_ref],
+            },
+        )
+
+        response = self.client.get(
+            reverse(
+                "builder-crafting-recipe-detail",
+                args=[self.world.pk, recipe.pk],
+            )
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(
+            response.data["manifest"]["spec"]["conditions"]["eq"][1],
+            canonical_ref,
+        )
+        self.assertEqual(
+            yaml.safe_load(response.data["yaml"]),
+            response.data["manifest"],
+        )
+        self.assertNotIn(legacy_ref, response.data["yaml"])
 
     def test_explicit_empty_salvage_clears_yields(self):
         bronze, _ = self.create_materials()

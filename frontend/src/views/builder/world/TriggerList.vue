@@ -38,7 +38,6 @@ const formatTarget = (_value, trigger) => {
   const target = trigger.target || {};
   return target.name || target.key || target.type || "";
 };
-const formatActive = (value) => value ? "Active" : "Inactive";
 
 const listSchema: any[] = [
   { name: "id", label: "ID", sortable: true },
@@ -48,7 +47,6 @@ const listSchema: any[] = [
   { name: "target.name", label: "Target", light: true, format: formatTarget },
   { name: "match", label: "Match", light: true, sortable: true },
   { name: "event", label: "Event", light: true, sortable: true },
-  { name: "is_active", label: "Status", light: true, sortable: true, format: formatActive },
   {
     name: "modified_ts",
     label: "Modified",

@@ -238,7 +238,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
             plan=plan,
             slug="guard",
             source="mobdefinition.instance-guard",
-            target={"room": f"room@{self.instance_room.x},{self.instance_room.y},{self.instance_room.z}"},
+            target_room=self.instance_room,
             count=1,
         )
 
@@ -1252,13 +1252,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
             plan=plan,
             slug="guard",
             source="mobdefinition.reset-guard",
-            target={
-                "room": (
-                    f"room@{self.instance_room.x},"
-                    f"{self.instance_room.y},"
-                    f"{self.instance_room.z}"
-                )
-            },
+            target_room=self.instance_room,
             count=1,
         )
         spawned_instance = self._enter()

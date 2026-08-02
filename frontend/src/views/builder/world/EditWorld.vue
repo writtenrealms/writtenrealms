@@ -50,6 +50,13 @@ import { type RouteLocationRaw, useRoute } from "vue-router";
 import { useStore } from "vuex";
 import { capfirst } from "@/core/utils.ts";
 import {
+  builderRoomIndexRoute,
+  builderZoneIndexRoute,
+  roomRelativeIdFromRef,
+  zoneRelativeId,
+  zoneRelativeIdFromRef,
+} from "@/core/builderRoutes";
+import {
   fetchCraftMaterial,
   fetchCraftingProfile,
   fetchCraftingRecipe,
@@ -172,6 +179,8 @@ const routeForEntity = (
   const id = payload?.id;
   const target = payload?.target || {};
   const targetId = parseEntityIdFromKey(target.key);
+  const targetRoomRelativeId = roomRelativeIdFromRef(target.ref);
+  const targetZoneRelativeId = zoneRelativeIdFromRef(target.ref);
 
   if (kind === "world") {
     return { name: "builder_world_config", params: { world_id: worldId } };
@@ -197,16 +206,16 @@ const routeForEntity = (
   if (kind === "ability") {
     return { name: "builder_world_ability_list", params: { world_id: worldId } };
   }
-  if (kind === "trigger" && target.type === "room" && targetId) {
+  if (kind === "trigger" && target.type === "room" && targetRoomRelativeId) {
     if (id) {
       return {
         name: "builder_room_trigger_details",
-        params: { world_id: worldId, room_id: targetId, trigger_id: id },
+        params: { world_id: worldId, room_relative_id: targetRoomRelativeId, trigger_id: id },
       };
     }
     return {
       name: "builder_room_trigger_list",
-      params: { world_id: worldId, room_id: targetId },
+      params: { world_id: worldId, room_relative_id: targetRoomRelativeId },
     };
   }
   if (kind === "trigger" && id && world.value?.builder_info?.builder_rank > 2) {
@@ -215,25 +224,34 @@ const routeForEntity = (
       params: { world_id: worldId, trigger_id: id },
     };
   }
-  if (kind === "trigger" && target.type === "zone" && targetId) {
-    return {
-      name: "builder_zone_index",
-      params: { world_id: worldId, zone_id: targetId },
-    };
+  if (kind === "trigger" && target.type === "zone" && (targetZoneRelativeId || targetId)) {
+    return builderZoneIndexRoute(worldId as string, {
+      id: targetId,
+      relative_id: targetZoneRelativeId,
+    });
   }
   if (kind === "trigger" && target.type === "world") {
     return { name: "builder_world_config", params: { world_id: worldId } };
   }
-  if (kind === "zone" && id) {
-    return { name: "builder_zone_index", params: { world_id: worldId, zone_id: id } };
+  if (kind === "zone" && (id || zoneRelativeId(payload))) {
+    return builderZoneIndexRoute(worldId as string, payload);
   }
   if (kind === "room" && id) {
-    return { name: "builder_room_index", params: { world_id: worldId, room_id: id } };
+    const relativeId = roomRelativeIdFromRef(payload?.ref);
+    if (relativeId) {
+      return {
+        name: "builder_room_index",
+        params: { world_id: worldId, room_relative_id: relativeId },
+      };
+    }
+    return builderRoomIndexRoute(worldId as string, payload);
   }
   if (kind === "path" && id && payload?.zone?.id) {
+    const relativeId = zoneRelativeId(payload.zone);
+    if (!relativeId) return builderZoneIndexRoute(worldId as string, payload.zone);
     return {
       name: "builder_zone_path_details",
-      params: { world_id: worldId, zone_id: payload.zone.id, path_id: id },
+      params: { world_id: worldId, zone_relative_id: relativeId, path_id: id },
     };
   }
   if (kind === "itemdefinition" && id) {
@@ -601,8 +619,12 @@ spec:
 `;
 };
 
-const newTriggerYaml = (roomIdOverride?: string) => {
-  const roomId = roomIdOverride || store.state.builder.room?.id || "ROOM_ID";
+const newTriggerYaml = (roomRefOverride?: string) => {
+  const roomRef = (
+    roomRefOverride
+    || store.state.builder.room?.manifest_ref
+    || "room@ROOM_RELATIVE_ID"
+  );
   return `kind: trigger
 metadata:
   world: world.${route.params.world_id}
@@ -610,9 +632,7 @@ metadata:
 spec:
   scope: room
   kind: command
-  target:
-    type: room
-    key: room.${roomId}
+  target: ${roomRef}
   match: pull lever
   script: |
     /cmd room -- /echo -- The lever clicks.
@@ -837,21 +857,29 @@ const loadTriggerYaml = async () => {
 
 const loadNewRoomTriggerYaml = async () => {
   clearApplyResult();
-  const rawRoomId = route.query.room_id;
-  const roomId = Array.isArray(rawRoomId)
-    ? rawRoomId[0]
-    : rawRoomId;
-  if (!roomId) {
+  const rawRoomRef = route.query.room_ref;
+  const roomRef = Array.isArray(rawRoomRef)
+    ? rawRoomRef[0]
+    : rawRoomRef;
+  const relativeId = roomRelativeIdFromRef(roomRef);
+  if (!roomRef || !relativeId) {
     manifestText.value = newTriggerYaml();
     return;
   }
   try {
+    let targetRoom = store.state.builder.room;
+    if (targetRoom?.manifest_ref !== roomRef) {
+      const roomResp = await axios.get(
+        `/builder/worlds/${route.params.world_id}/rooms/by-relative-id/${relativeId}/`
+      );
+      targetRoom = roomResp.data;
+    }
     const resp = await axios.get(
-      `/builder/worlds/${route.params.world_id}/rooms/${roomId}/triggers/`
+      `/builder/worlds/${route.params.world_id}/rooms/${targetRoom.id}/triggers/`
     );
-    manifestText.value = resp.data?.new_trigger_template?.yaml || newTriggerYaml(roomId);
+    manifestText.value = resp.data?.new_trigger_template?.yaml || newTriggerYaml(roomRef);
   } catch (error: any) {
-    manifestText.value = newTriggerYaml(roomId);
+    manifestText.value = newTriggerYaml(roomRef);
     store.commit("ui/notification_set_error", extractError(error));
   }
 };

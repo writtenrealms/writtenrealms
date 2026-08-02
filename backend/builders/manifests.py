@@ -132,10 +132,19 @@ from core.world_config import (
 )
 from spawns import trigger_matcher
 from worlds.models import Room, World, WorldConfig, Zone
+from worlds.room_refs import (
+    format_room_manifest_ref,
+    parse_room_reference,
+    resolve_room_reference,
+)
 
 
 MANIFEST_API_VERSION = "v1alpha1"
 LEGACY_MANIFEST_API_VERSION = "writtenrealms.com/v1alpha1"
+STABLE_ROOM_REFS_API_VERSION = "v1alpha2"
+STABLE_ROOM_REFS_NAMESPACED_API_VERSION = "writtenrealms.com/v1alpha2"
+SCALAR_TRIGGER_TARGETS_API_VERSION = "v1alpha3"
+CANONICAL_MANIFEST_API_VERSION = "writtenrealms.com/v1alpha3"
 TRIGGER_MANIFEST_KIND = "trigger"
 WORLD_MANIFEST_KIND = "world"
 QUEST_MANIFEST_KIND = "quest"
@@ -321,34 +330,31 @@ def _export_equipment_system(world: World) -> dict[str, Any] | None:
         return None
     return equipment_system
 
-_SCOPE_TO_TARGET_MODEL = {
-    adv_consts.TRIGGER_SCOPE_ROOM: Room,
-    adv_consts.TRIGGER_SCOPE_ZONE: Zone,
-    adv_consts.TRIGGER_SCOPE_WORLD: World,
-}
-
 _SCOPE_TO_TARGET_TYPE = {
     adv_consts.TRIGGER_SCOPE_ROOM: "room",
     adv_consts.TRIGGER_SCOPE_ZONE: "zone",
     adv_consts.TRIGGER_SCOPE_WORLD: "world",
 }
 
-_EVENT_TARGET_TYPES = {
-    "mobdefinition": MobDefinition,
-    "mob_definition": MobDefinition,
-}
-
-_COMMAND_ENTITY_TARGET_TYPES = {
-    "itemdefinition": ItemDefinition,
-    "item_definition": ItemDefinition,
-    "mobdefinition": MobDefinition,
-    "mob_definition": MobDefinition,
-}
-
 _CANONICAL_TRIGGER_ENTITY_TARGET_TYPES = {
     "item_definition": "itemdefinition",
     "mob_definition": "mobdefinition",
 }
+
+_TRIGGER_TARGET_MODELS = {
+    "room": Room,
+    "zone": Zone,
+    "world": World,
+    "itemdefinition": ItemDefinition,
+    "mobdefinition": MobDefinition,
+}
+
+_TRIGGER_TARGET_TYPE_BY_MODEL = {
+    model_cls: target_type
+    for target_type, model_cls in _TRIGGER_TARGET_MODELS.items()
+}
+
+_LEGACY_TRIGGER_TARGET_FIELDS = {"type", "ref", "key", "id", "name"}
 
 
 def _canonical_trigger_entity_target_type(value: Any) -> str:
@@ -716,7 +722,14 @@ def _validate_api_version(manifest: dict[str, Any]) -> None:
         return
 
     api_version = str(raw_version).strip()
-    allowed_versions = {MANIFEST_API_VERSION, LEGACY_MANIFEST_API_VERSION}
+    allowed_versions = {
+        MANIFEST_API_VERSION,
+        LEGACY_MANIFEST_API_VERSION,
+        STABLE_ROOM_REFS_API_VERSION,
+        STABLE_ROOM_REFS_NAMESPACED_API_VERSION,
+        SCALAR_TRIGGER_TARGETS_API_VERSION,
+        CANONICAL_MANIFEST_API_VERSION,
+    }
     if api_version not in allowed_versions:
         raise serializers.ValidationError(
             f"Unsupported apiVersion '{api_version}'. Allowed: {', '.join(sorted(allowed_versions))}."
@@ -896,14 +909,46 @@ def _serialize_room_reference(room: Room | None) -> dict[str, Any] | None:
     }
 
 
-def _serialize_world_room_reference(*, room: Room | None, mode: str) -> str:
+def _serialize_world_room_reference(
+    *,
+    room: Room | None,
+    mode: str,
+    world: World | int | None = None,
+    field_name: str = "Room reference",
+) -> str:
     if room is None:
         return ""
+    expected_world_id = world.id if isinstance(world, World) else world
+    if expected_world_id is not None and room.world_id != expected_world_id:
+        raise serializers.ValidationError(
+            f"{field_name} points to a room outside this world."
+        )
     if mode == "key":
         return _entity_key("room", room.id)
     if mode == "coords":
         return f"room@{room.x},{room.y},{room.z}"
+    if mode in {"manifest", "relative"}:
+        return format_room_manifest_ref(room)
     raise ValueError(f"Unsupported world room reference mode '{mode}'.")
+
+
+def _canonicalize_payload_manifest(
+    manifest: dict[str, Any],
+    *,
+    world: World,
+    entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
+    room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+) -> dict[str, Any]:
+    # Lazy import avoids a module cycle: world_export builds its source
+    # documents from the raw *_to_manifest helpers in this module.
+    from builders import world_export as builder_world_export
+
+    return builder_world_export.canonicalize_manifest_for_export(
+        manifest=manifest,
+        world=world,
+        entity_ref_cache=entity_ref_cache,
+        room_ref_cache=room_ref_cache,
+    )
 
 
 def _lookup_item_definition_for_ref(*, world: World, value: Any) -> ItemDefinition | None:
@@ -1038,7 +1083,7 @@ def world_config_to_manifest(
     world: World,
     manifest_kind: str = WORLD_MANIFEST_KIND,
     include_metadata: bool = True,
-    room_reference_mode: str = "key",
+    room_reference_mode: str = "manifest",
 ) -> dict[str, Any]:
     config = world.config
     if not config:
@@ -1054,10 +1099,14 @@ def world_config_to_manifest(
         "starting_room": _serialize_world_room_reference(
             room=config.starting_room,
             mode=room_reference_mode,
+            world=world,
+            field_name="World starting room",
         ),
         "death_room": _serialize_world_room_reference(
             room=config.death_room,
             mode=room_reference_mode,
+            world=world,
+            field_name="World death room",
         ),
         "death_mode": config.death_mode,
         "death_route": config.death_route,
@@ -1068,6 +1117,8 @@ def world_config_to_manifest(
             serialize_room=lambda room: _serialize_world_room_reference(
                 room=room,
                 mode=room_reference_mode,
+                world=world,
+                field_name="World death-routing destination",
             ),
         ),
         "pvp_mode": config.pvp_mode,
@@ -1133,6 +1184,11 @@ def world_config_to_manifest(
         "kind": manifest_kind,
         "spec": spec,
     }
+    if room_reference_mode in {"manifest", "relative"}:
+        manifest = {
+            "apiVersion": CANONICAL_MANIFEST_API_VERSION,
+            **manifest,
+        }
     if include_metadata:
         manifest["metadata"] = {
             "world": _entity_key(_WORLD_KEY_PREFIX, world.id),
@@ -1145,7 +1201,7 @@ def serialize_world_config_manifest(
     world: World,
     manifest_kind: str = WORLD_MANIFEST_KIND,
     include_metadata: bool = True,
-    room_reference_mode: str = "key",
+    room_reference_mode: str = "manifest",
 ) -> dict[str, Any]:
     manifest = world_config_to_manifest(
         world=world,
@@ -1153,6 +1209,11 @@ def serialize_world_config_manifest(
         include_metadata=include_metadata,
         room_reference_mode=room_reference_mode,
     )
+    if room_reference_mode in {"manifest", "relative"}:
+        manifest = _canonicalize_payload_manifest(
+            manifest,
+            world=world,
+        )
     return {
         "manifest": manifest,
         "yaml": manifest_to_yaml(manifest),
@@ -1169,7 +1230,7 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
         world=world,
         manifest_kind=WORLD_MANIFEST_KIND,
         include_metadata=False,
-        room_reference_mode="coords",
+        room_reference_mode="manifest",
     )
     config_payload = {
         "starting_room": _serialize_room_reference(config.starting_room),
@@ -1182,7 +1243,9 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
             config=config,
             serialize_room=lambda room: _serialize_world_room_reference(
                 room=room,
-                mode="coords",
+                mode="manifest",
+                world=world,
+                field_name="World death-routing destination",
             ),
         ),
         "small_background": config.small_background or "",
@@ -1346,8 +1409,18 @@ def item_definition_delete_manifest(item_definition: ItemDefinition) -> dict[str
     }
 
 
-def serialize_item_definition_payload(item_definition: ItemDefinition) -> dict[str, Any]:
-    manifest = item_definition_to_manifest(item_definition)
+def serialize_item_definition_payload(
+    item_definition: ItemDefinition,
+    *,
+    entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
+    room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+) -> dict[str, Any]:
+    manifest = _canonicalize_payload_manifest(
+        item_definition_to_manifest(item_definition),
+        world=item_definition.world,
+        entity_ref_cache=entity_ref_cache,
+        room_ref_cache=room_ref_cache,
+    )
     delete_manifest = item_definition_delete_manifest(item_definition)
     return {
         "id": item_definition.id,
@@ -1374,7 +1447,7 @@ def serialize_item_definition_payload(item_definition: ItemDefinition) -> dict[s
 def _faction_spec_from_instance(
     faction: Faction,
     *,
-    room_reference_mode: str = "key",
+    room_reference_mode: str = "manifest",
 ) -> dict[str, Any]:
     faction_type = FACTION_TYPE_CORE if faction_is_core(faction) else FACTION_TYPE_REPUTATION
     spec: dict[str, Any] = {
@@ -1388,10 +1461,14 @@ def _faction_spec_from_instance(
         spec["starting_room"] = _serialize_world_room_reference(
             room=faction.starting_room,
             mode=room_reference_mode,
+            world=faction.world_id,
+            field_name=f"Faction '{faction.code}' starting room",
         )
         spec["death_room"] = _serialize_world_room_reference(
             room=faction.death_room,
             mode=room_reference_mode,
+            world=faction.world_id,
+            field_name=f"Faction '{faction.code}' death room",
         )
         if faction.default_languages:
             spec["default_languages"] = list(faction.default_languages or [])
@@ -1411,7 +1488,7 @@ def _faction_spec_from_instance(
 def faction_to_manifest(
     faction: Faction,
     *,
-    room_reference_mode: str = "key",
+    room_reference_mode: str = "manifest",
 ) -> dict[str, Any]:
     return {
         "kind": FACTION_MANIFEST_KIND,
@@ -1444,7 +1521,13 @@ def faction_delete_manifest(faction: Faction) -> dict[str, Any]:
 
 
 def serialize_faction_payload(faction: Faction) -> dict[str, Any]:
-    manifest = faction_to_manifest(faction)
+    manifest = _canonicalize_payload_manifest(
+        faction_to_manifest(
+            faction,
+            room_reference_mode="manifest",
+        ),
+        world=faction.world,
+    )
     delete_manifest = faction_delete_manifest(faction)
     return {
         "id": faction.id,
@@ -1595,8 +1678,18 @@ def mob_definition_delete_manifest(mob_definition: MobDefinition) -> dict[str, A
     }
 
 
-def serialize_mob_definition_payload(mob_definition: MobDefinition) -> dict[str, Any]:
-    manifest = mob_definition_to_manifest(mob_definition)
+def serialize_mob_definition_payload(
+    mob_definition: MobDefinition,
+    *,
+    entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
+    room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+) -> dict[str, Any]:
+    manifest = _canonicalize_payload_manifest(
+        mob_definition_to_manifest(mob_definition),
+        world=mob_definition.world,
+        entity_ref_cache=entity_ref_cache,
+        room_ref_cache=room_ref_cache,
+    )
     delete_manifest = mob_definition_delete_manifest(mob_definition)
     return {
         "id": mob_definition.id,
@@ -1902,7 +1995,10 @@ def crafting_recipe_delete_manifest(recipe: CraftingRecipe) -> dict[str, Any]:
 
 
 def serialize_crafting_recipe_payload(recipe: CraftingRecipe) -> dict[str, Any]:
-    manifest = crafting_recipe_to_manifest(recipe)
+    manifest = _canonicalize_payload_manifest(
+        crafting_recipe_to_manifest(recipe),
+        world=recipe.world,
+    )
     delete_manifest = crafting_recipe_delete_manifest(recipe)
     return {
         "id": recipe.id,
@@ -2042,8 +2138,18 @@ def ability_delete_manifest(ability: AbilityDefinition) -> dict[str, Any]:
     }
 
 
-def serialize_ability_payload(ability: AbilityDefinition) -> dict[str, Any]:
-    manifest = ability_to_manifest(ability)
+def serialize_ability_payload(
+    ability: AbilityDefinition,
+    *,
+    entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
+    room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+) -> dict[str, Any]:
+    manifest = _canonicalize_payload_manifest(
+        ability_to_manifest(ability),
+        world=ability.world,
+        entity_ref_cache=entity_ref_cache,
+        room_ref_cache=room_ref_cache,
+    )
     delete_manifest = ability_delete_manifest(ability)
     return {
         "id": ability.id,
@@ -2166,47 +2272,28 @@ def serialize_social_payload(social: Social) -> dict[str, Any]:
 
 
 def trigger_to_manifest(trigger: Trigger) -> dict[str, Any]:
-    target_type = _SCOPE_TO_TARGET_TYPE.get(trigger.scope, "")
-    target_key = ""
-    target_name = ""
-    if trigger.target_type_id and trigger.target_id:
-        target_type = trigger.target_type.model
-        target_key = _entity_key(target_type, trigger.target_id)
-        if trigger.target:
-            target_name = getattr(trigger.target, "name", "") or ""
+    # Keep the single-trigger editor on the same portable contract as a full
+    # world export. The import is intentionally lazy to avoid a module cycle.
+    from builders import world_export as builder_world_export
 
+    manifest = builder_world_export._serialize_trigger_manifest(
+        trigger,
+        world=trigger.world,
+        entity_ref_cache=None,
+        room_ref_cache=builder_world_export._build_room_ref_cache(
+            trigger.world
+        ),
+    )
     manifest = {
-        "kind": TRIGGER_MANIFEST_KIND,
-        "metadata": {
-            "world": _entity_key(_WORLD_KEY_PREFIX, trigger.world_id),
-            "id": trigger.id,
-            "key": trigger.key,
-            "name": trigger.name or "",
-        },
-        "spec": {
-            "scope": trigger.scope,
-            "kind": _canonical_trigger_kind(trigger.kind),
-            "target": {
-                "type": target_type,
-                "key": target_key,
-            },
-            "match": trigger.match or "",
-            "script": trigger.script or "",
-            "steps": trigger.steps or [],
-            "on_step_error": trigger.on_step_error or "cancel",
-            "conditions": _deserialize_conditions_payload(trigger.conditions),
-            "event": trigger.event or "",
-            "show_details_on_failure": bool(trigger.show_details_on_failure),
-            "failure_message": trigger.failure_message or "",
-            "display_action_in_room": bool(trigger.display_action_in_room),
-            "gate_delay": int(trigger.gate_delay),
-            "order": int(trigger.order),
-            "is_active": bool(trigger.is_active),
-        },
+        "apiVersion": CANONICAL_MANIFEST_API_VERSION,
+        **manifest,
     }
-    if target_name:
-        manifest["spec"]["target"]["name"] = target_name
-
+    manifest["metadata"] = {
+        "world": _entity_key(_WORLD_KEY_PREFIX, trigger.world_id),
+        "id": trigger.id,
+        "key": trigger.key,
+        **manifest["metadata"],
+    }
     return manifest
 
 
@@ -2433,7 +2520,10 @@ def _coerce_conditions_payload(raw_conditions: Any, *, world: World) -> str:
 def serialize_trigger_manifest(trigger: Trigger) -> dict[str, Any]:
     manifest = trigger_to_manifest(trigger)
     delete_manifest = trigger_delete_manifest(trigger)
-    target_data = manifest["spec"]["target"]
+    target = trigger.target
+    target_model = trigger.target_type.model_class() if trigger.target_type_id else None
+    target_type = _TRIGGER_TARGET_TYPE_BY_MODEL.get(target_model, "")
+    target_ref = manifest["spec"]["target"]
     return {
         "id": trigger.id,
         "key": trigger.key,
@@ -2443,9 +2533,10 @@ def serialize_trigger_manifest(trigger: Trigger) -> dict[str, Any]:
         "event": trigger.event or "",
         "match": trigger.match or "",
         "target": {
-            "type": target_data.get("type", ""),
-            "key": target_data.get("key", ""),
-            "name": target_data.get("name", ""),
+            "type": target_type,
+            "key": getattr(target, "key", "") if target else "",
+            "ref": target_ref,
+            "name": (getattr(target, "name", "") or "") if target else "",
         },
         "manifest": manifest,
         "yaml": manifest_to_yaml(manifest),
@@ -2455,7 +2546,12 @@ def serialize_trigger_manifest(trigger: Trigger) -> dict[str, Any]:
 
 
 def room_trigger_template_manifest(*, world: World, room: Room) -> dict[str, Any]:
+    if room.world_id != world.id:
+        raise serializers.ValidationError(
+            "Trigger room target points to a room outside this world."
+        )
     return {
+        "apiVersion": CANONICAL_MANIFEST_API_VERSION,
         "kind": TRIGGER_MANIFEST_KIND,
         "metadata": {
             "world": _entity_key(_WORLD_KEY_PREFIX, world.id),
@@ -2464,11 +2560,7 @@ def room_trigger_template_manifest(*, world: World, room: Room) -> dict[str, Any
         "spec": {
             "scope": adv_consts.TRIGGER_SCOPE_ROOM,
             "kind": adv_consts.TRIGGER_KIND_COMMAND,
-            "target": {
-                "type": _SCOPE_TO_TARGET_TYPE[adv_consts.TRIGGER_SCOPE_ROOM],
-                "key": _entity_key("room", room.id),
-                "name": room.name or "",
-            },
+            "target": format_room_manifest_ref(room),
             "match": "pull lever",
             "script": (
                 "/cmd room -- /echo *CLICK*.\n"
@@ -2497,7 +2589,17 @@ def serialize_room_trigger_template(*, world: World, room: Room) -> dict[str, An
 
 def mob_trigger_template_manifest(*, world: World, mob_definition: MobDefinition) -> dict[str, Any]:
     definition_name = mob_definition.name or f"Mob {mob_definition.id}"
+    definition_world_id = _trigger_definition_world_id(world)
+    if mob_definition.world_id != definition_world_id:
+        raise serializers.ValidationError(
+            "Trigger mob target points outside the authored definition world."
+        )
+    if not mob_definition.slug:
+        raise serializers.ValidationError(
+            "Trigger mob target must have a portable slug."
+        )
     return {
+        "apiVersion": CANONICAL_MANIFEST_API_VERSION,
         "kind": TRIGGER_MANIFEST_KIND,
         "metadata": {
             "world": _entity_key(_WORLD_KEY_PREFIX, world.id),
@@ -2506,11 +2608,7 @@ def mob_trigger_template_manifest(*, world: World, mob_definition: MobDefinition
         "spec": {
             "scope": adv_consts.TRIGGER_SCOPE_WORLD,
             "kind": adv_consts.TRIGGER_KIND_EVENT,
-            "target": {
-                "type": "mobdefinition",
-                "key": _entity_key("mobdefinition", mob_definition.id),
-                "name": definition_name,
-            },
+            "target": f"mobdefinition.{mob_definition.slug}",
             "event": adv_consts.MOB_REACTION_EVENT_SAYING,
             "match": "hello and (traveler or friend)",
             "script": "say Welcome, traveler.",
@@ -2811,172 +2909,375 @@ def parse_social_delete_manifest(
     )
 
 
-def _resolve_target(
+def _trigger_definition_world_id(world: World) -> int:
+    """Return the authored definition scope used by an instance world."""
+
+    return world.instance_of_id or world.id
+
+
+def _infer_trigger_target_type(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered == "world":
+        return "world"
+    if parse_room_reference(text) is not None:
+        return "room"
+    if re.fullmatch(r"zone@\s*[+]?[0-9]+", lowered):
+        return "zone"
+
+    prefix, separator, _raw_value = lowered.partition(".")
+    if separator:
+        target_type = _canonical_trigger_entity_target_type(prefix)
+        if target_type in _TRIGGER_TARGET_MODELS:
+            return target_type
+    return None
+
+
+def _infer_canonical_trigger_target_type(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    lowered = text.lower()
+    if lowered == "world":
+        return "world"
+
+    parsed_room = parse_room_reference(text)
+    if (
+        parsed_room is not None
+        and parsed_room.kind == "relative_id"
+        and parsed_room.relative_id is not None
+        and parsed_room.relative_id > 0
+    ):
+        return "room"
+    if re.fullmatch(r"zone@[1-9][0-9]*", lowered):
+        return "zone"
+
+    prefix, separator, raw_slug = lowered.partition(".")
+    if (
+        separator
+        and prefix in {"mobdefinition", "itemdefinition"}
+        and raw_slug
+    ):
+        return prefix
+    return None
+
+
+def _parse_trigger_target_database_id(
+    value: Any,
+    *,
+    target_type: str,
+    field_name: str,
+) -> int:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(
+            f"{field_name} must be an integer id or a "
+            f"'{target_type}.<id>' key."
+        )
+    if isinstance(value, int):
+        target_id = value
+    else:
+        text = str(value or "").strip()
+        if text.isdigit():
+            target_id = int(text)
+        else:
+            prefix, separator, raw_id = text.partition(".")
+            canonical_prefix = _canonical_trigger_entity_target_type(prefix)
+            if (
+                separator != "."
+                or canonical_prefix != target_type
+                or not raw_id.isdigit()
+            ):
+                raise serializers.ValidationError(
+                    f"{field_name} must be an integer id or a "
+                    f"'{target_type}.<id>' key."
+                )
+            target_id = int(raw_id)
+    if target_id <= 0:
+        raise serializers.ValidationError(f"{field_name} id must be positive.")
+    return target_id
+
+
+def _parse_trigger_zone_relative_id(value: Any, *, field_name: str) -> int:
+    text = str(value or "").strip().lower()
+    match = re.fullmatch(r"zone@\s*([+]?[0-9]+)", text)
+    if match is None:
+        raise serializers.ValidationError(
+            f"{field_name} must use the portable form 'zone@<relative_id>'."
+        )
+    relative_id = int(match.group(1))
+    if relative_id <= 0:
+        raise serializers.ValidationError(
+            f"{field_name} relative id must be positive."
+        )
+    return relative_id
+
+
+def _resolve_trigger_target_locator(
     *,
     world: World,
-    scope: str,
-    target_data: Any,
-    trigger: Trigger | None,
-) -> tuple[ContentType, int]:
-    model_cls = _SCOPE_TO_TARGET_MODEL[scope]
-    expected_type = _SCOPE_TO_TARGET_TYPE[scope]
+    target_type: str,
+    value: Any,
+    locator_kind: str,
+    field_name: str,
+) -> int:
+    model_cls = _TRIGGER_TARGET_MODELS[target_type]
+    is_database_locator = locator_kind in {"key", "id"}
 
-    if target_data is None:
-        if scope == adv_consts.TRIGGER_SCOPE_WORLD:
-            if trigger.target_type_id and trigger.target_id:
-                trigger_model = trigger.target_type.model_class()
-                if trigger_model is not World:
-                    raise serializers.ValidationError(
-                        "Existing trigger target does not match scope 'world'."
-                    )
-                if trigger.target_id != world.id:
-                    raise serializers.ValidationError(
-                        "World scoped trigger target must belong to this world."
-                    )
-                return trigger.target_type, trigger.target_id
-            return ContentType.objects.get_for_model(World), world.id
-
-        if not trigger.target_type_id or not trigger.target_id:
-            raise serializers.ValidationError("spec.target is required.")
-        trigger_model = trigger.target_type.model_class()
-        if trigger_model is not model_cls:
-            raise serializers.ValidationError(
-                f"spec.target.type must be '{expected_type}' for scope '{scope}'."
-            )
-        exists = model_cls.objects.filter(world=world, pk=trigger.target_id).exists()
-        if not exists:
-            raise serializers.ValidationError("Existing trigger target does not exist.")
-        return trigger.target_type, trigger.target_id
-
-    if not isinstance(target_data, dict):
-        raise serializers.ValidationError("spec.target must be a mapping.")
-
-    target_type = str(target_data.get("type") or expected_type).strip().lower()
-    if target_type != expected_type:
-        raise serializers.ValidationError(
-            f"spec.target.type must be '{expected_type}' for scope '{scope}'."
-        )
-
-    target_ref = target_data.get("key", target_data.get("id"))
-    if target_ref is None:
-        if scope == adv_consts.TRIGGER_SCOPE_WORLD:
+    if target_type == "world":
+        if not is_database_locator and str(value or "").strip().lower() == "world":
             target_id = world.id
         else:
-            raise serializers.ValidationError("spec.target.key is required.")
-    else:
-        target_id = _parse_entity_ref(
-            target_ref,
-            expected_type=expected_type,
-            field_name="spec.target.key",
-        )
-
-    if scope == adv_consts.TRIGGER_SCOPE_WORLD:
+            target_id = _parse_trigger_target_database_id(
+                value,
+                target_type=target_type,
+                field_name=field_name,
+            )
         if target_id != world.id:
             raise serializers.ValidationError(
-                "World scoped triggers must target the current world."
+                f"{field_name} must reference the selected world."
             )
-        return ContentType.objects.get_for_model(World), world.id
+        return target_id
 
-    target_obj = model_cls.objects.filter(world=world, pk=target_id).first()
-    if not target_obj:
-        raise serializers.ValidationError("Trigger target does not exist in this world.")
-    return ContentType.objects.get_for_model(model_cls), target_obj.id
+    if target_type == "room":
+        if is_database_locator:
+            target_id = _parse_trigger_target_database_id(
+                value,
+                target_type=target_type,
+                field_name=field_name,
+            )
+            room = Room.objects.filter(world=world, pk=target_id).first()
+        else:
+            if parse_room_reference(value) is None:
+                raise serializers.ValidationError(
+                    f"{field_name} must use 'room@<relative_id>', legacy "
+                    "'room@x,y,z', or legacy 'room.<database_id>'."
+                )
+            room = resolve_room_reference(world, value)
+        if room is None:
+            raise serializers.ValidationError(
+                f"{field_name} references an unknown room in this world."
+            )
+        return room.id
+
+    if target_type == "zone":
+        text = str(value or "").strip()
+        if is_database_locator or text.lower().startswith("zone."):
+            target_id = _parse_trigger_target_database_id(
+                value,
+                target_type=target_type,
+                field_name=field_name,
+            )
+            zone = Zone.objects.filter(world=world, pk=target_id).first()
+        elif text.lower().startswith("zone@"):
+            relative_id = _parse_trigger_zone_relative_id(
+                text,
+                field_name=field_name,
+            )
+            zone = Zone.objects.filter(
+                world=world,
+                relative_id=relative_id,
+            ).first()
+        elif locator_kind == "ref":
+            # Legacy trigger manifests allowed a zone name in target.ref.
+            zone = Zone.objects.filter(world=world, name=text).order_by("id").first()
+        else:
+            zone = None
+        if zone is None:
+            raise serializers.ValidationError(
+                f"{field_name} references an unknown zone in this world."
+            )
+        return zone.id
+
+    definition_world_id = _trigger_definition_world_id(world)
+    if is_database_locator:
+        target_id = _parse_trigger_target_database_id(
+            value,
+            target_type=target_type,
+            field_name=field_name,
+        )
+        target = model_cls.objects.filter(
+            world_id=definition_world_id,
+            pk=target_id,
+        ).first()
+    else:
+        text = str(value or "").strip()
+        prefix, separator, raw_slug = text.partition(".")
+        if separator:
+            canonical_prefix = _canonical_trigger_entity_target_type(prefix)
+            if canonical_prefix != target_type:
+                raise serializers.ValidationError(
+                    f"{field_name} must reference a {target_type}."
+                )
+            slug = raw_slug.strip()
+        else:
+            # Bare slugs remain an import-only compatibility form for ref maps.
+            slug = text
+        if not slug:
+            raise serializers.ValidationError(f"{field_name} is required.")
+        target = model_cls.objects.filter(
+            world_id=definition_world_id,
+            slug=slug,
+        ).first()
+    if target is None:
+        raise serializers.ValidationError(
+            f"{field_name} references an unknown {target_type} in the "
+            "authored definition world."
+        )
+    return target.id
 
 
-def _resolve_event_target(
+def resolve_trigger_manifest_target(
     *,
     world: World,
     target_data: Any,
-    trigger: Trigger | None,
+    default_type: str | None = None,
+    allowed_types: set[str] | None = None,
 ) -> tuple[ContentType, int]:
-    if target_data is None:
-        if not trigger or not trigger.target_type_id or not trigger.target_id:
-            raise serializers.ValidationError("spec.target is required.")
+    """Resolve canonical scalar and legacy mapping trigger targets."""
 
-        model_cls = trigger.target_type.model_class()
-        if model_cls not in set(_EVENT_TARGET_TYPES.values()):
+    canonical_default = _canonical_trigger_entity_target_type(default_type)
+    if canonical_default not in _TRIGGER_TARGET_MODELS:
+        canonical_default = ""
+    canonical_allowed = {
+        _canonical_trigger_entity_target_type(target_type)
+        for target_type in (allowed_types or set(_TRIGGER_TARGET_MODELS))
+    }
+
+    declared_type = ""
+    locators: list[tuple[str, str, Any]] = []
+    if isinstance(target_data, str):
+        if not target_data.strip():
+            raise serializers.ValidationError("spec.target cannot be empty.")
+        inferred_type = _infer_canonical_trigger_target_type(target_data)
+        if inferred_type is None:
             raise serializers.ValidationError(
-                "Event triggers must target one of: "
-                + ", ".join(sorted(_EVENT_TARGET_TYPES.keys()))
+                "spec.target must be one of: room@<relative_id>, "
+                "zone@<relative_id>, world, mobdefinition.<slug>, or "
+                "itemdefinition.<slug>."
+            )
+        declared_type = inferred_type
+        locators.append(("spec.target", "scalar", target_data))
+    elif isinstance(target_data, dict):
+        unknown_fields = sorted(
+            set(target_data.keys()) - _LEGACY_TRIGGER_TARGET_FIELDS
+        )
+        if unknown_fields:
+            raise serializers.ValidationError(
+                "Unsupported spec.target field(s): "
+                + ", ".join(unknown_fields)
                 + "."
             )
-
-        if not model_cls:
-            raise serializers.ValidationError("Existing trigger target type is invalid.")
-
-        exists = model_cls.objects.filter(world=world, pk=trigger.target_id).exists()
-        if not exists:
-            raise serializers.ValidationError("Existing trigger target does not exist in this world.")
-        return trigger.target_type, trigger.target_id
-
-    if not isinstance(target_data, dict):
-        raise serializers.ValidationError("spec.target must be a mapping.")
-
-    target_type = _canonical_trigger_entity_target_type(target_data.get("type"))
-    if target_type not in _EVENT_TARGET_TYPES:
+        if "type" in target_data:
+            declared_type = _canonical_trigger_entity_target_type(
+                target_data.get("type")
+            )
+            if declared_type not in _TRIGGER_TARGET_MODELS:
+                raise serializers.ValidationError(
+                    f"Unsupported trigger target type '{declared_type}'."
+                )
+        for locator_kind in ("ref", "key", "id"):
+            if locator_kind not in target_data:
+                continue
+            value = target_data.get(locator_kind)
+            if value is None or (
+                isinstance(value, str) and not value.strip()
+            ):
+                raise serializers.ValidationError(
+                    f"spec.target.{locator_kind} cannot be empty."
+                )
+            locators.append(
+                (f"spec.target.{locator_kind}", locator_kind, value)
+            )
+        if not locators and declared_type != "world":
+            raise serializers.ValidationError(
+                "Legacy spec.target mappings require ref, key, or id."
+            )
+    else:
         raise serializers.ValidationError(
-            "spec.target.type must be one of: "
-            + ", ".join(sorted(_EVENT_TARGET_TYPES.keys()))
+            "spec.target must be a typed scalar string or a legacy mapping."
+        )
+
+    inferred_types = {
+        inferred_type
+        for _field_name, _locator_kind, value in locators
+        if (inferred_type := _infer_trigger_target_type(value)) is not None
+    }
+    if len(inferred_types) > 1:
+        raise serializers.ValidationError(
+            "spec.target locators use conflicting target types."
+        )
+    inferred_type = next(iter(inferred_types), "")
+    target_type = declared_type or inferred_type or canonical_default
+    if not target_type:
+        raise serializers.ValidationError(
+            "spec.target.type is required when its locator is untyped."
+        )
+    if inferred_type and inferred_type != target_type:
+        raise serializers.ValidationError(
+            "spec.target.type conflicts with its ref, key, or id."
+        )
+    if target_type not in canonical_allowed:
+        raise serializers.ValidationError(
+            "spec.target type must be one of: "
+            + ", ".join(sorted(canonical_allowed))
             + "."
         )
 
-    target_ref = target_data.get("key", target_data.get("id"))
-    if target_ref is None:
-        raise serializers.ValidationError("spec.target.key is required.")
+    if not locators:
+        return ContentType.objects.get_for_model(World), world.id
 
-    target_id = _parse_entity_ref(
-        target_ref,
-        expected_type=target_type,
-        field_name="spec.target.key",
-    )
+    resolved_ids = {
+        _resolve_trigger_target_locator(
+            world=world,
+            target_type=target_type,
+            value=value,
+            locator_kind=locator_kind,
+            field_name=field_name,
+        )
+        for field_name, locator_kind, value in locators
+    }
+    if len(resolved_ids) != 1:
+        raise serializers.ValidationError(
+            "spec.target ref, key, and id refer to different targets."
+        )
+    target_id = next(iter(resolved_ids))
+    return ContentType.objects.get_for_model(
+        _TRIGGER_TARGET_MODELS[target_type]
+    ), target_id
 
-    model_cls = _EVENT_TARGET_TYPES[target_type]
-    target_ct = ContentType.objects.get_for_model(model_cls)
 
-    target_obj = model_cls.objects.filter(world=world, pk=target_id).first()
-    if not target_obj:
-        raise serializers.ValidationError("Trigger target does not exist in this world.")
-    return target_ct, target_obj.id
-
-
-def _resolve_command_entity_target(
+def _resolve_existing_trigger_target(
     *,
     world: World,
-    target_data: Any,
-    trigger: Trigger | None,
-) -> tuple[ContentType, int] | None:
-    if target_data is None:
-        if not trigger or not trigger.target_type_id or not trigger.target_id:
-            return None
-        model_cls = trigger.target_type.model_class()
-        if model_cls not in set(_COMMAND_ENTITY_TARGET_TYPES.values()):
-            return None
-        exists = model_cls.objects.filter(world=world, pk=trigger.target_id).exists()
-        if not exists:
-            raise serializers.ValidationError("Existing trigger target does not exist in this world.")
-        return trigger.target_type, trigger.target_id
-
-    if not isinstance(target_data, dict):
-        return None
-
-    target_type = _canonical_trigger_entity_target_type(target_data.get("type"))
-    if target_type not in _COMMAND_ENTITY_TARGET_TYPES:
-        return None
-
-    target_ref = target_data.get("key", target_data.get("id"))
-    if target_ref is None:
-        raise serializers.ValidationError("spec.target.key is required.")
-
-    target_id = _parse_entity_ref(
-        target_ref,
-        expected_type=target_type,
-        field_name="spec.target.key",
+    trigger: Trigger,
+    allowed_types: set[str],
+) -> tuple[ContentType, int]:
+    if not trigger.target_type_id or not trigger.target_id:
+        raise serializers.ValidationError(
+            "Existing trigger target is missing or invalid."
+        )
+    model_cls = trigger.target_type.model_class()
+    target_type = _TRIGGER_TARGET_TYPE_BY_MODEL.get(model_cls)
+    canonical_allowed = {
+        _canonical_trigger_entity_target_type(value)
+        for value in allowed_types
+    }
+    if target_type not in canonical_allowed:
+        raise serializers.ValidationError(
+            "Existing trigger target does not match its kind and scope."
+        )
+    resolved_id = _resolve_trigger_target_locator(
+        world=world,
+        target_type=target_type,
+        value=trigger.target_id,
+        locator_kind="id",
+        field_name="Existing trigger target",
     )
-    model_cls = _COMMAND_ENTITY_TARGET_TYPES[target_type]
-    target_obj = model_cls.objects.filter(world=world, pk=target_id).first()
-    if not target_obj:
-        raise serializers.ValidationError("Trigger target does not exist in this world.")
-    return ContentType.objects.get_for_model(model_cls), target_obj.id
+    return trigger.target_type, resolved_id
 
 
 def _resolve_trigger_reference(*, world: World, metadata: dict[str, Any]) -> tuple[Trigger | None, int | None]:
@@ -3092,49 +3393,47 @@ def parse_trigger_manifest(
             field_name="spec.event",
         )
 
+    scope_target_type = _SCOPE_TO_TARGET_TYPE[scope]
     if (
         kind == adv_consts.TRIGGER_KIND_EVENT
         and scope == adv_consts.TRIGGER_SCOPE_WORLD
     ):
-        target_type, target_id = _resolve_event_target(
-            world=world,
-            target_data=spec.get("target"),
-            trigger=trigger,
-        )
+        allowed_target_types = {"mobdefinition"}
     elif kind == adv_consts.TRIGGER_KIND_COMMAND:
-        command_entity_target = _resolve_command_entity_target(
-            world=world,
-            target_data=spec.get("target"),
-            trigger=trigger,
-        )
-        if command_entity_target is not None:
-            target_type, target_id = command_entity_target
-        else:
-            target_type, target_id = _resolve_target(
-                world=world,
-                scope=scope,
-                target_data=spec.get("target"),
-                trigger=trigger,
-            )
+        allowed_target_types = {
+            scope_target_type,
+            "itemdefinition",
+            "mobdefinition",
+        }
     else:
-        target_type, target_id = _resolve_target(
+        allowed_target_types = {scope_target_type}
+
+    target_present = "target" in spec
+    if target_present:
+        target_type, target_id = resolve_trigger_manifest_target(
             world=world,
-            scope=scope,
             target_data=spec.get("target"),
+            default_type=scope_target_type,
+            allowed_types=allowed_target_types,
+        )
+    elif trigger is not None:
+        target_type, target_id = _resolve_existing_trigger_target(
+            world=world,
             trigger=trigger,
+            allowed_types=allowed_target_types,
+        )
+    elif (
+        kind == adv_consts.TRIGGER_KIND_COMMAND
+        and scope == adv_consts.TRIGGER_SCOPE_WORLD
+    ):
+        target_type = ContentType.objects.get_for_model(World)
+        target_id = world.id
+    else:
+        raise serializers.ValidationError(
+            "spec.target is required when creating a trigger."
         )
 
     name = _coerce_text(metadata.get("name", trigger.name if trigger else ""))
-
-    if (
-        is_create
-        and spec.get("target") is None
-        and (
-            kind in (adv_consts.TRIGGER_KIND_EVENT, adv_consts.TRIGGER_KIND_POLICY)
-            or scope != adv_consts.TRIGGER_SCOPE_WORLD
-        )
-    ):
-        raise serializers.ValidationError("spec.target is required when creating a trigger.")
 
     conditions = _coerce_conditions_payload(
         spec.get("conditions", trigger.conditions if trigger else ""),

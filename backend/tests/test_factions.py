@@ -60,6 +60,10 @@ spec:
         self.assertTrue(orc.is_core)
         self.assertEqual(orc.starting_room, faction_room)
         self.assertEqual(orc.default_languages, ["orcish"])
+        self.assertEqual(
+            resp.data["faction"]["manifest"]["spec"]["starting_room"],
+            f"room@{faction_room.relative_id}",
+        )
 
         reputation_manifest = f"""
 kind: faction
@@ -96,7 +100,10 @@ spec:
         faction_docs = [doc for doc in docs if doc["kind"] == "faction"]
         self.assertEqual([doc["metadata"]["code"] for doc in faction_docs], ["orc", "ashwick"])
         self.assertNotIn("is_core", faction_docs[0]["spec"])
-        self.assertEqual(faction_docs[0]["spec"]["starting_room"], "room@1,0,0")
+        self.assertEqual(
+            faction_docs[0]["spec"]["starting_room"],
+            f"room@{faction_room.relative_id}",
+        )
 
     def test_mob_definition_manifest_assigns_and_spawns_factions(self):
         Faction.objects.create(

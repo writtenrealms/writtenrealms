@@ -1024,6 +1024,67 @@ spec:
             ]
         )
 
+    def test_ability_list_and_detail_canonicalize_nested_room_refs(self):
+        legacy_ref = f"room.{self.room.id}"
+        canonical_ref = f"room@{self.room.relative_id}"
+        ability = self._create_ability(
+            requirements={
+                "conditions": {
+                    "eq": ["actor.room_id", legacy_ref],
+                },
+            },
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "room-ward",
+                    "scope": "encounter",
+                    "category": "buff",
+                    "target": "self",
+                    "duration": {"rounds": 1},
+                    "apply": "on_resolve",
+                    "text": {"label": "Room Ward"},
+                    "primitives": [
+                        {
+                            "type": "proc",
+                            "phase": "after_damage",
+                            "conditions": {
+                                "eq": ["actor.room_id", legacy_ref],
+                            },
+                            "actions": [],
+                        },
+                    ],
+                },
+            ],
+        )
+
+        list_response = self.client.get(self.list_ep)
+        self.assertEqual(list_response.status_code, 200, list_response.data)
+        list_manifest = list_response.data["results"][0]["manifest"]
+        self.assertEqual(
+            list_manifest["spec"]["requirements"]["conditions"]["eq"][1],
+            canonical_ref,
+        )
+        self.assertEqual(
+            list_manifest["spec"]["components"][0]["primitives"][0][
+                "conditions"
+            ]["eq"][1],
+            canonical_ref,
+        )
+        self.assertNotIn(legacy_ref, list_response.data["results"][0]["yaml"])
+
+        detail_response = self.client.get(
+            reverse(
+                "builder-world-ability-detail",
+                args=[self.world.pk, ability.pk],
+            )
+        )
+        self.assertEqual(detail_response.status_code, 200, detail_response.data)
+        self.assertEqual(detail_response.data["manifest"], list_manifest)
+        self.assertEqual(
+            yaml.safe_load(detail_response.data["yaml"]),
+            list_manifest,
+        )
+
     def test_instance_ability_list_reads_base_world_definitions(self):
         ability = self._create_ability()
         instance_world = self._create_instance_world()

@@ -79,6 +79,7 @@ from builders.models import (
     ItemDefinition,
     MobDefinition,
     MerchantProfile,
+    SpawnEntry,
     SpawnPlan,
     RoomAction,
     Trigger,
@@ -98,6 +99,7 @@ from spawns import serializers as spawn_serializers
 from users.models import User
 from worlds.models import (
     World, WorldConfig, Room, Zone, RoomFlag, RoomDetail, Door)
+from worlds.room_refs import format_room_manifest_ref
 from worlds.services import WorldSmith
 from worlds import tasks as world_tasks
 
@@ -866,7 +868,16 @@ class ZoneBuilderViewSet(WorldCreationMixin,
     def spawn_plan_detail(self, request, world_pk, pk, spawn_plan_pk):
         zone = self.get_object()
         spawn_plan = get_object_or_404(
-            zone.spawn_plans.select_related('zone').prefetch_related('entries'),
+            zone.spawn_plans.select_related('zone').prefetch_related(Prefetch(
+                'entries',
+                queryset=SpawnEntry.objects.select_related(
+                    'plan',
+                    'target_room',
+                    'target_zone',
+                    'target_path',
+                    'target_entry',
+                ).order_by('order', 'created_ts', 'id'),
+            )),
             pk=spawn_plan_pk,
         )
         return Response(
@@ -918,7 +929,7 @@ class ZoneBuilderViewSet(WorldCreationMixin,
                 self.perform_destroy(zone)
             except RestrictedError as exc:
                 raise serializers.ValidationError(
-                    'Cannot delete a zone referenced by death routing.'
+                    'Cannot delete a zone referenced by death routing or a spawn plan.'
                 ) from exc
 
             if builder:
@@ -930,6 +941,13 @@ class ZoneBuilderViewSet(WorldCreationMixin,
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+class ZoneBuilderRelativeDetailViewSet(ZoneBuilderViewSet):
+    """Retrieve an authored zone by its world-scoped portable identity."""
+
+    lookup_field = 'relative_id'
+    lookup_url_kwarg = 'relative_id'
+
+
 zone_list =  ZoneBuilderViewSet.as_view({
     'get': 'list',
     'post': 'create'})
@@ -937,6 +955,9 @@ zone_detail =  ZoneBuilderViewSet.as_view({
     'get': 'retrieve',
     'put': 'update',
     'delete': 'destroy'})
+zone_relative_detail = ZoneBuilderRelativeDetailViewSet.as_view({
+    'get': 'retrieve',
+})
 zone_room_list = ZoneBuilderViewSet.as_view({
     'get': 'rooms',
 })
@@ -1185,7 +1206,7 @@ class RoomBuilderDetailViewSet(RoomBuilderListViewSet):
                 self.perform_destroy(room)
             except RestrictedError as exc:
                 raise serializers.ValidationError(
-                    'Cannot delete a room referenced by death routing.'
+                    'Cannot delete a room referenced by death routing or a spawn plan.'
                 ) from exc
 
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -1220,10 +1241,20 @@ instance_room_list = InstanceRoomListViewSet.as_view({'get': 'list'})
 class LegacyRoomBuilderDetailViewSet(RoomBuilderDetailViewSet):
     serializer_class = builder_serializers.LegacyRoomBuilderSerializer
 
+
+class RoomBuilderRelativeDetailViewSet(RoomBuilderDetailViewSet):
+    """Retrieve an authored room by its permanent world-scoped identity."""
+
+    lookup_field = 'relative_id'
+    lookup_url_kwarg = 'relative_id'
+
 room_detail = RoomBuilderDetailViewSet.as_view({
     'get': 'retrieve',
     'put': 'update',
     'delete': 'destroy',
+})
+room_relative_detail = RoomBuilderRelativeDetailViewSet.as_view({
+    'get': 'retrieve',
 })
 room_mark_last_viewed = RoomBuilderDetailViewSet.as_view({
     'post': 'last_viewed',
@@ -1292,49 +1323,62 @@ class RoomSpawnPlansView(BaseWorldBuilderView):
 
     def get(self, request, world_pk, room_pk, format=None):
         if '.' in room_pk:
-            room = Room.objects.get(
-                world_id=world_pk,
-                relative_id=room_pk.split('.')[1])
+            room_lookup = {
+                'world_id': world_pk,
+                'relative_id': room_pk.split('.')[1],
+            }
         else:
-            room = Room.objects.get(pk=room_pk)
-
-        path_ids = set(
-            PathRoom.objects.filter(room=room).values_list('path_id', flat=True)
+            room_lookup = {'world_id': world_pk, 'pk': room_pk}
+        room = get_object_or_404(
+            Room.objects.select_related('zone', 'world'),
+            **room_lookup,
         )
-        room_refs = {
-            room.key,
-            f"room.{room.id}",
-            f"room@{room.x},{room.y},{room.z}",
-            room.name,
-        }
-        zone_refs = {
-            room.zone.key,
-            f"zone.{room.zone.id}",
-            f"zone@{room.zone.relative_id}",
-            room.zone.name,
-        } if room.zone_id else set()
-        path_refs = {f"path@{path_id}" for path_id in path_ids}
+
+        target_filter = (
+            Q(target_room_id=room.id)
+            | Q(target_path__path_rooms__room_id=room.id)
+            | Q(target_path__entry_room_id=room.id)
+        )
+        if room.zone_id:
+            target_filter |= Q(target_zone_id=room.zone_id)
+
+        matching_entries_by_plan = collections.defaultdict(list)
+        matching_entries = (
+            SpawnEntry.objects
+            .filter(plan__world_id=room.world_id)
+            .filter(target_filter)
+            .distinct()
+            .order_by(
+                'plan__order',
+                'plan__created_ts',
+                'plan_id',
+                'order',
+                'created_ts',
+                'id',
+            )
+            .values_list('plan_id', 'slug')
+        )
+        for plan_id, slug in matching_entries:
+            matching_entries_by_plan[plan_id].append(slug)
+
         spawn_plan_payloads = []
-        for spawn_plan in room.world.spawn_plans.prefetch_related('entries').order_by(
-            'order', 'created_ts', 'id'
-        ):
-            matching_entries = []
-            for entry in spawn_plan.entries.all():
-                target = entry.target if isinstance(entry.target, dict) else {}
-                if (
-                    target.get('room') in room_refs
-                    or target.get('room_ref') in room_refs
-                    or target.get('zone') in zone_refs
-                    or target.get('path') in path_refs
-                ):
-                    matching_entries.append(entry.slug)
-            if matching_entries:
-                payload = builder_world_export.serialize_spawn_plan_payload(
-                    spawn_plan,
-                    include_yaml=False,
-                )
-                payload['matching_entries'] = matching_entries
-                spawn_plan_payloads.append(payload)
+        spawn_plans = (
+            room.world.spawn_plans
+            .filter(pk__in=matching_entries_by_plan)
+            .select_related('zone')
+            .prefetch_related(Prefetch(
+                'entries',
+                queryset=SpawnEntry.objects.only('id', 'plan_id'),
+            ))
+            .order_by('order', 'created_ts', 'id')
+        )
+        for spawn_plan in spawn_plans:
+            payload = builder_world_export.serialize_spawn_plan_payload(
+                spawn_plan,
+                include_yaml=False,
+            )
+            payload['matching_entries'] = matching_entries_by_plan[spawn_plan.id]
+            spawn_plan_payloads.append(payload)
 
         return Response({
             'spawn_plans': spawn_plan_payloads,
@@ -1479,7 +1523,7 @@ class RoomTriggerViewSet(BaseWorldBuilderViewSet):
             scope=adv_consts.TRIGGER_SCOPE_ROOM,
             target_type=room_ct,
             target_id=room.id,
-        ).select_related("target_type")
+        ).select_related("target_type").prefetch_related("target")
 
         kind = self.request.query_params.get('kind')
         if kind in adv_consts.TRIGGER_KINDS:
@@ -1578,7 +1622,11 @@ class WorldTriggerViewSet(BaseWorldBuilderViewSet):
     def get_queryset(self):
         self._assert_can_view_world_triggers()
 
-        qs = Trigger.objects.filter(world=self.world).select_related("target_type")
+        qs = (
+            Trigger.objects.filter(world=self.world)
+            .select_related("target_type")
+            .prefetch_related("target")
+        )
 
         scope = self.request.query_params.get('scope')
         if scope in adv_consts.TRIGGER_SCOPES:
@@ -1654,8 +1702,17 @@ world_trigger_detail = WorldTriggerViewSet.as_view({
 })
 
 
-def _serialize_builder_ability_response(ability):
-    payload = builder_manifests.serialize_ability_payload(ability)
+def _serialize_builder_ability_response(
+    ability,
+    *,
+    entity_ref_cache=None,
+    room_ref_cache=None,
+):
+    payload = builder_manifests.serialize_ability_payload(
+        ability,
+        entity_ref_cache=entity_ref_cache,
+        room_ref_cache=room_ref_cache,
+    )
     payload.update({
         "created_ts": ability.created_ts,
         "modified_ts": ability.modified_ts,
@@ -1677,7 +1734,9 @@ class WorldAbilityViewSet(BaseWorldBuilderViewSet):
     def get_queryset(self):
         self._assert_can_view_abilities()
 
-        qs = AbilityDefinition.objects.filter(world=definition_world(self.world))
+        qs = AbilityDefinition.objects.filter(
+            world=definition_world(self.world)
+        ).select_related("world")
 
         is_active = self.request.query_params.get('is_active')
         if is_active in ('true', '1'):
@@ -1718,17 +1777,47 @@ class WorldAbilityViewSet(BaseWorldBuilderViewSet):
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
+        entity_ref_cache, room_ref_cache = (
+            builder_world_export.build_manifest_semantic_ref_caches(
+                definition_world(self.world)
+            )
+        )
         page = self.paginate_queryset(queryset)
         if page is not None:
-            data = [_serialize_builder_ability_response(ability) for ability in page]
+            data = [
+                _serialize_builder_ability_response(
+                    ability,
+                    entity_ref_cache=entity_ref_cache,
+                    room_ref_cache=room_ref_cache,
+                )
+                for ability in page
+            ]
             return self.get_paginated_response(data)
 
-        data = [_serialize_builder_ability_response(ability) for ability in queryset]
+        data = [
+            _serialize_builder_ability_response(
+                ability,
+                entity_ref_cache=entity_ref_cache,
+                room_ref_cache=room_ref_cache,
+            )
+            for ability in queryset
+        ]
         return Response(data)
 
     def retrieve(self, request, *args, **kwargs):
         ability = self.get_object()
-        return Response(_serialize_builder_ability_response(ability))
+        entity_ref_cache, room_ref_cache = (
+            builder_world_export.build_manifest_semantic_ref_caches(
+                definition_world(self.world)
+            )
+        )
+        return Response(
+            _serialize_builder_ability_response(
+                ability,
+                entity_ref_cache=entity_ref_cache,
+                room_ref_cache=room_ref_cache,
+            )
+        )
 
 
 world_ability_list = WorldAbilityViewSet.as_view({
@@ -1850,6 +1939,8 @@ class WorldManifestApplyView(BaseWorldBuilderView):
         )
 
     def _assert_can_edit_zone_manifest(self, manifest):
+        if self._builder_rank >= 3:
+            return
         metadata = manifest.get("metadata") or {}
         zone_ref = str(metadata.get("ref") or "").strip()
         zone = None
@@ -1883,15 +1974,19 @@ class WorldManifestApplyView(BaseWorldBuilderView):
         )
 
     def _assert_can_edit_room_manifest(self, manifest):
+        if self._builder_rank >= 3:
+            return
         metadata = builder_world_export._manifest_metadata(manifest)
         room_ref = str(metadata.get("ref") or "").strip()
         if not room_ref:
             return
-        try:
-            x, y, z = builder_world_export._parse_room_ref(room_ref)
-        except serializers.ValidationError:
+        parsed = builder_world_export.parse_room_reference(room_ref)
+        if parsed is None:
             return
-        room = Room.objects.filter(world=self.world, x=x, y=y, z=z).first()
+        room = builder_world_export.resolve_room_reference(
+            self.world,
+            room_ref,
+        )
         if room is None:
             if self._builder_rank >= 3:
                 return
@@ -2037,6 +2132,11 @@ class WorldManifestApplyView(BaseWorldBuilderView):
         manifest = builder_world_export.normalize_trigger_manifest_for_import(
             world=self.world,
             manifest=manifest,
+            room_ref_cache=getattr(
+                self,
+                "_batch_room_ref_cache",
+                None,
+            ),
         )
         parsed_trigger = builder_manifests.parse_trigger_manifest(
             world=self.world,
@@ -2148,12 +2248,31 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             world=self.world,
             manifest=manifest,
         )
+        entity_ref_cache = getattr(
+            self,
+            "_batch_entity_ref_cache",
+            None,
+        )
+        if entity_ref_cache is not None and item_definition.slug:
+            canonical_ref = f"itemdefinition.{item_definition.slug}"
+            entity_ref_cache[
+                ("itemdefinition", "id", item_definition.id)
+            ] = canonical_ref
+            entity_ref_cache[
+                ("itemdefinition", "slug", item_definition.slug)
+            ] = canonical_ref
         return Response(
             {
                 "kind": builder_manifests.ITEM_DEFINITION_MANIFEST_KIND,
                 "operation": "created" if is_create else "updated",
                 "item_definition": builder_manifests.serialize_item_definition_payload(
-                    item_definition
+                    item_definition,
+                    entity_ref_cache=entity_ref_cache,
+                    room_ref_cache=getattr(
+                        self,
+                        "_batch_room_ref_cache",
+                        None,
+                    ),
                 ),
             },
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
@@ -2188,12 +2307,31 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             world=self.world,
             manifest=manifest,
         )
+        entity_ref_cache = getattr(
+            self,
+            "_batch_entity_ref_cache",
+            None,
+        )
+        if entity_ref_cache is not None and mob_definition.slug:
+            canonical_ref = f"mobdefinition.{mob_definition.slug}"
+            entity_ref_cache[
+                ("mobdefinition", "id", mob_definition.id)
+            ] = canonical_ref
+            entity_ref_cache[
+                ("mobdefinition", "slug", mob_definition.slug)
+            ] = canonical_ref
         return Response(
             {
                 "kind": builder_manifests.MOB_DEFINITION_MANIFEST_KIND,
                 "operation": "created" if is_create else "updated",
                 "mob_definition": builder_manifests.serialize_mob_definition_payload(
-                    mob_definition
+                    mob_definition,
+                    entity_ref_cache=entity_ref_cache,
+                    room_ref_cache=getattr(
+                        self,
+                        "_batch_room_ref_cache",
+                        None,
+                    ),
                 ),
             },
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
@@ -2228,6 +2366,19 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             world=self.world,
             manifest=manifest,
         )
+        entity_ref_cache = getattr(
+            self,
+            "_batch_entity_ref_cache",
+            None,
+        )
+        if entity_ref_cache is not None and item_bundle.slug:
+            canonical_ref = f"itembundle.{item_bundle.slug}"
+            entity_ref_cache[
+                ("itembundle", "id", item_bundle.id)
+            ] = canonical_ref
+            entity_ref_cache[
+                ("itembundle", "slug", item_bundle.slug)
+            ] = canonical_ref
         return Response(
             {
                 "kind": builder_manifests.ITEM_BUNDLE_MANIFEST_KIND,
@@ -2669,6 +2820,40 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             world=self.world,
             manifest=manifest,
         )
+        canonical_ref = format_room_manifest_ref(room)
+        room_ref_cache = getattr(self, "_batch_room_ref_cache", None)
+        if room_ref_cache is not None:
+            stale_keys = [
+                key
+                for key, value in room_ref_cache.items()
+                if value == canonical_ref
+            ]
+            for key in stale_keys:
+                room_ref_cache.pop(key, None)
+            room_ref_cache[("database_id", room.id)] = canonical_ref
+            room_ref_cache[("relative_id", room.relative_id)] = canonical_ref
+            room_ref_cache[
+                ("coordinates", room.x, room.y, room.z)
+            ] = canonical_ref
+            if room.name:
+                room_ref_cache.setdefault(("name", room.name), canonical_ref)
+        room_object_cache = getattr(
+            self,
+            "_batch_room_object_cache",
+            None,
+        )
+        if room_object_cache is not None:
+            builder_world_export.refresh_room_reference_object_cache(
+                room_object_cache,
+                room,
+            )
+        reserved_relative_ids = getattr(
+            self,
+            "_batch_created_room_relative_ids",
+            set(),
+        )
+        if room.relative_id in reserved_relative_ids:
+            is_create = True
         room.update_live_instances()
         return Response(
             {
@@ -2678,7 +2863,9 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                     "id": room.id,
                     "key": room.key,
                     "name": room.name,
-                    "ref": builder_world_export._room_ref(room),
+                    "ref": canonical_ref,
+                    "relative_id": room.relative_id,
+                    "manifest_ref": canonical_ref,
                 },
             },
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
@@ -2757,19 +2944,45 @@ class WorldManifestApplyView(BaseWorldBuilderView):
         spawn_plan, is_create = builder_world_export.apply_spawn_plan_manifest(
             world=self.world,
             manifest=manifest,
+            room_ref_cache=getattr(
+                self,
+                "_batch_room_ref_cache",
+                None,
+            ),
         )
         return Response(
             {
                 "kind": builder_world_export.SPAWN_PLAN_MANIFEST_KIND,
                 "operation": "created" if is_create else "updated",
                 "spawn_plan": builder_world_export.serialize_spawn_plan_payload(
-                    spawn_plan
+                    spawn_plan,
+                    room_ref_cache=getattr(
+                        self,
+                        "_batch_room_ref_cache",
+                        None,
+                    ),
+                    source_ref_cache=getattr(
+                        self,
+                        "_batch_entity_ref_cache",
+                        None,
+                    ),
                 ),
             },
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
         )
 
     def _dispatch_manifest(self, manifest):
+        manifest = (
+            builder_world_export.normalize_manifest_room_references_for_import(
+                world=self.world,
+                manifest=manifest,
+                room_ref_cache=getattr(
+                    self,
+                    "_batch_room_ref_cache",
+                    None,
+                ),
+            )
+        )
         manifest_kind = builder_world_export.parse_document_kind(manifest)
 
         if manifest_kind == builder_world_export.WORLD_MANIFEST_KIND:
@@ -2827,32 +3040,346 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             summary["kinds"][kind] = summary["kinds"].get(kind, 0) + 1
         return summary
 
+    def _assert_batch_room_permissions_before_reservation(self, manifests):
+        """
+        Authorize every room document against the pre-batch world state.
+
+        Room reservation intentionally happens before document dispatch so
+        forward references resolve. Without this preflight, an earlier zone
+        document could adopt a newly reserved room as its center, assign that
+        room to the zone, and thereby manufacture edit permission for a
+        lower-rank builder before the room document is dispatched.
+        """
+        if self._builder_rank >= 3:
+            return
+
+        for index, manifest in enumerate(manifests, start=1):
+            kind = builder_world_export.parse_document_kind(manifest)
+            if kind != builder_world_export.ROOM_MANIFEST_KIND:
+                continue
+            try:
+                self._assert_can_edit_room_manifest(manifest)
+            except drf_exceptions.PermissionDenied as exc:
+                raise drf_exceptions.PermissionDenied(
+                    f"Document {index} ({kind}) failed: {exc.detail}"
+                )
+
+    def _apply_world_bundle(self, manifests):
+        if self._builder_rank < 3:
+            raise drf_exceptions.PermissionDenied(
+                "You do not have permission to import a world bundle."
+            )
+        if self.world.context_id or self.world.instance_of_id:
+            raise serializers.ValidationError(
+                "World bundles can only be imported into an authored base "
+                "world."
+            )
+
+        (
+            declarations,
+            grouped_documents,
+            links,
+        ) = builder_world_export.parse_world_bundle_stream(manifests)
+        for scoped_documents in grouped_documents.values():
+            builder_world_export.validate_room_door_stream_consistency(
+                scoped_documents
+            )
+
+        original_world = self.world
+        original_builder_rank = self._builder_rank
+        missing = object()
+        original_created_room_ids = getattr(
+            self,
+            "_batch_created_room_relative_ids",
+            missing,
+        )
+        original_room_ref_cache = getattr(
+            self,
+            "_batch_room_ref_cache",
+            missing,
+        )
+        original_room_object_cache = getattr(
+            self,
+            "_batch_room_object_cache",
+            missing,
+        )
+        original_entity_ref_cache = getattr(
+            self,
+            "_batch_entity_ref_cache",
+            missing,
+        )
+        results = []
+        scope_worlds = {}
+        try:
+            with transaction.atomic():
+                try:
+                    scope_worlds = (
+                        builder_world_export
+                        .resolve_or_create_world_bundle_scopes(
+                            base_world=original_world,
+                            declarations=declarations,
+                            author=self.request.user,
+                        )
+                    )
+                except ValidationError as exc:
+                    detail = (
+                        exc.message_dict
+                        if hasattr(exc, "message_dict")
+                        else exc.messages
+                    )
+                    raise serializers.ValidationError(detail)
+
+                ordered_world_refs = [
+                    "world@base",
+                    *sorted(
+                        world_ref
+                        for world_ref in scope_worlds
+                        if world_ref != "world@base"
+                    ),
+                ]
+                created_room_ids_by_scope = {}
+                room_ref_cache_by_scope = {}
+                room_object_cache_by_scope = {}
+                for world_ref in ordered_world_refs:
+                    scope_world = scope_worlds[world_ref]
+                    scoped_documents = grouped_documents[world_ref]
+                    created_room_ids_by_scope[world_ref] = (
+                        builder_world_export
+                        .reserve_room_manifest_references(
+                            world=scope_world,
+                            documents=scoped_documents,
+                        )
+                    )
+                    scope_rooms = list(
+                        Room.objects.filter(world=scope_world)
+                    )
+                    room_ref_cache_by_scope[world_ref] = (
+                        builder_world_export._build_room_ref_cache(
+                            scope_world,
+                            rooms=scope_rooms,
+                        )
+                    )
+                    room_object_cache_by_scope[world_ref] = (
+                        builder_world_export
+                        .build_room_reference_object_cache(scope_rooms)
+                    )
+
+                base_definition_world = scope_worlds["world@base"]
+                base_entity_ref_cache = (
+                    builder_world_export._build_entity_ref_cache(
+                        item_definitions=list(
+                            ItemDefinition.objects.filter(
+                                world=base_definition_world,
+                            ).only("id", "slug")
+                        ),
+                        item_bundles=list(
+                            ItemBundle.objects.filter(
+                                world=base_definition_world,
+                            ).only("id", "slug")
+                        ),
+                        mob_definitions=list(
+                            MobDefinition.objects.filter(
+                                world=base_definition_world,
+                            ).only("id", "slug")
+                        ),
+                    )
+                )
+                entity_ref_cache_by_scope = {
+                    "world@base": base_entity_ref_cache,
+                }
+                active_room_object_caches = {
+                    scope_worlds[world_ref].id: (
+                        room_object_cache_by_scope[world_ref]
+                    )
+                    for world_ref in ordered_world_refs
+                }
+                with (
+                    builder_world_export
+                    .use_room_reference_object_caches(
+                        active_room_object_caches
+                    )
+                ):
+                    for world_ref in ordered_world_refs:
+                        self.world = scope_worlds[world_ref]
+                        if world_ref not in entity_ref_cache_by_scope:
+                            entity_ref_cache_by_scope[world_ref] = dict(
+                                base_entity_ref_cache
+                            )
+                        # Rank-three base-world builders are authorized for a
+                        # whole-family import. Child scopes do not carry
+                        # separate memberships, so dispatch at owner rank.
+                        self._builder_rank = 4
+                        self._batch_created_room_relative_ids = (
+                            created_room_ids_by_scope[world_ref]
+                        )
+                        self._batch_room_ref_cache = (
+                            room_ref_cache_by_scope[world_ref]
+                        )
+                        self._batch_room_object_cache = (
+                            room_object_cache_by_scope[world_ref]
+                        )
+                        self._batch_entity_ref_cache = (
+                            entity_ref_cache_by_scope[world_ref]
+                        )
+                        for index, manifest in enumerate(
+                            grouped_documents[world_ref],
+                            start=1,
+                        ):
+                            try:
+                                response = self._dispatch_manifest(manifest)
+                            except drf_exceptions.PermissionDenied as exc:
+                                kind = str(
+                                    manifest.get("kind") or "manifest"
+                                ).strip().lower() or "manifest"
+                                raise drf_exceptions.PermissionDenied(
+                                    f"Bundle scope '{world_ref}' document "
+                                    f"{index} ({kind}) failed: {exc.detail}"
+                                )
+                            except serializers.ValidationError as exc:
+                                kind = str(
+                                    manifest.get("kind") or "manifest"
+                                ).strip().lower() or "manifest"
+                                raise serializers.ValidationError(
+                                    f"Bundle scope '{world_ref}' document "
+                                    f"{index} ({kind}) failed: {exc.detail}"
+                                )
+                            results.append(
+                                {
+                                    "world_ref": world_ref,
+                                    **response.data,
+                                }
+                            )
+
+                    builder_world_export.apply_world_bundle_links(
+                        scope_worlds=scope_worlds,
+                        links=links,
+                    )
+        finally:
+            self.world = original_world
+            self._builder_rank = original_builder_rank
+            if original_created_room_ids is missing:
+                self.__dict__.pop(
+                    "_batch_created_room_relative_ids",
+                    None,
+                )
+            else:
+                self._batch_created_room_relative_ids = (
+                    original_created_room_ids
+                )
+            if original_room_ref_cache is missing:
+                self.__dict__.pop("_batch_room_ref_cache", None)
+            else:
+                self._batch_room_ref_cache = original_room_ref_cache
+            if original_room_object_cache is missing:
+                self.__dict__.pop("_batch_room_object_cache", None)
+            else:
+                self._batch_room_object_cache = (
+                    original_room_object_cache
+                )
+            if original_entity_ref_cache is missing:
+                self.__dict__.pop("_batch_entity_ref_cache", None)
+            else:
+                self._batch_entity_ref_cache = (
+                    original_entity_ref_cache
+                )
+
+        summary = self._batch_summary(results)
+        summary["content_documents"] = summary["documents"]
+        summary["documents"] = len(manifests)
+        summary["worlds"] = len(scope_worlds)
+        summary["instances"] = max(0, len(scope_worlds) - 1)
+        summary["links"] = len(links)
+        return Response(
+            {
+                "kind": builder_world_export.WORLD_BUNDLE_MANIFEST_KIND,
+                "operation": "applied",
+                "summary": summary,
+                "results": results,
+            },
+            status=status.HTTP_200_OK,
+        )
+
     def post(self, request, world_pk, format=None):
         manifest_text = request.data.get("manifest")
         if manifest_text is None:
             raise serializers.ValidationError({"manifest": ["This field is required."]})
 
         manifests = builder_manifests.load_yaml_documents(manifest_text)
+        if (
+            manifests
+            and builder_world_export.parse_document_kind(manifests[0])
+            == builder_world_export.WORLD_BUNDLE_MANIFEST_KIND
+        ):
+            return self._apply_world_bundle(manifests)
         if len(manifests) == 1:
             return self._dispatch_manifest(manifests[0])
 
         builder_world_export.validate_room_door_stream_consistency(manifests)
         results = []
         with transaction.atomic():
-            for index, manifest in enumerate(manifests, start=1):
-                try:
-                    response = self._dispatch_manifest(manifest)
-                except drf_exceptions.PermissionDenied as exc:
-                    kind = str((manifest.get("kind") or "manifest")).strip().lower() or "manifest"
-                    raise drf_exceptions.PermissionDenied(
-                        f"Document {index} ({kind}) failed: {exc.detail}"
-                    )
-                except serializers.ValidationError as exc:
-                    kind = str((manifest.get("kind") or "manifest")).strip().lower() or "manifest"
-                    raise serializers.ValidationError(
-                        f"Document {index} ({kind}) failed: {exc.detail}"
-                    )
-                results.append(response.data)
+            self._assert_batch_room_permissions_before_reservation(manifests)
+            self._batch_created_room_relative_ids = (
+                builder_world_export.reserve_room_manifest_references(
+                    world=self.world,
+                    documents=manifests,
+                )
+            )
+            batch_rooms = list(Room.objects.filter(world=self.world))
+            self._batch_room_ref_cache = (
+                builder_world_export._build_room_ref_cache(
+                    self.world,
+                    rooms=batch_rooms,
+                )
+            )
+            self._batch_room_object_cache = (
+                builder_world_export.build_room_reference_object_cache(
+                    batch_rooms
+                )
+            )
+            definition_world_id = (
+                self.world.instance_of_id
+                or self.world.id
+            )
+            self._batch_entity_ref_cache = (
+                builder_world_export._build_entity_ref_cache(
+                    item_definitions=list(
+                        ItemDefinition.objects.filter(
+                            world_id=definition_world_id,
+                        ).only("id", "slug")
+                    ),
+                    item_bundles=list(
+                        ItemBundle.objects.filter(
+                            world_id=definition_world_id,
+                        ).only("id", "slug")
+                    ),
+                    mob_definitions=list(
+                        MobDefinition.objects.filter(
+                            world_id=definition_world_id,
+                        ).only("id", "slug")
+                    ),
+                )
+            )
+            with builder_world_export.use_room_reference_object_caches({
+                self.world.id: self._batch_room_object_cache,
+            }):
+                for index, manifest in enumerate(manifests, start=1):
+                    try:
+                        response = self._dispatch_manifest(manifest)
+                    except drf_exceptions.PermissionDenied as exc:
+                        kind = str((manifest.get("kind") or "manifest")).strip().lower() or "manifest"
+                        raise drf_exceptions.PermissionDenied(
+                            f"Document {index} ({kind}) failed: {exc.detail}"
+                        )
+                    except serializers.ValidationError as exc:
+                        kind = str((manifest.get("kind") or "manifest")).strip().lower() or "manifest"
+                        raise serializers.ValidationError(
+                            f"Document {index} ({kind}) failed: {exc.detail}"
+                        )
+                    results.append(response.data)
+        self._batch_created_room_relative_ids = set()
+        self._batch_room_ref_cache = None
+        self._batch_room_object_cache = None
+        self._batch_entity_ref_cache = None
 
         return Response(
             {
@@ -3296,7 +3823,9 @@ class MobDefinitionViewSet(BaseWorldBuilderViewSet):
             kind=adv_consts.TRIGGER_KIND_EVENT,
             target_type=mob_definition_ct,
             target_id=mob_definition.id,
-        ).order_by('order', 'created_ts', 'id')
+        ).select_related("target_type").prefetch_related("target").order_by(
+            'order', 'created_ts', 'id'
+        )
         serializer = builder_serializers.MobReactionSerializer(
             reaction_triggers,
             many=True)
@@ -3474,11 +4003,15 @@ class MobDefinitionReactionViewSet(BaseWorldBuilderViewSet):
     serializer_class = builder_serializers.MobReactionSerializer
 
     def get_queryset(self):
-        return Trigger.objects.filter(
-            world=self.world,
-            kind=adv_consts.TRIGGER_KIND_EVENT,
-            target_type=ContentType.objects.get_for_model(MobDefinition),
-            target_id=self.kwargs['mob_definition_pk'],
+        return (
+            Trigger.objects.filter(
+                world=self.world,
+                kind=adv_consts.TRIGGER_KIND_EVENT,
+                target_type=ContentType.objects.get_for_model(MobDefinition),
+                target_id=self.kwargs['mob_definition_pk'],
+            )
+            .select_related("target_type")
+            .prefetch_related("target")
         )
 
 
@@ -3515,8 +4048,23 @@ class PathViewSet(BaseWorldBuilderViewSet):
             status=status.HTTP_201_CREATED)
 
     def perform_destroy(self, instance):
-        PathRoom.objects.filter(path=instance).delete()
         instance.delete()
+
+    def destroy(self, request, world_pk, pk, *args, **kwargs):
+        with transaction.atomic():
+            path = Path.objects.select_for_update().filter(
+                world=self.world,
+                pk=pk,
+            ).first()
+            if path is None:
+                raise NotFound
+            try:
+                self.perform_destroy(path)
+            except RestrictedError as exc:
+                raise serializers.ValidationError(
+                    'Cannot delete a path referenced by a spawn plan.'
+                ) from exc
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=False)
     def rooms(self, request, world_pk, pk):
