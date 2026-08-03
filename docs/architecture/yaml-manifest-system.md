@@ -137,6 +137,19 @@ Current required mappings:
   `spec.room_description`. Do not emit `spec.ground_description`; it is not
   part of the canonical WR2 contract. Preserve explicitly authored blank values
   as `""` when the conversion needs to clear an existing description.
+- WR1 item point and combat fields use current WR2 names: `mana_max` and
+  `mana_regen` become `energy_max` and `energy_regen`, `spell_power` becomes
+  `ability_power`, and food whose legacy `food_type` is `mana` becomes
+  `food_type: energy`. Move fixed `strength`, `constitution`, `dexterity`, and
+  `intelligence` values under `spec.attributes`; do not emit those legacy flat
+  keys. WR1 computed item `damage` and `armor` were runtime properties rather
+  than stored template columns, so the converter materializes their legacy
+  level, slot, quality, and armor-class formulas into WR2 `weapon_damage` and
+  `armor`. Otherwise converted weapons and armor would import successfully but
+  have zero combat value.
+- WR1 `ItemTemplate.skill_modifier` has no direct current item-definition
+  mapping. Omit non-empty values and report them for builder review rather than
+  inventing an attribute or ability effect.
 - WR1 `ItemTemplate.hit_msg_first` and `ItemTemplate.hit_msg_third` export to
   `kind: itemdefinition` fields `spec.hit_msg_first` and
   `spec.hit_msg_third`. Preserve non-empty multiword phrases as authored. Emit
@@ -144,6 +157,14 @@ Current required mappings:
   clears an old customization; omission defaults only when creating a definition.
 - WR1 `MobTemplate` rows export as `kind: mobdefinition`; WR2 no longer has a
   `MobTemplate` model, manifest kind, API endpoint, or runtime mob FK.
+- WR1 mob `mana_max` and `mana_regen` become `energy_max` and `energy_regen`,
+  `spell_power` becomes `ability_power`, and positive legacy Gold rewards become
+  `spec.rewards.currencies.gold`. Split the whitespace-delimited WR1 `traits`
+  field into a WR2 trait list. Legacy random-drop generation, elite/editor
+  flags, carried or equipped template inventory, merchant behavior, crafting,
+  upgrading, and skill teaching require explicit current WR2 definitions or
+  profiles; omit and report them instead of leaving rejected legacy keys in a
+  mob-definition document.
 - WR1 `MobTemplate.hit_msg_first` and `MobTemplate.hit_msg_third` export to
   `kind: mobdefinition` fields `spec.hit_msg_first` and
   `spec.hit_msg_third`. Preserve non-empty multiword phrases as authored. Emit
@@ -267,6 +288,11 @@ Current required mappings:
   positive world-relative id and preserve it throughout the converted
   manifest stream. Emit canonical `room@<relative_id>` references; never use a
   WR1 database id as that relative id by accident.
+- Write converted YAML as literal UTF-8. JSON-style UTF-16 surrogate-pair
+  escapes for astral characters are not valid authored YAML scalar content and
+  can survive parsing as code units that PostgreSQL rejects. Exporter YAML
+  quoting must therefore disable ASCII-only escaping and round-trip non-BMP
+  names and descriptions before a manifest is handed to WR2.
 - When one WR1 authored export contains a base world plus authored instance
   templates, emit one `kind: worldbundle` stream. Give each direct template a
   deterministic lowercase `instance_slug` that is unique within that base
@@ -1532,11 +1558,16 @@ content documents retain their normal apply/delete semantics, but undeclared
 instance templates are not pruned implicitly.
 
 A newly created target's untouched `Starting Room` may be removed when its
-identity is absent from a complete incoming stream. The importer proves that it
-is still disposable scaffold data first: authored fields, state, links,
-inventory, triggers, assignments, and all dependent records make the room
-ineligible for cleanup. Existing authored rooms are preserved, never
-heuristically deleted.
+identity is absent from a complete incoming stream. The stream must explicitly
+declare a `spec.starting_room` that is also defined by one of its room
+documents. The Lobby's Create World workflow creates an offline Builder player
+and an editor `LastViewedRoom` bookmark at the scaffold room; those two
+navigation records are atomically rehomed to the declared incoming starting
+room before the scaffold is removed. The importer still proves that the room
+is disposable first: authored fields, state, links, inventory, triggers,
+assignments, an active or non-builder player, a foreign bookmark, and every
+other dependent record make it ineligible for cleanup. Existing authored rooms
+are preserved, never heuristically deleted.
 
 The canonical format has explicit safety bounds: at most 50 authored worlds
 including the base, 10,000 total documents including the header, and 20,000

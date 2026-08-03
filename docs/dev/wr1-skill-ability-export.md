@@ -19,27 +19,56 @@ cd /Users/teebes/code/Advent/api
 python scripts/wr2_manifest_export.py <world_id> > /tmp/world.yaml
 ```
 
+The positional world ID remains required for a full-world export. To include
+skills and triggers in the same stream:
+
+```bash
+python scripts/wr2_manifest_export.py <world_id> \
+  --include-abilities --include-triggers > /tmp/world-with-logic.yaml
+```
+
 Useful options:
 
 - `--exact-world` exports the provided world directly instead of resolving a
   spawned world to its context.
 - `--settings <module>` overrides the Django settings module.
-- `--no-triggers` skips WR1 room actions and mob reactions.
-- `--no-skills` skips WR1 builder skills and therefore emits no ability
+- `--include-abilities` exports WR1 builder skills as ability manifests.
+  `--include-skills` is an equivalent alias.
+- `--include-triggers` exports WR1 room actions and mob reactions as trigger
   manifests.
+- `--zone-id <id>` exports one WR1 zone and its rooms instead of a full world.
 
 ## Current Export Shape
 
-The script emits a YAML stream of WR2 manifest documents. It currently exports:
+The script emits a YAML manifest stream. By default, a full-world export
+contains:
 
 - currencies
-- item templates
-- WR1 builder skills as WR2 `kind: ability` documents
+- item definitions
 - zones
-- rooms, details, exits, doors, and room inventory references
-- mob templates
-- room action and mob reaction triggers
+- rooms, details, exits, and doors
+- mob definitions
 - the world document
+
+These use the current WR2 kinds and references: `itemdefinition`,
+`mobdefinition`, `room@<relative_id>`, `zone@<relative_id>`, and
+`itemdefinition.<slug>`. Rooms include explicit `spec.coordinates`, and the
+world document selects `gold` as its default currency and carries WR1 starting
+Gold under `starting_balances.gold`. The exporter writes YAML only to stdout;
+lossy conversion warnings go to stderr, so normal shell redirection produces a
+clean manifest file.
+
+The exporter also materializes WR1's runtime-computed item weapon damage and
+armor, renames Mana fields to Energy, moves fixed item attributes under
+`spec.attributes`, and preserves astral Unicode as literal UTF-8. Unsupported
+legacy template-inventory, procedural-drop, merchant, crafter/upgrader, elite,
+and teaching behavior is omitted with a review warning instead of being
+written as fields that WR2 rejects.
+
+Optional content is opt-in:
+
+- `--include-abilities` adds WR1 builder skills as `kind: ability` documents.
+- `--include-triggers` adds room action and mob reaction trigger documents.
 
 The skill export only covers world-authored `builders.Skill` records. It does
 not yet export WR1 hard-coded core or flex class skills from the Advent Python
@@ -66,6 +95,9 @@ Direct field mappings:
   - `healing` becomes an ally ability that defaults to self.
   - `self_healing` becomes a self-targeted ability.
 - `cost_type`, `cost`, and `cost_calc` become `spec.cost`.
+- WR1 `mana` costs become WR2 `energy` costs; `perc_base` and `perc_max`
+  become `percent_base` and `percent_max` respectively.
+- `cast_time` seconds become `spec.cast_time.rounds`.
 - `cooldown` seconds become `spec.cooldown.rounds`.
 
 Timing conversion uses `WR1_SECONDS_PER_WR2_ROUND = 3.0` in the exporter:
@@ -127,6 +159,10 @@ python /Users/teebes/code/Advent/api/scripts/wr2_manifest_export.py --help
 ```
 
 For behavioral validation, export a known WR1 world, import the resulting YAML
-through the WR2 manifest flow, and inspect any ability documents with
-`wr1_export.notes`. Those notes are the practical checklist for manually tuning
-abilities after import.
+through **Create World** followed by **World > Edit World**, and inspect any
+ability documents with `wr1_export.notes`. Converted room references remain the
+stable WR1-relative identities; they do not need to contain `room@1`. On a
+pristine target, WR2 replaces its scaffold room and moves the Lobby's offline
+Builder character and editor bookmark to the manifest's declared starting
+room. Those notes are the practical checklist for manually tuning abilities
+after import.

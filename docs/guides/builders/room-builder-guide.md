@@ -22,6 +22,21 @@ The editor accepts one room manifest. Use **World > Edit World** when applying
 multiple related documents, such as a room plus a zone, neighboring rooms,
 triggers, and spawn plans.
 
+## Importing A Complete Room Set
+
+**Create World** starts a world with scaffold `room@1` at `(0, 0, 0)`. A
+complete multi-document import does not need to invent or remap a source room
+to `room@1`. When the stream contains a `kind: world` document with an explicit
+`starting_room` that is also declared by a room document, WR2 can replace the
+untouched scaffold even if the incoming room references are sparse.
+
+The offline Builder character and editor bookmark created by the Lobby are
+moved to the imported starting room during that replacement. The operation is
+atomic. If the scaffold was edited, contains authored content, or has an active
+or ordinary player or any other dependent record, WR2 preserves it and rejects
+an incoming coordinate collision instead. Single-room and partial streams do
+not invoke complete-world scaffold replacement.
+
 ## Complete Example
 
 ```yaml

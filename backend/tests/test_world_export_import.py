@@ -16,6 +16,7 @@ from builders.models import (
     BuilderAssignment,
     Currency,
     ItemDefinition,
+    LastViewedRoom,
     MobDefinition,
     Path,
     PathRoom,
@@ -32,6 +33,7 @@ from core.scoped_state import (
     replace_initial_state_snapshot,
 )
 from quests.models import QuestArcTemplate, QuestTemplate
+from spawns.models import Player
 from tests.base import WorldTestCase
 from worlds.models import (
     Door,
@@ -56,6 +58,79 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         self.export_ep = reverse("builder-world-export", args=[self.world.pk])
         self.apply_ep = reverse("builder-world-manifest-apply", args=[self.world.pk])
         self._build_source_world()
+
+    def _create_lobby_import_target(self, *, name):
+        response = self.client.post(
+            reverse("builder-world-list"),
+            {
+                "name": name,
+                "is_multiplayer": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+
+        target_world = self.world.__class__.objects.get(pk=response.data["id"])
+        scaffold = target_world.rooms.get(relative_id=1)
+        builder_player = Player.objects.get(
+            world__context=target_world,
+            is_builder=True,
+        )
+        bookmark = LastViewedRoom.objects.get(
+            world=target_world,
+            user=self.user,
+        )
+        self.assertEqual(builder_player.room_id, scaffold.id)
+        self.assertEqual(bookmark.room_id, scaffold.id)
+        return target_world, scaffold, builder_player, bookmark
+
+    def _sparse_complete_world_manifest(self):
+        return yaml.safe_dump_all(
+            [
+                {
+                    "apiVersion": "writtenrealms.com/v1alpha3",
+                    "kind": "zone",
+                    "metadata": {
+                        "ref": "zone@6",
+                        "name": "Imported Zone",
+                    },
+                    "spec": {},
+                },
+                {
+                    "apiVersion": "writtenrealms.com/v1alpha3",
+                    "kind": "room",
+                    "metadata": {
+                        "ref": "room@193",
+                        "name": "Imported Origin",
+                    },
+                    "spec": {
+                        "coordinates": {"x": 0, "y": 0, "z": 0},
+                        "zone": "zone@6",
+                    },
+                },
+                {
+                    "apiVersion": "writtenrealms.com/v1alpha3",
+                    "kind": "room",
+                    "metadata": {
+                        "ref": "room@492",
+                        "name": "Imported Starting Room",
+                    },
+                    "spec": {
+                        "coordinates": {"x": 4, "y": 9, "z": 0},
+                        "zone": "zone@6",
+                    },
+                },
+                {
+                    "apiVersion": "writtenrealms.com/v1alpha3",
+                    "kind": "world",
+                    "spec": {
+                        "starting_room": "room@492",
+                        "death_room": "room@193",
+                    },
+                },
+            ],
+            sort_keys=False,
+        )
 
     def _build_source_world(self):
         self.obol = create_currency(
@@ -736,6 +811,89 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         )
         self.assertNotEqual(imported_item_trigger.target_id, self.brass_key.id)
         self.assertEqual(imported_item_trigger.target.slug, self.brass_key.slug)
+
+    def test_complete_import_replaces_lobby_scaffold_and_rehomes_builder(self):
+        (
+            target_world,
+            scaffold,
+            builder_player,
+            bookmark,
+        ) = self._create_lobby_import_target(name="Sparse Import Target")
+        manifest = self._sparse_complete_world_manifest()
+        apply_ep = reverse(
+            "builder-world-manifest-apply",
+            args=[target_world.pk],
+        )
+
+        response = self.client.post(
+            apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertFalse(target_world.rooms.filter(pk=scaffold.pk).exists())
+        self.assertEqual(
+            set(target_world.rooms.values_list("relative_id", flat=True)),
+            {193, 492},
+        )
+        imported_origin = target_world.rooms.get(relative_id=193)
+        imported_start = target_world.rooms.get(relative_id=492)
+        self.assertEqual(
+            (imported_origin.x, imported_origin.y, imported_origin.z),
+            (0, 0, 0),
+        )
+
+        target_world.config.refresh_from_db()
+        builder_player.refresh_from_db()
+        bookmark.refresh_from_db()
+        self.assertEqual(target_world.config.starting_room_id, imported_start.id)
+        self.assertEqual(target_world.config.death_room_id, imported_origin.id)
+        self.assertEqual(builder_player.room_id, imported_start.id)
+        self.assertEqual(bookmark.room_id, imported_start.id)
+
+        repeat_response = self.client.post(
+            apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+        self.assertEqual(repeat_response.status_code, 200, repeat_response.data)
+        builder_player.refresh_from_db()
+        bookmark.refresh_from_db()
+        self.assertEqual(builder_player.room_id, imported_start.id)
+        self.assertEqual(bookmark.room_id, imported_start.id)
+
+    def test_complete_import_keeps_scaffold_with_non_builder_player(self):
+        (
+            target_world,
+            scaffold,
+            _builder_player,
+            _bookmark,
+        ) = self._create_lobby_import_target(name="Occupied Import Target")
+        visitor = Player.objects.create(
+            world=target_world.spawned_worlds.get(),
+            user=self.create_user("sparse-import-visitor@example.com"),
+            name="Visitor",
+            room=scaffold,
+        )
+
+        response = self.client.post(
+            reverse(
+                "builder-world-manifest-apply",
+                args=[target_world.pk],
+            ),
+            {"manifest": self._sparse_complete_world_manifest()},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("room@1", str(response.data))
+        self.assertEqual(
+            list(target_world.rooms.values_list("relative_id", flat=True)),
+            [1],
+        )
+        visitor.refresh_from_db()
+        self.assertEqual(visitor.room_id, scaffold.id)
 
     def test_batch_preflights_room_create_permission_before_zone_center_reservation(self):
         builder_user = self.create_user("assigned-zone-builder@example.com")

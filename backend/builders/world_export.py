@@ -28,6 +28,7 @@ from builders.models import (
     ItemBundle,
     ItemDefinition,
     ItemSalvageYield,
+    LastViewedRoom,
     MerchantProfile,
     MobDefinition,
     Path,
@@ -3299,15 +3300,18 @@ def _placeholder_room_has_dependents(
     room: Room,
     config: WorldConfig,
     placeholder_zone: Zone,
+    allow_import_scaffold_dependents: bool = False,
 ) -> bool:
     """
     Detect records that make a default-looking room authored or runtime data.
 
-    The target config's starting/death pointers are the only expected
-    dependents: reservation detaches those immediately before deleting a
-    proven scaffold room. The untouched starting zone may also point at it as
-    its center.
+    The target config's starting/death pointers and the untouched starting
+    zone's center are expected scaffold references. A complete-stream import
+    may also rehome the offline Builder player and same-world editor bookmark
+    created by the Lobby's Create World workflow.
     """
+
+    from spawns.models import Mob, Player
 
     database = room._state.db
     for relation in Room._meta.related_objects:
@@ -3324,6 +3328,22 @@ def _placeholder_room_has_dependents(
             and relation.field.name == "center"
         ):
             queryset = queryset.exclude(pk=placeholder_zone.pk)
+        elif (
+            allow_import_scaffold_dependents
+            and relation.related_model is LastViewedRoom
+            and relation.field.name == "room"
+        ):
+            queryset = queryset.exclude(world_id=room.world_id)
+        elif (
+            allow_import_scaffold_dependents
+            and relation.related_model is Player
+            and relation.field.name == "room"
+        ):
+            queryset = queryset.exclude(
+                is_builder=True,
+                in_game=False,
+                world__context_id=room.world_id,
+            )
         if queryset.exists():
             return True
 
@@ -3346,15 +3366,17 @@ def _placeholder_room_has_dependents(
         return True
 
     # Mob.roams is a GenericForeignKey without a reverse GenericRelation.
-    from spawns.models import Mob
-
     return Mob.objects.filter(
         roams_type=room_content_type,
         roams_id=room.id,
     ).exists()
 
 
-def _find_placeholder_room(world: World) -> Room | None:
+def _find_placeholder_room(
+    world: World,
+    *,
+    allow_import_scaffold_dependents: bool = False,
+) -> Room | None:
     if world.rooms.count() != 1:
         return None
     room = world.rooms.order_by("id").first()
@@ -3410,6 +3432,7 @@ def _find_placeholder_room(world: World) -> Room | None:
         room=room,
         config=config,
         placeholder_zone=placeholder_zone,
+        allow_import_scaffold_dependents=allow_import_scaffold_dependents,
     ):
         return None
     return room
@@ -4390,10 +4413,30 @@ def reserve_room_manifest_references(
         room_specs: dict[int, tuple[tuple[int, int, int], str]] = {}
         coordinate_refs: dict[tuple[int, int, int], int] = {}
         has_world_document = False
+        declared_starting_room_relative_id: int | None = None
         for document in documents:
             kind = parse_document_kind(document)
             if kind == WORLD_MANIFEST_KIND:
                 has_world_document = True
+                world_spec = _manifest_spec(document)
+                if "starting_room" in world_spec:
+                    starting_room_ref = str(
+                        world_spec.get("starting_room") or ""
+                    ).strip()
+                    parsed_starting_room = parse_room_reference(
+                        starting_room_ref
+                    )
+                    if (
+                        parsed_starting_room is not None
+                        and parsed_starting_room.kind == "relative_id"
+                        and parsed_starting_room.relative_id is not None
+                        and parsed_starting_room.relative_id > 0
+                    ):
+                        declared_starting_room_relative_id = (
+                            parsed_starting_room.relative_id
+                        )
+                    else:
+                        declared_starting_room_relative_id = None
             if kind != ROOM_MANIFEST_KIND:
                 continue
             if (
@@ -4437,31 +4480,25 @@ def reserve_room_manifest_references(
             room_specs[relative_id] = definition
             coordinate_refs[coordinates] = relative_id
 
-        placeholder = _find_placeholder_room(world)
+        placeholder = None
         if (
             has_world_document
-            and placeholder is not None
-            and placeholder.relative_id not in room_specs
+            and declared_starting_room_relative_id in room_specs
         ):
-            config = world.config
-            if config is not None:
-                update_fields = []
-                if config.starting_room_id == placeholder.id:
-                    config.starting_room = None
-                    update_fields.append("starting_room")
-                if config.death_room_id == placeholder.id:
-                    config.death_room = None
-                    update_fields.append("death_room")
-                if update_fields:
-                    config.save(update_fields=update_fields)
-            placeholder.delete()
-            current_rooms = [
-                room for room in current_rooms if room.id != placeholder.id
-            ]
-            existing_by_relative_id.pop(placeholder.relative_id, None)
+            candidate = _find_placeholder_room(
+                world,
+                allow_import_scaffold_dependents=True,
+            )
+            if (
+                candidate is not None
+                and candidate.relative_id not in room_specs
+            ):
+                placeholder = candidate
 
         represented_relative_ids = set(room_specs)
         for room in current_rooms:
+            if placeholder is not None and room.id == placeholder.id:
+                continue
             desired_owner = coordinate_refs.get((room.x, room.y, room.z))
             if (
                 desired_owner is not None
@@ -4486,16 +4523,19 @@ def reserve_room_manifest_references(
             (room.x, room.y, room.z)
             for room in current_rooms
         } | set(coordinate_refs)
+        staged_rooms = [*movers]
+        if placeholder is not None:
+            staged_rooms.append(placeholder)
         staging_coordinates = _temporary_room_coordinates(
             occupied=occupied,
-            count=len(movers),
+            count=len(staged_rooms),
         )
-        for room, (x, y, z) in zip(movers, staging_coordinates):
+        for room, (x, y, z) in zip(staged_rooms, staging_coordinates):
             room.x = x
             room.y = y
             room.z = z
-        if movers:
-            Room.objects.bulk_update(movers, ["x", "y", "z"])
+        if staged_rooms:
+            Room.objects.bulk_update(staged_rooms, ["x", "y", "z"])
 
         created_relative_ids: set[int] = set()
         for relative_id in sorted(room_specs):
@@ -4516,6 +4556,55 @@ def reserve_room_manifest_references(
             room.x, room.y, room.z = room_specs[room.relative_id][0]
         if movers:
             Room.objects.bulk_update(movers, ["x", "y", "z"])
+
+        if placeholder is not None:
+            from spawns.models import Player
+
+            imported_starting_room = existing_by_relative_id[
+                declared_starting_room_relative_id
+            ]
+            LastViewedRoom.objects.select_for_update().filter(
+                room=placeholder,
+                world=world,
+            ).update(room=imported_starting_room)
+            Player.objects.select_for_update().filter(
+                room=placeholder,
+                is_builder=True,
+                in_game=False,
+                world__context_id=world.id,
+            ).update(room=imported_starting_room)
+
+            config = world.config
+            placeholder_zone = _find_placeholder_zone(world)
+            if (
+                config is None
+                or placeholder_zone is None
+                or _placeholder_room_has_dependents(
+                    room=placeholder,
+                    config=config,
+                    placeholder_zone=placeholder_zone,
+                )
+            ):
+                raise serializers.ValidationError(
+                    "The Starting Room gained dependent records while the "
+                    "manifest was being reserved."
+                )
+
+            update_fields = []
+            if config.starting_room_id == placeholder.id:
+                config.starting_room = imported_starting_room
+                update_fields.append("starting_room")
+            if config.death_room_id == placeholder.id:
+                config.death_room = imported_starting_room
+                update_fields.append("death_room")
+            if update_fields:
+                config.save(update_fields=update_fields)
+
+            placeholder.delete()
+            current_rooms = [
+                room for room in current_rooms if room.id != placeholder.id
+            ]
+            existing_by_relative_id.pop(placeholder.relative_id, None)
 
         return created_relative_ids
 
