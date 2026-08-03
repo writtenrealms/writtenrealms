@@ -115,8 +115,6 @@ const routes = [
       { path: 'zones/:zone_relative_id(\\d+)/spawn-plans', name: 'builder_zone_spawn_plan_list', component: () => import('@/views/builder/zone/SpawnPlanList.vue') },
       { path: 'zones/:zone_relative_id(\\d+)/spawn-plans/:spawn_plan_id', name: 'builder_zone_spawn_plan_details', component: () => import('@/views/builder/zone/SpawnPlanDetails.vue') },
       { path: 'zones/:zone_relative_id(\\d+)/config', name: 'builder_zone_config', component: () => import('@/views/builder/zone/Config.vue') },
-      { path: 'zones/:zone_relative_id(\\d+)/processions', name: 'builder_zone_procession_list', component: () => import('@/views/builder/zone/ProcessionList.vue') },
-      { path: 'zones/:zone_relative_id(\\d+)/processions/:procession_id', name: 'builder_zone_procession_details', component: () => import('@/views/builder/zone/ProcessionDetails.vue') },
 
       // Room Views
       { path: 'rooms/db/:room_database_id(\\d+)', name: 'builder_room_database_lookup', component: () => import('@/views/builder/room/RoomDatabaseRedirect.vue') },

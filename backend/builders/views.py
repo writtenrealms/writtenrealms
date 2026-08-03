@@ -86,7 +86,6 @@ from builders.models import (
     Social,
     Path,
     PathRoom,
-    Procession,
     FactionAssignment,
     Faction,
     FactionRank,
@@ -4335,55 +4334,6 @@ player_detail = PlayerDetailViewSet.as_view({
 })
 player_reset = PlayerDetailViewSet.as_view({
     'post': 'reset',
-})
-
-
-class ProcessionViewSet(BaseWorldBuilderViewSet):
-
-    serializer_class = builder_serializers.ProcessionSerializer
-    pagination_class = None
-
-    def get_queryset(self):
-        processions_qs = Procession.objects.filter(
-            room__zone_id=self.kwargs['zone_pk'])
-        return processions_qs
-
-    def perform_create(self, serializer):
-        procession = serializer.save()
-        procession.update_live_instances()
-        procession.room.flags.create(
-            code=adv_consts.ROOM_FLAG_PEACEFUL,
-            room=procession.room)
-        procession.room.update_live_instances()
-        return procession
-
-    def perform_update(self, serializer):
-        original_room = self.get_object().room
-        procession = serializer.save()
-        procession.update_live_instances()
-        if procession.room != original_room:
-            original_room.flags.filter(
-                code=adv_consts.ROOM_FLAG_PEACEFUL).delete()
-            original_room.update_live_instances()
-            procession.room.flags.create(
-                code=adv_consts.ROOM_FLAG_PEACEFUL,
-                room=procession.room)
-            procession.room.update_live_instances()
-        return procession
-
-    def perform_destroy(self, instance):
-        instance.room.flags.filter(
-            code=adv_consts.ROOM_FLAG_PEACEFUL).delete()
-        super().perform_destroy(instance)
-
-procession_list = ProcessionViewSet.as_view({
-    'get': 'list',
-    'post': 'create',
-})
-procession_detail = ProcessionViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'update',
-    'delete': 'destroy',
 })
 
 

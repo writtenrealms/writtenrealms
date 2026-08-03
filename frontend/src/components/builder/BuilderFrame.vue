@@ -550,11 +550,7 @@ const isZoneSpawnPlanRoute = computed(() => {
   return ['builder_zone_spawn_plan_list', 'builder_zone_spawn_plan_details'].includes(route.name as string);
 });
 const isZoneConfigRoute = computed(() => {
-  return [
-    'builder_zone_config',
-    'builder_zone_procession_list',
-    'builder_zone_procession_details',
-  ].includes(route.name as string);
+  return route.name === 'builder_zone_config';
 });
 </script>
 

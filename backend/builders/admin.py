@@ -22,7 +22,6 @@ from builders.models import (
     ItemSalvageYield,
     MobDefinition,
     Path,
-    Procession,
     RoomAction,
     RoomBlock,
     RoomGetTrigger,
@@ -208,11 +207,6 @@ class HousingLeaseAdmin(BaseAdmin):
     raw_id_fields = ['block', 'owner']
 
 
-class ProcessionAdmin(BaseAdmin):
-    list_display = ('id', 'faction', 'room')
-    raw_id_fields = ['faction', 'room']
-
-
 class FactScheduleAdmin(BaseAdmin):
     list_display = ('id', 'world', 'name')
     raw_id_fields = ['world']
@@ -256,7 +250,6 @@ admin.site.register(ItemDefinition, ItemDefinitionAdmin)
 admin.site.register(ItemBundle, ItemBundleAdmin)
 admin.site.register(MobDefinition, MobDefinitionAdmin)
 admin.site.register(Path, PathAdmin)
-admin.site.register(Procession, ProcessionAdmin)
 admin.site.register(RoomAction, RoomActionAdmin)
 admin.site.register(RoomBlock, RoomBlockAdmin)
 admin.site.register(RoomGetTrigger, RoomGetTriggerAdmin)

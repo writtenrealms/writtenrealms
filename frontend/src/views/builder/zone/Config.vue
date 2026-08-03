@@ -3,14 +3,6 @@
     <h2>ZONE CONFIG</h2>
 
     <div class="config-panels">
-      <div class="processions">
-        <h3>PROCESSIONS</h3>
-
-        <div>Define processions, or death rooms that characters of certain factions can be taken to on death.</div>
-
-        <router-link :to="processions_list_link">manage</router-link>
-      </div>
-
       <div class="move">
         <h3>MOVE ZONE</h3>
 
@@ -30,16 +22,9 @@
 
 <script lang='ts' setup>
 import { useStore } from "vuex";
-import { useRoute } from "vue-router";
 import { FormElement, DIRECTION } from "@/core/forms";
 
 const store = useStore();
-const route = useRoute();
-
-const processions_list_link = {
-  name: 'builder_zone_procession_list',
-  params: { zone_relative_id: route.params.zone_relative_id }
-};
 
 const moveZone = async () => {
   const schema: FormElement[] = [

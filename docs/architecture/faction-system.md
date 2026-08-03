@@ -536,10 +536,8 @@ and rank do not participate. Portable faction codes resolve to canonical
 faction ids when the policy is applied, and the runtime consumes only a
 precompiled ordered predicate list.
 
-New behavior belongs to explicit world/instance policy rather than an implicit
-scan of faction assignments or faction rooms. The existing faction
-`death_room`, legacy `death_route` enum, and `Procession` structures are not the
-target runtime contract.
+New behavior belongs to explicit world/instance policy. Authored faction fields
+and faction assignments do not select death destinations implicitly.
 
 ## Builder UI Language
 

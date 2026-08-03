@@ -1,15 +1,6 @@
 <template>
   <div>
     <div>{{ resource.name }} ({{ resource.code }}) <span class='color-text-50 ml-2' v-if="resource.is_core">[ CORE ]</span></div>
-    <!-- Death Rooms -->
-    <div v-if="resource.death_rooms && resource.death_rooms.length" class="mt-4">
-      <h3>DEATH ROOMS</h3>
-      <ul class="list">
-        <li v-for="room in resource.death_rooms" :key="room.id">
-          <router-link :to="room_link(room)">{{ room.name }}</router-link>
-        </li>
-      </ul>
-    </div>
     <!-- Faction Ranks -->
     <div v-if="!resource.is_core" class="mt-4">
       <h3>RANKS</h3>
@@ -32,17 +23,12 @@
 
 <script lang='ts' setup>
 import { useRoute } from "vue-router";
-import { builderRoomIndexRoute } from "@/core/builderRoutes";
 
 const route = useRoute();
 
 defineProps<{
   resource: any;
 }>();
-
-const room_link = (room: any) => {
-  return builderRoomIndexRoute(route.params.world_id, room);
-};
 
 const faction_ranks_link = (faction: any) => {
   return {

@@ -92,8 +92,7 @@ from builders.models import (
     Path,
     PathRoom,
     WorldBuilder,
-    WorldReview,
-    Procession)
+    WorldReview)
 from core.db import qs_by_pks
 from core.serializers import KeyNameSerializer, ReferenceField, AuthorField
 from builders.doors import (
@@ -2487,7 +2486,6 @@ class FactionSerializer(serializers.ModelSerializer):
 
     starting_room = ReferenceField(required=False, allow_null=True)
     death_room = ReferenceField(required=False, allow_null=True)
-    death_rooms = serializers.SerializerMethodField()
     ranks = FactionRankSerializer(many=True, read_only=True)
 
     class Meta:
@@ -2507,7 +2505,6 @@ class FactionSerializer(serializers.ModelSerializer):
             'death_room',
             'is_default',
             'is_selectable',
-            'death_rooms',
             'ranks',
         ]
 
@@ -2716,14 +2713,6 @@ class FactionSerializer(serializers.ModelSerializer):
 
         return super().validate(data)
 
-    def get_death_rooms(self, faction):
-        death_rooms = []
-        for procession in faction.faction_processions.all():
-            death_rooms.append(
-                ReferenceField().to_representation(procession.room))
-        return death_rooms
-
-
 # Paths
 
 class PathListSerializer(serializers.ModelSerializer):
@@ -2797,18 +2786,6 @@ class AddPathRoomSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 "Room already belongs to the path.")
         return PathRoom.objects.create(room=room, path=path)
-
-
-# Processions
-
-class ProcessionSerializer(serializers.ModelSerializer):
-
-    room = ReferenceField(required=True, allow_null=False)
-    faction = ReferenceField(required=True, allow_null=False)
-
-    class Meta:
-        model = Procession
-        fields = ['id', 'room', 'faction']
 
 
 class WorldBuilderSerializer(serializers.ModelSerializer):

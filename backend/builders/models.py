@@ -985,9 +985,6 @@ class Faction(AdventBaseModel):
         related_name='death_room_for_factions',
         **optional)
 
-    death_rooms = models.ManyToManyField('worlds.Room',
-                                         through='builders.Procession')
-
     def __str__(self):
         return "%s in %s" % (self.name, self.world.name)
 
@@ -1153,25 +1150,6 @@ class Path(AdventWorldBaseModel):
         for spawn_world in running_worlds:
             pass
 
-
-class Procession(AdventBaseModel):
-
-    faction = models.ForeignKey('builders.Faction',
-                                related_name='faction_processions',
-                                on_delete=models.CASCADE)
-    room = models.ForeignKey('worlds.Room',
-                             related_name='room_processions',
-                             on_delete=models.CASCADE)
-
-    class Meta:
-        unique_together = (('faction', 'room'),)
-
-    def update_live_instances(self):
-        return
-        running_worlds = self.room.world.get_running_worlds()
-        if not running_worlds.count(): return
-        for spawn_world in running_worlds:
-            pass
 
 class FactSchedule(BaseModel):
 

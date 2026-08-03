@@ -38,6 +38,8 @@ Implemented manifest kinds currently include the current WR2 authoring path:
 WR1-to-WR2 export scripts should target the current WR2 manifest contracts, not
 the temporary compatibility models. As WR2 legacy concepts are removed, update
 this section in the same change so the WR1 exporter can be kept in sync.
+Exporter invocation, default scope, and optional logic conversion are
+documented in [WR1 World Manifest Export](../dev/wr1-world-manifest-export.md).
 
 WR2 itself starts with a clean, empty database. This exporter is an optional
 authored-world conversion tool only: it does not migrate accounts, players,
@@ -63,17 +65,8 @@ Current required mappings:
   as an explicit absence and normalized away; canonical exports omit it.
 - Normalize only the known WR1 item-currency enum value `medal` to the built-in
   code `medals`; do not rename an unrelated authored custom code by guesswork.
-- A single fixed authored WR1 death room may become `spec.death_room`. Do not
-  copy legacy `death_route` values, spatial routing, faction `Procession`
-  destinations, player marks, past deaths, or player faction assignments into
-  `spec.death_routing`. When every legacy path can be proven to converge on one
-  room, that room may be the fail-safe; otherwise retain the global room and
-  flag the old routing policy for builder review.
-- Converted instance templates always emit
-  `death_routing_source: local`. The optional exporter must never infer base
-  delegation from WR1 content or runtime history. Builders may author a new
-  ordered deterministic policy after import using explicit character-state,
-  core-faction, class/archetype, player-level, and origin-zone selectors.
+- Apply the death-destination conversion boundary documented in
+  [WR1 World Manifest Export](../dev/wr1-world-manifest-export.md).
 - Convert representable legacy currency conditions to the existing structured
   condition path `actor.balances.<code>`. Flag ambiguous predicates for builder
   review instead of inventing a second currency condition language.

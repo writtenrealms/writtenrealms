@@ -141,11 +141,11 @@ open the wrong room.
 Zones follow the same rule. A zone whose manifest reference is `zone@5` uses
 the canonical builder route `/build/worlds/23/zones/5`, where `23` is the
 installation-local world database id and `5` is the zone's world-relative id.
-The zone's Rooms, Paths, Spawns, Config, and Processions routes retain that
-same relative-id segment. Staff can use `/build/worlds/23/zones/db/38` to look
-up database zone 38; the builder immediately replaces that alias with the
-canonical relative-id route. The zone screen exposes the database id only in
-its collapsed technical details.
+The zone's Rooms, Paths, Spawns, and Config routes retain that same relative-id
+segment. Staff can use `/build/worlds/23/zones/db/38` to look up database zone
+38; the builder immediately replaces that alias with the canonical relative-id
+route. The zone screen exposes the database id only in its collapsed technical
+details.
 
 As with rooms, `/zones/5` never falls back to database zone 5. Keeping the
 relative and database namespaces explicit prevents a valid number in one

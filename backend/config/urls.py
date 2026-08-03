@@ -167,9 +167,6 @@ api_v1_urls = [
     path('builder/worlds/<world_pk>/zones/<pk>/spawn-plans/', builder_views.zone_spawn_plans, name='builder-zone-spawn-plans'),
     path('builder/worlds/<world_pk>/zones/<pk>/spawn-plans/<spawn_plan_pk>/', builder_views.zone_spawn_plan_detail, name='builder-zone-spawn-plan-detail'),
     path('builder/worlds/<world_pk>/zones/<pk>/move/', builder_views.zone_move, name='builder-zone-move'),
-    # Processions
-    path('builder/worlds/<world_pk>/zones/<zone_pk>/processions/', builder_views.procession_list, name='builder-procession-list'),
-    path('builder/worlds/<world_pk>/zones/<zone_pk>/processions/<pk>/', builder_views.procession_detail, name='builder-procession-detail'),
 
     # Rooms
     path('builder/worlds/<world_pk>/rooms/', builder_views.room_list, name='builder-room-list'),

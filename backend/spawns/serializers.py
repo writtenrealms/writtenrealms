@@ -26,8 +26,7 @@ from builders.models import (
     FactionRelationship,
     RoomAction,
     Trigger,
-    Path,
-    Procession)
+    Path)
 from core.serializers import (
     KeyField,
     ContainerTypeField,
@@ -1172,24 +1171,6 @@ class AnimatePathSerializer(serializers.ModelSerializer):
             'room.%s' % i
             for i in path.rooms.values_list('id', flat=True)
         ])
-
-
-class AnimateProcessionSerializer(serializers.ModelSerializer):
-
-    faction_code = serializers.CharField(source='faction.code')
-    room = serializers.CharField(source='room.key')
-
-    class Meta:
-        model = Procession
-        fields = [
-            'id',
-            'key',
-            'faction_code',
-            'room',
-        ]
-
-    #def get_room(self, procession):
-    #    return procession.room.key
 
 
 # Extraction Serializers

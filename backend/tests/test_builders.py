@@ -1600,6 +1600,7 @@ class WorldFactionTests(BuilderTestCase):
         self.assertEqual(resp.data['results'][0]['id'], faction.pk)
         self.assertEqual(resp.data['results'][0]['type'], 'core')
         self.assertTrue(resp.data['results'][0]['playable'])
+        self.assertNotIn('death_rooms', resp.data['results'][0])
 
     def test_add_core_faction(self):
         resp = self.client.post(self.factions_ep, {

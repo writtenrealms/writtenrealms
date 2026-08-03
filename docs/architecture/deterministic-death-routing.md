@@ -582,18 +582,6 @@ Required coverage includes:
 ## WR1 Authored-World Conversion
 
 WR2 launches with an empty database. There is no player/runtime-state
-migration.
-
-The optional WR1 authored-world exporter may preserve one fixed death room when
-it is semantically clear. It must not infer ordered WR2 routes from legacy
-spatial modes, faction procession rooms, player marks, historical deaths, or
-runtime assignments.
-
-Converted instance templates emit:
-
-```yaml
-death_routing_source: local
-```
-
-Builders may author new ordered core-faction, archetype, level,
-character-state, and zone rules after import.
+migration. The optional conversion boundary for authored death destinations is
+documented in
+[WR1 World Manifest Export](../dev/wr1-world-manifest-export.md).

@@ -1,8 +1,15 @@
-# WR1 Skill to WR2 Ability Export
+# WR1 World Manifest Export
 
-This note documents the WR1-to-WR2 migration boundary for skills. The intent is
-to keep WR1 compatibility logic in the Advent exporter, not in the WR2 runtime,
-so WR2 can continue replacing legacy skill concepts with abilities.
+This note documents the optional WR1-to-WR2 authored-world conversion boundary.
+WR2 launches with a clean, empty database; this utility does not migrate users,
+players, balances, inventories, quest progress, runtime entities, or any other
+live state. WR1 conversion logic belongs in the Advent exporter, not in the WR2
+runtime.
+
+The default export contains the baseline authored-world definitions listed
+below. It intentionally excludes WR1 skills as WR2 abilities and excludes
+triggers. Those lossy conversions are available only through explicit opt-in
+flags and are not part of the default authored-world export contract.
 
 ## Exporter Location
 
@@ -38,7 +45,7 @@ Useful options:
   manifests.
 - `--zone-id <id>` exports one WR1 zone and its rooms instead of a full world.
 
-## Current Export Shape
+## Default Export Shape
 
 The script emits a YAML manifest stream. By default, a full-world export
 contains:
@@ -65,7 +72,7 @@ legacy template-inventory, procedural-drop, merchant, crafter/upgrader, elite,
 and teaching behavior is omitted with a review warning instead of being
 written as fields that WR2 rejects.
 
-Optional content is opt-in:
+Logic conversion is opt-in:
 
 - `--include-abilities` adds WR1 builder skills as `kind: ability` documents.
 - `--include-triggers` adds room action and mob reaction trigger documents.
@@ -74,6 +81,26 @@ The skill export only covers world-authored `builders.Skill` records. It does
 not yet export WR1 hard-coded core or flex class skills from the Advent Python
 skill modules. Those can be mapped later if we decide they are worth carrying
 forward.
+
+## Legacy Death-Destination Boundary
+
+WR1 `Procession` records linked factions to one or more death rooms and were
+exposed through Zone Config. They are historical conversion inputs only: WR2
+has no procession manifest kind or runtime contract, and neither the default
+export nor the optional logic flags should emit them.
+
+A converter may preserve one fixed authored WR1 death room as the world
+`spec.death_room` fail-safe when its meaning is unambiguous. If every legacy
+route can be proven to converge on one room, that room may be used as the
+fail-safe; otherwise keep the global death room and emit a builder-review
+warning. Do not infer `spec.death_routing` from legacy `death_route` values,
+spatial modes, procession destinations, player marks, historical deaths,
+runtime faction assignments, or any other live state.
+
+Converted instance templates always emit `death_routing_source: local`.
+Builders who want conditional routing after import must author a new ordered
+WR2 policy using the shared condition framework and explicit character-state,
+core-faction, class/archetype, player-level, or origin-zone selectors.
 
 ## Skill Mapping Strategy
 
@@ -106,7 +133,7 @@ Timing conversion uses `WR1_SECONDS_PER_WR2_ROUND = 3.0` in the exporter:
 rounds = ceil(seconds / 3.0)
 ```
 
-This is only a migration heuristic. Round cooldowns should be reviewed during
+This is only a conversion heuristic. Round cooldowns should be reviewed during
 world tuning because WR1 cooldown seconds and WR2 encounter rounds are not
 equivalent pacing models.
 
@@ -143,7 +170,7 @@ source data needed to revisit the mapping:
 - exporter notes for lossy or unsupported mappings
 
 The WR2 runtime currently ignores this metadata. It exists so cleanup work in
-this repo can delete legacy skill references without losing migration context.
+this repo can delete legacy skill references without losing conversion context.
 
 ## Iteration Notes
 
