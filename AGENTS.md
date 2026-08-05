@@ -4,7 +4,9 @@
 
 - `backend/` holds the Django REST API ("Forge") and its app-specific tests.
 - `frontend/` contains the Vue + TypeScript client ("Herald").
-- `docs/` has Sphinx documentation sources.
+- `docs/guides/` contains the VitePress-published builder and player guides;
+  the rest of `docs/` contains internal architecture, development, and flow
+  notes.
 - `docker-compose.yml`, `backend/Dockerfile`, and `entrypoint.sh` define the containerized dev stack.
 - `data/` and `logs/` are used for local persistence and runtime output when running via Docker.
 
@@ -39,6 +41,8 @@
 - `make run` starts the backend service via Docker Compose.
 - `npm install` and `npm run dev` start the frontend (see `frontend/README.md`).
 - `npm run dev-local` points the frontend at a local backend via `.env.dev`.
+- `make docs` installs the isolated VitePress package when needed and previews public guides on port 5174.
+- `make docs-build` performs the strict documentation production build; `make docs-install` forces a clean dependency reinstall.
 
 ## Coding Style & Naming Conventions
 

@@ -1,45 +1,62 @@
 <template>
   <div id="edit-world-manifest">
-    <h2>{{ world.name.toUpperCase() }} EDIT WORLD</h2>
-    <div class="color-text-60 mb-6">
-      Paste one or more YAML manifests. Each YAML document is applied in order. Supported kinds: world, currency, faction, zone, room, path, itemdefinition, itembundle, merchantprofile, craftmaterial, craftingrecipe, craftingprofile, mobdefinition, spawnplan, ability, abilities, quest, questarc, and trigger.
-    </div>
-
     <template v-if="!hasApplyResult">
-      <textarea
+      <ManifestYamlEditor
         v-model="manifestText"
-        class="manifest-input"
+        :is-submitting="isSubmitting"
+        copy-success-message="Manifest YAML copied."
         placeholder="Paste YAML manifest here..."
-        spellcheck="false"
-      />
-
-      <div class="manifest-actions mt-4">
-        <button class="btn-small" :disabled="isSubmitting || !manifestText.trim()" @click="submitManifest">
-          APPLY MANIFEST
-        </button>
-      </div>
+        save-label="APPLY MANIFEST"
+        saving-label="APPLYING..."
+        textarea-label="World YAML manifests"
+        @save="submitManifest"
+      >
+        <template #header>
+          <h2 class="definition-title">{{ world.name }}</h2>
+          <div class="definition-meta color-text-60">
+            Paste one or more YAML manifests. Each YAML document is applied in order.
+            <a
+              href="https://docs.writtenrealms.com/builders/yaml-manifests"
+              target="_blank"
+              rel="noopener noreferrer"
+            >View supported kinds and examples.</a>
+          </div>
+        </template>
+      </ManifestYamlEditor>
     </template>
 
-    <div v-else class="manifest-result mt-6">
-      <h3>Manifest Applied</h3>
-      <div class="manifest-result-summary color-text-60">{{ appliedSummaryText }}</div>
-
-      <ul v-if="appliedEntities.length" class="manifest-entity-list">
-        <li v-for="entity in appliedEntities" :key="entity.key" class="manifest-entity-row">
-          <span class="manifest-entity-operation">{{ capfirst(entity.operation) }}</span>
-          <span class="manifest-entity-kind">{{ entity.kindLabel }}</span>
-          <router-link v-if="entity.to" :to="entity.to" class="manifest-entity-link">
-            {{ entity.name }}
-          </router-link>
-          <span v-else class="manifest-entity-name">{{ entity.name }}</span>
-        </li>
-      </ul>
-      <div v-else class="color-text-60">No linkable entities were returned.</div>
-
-      <div class="manifest-actions mt-4">
-        <button class="btn-small" @click="startAnotherManifest">APPLY ANOTHER MANIFEST</button>
+    <template v-else>
+      <h2 class="definition-title">{{ world.name }}</h2>
+      <div class="definition-meta color-text-60">
+        Paste one or more YAML manifests. Each YAML document is applied in order.
+        <a
+          href="https://docs.writtenrealms.com/builders/yaml-manifests"
+          target="_blank"
+          rel="noopener noreferrer"
+        >View supported kinds and examples.</a>
       </div>
-    </div>
+
+      <div class="manifest-result mt-6" aria-live="polite">
+        <h3>Manifest Applied</h3>
+        <div class="manifest-result-summary color-text-60">{{ appliedSummaryText }}</div>
+
+        <ul v-if="appliedEntities.length" class="manifest-entity-list">
+          <li v-for="entity in appliedEntities" :key="entity.key" class="manifest-entity-row">
+            <span class="manifest-entity-operation">{{ capfirst(entity.operation) }}</span>
+            <span class="manifest-entity-kind">{{ entity.kindLabel }}</span>
+            <router-link v-if="entity.to" :to="entity.to" class="manifest-entity-link">
+              {{ entity.name }}
+            </router-link>
+            <span v-else class="manifest-entity-name">{{ entity.name }}</span>
+          </li>
+        </ul>
+        <div v-else class="color-text-60">No linkable entities were returned.</div>
+
+        <div class="manifest-actions mt-4">
+          <button class="btn-small" @click="startAnotherManifest">APPLY ANOTHER MANIFEST</button>
+        </div>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -48,6 +65,7 @@ import axios from "axios";
 import { computed, onMounted, ref } from "vue";
 import { type RouteLocationRaw, useRoute } from "vue-router";
 import { useStore } from "vuex";
+import ManifestYamlEditor from "@/components/builder/world/ManifestYamlEditor.vue";
 import { capfirst } from "@/core/utils.ts";
 import {
   builderRoomIndexRoute,
@@ -988,20 +1006,16 @@ const submitManifest = async () => {
 @import "@/styles/colors.scss";
 
 #edit-world-manifest {
+  box-sizing: border-box;
   min-width: 0;
   width: 100%;
 
-  .manifest-input {
-    box-sizing: border-box;
-    max-width: 100%;
-    width: 100%;
-    min-height: 480px;
-    padding: 0.75rem;
-    border: 1px solid $color-form-border;
-    background: $color-background;
-    color: $color-text;
-    font-family: monospace;
-    line-height: 1.35;
+  .definition-title {
+    margin-bottom: 0.35rem;
+  }
+
+  .definition-meta {
+    line-height: 1.4;
   }
 
   .manifest-result {

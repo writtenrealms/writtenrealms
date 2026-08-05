@@ -1,6 +1,7 @@
 # Player Guides
 
-This folder contains player-facing guides for WR2 gameplay systems.
+These guides cover the player-facing systems currently available in Written
+Realms Core.
 
 - [Map](map.md)
 - [Doors and Keys](doors-and-keys.md)

@@ -1,7 +1,7 @@
 <template>
   <div class="my-4">
     <div>
-      Once per month, you can request for your world to be reviewed for publication. Submitted worlds should be polished and ready for prime time. Please review the <a href='https://docs.writtenrealms.com/building/worlds/publishing'>World Publishing Guidelines</a> and provide a description for your world below.</div>
+      Once per month, you can request for your world to be reviewed for publication. Submitted worlds should be polished and ready for prime time. Please review the <a href="https://docs.writtenrealms.com/builders/world-publishing" target="_blank" rel="noopener noreferrer">World Publishing Guidelines</a> and provide a description for your world below.</div>
 
       <div class="mt-4">You can describe your world however you'd like, but if you're looking for ideas, try to answer some of the following questions in it:<br/>
         <ul class="ml-4">

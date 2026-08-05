@@ -1,4 +1,6 @@
 REDIS = redis
+DOCS_PORT ?= 5174
+DOCS_MODULES = docs/node_modules/.package-lock.json
 
 run:
 	docker compose up backend
@@ -33,6 +35,18 @@ css:
 
 client:
 	npm --prefix frontend run dev-local
+
+$(DOCS_MODULES): docs/package.json docs/package-lock.json
+	npm --prefix docs ci
+
+docs-install:
+	npm --prefix docs ci
+
+docs: $(DOCS_MODULES)
+	npm --prefix docs run dev -- --port $(DOCS_PORT)
+
+docs-build: $(DOCS_MODULES)
+	npm --prefix docs run build
 
 redis: bin/redis-server
 	bin/redis-server
@@ -83,7 +97,7 @@ test-serial:
 test-keepdb:
 	$(DJANGO_TEST) --parallel $(TEST_PARALLEL) --buffer --keepdb
 
-.PHONY: test test-serial test-keepdb docker-up docker-up-mount docker-restart docker-restart-mount reset-dev-db reset-dev-db-mount
+.PHONY: test test-serial test-keepdb docs docs-install docs-build docker-up docker-up-mount docker-restart docker-restart-mount reset-dev-db reset-dev-db-mount
 
 docker-up:
 	docker compose up -d --build

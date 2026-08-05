@@ -8,7 +8,7 @@
     :schema="schema"
   >
     <div class="color-text-60">
-      Room actions are custom commands defined per room. For more information, refer to the <a href="https://docs.writtenrealms.com/building/roomactions">Room Action documentation</a>.
+      Room actions are custom commands defined per room. For more information, refer to the <a href="https://docs.writtenrealms.com/builders/room-actions" target="_blank" rel="noopener noreferrer">room action guide</a>.
     </div>
   </EditableCollection>
 </template>

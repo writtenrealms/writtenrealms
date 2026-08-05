@@ -113,7 +113,29 @@ docker compose up -d --build
 
 ## Documentation
 
-For detailed setup instructions, environment variables reference, and troubleshooting, see:
+Builder and player guides are published at
+[docs.writtenrealms.com](https://docs.writtenrealms.com). The public guide
+sources live in `docs/guides/` and are built with VitePress:
+
+```bash
+make docs
+make docs-build
+```
+
+`make docs` installs the pinned package set when needed and serves the guides
+at `http://localhost:5174`. Override the port with
+`DOCS_PORT=5180 make docs`. Use `make docs-install` to force a clean reinstall.
+
+Pushes to `main` that change `docs/` deploy through
+[the GitHub Pages workflow](.github/workflows/docs.yml). Initial repository
+setup still requires selecting **GitHub Actions** as the Pages source, setting
+the custom domain to `docs.writtenrealms.com`, and pointing the `docs` DNS
+CNAME to `writtenrealms.github.io`.
+
+See [Documentation Deployment](docs/dev/documentation-deployment.md) for the
+cutover, verification, rollback, and legacy Doctrine retirement checklist.
+
+For engineering setup, architecture, and troubleshooting, see:
 
 - [Environment Setup](docs/dev/environment-setup.md)
 - [WR2 Player Command Flow](docs/flows/player-command-flow.md)
@@ -127,6 +149,7 @@ For detailed setup instructions, environment variables reference, and troublesho
 .
 ├── backend/          # Django REST API
 ├── frontend/         # Vue.js frontend application
+├── docs/             # VitePress guides and internal engineering docs
 └── docker-compose.yml
 ```
 

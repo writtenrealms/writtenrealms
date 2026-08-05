@@ -187,11 +187,11 @@ See [Trigger Builder Guide](trigger-builder-guide.md) and
 The optional WR1 converter may translate authored social definitions into
 these manifests. It does not transfer players, mute lists, command history, or
 runtime events/state. The exact positional-to-named mapping is maintained in
-[WR2 YAML Manifest Editing](../../architecture/yaml-manifest-system.md#optional-wr1-authored-world-conversion-notes).
+[the WR1 conversion architecture notes](https://github.com/writtenrealms/writtenrealms/blob/main/docs/architecture/yaml-manifest-system.md#optional-wr1-authored-world-conversion-notes).
 
 ## Related Docs
 
 - [Player Socials Guide](../players/socials.md)
-- [Trigger Event Subscriptions](../../architecture/trigger-event-subscriptions.md)
-- [Trigger Matching DSL](../../architecture/trigger-matching-dsl.md)
-- [Instance System](../../architecture/instance-system.md)
+- [Trigger Event Subscriptions](https://github.com/writtenrealms/writtenrealms/blob/main/docs/architecture/trigger-event-subscriptions.md)
+- [Trigger Matching DSL](https://github.com/writtenrealms/writtenrealms/blob/main/docs/architecture/trigger-matching-dsl.md)
+- [Instance System](https://github.com/writtenrealms/writtenrealms/blob/main/docs/architecture/instance-system.md)

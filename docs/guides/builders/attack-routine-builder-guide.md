@@ -5,7 +5,7 @@ combat turn resolves. Use them for extra attacks, dual wielding, and mob
 multiattack behavior.
 
 For architecture details, see
-[attack-routines-and-dual-wielding.md](/Users/teebes/code/writtenrealms/docs/architecture/attack-routines-and-dual-wielding.md).
+[the attack-routine and dual-wielding architecture notes](https://github.com/writtenrealms/writtenrealms/blob/main/docs/architecture/attack-routines-and-dual-wielding.md).
 
 ## Core Concepts
 

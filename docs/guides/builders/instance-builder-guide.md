@@ -4,7 +4,7 @@ This guide explains how WR2 builders should think about creating, connecting,
 and administering instances.
 
 For the deeper architecture, see
-[instance-system.md](/Users/teebes/code/writtenrealms/docs/architecture/instance-system.md).
+[the instance-system architecture notes](https://github.com/writtenrealms/writtenrealms/blob/main/docs/architecture/instance-system.md).
 
 ## Mental Model
 
@@ -158,8 +158,9 @@ From the base world:
 4. Build its zones, rooms, paths, and spawn plans.
 5. Configure its starting room and death room.
 6. Link a base-world room to the instance template from the base room's config.
-7. If the instance has a goal, draft the instance goal manifest alongside the
-   spawn plans so the completion cohort is clear.
+7. If the instance will eventually need a goal, record the intended objective
+   and timer behavior in builder notes. Do not apply a `kind: instance`
+   document; goal ingestion is not implemented yet.
 
 When editing an instance template, open **World > Config** and use the base
 world config link to jump directly back to the base world's config screen.
@@ -277,7 +278,7 @@ assumed globally unique `room@N` in a Trigger or script; add a typed bundle
 relation when the supported instance-link behavior is intended.
 
 For the full header and link examples, see
-[yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md#world-family-bundles).
+[World Bundle Imports](yaml-manifests.md#world-bundle-imports).
 
 ## Moving A Family From Development To Production
 
@@ -689,6 +690,12 @@ than inventing another run model.
 
 ## Goals And Timers
 
+::: warning Planned authoring surface
+Goals, timers, leaderboards, and `kind: instance` ingestion are not implemented.
+The shapes in this section are design previews and must not be pasted into
+**World > Edit**. They may change before the feature ships.
+:::
+
 Instance goals are the target authoring model. A goal belongs to the instance
 template and is evaluated separately for each `InstanceRun`.
 
@@ -1020,24 +1027,6 @@ For future clear-all goals:
 If you need ambient respawning mobs, put them in a separate spawn plan without
 the clear-required trait. They can make the instance feel alive without blocking
 the clear objective.
-
-## Testing Expectations
-
-New instance runtime behavior should be covered under `backend/tests/`.
-
-Important cases:
-
-- `enter` from a linked base room creates or re-enters a run
-- `enter <instance_ref>` joins an existing run
-- `leave` returns the player to the remembered base-world room
-- `instance` reports the linked entrance or current run reference
-- leader entry creates one run and one leader participant
-- group member entry by reference joins the same run
-- joining a group run exits the player's previous solo participation
-- enter moves inventory and equipment into the instance recursively
-- leave moves inventory and equipment back recursively
-- leave records participant exit without deleting the run
-- future goal and timer behavior updates the same `InstanceRun`
 
 ## Builder Rule Of Thumb
 

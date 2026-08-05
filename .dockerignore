@@ -1,6 +1,7 @@
 ve
 syl
 frontend
+docs/
 advent/
 api/wr-import.psql
 api/cron-backup.psql

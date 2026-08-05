@@ -397,7 +397,7 @@ alter it, **Rooms > Edit** is view-only and disables save.
 
 ## Related Docs
 
-- [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
+- [YAML Manifest Guide](yaml-manifests.md)
 - [trigger-builder-guide.md](trigger-builder-guide.md)
 - [condition-builder-guide.md](condition-builder-guide.md)
 - [spawn-plan-builder-guide.md](spawn-plan-builder-guide.md)

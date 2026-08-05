@@ -507,7 +507,11 @@ Room **Spawn Plans** is a read-only view of spawn plans targeting that room.
 
 ### 6. World Edit Screen
 
-A new world-level **Edit World** view accepts a YAML manifest textarea.
+The world-level **Edit World** view uses the same YAML editor layout as the
+entity detail screens. It tells builders that they can paste one or more YAML
+manifests and that each document is applied in order. The UI links to the
+builder-facing [YAML Manifest Guide](../guides/builders/yaml-manifests.md) for
+the supported-kind catalog and examples rather than duplicating them inline.
 
 - Submitting YAML currently supports one or more YAML documents in sequence.
 - A `kind: worldbundle` is accepted only as the first document of a complete

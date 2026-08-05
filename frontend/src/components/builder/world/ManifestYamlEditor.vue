@@ -19,7 +19,9 @@
     <textarea
       ref="textarea"
       :value="currentValue"
+      :aria-label="textareaLabel"
       class="manifest-yaml-editor-input"
+      :placeholder="placeholder"
       :style="textareaStyle"
       spellcheck="false"
       @input="onInput"
@@ -42,6 +44,8 @@ const props = withDefaults(defineProps<{
   savingLabel?: string;
   copySuccessMessage?: string;
   copyErrorMessage?: string;
+  placeholder?: string;
+  textareaLabel?: string;
   minHeight?: number;
   bottomGap?: number;
 }>(), {
@@ -54,6 +58,8 @@ const props = withDefaults(defineProps<{
   savingLabel: "SAVING...",
   copySuccessMessage: "YAML copied.",
   copyErrorMessage: "Unable to copy YAML to clipboard.",
+  placeholder: "",
+  textareaLabel: "YAML manifest editor",
   minHeight: 260,
   bottomGap: 24,
 });

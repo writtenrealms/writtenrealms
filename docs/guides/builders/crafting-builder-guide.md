@@ -6,7 +6,7 @@ copy of the referenced definition, so its existing guided-random ranges roll
 once in the normal item spawn path.
 
 The complete design and economy rationale are in
-[crafting-system.md](../../architecture/crafting-system.md). This guide is the
+[the crafting-system architecture notes](https://github.com/writtenrealms/writtenrealms/blob/main/docs/architecture/crafting-system.md). This guide is the
 short authoring checklist.
 
 ## Authoring Order
@@ -48,7 +48,7 @@ instance.
 Materials are world-scoped ledger resources, not physical items or currencies.
 
 ```yaml
-apiVersion: v1alpha1
+apiVersion: writtenrealms.com/v1alpha3
 kind: craftmaterial
 metadata:
   slug: bronze
@@ -64,7 +64,7 @@ integers wherever they appear.
 ## Recipes
 
 ```yaml
-apiVersion: v1alpha1
+apiVersion: writtenrealms.com/v1alpha3
 kind: craftingrecipe
 metadata:
   slug: reinforced-helm
@@ -116,7 +116,7 @@ use `cost: null` when the recipe should have no monetary requirement.
 A profile is an explicit, ordered recipe catalog:
 
 ```yaml
-apiVersion: v1alpha1
+apiVersion: writtenrealms.com/v1alpha3
 kind: craftingprofile
 metadata:
   slug: town-forge

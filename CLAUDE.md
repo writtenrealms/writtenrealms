@@ -282,8 +282,9 @@ Optional:
 ## Useful References
 
 - `AGENTS.md` - repository development guidelines
-- `ENVIRONMENT_SETUP.md` - detailed setup and troubleshooting
+- `docs/dev/environment-setup.md` - detailed setup and troubleshooting
 - `.claude/skills/wr-transition/wr1-architecture.md` - legacy architecture
 - `.claude/skills/wr-transition/wr2-architecture.md` - target architecture
 - `README.md` - quick start guide
-- `docs/` - Sphinx documentation sources
+- `docs/guides/` - builder and player guides published with VitePress
+- `docs/architecture/`, `docs/dev/`, and `docs/flows/` - internal engineering documentation

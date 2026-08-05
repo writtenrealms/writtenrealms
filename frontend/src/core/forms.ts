@@ -95,7 +95,7 @@ export const DIRECTION: FormElement = {
 export const CONDITIONS: FormElement = {
   attr: "conditions",
   label: "Conditions",
-  help: `Conditions required for the action to be carried. For more information on conditions, refer to their <a href='https://docs.writtenrealms.com/building/conditions'>doc page</a>.<br/><br/>
+  help: `Conditions required for the action to be carried. For more information on conditions, refer to the <a href='https://docs.writtenrealms.com/builders/condition-builder-guide' target='_blank' rel='noopener noreferrer'>condition guide</a>.<br/><br/>
     Quick reference:<br/>
     <code>
     - archetype archetype<br/>

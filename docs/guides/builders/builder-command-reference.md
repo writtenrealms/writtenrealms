@@ -1120,4 +1120,4 @@ script: /cmd room -- /lock north
 - [state-builder-guide.md](state-builder-guide.md)
 - [item-definition-builder-guide.md](item-definition-builder-guide.md)
 - [mob-definition-builder-guide.md](mob-definition-builder-guide.md)
-- [ambient-command-issuers-plan.md](/Users/teebes/code/writtenrealms/docs/architecture/ambient-command-issuers-plan.md)
+- [Ambient command issuer architecture](https://github.com/writtenrealms/writtenrealms/blob/main/docs/architecture/ambient-command-issuers-plan.md)
