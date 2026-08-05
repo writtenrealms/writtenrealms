@@ -47,6 +47,8 @@ from core.trigger_steps import (
     MAX_TRIGGER_SEND_LENGTH,
     SCRIPT_COMMAND_DEPTH_KEY,
     TriggerStepSpecError,
+    has_instance_exit_command,
+    is_terminal_instance_exit_step,
     normalize_trigger_step_error_policy,
     normalize_trigger_steps,
 )
@@ -75,7 +77,7 @@ from spawns.script_commands import (
     ScriptCommandRunner,
 )
 from spawns.wallet import WalletError, WalletMutation, mutate_balances
-from worlds.models import Room, World
+from worlds.models import InstanceRun, Room, World
 
 
 DEFAULT_DUE_RUN_LIMIT = 100
@@ -1950,6 +1952,22 @@ def _room_recipient_keys(run: ScheduledTriggerRun) -> tuple[str, ...]:
     )
 
 
+def _prelock_terminal_instance_exit_run(
+    *,
+    runtime_world_id: int,
+    step: dict[str, Any],
+) -> None:
+    """Honor the instance lifecycle's Run -> Player row-lock order."""
+    if not is_terminal_instance_exit_step(step):
+        return
+    (
+        InstanceRun.objects.select_for_update(of=("self",))
+        .only("id")
+        .filter(spawned_world_id=runtime_world_id)
+        .first()
+    )
+
+
 def _execute_current_step(
     run: ScheduledTriggerRun,
     *,
@@ -1971,6 +1989,14 @@ def _execute_current_step(
             "The scheduled trigger step snapshot is invalid.",
             code="invalid_snapshot",
         )
+    if has_instance_exit_command(step) and (
+        run.next_step_index != len(steps) - 1
+        or not is_terminal_instance_exit_step(step)
+    ):
+        raise TriggerStepExecutionError(
+            "/exitinstance must be the only action in the final Trigger step.",
+            code="instance_exit_not_terminal",
+        )
 
     if runtime_world is None:
         runtime_world = World.objects.select_related(
@@ -1986,6 +2012,10 @@ def _execute_current_step(
     item_changes = TriggerItemChanges()
     mob_changes = TriggerMobChanges()
     actions = step.get("actions") or []
+    _prelock_terminal_instance_exit_run(
+        runtime_world_id=run.runtime_world_id,
+        step=step,
+    )
     currency_actions = [
         action
         for action in actions
@@ -2483,11 +2513,6 @@ def start_trigger_steps(
                 event_data=event_data,
             )
             locked_actor = None
-            if actor_model is Player:
-                locked_actor = (
-                    Player.objects.select_for_update()
-                    .get(pk=actor.id)
-                )
 
             current_trigger = Trigger.objects.filter(
                 pk=trigger_id,
@@ -2534,6 +2559,16 @@ def start_trigger_steps(
             first_step_delay_seconds = int(
                 snapshot_steps[0]["due_after_seconds"]
             )
+            if first_step_delay_seconds == 0:
+                _prelock_terminal_instance_exit_run(
+                    runtime_world_id=runtime_world_id,
+                    step=snapshot_steps[0],
+                )
+            if actor_model is Player:
+                locked_actor = (
+                    Player.objects.select_for_update()
+                    .get(pk=actor.id)
+                )
             command_depth = _script_command_depth(event_data)
             initial_bindings = {
                 _TRIGGER_PROVENANCE_BINDING_KEY: {

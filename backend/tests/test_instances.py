@@ -28,6 +28,7 @@ from spawns.models import (
     CombatEncounter,
     DuelMatch,
     DuelParticipant,
+    GameEventOutbox,
     Item,
     Mob,
 )
@@ -42,8 +43,10 @@ from worlds.models import (
 )
 from worlds.tasks import monitor_worlds
 from worlds.instances import (
+    ForcedInstanceExitError,
     create_fresh_instance_run,
     enter_players_into_run,
+    force_exit_instance,
     player_carried_item_ids,
     reset_instance,
     transfer_instance_participant,
@@ -1054,6 +1057,231 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
             InstanceParticipant.EXIT_REASON_DEATH_DELEGATED,
         )
         self.assertIsNone(participant.return_runtime_world_id)
+
+    def test_forced_exit_uses_explicit_base_room_and_recorded_runtime(self):
+        destination = self.room.create_at(adv_consts.DIRECTION_NORTH)
+        alternate_runtime = World.objects.create(
+            name="Alternate Island Runtime",
+            config=self.world.config,
+            context=self.world,
+            is_multiplayer=True,
+        )
+        self.player.world = alternate_runtime
+        self.player.save(update_fields=["world"])
+        spawned_instance = self._enter()
+        run = spawned_instance.instance_run
+        participant = run.participants.get(player=self.player)
+        original_last_active_at = run.last_active_at
+
+        bag = Item.objects.create(
+            world=spawned_instance,
+            container=self.player,
+            name="Expedition Bag",
+            type=adv_consts.ITEM_TYPE_CONTAINER,
+        )
+        nested_item = Item.objects.create(
+            world=spawned_instance,
+            container=bag,
+            name="Expedition Token",
+        )
+        character_effect = ActiveEffect.objects.create(
+            world=spawned_instance,
+            target_player=self.player,
+            scope=ActiveEffect.SCOPE_CHARACTER,
+            effect="instance-blessing",
+            category="buff",
+            label="Instance Blessing",
+        )
+        mob = Mob.objects.create(
+            world=spawned_instance,
+            room=self.instance_room,
+            name="Exit Guard",
+        )
+        encounter = CombatEncounter.objects.create(
+            world=spawned_instance,
+            room=self.instance_room,
+            player=self.player,
+            mob=mob,
+            status=CombatEncounter.STATUS_ACTIVE,
+            pending_player_ability={"ability": "strike"},
+            pending_mob_ability={"ability": "claw"},
+            pending_flee={"direction": "north"},
+        )
+        encounter_effect = ActiveEffect.objects.create(
+            world=spawned_instance,
+            encounter=encounter,
+            target_player=self.player,
+            scope=ActiveEffect.SCOPE_ENCOUNTER,
+            effect="exit-guard-snare",
+            category="debuff",
+            label="Exit Guard Snare",
+        )
+        member = self.create_player("Former Opponent")
+        completed_match = DuelMatch.objects.create(
+            base_world=self.world,
+            template_world=self.instance_template,
+            entrance_room=self.room,
+            run=run,
+            challenger=self.player,
+            challenged=member,
+            status=DuelMatch.STATUS_COMPLETED,
+            expires_at=timezone.now() + timezone.timedelta(minutes=5),
+            completed_at=timezone.now(),
+        )
+        duel_participant = DuelParticipant.objects.create(
+            match=completed_match,
+            player=self.player,
+            role=DuelParticipant.ROLE_CONTESTANT,
+            team=1,
+        )
+        outbox_count = GameEventOutbox.objects.count()
+
+        result = force_exit_instance(
+            player=self.player.id,
+            destination_room=destination,
+            expected_origin_world_id=spawned_instance.id,
+            expected_origin_room_id=self.instance_room.id,
+        )
+
+        self.player.refresh_from_db()
+        participant.refresh_from_db()
+        run.refresh_from_db()
+        encounter.refresh_from_db()
+        character_effect.refresh_from_db()
+        duel_participant.refresh_from_db()
+        bag.refresh_from_db()
+        nested_item.refresh_from_db()
+        self.assertEqual(self.player.world, alternate_runtime)
+        self.assertEqual(self.player.room, destination)
+        self.assertTrue(self.player.viewed_rooms.filter(pk=destination.id).exists())
+        self.assertEqual(
+            participant.exit_reason,
+            InstanceParticipant.EXIT_REASON_FORCED,
+        )
+        self.assertIsNotNone(participant.exited_at)
+        self.assertIsNone(participant.return_runtime_world_id)
+        self.assertGreaterEqual(run.last_active_at, original_last_active_at)
+        self.assertIsNotNone(duel_participant.exited_at)
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
+        self.assertIsNone(encounter.next_resolution_ts)
+        self.assertEqual(encounter.pending_player_ability, {})
+        self.assertEqual(encounter.pending_mob_ability, {})
+        self.assertEqual(encounter.pending_flee, {})
+        self.assertFalse(
+            ActiveEffect.objects.filter(pk=encounter_effect.pk).exists()
+        )
+        self.assertEqual(character_effect.world, alternate_runtime)
+        self.assertEqual(bag.world, alternate_runtime)
+        self.assertEqual(nested_item.world, alternate_runtime)
+        self.assertEqual(result.player.id, self.player.id)
+        self.assertEqual(result.run_id, run.id)
+        self.assertEqual(result.participant_id, participant.id)
+        self.assertEqual(result.origin_world_id, spawned_instance.id)
+        self.assertEqual(result.origin_room_id, self.instance_room.id)
+        self.assertEqual(result.destination_world_id, alternate_runtime.id)
+        self.assertEqual(result.destination_room_id, destination.id)
+        self.assertEqual(result.finished_encounter_ids, [encounter.id])
+        self.assertEqual(
+            [event.type for event in result.events],
+            ["instance.left", "lifecycle.player.room.enter"],
+        )
+        self.assertEqual(
+            result.events[0].data,
+            {
+                "player_id": self.player.id,
+                "run_id": run.id,
+                "participant_id": participant.id,
+                "reason": InstanceParticipant.EXIT_REASON_FORCED,
+                "destination_world_id": alternate_runtime.id,
+                "destination_room_id": destination.id,
+            },
+        )
+        self.assertEqual(
+            result.events[1].data["source"],
+            "instance_leave",
+        )
+        self.assertEqual(
+            result.events[1].data["runtime_world_id"],
+            alternate_runtime.id,
+        )
+        self.assertEqual(GameEventOutbox.objects.count(), outbox_count)
+
+    def test_forced_exit_rejects_active_duel_without_partial_exit(self):
+        destination = self.room.create_at(adv_consts.DIRECTION_NORTH)
+        member = self.create_player("Opponent")
+        spawned_instance = self._enter()
+        run = spawned_instance.instance_run
+        participant = run.participants.get(player=self.player)
+        match = DuelMatch.objects.create(
+            base_world=self.world,
+            template_world=self.instance_template,
+            entrance_room=self.room,
+            run=run,
+            challenger=self.player,
+            challenged=member,
+            status=DuelMatch.STATUS_ACTIVE,
+            expires_at=timezone.now() + timezone.timedelta(minutes=5),
+            started_at=timezone.now(),
+        )
+        duel_participant = DuelParticipant.objects.create(
+            match=match,
+            player=self.player,
+            role=DuelParticipant.ROLE_CONTESTANT,
+            team=1,
+        )
+
+        with self.assertRaises(ForcedInstanceExitError) as raised:
+            force_exit_instance(
+                player=self.player,
+                destination_room=destination,
+                expected_origin_world_id=spawned_instance,
+                expected_origin_room_id=self.instance_room,
+            )
+
+        self.assertEqual(raised.exception.code, "active_duel")
+        self.player.refresh_from_db()
+        participant.refresh_from_db()
+        duel_participant.refresh_from_db()
+        self.assertEqual(self.player.world, spawned_instance)
+        self.assertEqual(self.player.room, self.instance_room)
+        self.assertIsNone(participant.exited_at)
+        self.assertIsNone(participant.exit_reason)
+        self.assertEqual(participant.return_runtime_world, self.spawn_world)
+        self.assertIsNone(duel_participant.exited_at)
+
+    def test_forced_exit_rejects_invalid_destination_and_stale_origin(self):
+        destination = self.room.create_at(adv_consts.DIRECTION_NORTH)
+        spawned_instance = self._enter()
+        participant = spawned_instance.instance_run.participants.get(
+            player=self.player,
+        )
+
+        with self.assertRaises(ForcedInstanceExitError) as invalid_destination:
+            force_exit_instance(
+                player=self.player,
+                destination_room=self.instance_room,
+                expected_origin_world_id=spawned_instance,
+                expected_origin_room_id=self.instance_room,
+            )
+        self.assertEqual(
+            invalid_destination.exception.code,
+            "invalid_destination",
+        )
+
+        with self.assertRaises(ForcedInstanceExitError) as stale_origin:
+            force_exit_instance(
+                player=self.player,
+                destination_room=destination,
+                expected_origin_world_id=spawned_instance,
+                expected_origin_room_id=destination,
+            )
+        self.assertEqual(stale_origin.exception.code, "origin_changed")
+        self.player.refresh_from_db()
+        participant.refresh_from_db()
+        self.assertEqual(self.player.world, spawned_instance)
+        self.assertEqual(self.player.room, self.instance_room)
+        self.assertIsNone(participant.exited_at)
+        self.assertIsNone(participant.exit_reason)
 
     def test_monitor_keeps_recently_vacated_instance_running(self):
         spawned_instance = self._enter()

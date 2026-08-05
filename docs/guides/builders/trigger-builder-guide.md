@@ -715,8 +715,8 @@ does not select an arbitrary bystander player by name or room position:
 
 Commands currently approved for transactional steps are room-local `say`,
 `emote`, `talk`, authored socials, room-subject, room-scoped `/echo`, and the
-audited transactional `/transfer` command. Most approved handlers are
-event-only. `/transfer` is the intentional mutating exception: it can target
+audited transactional `/transfer` and `/exitinstance` commands. Most approved
+handlers are event-only. `/transfer` is one mutating exception: it can target
 only the Trigger actor, but any of the three supported subject forms may issue
 it. The canonical forms are `subject: trigger_room` with
 `/transfer {{ actor_key }} room@<relative_id>` and `subject: trigger_actor` with
@@ -727,6 +727,13 @@ when the resolved subject is the Trigger actor. That is normally
 the Mob Trigger actor. Other room and selected-mob subjects must name the
 rendered actor key. Always use the stable `room@<relative_id>` destination form in
 authored YAML.
+
+`/exitinstance` is the explicit cross-runtime exception. Any supported step
+subject may issue it, but it must target the player `trigger_actor` at
+`world@base/room@<relative_id>`. It must also be the sole action of the final
+step because the successful exit invalidates the run's instance-runtime
+context.
+
 Zone-wide `yell` and zone/world echoes are excluded because they can create
 large fanout while a step transaction is open. Other movement, combat,
 inventory mutation, builder-state mutation, and nested `/cmd` dispatch are not
@@ -734,7 +741,8 @@ currently step-safe.
 
 One action contains exactly one command. Newlines, `;` or `&&` chains, history
 references, and nested `/cmd` are rejected. Use multiple `command` actions in
-one step for multiple immediate commands. Player aliases, command history, and
+one step for multiple immediate commands, except that an `/exitinstance`
+action must stand alone in the final step. Player aliases, command history, and
 fallback command Triggers are suppressed for forced commands. Published
 output remains visible, while internal durable events carry
 Trigger/run/issuer/subject provenance that is not exposed to players. Forced
@@ -764,7 +772,7 @@ original Trigger actor before dispatch.
 
 | Type | Required fields | Effect |
 | --- | --- | --- |
-| `command` | `subject`, `command` | Executes one audited command as `trigger_room`, `trigger_actor`, or one exact room-local mob selector. Approved commands are event-only except for transactional `/transfer`, whose target is restricted to the Trigger actor. Command failure rolls back the step. |
+| `command` | `subject`, `command` | Executes one audited command as `trigger_room`, `trigger_actor`, or one exact room-local mob selector. Transactional `/transfer` is same-runtime; `/exitinstance` is restricted to the player Trigger actor and must be the sole action of the final step. Command failure rolls back the step. |
 | `debit_currency` | `actor: trigger_actor`, `currency`, `amount` | Atomically removes a positive amount of one explicit currency from the triggering player. Fails if the actor is not a player or has insufficient funds. |
 | `grant_currency` | `actor: trigger_actor`, `currency`, `amount` | Atomically adds a positive amount of one explicit currency to the triggering player. Fails if the actor is not a player or the final balance would exceed the safe-integer limit. |
 | `consume_item` | `actor: trigger_actor`, `item`, optional `count` | Removes exact-definition items from the triggering actor's inventory. `count` defaults to `1`. |
@@ -1105,6 +1113,63 @@ aggregate currency change emits its authoritative wallet state event after
 those action events. The WR2 transfer will also emit its standard disappearance
 notification; review migrated scripts that used the WR1 trailing command to
 suppress that text.
+
+## Exiting An Instance To A Chosen Base Room
+
+Use `/exitinstance` when the interaction should leave the current instance and
+choose its base-world destination:
+
+```text
+/exitinstance <player-target> world@base/room@<relative_id>
+```
+
+For an immediate trusted room script, wrap the command normally:
+
+```yaml
+script: /cmd room -- /exitinstance {{ actor_key }} world@base/room@42
+```
+
+For typed steps, the target must be the original player `trigger_actor`. The
+command must be the only action in the final step, so place feedback or other
+effects in an earlier step:
+
+```yaml
+steps:
+  - after_seconds: 0
+    actions:
+      - type: send
+        actor: trigger_actor
+        text: The right-hand gate opens toward Athens.
+  - after_seconds: 0
+    actions:
+      - type: command
+        subject: trigger_room
+        command: /exitinstance {{ actor_key }} world@base/room@42
+```
+
+An exact-one room-local mob may be the final command subject instead of
+`trigger_room`, but the explicit target must still render to the player Trigger
+actor. The player `trigger_actor` may also be the subject and use
+`/exitinstance self world@base/room@42`. A typed step cannot select another
+player, use `self` to make a room or mob the target, add a sibling action beside
+`/exitinstance`, or schedule a later step.
+
+The `world@base/room@<relative_id>` token is deliberately command-specific.
+WR2 resolves it against the target player's active run's direct base world,
+then moves the player to that authored room in the exact return runtime stored
+on their participant record. A plain `room@<relative_id>` remains local to the
+instance. Scoped database and coordinate aliases are not accepted; authored
+YAML should use the lowercase positive-relative-id form shown above.
+`/transfer` also remains same-runtime and cannot perform this exit.
+
+The destination, active run, participant, and recorded return runtime are all
+validated before the exit commits. An active duel contestant is rejected;
+ordinary non-duel combat is finished, pending door work is cancelled, carried
+and equipped items plus character effects move to the return runtime, and the
+participant records a `forced` exit. The command updates run activity, emits
+`instance.left`, and emits one room-enter lifecycle event with
+`event.source: instance_leave` after commit. The player also receives a full
+state sync for the destination runtime and room.
 
 ## Death Traps
 

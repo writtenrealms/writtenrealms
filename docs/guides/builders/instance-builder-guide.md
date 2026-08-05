@@ -36,6 +36,8 @@ The foundation exists now:
   instance world with bounded, depth-batched traversal
 - players can use `enter`, `enter <instance_ref>`, `leave`, and `instance`
   from the game command input
+- builders and trusted room/mob scripts can use `/exitinstance` to return a
+  player to one explicitly chosen authored room in the recorded base runtime
 - builder/admin payloads expose run state and participant counts
 - world, zone, and room state is isolated per active run
 - `/reset` reseeds only the current run from the template's authored defaults
@@ -386,6 +388,72 @@ For group play, the leader's created run has a shared instance reference.
 Members can join that same run by entering through the shared reference instead
 of creating their own separate run.
 
+## Building Interaction-Specific Exits
+
+Use `/exitinstance` when different interactions inside one instance should
+lead to different rooms in the base world. Its destination has an explicit
+base-world scope:
+
+```text
+/exitinstance <player-target> world@base/room@<relative_id>
+```
+
+For example, these two command Triggers can offer a right-hand exit to Athens
+and a left-hand exit to Sparta from the same instance room:
+
+```yaml
+kind: trigger
+metadata:
+  name: Exit Right To Athens
+spec:
+  scope: room
+  kind: command
+  target: room@9
+  match: go right
+  script: ""
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: command
+          subject: trigger_room
+          command: /exitinstance {{ actor_key }} world@base/room@42
+---
+kind: trigger
+metadata:
+  name: Exit Left To Sparta
+spec:
+  scope: room
+  kind: command
+  target: room@9
+  match: go left
+  script: ""
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: command
+          subject: trigger_room
+          command: /exitinstance {{ actor_key }} world@base/room@87
+```
+
+Here `room@9` belongs to the instance template, while base `room@42` and
+`room@87` are resolved from the target player's active run. WR2 then places
+the player in that authored room inside the exact base runtime recorded when
+the participant entered. It does not route the player to another base shard.
+
+The qualified destination is intentionally specific to `/exitinstance`.
+`/transfer` continues to resolve destinations within one live runtime world
+and cannot cross an instance boundary. Normal `leave` continues to use the
+remembered entrance rather than one of these interaction-specific routes.
+
+In typed `steps`, `/exitinstance` may target only `trigger_actor` and must be
+the only action in the final step. Put any narration, payment, reward, or state
+change in an earlier step. A direct builder or trusted room/mob script can use
+the same command outside typed steps. Active duel contestants cannot be exited
+this way; the duel must finish or be surrendered through its normal lifecycle.
+A successful command records a `forced` participant exit, finishes ordinary
+combat, cancels pending door work, and moves carried/equipped items and
+character effects to the exact recorded return runtime.
+
 ## Building A Duel Arena
 
 A duel arena uses the normal instance layout and entry link, but its run is
@@ -499,6 +567,7 @@ game commands from the linked base room.
 | `enter <instance_ref>` | Join an existing active run for the same instance template. |
 | `leave` | Leave the current instance and return to the remembered base-world room. |
 | `instance` | Show the linked entrance, or show the current run's Instance ID while inside. |
+| `/exitinstance <player> world@base/room@N` | Builder/trusted-script: exit a player to one explicitly chosen authored room in their recorded base runtime. |
 | `/repop [--doors]` | Builder-only: refill missing spawn-plan placements in the current instance zone, optionally resetting its runtime doorways, without rebuilding the run. |
 | `/reset` | Builder-only: reset the current instance run to its initial spawned state. |
 | `duel <player>` | Challenge a player at the same match-arena entrance. |

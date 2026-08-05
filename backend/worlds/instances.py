@@ -12,6 +12,7 @@ from worlds.models import (
     InstanceAssignment,
     InstanceParticipant,
     InstanceRun,
+    Room,
     World,
 )
 
@@ -30,6 +31,37 @@ class InstanceResetResult:
     combat_encounters_deleted: int
     spawn_plan_runs_reset: int
     runtime_scoped_state_reset: bool
+
+
+@dataclass(frozen=True)
+class InstanceParticipantTransferResult:
+    player: object
+    participant_id: int
+    run_id: int
+    origin_world_id: int
+    origin_room_id: int | None
+    destination_world_id: int
+    destination_room_id: int
+    events: list[object]
+
+
+@dataclass(frozen=True)
+class ForcedInstanceExitResult:
+    player: object
+    participant_id: int
+    run_id: int
+    origin_world_id: int
+    origin_room_id: int | None
+    destination_world_id: int
+    destination_room_id: int
+    finished_encounter_ids: list[int]
+    events: list[object]
+
+
+class ForcedInstanceExitError(RuntimeError):
+    def __init__(self, message, *, code):
+        super().__init__(message)
+        self.code = code
 
 
 def _normalize_member_ids(member_ids):
@@ -709,6 +741,115 @@ def _enqueue_instance_events(events):
     transaction.on_commit(flush_game_event_outbox, robust=True)
 
 
+def _transfer_instance_participant_locked(
+        *,
+        player,
+        participant,
+        destination_room,
+        exit_reason,
+        expected_origin_world_id=None,
+        expected_origin_room_id=None,
+        exited_at=None,
+        emit_room_enter_event=True):
+    """Move an already-locked participant and return its unpublished events."""
+    if exit_reason not in InstanceParticipant.EXIT_REASON_CHOICES:
+        raise ValueError("Invalid instance participant exit reason.")
+    if participant.player_id != player.id:
+        raise RuntimeError(
+            "The instance participant changed players during transfer."
+        )
+    if participant.exited_at is not None:
+        raise RuntimeError("The instance participant has already exited.")
+    if participant.return_runtime_world_id is None:
+        raise RuntimeError(
+            "The instance participant has no recorded return runtime."
+        )
+
+    run = participant.run
+    return_runtime = participant.return_runtime_world
+    if return_runtime.context_id != run.base_world_id:
+        raise RuntimeError(
+            "The recorded return runtime does not belong to the base world."
+        )
+    if not destination_room or destination_room.world_id != run.base_world_id:
+        raise RuntimeError(
+            "The instance destination room does not belong to the base world."
+        )
+
+    expected_origin_world_id = (
+        expected_origin_world_id
+        if expected_origin_world_id is not None
+        else run.spawned_world_id
+    )
+    if player.world_id != expected_origin_world_id:
+        raise RuntimeError(
+            "The player is no longer in the expected instance runtime."
+        )
+    if (
+        expected_origin_room_id is not None
+        and player.room_id != expected_origin_room_id
+    ):
+        raise RuntimeError(
+            "The player is no longer in the expected instance room."
+        )
+
+    cancellation_events = _cancel_pending_door_action(
+        player=player,
+        code=(
+            "actor_dead"
+            if exit_reason
+            == InstanceParticipant.EXIT_REASON_DEATH_DELEGATED
+            else "actor_world_changed"
+        ),
+        message=(
+            "You can no longer finish with the door."
+            if exit_reason
+            == InstanceParticipant.EXIT_REASON_DEATH_DELEGATED
+            else "You stop working with the door as you leave the instance."
+        ),
+    )
+    origin_world_id = player.world_id
+    origin_room_id = player.room_id
+    player.world = return_runtime
+    player.room = destination_room
+    player_update_fields = ['world', 'room']
+    _increment_location_sequence(player, player_update_fields)
+    player.save(update_fields=player_update_fields)
+    move_player_carried_items_to_world(player, return_runtime)
+    move_player_character_effects_to_world(player, return_runtime)
+
+    participant.exited_at = exited_at or timezone.now()
+    participant.exit_reason = exit_reason
+    participant.return_runtime_world = None
+    participant.save(update_fields=[
+        'exited_at',
+        'exit_reason',
+        'return_runtime_world',
+    ])
+    instance_events = list(cancellation_events)
+    if emit_room_enter_event:
+        from spawns.events import player_room_enter_event
+
+        instance_events.append(
+            player_room_enter_event(
+                player=player,
+                origin_room_id=origin_room_id,
+                destination_room_id=destination_room.id,
+                source="instance_leave",
+            )
+        )
+    return InstanceParticipantTransferResult(
+        player=player,
+        participant_id=participant.id,
+        run_id=run.id,
+        origin_world_id=origin_world_id,
+        origin_room_id=origin_room_id,
+        destination_world_id=return_runtime.id,
+        destination_room_id=destination_room.id,
+        events=instance_events,
+    )
+
+
 def transfer_instance_participant(
         *,
         participant,
@@ -719,6 +860,10 @@ def transfer_instance_participant(
         emit_room_enter_event=True):
     """
     Atomically return one active participant to its recorded base runtime.
+
+    This compatibility wrapper retains durable event delivery for existing
+    leave and delegated-death callers. New composite actions should use the
+    locked primitive and own publication of the returned events.
 
     The helper deliberately does not lock or update InstanceRun, so delegated
     death can use it without turning one busy run into a shared lock hotspot.
@@ -739,8 +884,6 @@ def transfer_instance_participant(
             flat=True,
         ).get(pk=participant_id)
     )
-    if exit_reason not in InstanceParticipant.EXIT_REASON_CHOICES:
-        raise ValueError("Invalid instance participant exit reason.")
 
     with transaction.atomic():
         # The Player row is the participation reservation used by entry,
@@ -754,85 +897,307 @@ def transfer_instance_participant(
             .select_related('run', 'return_runtime_world')
             .get(pk=participant_id)
         )
-        if locked_participant.player_id != locked_player.id:
-            raise RuntimeError(
-                "The instance participant changed players during transfer."
-            )
-        if locked_participant.exited_at is not None:
-            raise RuntimeError("The instance participant has already exited.")
-        if locked_participant.return_runtime_world_id is None:
-            raise RuntimeError(
-                "The instance participant has no recorded return runtime."
-            )
-
-        run = locked_participant.run
-        return_runtime = locked_participant.return_runtime_world
-        if return_runtime.context_id != run.base_world_id:
-            raise RuntimeError(
-                "The recorded return runtime does not belong to the base world."
-            )
-        if not destination_room or destination_room.world_id != run.base_world_id:
-            raise RuntimeError(
-                "The instance destination room does not belong to the base world."
-            )
-
-        expected_origin_world_id = (
-            expected_origin_world_id
-            if expected_origin_world_id is not None
-            else run.spawned_world_id
-        )
-        if locked_player.world_id != expected_origin_world_id:
-            raise RuntimeError(
-                "The player is no longer in the expected instance runtime."
-            )
-
-        cancellation_events = _cancel_pending_door_action(
+        result = _transfer_instance_participant_locked(
             player=locked_player,
-            code=(
-                "actor_dead"
-                if exit_reason
-                == InstanceParticipant.EXIT_REASON_DEATH_DELEGATED
-                else "actor_world_changed"
-            ),
-            message=(
-                "You can no longer finish with the door."
-                if exit_reason
-                == InstanceParticipant.EXIT_REASON_DEATH_DELEGATED
-                else "You stop working with the door as you leave the instance."
-            ),
+            participant=locked_participant,
+            destination_room=destination_room,
+            exit_reason=exit_reason,
+            expected_origin_world_id=expected_origin_world_id,
+            exited_at=exited_at,
+            emit_room_enter_event=emit_room_enter_event,
         )
-        origin_room_id = locked_player.room_id
-        locked_player.world = return_runtime
-        locked_player.room = destination_room
-        player_update_fields = ['world', 'room']
-        _increment_location_sequence(locked_player, player_update_fields)
-        locked_player.save(update_fields=player_update_fields)
-        move_player_carried_items_to_world(locked_player, return_runtime)
-        move_player_character_effects_to_world(locked_player, return_runtime)
+        _enqueue_instance_events(result.events)
 
-        locked_participant.exited_at = exited_at or timezone.now()
-        locked_participant.exit_reason = exit_reason
-        locked_participant.return_runtime_world = None
-        locked_participant.save(update_fields=[
-            'exited_at',
-            'exit_reason',
-            'return_runtime_world',
-        ])
-        instance_events = list(cancellation_events)
-        if emit_room_enter_event:
-            from spawns.events import player_room_enter_event
+    return result.player
 
-            instance_events.append(
-                player_room_enter_event(
-                    player=locked_player,
-                    origin_room_id=origin_room_id,
-                    destination_room_id=destination_room.id,
-                    source="instance_leave",
+
+def _required_model_id(value, *, label):
+    model_id = getattr(value, 'pk', value)
+    try:
+        model_id = int(model_id)
+    except (TypeError, ValueError):
+        raise ForcedInstanceExitError(
+            f"A valid {label} is required.",
+            code=f"invalid_{label}",
+        ) from None
+    if model_id <= 0:
+        raise ForcedInstanceExitError(
+            f"A valid {label} is required.",
+            code=f"invalid_{label}",
+        )
+    return model_id
+
+
+def _finish_forced_exit_encounters(encounters):
+    from spawns.models import ActiveEffect, CombatEncounter
+
+    encounter_ids = [encounter.id for encounter in encounters]
+    if not encounter_ids:
+        return []
+    ActiveEffect.objects.filter(
+        encounter_id__in=encounter_ids,
+        scope=ActiveEffect.SCOPE_ENCOUNTER,
+    ).delete()
+    CombatEncounter.objects.filter(pk__in=encounter_ids).update(
+        status=CombatEncounter.STATUS_FINISHED,
+        next_resolution_ts=None,
+        pending_player_ability={},
+        pending_mob_ability={},
+        pending_flee={},
+    )
+    return encounter_ids
+
+
+def force_exit_instance(
+        *,
+        player,
+        destination_room,
+        expected_origin_world_id,
+        expected_origin_room_id=None):
+    """
+    Force one player from an instance to an explicit authored base room.
+
+    The player's recorded ``return_runtime_world`` remains authoritative for
+    the destination runtime. The supplied room selects only the authored room
+    in that runtime's base world. Events are returned to the composite action
+    and are never enqueued or published by this service.
+    """
+    from spawns.events import GameEvent, player_room_enter_event
+    from spawns.models import (
+        CombatEncounter,
+        DuelMatch,
+        DuelParticipant,
+        Player,
+    )
+
+    player_id = _required_model_id(player, label="player")
+    destination_room_id = _required_model_id(
+        destination_room,
+        label="destination_room",
+    )
+    origin_world_id = _required_model_id(
+        expected_origin_world_id,
+        label="origin_world",
+    )
+    origin_room_id = (
+        _required_model_id(
+            expected_origin_room_id,
+            label="origin_room",
+        )
+        if expected_origin_room_id is not None
+        else None
+    )
+    run_id = (
+        InstanceParticipant.objects.filter(
+            player_id=player_id,
+            run__spawned_world_id=origin_world_id,
+            exited_at__isnull=True,
+        )
+        .values_list('run_id', flat=True)
+        .first()
+    )
+    if run_id is None:
+        raise ForcedInstanceExitError(
+            "The player has no active participant record for this instance.",
+            code="not_in_instance",
+        )
+
+    with transaction.atomic():
+        # Global order: Run, combat rows, Player, InstanceParticipant. A run
+        # lock deliberately serializes lifecycle-changing exits for one run,
+        # while ordinary movement and combat in other runs remain independent.
+        locked_run = (
+            InstanceRun.objects.select_for_update(of=('self',))
+            .select_related('base_world')
+            .filter(pk=run_id)
+            .first()
+        )
+        if locked_run is None:
+            raise ForcedInstanceExitError(
+                "The player has no active participant record for this instance.",
+                code="not_in_instance",
+            )
+        if locked_run.spawned_world_id != origin_world_id:
+            raise ForcedInstanceExitError(
+                "The expected runtime is not this instance run.",
+                code="origin_changed",
+            )
+
+        resolved_destination = (
+            Room.objects.filter(pk=destination_room_id)
+            .only('id', 'world_id')
+            .first()
+        )
+        if (
+            resolved_destination is None
+            or resolved_destination.world_id != locked_run.base_world_id
+        ):
+            raise ForcedInstanceExitError(
+                "The destination room does not belong to the instance's base world.",
+                code="invalid_destination",
+            )
+
+        locked_match = (
+            DuelMatch.objects.select_for_update(of=('self',))
+            .filter(run=locked_run)
+            .first()
+        )
+        locked_duel_participants = []
+        if locked_match is not None:
+            locked_duel_participants = list(
+                DuelParticipant.objects.select_for_update(of=('self',))
+                .filter(match=locked_match, player_id=player_id)
+                .order_by('id')
+            )
+            is_active_contestant = (
+                locked_match.status == DuelMatch.STATUS_ACTIVE
+                and any(
+                    participation.role == DuelParticipant.ROLE_CONTESTANT
+                    for participation in locked_duel_participants
                 )
             )
-        _enqueue_instance_events(instance_events)
+            if is_active_contestant:
+                raise ForcedInstanceExitError(
+                    "Use `duel surrender` before leaving an active duel.",
+                    code="active_duel",
+                )
 
-    return locked_player
+        active_encounters = list(
+            CombatEncounter.objects.select_for_update(of=('self',))
+            .filter(
+                world_id=origin_world_id,
+                player_id=player_id,
+                status=CombatEncounter.STATUS_ACTIVE,
+                duel_match__isnull=True,
+            )
+            .order_by('id')
+        )
+        locked_player = (
+            Player.objects.select_for_update(of=('self',))
+            .filter(pk=player_id)
+            .first()
+        )
+        if locked_player is None:
+            raise ForcedInstanceExitError(
+                "The player no longer exists.",
+                code="not_in_instance",
+            )
+        if locked_player.world_id != origin_world_id:
+            raise ForcedInstanceExitError(
+                "The player is no longer in the expected instance runtime.",
+                code="origin_changed",
+            )
+        if (
+            origin_room_id is not None
+            and locked_player.room_id != origin_room_id
+        ):
+            raise ForcedInstanceExitError(
+                "The player is no longer in the expected instance room.",
+                code="origin_changed",
+            )
+        locked_encounter_ids = {
+            encounter.id for encounter in active_encounters
+        }
+        current_encounter_ids = set(
+            CombatEncounter.objects.filter(
+                world_id=origin_world_id,
+                player_id=player_id,
+                status=CombatEncounter.STATUS_ACTIVE,
+                duel_match__isnull=True,
+            ).values_list('id', flat=True)
+        )
+        if current_encounter_ids != locked_encounter_ids:
+            raise ForcedInstanceExitError(
+                "The player's combat state changed. Try the exit again.",
+                code="target_busy",
+            )
+
+        locked_participant = (
+            InstanceParticipant.objects.select_for_update(of=('self',))
+            .select_related('run', 'return_runtime_world')
+            .filter(
+                run=locked_run,
+                player_id=player_id,
+                exited_at__isnull=True,
+            )
+            .first()
+        )
+        if locked_participant is None:
+            raise ForcedInstanceExitError(
+                "The player has no active participant record for this instance.",
+                code="not_in_instance",
+            )
+        return_runtime = locked_participant.return_runtime_world
+        if (
+            return_runtime is None
+            or return_runtime.context_id != locked_run.base_world_id
+        ):
+            raise ForcedInstanceExitError(
+                "The participant has no valid recorded base runtime.",
+                code="invalid_return_runtime",
+            )
+
+        now = timezone.now()
+        finished_encounter_ids = _finish_forced_exit_encounters(
+            active_encounters,
+        )
+        transfer_result = _transfer_instance_participant_locked(
+            player=locked_player,
+            participant=locked_participant,
+            destination_room=resolved_destination,
+            exit_reason=InstanceParticipant.EXIT_REASON_FORCED,
+            expected_origin_world_id=origin_world_id,
+            expected_origin_room_id=origin_room_id,
+            exited_at=now,
+            emit_room_enter_event=False,
+        )
+        locked_player.viewed_rooms.add(resolved_destination.id)
+        duel_participant_ids = [
+            participation.id
+            for participation in locked_duel_participants
+            if participation.exited_at is None
+        ]
+        if duel_participant_ids:
+            DuelParticipant.objects.filter(
+                pk__in=duel_participant_ids,
+            ).update(exited_at=now)
+
+        locked_run.last_active_at = now
+        locked_run.save(update_fields=['last_active_at'])
+
+        events = [
+            *transfer_result.events,
+            GameEvent(
+                type="instance.left",
+                recipients=[],
+                data={
+                    "player_id": locked_player.id,
+                    "run_id": locked_run.id,
+                    "participant_id": locked_participant.id,
+                    "reason": InstanceParticipant.EXIT_REASON_FORCED,
+                    "destination_world_id": transfer_result.destination_world_id,
+                    "destination_room_id": resolved_destination.id,
+                },
+            ),
+            player_room_enter_event(
+                player=locked_player,
+                origin_room_id=transfer_result.origin_room_id,
+                destination_room_id=resolved_destination.id,
+                source="instance_leave",
+            ),
+        ]
+
+    return ForcedInstanceExitResult(
+        player=transfer_result.player,
+        participant_id=transfer_result.participant_id,
+        run_id=transfer_result.run_id,
+        origin_world_id=transfer_result.origin_world_id,
+        origin_room_id=transfer_result.origin_room_id,
+        destination_world_id=transfer_result.destination_world_id,
+        destination_room_id=transfer_result.destination_room_id,
+        finished_encounter_ids=finished_encounter_ids,
+        events=events,
+    )
 
 
 def enter_instance(
@@ -1023,7 +1388,7 @@ def leave_instance(*, player, force_active_duel=False):
             )
         participant = (
             InstanceParticipant.objects.select_for_update(of=('self',))
-            .select_related('transfer_from')
+            .select_related('run', 'return_runtime_world', 'transfer_from')
             .filter(
                 run=locked_run,
                 player_id=locked_player.pk,
@@ -1051,13 +1416,16 @@ def leave_instance(*, player, force_active_duel=False):
         if room is None:
             room = locked_run.base_world.config.starting_room
 
-        updated_player = transfer_instance_participant(
+        transfer_result = _transfer_instance_participant_locked(
+            player=locked_player,
             participant=participant,
             destination_room=room,
             exit_reason=InstanceParticipant.EXIT_REASON_LEFT,
             expected_origin_world_id=spawned_instance.id,
             exited_at=now,
         )
+        _enqueue_instance_events(transfer_result.events)
+        updated_player = transfer_result.player
         DuelParticipant.objects.filter(
             match__run=locked_run,
             player_id=locked_player.pk,

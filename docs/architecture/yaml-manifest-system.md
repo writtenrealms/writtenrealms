@@ -297,10 +297,20 @@ Current required mappings:
   template.
 - Convert supported authored base/instance relationships into the bundle
   header's `spec.links`: `room.transfer_to`, `room.enters_instance`,
-  `room.exits_to`, and `world_config.exits_to`. Do not embed cross-world
-  database ids in room, world-config, Trigger, or script documents. Flag a
-  legacy cross-world script for builder review when it does not have the exact
-  semantics of one of those typed relations.
+  `room.exits_to`, and `world_config.exits_to`. These links remain the right
+  representation for static entry and default-exit relationships. When one
+  specific interaction inside a direct instance instead chooses one of several
+  base-world destinations, a deterministic legacy player-exit script may map
+  to the command
+  `/exitinstance {{ actor_key }} world@base/room@<relative_id>`. Resolve the
+  legacy destination against the authored base world and emit its stable
+  relative id; never copy a WR1 or WR2 database id into the command. An
+  immediate room script uses `/cmd room --`.
+  A typed conversion must target `trigger_actor`, and `/exitinstance` must be
+  the only action in the final step. Flag dynamic destinations, non-player
+  targets, nested-instance transitions, or scripts whose meaning is not an
+  instance exit for builder review. Do not embed any other cross-world address
+  in room, world-config, Trigger, or script documents.
 - Convert only direct authored instance templates. Never include spawned
   runtime worlds, `instance_ref` values, instance runs or participants,
   players, or mutable runtime world/room state. This remains an optional
@@ -1043,16 +1053,17 @@ optional query-free `where`. One action executes one command; command chains,
 history references, and nested `/cmd` dispatch are rejected. The dedicated
 runner accepts only explicitly audited handlers. Current coverage is room-local
 `say`, `emote`, `talk`, authored socials, room-subject, room-scoped `/echo`,
-and transactional `/transfer`. The transfer target must be the Trigger actor,
-but any supported step subject may issue the command. The canonical forms are
+transactional `/transfer`, and transactional `/exitinstance`. The transfer
+target must be the Trigger actor, but any supported step subject may issue the
+command. The canonical forms are
 `subject: trigger_room` with
 `/transfer {{ actor_key }} room@<relative_id>` and
 `subject: trigger_actor` with `/transfer self room@<relative_id>`; an exact-one
-selected mob may also use the explicit `{{ actor_key }}` target. `self` or `me` is valid
-only when the resolved subject is the Trigger actor; a selected mob can qualify
-when it is itself the Mob Trigger actor. Relative `here` and direction
-destinations are resolved from the subject's room: the fixed Trigger room, the
-Trigger actor's current room, or the selected mob's room respectively.
+selected mob may also use the explicit `{{ actor_key }}` target. `self` or `me`
+is valid only when the resolved subject is the Trigger actor; a selected mob
+can qualify when it is itself the Mob Trigger actor. Relative `here` and
+direction destinations are resolved from the subject's room: the fixed Trigger
+room, the Trigger actor's current room, or the selected mob's room respectively.
 Portable manifests should use `room@<relative_id>`, not a coordinate or
 database room id, so the destination survives room moves and cross-instance
 imports. A typed transfer that would
@@ -1069,6 +1080,21 @@ triggers after commit. A moved player still in that destination after its
 reactions additionally starts hostile-mob aggro. A transferred mob preserves
 its existing mob-reaction path but does not run the player-only room hook.
 
+`/exitinstance` is the only audited command in this contract that may cross a
+runtime-world boundary. Its exact syntax is
+`/exitinstance <player-target> world@base/room@<relative_id>`. A
+supported step subject may issue it, but the target must render to the original
+player `trigger_actor`. It must be the sole action in the final step; no later
+step is valid. The qualified room token resolves against the target's active
+run's direct base world, and the player returns to the exact base runtime saved
+on their participant record. The command rejects an active duel contestant
+and never broadens `/transfer` beyond its existing same-runtime boundary. A
+successful exit finishes ordinary non-duel combat, cancels pending door work,
+moves carried/equipped items and character effects, records a `forced`
+participant exit, updates run activity, and emits `instance.left` plus one
+room-enter lifecycle event with source `instance_leave`. The exited player
+also receives a full destination state sync.
+
 The derived reaction and aggro output is captured into one bounded durable
 outbox batch. Only the player's final current arrival in one event batch runs
 this work. A later location change invalidates an earlier pending arrival, and
@@ -1081,6 +1107,8 @@ arbitrary bystander players.
 Item and mob mutations must form an initial action prefix. After that prefix,
 `debit_currency`, `grant_currency`, `command`, `echo`, `send`, and
 `send_except` may interleave, and their narrative events retain authored order.
+The sole exception is `/exitinstance`: its command action must stand alone in
+the final step, so all other effects and narration belong in earlier steps.
 The runtime requires the starting wallet to cover the gross total of all
 same-currency debits; same-step grants never subsidize those charges. It also
 validates that the final net balance stays within the safe-integer limit, then
@@ -1237,6 +1265,17 @@ supported command destinations—use the same resolver. Syntactically recognized
 literal aliases in semantic scripts and command text are canonicalized when
 they resolve; computed or dynamic strings cannot be rewritten reliably and
 must resolve at runtime.
+
+`world@base/room@<relative_id>` is a deliberately narrow qualified command
+token, not a general manifest foreign key. It is accepted only as the
+destination of `/exitinstance`. At runtime, WR2 resolves it against the target
+player's active instance run's direct base world and returns that player to the
+exact base runtime recorded on the participant. Every ordinary
+`room@<relative_id>` remains scoped to its containing authored world, and
+`/transfer` remains confined to one live runtime world. Only a positive
+relative id is valid in the qualified token; scoped database and coordinate
+aliases are rejected. Case-insensitive input normalizes to lowercase canonical
+output.
 
 ### Builder Room URLs And Operational Identity
 
@@ -1452,7 +1491,12 @@ spawn targets, Trigger targets, and structured conditions—resolve within that
 document's authored scope. Literal room refs executed later by commands such
 as `/transfer` retain their normal runtime rule: they resolve inside the
 issuer's current authored runtime world. Neither form is a cross-world
-address; supported base/instance transitions use the central link table.
+address. Static supported base/instance relationships use the central link
+table. The one interaction-specific command exception is
+`/exitinstance <player> world@base/room@<relative_id>`: it validates the
+destination in that target's active run's direct base world and returns the
+player to the exact recorded base runtime. The qualified token is not accepted
+by `/transfer` or ordinary manifest fields.
 
 ### Stable Instance Scope
 
@@ -1508,7 +1552,12 @@ base world's
 only from an instance back to its base.
 
 Each relation may occur at most once for a given source world/source room
-pair. Future cross-world concepts should add an explicit, validated bundle
+pair. Interaction-specific branching is not another link relation: a trusted
+instance Trigger may use
+`/exitinstance <player> world@base/room@<relative_id>` so separate interactions
+can choose separate base rooms. That qualified destination is validated against
+the target's active run's direct base world at execution time. Future
+cross-world concepts should otherwise add an explicit, validated bundle
 relation rather than inventing a globally resolved room ref or hiding a
 database id in a script.
 
@@ -2018,6 +2067,14 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   Trigger actor may be its target. Relative destinations use the subject's room;
   authored content should use a stable `room@<relative_id>` destination. Moving a
   player in active PvP fails with `target_busy`.
+  Transactional `/exitinstance` instead requires the player Trigger actor as
+  its target and an exact `world@base/room@<relative_id>` destination. Any
+  supported step subject may issue it; `self` or `me` is valid only when that
+  subject is the player Trigger actor. Its command action must be the sole
+  action of the final step. The destination must resolve in the target's active
+  run's direct base world, the participant must have a valid recorded base
+  runtime, and active duel contestants are rejected. Scoped database and
+  coordinate destination aliases are not accepted.
 - `send` and `send_except` require exactly `actor: trigger_actor` and `text`.
   The actor must still be a connected player when the action executes;
   `send_except` additionally requires a current room. Actor substitutions are

@@ -69,8 +69,8 @@ from worlds.models import (
 from worlds.room_refs import (
     RoomReferenceError,
     build_room_reference_object_cache,
+    canonicalize_command_room_references_in_text,
     canonicalize_room_reference,
-    canonicalize_room_references_in_text,
     format_room_manifest_ref,
     parse_room_reference,
     refresh_room_reference_object_cache,
@@ -1508,6 +1508,7 @@ def _canonicalize_nested_conditions(
     world: World,
     entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
     room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+    base_room_ref_cache: dict[tuple[Any, ...], str] | None = None,
     canonicalize_entities: bool = True,
 ) -> Any:
     """Canonicalize semantic refs embedded in authored JSON structures."""
@@ -1519,6 +1520,7 @@ def _canonicalize_nested_conditions(
                 world=world,
                 entity_ref_cache=entity_ref_cache,
                 room_ref_cache=room_ref_cache,
+                base_room_ref_cache=base_room_ref_cache,
                 canonicalize_entities=canonicalize_entities,
             )
             for item in value
@@ -1552,6 +1554,7 @@ def _canonicalize_nested_conditions(
                     child,
                     world=world,
                     room_ref_cache=room_ref_cache,
+                    base_room_ref_cache=base_room_ref_cache,
                 )
             else:
                 canonical[key] = child
@@ -1566,6 +1569,7 @@ def _canonicalize_nested_conditions(
                 child,
                 world=world,
                 room_ref_cache=room_ref_cache,
+                base_room_ref_cache=base_room_ref_cache,
             )
         elif (
             key in {"room", "room_ref", "room_id", "destination", "to_room"}
@@ -1582,6 +1586,7 @@ def _canonicalize_nested_conditions(
                 world=world,
                 entity_ref_cache=entity_ref_cache,
                 room_ref_cache=room_ref_cache,
+                base_room_ref_cache=base_room_ref_cache,
                 canonicalize_entities=canonicalize_entities,
             )
     return canonical
@@ -1592,14 +1597,16 @@ def _canonicalize_semantic_command_value(
     *,
     world: World,
     room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+    base_room_ref_cache: dict[tuple[Any, ...], str] | None = None,
 ) -> Any:
     if isinstance(value, str):
         try:
-            return canonicalize_room_references_in_text(
+            return canonicalize_command_room_references_in_text(
                 world,
                 value,
                 strict=True,
                 canonical_ref_cache=room_ref_cache,
+                base_canonical_ref_cache=base_room_ref_cache,
             )
         except RoomReferenceError as exc:
             raise serializers.ValidationError(str(exc)) from exc
@@ -1609,6 +1616,7 @@ def _canonicalize_semantic_command_value(
                 item,
                 world=world,
                 room_ref_cache=room_ref_cache,
+                base_room_ref_cache=base_room_ref_cache,
             )
             for item in value
         ]
@@ -1618,6 +1626,7 @@ def _canonicalize_semantic_command_value(
                 child,
                 world=world,
                 room_ref_cache=room_ref_cache,
+                base_room_ref_cache=base_room_ref_cache,
             )
             for key, child in value.items()
         }
@@ -1630,6 +1639,7 @@ def canonicalize_manifest_for_export(
     world: World,
     entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
     room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+    base_room_ref_cache: dict[tuple[Any, ...], str] | None = None,
     include_api_version: bool = False,
 ) -> dict[str, Any]:
     """Return one authored manifest with portable semantic references."""
@@ -1642,6 +1652,7 @@ def canonicalize_manifest_for_export(
             world=world,
             entity_ref_cache=entity_ref_cache,
             room_ref_cache=room_ref_cache,
+            base_room_ref_cache=base_room_ref_cache,
         )
     if include_api_version:
         canonical["apiVersion"] = CANONICAL_MANIFEST_API_VERSION
@@ -1654,6 +1665,7 @@ def _canonicalize_trigger_steps(
     world: World,
     entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
     room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+    base_room_ref_cache: dict[tuple[Any, ...], str] | None = None,
 ) -> list[dict[str, Any]]:
     if not isinstance(steps, list):
         return []
@@ -1697,11 +1709,12 @@ def _canonicalize_trigger_steps(
                 )
             if isinstance(action.get("command"), str):
                 try:
-                    action["command"] = canonicalize_room_references_in_text(
+                    action["command"] = canonicalize_command_room_references_in_text(
                         world,
                         action["command"],
                         strict=True,
                         canonical_ref_cache=room_ref_cache,
+                        base_canonical_ref_cache=base_room_ref_cache,
                     )
                 except RoomReferenceError as exc:
                     raise serializers.ValidationError(str(exc)) from exc
@@ -1766,7 +1779,7 @@ def _canonicalize_quest_node(
             and str(node.get("type") or "").strip().lower().endswith("_command")
         ):
             try:
-                canonical[key] = canonicalize_room_references_in_text(
+                canonical[key] = canonicalize_command_room_references_in_text(
                     world,
                     value,
                     strict=True,
@@ -1933,6 +1946,7 @@ def _serialize_trigger_manifest(
     world: World,
     entity_ref_cache: dict[tuple[str, str, Any], str] | None,
     room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+    base_room_ref_cache: dict[tuple[Any, ...], str] | None = None,
 ) -> dict[str, Any]:
     conditions = builder_manifests._deserialize_conditions_payload(
         trigger.conditions,
@@ -1947,11 +1961,12 @@ def _serialize_trigger_manifest(
     script = trigger.script or ""
     if script:
         try:
-            script = canonicalize_room_references_in_text(
+            script = canonicalize_command_room_references_in_text(
                 world,
                 script,
                 strict=True,
                 canonical_ref_cache=room_ref_cache,
+                base_canonical_ref_cache=base_room_ref_cache,
             )
         except RoomReferenceError as exc:
             raise serializers.ValidationError(str(exc)) from exc
@@ -1971,6 +1986,7 @@ def _serialize_trigger_manifest(
                 world=world,
                 entity_ref_cache=entity_ref_cache,
                 room_ref_cache=room_ref_cache,
+                base_room_ref_cache=base_room_ref_cache,
             ),
             "on_step_error": trigger.on_step_error or "cancel",
             "conditions": conditions,
@@ -2083,6 +2099,23 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
         ).order_by("z", "y", "x", "id")
     )
     room_ref_cache = _build_room_ref_cache(world, rooms=rooms)
+    triggers = list(
+        world.triggers.select_related(
+            "target_type"
+        ).prefetch_related("target").order_by(
+            "scope", "order", "created_ts", "id"
+        )
+    )
+    trigger_uses_base_room_ref = any(
+        "world@base/" in str(trigger.script or "").lower()
+        or "world@base/" in json.dumps(trigger.steps or []).lower()
+        for trigger in triggers
+    )
+    base_room_ref_cache = (
+        _build_room_ref_cache(world.instance_of)
+        if world.instance_of_id and trigger_uses_base_room_ref
+        else None
+    )
     zones = list(
         world.zones.select_related("center").order_by("name", "id")
     )
@@ -2214,12 +2247,9 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
                 world=world,
                 entity_ref_cache=entity_ref_cache,
                 room_ref_cache=room_ref_cache,
+                base_room_ref_cache=base_room_ref_cache,
             )
-            for trigger in world.triggers.select_related(
-                "target_type"
-            ).prefetch_related("target").order_by(
-                "scope", "order", "created_ts", "id"
-            )
+            for trigger in triggers
         ],
         _serialize_world_manifest(world),
     ]
@@ -2229,6 +2259,7 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             world=world,
             entity_ref_cache=entity_ref_cache,
             room_ref_cache=room_ref_cache,
+            base_room_ref_cache=base_room_ref_cache,
             include_api_version=True,
         )
         for document in documents
@@ -5475,7 +5506,7 @@ def normalize_trigger_manifest_for_import(
         )
     if isinstance(spec.get("script"), str) and spec["script"]:
         try:
-            spec["script"] = canonicalize_room_references_in_text(
+            spec["script"] = canonicalize_command_room_references_in_text(
                 world,
                 spec["script"],
                 strict=True,

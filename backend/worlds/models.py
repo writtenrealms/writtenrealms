@@ -1097,10 +1097,12 @@ class InstanceParticipant(BaseModel):
         ROLE_MEMBER,
     )
     EXIT_REASON_LEFT = 'left'
+    EXIT_REASON_FORCED = 'forced'
     EXIT_REASON_REPLACED = 'replaced'
     EXIT_REASON_DEATH_DELEGATED = 'death_delegated'
     EXIT_REASON_CHOICES = (
         EXIT_REASON_LEFT,
+        EXIT_REASON_FORCED,
         EXIT_REASON_REPLACED,
         EXIT_REASON_DEATH_DELEGATED,
     )

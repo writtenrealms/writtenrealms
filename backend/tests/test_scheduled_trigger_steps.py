@@ -1853,6 +1853,65 @@ class TestScheduledTriggerSteps(WorldTestCase):
             ],
         )
 
+    def test_exitinstance_command_must_be_the_only_action_in_final_step(self):
+        exit_action = {
+            "type": "command",
+            "subject": "trigger_room",
+            "command": "/exitinstance {{ actor_key }} world@base/room@17",
+        }
+
+        normalized = normalize_trigger_steps([
+            {
+                "after_seconds": 0,
+                "actions": [
+                    {
+                        "type": "echo",
+                        "room": "trigger_room",
+                        "text": "Choose a road.",
+                    },
+                ],
+            },
+            {"after_seconds": 0, "actions": [exit_action]},
+        ])
+
+        self.assertEqual(normalized[-1]["actions"], [exit_action])
+
+        invalid_steps = (
+            [
+                {"after_seconds": 0, "actions": [exit_action]},
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "Too late.",
+                        },
+                    ],
+                },
+            ],
+            [
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "Leaving.",
+                        },
+                        exit_action,
+                    ],
+                },
+            ],
+        )
+        for steps in invalid_steps:
+            with self.subTest(steps=steps):
+                with self.assertRaisesRegex(
+                    TriggerStepSpecError,
+                    "only action in the final Trigger step",
+                ):
+                    normalize_trigger_steps(steps)
+
     def test_command_action_rejects_unsafe_or_invalid_shapes(self):
         invalid_actions = [
             {

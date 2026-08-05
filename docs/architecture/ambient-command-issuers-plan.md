@@ -44,6 +44,20 @@ This plan remains directional, but several pieces are now implemented:
   targets are local to the issuer room, and portable scripts can use
   move-stable `room@<relative_id>` destinations. Legacy coordinate and
   database-key selectors remain import compatibility aliases.
+- `/exitinstance <player> world@base/room@<relative_id>` supports direct
+  builder players plus trusted mob and room issuers. It resolves the
+  destination in the target's active run's direct base world and returns the
+  player to the exact base runtime recorded on the participant. Active duel
+  contestants are rejected. This is a dedicated instance-lifecycle command;
+  `/transfer` remains confined to one live runtime world. A successful forced
+  exit finishes ordinary combat, cancels pending door work, moves carried and
+  equipped items plus character effects, updates participant/run activity,
+  and emits `instance.left`, the shared `instance_leave` arrival event, and a
+  full state sync for the exited player.
+  The lifecycle transaction locks only the affected run, relevant combat/duel
+  rows, player, and participant. Independent runs do not share that run lock,
+  and item ownership moves through the existing bounded depth-batched path
+  rather than scanning the base-world population.
 - `/echo`, `/send`, `/sendexcept`, and `/state` support room, zone, and world
   actors. `/send` privately addresses one connected player;
   `/sendexcept` addresses every other connected player in that target's
@@ -71,14 +85,16 @@ This plan remains directional, but several pieces are now implemented:
 - A dedicated `ScriptCommandRunner` now powers typed Trigger `command` actions.
   It captures audited handler output inside the step transaction so publication
   occurs through the durable outbox after commit. Most approved commands are
-  event-only; `/transfer` is also audited for transactional Trigger-step use
-  with the Trigger actor as its only target; any supported step subject may
-  issue it. Its room change and events roll back with a failed step. Durable
-  events carry internal Trigger/run/issuer/subject provenance that is stripped
-  from player payloads. Forced speech and socials are excluded from Trigger and
-  quest subscriptions because they are not voluntary player input. When a
-  transfer actually moves a player, the committed structural lifecycle event
-  runs destination mob-definition `enter` reactions and room-scoped
+  event-only; `/transfer` and `/exitinstance` are also audited for
+  transactional Trigger-step use. `/transfer` may target only the Trigger
+  actor. `/exitinstance` likewise permits any supported step subject but
+  requires a player Trigger actor as its target and must be the sole action of
+  the final step. Their state changes and events roll back with a failed step.
+  Durable events carry internal Trigger/run/issuer/subject provenance that is
+  stripped from player payloads. Forced speech and socials are excluded from
+  Trigger and quest subscriptions because they are not voluntary player
+  input. When a transfer actually moves a player, the committed structural
+  lifecycle event runs destination mob-definition `enter` reactions and room-scoped
   `event: enter` triggers after commit; a moved player still in that
   destination after its reactions additionally runs hostile-mob aggro.
   Reaction and aggro output is captured and durably enqueued outside the
@@ -105,6 +121,8 @@ This plan remains directional, but several pieces are now implemented:
   the wallet; `/transfer` may serialize a pre-mutation wallet snapshot as part
   of its full player state, so the final wallet event, when present,
   deliberately supersedes it.
+  `/exitinstance` is the final-step exception: every other action must appear
+  in an earlier step because the exit changes the Trigger actor's runtime.
 
 Current trigger command kind is `command`.
 
@@ -362,9 +380,13 @@ Status: partially implemented for scoped builder primitives.
    rewards and starter-equipment scripts.
 6. Support `/transfer` as a runtime-isolated forced-movement primitive for room
    and mob scripts, without treating ambient issuers as physical movers.
-7. Support `/set` as a room-script primitive with room-local, runtime-isolated
+7. Support `/exitinstance` as the explicit instance-lifecycle bridge for a
+   direct builder or trusted room/mob issuer. Its qualified destination is
+   resolved only in the target's active run's base world, and the participant's
+   recorded return runtime remains authoritative.
+8. Support `/set` as a room-script primitive with room-local, runtime-isolated
    character targeting and target-row locking.
-8. Support `/send` and `/sendexcept` as targeted, runtime-isolated
+9. Support `/send` and `/sendexcept` as targeted, runtime-isolated
    communication primitives for the same direct-builder and script-gated
    ambient actor contexts.
 
@@ -379,8 +401,9 @@ points remain pending.
 1. Add `ScriptCommandRunner` that executes command lines under ambient issuer
    context. Implemented for one bounded command.
 2. Integrate with typed Trigger steps. Implemented for audited event-only
-   commands and transactional `/transfer` restricted to the Trigger actor as
-   its target.
+   commands, transactional `/transfer` restricted to the Trigger actor as its
+   target, and final-step-only `/exitinstance` restricted to the player Trigger
+   actor.
 3. Integrate with legacy Trigger scripts and quest script entry points.
 4. Route command execution exclusively through the runner for scripted
    sources.
@@ -467,7 +490,12 @@ The first compatibility slice is:
    exit/enter flow plus a transfer-state snapshot for player targets, runs
    runtime-isolated destination mob reactions, and terminates active combat
    with bulk cleanup queries.
-8. `/set <target> <field> <value>` under a room actor changes one supported
+8. `/exitinstance <player> world@base/room@<relative_id>` under a direct
+   builder, trusted room, or trusted mob issuer exits the target's active run
+   to the chosen authored base room in the participant's recorded return
+   runtime. Typed Trigger use is restricted to the player Trigger actor and a
+   sole command action in the final step; active duels reject the exit.
+9. `/set <target> <field> <value>` under a room actor changes one supported
    runtime player or mob field after local target resolution and a target-only
    row lock; player targets receive a state-updating notification.
 

@@ -8,6 +8,7 @@ from spawns.actions.builder import (
     BuilderStatsAction,
     CmdAction,
     EchoAction,
+    ExitInstanceAction,
     GrantItemAction,
     InvisibleAction,
     JumpAction,
@@ -44,6 +45,7 @@ from spawns.handlers.registry import register_handler
 from spawns.state_payloads import build_state_sync, get_player_with_related
 from spawns.text_output import render_event_text
 from worlds.instances import reset_instance
+from worlds.room_refs import parse_base_world_room_reference
 
 SCOPED_ECHO_ALIASES = {
     "/wecho": "world",
@@ -446,6 +448,12 @@ def _parse_transfer_args(
     if len(args) > 2:
         return args[0], args[1], True
     return args[0], args[1], False
+
+
+def _parse_exitinstance_args(
+    ctx: CommandContext,
+) -> tuple[str | None, str | None, bool]:
+    return _parse_transfer_args(ctx)
 
 
 @register_handler
@@ -1565,6 +1573,179 @@ class CmdHandler(CommandHandler):
             result.events,
             actor_key=ctx.actor_key,
             connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class ExitInstanceHandler(CommandHandler):
+    command_type = "/exitinstance"
+    text_commands = ("/exitinstance",)
+    builder_only = True
+    allow_script_source = True
+    supported_actor_types = ("player", "mob", "room")
+    trigger_step_mode = TRIGGER_STEP_MODE_TRANSACTIONAL
+    help = {
+        "name": "Exit Instance",
+        "format": (
+            "/exitinstance <player> world@base/room@<relative_id>"
+        ),
+        "description": (
+            "Force a player out of the current instance to one authored room "
+            "in its direct base world. The player returns to the exact base "
+            "runtime recorded when they entered."
+        ),
+        "details": [
+            "The destination must use the portable world@base/room@N form.",
+            "Room and mob issuers are available only to trusted scripts.",
+            (
+                "In Trigger steps, /exitinstance may target only the Trigger "
+                "actor and must be the sole action in the final step."
+            ),
+            "Active duel contestants must surrender before exiting.",
+        ],
+        "examples": [
+            "/exitinstance self world@base/room@17",
+            "/exitinstance player.123 world@base/room@42",
+        ],
+    }
+
+    def validate_trigger_step_command(
+        self,
+        *,
+        command: str,
+        subject_type: str,
+        subject_key: str,
+        render_actor_key: str,
+    ) -> tuple[str, str] | None:
+        if subject_type not in self.supported_actor_types:
+            return (
+                f"{subject_type.capitalize()}s cannot execute /exitinstance.",
+                "unsupported_command_subject",
+            )
+
+        tokens = str(command or "").split()
+        if len(tokens) != 3 or tokens[0].lower() != "/exitinstance":
+            return (
+                "Usage: /exitinstance <trigger actor> "
+                "world@base/room@<relative_id>.",
+                "invalid_args",
+            )
+        if parse_base_world_room_reference(tokens[2]) is None:
+            return (
+                "The destination must use world@base/room@<relative_id>.",
+                "invalid_base_room",
+            )
+
+        target = tokens[1].lower()
+        render_key = str(render_actor_key or "").lower()
+        if not render_key.startswith("player."):
+            return (
+                "Trigger-step /exitinstance commands require a player Trigger actor.",
+                "unsupported_instance_exit_target",
+            )
+        subject_is_trigger_actor = str(subject_key or "").lower() == render_key
+        targets_trigger_actor = target == render_key or (
+            target in {"self", "me"} and subject_is_trigger_actor
+        )
+        if not targets_trigger_actor:
+            return (
+                "Trigger-step /exitinstance commands may target only the Trigger actor.",
+                "unsupported_instance_exit_target",
+            )
+        return None
+
+    def _can_execute_exitinstance_command(self, ctx: CommandContext) -> bool:
+        if has_builder_access(ctx.player):
+            return True
+        if ctx.trigger_step and ctx.capture_only and ctx.script_source:
+            return True
+        return bool(
+            ctx.script_source
+            and self.allow_script_source
+            and ctx.actor_type in {"mob", "room"}
+        )
+
+    def handle(self, ctx: CommandContext) -> None:
+        if not self._can_execute_exitinstance_command(ctx):
+            ctx.publish(builder_permission_error(self.command_type))
+            return
+
+        target, destination_ref, has_trailing_command = (
+            _parse_exitinstance_args(ctx)
+        )
+        if has_trailing_command or not target or not destination_ref:
+            ctx.publish({
+                "type": "cmd./exitinstance.error",
+                "text": (
+                    "Usage: /exitinstance <player> "
+                    "world@base/room@<relative_id>"
+                ),
+                "data": {
+                    "error": "A player and base-world room are required.",
+                    "code": "invalid_args",
+                },
+            })
+            return
+        if parse_base_world_room_reference(destination_ref) is None:
+            ctx.publish({
+                "type": "cmd./exitinstance.error",
+                "text": (
+                    "The destination must use "
+                    "world@base/room@<relative_id>."
+                ),
+                "data": {
+                    "error": "Invalid base-world room reference.",
+                    "code": "invalid_base_room",
+                },
+            })
+            return
+
+        try:
+            result = ExitInstanceAction().execute(
+                actor=ctx.actor,
+                target_selector=target,
+                destination_ref=destination_ref,
+                runtime_world=ctx.world,
+                local_target_only=bool(
+                    ctx.script_source
+                    and not ctx.trigger_step
+                    and ctx.actor_type in {"mob", "room"}
+                ),
+            )
+        except ActionError as err:
+            ctx.publish({
+                "type": "cmd./exitinstance.error",
+                "text": err.message,
+                "data": {
+                    "error": err.message,
+                    "code": err.code,
+                    **err.data,
+                },
+            })
+            return
+
+        issuer_events = [
+            event
+            for event in result.events
+            if event.type == "cmd./exitinstance.success"
+        ]
+        target_events = [
+            event
+            for event in result.events
+            if event.type != "cmd./exitinstance.success"
+        ]
+        publish_events(
+            issuer_events,
+            actor_key=ctx.actor_key,
+            connection_id=ctx.connection_id,
+        )
+        target_key = str(result.data.get("target_key") or "")
+        publish_events(
+            target_events,
+            actor_key=target_key,
+            connection_id=(
+                ctx.connection_id if target_key == ctx.actor_key else None
+            ),
         )
 
 

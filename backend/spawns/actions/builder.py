@@ -55,6 +55,7 @@ from spawns.ability_prepare_state import (
 from spawns.events import (
     GameEvent,
     PLAYER_ROOM_ENTER_EMITTED_KEY,
+    PLAYER_ROOM_ENTER_EVENT_TYPE,
     TRANSFER_LOCATION_SEQUENCE_KEY,
     TRANSFER_RUNTIME_WORLD_KEY,
     player_room_enter_event,
@@ -77,6 +78,7 @@ from spawns.models import (
 )
 from spawns.serializers import LoadDefinitionSerializer
 from spawns.state_payloads import (
+    build_state_sync,
     door_state_lookup,
     get_player_with_related,
     room_payload_key_for,
@@ -87,9 +89,15 @@ from spawns.state_payloads import (
     serialize_room,
     serialize_world,
 )
+from spawns.text_output import render_event_text
 from spawns.wallet import WalletError, set_balance
+from worlds.instances import ForcedInstanceExitError, force_exit_instance
 from worlds.models import Room, World, Zone
-from worlds.room_refs import resolve_room_reference
+from worlds.room_refs import (
+    direct_base_world_for_room_reference,
+    resolve_base_world_room_reference,
+    resolve_room_reference,
+)
 
 ECHO_SCOPES = ("room", "zone", "world")
 CMD_SCOPE_TARGETS = ("room", "zone", "world")
@@ -2848,6 +2856,242 @@ class _TransferTargetRef:
     target_type: str
     target_id: int
     required_room_id: int | None = None
+
+
+@dataclass(frozen=True)
+class _ExitInstanceTargetRef:
+    player_id: int
+    expected_room_id: int | None
+
+
+class ExitInstanceAction:
+    """Force one player to an explicit room in an instance's base world."""
+
+    @staticmethod
+    def _validate_runtime_context(
+        *,
+        actor: Player | Mob | Room,
+        issuer_room: Room,
+        runtime_world: World,
+    ) -> None:
+        authored_world_id = runtime_world.context_id or runtime_world.id
+        if issuer_room.world_id != authored_world_id:
+            raise ActionError(
+                "The issuer room is not part of this runtime world.",
+                code="invalid_world_context",
+            )
+        if isinstance(actor, (Player, Mob)) and actor.world_id != runtime_world.id:
+            raise ActionError(
+                "The issuer is not part of this runtime world.",
+                code="invalid_world_context",
+            )
+
+    @staticmethod
+    def _resolve_target_ref(
+        *,
+        actor: Player | Mob | Room,
+        issuer_room: Room,
+        runtime_world: World,
+        selector: str,
+        local_target_only: bool,
+    ) -> _ExitInstanceTargetRef:
+        normalized = str(selector or "").strip().lower()
+        if not normalized:
+            raise ActionError("Player target is required.", code="invalid_target")
+
+        if normalized in {"self", "me"}:
+            if not isinstance(actor, Player):
+                raise ActionError(
+                    "Room and mob issuers must specify a player target.",
+                    code="invalid_target",
+                )
+            player_id = actor.id
+        else:
+            parsed_key = _parse_character_key(normalized)
+            if parsed_key is not None:
+                target_type, player_id = parsed_key
+                if target_type != "player":
+                    raise ActionError(
+                        "/exitinstance can target only players.",
+                        code="unsupported_instance_exit_target",
+                    )
+            else:
+                players = Player.objects.filter(
+                    world=runtime_world,
+                    in_game=True,
+                    name__iexact=normalized,
+                )
+                if local_target_only:
+                    players = players.filter(room=issuer_room)
+                player_ids = list(
+                    players.order_by("id").values_list("id", flat=True)[:2]
+                )
+                if len(player_ids) > 1:
+                    raise ActionError(
+                        "Player target is ambiguous.",
+                        code="ambiguous_target",
+                    )
+                if not player_ids:
+                    raise ActionError(
+                        "Player target not found in this instance runtime.",
+                        code="invalid_target",
+                    )
+                player_id = player_ids[0]
+
+        target = (
+            Player.objects.filter(
+                pk=player_id,
+                world=runtime_world,
+                in_game=True,
+            )
+            .only("id", "room_id")
+            .first()
+        )
+        if target is None or (
+            local_target_only and target.room_id != issuer_room.id
+        ):
+            raise ActionError(
+                "Player target not found in the issuer's room."
+                if local_target_only
+                else "Player target not found in this instance runtime.",
+                code="invalid_target",
+            )
+        return _ExitInstanceTargetRef(
+            player_id=target.id,
+            expected_room_id=target.room_id,
+        )
+
+    @staticmethod
+    def _service_error(error: ForcedInstanceExitError) -> ActionError:
+        code_map = {
+            "invalid_destination": "invalid_base_room",
+            "invalid_destination_room": "invalid_base_room",
+            "origin_changed": "target_busy",
+        }
+        return ActionError(
+            str(error),
+            code=code_map.get(error.code, error.code),
+        )
+
+    def execute(
+        self,
+        *,
+        actor: Player | Mob | Room,
+        target_selector: str,
+        destination_ref: str,
+        runtime_world: World | None = None,
+        local_target_only: bool = False,
+    ) -> ActionResult:
+        issuer_room = _actor_room(actor)
+        if issuer_room is None:
+            raise ActionError(
+                "There is no current room for this instance exit.",
+                code="no_room",
+            )
+        resolved_runtime_world = _actor_world(
+            actor,
+            runtime_world=runtime_world,
+        )
+        if resolved_runtime_world is None:
+            raise ActionError(
+                "No runtime world is available for this instance exit.",
+                code="no_world",
+            )
+        self._validate_runtime_context(
+            actor=actor,
+            issuer_room=issuer_room,
+            runtime_world=resolved_runtime_world,
+        )
+        if direct_base_world_for_room_reference(resolved_runtime_world) is None:
+            raise ActionError(
+                "The target runtime is not an instance.",
+                code="not_in_instance",
+            )
+        destination = resolve_base_world_room_reference(
+            resolved_runtime_world,
+            destination_ref,
+        )
+        if destination is None:
+            raise ActionError(
+                "The base-world destination room does not exist.",
+                code="invalid_base_room",
+            )
+        target_ref = self._resolve_target_ref(
+            actor=actor,
+            issuer_room=issuer_room,
+            runtime_world=resolved_runtime_world,
+            selector=target_selector,
+            local_target_only=local_target_only,
+        )
+
+        try:
+            service_result = force_exit_instance(
+                player=target_ref.player_id,
+                destination_room=destination.id,
+                expected_origin_world_id=resolved_runtime_world.id,
+                expected_origin_room_id=target_ref.expected_room_id,
+            )
+        except ForcedInstanceExitError as error:
+            raise self._service_error(error) from error
+        updated_target = get_player_with_related(target_ref.player_id)
+        state_payload = build_state_sync(updated_target).model_dump()
+
+        target_name = updated_target.name or "Player"
+        success_text = (
+            "You leave the instance."
+            if actor.key == updated_target.key
+            else f"{target_name} leaves the instance."
+        )
+        lifecycle_events = [
+            event
+            for event in service_result.events
+            if event.type == PLAYER_ROOM_ENTER_EVENT_TYPE
+        ]
+        pre_arrival_events = [
+            event
+            for event in service_result.events
+            if event.type != PLAYER_ROOM_ENTER_EVENT_TYPE
+        ]
+        events = [
+            GameEvent(
+                type="cmd./exitinstance.success",
+                recipients=[actor.key],
+                data={
+                    "actor": _actor_summary(actor),
+                    "target": {
+                        "key": updated_target.key,
+                        "name": target_name,
+                    },
+                    "run_id": service_result.run_id,
+                    "participant_id": service_result.participant_id,
+                    "destination_world_id": service_result.destination_world_id,
+                    "destination_room": _room_reference_payload(destination),
+                    "finished_encounter_ids": (
+                        service_result.finished_encounter_ids
+                    ),
+                },
+                text=success_text,
+            ),
+            *pre_arrival_events,
+            GameEvent(
+                type="cmd.state.sync.success",
+                recipients=[updated_target.key],
+                data=state_payload,
+                text=render_event_text(
+                    "cmd.state.sync.success",
+                    state_payload,
+                    viewer=updated_target,
+                ),
+            ),
+            *lifecycle_events,
+        ]
+        return ActionResult(
+            events=events,
+            data={
+                "target_key": updated_target.key,
+                "run_id": service_result.run_id,
+            },
+        )
 
 
 class TransferAction:

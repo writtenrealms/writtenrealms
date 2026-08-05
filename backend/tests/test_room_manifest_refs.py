@@ -2,6 +2,7 @@ from rest_framework import serializers
 
 from builders import manifests as builder_manifests
 from builders import world_export as builder_world_export
+from builders.instance_templates import create_instance_template
 from builders.models import ItemDefinition, MobDefinition
 from config import constants as adv_consts
 from core.condition_dsl import ConditionContext, evaluate_condition
@@ -9,18 +10,35 @@ from quests.entity_refs import resolve_room_ref_id
 from tests.base import WorldTestCase
 from worlds.models import Room, World, WorldConfig
 from worlds.room_refs import (
+    ParsedBaseWorldRoomReference,
     ParsedRoomReference,
     RoomReferenceError,
+    canonicalize_base_world_room_reference,
+    canonicalize_command_room_references_in_text,
     canonicalize_room_reference,
     canonicalize_room_references_in_text,
+    direct_base_world_for_room_reference,
+    format_base_world_room_manifest_ref,
     format_room_manifest_ref,
     legacy_room_coordinate_ref,
+    parse_base_world_room_reference,
     parse_room_reference,
+    resolve_base_world_room_reference,
     resolve_room_reference,
 )
 
 
 class TestRoomManifestReferences(WorldTestCase):
+    def _create_instance_template(self):
+        self.world.is_multiplayer = True
+        self.world.save(update_fields=["is_multiplayer"])
+        return create_instance_template(
+            base_world=self.world,
+            author=self.user,
+            name="Scoped Reference Instance",
+            instance_slug="scoped-reference-instance",
+        )
+
     def test_parser_classifies_canonical_and_legacy_references(self):
         self.assertEqual(
             parse_room_reference("room@17"),
@@ -37,6 +55,130 @@ class TestRoomManifestReferences(WorldTestCase):
         self.assertIsNone(parse_room_reference("17"))
         self.assertIsNone(parse_room_reference("room-name"))
         self.assertIsNone(parse_room_reference(True))
+
+    def test_base_world_parser_accepts_only_positive_portable_references(self):
+        self.assertEqual(
+            parse_base_world_room_reference("WORLD@BASE/ROOM@17"),
+            ParsedBaseWorldRoomReference(relative_id=17),
+        )
+        self.assertIsNone(
+            parse_base_world_room_reference("world@base/room@0")
+        )
+        self.assertIsNone(
+            parse_base_world_room_reference("world@base/room.17")
+        )
+        self.assertIsNone(
+            parse_base_world_room_reference("world@base/room@1,2,3")
+        )
+
+    def test_base_world_reference_resolves_from_template_and_runtime_context(self):
+        template = self._create_instance_template()
+        instance_room = template.config.starting_room
+        self.assertEqual(instance_room.relative_id, self.room.relative_id)
+        reference = format_base_world_room_manifest_ref(self.room)
+
+        self.assertEqual(
+            direct_base_world_for_room_reference(template),
+            self.world,
+        )
+        self.assertEqual(
+            resolve_base_world_room_reference(template, reference),
+            self.room,
+        )
+        self.assertNotEqual(
+            resolve_base_world_room_reference(template, reference),
+            instance_room,
+        )
+        self.assertEqual(
+            canonicalize_base_world_room_reference(template, reference),
+            reference,
+        )
+
+        runtime_world = template.create_spawn_world()
+        self.assertEqual(
+            direct_base_world_for_room_reference(runtime_world),
+            self.world,
+        )
+        self.assertEqual(
+            resolve_base_world_room_reference(runtime_world, reference),
+            self.room,
+        )
+        self.assertIsNone(
+            resolve_base_world_room_reference(self.world, reference)
+        )
+
+    def test_exitinstance_command_canonicalizes_base_and_local_refs_separately(self):
+        template = self._create_instance_template()
+        instance_room = template.config.starting_room
+        base_reference = format_base_world_room_manifest_ref(self.room)
+        local_database_reference = f"room.{instance_room.id}"
+        text = (
+            f"/transfer self {local_database_reference}\n"
+            "/cmd room -- /exitinstance {{ actor_key }} "
+            f"{base_reference.upper()}"
+        )
+
+        canonical = canonicalize_command_room_references_in_text(
+            template,
+            text,
+            strict=True,
+        )
+
+        self.assertEqual(
+            canonical,
+            f"/transfer self room@{instance_room.relative_id}\n"
+            "/cmd room -- /exitinstance {{ actor_key }} "
+            f"{base_reference}",
+        )
+
+    def test_scoped_room_token_is_not_reinterpreted_for_other_commands(self):
+        template = self._create_instance_template()
+        for text in (
+            "/echo -- WORLD@BASE/ROOM@999999",
+            "exitinstance self WORLD@BASE/ROOM@999999",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    canonicalize_command_room_references_in_text(
+                        template,
+                        text,
+                        strict=True,
+                    ),
+                    text,
+                )
+                self.assertEqual(
+                    canonicalize_room_references_in_text(
+                        template,
+                        text,
+                        strict=True,
+                    ),
+                    text,
+                )
+
+    def test_exitinstance_command_rejects_invalid_base_destinations(self):
+        template = self._create_instance_template()
+        invalid_commands = (
+            "/exitinstance self world@base/room@999999",
+            "/exitinstance self world@base/room@-1",
+            f"/exitinstance self world@base/room.{self.room.id}",
+            "/exitinstance self world@base/room@0,0,0",
+        )
+
+        for command in invalid_commands:
+            with self.subTest(command=command):
+                with self.assertRaises(RoomReferenceError):
+                    canonicalize_command_room_references_in_text(
+                        template,
+                        command,
+                        strict=True,
+                    )
+
+        with self.assertRaises(RoomReferenceError):
+            canonicalize_command_room_references_in_text(
+                self.world,
+                "/exitinstance self world@base/room@1",
+                strict=True,
+            )
 
     def test_canonical_reference_survives_room_movement(self):
         canonical_ref = format_room_manifest_ref(self.room)

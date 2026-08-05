@@ -56,6 +56,7 @@ form even though arbitrary player scripts cannot issue `/transfer`.
 | `/grantitem` | Direct | Script | Script | Script | No | No |
 | `/kill` | Direct | No | Script | Script | No | No |
 | `/transfer` | Direct | No | Script | Script | No | No |
+| `/exitinstance` | Direct | No | Script | Script | No | No |
 | `/purge` | Direct | No | No | No | No | No |
 | `/echo`, `/zecho`, `/wecho` | Direct | Script | Script | Script | Script | Script |
 | `/send`, `/sendexcept` | Direct | No | Script | Script | Script | Script |
@@ -876,6 +877,90 @@ wallet state event after all authored action events; an exact net-zero batch
 emits its narratives but no wallet revision/state event. Exporters that relied
 on WR1's trailing command to suppress that text should flag the script for an
 authoring review.
+
+### `/exitinstance`
+
+Format:
+
+```text
+/exitinstance <player-target> world@base/room@<relative_id>
+```
+
+Exits a connected player from their active instance run and places them in one
+specific authored room in that run's base world. Use this command when the
+interaction itself chooses the destination—for example, when one portal leads
+to Athens and another leads to Sparta. Ordinary `leave` still returns to the
+remembered entrance.
+
+The `world@base/` qualifier is required. A plain `room@42` inside an instance
+means room 42 in that instance, while `world@base/room@42` means room 42 in the
+active run's direct base world. This qualified token is accepted only by
+`/exitinstance`; it does not make `/transfer` or ordinary manifest room fields
+cross-world. Use a positive relative id in the exact
+`world@base/room@<relative_id>` shape. Scoped database and coordinate aliases
+are rejected. The destination must exist in the target player's active run's
+base world.
+
+WR2 returns the player to the exact base runtime recorded when that participant
+entered the run. It never searches for or creates a different base runtime.
+The command rejects a player who is outside an instance, has no valid recorded
+return runtime, or is an active duel contestant. `/transfer` remains the
+correct command for movement inside one runtime world and never crosses
+between an instance and its base runtime.
+
+On success, WR2 finishes the player's ordinary non-duel combat, cancels pending
+door work, moves the entire carried/equipped item tree and character effects to
+the return runtime, and records the participant exit reason as
+`forced`. Non-active duel participation is marked exited, the run activity is
+updated, and the normal `instance.left` plus room-arrival lifecycle is emitted
+with `event.source: instance_leave`. The exited player receives a full state
+sync for the destination runtime and room.
+
+Examples:
+
+```text
+/exitinstance self world@base/room@17
+/exitinstance player.123 world@base/room@42
+/cmd room -- /exitinstance {{ actor_key }} world@base/room@42
+```
+
+Direct use requires a builder player. Mob and room issuers require a trusted
+script context. Player, zone, and world scripts cannot issue the command.
+`self` and `me` select a player issuer. `player.<id>` or one exact active player
+name selects a player in the issuer's current instance runtime. An immediate
+trusted room or mob script is further restricted to a target in that issuer's
+room; it cannot reach across the instance by key. Mob and room issuers cannot
+target themselves.
+
+Typed Trigger steps are narrower still: the player target must be the original
+`trigger_actor`, and `/exitinstance` must be the only action in the final step.
+Any supported step subject may issue it. A room or selected mob names the actor
+explicitly; an embodied player Trigger actor may use `self`:
+
+```yaml
+steps:
+  - after_seconds: 0
+    actions:
+      - type: command
+        subject: trigger_room
+        command: /exitinstance {{ actor_key }} world@base/room@42
+```
+
+Or, as the player Trigger actor:
+
+```yaml
+steps:
+  - after_seconds: 0
+    actions:
+      - type: command
+        subject: trigger_actor
+        command: /exitinstance self world@base/room@42
+```
+
+The final-only rule prevents later actions from running with the Trigger's
+obsolete instance-runtime context. Put narration, charges, grants, or other
+effects in earlier steps. The exit and its output remain transactional; a
+validation failure rolls back the final step.
 
 ### `/repop`
 

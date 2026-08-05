@@ -73,10 +73,40 @@ _COMMAND_CHAIN_RE = re.compile(
     r""";(?=(?:[^'"]|'[^']*'|"[^"]*")*$)"""
 )
 _NESTED_COMMAND_TOKENS = {"/cmd", "/force", "/rcmd", "/zcmd", "/wcmd"}
+_INSTANCE_EXIT_COMMAND_TOKEN = "/exitinstance"
 
 
 class TriggerStepSpecError(ValueError):
     pass
+
+
+def has_instance_exit_command(step: Any) -> bool:
+    """Return whether a Trigger step contains an instance-exit command."""
+    if not isinstance(step, dict):
+        return False
+    actions = step.get("actions")
+    if not isinstance(actions, list):
+        return False
+    return any(
+        isinstance(action, dict)
+        and action.get("type") == TRIGGER_STEP_ACTION_COMMAND
+        and str(action.get("command") or "").strip()
+        and str(action.get("command") or "").strip().split(maxsplit=1)[0].lower()
+        == _INSTANCE_EXIT_COMMAND_TOKEN
+        for action in actions
+    )
+
+
+def is_terminal_instance_exit_step(step: Any) -> bool:
+    """Return whether ``step`` is the canonical terminal instance-exit step."""
+    if not isinstance(step, dict):
+        return False
+    actions = step.get("actions")
+    return bool(
+        isinstance(actions, list)
+        and len(actions) == 1
+        and has_instance_exit_command(step)
+    )
 
 
 ItemRefNormalizer = Callable[[Any, str], str]
@@ -737,6 +767,17 @@ def normalize_trigger_steps(
             )
             for action_index, action in enumerate(raw_actions)
         ]
+        contains_instance_exit = has_instance_exit_command({
+            "actions": normalized_actions,
+        })
+        if contains_instance_exit and (
+            step_index != len(value) - 1
+            or len(normalized_actions) != 1
+        ):
+            raise TriggerStepSpecError(
+                f"{field_name} /exitinstance must be the only action in the "
+                "final Trigger step."
+            )
         mutation_prefix_ended = False
         for action_index, action in enumerate(normalized_actions):
             action_type = action.get("type")

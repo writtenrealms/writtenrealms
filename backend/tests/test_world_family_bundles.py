@@ -4,6 +4,7 @@ from unittest import mock
 import yaml
 
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 
 from rest_framework import serializers
 from rest_framework.reverse import reverse
@@ -12,7 +13,7 @@ from rest_framework.test import APITestCase
 from builders import world_export as builder_world_export
 from builders.currencies import create_currency
 from builders.instance_templates import create_instance_template
-from builders.models import RoomGetTrigger, WorldBuilder
+from builders.models import RoomGetTrigger, Trigger, WorldBuilder
 from config import constants as adv_consts
 from worlds.models import Room, World, WorldConfig
 
@@ -338,6 +339,115 @@ class WorldFamilyBundleTests(APITestCase):
                 instance_slug="hades",
             ).count(),
             1,
+        )
+
+        reexport = self.client.get(
+            reverse("builder-world-export", args=[target_world.pk])
+        )
+        self.assertEqual(reexport.status_code, 200, reexport.data)
+        self.assertEqual(
+            [
+                document
+                for document in yaml.safe_load_all(reexport.data["yaml"])
+                if document is not None
+            ],
+            documents,
+        )
+
+    def test_instance_exit_command_base_room_refs_round_trip(self):
+        self.assertEqual(
+            self.source_start.relative_id,
+            self.source_instance_start.relative_id,
+        )
+        base_destination = (
+            f"world@base/room@{self.source_start.relative_id}"
+        )
+        trigger_target_type = ContentType.objects.get_for_model(Room)
+        Trigger.objects.create(
+            world=self.source_instance,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=trigger_target_type,
+            target_id=self.source_instance_start.id,
+            name="Exit Instance Script",
+            match="return by script",
+            script=(
+                "/cmd room -- /exitinstance {{ actor_key }} "
+                f"{base_destination.upper()}"
+            ),
+            is_active=True,
+        )
+        Trigger.objects.create(
+            world=self.source_instance,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_COMMAND,
+            target_type=trigger_target_type,
+            target_id=self.source_instance_start.id,
+            name="Exit Instance Step",
+            match="return by step",
+            script="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": "trigger_room",
+                            "command": (
+                                "/exitinstance {{ actor_key }} "
+                                f"{base_destination.upper()}"
+                            ),
+                        },
+                    ],
+                },
+            ],
+            is_active=True,
+        )
+
+        _, documents = self._export_bundle()
+        exported_triggers = {
+            document["metadata"]["name"]: document
+            for document in documents
+            if document["kind"] == "trigger"
+            and document["metadata"]["world_ref"] == "instance.hades"
+        }
+        self.assertEqual(
+            exported_triggers["Exit Instance Script"]["spec"]["script"],
+            "/cmd room -- /exitinstance {{ actor_key }} "
+            + base_destination,
+        )
+        self.assertEqual(
+            exported_triggers["Exit Instance Step"]["spec"]["steps"][0]
+            ["actions"][0]["command"],
+            "/exitinstance {{ actor_key }} " + base_destination,
+        )
+
+        target_world = self._new_target()
+        response = self._apply_documents(
+            target_world=target_world,
+            documents=documents,
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        imported_instance = World.objects.get(
+            instance_of=target_world,
+            context__isnull=True,
+            instance_slug="hades",
+        )
+        imported_triggers = {
+            trigger.name: trigger
+            for trigger in imported_instance.triggers.filter(
+                name__in=("Exit Instance Script", "Exit Instance Step")
+            )
+        }
+        self.assertEqual(
+            imported_triggers["Exit Instance Script"].script,
+            "/cmd room -- /exitinstance {{ actor_key }} "
+            + base_destination,
+        )
+        self.assertEqual(
+            imported_triggers["Exit Instance Step"].steps[0]["actions"][0]
+            ["command"],
+            "/exitinstance {{ actor_key }} " + base_destination,
         )
 
         reexport = self.client.get(
