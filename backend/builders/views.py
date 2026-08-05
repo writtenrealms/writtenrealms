@@ -1840,6 +1840,20 @@ class WorldExportView(BaseWorldBuilderView):
 world_export = WorldExportView.as_view()
 
 
+def _manifest_error_message(detail: object) -> str:
+    if isinstance(detail, dict):
+        messages = []
+        for field_name, field_detail in detail.items():
+            message = _manifest_error_message(field_detail)
+            if message:
+                messages.append(f"{field_name}: {message}")
+        return "; ".join(messages)
+    if isinstance(detail, (list, tuple)):
+        messages = [_manifest_error_message(item) for item in detail]
+        return "; ".join(message for message in messages if message)
+    return str(detail)
+
+
 class WorldManifestApplyView(BaseWorldBuilderView):
 
     def _assert_can_edit_trigger_scope_target(
@@ -3060,7 +3074,8 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                 self._assert_can_edit_room_manifest(manifest)
             except drf_exceptions.PermissionDenied as exc:
                 raise drf_exceptions.PermissionDenied(
-                    f"Document {index} ({kind}) failed: {exc.detail}"
+                    f"Document {index} ({kind}) failed: "
+                    f"{_manifest_error_message(exc.detail)}"
                 )
 
     def _apply_world_bundle(self, manifests):
@@ -3232,7 +3247,8 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                                 ).strip().lower() or "manifest"
                                 raise drf_exceptions.PermissionDenied(
                                     f"Bundle scope '{world_ref}' document "
-                                    f"{index} ({kind}) failed: {exc.detail}"
+                                    f"{index} ({kind}) failed: "
+                                    f"{_manifest_error_message(exc.detail)}"
                                 )
                             except serializers.ValidationError as exc:
                                 kind = str(
@@ -3240,7 +3256,8 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                                 ).strip().lower() or "manifest"
                                 raise serializers.ValidationError(
                                     f"Bundle scope '{world_ref}' document "
-                                    f"{index} ({kind}) failed: {exc.detail}"
+                                    f"{index} ({kind}) failed: "
+                                    f"{_manifest_error_message(exc.detail)}"
                                 )
                             results.append(
                                 {
@@ -3367,12 +3384,14 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                     except drf_exceptions.PermissionDenied as exc:
                         kind = str((manifest.get("kind") or "manifest")).strip().lower() or "manifest"
                         raise drf_exceptions.PermissionDenied(
-                            f"Document {index} ({kind}) failed: {exc.detail}"
+                            f"Document {index} ({kind}) failed: "
+                            f"{_manifest_error_message(exc.detail)}"
                         )
                     except serializers.ValidationError as exc:
                         kind = str((manifest.get("kind") or "manifest")).strip().lower() or "manifest"
                         raise serializers.ValidationError(
-                            f"Document {index} ({kind}) failed: {exc.detail}"
+                            f"Document {index} ({kind}) failed: "
+                            f"{_manifest_error_message(exc.detail)}"
                         )
                     results.append(response.data)
         self._batch_created_room_relative_ids = set()

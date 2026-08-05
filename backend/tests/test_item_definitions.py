@@ -268,6 +268,55 @@ spec:
         self.assertEqual(definition.attributes, {"brawn": 2})
         self.assertEqual(definition.randomization["attributes"][0]["mode"], "favor_high")
 
+    def test_delete_unknown_item_definition_slug_reports_not_found(self):
+        manifest = """
+kind: itemdefinition
+operation: delete
+metadata:
+  slug: t1-assassin-head
+"""
+
+        response = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(
+            str(response.data[0]),
+            "Item definition with slug 't1-assassin-head' was not found in this world.",
+        )
+
+    def test_delete_rejects_unknown_slug_when_id_is_valid(self):
+        definition = ItemDefinition.objects.create(
+            world=self.world,
+            slug="bronze-sword",
+            name="a bronze sword",
+        )
+        manifest = f"""
+kind: itemdefinition
+operation: delete
+metadata:
+  id: {definition.id}
+  slug: t1-assassin-head
+"""
+
+        response = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(
+            str(response.data[0]),
+            "Item definition with slug 't1-assassin-head' was not found in this world.",
+        )
+        self.assertTrue(
+            ItemDefinition.objects.filter(pk=definition.pk).exists()
+        )
+
     def test_apply_item_definition_manifest_rejects_removed_ground_description(self):
         manifest = f"""
 kind: itemdefinition

@@ -23,6 +23,14 @@ Apply documents in this order when references are new:
 The multi-document endpoint applies documents sequentially. Keep the order
 above so every portable reference exists when it is resolved.
 
+For deletion, reverse the dependent portion of that order: delete crafting
+recipes before deleting their output item definitions. Recipe deletion also
+removes the recipe from crafting profiles. A recipe delete manifest must
+identify an existing recipe; an unknown recipe slug returns a not-found error
+for the selected world, while omitted `id`, `key`, and `slug` metadata returns
+a required-field error. Multi-document deletion is atomic, so any failed
+document rolls back the whole batch.
+
 ## Builder UI
 
 World Config links to the world's Craft Materials, Crafting Recipes, and

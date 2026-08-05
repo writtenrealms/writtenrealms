@@ -97,6 +97,81 @@ spec:
 """
         )
 
+    def test_batch_delete_unknown_recipe_slug_reports_not_found_and_rolls_back(self):
+        self.create_materials()
+        self.create_recipe()
+
+        response = self.apply(
+            """
+kind: craftingrecipe
+operation: delete
+metadata:
+  slug: t2-hoplite-head
+---
+kind: craftingrecipe
+operation: delete
+metadata:
+  slug: t2-assassin-head
+""",
+            expected_status=400,
+        )
+
+        error = str(response.data[0])
+        self.assertEqual(
+            error,
+            "Document 2 (craftingrecipe) failed: Crafting recipe with slug "
+            "'t2-assassin-head' was not found in this world.",
+        )
+        self.assertNotIn("ErrorDetail", error)
+        self.assertTrue(
+            CraftingRecipe.objects.filter(
+                world=self.world,
+                slug="t2-hoplite-head",
+            ).exists()
+        )
+
+    def test_delete_recipe_without_identifier_reports_required_metadata(self):
+        response = self.apply(
+            """
+kind: craftingrecipe
+operation: delete
+metadata: {}
+""",
+            expected_status=400,
+        )
+
+        self.assertIn(
+            "metadata.id, metadata.key, or metadata.slug is required for operation: delete.",
+            str(response.data),
+        )
+
+    def test_delete_recipe_rejects_unknown_slug_when_id_is_valid(self):
+        self.create_materials()
+        self.create_recipe()
+        recipe = CraftingRecipe.objects.get(
+            world=self.world,
+            slug="t2-hoplite-head",
+        )
+
+        response = self.apply(
+            f"""
+kind: craftingrecipe
+operation: delete
+metadata:
+  id: {recipe.id}
+  slug: t2-assassin-head
+""",
+            expected_status=400,
+        )
+
+        self.assertEqual(
+            str(response.data[0]),
+            "Crafting recipe with slug 't2-assassin-head' was not found in this world.",
+        )
+        self.assertTrue(
+            CraftingRecipe.objects.filter(pk=recipe.pk).exists()
+        )
+
     def test_apply_complete_authored_crafting_catalog_and_provider_attachments(self):
         obol = Currency.objects.create(
             world=self.world,

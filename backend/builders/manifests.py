@@ -3639,10 +3639,11 @@ def _resolve_item_definition_reference(
     *,
     world: World,
     metadata: dict[str, Any],
+    require_existing_slug: bool = False,
 ) -> tuple[ItemDefinition | None, int | None]:
     definition_id = metadata.get("id")
     definition_key = metadata.get("key")
-    definition_slug = str(metadata.get("slug") or "").strip()
+    raw_definition_slug = str(metadata.get("slug") or "").strip()
 
     resolved_by_id = None
     if definition_id is not None:
@@ -3663,8 +3664,16 @@ def _resolve_item_definition_reference(
             )
 
     resolved_by_slug = None
-    if definition_slug:
-        resolved_by_slug = ItemDefinition.objects.filter(world=world, slug=definition_slug).first()
+    if raw_definition_slug:
+        definition_slug = _slug_or_error(raw_definition_slug, "metadata.slug")
+        resolved_by_slug = ItemDefinition.objects.filter(
+            world=world,
+            slug=definition_slug,
+        ).first()
+        if require_existing_slug and resolved_by_slug is None:
+            raise serializers.ValidationError(
+                f"Item definition with slug '{definition_slug}' was not found in this world."
+            )
 
     resolved = [item for item in (resolved_by_id, resolved_by_key, resolved_by_slug) if item]
     if len({item.pk for item in resolved}) > 1:
@@ -4139,6 +4148,7 @@ def _resolve_crafting_metadata(
     model,
     prefixes: set[str],
     label: str,
+    require_existing_slug: bool = False,
 ):
     candidates = []
     if metadata.get("id") is not None:
@@ -4161,12 +4171,17 @@ def _resolve_crafting_metadata(
         ))
     raw_slug = str(metadata.get("slug") or "").strip()
     if raw_slug:
+        slug = _slug_or_error(raw_slug, "metadata.slug")
         entity = model.objects.filter(
             world=world,
-            slug=_slug_or_error(raw_slug, "metadata.slug"),
+            slug=slug,
         ).first()
         if entity:
             candidates.append(entity)
+        elif require_existing_slug:
+            raise serializers.ValidationError(
+                f"{label.capitalize()} with slug '{slug}' was not found in this world."
+            )
 
     if len({candidate.pk for candidate in candidates}) > 1:
         raise serializers.ValidationError(
@@ -5256,6 +5271,7 @@ def parse_item_definition_delete_manifest(
     item_definition, item_definition_id = _resolve_item_definition_reference(
         world=world,
         metadata=metadata,
+        require_existing_slug=True,
     )
     if item_definition is None or item_definition_id is None:
         raise serializers.ValidationError(
@@ -6432,6 +6448,7 @@ def parse_crafting_recipe_delete_manifest(
         model=CraftingRecipe,
         prefixes={CRAFTING_RECIPE_MANIFEST_KIND, "crafting_recipe"},
         label="crafting recipe",
+        require_existing_slug=True,
     )
     if recipe is None or recipe_id is None:
         raise serializers.ValidationError(

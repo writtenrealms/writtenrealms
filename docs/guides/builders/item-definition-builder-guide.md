@@ -9,6 +9,15 @@ weapon category. Both filters remain side by side at mobile widths.
 Use `kind: itemdefinition` for one authored item. Use `kind: itembundle` when a
 mob, merchant, or spawn plan should choose from a weighted set of item definitions.
 
+## Deleting Item Definitions
+
+Set `operation: delete` and identify an existing item definition with
+`metadata.id`, `metadata.key`, or `metadata.slug`. An unknown slug reports that
+the item definition was not found in the selected world; omitting every
+identifier reports that an identifier is required. Delete dependent crafting
+recipes and other references first. Multi-document manifest application is
+atomic, so any failed document rolls back earlier deletes in the same batch.
+
 ## Plain Stackable Items
 
 An item definition with no `randomization` creates stable items. Stable,
