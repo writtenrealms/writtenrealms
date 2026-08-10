@@ -1,8 +1,9 @@
 # YAML Manifest Guide
 
 Use **World > Edit** to paste and apply one or more Written Realms YAML
-manifests. Entity detail screens such as Rooms, Mobs, Items, Factions, and
-Abilities also expose canonical YAML that is safe to copy, edit, and apply.
+manifests. **World > Config** and entity detail screens such as Rooms, Mobs,
+Items, Factions, and Abilities also expose canonical YAML that is safe to copy,
+edit, and apply directly.
 
 ## Basic Shape
 

@@ -1,8 +1,10 @@
 # World Config Builder Guide
 
-World config controls the global rules and presentation for a WR2 world. Edit it
-with a `kind: world` manifest in **World > Edit**. The current config can be
-copied from **World > Config**.
+World config controls the global rules and presentation for a WR2 world. Open
+**World > Config** to edit the current canonical `kind: world` YAML directly.
+Use **Copy YAML** to copy the editor contents and **Save YAML** to apply changes
+to the selected world. **World > Edit** remains available for general and
+multi-document manifest workflows.
 
 World config manifests are update-only. Applying a `kind: world` document
 updates the selected world; it does not create or delete worlds.

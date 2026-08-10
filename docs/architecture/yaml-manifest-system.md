@@ -449,12 +449,12 @@ Builder-facing authoring guidance lives in:
 
 ### 1. World Config Screen
 
-In **World > Config**, configuration is read-oriented:
+In **World > Config**, configuration is manifest-oriented:
 
-- all configurable world values are shown read-only
-- the page can reveal the current **World Config YAML**
-- the page supports **Copy Config YAML**
-- edits happen through **World > Edit World** by applying one or more YAML manifests
+- the page loads the current canonical **World YAML** into the shared manifest editor
+- builders can edit, copy, and save the YAML directly
+- saves require exactly one `kind: world` document and reload the canonical YAML
+- **World > Edit World** remains the general editor for other kinds and batches
 
 ### 2. Room Triggers Screen
 
@@ -2225,11 +2225,9 @@ Permission checks are applied when editing via manifest:
 ## How To Edit World Config
 
 1. Open **World > Config**.
-2. Click **Copy Config YAML** (or show YAML and copy manually).
-3. Open **World > Edit World**.
-4. Paste the YAML and edit desired `spec` fields.
-5. Submit manifest.
-6. Verify response indicates `kind: world` and `operation: updated`.
+2. Edit the desired `spec` fields in **World YAML**.
+3. Select **Save YAML**.
+4. Confirm the success message and review the reloaded canonical YAML.
 
 ## How To Add A New Trigger (Builder Workflow)
 

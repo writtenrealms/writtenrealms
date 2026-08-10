@@ -28,80 +28,39 @@
         </div>
       </section>
 
-      <section class="world-data">
-        <div class="section-header">
-          <h2>World Data</h2>
-          <div class="data-actions">
-            <button class="btn-small" @click="copyConfigYaml">COPY YAML</button>
-            <button class="btn-thin" @click="toggleConfigYaml">
-              {{ showConfigYaml ? "HIDE YAML" : "SHOW YAML" }}
-            </button>
-          </div>
+      <section class="world-yaml">
+        <div v-if="isConfigLoading" class="config-state color-text-60" aria-live="polite">
+          Loading World YAML...
         </div>
 
-        <div class="world-data-layout">
-          <div class="manifest-grid">
-            <template v-if="worldSpec">
-              <section
-                v-for="section in manifestSections"
-                :key="section.title"
-                class="manifest-section"
-                :class="{ wide: section.wide }"
-              >
-                <h3>{{ section.title }}</h3>
+        <div v-else-if="configLoadError" class="config-error" role="alert">
+          <div>{{ configLoadError }}</div>
+          <button class="btn-thin" @click="loadConfigYaml">RETRY</button>
+        </div>
 
-                <table v-if="section.tableEntries.length" class="data-table key-value-table manifest-section-table">
-                  <tbody>
-                    <tr v-for="entry in section.tableEntries" :key="entry.key">
-                      <th scope="row">{{ entry.label }}</th>
-                      <td>
-                        <router-link v-if="entry.to" :to="entry.to">
-                          {{ entry.displayValue }}
-                        </router-link>
-                        <ManifestValue v-else :value="entry.value" />
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-
-                <div
-                  v-for="entry in section.stackedEntries"
-                  :key="entry.key"
-                  class="manifest-field"
-                >
-                  <div class="manifest-label">{{ entry.label }}</div>
-                  <div class="manifest-field-value">
-                    <router-link v-if="entry.to" :to="entry.to">
-                      {{ entry.displayValue }}
-                    </router-link>
-                    <template v-else-if="entry.backgroundPreview">
-                      <ManifestValue :value="entry.value" />
-                      <details class="background-preview">
-                        <summary>Preview background</summary>
-                        <img :src="entry.backgroundPreview" :alt="`${entry.label} preview`">
-                      </details>
-                    </template>
-                    <ManifestValue
-                      v-else
-                      :value="entry.value"
-                      :collapse-complex="entry.collapseComplex"
-                    />
-                  </div>
-                </div>
-              </section>
-            </template>
-            <template v-else>
-              <div class="color-text-60">World config is unavailable for this world.</div>
-            </template>
+        <template v-else>
+          <div v-if="configSubmitError" class="config-error submit-error" role="alert">
+            {{ configSubmitError }}
           </div>
 
-          <aside class="config-yaml-panel" v-if="showConfigYaml">
-            <div class="yaml-panel-header">
-              <h3>World YAML</h3>
-            </div>
-            <pre class="config-yaml"><code>{{ configYaml }}</code></pre>
-          </aside>
-        </div>
+          <ManifestYamlEditor
+            v-model="manifestText"
+            :loaded-value="loadedConfigYaml"
+            :is-submitting="isSubmitting"
+            :min-height="500"
+            copy-success-message="World YAML copied."
+            copy-error-message="Unable to copy World YAML to clipboard."
+            textarea-label="World YAML"
+            @save="saveConfigYaml"
+          >
+            <template #header>
+              <h2>World YAML</h2>
+              <div class="color-text-60">
+                Edit the current world configuration manifest.
+              </div>
+            </template>
+          </ManifestYamlEditor>
+        </template>
       </section>
 
       <section class="danger-zone">
@@ -128,19 +87,21 @@
 import { computed, onMounted, ref } from "vue";
 import { useStore } from "vuex";
 import { useRouter, useRoute } from "vue-router";
-import ManifestValue from "@/components/builder/world/ManifestValue.vue";
+import ManifestYamlEditor from "@/components/builder/world/ManifestYamlEditor.vue";
 import { builderRoomIndexRoute, builderZoneIndexRoute } from "@/core/builderRoutes";
+import { applyWorldManifest, manifestApiErrorMessage } from "@/services/manifests";
 
 const store = useStore();
 const router = useRouter();
 const route = useRoute();
 
 const world = computed(() => store.state.builder.world);
-const configPayload = computed(() => store.state.builder.worlds.config);
-const configData = computed(() => configPayload.value?.config || null);
-const configYaml = computed(() => configPayload.value?.yaml || "");
-const worldSpec = computed(() => configPayload.value?.manifest?.spec || null);
-const showConfigYaml = ref(false);
+const manifestText = ref("");
+const loadedConfigYaml = ref("");
+const isConfigLoading = ref(true);
+const isSubmitting = ref(false);
+const configLoadError = ref("");
+const configSubmitError = ref("");
 
 const baseWorld = computed(() => world.value.instance_of || {});
 const isRootWorld = computed(() => !baseWorld.value.id);
@@ -155,25 +116,6 @@ const baseWorldConfigLink = computed(() => ({
   name: "builder_world_config",
   params: { world_id: baseWorld.value.id },
 }));
-
-const roomLinkForKey = (key: string) => {
-  const room = configData.value?.[key];
-  if (!room?.id) return null;
-  return builderRoomIndexRoute(route.params.world_id, room);
-};
-
-const roomDisplayForKey = (key: string, fallback: any) => {
-  const room = configData.value?.[key];
-  if (room?.name) return room.name;
-  return fallback || "(unset)";
-};
-
-const backgroundPreviewSrc = (value: any) => {
-  if (typeof value !== "string") return "";
-  const src = value.trim();
-  if (!src) return "";
-  return src;
-};
 
 const configLinks = computed(() => [
   {
@@ -305,197 +247,85 @@ const configLinks = computed(() => [
 ]);
 
 const visibleConfigLinks = computed(() => {
-  return configLinks.value.filter((link) => !link.rootOnly || isRootWorld.value);
+  return configLinks.value
+    .filter((link) => !link.rootOnly || isRootWorld.value)
+    .sort((left, right) => left.title.localeCompare(right.title));
 });
 
-const manifestGroups = [
-  {
-    title: "Identity",
-    keys: ["name", "short_description", "description", "motd", "is_public", "built_by"],
-  },
-  {
-    title: "Progression",
-    keys: ["starting_level", "max_level", "leveling_curve", "ability_progression"],
-  },
-  {
-    title: "Economy",
-    keys: ["default_currency", "starting_balances"],
-  },
-  {
-    title: "Rooms",
-    keys: ["starting_room", "death_room"],
-  },
-  {
-    title: "Combat",
-    keys: [
-      "combat_resolution_interval",
-      "combat",
-      "death_mode",
-      "death_route",
-      "death_currency",
-      "death_currency_penalty",
-    ],
-    wide: true,
-  },
-  {
-    title: "PvP",
-    keys: ["pvp_mode", "announce_duel_results"],
-  },
-  {
-    title: "Player Rules",
-    keys: [
-      "can_select_faction",
-      "auto_equip",
-      "is_narrative",
-      "players_can_set_title",
-      "non_ascii_names",
-      "globals_enabled",
-      "decay_glory",
-    ],
-  },
-  {
-    title: "Presentation",
-    keys: ["small_background", "large_background"],
-  },
-  {
-    title: "Naming",
-    keys: ["name_exclusions"],
-  },
-  {
-    title: "Stats",
-    keys: ["stats"],
-    wide: true,
-  },
-];
-
-const labelOverrides = {
-  motd: "Message Of The Day",
-  is_public: "Visibility",
-  pvp_mode: "PvP Mode",
-  announce_duel_results: "Announce Duel Results",
-  small_background: "General Lobby Art",
-  large_background: "World Lobby Art",
+const setLoadedConfigYaml = (payload: any) => {
+  loadedConfigYaml.value = payload?.yaml || "";
+  manifestText.value = payload?.yaml || "";
+  configLoadError.value = "";
 };
 
-const labelForKey = (key: string) => {
-  if (labelOverrides[key]) return labelOverrides[key];
-  return key
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-};
-
-const isPlainObject = (value: any) => {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-};
-
-const isEmptyValue = (value: any) => {
-  if (value === null || value === undefined || value === "") return true;
-  if (Array.isArray(value)) return value.length === 0;
-  if (isPlainObject(value)) return Object.keys(value).length === 0;
-  return false;
-};
-
-const isCompactPrimitive = (value: any) => {
-  if (isEmptyValue(value) || typeof value === "number" || typeof value === "boolean") return true;
-  if (typeof value !== "string") return false;
-  return value.length <= 160 && !value.includes("\n");
-};
-
-const isPrimitiveArray = (value: any) => {
-  return Array.isArray(value) && value.every((item) => isCompactPrimitive(item));
-};
-
-const isSimpleSectionEntry = (entry: any) => {
-  if (entry.backgroundPreview || entry.collapseComplex) return false;
-  if (entry.to) return true;
-  if (isCompactPrimitive(entry.value) || isPrimitiveArray(entry.value)) return true;
-  return false;
-};
-
-const entryForKey = (spec: any, key: string) => {
-  const value = spec[key];
-  const entry: any = {
-    key,
-    label: labelForKey(key),
-    value,
-  };
-
-  if (key === "starting_room" || key === "death_room") {
-    entry.to = roomLinkForKey(key);
-    entry.displayValue = roomDisplayForKey(key, value);
-  }
-
-  if (key === "small_background" || key === "large_background") {
-    entry.backgroundPreview = backgroundPreviewSrc(value);
-  }
-
-  if (key === "combat" || key === "stats") {
-    entry.collapseComplex = true;
-  }
-
-  return entry;
-};
-
-const manifestSections = computed(() => {
-  const spec = worldSpec.value;
-  if (!spec) return [];
-
-  const usedKeys = new Set<string>();
-  const sections = manifestGroups
-    .map((group) => {
-      const entries = group.keys
-        .filter((key) => Object.prototype.hasOwnProperty.call(spec, key))
-        .map((key) => {
-          usedKeys.add(key);
-          return entryForKey(spec, key);
-        });
-
-      return {
-        title: group.title,
-        entries,
-        tableEntries: entries.filter(isSimpleSectionEntry),
-        stackedEntries: entries.filter((entry) => !isSimpleSectionEntry(entry)),
-        wide: group.wide,
-      };
-    })
-    .filter((section) => section.entries.length);
-
-  const remainingEntries = Object.keys(spec)
-    .filter((key) => !usedKeys.has(key))
-    .map((key) => entryForKey(spec, key));
-
-  if (remainingEntries.length) {
-    sections.push({
-      title: "Other",
-      entries: remainingEntries,
-      tableEntries: remainingEntries.filter(isSimpleSectionEntry),
-      stackedEntries: remainingEntries.filter((entry) => !isSimpleSectionEntry(entry)),
-      wide: false,
-    });
-  }
-
-  return sections;
-});
-
-onMounted(async () => {
+const loadConfigYaml = async () => {
+  isConfigLoading.value = true;
+  configLoadError.value = "";
+  configSubmitError.value = "";
   store.commit("builder/worlds/config_clear");
-  await store.dispatch("builder/worlds/config_fetch", {
-    world_id: world.value.id,
-  });
-});
 
-const toggleConfigYaml = () => {
-  showConfigYaml.value = !showConfigYaml.value;
-};
-
-const copyConfigYaml = async () => {
   try {
-    await navigator.clipboard.writeText(configYaml.value || "");
-    store.commit("ui/notification_set", "World config YAML copied.");
-  } catch {
-    store.commit("ui/notification_set_error", "Unable to copy YAML to clipboard.");
+    const payload = await store.dispatch("builder/worlds/config_fetch", {
+      world_id: world.value.id,
+    });
+    setLoadedConfigYaml(payload);
+  } catch (error: unknown) {
+    configLoadError.value = manifestApiErrorMessage(
+      error,
+      "Could not load World YAML.",
+    );
+    store.commit("ui/notification_set_error", configLoadError.value);
+  } finally {
+    isConfigLoading.value = false;
   }
 };
+
+const saveConfigYaml = async () => {
+  const submittedYaml = manifestText.value;
+  let saveCompleted = false;
+  isSubmitting.value = true;
+  configSubmitError.value = "";
+
+  try {
+    const response = await applyWorldManifest(
+      world.value.id,
+      submittedYaml,
+      "world",
+    );
+    if (response.kind !== "world" || response.operation !== "updated") {
+      throw new Error("Unexpected world manifest response.");
+    }
+    saveCompleted = true;
+    loadedConfigYaml.value = submittedYaml;
+
+    const [worldRefresh, configRefresh] = await Promise.allSettled([
+      store.dispatch("builder/fetch_world", world.value.id),
+      store.dispatch("builder/worlds/config_fetch", {
+        world_id: world.value.id,
+      }),
+    ]);
+    if (configRefresh.status === "fulfilled") {
+      setLoadedConfigYaml(configRefresh.value);
+    }
+    if (worldRefresh.status === "rejected") throw worldRefresh.reason;
+    if (configRefresh.status === "rejected") throw configRefresh.reason;
+    store.commit("ui/notification_set", "World YAML saved.");
+  } catch (error: unknown) {
+    const fallback = saveCompleted
+      ? "World YAML was saved, but its updated state could not be reloaded. Refresh this page to try again."
+      : error instanceof Error && error.message === "Unexpected world manifest response."
+        ? error.message
+        : "Could not save World YAML.";
+    configSubmitError.value = saveCompleted
+      ? fallback
+      : manifestApiErrorMessage(error, fallback);
+    store.commit("ui/notification_set_error", configSubmitError.value);
+  } finally {
+    isSubmitting.value = false;
+  }
+};
+
+onMounted(loadConfigYaml);
 
 const deleteWorld = async () => {
   const world_id = world.value.id;
@@ -524,22 +354,8 @@ const assignment_link = (assignment) => {
   width: 100%;
 }
 
-.section-header,
-.yaml-panel-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 1rem;
-
-  @media ($mobile-site) {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-}
-
 .config-links,
-.world-data,
+.world-yaml,
 .danger-zone {
   margin-top: 2rem;
 }
@@ -574,10 +390,24 @@ const assignment_link = (assignment) => {
   gap: 0.8rem;
 }
 
-.data-actions {
+.config-state {
+  align-items: center;
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
+  justify-content: center;
+  min-height: 12rem;
+}
+
+.config-error {
+  border: 1px solid $color-form-border;
+  padding: 1rem;
+
+  .btn-thin {
+    margin-top: 0.75rem;
+  }
+}
+
+.submit-error {
+  margin-bottom: 1rem;
 }
 
 .danger-zone {
@@ -588,106 +418,5 @@ const assignment_link = (assignment) => {
     color: $color-text-hex-60;
     margin-bottom: 1rem;
   }
-}
-
-.world-data-layout {
-  display: grid;
-  gap: 1.5rem;
-  min-width: 0;
-}
-
-.manifest-grid {
-  display: grid;
-  gap: 1.5rem;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  min-width: 0;
-}
-
-.manifest-section {
-  border-top: 1px solid $color-background-light-border;
-  min-width: 0;
-  padding: 1.25rem 0;
-
-  &.wide {
-    grid-column: 1 / -1;
-  }
-
-  h3 {
-    color: $color-secondary;
-    margin-bottom: 1rem;
-  }
-}
-
-.manifest-field {
-  margin-bottom: 1.25rem;
-  min-width: 0;
-}
-
-.manifest-section-table + .manifest-field {
-  margin-top: 1.25rem;
-}
-
-.manifest-label {
-  color: $color-text-hex-60;
-  margin-bottom: 0.35rem;
-}
-
-.manifest-field-value {
-  line-height: 1.5;
-  min-width: 0;
-}
-
-.background-preview {
-  margin-top: 0.5rem;
-
-  summary {
-    color: $color-secondary;
-    cursor: pointer;
-    width: fit-content;
-  }
-
-  img {
-    border: 1px solid $color-background-light-border;
-    display: block;
-    margin-top: 0.75rem;
-    max-height: 280px;
-    max-width: 100%;
-    object-fit: contain;
-  }
-}
-
-.config-yaml-panel {
-  border-top: 1px solid $color-background-light-border;
-  min-width: 0;
-  order: -1;
-  padding-top: 1.25rem;
-  width: 100%;
-}
-
-.config-yaml {
-  background: $color-background;
-  border: 1px solid $color-form-border;
-  box-sizing: border-box;
-  margin: 0;
-  max-height: 70vh;
-  overflow: auto;
-  padding: 1rem;
-  white-space: pre;
-  width: 100%;
-
-  code {
-    background: transparent;
-    border: 0;
-    display: block;
-    padding: 0;
-  }
-}
-
-.manifest-section.wide :deep(.manifest-map.root) {
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-}
-
-.manifest-section.wide :deep(.manifest-map.nested) {
-  grid-template-columns: 1fr;
 }
 </style>

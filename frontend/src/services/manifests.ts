@@ -4,6 +4,7 @@ export type BuilderWorldId = string | number;
 export type BuilderEntityId = string | number;
 export type ManifestDocument = Record<string, unknown>;
 export type ManifestResourceKind =
+  | "world"
   | "craftmaterial"
   | "craftingrecipe"
   | "craftingprofile"

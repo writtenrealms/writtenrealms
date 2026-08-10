@@ -11,10 +11,10 @@ There are two related systems:
 - `combat` decides how those numbers become damage, dodge, crits, and
   mitigation.
 
-A newly created world may not show a `combat` block in **World > Config > Copy
-YAML**. That means the builder has not authored any combat overrides yet. The
-runtime still uses the default combat model below, and `spec.combat` only needs
-to be added when the builder wants to tune that model.
+A newly created world may not show a `combat` block in the **World > Config**
+YAML editor. That means the builder has not authored any combat overrides yet.
+The runtime still uses the default combat model below, and `spec.combat` only
+needs to be added when the builder wants to tune that model.
 
 Most builders should only need to tune a few combat values:
 
@@ -46,7 +46,7 @@ for the ability authoring shape.
 
 ## Where To Edit
 
-Open the world config YAML from the builder UI, then edit:
+Open **World > Config**, edit the World YAML, and select **Save YAML**:
 
 ```yaml
 kind: world
@@ -75,9 +75,9 @@ attributes matter heavily, or something in between.
 
 ## Full Default Combat Shape
 
-The runtime normalizes missing combat config against this default shape. Copy
-YAML omits the block until the world has authored combat config; paste only the
-fields you want to change under `spec.combat`.
+The runtime normalizes missing combat config against this default shape. The
+canonical World YAML omits the block until the world has authored combat
+config; add only the fields you want to change under `spec.combat`.
 
 ```yaml
 combat:

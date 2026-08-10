@@ -19,6 +19,7 @@
     <textarea
       ref="textarea"
       :value="currentValue"
+      :disabled="disabled || isSubmitting"
       :aria-label="textareaLabel"
       class="manifest-yaml-editor-input"
       :placeholder="placeholder"
