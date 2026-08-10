@@ -3073,6 +3073,21 @@ class TestBuilderJump(BuilderCommandTestCase):
         self.assertIsNotNone(preparation_state)
         self.assertEqual(preparation_state["data"]["abilities"], [])
 
+    def test_jump_moves_player_to_room_manifest_ref(self):
+        target_room = self.room.create_at("east")
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/jump room@{target_room.relative_id}",
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, target_room.id)
+        message = self._message_by_type(messages, "cmd./jump.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target"]["id"], target_room.id)
+
     def test_jump_moves_player_by_direction(self):
         target_room = self.room.create_at(api_consts.DIRECTION_EAST)
 
@@ -3145,7 +3160,16 @@ class TestBuilderJump(BuilderCommandTestCase):
         self.assertIsNotNone(message)
         self.assertIn("invalid room id", message.get("text", "").lower())
 
-    def test_jump_prefers_template_room_id_over_relative_id_collision(self):
+    def test_jump_rejects_unknown_room_manifest_ref(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/jump room@999999")
+
+        message = self._message_by_type(messages, "cmd./jump.error")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["code"], "invalid_room")
+        self.assertIn("invalid room id or reference", message.get("text", "").lower())
+
+    def test_jump_distinguishes_room_id_from_relative_room_ref_collision(self):
         filler_world = World.objects.create(name="Jump ID filler")
         for index in range(3):
             Room.objects.create(
@@ -3156,7 +3180,7 @@ class TestBuilderJump(BuilderCommandTestCase):
                 z=0,
             )
         target_room = self.room.create_at("east")
-        self.create_imported_room(
+        relative_target = self.create_imported_room(
             name="Colliding relative room",
             relative_id=target_room.id,
             x=self.room.x - 1,
@@ -3169,6 +3193,15 @@ class TestBuilderJump(BuilderCommandTestCase):
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.room_id, target_room.id)
+
+        with capture_game_messages():
+            dispatch_text_command(
+                self.player.id,
+                f"/jump room@{target_room.id}",
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, relative_target.id)
 
     def test_jump_sends_origin_and_destination_notifications(self):
         target_room = self.room.create_at("east")

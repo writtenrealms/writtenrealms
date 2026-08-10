@@ -1924,12 +1924,14 @@ class JumpHandler(CommandHandler):
     builder_only = True
     help = {
         "name": "Jump",
-        "format": "/jump <room_id|direction>",
+        "format": "/jump <room_id|room_ref|direction>",
         "description": (
-            "Instantly move yourself to another room by room ID or adjacent direction."
+            "Instantly move yourself to another room by room ID, room ref, "
+            "or adjacent direction."
         ),
         "examples": [
             "/jump 50201",
+            "/jump room@17",
             "/jump room.50201",
             "/jump east",
             "/jump e",
@@ -1948,9 +1950,9 @@ class JumpHandler(CommandHandler):
                 ctx.publish(
                     {
                         "type": "cmd./jump.error",
-                        "text": "Usage: /jump <room_id|direction>",
+                        "text": "Usage: /jump <room_id|room_ref|direction>",
                         "data": {
-                            "error": "Missing room ID or direction.",
+                            "error": "Missing room ID, room ref, or direction.",
                             "code": "invalid_args",
                         },
                     }

@@ -95,6 +95,7 @@ from worlds.instances import ForcedInstanceExitError, force_exit_instance
 from worlds.models import Room, World, Zone
 from worlds.room_refs import (
     direct_base_world_for_room_reference,
+    parse_room_reference,
     resolve_base_world_room_reference,
     resolve_room_reference,
 )
@@ -3735,9 +3736,19 @@ class JumpAction:
     ) -> ActionResult:
         normalized_selector = (room_selector or "").strip()
         if not normalized_selector:
-            raise ActionError("Usage: /jump <room_id|direction>", code="invalid_args")
+            raise ActionError(
+                "Usage: /jump <room_id|room_ref|direction>",
+                code="invalid_args",
+            )
         jump_direction = _normalize_jump_direction(normalized_selector)
-        room_selector_id = None if jump_direction else _parse_room_selector(normalized_selector)
+        room_reference = (
+            None if jump_direction else parse_room_reference(normalized_selector)
+        )
+        room_selector_id = (
+            None
+            if jump_direction or room_reference is not None
+            else _parse_room_selector(normalized_selector)
+        )
         door_cancellation_events: list[GameEvent] = []
 
         with transaction.atomic():
@@ -3755,15 +3766,36 @@ class JumpAction:
                 raise ActionError("Current room is invalid.", code="invalid_room")
 
             room_world = origin_room.world
-            target_room = (
-                getattr(origin_room, jump_direction, None)
-                if jump_direction
-                else _resolve_room_in_world(room_world, room_selector_id)
-            )
+            if jump_direction:
+                target_room = getattr(origin_room, jump_direction, None)
+            elif room_reference is not None:
+                target_room = resolve_room_reference(
+                    room_world,
+                    normalized_selector,
+                )
+                # ``room.<id>`` historically fell back to a relative room ID
+                # when no world-local database ID matched. Preserve that
+                # compatibility while canonical ``room@<id>`` refs resolve
+                # directly by relative ID.
+                if (
+                    target_room is None
+                    and room_reference.kind == "database_id"
+                ):
+                    target_room = room_world.rooms.filter(
+                        relative_id=room_reference.database_id,
+                    ).first()
+            else:
+                target_room = _resolve_room_in_world(
+                    room_world,
+                    room_selector_id,
+                )
             if not target_room:
                 if jump_direction:
                     raise ActionError("You cannot jump that way.", code="no_exit")
-                raise ActionError("Invalid room ID.", code="invalid_room")
+                raise ActionError(
+                    "Invalid room ID or reference.",
+                    code="invalid_room",
+                )
 
             if target_room.id != origin_room_id:
                 from spawns.actions.doors import (

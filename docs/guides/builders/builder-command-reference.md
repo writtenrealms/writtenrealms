@@ -701,21 +701,24 @@ Use `&&` to chain nested commands on one line:
 Format:
 
 ```text
-/jump <room_id|direction>
+/jump <room_id|room_ref|direction>
 ```
 
 Moves the builder player to another room in the current world. The room can be
-selected by absolute room id, `room.<id>` style key, or a connected direction
-from the current room. A jump that changes rooms runs the destination's
-room-scoped `event: enter` triggers with `event.source: jump`. A directional
-jump supplies `event.direction`; an id/key jump leaves it empty. Jumps bypass
-normal movement policies and do not run the movement-only `after_move_enter`
-compatibility hook. Jumping to the current room emits no arrival.
+selected by absolute room id, stable `room@<relative_id>` ref, legacy
+`room.<id>` style key, or a connected direction from the current room. Room
+refs resolve only within the current authored world. A jump that changes rooms
+runs the destination's room-scoped `event: enter` triggers with
+`event.source: jump`. A directional jump supplies `event.direction`; an
+id/ref/key jump leaves it empty. Jumps bypass normal movement policies and do
+not run the movement-only `after_move_enter` compatibility hook. Jumping to the
+current room emits no arrival.
 
 Examples:
 
 ```text
 /jump 50201
+/jump room@17
 /jump room.50201
 /jump north
 /jump n
