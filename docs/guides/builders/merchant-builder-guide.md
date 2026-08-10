@@ -2,12 +2,15 @@
 
 This guide explains the WR2 merchant model at a builder level.
 
-Merchants are built from two clean WR2 concepts:
+Merchants are built from reusable shop configuration plus an optional physical
+presence:
 
 - `merchantprofile`: the shop configuration, including stock, prices, restock,
   buyback, and funds.
-- `mobdefinition`: the NPC presence in the room. It can point at a merchant
-  profile and can be either attackable or not attackable.
+- `room`: the dependable, fixed-location provider. Attach a profile directly
+  when the shop should always be available there.
+- `mobdefinition`: an optional presence-controlled provider. Use it when a
+  spawned NPC leaving or dying should close the shop.
 
 Merchant stock is not mob inventory. Killing a shopkeeper does not drop the shop
 stock unless you explicitly author drops or death triggers.
@@ -15,6 +18,27 @@ stock unless you explicitly author drops or death triggers.
 The examples use a previously defined `obol` currency. Replace that code with
 the currency defined by your world. See
 [currency-builder-guide.md](currency-builder-guide.md).
+
+## Builder UI
+
+World Config links to the world's Merchant Profiles. The list page shows the
+authored shop configurations for that world and can filter them by funds mode
+or buyback availability. `Add` opens manifest import with starter Merchant
+Profile YAML.
+
+Selecting a profile opens its canonical YAML in an inline editor. Save changes
+there or copy the current YAML for reuse. To remove the profile, copy the
+separate delete manifest, replace the editor contents with it, and save. The
+summary above the editor shows its currency, funds, pricing, restock schedule,
+buyback policy, and stock slots.
+
+Runtime instances inherit Merchant Profiles and show them read-only. Follow the
+source-world link to change the authored profile rather than trying to edit an
+instance.
+
+Room Config includes a **Shop** service selector. Choose a Merchant Profile and
+save to make it available in that room without a mob or Spawn Plan. The room's
+canonical YAML records the same attachment.
 
 ## How It Works
 
@@ -36,7 +60,23 @@ Then create a `merchantprofile`:
   10.
 - `stock`: fixed item-definition slots or item-bundle slots.
 
-Finally, attach the profile to a `mobdefinition`:
+For a fixed-location shop, attach the profile in Room Config or room YAML:
+
+```yaml
+kind: room
+metadata:
+  ref: room@42
+  name: Garron's Smithy
+spec:
+  merchant:
+    profile: merchantprofile.garron-smithy
+```
+
+This automatically exposes the room's **List** and **Offer** actions. A
+decorative mob can still be placed in the room without a Merchant Profile.
+
+When NPC presence should control availability, leave the room attachment blank
+and attach the profile to a `mobdefinition` instead:
 
 ```yaml
 merchant:
@@ -48,15 +88,28 @@ combat:
 
 Use `combat.attackable: true` for a killable shopkeeper.
 
+Use only one attachment for an ordinary shop. Attaching a profile to the room
+and to a local merchant mob creates multiple providers and requires players to
+name the one they intend.
+
 ## Player Commands
 
 Players use:
 
+- `list`, `shop`, or bare `buy` to view numbered stock
+- `offer` or bare `sell` to view numbered inventory the shop can buy
+- `buy <number-or-item>`, `sell <number-or-item>`, and `buyback` when exactly
+  one shop is present
 - `shop <merchant>` or `list <merchant>`
-- `buy <item> from <merchant>`
-- `sell <item> to <merchant>`
+- `offer <merchant>`
+- `buy <number-or-item> from <merchant>`
+- `sell <number-or-item> to <merchant>`
 - `buyback <merchant>`
 - `buyback <item> from <merchant>`
+
+Numbers refer to the most recent `list` or `offer` for that shop and remain
+usable for ten minutes. If an item is bought, moved, or the list expires, the
+player must list again rather than having the number shift to another item.
 
 ## Fixed Inventory Example
 

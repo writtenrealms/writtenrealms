@@ -11,6 +11,12 @@ class ListMerchantStockAction:
         return ActionResult(data=merchants.list_merchant_stock(player, merchant_selector))
 
 
+class ListMerchantOffersAction:
+    def execute(self, player_id: int, merchant_selector: str | None) -> ActionResult:
+        player = Player.objects.get(pk=player_id)
+        return ActionResult(data=merchants.list_merchant_offers(player, merchant_selector))
+
+
 class BuyMerchantItemAction:
     def execute(self, player_id: int, merchant_selector: str | None, item_selector: str | None) -> ActionResult:
         player = Player.objects.get(pk=player_id)

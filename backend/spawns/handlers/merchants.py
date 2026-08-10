@@ -5,6 +5,7 @@ from spawns.actions.merchants import (
     BuyMerchantItemAction,
     BuybackMerchantItemAction,
     ListMerchantBuybackAction,
+    ListMerchantOffersAction,
     ListMerchantStockAction,
     SellMerchantItemAction,
 )
@@ -35,14 +36,48 @@ def _money_text(value: dict | None) -> str:
 def _stock_text(data: dict) -> str:
     merchant = (data.get("merchant") or {}).get("name") or "The merchant"
     stock = data.get("stock") or []
-    if not stock:
-        return f"{merchant} has nothing for sale."
-    lines = [f"{merchant} offers:"]
-    for entry in stock:
-        item = entry.get("item") or {}
-        lines.append(
-            f"{entry.get('id')}. {item.get('name') or 'item'} - "
-            f"{_money_text(entry.get('price'))}")
+    if stock:
+        lines = [f"{merchant} offers:"]
+        for fallback_number, entry in enumerate(stock, start=1):
+            item = entry.get("item") or {}
+            lines.append(
+                f"{entry.get('number') or fallback_number}. "
+                f"{item.get('name') or 'item'} - "
+                f"{_money_text(entry.get('price'))}")
+    else:
+        lines = [f"{merchant} has nothing for sale."]
+    if data.get("truncated"):
+        lines.append(f"Only the first {data.get('limit')} items are shown.")
+    balance = data.get("balance")
+    if balance:
+        lines.append(f"You have {_money_text(balance)}.")
+    hint = str(data.get("hint") or "").strip()
+    if hint:
+        lines.append(hint)
+    return "\n".join(lines)
+
+
+def _offer_text(data: dict) -> str:
+    merchant = (data.get("merchant") or {}).get("name") or "The merchant"
+    offers = data.get("offers") or []
+    if offers:
+        lines = [f"You can sell to {merchant}:"]
+        for fallback_number, entry in enumerate(offers, start=1):
+            item = entry.get("item") or {}
+            lines.append(
+                f"{entry.get('number') or fallback_number}. "
+                f"{item.get('name') or 'item'} - "
+                f"{_money_text(entry.get('price'))}")
+    else:
+        lines = ["You have nothing to sell."]
+    if data.get("truncated"):
+        lines.append(f"Only the first {data.get('limit')} items are shown.")
+    balance = data.get("balance")
+    if balance:
+        lines.append(f"You have {_money_text(balance)}.")
+    hint = str(data.get("hint") or "").strip()
+    if hint:
+        lines.append(hint)
     return "\n".join(lines)
 
 
@@ -60,27 +95,89 @@ def _buyback_text(data: dict) -> str:
     return "\n".join(lines)
 
 
+def _publish_list(ctx: CommandContext, merchant_selector: str | None) -> None:
+    try:
+        result = ListMerchantStockAction().execute(
+            ctx.player.id,
+            merchant_selector,
+        )
+    except ActionError as err:
+        ctx.publish({
+            "type": "cmd.list.error",
+            "text": err.message,
+            "data": {
+                "error": err.message,
+                "code": err.code,
+                **err.data,
+            },
+        })
+        return
+    ctx.publish_success("list", result.data, text=_stock_text(result.data))
+
+
+def _publish_offer(ctx: CommandContext, merchant_selector: str | None) -> None:
+    try:
+        result = ListMerchantOffersAction().execute(
+            ctx.player.id,
+            merchant_selector,
+        )
+    except ActionError as err:
+        ctx.publish({
+            "type": "cmd.offer.error",
+            "text": err.message,
+            "data": {
+                "error": err.message,
+                "code": err.code,
+                **err.data,
+            },
+        })
+        return
+    ctx.publish_success("offer", result.data, text=_offer_text(result.data))
+
+
 @register_handler
-class ShopHandler(CommandHandler):
-    command_type = "shop"
-    text_commands = ("shop", "list")
+class ListHandler(CommandHandler):
+    command_type = "list"
+    text_commands = ("list", "shop")
     help = {
-        "name": "Shop",
-        "format": "shop <merchant> | list <merchant>",
-        "description": "View a merchant's current stock.",
+        "name": "List",
+        "format": "shop [merchant] | list [merchant]",
+        "description": "View a local shop's current stock.",
         "examples": [
+            "shop",
             "shop garron",
             "list blacksmith",
         ],
     }
 
     def handle(self, ctx: CommandContext) -> None:
-        try:
-            result = ListMerchantStockAction().execute(ctx.player.id, _args_text(ctx) or None)
-        except ActionError as err:
-            ctx.publish_error("shop", err.message)
-            return
-        ctx.publish_success("shop", result.data, text=_stock_text(result.data))
+        _publish_list(ctx, _args_text(ctx) or None)
+
+
+@register_handler
+class ShopHandler(ListHandler):
+    """Compatibility route for structured clients still dispatching shop."""
+    command_type = "shop"
+    text_commands = ()
+    help = None
+
+
+@register_handler
+class OfferHandler(CommandHandler):
+    command_type = "offer"
+    text_commands = ("offer",)
+    help = {
+        "name": "Offer",
+        "format": "offer [merchant]",
+        "description": "View inventory items a local shop can buy.",
+        "examples": [
+            "offer",
+            "offer garron",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        _publish_offer(ctx, _args_text(ctx) or None)
 
 
 @register_handler
@@ -89,15 +186,20 @@ class BuyHandler(CommandHandler):
     text_commands = ("buy",)
     help = {
         "name": "Buy",
-        "format": "buy <item> from <merchant>",
+        "format": "buy <item> [from <merchant>]",
         "description": "Buy an item from a merchant.",
         "examples": [
+            "buy sword",
             "buy sword from garron",
         ],
     }
 
     def handle(self, ctx: CommandContext) -> None:
-        item_selector, merchant_selector = _split_on_marker(_args_text(ctx), "from")
+        text = _args_text(ctx)
+        if not text:
+            _publish_list(ctx, None)
+            return
+        item_selector, merchant_selector = _split_on_marker(text, "from")
         try:
             result = BuyMerchantItemAction().execute(
                 ctx.player.id,
@@ -121,15 +223,20 @@ class SellHandler(CommandHandler):
     text_commands = ("sell",)
     help = {
         "name": "Sell",
-        "format": "sell <item> to <merchant>",
+        "format": "sell <item> [to <merchant>]",
         "description": "Sell an inventory item to a merchant.",
         "examples": [
+            "sell dagger",
             "sell dagger to garron",
         ],
     }
 
     def handle(self, ctx: CommandContext) -> None:
-        item_selector, merchant_selector = _split_on_marker(_args_text(ctx), "to")
+        text = _args_text(ctx)
+        if not text:
+            _publish_offer(ctx, None)
+            return
+        item_selector, merchant_selector = _split_on_marker(text, "to")
         try:
             result = SellMerchantItemAction().execute(
                 ctx.player.id,

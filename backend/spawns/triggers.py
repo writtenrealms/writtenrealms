@@ -1325,7 +1325,8 @@ def _collect_display_action_labels(
             continue
 
         action_label = _first_match_label(trigger.match)
-        if not action_label or action_label in seen_labels:
+        normalized_action_label = action_label.casefold() if action_label else ""
+        if not action_label or normalized_action_label in seen_labels:
             continue
 
         if trigger.conditions:
@@ -1343,7 +1344,7 @@ def _collect_display_action_labels(
         if not _is_gate_allowed(trigger, scope_key):
             continue
 
-        seen_labels.add(action_label)
+        seen_labels.add(normalized_action_label)
         labels.append(action_label)
 
     return labels
@@ -1366,6 +1367,12 @@ def get_room_action_labels_for_actor(actor: Player | Mob | None, room: Room | No
 
     # Built-in room capabilities use already-loaded FK ids so serializing a
     # busy room does not add a database query per look.
+    if isinstance(actor, Player) and room.merchant_profile_id:
+        normalized_labels = {label.casefold() for label in labels}
+        for action_label in ("list", "offer"):
+            if action_label not in normalized_labels:
+                labels.append(action_label)
+
     if isinstance(actor, Player) and room.crafting_profile_id:
         normalized_labels = {label.casefold() for label in labels}
         for action_label in ("craft", "salvage"):

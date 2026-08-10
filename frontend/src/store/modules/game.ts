@@ -33,6 +33,13 @@ const TRIGGER_ACCEPTED_MESSAGE = "cmd.trigger.accepted";
 const TRIGGER_COMPLETED_MESSAGE = "cmd.trigger.completed";
 const TRIGGER_CANCELLED_MESSAGE = "cmd.trigger.cancelled";
 const TRIGGER_REJECTED_MESSAGE = "cmd.trigger.rejected";
+const MERCHANT_INVENTORY_ADD_MESSAGES = new Set([
+  "cmd.buy.success",
+  "cmd.buyback.success",
+]);
+const MERCHANT_INVENTORY_REMOVE_MESSAGES = new Set([
+  "cmd.sell.success",
+]);
 
 const commandReceiptTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -576,6 +583,27 @@ const receiveMessage = async ({
     message_data.data
   ) {
     commit("trigger_mobs_changed_apply", message_data.data);
+  }
+
+  if (
+    (MERCHANT_INVENTORY_ADD_MESSAGES.has(message_data.type)
+      || MERCHANT_INVENTORY_REMOVE_MESSAGES.has(message_data.type))
+    && message_data.data
+  ) {
+    const item = message_data.data.item;
+    if (item) {
+      commit("player_inventory_changes_apply", {
+        removed: MERCHANT_INVENTORY_REMOVE_MESSAGES.has(message_data.type)
+          ? [item]
+          : [],
+        added: MERCHANT_INVENTORY_ADD_MESSAGES.has(message_data.type)
+          ? [item]
+          : [],
+      });
+    }
+    if (message_data.data.economy) {
+      commit("player_economy_snapshot_apply", message_data.data.economy);
+    }
   }
 
   if (
@@ -1623,6 +1651,42 @@ const mutations = {
     });
     // Vue.set(state.player, "inventory", inv);
     state.player['inventory'] = inv;
+  },
+
+  player_inventory_changes_apply: (state, payload) => {
+    if (!Array.isArray(state.player?.inventory)) return;
+    applyItemChangesInPlace(
+      state.player.inventory,
+      payload?.removed,
+      payload?.added,
+    );
+  },
+
+  player_economy_snapshot_apply: (state, payload) => {
+    if (!state.player || !payload) return;
+    const incomingRevision = Number(payload.wallet_revision);
+    const currentEconomy = state.player.economy || {
+      wallet_revision: -1,
+      balances: {},
+    };
+    const currentRevision = Number(currentEconomy.wallet_revision ?? -1);
+    if (
+      !Number.isSafeInteger(incomingRevision)
+      || incomingRevision < currentRevision
+    ) {
+      return;
+    }
+    state.player = {
+      ...state.player,
+      economy: {
+        ...currentEconomy,
+        ...payload,
+        balances: {
+          ...(currentEconomy.balances || {}),
+          ...(payload.balances || {}),
+        },
+      },
+    };
   },
 
   trigger_items_changed_apply: (state, payload) => {

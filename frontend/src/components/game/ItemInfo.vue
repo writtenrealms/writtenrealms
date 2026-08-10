@@ -112,7 +112,7 @@
 <script lang='ts' setup>
 import { computed } from "vue";
 import { useStore } from "vuex";
-import { formatMoney } from "@/core/economy.ts";
+import { formatMoneyUppercaseCurrency } from "@/core/economy.ts";
 import { getTargetInGroup } from "@/core/utils.ts";
 import { capfirst } from "@/core/utils.ts";
 import { stackedInventory } from "@/core/utils.ts";
@@ -139,7 +139,9 @@ const resourceLabels = computed(() => world.value?.labels?.resources || {});
 const statLabels = computed(() => world.value?.labels?.stats || {});
 const attributeLabels = computed(() => world.value?.labels?.attributes || {});
 const itemValueDisplay = computed(() => (
-  props.item.value ? formatMoney(props.item.value, world.value?.economy) : ""
+  props.item.value
+    ? formatMoneyUppercaseCurrency(props.item.value, world.value?.economy)
+    : ""
 ));
 
 const ITEM_STAT_LABELS = {

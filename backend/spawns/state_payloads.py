@@ -50,6 +50,7 @@ from spawns.schemas import (
     Equipment as EquipmentSchema,
     Item as ItemSchema,
     MapRoom,
+    MerchantProvider as MerchantProviderSchema,
     QuestIndicator,
     Room as RoomSchema,
     StateSyncData,
@@ -252,6 +253,7 @@ def get_player_with_related(player_id: int) -> Player:
             "world__instance_of",
             "world__instance_of__default_currency",
             "room",
+            "room__merchant_profile",
             "user",
             "config",
             "equipment",
@@ -615,7 +617,7 @@ def serialize_char_from_mob(
         char_type="mob",
         is_elite=getattr(mob, "is_elite", False),
         is_invisible=getattr(mob, "is_invisible", False),
-        is_merchant=hasattr(mob, "merchant_runtime"),
+        is_merchant=bool(mob.definition and mob.definition.merchant_profile_id),
         attackable=getattr(mob, "attackable", True),
         equipment=serialize_equipment(mob.equipment, viewer=viewer) if include_equipment else None,
         actions=actions,
@@ -897,6 +899,15 @@ def serialize_room(
     flags = list(room.flags.values_list("code", flat=True))
     actions = get_room_action_labels_for_actor(viewer, room)
     ds = door_states.get(room.id, {})
+    merchant_provider = None
+    room_profile = room._state.fields_cache.get("merchant_profile")
+    if room.merchant_profile_id:
+        merchant_provider = MerchantProviderSchema(
+            type="room",
+            id=room.id,
+            key=room.key,
+            name=(room_profile.name if room_profile else "") or room.name,
+        )
 
     def _exit_key(room_id: Optional[int]) -> Optional[str]:
         if not room_id:
@@ -914,6 +925,7 @@ def serialize_room(
         inventory=room_inventory,
         chars=chars,
         actions=actions,
+        merchant_provider=merchant_provider,
         x=room.x,
         y=room.y,
         z=room.z,

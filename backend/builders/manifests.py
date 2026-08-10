@@ -5556,6 +5556,20 @@ def _resolve_profile_ref(*, world: World, value: Any, field_name: str) -> Mercha
     raise serializers.ValidationError(f"{field_name} references an unknown merchant profile.")
 
 
+def resolve_merchant_profile_ref(
+    *,
+    world: World,
+    value: Any,
+    field_name: str,
+) -> MerchantProfile:
+    """Resolve a builder-facing Merchant Profile reference in one authored world."""
+    return _resolve_profile_ref(
+        world=world,
+        value=value,
+        field_name=field_name,
+    )
+
+
 def parse_item_bundle_manifest(
     *,
     world: World,
@@ -7602,17 +7616,34 @@ def apply_merchant_profile_manifest(parsed: ParsedMerchantProfileManifest) -> Me
                 setattr(merchant_profile, field_name, value)
             merchant_profile.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
 
+        if generation_changed:
+            from spawns.models import MerchantRuntime
+
+            # Purchases/restocks lock runtime before stock entries. Keep the
+            # same profile -> runtime -> stock order here so replacing slots
+            # cannot deadlock an in-flight merchant action.
+            MerchantRuntime.objects.filter(profile=merchant_profile).update(
+                last_restocked_ts=None,
+                next_restock_ts=None,
+            )
+
         if parsed.stock_slots is not None:
             MerchantStockSlot.objects.filter(profile=merchant_profile).delete()
             for slot in parsed.stock_slots:
                 MerchantStockSlot.objects.create(profile=merchant_profile, **slot)
 
         if generation_changed:
-            from spawns.models import MerchantRuntime
-
-            MerchantRuntime.objects.filter(profile=merchant_profile).update(
-                last_restocked_ts=None,
-                next_restock_ts=None,
+            # Repeat after commit to catch a first lazy room runtime that was
+            # still uncommitted when the in-transaction reset ran. Existing
+            # runtimes stay on the fast bulk path; no authored room/profile
+            # lock is added to gameplay commands.
+            transaction.on_commit(
+                lambda profile_id=merchant_profile.id: (
+                    MerchantRuntime.objects.filter(profile_id=profile_id).update(
+                        last_restocked_ts=None,
+                        next_restock_ts=None,
+                    )
+                )
             )
 
         return merchant_profile

@@ -1,9 +1,20 @@
 import axios from "axios";
 import type { Money } from "@/core/economy.ts";
+import {
+  applyWorldManifest,
+  manifestApiErrorMessage,
+  type BuilderEntityId,
+  type BuilderWorldId,
+  type ManifestApplyResponse,
+  type ManifestBackedDetail,
+} from "@/services/manifests";
 
-export type BuilderWorldId = string | number;
-export type BuilderEntityId = string | number;
-export type ManifestDocument = Record<string, unknown>;
+export type {
+  BuilderEntityId,
+  BuilderWorldId,
+  ManifestBackedDetail,
+  ManifestDocument,
+} from "@/services/manifests";
 
 export interface PaginatedResponse<T> {
   count: number;
@@ -55,13 +66,6 @@ export interface CraftingProfileSummary extends CraftingListEntity {
   recipe_count: number;
 }
 
-export interface ManifestBackedDetail {
-  manifest: ManifestDocument;
-  yaml: string;
-  delete_manifest: ManifestDocument;
-  delete_yaml: string;
-}
-
 export type CraftMaterialDetail = CraftMaterial & ManifestBackedDetail;
 
 export interface CraftingRecipeDetail
@@ -100,7 +104,7 @@ export type CraftingProfileManifestPayload =
   | Omit<CraftingProfileDetail, "model_type" | "modified_ts" | "recipe_count">
   | CraftingManifestEntity;
 
-export interface CraftingManifestApplyResponse {
+export interface CraftingManifestApplyResponse extends ManifestApplyResponse {
   kind: CraftingManifestKind;
   operation: "created" | "updated" | "deleted";
   craft_material?: CraftMaterialManifestPayload;
@@ -171,27 +175,10 @@ export const applyCraftingManifest = async (
   worldId: BuilderWorldId,
   manifest: string,
 ): Promise<CraftingManifestApplyResponse> => {
-  const response = await axios.post<CraftingManifestApplyResponse>(
-    `${worldEndpoint(worldId)}/manifests/apply/`,
-    { manifest },
+  return applyWorldManifest<CraftingManifestApplyResponse>(
+    worldId,
+    manifest,
   );
-  return response.data;
 };
 
-export const craftingApiErrorMessage = (
-  error: unknown,
-  fallbackMessage: string,
-): string => {
-  if (!axios.isAxiosError(error)) return fallbackMessage;
-  const data = error.response?.data;
-  if (!data) return fallbackMessage;
-  if (typeof data === "string") return data;
-  if (Array.isArray(data)) return String(data[0] || fallbackMessage);
-  if (typeof data !== "object") return fallbackMessage;
-
-  const responseData = data as Record<string, unknown>;
-  if (typeof responseData.detail === "string") return responseData.detail;
-  const firstValue = responseData[Object.keys(responseData)[0]];
-  if (Array.isArray(firstValue)) return String(firstValue[0] || fallbackMessage);
-  return typeof firstValue === "string" ? firstValue : fallbackMessage;
-};
+export const craftingApiErrorMessage = manifestApiErrorMessage;

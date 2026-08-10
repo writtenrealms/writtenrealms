@@ -2,8 +2,8 @@
 
 ## Purpose
 
-WR2 needs merchants that behave like authored NPCs in the room without forcing
-shop behavior to be normal mob inventory behavior.
+WR2 needs authored shops that can be exposed by a room or by an NPC without
+forcing shop behavior to be normal room or mob inventory behavior.
 
 This document specifies the target merchant model for WR2, including:
 
@@ -27,17 +27,27 @@ Reference docs:
 
 Separate these concepts:
 
+- merchant provider: the room or NPC through which players reach the shop
 - NPC presence: the person or creature visible in the room
 - combat capability: whether that NPC can be attacked and killed
 - merchant profile: settlement currency, shop stock, prices, restock, buyback,
   and funds
 - runtime stock: concrete item instances currently available for sale
 
-A merchant should usually be an NPC-like room presence with a merchant profile.
-Being a merchant must not imply being killable. Being killable must not imply
-that shop stock becomes corpse loot.
+A fixed-location shop should usually attach its profile directly to the room.
+An NPC attachment is the deliberate alternative when spawn, presence, or death
+should control availability. A room-backed shop may still have decorative mobs;
+those mobs do not need Merchant Profiles. Being a merchant must not imply being
+killable, and being killable must not imply that shop stock becomes corpse loot.
 
-The builder-facing distinction should be simple:
+The builder-facing room attachment is:
+
+```yaml
+merchant:
+  profile: merchantprofile.garron-smithy
+```
+
+The NPC-controlled alternatives remain:
 
 ```yaml
 merchant:
@@ -58,6 +68,7 @@ combat:
 ## Goals
 
 - Let merchants look and target like NPCs in rooms.
+- Let rooms expose dependable shops without mobs or Spawn Plans.
 - Let builders choose whether a shopkeeper is attackable.
 - Keep shop stock separate from normal mob drops and corpse inventory.
 - Support fixed authored stock with direct item definitions.
@@ -82,7 +93,9 @@ combat:
 ### MerchantProfile
 
 `MerchantProfile` is the authored shop configuration. It is world-scoped and
-can be attached to one or more NPC definitions.
+can be attached to rooms or NPC definitions. Reusing a profile reuses its
+configuration, not its mutable ledger: each room or live NPC presence has
+independent stock, funds, and buyback state.
 
 It owns:
 
@@ -206,7 +219,31 @@ Default recommendation:
 - fixed direct stock defaults to `fill_missing`
 - random bundle stock defaults to `reroll_on_restock`
 
-## NPC Attachment
+## Room Attachment
+
+A room can expose one Merchant Profile directly:
+
+```yaml
+kind: room
+metadata:
+  ref: room@42
+  name: Garron's Smithy
+spec:
+  merchant:
+    profile: merchantprofile.garron-smithy
+```
+
+The room is a merchant provider, not a command issuer and not a fake mob. The
+player still initiates commerce commands. A direct attachment is always
+available in that room and automatically exposes the room's shop capability.
+When it is the only local provider, players may omit a merchant selector.
+
+Use one direct profile per room. A large market can use a combined profile. If
+an NPC should mechanically gate the shop, leave the room attachment empty and
+use the NPC attachment instead. Attaching both normally creates an intentional
+multi-provider room and requires explicit selectors.
+
+## Optional NPC Attachment
 
 Merchant behavior is attached to an NPC definition with a `merchant.profile`
 reference.
@@ -282,11 +319,12 @@ Behavior:
 
 ### MerchantRuntime
 
-`MerchantRuntime` is the live shop state for one active merchant presence.
+`MerchantRuntime` is the live shop state for one active room or NPC provider.
 
 It should track:
 
-- merchant presence key/id
+- provider type plus room or mob key/id
+- live runtime world
 - merchant profile key/id
 - active/inactive status
 - last restocked timestamp
@@ -297,6 +335,10 @@ It should track:
 - buyback entries
 
 The runtime row is canonical mutable state, not a derived display cache.
+Room-backed runtimes are unique by live runtime world and authored room because
+one authored room can be shared by many parallel runs. They are initialized
+lazily on the first merchant interaction; room Look never creates stock or
+performs restocking.
 
 ### MerchantStockEntry
 
@@ -440,15 +482,29 @@ builders.
 
 Recommended player commands:
 
+- `list`, `shop`, or bare `buy` to view numbered stock when exactly one
+  provider is available
+- `offer` or bare `sell` to view numbered eligible inventory when exactly one
+  provider is available
+- `buy <number-or-item>`, `sell <number-or-item>`, and `buyback` when exactly
+  one provider is available
 - `shop <merchant>` or `list <merchant>`
-- `buy <item> from <merchant>`
-- `sell <item> to <merchant>`
+- `offer <merchant>`
+- `buy <number-or-item> from <merchant>`
+- `sell <number-or-item> to <merchant>`
 - `buyback <merchant>`
 - `buyback <item> from <merchant>`
+
+Numbered selectors resolve through the player's most recent bounded LIST or
+OFFER snapshot for that merchant, retained for ten minutes. The snapshot stores
+stable entry/item ids so another player's purchase cannot silently shift
+`buy 1` onto a different item; missing, expired, or no-longer-valid selections
+fail closed and ask the player to list again.
 
 Recommended actions:
 
 - `ListMerchantStockAction(player_id, merchant_id)`
+- `ListMerchantOffersAction(player_id, merchant_id)`
 - `BuyMerchantItemAction(player_id, merchant_id, stock_entry_id)`
 - `SellMerchantItemAction(player_id, merchant_id, item_id)`
 - `BuybackMerchantItemAction(player_id, merchant_id, buyback_entry_id)`
@@ -456,7 +512,7 @@ Recommended actions:
 
 Planning should reject merchant commands when:
 
-- the merchant is not present
+- no merchant provider is available, or an explicit selector is ambiguous
 - the merchant profile is inactive
 - the merchant NPC is dead and availability requires `alive_and_present`
 - the requested item is not available
@@ -482,12 +538,12 @@ Recommended event types:
 - `merchant.restocked`
 - `merchant.unavailable`
 
-Player-facing command events can still use `cmd.buy.*`, `cmd.sell.*`, and
-`cmd.buyback.*` wrappers if that fits the current frontend console pipeline.
+Player-facing command events use `cmd.list.*`, `cmd.offer.*`, `cmd.buy.*`,
+`cmd.sell.*`, and `cmd.buyback.*` wrappers for the frontend console pipeline.
 The domain event should still exist so downstream systems, analytics, quests,
 and triggers do not need to parse command text.
 
-## Death Behavior
+## NPC Death Behavior
 
 Killing a merchant NPC affects the merchant runtime, not the merchant profile.
 
@@ -534,6 +590,9 @@ runtime state. It is import tooling, not a permanent compatibility layer.
 ## Validation Rules
 
 - `MerchantProfile` slugs are unique per world.
+- A room has at most one direct Merchant Profile.
+- A room-backed runtime is unique per live runtime world and authored room.
+- A runtime has exactly one host: room or mob.
 - A stock slot must define exactly one source: `item_definition` or
   `item_bundle`.
 - `count` must be greater than zero.
@@ -558,6 +617,7 @@ runtime state. It is import tooling, not a permanent compatibility layer.
 - Support direct `ItemDefinition` stock slots.
 - Support `ItemBundle` stock slots.
 - Attach merchant profiles to mob definitions.
+- Attach merchant profiles directly to rooms.
 - Add `combat.attackable` to mob definition authoring.
 
 ### Phase 2: Runtime Tables
@@ -584,6 +644,7 @@ runtime state. It is import tooling, not a permanent compatibility layer.
 ### Phase 5: Builder UX And Cleanup
 
 - Add structured merchant profile UI.
+- Add a Room Config service selector for direct room shops.
 - Add stock slot editor with direct item and item bundle selectors.
 - Add buyback and funds controls.
 - Add optional one-way conversion tooling for old merchant content.

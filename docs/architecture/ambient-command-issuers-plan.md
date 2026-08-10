@@ -36,6 +36,10 @@ This plan remains directional, but several pieces are now implemented:
 - `/load` supports player, mob, and room actors. Player and mob actors load
   items into their own inventory; room actors load items onto the room floor.
   Mob and room usage is script-source gated.
+- A room-attached Merchant Profile makes the room a commerce provider, not an
+  ambient issuer. The player still issues `shop`, `buy`, `sell`, and `buyback`;
+  mutable stock remains in a runtime-world-scoped merchant ledger rather than
+  room inventory or `/load` state.
 - `/grantitem <target> <item>` supports builder player, mob, and room issuers.
   It resolves a player or mob target in the issuer's current room and loads the
   item into that target's inventory. Mob and room usage is script-source gated.

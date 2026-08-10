@@ -1631,6 +1631,11 @@ class Room(AdventWorldBaseModel):
         on_delete=models.SET_NULL,
         related_name='rooms',
         **optional)
+    merchant_profile = models.ForeignKey(
+        'builders.MerchantProfile',
+        on_delete=models.SET_NULL,
+        related_name='rooms',
+        **optional)
 
     name = models.TextField()
     description = models.TextField(**optional)

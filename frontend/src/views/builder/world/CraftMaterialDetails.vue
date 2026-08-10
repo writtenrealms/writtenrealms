@@ -1,5 +1,5 @@
 <template>
-  <CraftingManifestDetails
+  <ManifestResourceDetails
     :world-id="worldId"
     :resource-id="materialId"
     resource-label="craft material"
@@ -26,14 +26,14 @@
       </p>
       <div v-else class="definition-description color-text-60">No description.</div>
     </template>
-  </CraftingManifestDetails>
+  </ManifestResourceDetails>
 </template>
 
 <script lang="ts" setup>
 import { computed } from "vue";
 import { useRoute } from "vue-router";
 import { useStore } from "vuex";
-import CraftingManifestDetails from "@/components/builder/world/CraftingManifestDetails.vue";
+import ManifestResourceDetails from "@/components/builder/world/ManifestResourceDetails.vue";
 import { fetchCraftMaterial } from "@/services/crafting";
 
 const route = useRoute();

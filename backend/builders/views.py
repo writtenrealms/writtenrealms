@@ -1944,6 +1944,18 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             "You do not have permission to alter item definitions."
         )
 
+    def _assert_can_edit_merchant_profiles(self):
+        if self.world.instance_of_id:
+            raise serializers.ValidationError(
+                "Merchant profiles are inherited from the base world and "
+                "cannot be altered on an instance world."
+            )
+        if self._builder_rank >= 3:
+            return
+        raise drf_exceptions.PermissionDenied(
+            "You do not have permission to alter merchant profiles."
+        )
+
     def _assert_can_edit_mob_definitions(self):
         if self._builder_rank >= 3:
             return
@@ -2404,7 +2416,7 @@ class WorldManifestApplyView(BaseWorldBuilderView):
         )
 
     def _apply_merchant_profile_manifest(self, manifest):
-        self._assert_can_edit_item_definitions()
+        self._assert_can_edit_merchant_profiles()
         operation = builder_manifests.parse_manifest_operation(manifest)
         if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
             parsed_delete = builder_manifests.parse_merchant_profile_delete_manifest(
@@ -3315,12 +3327,40 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             status=status.HTTP_200_OK,
         )
 
+    def _assert_expected_manifest_kind(self, manifests, expected_kind):
+        if expected_kind is None:
+            return
+        if not isinstance(expected_kind, str) or not expected_kind.strip():
+            raise serializers.ValidationError({
+                "expected_kind": ["Expected kind must be a non-empty string."],
+            })
+
+        expected_kind = expected_kind.strip().lower()
+        if len(manifests) != 1:
+            raise serializers.ValidationError({
+                "manifest": [
+                    f"Expected exactly one {expected_kind} YAML document."
+                ],
+            })
+
+        actual_kind = builder_world_export.parse_document_kind(manifests[0])
+        if actual_kind != expected_kind:
+            raise serializers.ValidationError({
+                "manifest": [
+                    f"Expected kind {expected_kind}, got {actual_kind}."
+                ],
+            })
+
     def post(self, request, world_pk, format=None):
         manifest_text = request.data.get("manifest")
         if manifest_text is None:
             raise serializers.ValidationError({"manifest": ["This field is required."]})
 
         manifests = builder_manifests.load_yaml_documents(manifest_text)
+        self._assert_expected_manifest_kind(
+            manifests,
+            request.data.get("expected_kind"),
+        )
         if (
             manifests
             and builder_world_export.parse_document_kind(manifests[0])
@@ -3491,33 +3531,98 @@ room_detail_detail = RoomDetailViewSet.as_view({
 
 class RoomConfig(BaseWorldBuilderView):
 
+    @staticmethod
+    def _merchant_profile_reference(profile):
+        if profile is None:
+            return None
+        return {
+            'id': profile.id,
+            'key': profile.key,
+            'slug': profile.slug,
+            'name': profile.name,
+        }
+
+    def _can_edit(self, room):
+        try:
+            _assert_can_edit_room(view=self, room=room)
+        except drf_exceptions.PermissionDenied:
+            return False
+        return True
+
+    def _response_payload(self, room):
+        profile_world = definition_world(room.world)
+        return {
+            'has_instances': room.world.instances.exists(),
+            'can_edit': self._can_edit(room),
+            'merchant_profile': self._merchant_profile_reference(
+                room.merchant_profile,
+            ),
+            'merchant_profile_world': ReferenceField().to_representation(
+                profile_world,
+            ),
+            'transfer_to': ReferenceField().to_representation(
+                room.transfer_to) if room.transfer_to else None,
+            'transfer_to_world': ReferenceField().to_representation(
+                room.transfer_to.world) if room.transfer_to else None,
+        }
+
     def get(self, request, world_pk, pk, format=None):
         room = generics.get_object_or_404(
-            Room.objects.filter(world=self.world),
+            Room.objects.filter(world=self.world).select_related(
+                'merchant_profile',
+                'transfer_to__world',
+                'world__instance_of',
+            ),
             id=pk)
 
-        return Response({
-            'has_instances': room.world.instances.count() > 0,
-            'transfer_to': ReferenceField().to_representation(
-                room.transfer_to) if room.transfer_to else None,
-            'transfer_to_world': ReferenceField().to_representation(
-                room.transfer_to.world) if room.transfer_to else None,
-        })
+        return Response(self._response_payload(room))
 
     def patch(self, request, world_pk, pk, format=None):
-        room = generics.get_object_or_404(
-            Room.objects.filter(world=self.world),
-            id=pk)
-        if 'transfer_to' in request.data:
-            room.transfer_to_id = request.data['transfer_to']
-            room.save(update_fields=['transfer_to'])
-            room.update_live_instances()
-        return Response({
-            'transfer_to': ReferenceField().to_representation(
-                room.transfer_to) if room.transfer_to else None,
-            'transfer_to_world': ReferenceField().to_representation(
-                room.transfer_to.world) if room.transfer_to else None,
-        })
+        with transaction.atomic():
+            room = generics.get_object_or_404(
+                Room.objects.select_for_update(of=('self',)).filter(
+                    world=self.world,
+                ).select_related(
+                    'merchant_profile',
+                    'transfer_to__world',
+                    'world__instance_of',
+                ),
+                id=pk,
+            )
+            _assert_can_edit_room(view=self, room=room)
+
+            update_fields = []
+            merchant_changed = False
+            if 'transfer_to' in request.data:
+                room.transfer_to_id = request.data['transfer_to']
+                update_fields.append('transfer_to')
+
+            if 'merchant_profile' in request.data:
+                raw_profile = request.data['merchant_profile']
+                if raw_profile in (None, ''):
+                    merchant_profile = None
+                else:
+                    merchant_profile = builder_manifests.resolve_merchant_profile_ref(
+                        world=definition_world(room.world),
+                        value=raw_profile,
+                        field_name='merchant_profile',
+                    )
+                merchant_changed = room.merchant_profile_id != (
+                    merchant_profile.id if merchant_profile else None
+                )
+                room.merchant_profile = merchant_profile
+                update_fields.append('merchant_profile')
+
+            if update_fields:
+                room.save(update_fields=[*dict.fromkeys(update_fields), 'modified_ts'])
+                room.update_live_instances()
+
+            if merchant_changed:
+                from spawns.merchants import invalidate_room_merchant_runtimes
+
+                invalidate_room_merchant_runtimes(room)
+
+        return Response(self._response_payload(room))
 
 room_config = RoomConfig.as_view()
 

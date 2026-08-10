@@ -338,6 +338,14 @@ class RoomQuestCallout(BaseModel):
     command: str = "inspect"
 
 
+class MerchantProvider(BaseModel):
+    """One merchant presence available from the current room."""
+    type: Literal["mob", "room"]
+    id: int
+    key: str
+    name: str
+
+
 class MapRoom(BaseModel):
     """
     Simplified room data for the minimap.
@@ -382,6 +390,7 @@ class Room(BaseModel):
     inventory: List[Item] = Field(default_factory=list)
     chars: List[Char] = Field(default_factory=list)
     actions: List[str] = Field(default_factory=list)
+    merchant_provider: Optional[MerchantProvider] = None
 
     # Coordinates
     x: int = 0

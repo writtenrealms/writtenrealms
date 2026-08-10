@@ -1,5 +1,5 @@
 <template>
-  <CraftingManifestDetails
+  <ManifestResourceDetails
     :world-id="worldId"
     :resource-id="profileId"
     resource-label="crafting profile"
@@ -38,14 +38,14 @@
         </details>
       </div>
     </template>
-  </CraftingManifestDetails>
+  </ManifestResourceDetails>
 </template>
 
 <script lang="ts" setup>
 import { computed } from "vue";
 import { useRoute } from "vue-router";
 import { useStore } from "vuex";
-import CraftingManifestDetails from "@/components/builder/world/CraftingManifestDetails.vue";
+import ManifestResourceDetails from "@/components/builder/world/ManifestResourceDetails.vue";
 import { fetchCraftingProfile } from "@/services/crafting";
 
 const route = useRoute();

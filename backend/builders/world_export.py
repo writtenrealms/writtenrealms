@@ -613,6 +613,16 @@ def _serialize_room_manifest(room: Room) -> dict[str, Any]:
             ],
             **(
                 {
+                    "merchant": {
+                        "profile": (
+                            f"{_MERCHANT_PROFILE_REF_PREFIX}{room.merchant_profile.slug}"
+                        ),
+                    },
+                }
+                if room.merchant_profile_id else {}
+            ),
+            **(
+                {
                     "crafting": {
                         "profile": (
                             f"{_CRAFTING_PROFILE_REF_PREFIX}{room.crafting_profile.slug}"
@@ -2095,6 +2105,7 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             "west",
             "up",
             "down",
+            "merchant_profile",
             "crafting_profile",
         ).order_by("z", "y", "x", "id")
     )
@@ -3433,7 +3444,8 @@ def _find_placeholder_room(
     if get_initial_state_snapshot(STATE_SCOPE_ROOM, room):
         return None
     if (
-        room.crafting_profile_id
+        room.merchant_profile_id
+        or room.crafting_profile_id
         or room.enters_instance_id
         or room.transfer_to_id
         or room.exits_to_id
@@ -4674,6 +4686,30 @@ def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room
     )
     created = existing is None
 
+    profile_world = world.instance_of or world
+
+    merchant_profile = None
+    update_merchant = "merchant" in spec
+    if update_merchant:
+        merchant = spec.get("merchant")
+        if merchant in (None, ""):
+            merchant = {}
+        if not isinstance(merchant, dict):
+            raise serializers.ValidationError("spec.merchant must be a mapping.")
+        unknown_merchant_fields = sorted(set(merchant.keys()) - {"profile"})
+        if unknown_merchant_fields:
+            raise serializers.ValidationError(
+                "Unsupported spec.merchant field(s): "
+                f"{', '.join(unknown_merchant_fields)}."
+            )
+        profile_ref = merchant.get("profile")
+        if profile_ref not in (None, ""):
+            merchant_profile = builder_manifests.resolve_merchant_profile_ref(
+                world=profile_world,
+                value=profile_ref,
+                field_name="spec.merchant.profile",
+            )
+
     crafting_profile = None
     update_crafting = "crafting" in spec
     if update_crafting:
@@ -4691,7 +4727,7 @@ def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room
         profile_ref = crafting.get("profile")
         if profile_ref not in (None, ""):
             crafting_profile = builder_manifests.resolve_crafting_profile_ref(
-                world=world,
+                world=profile_world,
                 value=profile_ref,
                 field_name="spec.crafting.profile",
             )
@@ -4754,9 +4790,21 @@ def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room
                 f"{_room_ref(coordinate_owner)}."
             )
         room.x, room.y, room.z = x, y, z
+        merchant_changed = (
+            update_merchant
+            and room.merchant_profile_id
+            != (merchant_profile.id if merchant_profile else None)
+        )
+        if update_merchant:
+            room.merchant_profile = merchant_profile
         if update_crafting:
             room.crafting_profile = crafting_profile
         room.save()
+
+        if merchant_changed:
+            from spawns.merchants import invalidate_room_merchant_runtimes
+
+            invalidate_room_merchant_runtimes(room)
 
         if "initial_state" in spec or created:
             replace_initial_state_snapshot(

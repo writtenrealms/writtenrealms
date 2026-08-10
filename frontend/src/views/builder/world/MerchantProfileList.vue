@@ -1,12 +1,12 @@
 <template>
-  <div v-if="store.state.builder.world.instance_of.id">
+  <div v-if="isInstanceWorld">
     <h2 class="mb-4">MERCHANT PROFILES</h2>
     <p>The merchant profiles of an instance are inherited from the parent world:</p>
     <p>
       <router-link
-        :to="{ name: 'builder_merchant_profile_list', params: { world_id: store.state.builder.world.instance_of.id } }"
+        :to="{ name: 'builder_merchant_profile_list', params: { world_id: inheritedWorld.id } }"
       >
-        {{ store.state.builder.world.instance_of.name }} Merchant Profiles
+        {{ inheritedWorld.name }} Merchant Profiles
       </router-link>
     </p>
   </div>
@@ -19,41 +19,50 @@
     :endpoint="endpoint"
     :resolve_route="resolveRoute"
     filter-display="dropdown"
+    mobile-filter-row
     table-variant="data"
     default-sort="-modified_ts"
+    :exclude_add="!canManage"
     @add="onClickAdd"
   />
 </template>
 
 <script lang="ts" setup>
-import { useRoute, useRouter } from "vue-router";
+import { computed } from "vue";
+import { useRouter } from "vue-router";
 import { useStore } from "vuex";
 import ElementList from "@/components/elementlist/ElementList.vue";
 import { formatRelativeModifiedDate } from "@/core/utils.ts";
+import { merchantProfileListEndpoint } from "@/services/merchants";
 
 const store = useStore();
-const route = useRoute();
 const router = useRouter();
+const inheritedWorld = computed(() => store.state.builder.world.instance_of || {});
+const isInstanceWorld = computed(() => Boolean(inheritedWorld.value.id));
+const worldId = computed(() => store.state.builder.world.id);
+const canManage = computed(() => (
+  !isInstanceWorld.value
+  && Number(store.state.builder.world?.builder_info?.builder_rank || 0) > 2
+));
+const endpoint = computed(() => merchantProfileListEndpoint(worldId.value));
 
-const endpoint = `/builder/worlds/${route.params.world_id}/merchantprofiles/`;
-
-const resolveRoute = element => {
+const resolveRoute = (element: any) => {
   return {
     name: "builder_merchant_profile_details",
     params: {
-      world_id: store.state.builder.world.id,
+      world_id: worldId.value,
       merchant_profile_id: element.id,
     },
   };
 };
 
-const formatBoolean = value => value ? "Yes" : "No";
-const formatFundsMode = value => {
+const formatBoolean = (value: unknown) => value ? "Yes" : "No";
+const formatFundsMode = (value: unknown) => {
   if (value === "finite") return "Finite";
   if (value === "unlimited") return "Unlimited";
   return value || "";
 };
-const formatRestock = value => {
+const formatRestock = (value: unknown) => {
   if (!value) return "Manual";
   const seconds = Number(value);
   if (!Number.isFinite(seconds)) return value;
@@ -64,17 +73,31 @@ const formatRestock = value => {
 
 const listSchema: any[] = [
   { name: "id", label: "ID", sortable: true },
-  { name: "name", label: "Name", nowrap: true, sortable: true },
+  { name: "name", label: "Name", nowrap: true, sortable: true, mobileHidden: true },
   { name: "slug", label: "Slug", nowrap: true, sortable: true },
-  { name: "stock_count", label: "Stock", light: true },
-  { name: "funds_mode", label: "Funds", light: true, sortable: true, format: formatFundsMode },
-  { name: "buyback_enabled", label: "Buyback", light: true, format: formatBoolean },
+  { name: "stock_count", label: "Stock", light: true, mobileHidden: true },
+  {
+    name: "funds_mode",
+    label: "Funds",
+    light: true,
+    sortable: true,
+    format: formatFundsMode,
+    mobileHidden: true,
+  },
+  {
+    name: "buyback_enabled",
+    label: "Buyback",
+    light: true,
+    format: formatBoolean,
+    mobileHidden: true,
+  },
   {
     name: "restock_interval_seconds",
     label: "Restock",
     light: true,
     sortable: true,
     format: formatRestock,
+    mobileHidden: true,
   },
   {
     name: "modified_ts",
@@ -108,7 +131,7 @@ const onClickAdd = () => {
   router.push({
     name: "builder_world_edit",
     params: {
-      world_id: store.state.builder.world.id,
+      world_id: worldId.value,
     },
     query: {
       prefill: "new-merchant-profile",

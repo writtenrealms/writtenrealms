@@ -76,6 +76,7 @@ const playerSidebar: DefaultTheme.SidebarItem[] = [
   { text: "Combat", link: "/players/combat" },
   { text: "Duels", link: "/players/duels" },
   { text: "Currencies", link: "/players/currencies" },
+  { text: "Merchants", link: "/players/merchants" },
   { text: "Crafting", link: "/players/crafting-player-guide" },
   { text: "Socials", link: "/players/socials" },
 ];

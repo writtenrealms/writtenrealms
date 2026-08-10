@@ -68,6 +68,64 @@ export const formatMoney = (
   return label ? `${money.amount} ${label}` : String(money.amount);
 };
 
+const replaceCurrencyLabel = (display: string, label: string): string => {
+  if (!label) return display;
+  const normalizedDisplay = display.toLocaleLowerCase();
+  const normalizedLabel = label.toLocaleLowerCase();
+  const isTokenCharacter = (value: string) => /[\p{L}\p{N}_]/u.test(value);
+  let searchFrom = normalizedDisplay.length;
+
+  while (searchFrom >= 0) {
+    const start = normalizedDisplay.lastIndexOf(normalizedLabel, searchFrom);
+    if (start === -1) return display;
+    const end = start + label.length;
+    const hasLeftBoundary = (
+      !isTokenCharacter(label[0])
+      || !isTokenCharacter(display[start - 1] || "")
+    );
+    const hasRightBoundary = (
+      !isTokenCharacter(label[label.length - 1])
+      || !isTokenCharacter(display[end] || "")
+    );
+    if (hasLeftBoundary && hasRightBoundary) {
+      return [
+        display.slice(0, start),
+        display.slice(start, end).toUpperCase(),
+        display.slice(end),
+      ].join("");
+    }
+    searchFrom = start - 1;
+  }
+
+  return display;
+};
+
+export const formatMoneyUppercaseCurrency = (
+  money: Money,
+  economy?: EconomyCatalog | null,
+): string => {
+  const code = String(money.currency || "").trim();
+  const definition = economy?.currencies?.[code];
+  const label = displayName(definition, code, money.amount);
+  const authoredDisplay = money.display?.trim();
+  if (authoredDisplay) {
+    const labels = [
+      definition?.plural_name?.trim(),
+      definition?.name?.trim(),
+      code,
+    ]
+      .filter((candidate): candidate is string => Boolean(candidate))
+      .sort((left, right) => right.length - left.length);
+    for (const candidate of labels) {
+      const updatedDisplay = replaceCurrencyLabel(authoredDisplay, candidate);
+      if (updatedDisplay !== authoredDisplay) return updatedDisplay;
+    }
+    return authoredDisplay;
+  }
+
+  return label ? `${money.amount} ${label.toUpperCase()}` : String(money.amount);
+};
+
 export const walletBalanceEntries = (
   economy?: EconomyCatalog | null,
   wallet?: PlayerEconomy | null,

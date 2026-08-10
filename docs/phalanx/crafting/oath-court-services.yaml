@@ -1,0 +1,577 @@
+# Phalanx world 23 Oath Court class services.
+# Apply after T1-T3 remort gear, shared craft materials, all remort T2/T3
+# recipes, and both T2/T3 salvage overlay files. T1 shops are attached
+# directly to their exchange rooms; the inactive Spawn Plan at the end is
+# retained only for builders who want the decorative quartermasters present.
+apiVersion: v1alpha1
+kind: merchantprofile
+metadata:
+  world: world.23
+  slug: warlord-t1-outfitter
+  name: Warlord Field Outfitter
+spec:
+  notes: T1 Warlord field gear for the Oath Court.
+  settlement_currency: obol
+  pricing:
+    sell_markup: 1.0
+    buy_multiplier: 0.2
+  restock:
+    interval_seconds: 300
+  funds:
+    mode: unlimited
+  buyback:
+    enabled: true
+    max_items: 10
+    expires: on_restock
+  stock:
+    - key: t1-warlord-head
+      item_definition: itemdefinition.t1-warlord-head
+      count: 1
+      refresh: fill_missing
+    - key: t1-warlord-body
+      item_definition: itemdefinition.t1-warlord-body
+      count: 1
+      refresh: fill_missing
+    - key: t1-warlord-arms
+      item_definition: itemdefinition.t1-warlord-arms
+      count: 1
+      refresh: fill_missing
+    - key: t1-warlord-hands
+      item_definition: itemdefinition.t1-warlord-hands
+      count: 1
+      refresh: fill_missing
+    - key: t1-warlord-waist
+      item_definition: itemdefinition.t1-warlord-waist
+      count: 1
+      refresh: fill_missing
+    - key: t1-warlord-legs
+      item_definition: itemdefinition.t1-warlord-legs
+      count: 1
+      refresh: fill_missing
+    - key: t1-warlord-feet
+      item_definition: itemdefinition.t1-warlord-feet
+      count: 1
+      refresh: fill_missing
+    - key: t1-warlord-war-spear
+      item_definition: itemdefinition.t1-warlord-war-spear
+      count: 1
+      refresh: fill_missing
+---
+apiVersion: v1alpha1
+kind: merchantprofile
+metadata:
+  world: world.23
+  slug: tidecaller-t1-outfitter
+  name: Tidecaller Field Outfitter
+spec:
+  notes: T1 Tidecaller field gear for the Oath Court.
+  settlement_currency: obol
+  pricing:
+    sell_markup: 1.0
+    buy_multiplier: 0.2
+  restock:
+    interval_seconds: 300
+  funds:
+    mode: unlimited
+  buyback:
+    enabled: true
+    max_items: 10
+    expires: on_restock
+  stock:
+    - key: t1-tidecaller-head
+      item_definition: itemdefinition.t1-tidecaller-head
+      count: 1
+      refresh: fill_missing
+    - key: t1-tidecaller-body
+      item_definition: itemdefinition.t1-tidecaller-body
+      count: 1
+      refresh: fill_missing
+    - key: t1-tidecaller-arms
+      item_definition: itemdefinition.t1-tidecaller-arms
+      count: 1
+      refresh: fill_missing
+    - key: t1-tidecaller-hands
+      item_definition: itemdefinition.t1-tidecaller-hands
+      count: 1
+      refresh: fill_missing
+    - key: t1-tidecaller-waist
+      item_definition: itemdefinition.t1-tidecaller-waist
+      count: 1
+      refresh: fill_missing
+    - key: t1-tidecaller-legs
+      item_definition: itemdefinition.t1-tidecaller-legs
+      count: 1
+      refresh: fill_missing
+    - key: t1-tidecaller-feet
+      item_definition: itemdefinition.t1-tidecaller-feet
+      count: 1
+      refresh: fill_missing
+    - key: t1-tidecaller-trident
+      item_definition: itemdefinition.t1-tidecaller-trident
+      count: 1
+      refresh: fill_missing
+---
+apiVersion: v1alpha1
+kind: merchantprofile
+metadata:
+  world: world.23
+  slug: mystic-t1-outfitter
+  name: Mystic Field Outfitter
+spec:
+  notes: T1 Mystic field gear for the Oath Court.
+  settlement_currency: obol
+  pricing:
+    sell_markup: 1.0
+    buy_multiplier: 0.2
+  restock:
+    interval_seconds: 300
+  funds:
+    mode: unlimited
+  buyback:
+    enabled: true
+    max_items: 10
+    expires: on_restock
+  stock:
+    - key: t1-mystic-head
+      item_definition: itemdefinition.t1-mystic-head
+      count: 1
+      refresh: fill_missing
+    - key: t1-mystic-body
+      item_definition: itemdefinition.t1-mystic-body
+      count: 1
+      refresh: fill_missing
+    - key: t1-mystic-arms
+      item_definition: itemdefinition.t1-mystic-arms
+      count: 1
+      refresh: fill_missing
+    - key: t1-mystic-hands
+      item_definition: itemdefinition.t1-mystic-hands
+      count: 1
+      refresh: fill_missing
+    - key: t1-mystic-waist
+      item_definition: itemdefinition.t1-mystic-waist
+      count: 1
+      refresh: fill_missing
+    - key: t1-mystic-legs
+      item_definition: itemdefinition.t1-mystic-legs
+      count: 1
+      refresh: fill_missing
+    - key: t1-mystic-feet
+      item_definition: itemdefinition.t1-mystic-feet
+      count: 1
+      refresh: fill_missing
+    - key: t1-mystic-olive-staff
+      item_definition: itemdefinition.t1-mystic-olive-staff
+      count: 1
+      refresh: fill_missing
+    - key: t1-mystic-crescent-shield
+      item_definition: itemdefinition.t1-mystic-crescent-shield
+      count: 1
+      refresh: fill_missing
+---
+apiVersion: v1alpha1
+kind: merchantprofile
+metadata:
+  world: world.23
+  slug: moonstalker-t1-outfitter
+  name: Moonstalker Field Outfitter
+spec:
+  notes: T1 Moonstalker field gear for the Oath Court.
+  settlement_currency: obol
+  pricing:
+    sell_markup: 1.0
+    buy_multiplier: 0.2
+  restock:
+    interval_seconds: 300
+  funds:
+    mode: unlimited
+  buyback:
+    enabled: true
+    max_items: 10
+    expires: on_restock
+  stock:
+    - key: t1-moonstalker-head
+      item_definition: itemdefinition.t1-moonstalker-head
+      count: 1
+      refresh: fill_missing
+    - key: t1-moonstalker-body
+      item_definition: itemdefinition.t1-moonstalker-body
+      count: 1
+      refresh: fill_missing
+    - key: t1-moonstalker-arms
+      item_definition: itemdefinition.t1-moonstalker-arms
+      count: 1
+      refresh: fill_missing
+    - key: t1-moonstalker-hands
+      item_definition: itemdefinition.t1-moonstalker-hands
+      count: 1
+      refresh: fill_missing
+    - key: t1-moonstalker-waist
+      item_definition: itemdefinition.t1-moonstalker-waist
+      count: 1
+      refresh: fill_missing
+    - key: t1-moonstalker-legs
+      item_definition: itemdefinition.t1-moonstalker-legs
+      count: 1
+      refresh: fill_missing
+    - key: t1-moonstalker-feet
+      item_definition: itemdefinition.t1-moonstalker-feet
+      count: 1
+      refresh: fill_missing
+    - key: t1-moonstalker-narrow-sword
+      item_definition: itemdefinition.t1-moonstalker-narrow-sword
+      count: 1
+      refresh: fill_missing
+    - key: t1-moonstalker-left-dagger
+      item_definition: itemdefinition.t1-moonstalker-left-dagger
+      count: 1
+      refresh: fill_missing
+    - key: t1-moonstalker-wicker-shield
+      item_definition: itemdefinition.t1-moonstalker-wicker-shield
+      count: 1
+      refresh: fill_missing
+---
+apiVersion: v1alpha1
+kind: mobdefinition
+metadata:
+  world: world.23
+  slug: warlord-field-quartermaster
+  name: a Warlord quartermaster
+spec:
+  room_description: A scarred Warlord quartermaster tallies captured arms beside the exchange.
+  keywords: warlord quartermaster outfitter merchant spoils
+  type: humanoid
+  combat:
+    attackable: false
+  merchant:
+    profile: null
+---
+apiVersion: v1alpha1
+kind: mobdefinition
+metadata:
+  world: world.23
+  slug: tidecaller-field-quartermaster
+  name: a Tidecaller chandler
+spec:
+  room_description: A salt-robed Tidecaller chandler weighs bronze fittings and sea-worn gear.
+  keywords: tidecaller chandler quartermaster outfitter merchant
+  type: humanoid
+  combat:
+    attackable: false
+  merchant:
+    profile: null
+---
+apiVersion: v1alpha1
+kind: mobdefinition
+metadata:
+  world: world.23
+  slug: mystic-field-quartermaster
+  name: a Mystic granary steward
+spec:
+  room_description: A patient Mystic steward keeps field vestments arranged beside sealed grain jars.
+  keywords: mystic granary steward quartermaster outfitter merchant
+  type: humanoid
+  combat:
+    attackable: false
+  merchant:
+    profile: null
+---
+apiVersion: v1alpha1
+kind: mobdefinition
+metadata:
+  world: world.23
+  slug: moonstalker-field-quartermaster
+  name: a Moonstalker hidebroker
+spec:
+  room_description: A keen-eyed Moonstalker hidebroker sorts quiet field gear beneath racks of horn and hide.
+  keywords: moonstalker hidebroker quartermaster outfitter merchant
+  type: humanoid
+  combat:
+    attackable: false
+  merchant:
+    profile: null
+---
+apiVersion: v1alpha1
+kind: craftingprofile
+metadata:
+  world: world.23
+  slug: t2-warlord-workshop
+  name: Warlord T2 Workshop
+spec:
+  keywords: warlord t2 tier2 workshop craft forge
+  recipes:
+    - craftingrecipe.t2-warlord-head
+    - craftingrecipe.t2-warlord-body
+    - craftingrecipe.t2-warlord-arms
+    - craftingrecipe.t2-warlord-hands
+    - craftingrecipe.t2-warlord-waist
+    - craftingrecipe.t2-warlord-legs
+    - craftingrecipe.t2-warlord-feet
+    - craftingrecipe.t2-warlord-spear
+---
+apiVersion: v1alpha1
+kind: craftingprofile
+metadata:
+  world: world.23
+  slug: t3-warlord-workshop
+  name: Warlord T3 Workshop
+spec:
+  keywords: warlord t3 tier3 workshop craft forge
+  recipes:
+    - craftingrecipe.t3-warlord-head
+    - craftingrecipe.t3-warlord-body
+    - craftingrecipe.t3-warlord-arms
+    - craftingrecipe.t3-warlord-hands
+    - craftingrecipe.t3-warlord-waist
+    - craftingrecipe.t3-warlord-legs
+    - craftingrecipe.t3-warlord-feet
+    - craftingrecipe.t3-warlord-spear
+---
+apiVersion: v1alpha1
+kind: craftingprofile
+metadata:
+  world: world.23
+  slug: t2-tidecaller-workshop
+  name: Tidecaller T2 Workshop
+spec:
+  keywords: tidecaller t2 tier2 workshop craft forge
+  recipes:
+    - craftingrecipe.t2-tidecaller-head
+    - craftingrecipe.t2-tidecaller-body
+    - craftingrecipe.t2-tidecaller-arms
+    - craftingrecipe.t2-tidecaller-hands
+    - craftingrecipe.t2-tidecaller-waist
+    - craftingrecipe.t2-tidecaller-legs
+    - craftingrecipe.t2-tidecaller-feet
+    - craftingrecipe.t2-tidecaller-trident
+---
+apiVersion: v1alpha1
+kind: craftingprofile
+metadata:
+  world: world.23
+  slug: t3-tidecaller-workshop
+  name: Tidecaller T3 Workshop
+spec:
+  keywords: tidecaller t3 tier3 workshop craft forge
+  recipes:
+    - craftingrecipe.t3-tidecaller-head
+    - craftingrecipe.t3-tidecaller-body
+    - craftingrecipe.t3-tidecaller-arms
+    - craftingrecipe.t3-tidecaller-hands
+    - craftingrecipe.t3-tidecaller-waist
+    - craftingrecipe.t3-tidecaller-legs
+    - craftingrecipe.t3-tidecaller-feet
+    - craftingrecipe.t3-tidecaller-trident
+---
+apiVersion: v1alpha1
+kind: craftingprofile
+metadata:
+  world: world.23
+  slug: t2-mystic-workshop
+  name: Mystic T2 Workshop
+spec:
+  keywords: mystic t2 tier2 workshop craft forge
+  recipes:
+    - craftingrecipe.t2-mystic-head
+    - craftingrecipe.t2-mystic-body
+    - craftingrecipe.t2-mystic-arms
+    - craftingrecipe.t2-mystic-hands
+    - craftingrecipe.t2-mystic-waist
+    - craftingrecipe.t2-mystic-legs
+    - craftingrecipe.t2-mystic-feet
+    - craftingrecipe.t2-mystic-staff
+    - craftingrecipe.t2-mystic-shield
+---
+apiVersion: v1alpha1
+kind: craftingprofile
+metadata:
+  world: world.23
+  slug: t3-mystic-workshop
+  name: Mystic T3 Workshop
+spec:
+  keywords: mystic t3 tier3 workshop craft forge
+  recipes:
+    - craftingrecipe.t3-mystic-head
+    - craftingrecipe.t3-mystic-body
+    - craftingrecipe.t3-mystic-arms
+    - craftingrecipe.t3-mystic-hands
+    - craftingrecipe.t3-mystic-waist
+    - craftingrecipe.t3-mystic-legs
+    - craftingrecipe.t3-mystic-feet
+    - craftingrecipe.t3-mystic-staff
+    - craftingrecipe.t3-mystic-shield
+---
+apiVersion: v1alpha1
+kind: craftingprofile
+metadata:
+  world: world.23
+  slug: t2-moonstalker-workshop
+  name: Moonstalker T2 Workshop
+spec:
+  keywords: moonstalker t2 tier2 workshop craft forge
+  recipes:
+    - craftingrecipe.t2-moonstalker-head
+    - craftingrecipe.t2-moonstalker-body
+    - craftingrecipe.t2-moonstalker-arms
+    - craftingrecipe.t2-moonstalker-hands
+    - craftingrecipe.t2-moonstalker-waist
+    - craftingrecipe.t2-moonstalker-legs
+    - craftingrecipe.t2-moonstalker-feet
+    - craftingrecipe.t2-moonstalker-sword
+    - craftingrecipe.t2-moonstalker-dagger
+    - craftingrecipe.t2-moonstalker-shield
+---
+apiVersion: v1alpha1
+kind: craftingprofile
+metadata:
+  world: world.23
+  slug: t3-moonstalker-workshop
+  name: Moonstalker T3 Workshop
+spec:
+  keywords: moonstalker t3 tier3 workshop craft forge
+  recipes:
+    - craftingrecipe.t3-moonstalker-head
+    - craftingrecipe.t3-moonstalker-body
+    - craftingrecipe.t3-moonstalker-arms
+    - craftingrecipe.t3-moonstalker-hands
+    - craftingrecipe.t3-moonstalker-waist
+    - craftingrecipe.t3-moonstalker-legs
+    - craftingrecipe.t3-moonstalker-feet
+    - craftingrecipe.t3-moonstalker-sword
+    - craftingrecipe.t3-moonstalker-dagger
+    - craftingrecipe.t3-moonstalker-shield
+---
+apiVersion: v1alpha1
+kind: room
+metadata:
+  ref: room@178
+spec:
+  merchant:
+    profile: merchantprofile.warlord-t1-outfitter
+---
+apiVersion: v1alpha1
+kind: room
+metadata:
+  ref: room@186
+spec:
+  merchant:
+    profile: merchantprofile.tidecaller-t1-outfitter
+---
+apiVersion: v1alpha1
+kind: room
+metadata:
+  ref: room@194
+spec:
+  merchant:
+    profile: merchantprofile.mystic-t1-outfitter
+---
+apiVersion: v1alpha1
+kind: room
+metadata:
+  ref: room@202
+spec:
+  merchant:
+    profile: merchantprofile.moonstalker-t1-outfitter
+---
+apiVersion: v1alpha1
+kind: room
+metadata:
+  ref: room@179
+spec:
+  crafting:
+    profile: craftingprofile.t2-warlord-workshop
+---
+apiVersion: v1alpha1
+kind: room
+metadata:
+  ref: room@181
+spec:
+  crafting:
+    profile: craftingprofile.t3-warlord-workshop
+---
+apiVersion: v1alpha1
+kind: room
+metadata:
+  ref: room@187
+spec:
+  crafting:
+    profile: craftingprofile.t2-tidecaller-workshop
+---
+apiVersion: v1alpha1
+kind: room
+metadata:
+  ref: room@189
+spec:
+  crafting:
+    profile: craftingprofile.t3-tidecaller-workshop
+---
+apiVersion: v1alpha1
+kind: room
+metadata:
+  ref: room@195
+spec:
+  crafting:
+    profile: craftingprofile.t2-mystic-workshop
+---
+apiVersion: v1alpha1
+kind: room
+metadata:
+  ref: room@197
+spec:
+  crafting:
+    profile: craftingprofile.t3-mystic-workshop
+---
+apiVersion: v1alpha1
+kind: room
+metadata:
+  ref: room@203
+spec:
+  crafting:
+    profile: craftingprofile.t2-moonstalker-workshop
+---
+apiVersion: v1alpha1
+kind: room
+metadata:
+  ref: room@205
+spec:
+  crafting:
+    profile: craftingprofile.t3-moonstalker-workshop
+---
+apiVersion: v1alpha1
+kind: spawnplan
+metadata:
+  world: world.23
+  slug: oath-court-class-merchants
+  name: Optional Oath Court Quartermasters
+spec:
+  zone: zone@9
+  order: 90
+  is_active: false
+  respawn:
+    mode: fixed
+    seconds: 0
+  entries:
+    - slug: warlord-field-quartermaster
+      name: Place Warlord Quartermaster
+      order: 1
+      source: mobdefinition.warlord-field-quartermaster
+      target: room@178
+      count: 1
+    - slug: tidecaller-field-quartermaster
+      name: Place Tidecaller Quartermaster
+      order: 2
+      source: mobdefinition.tidecaller-field-quartermaster
+      target: room@186
+      count: 1
+    - slug: mystic-field-quartermaster
+      name: Place Mystic Quartermaster
+      order: 3
+      source: mobdefinition.mystic-field-quartermaster
+      target: room@194
+      count: 1
+    - slug: moonstalker-field-quartermaster
+      name: Place Moonstalker Quartermaster
+      order: 4
+      source: mobdefinition.moonstalker-field-quartermaster
+      target: room@202
+      count: 1

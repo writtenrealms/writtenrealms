@@ -255,9 +255,10 @@ Current required mappings:
   loot/item bundle, equipment, and merchant profile manifests rather than
   recreated as template inventory.
 - WR1 merchant mob-template settings and inventory export into `kind:
-  merchantprofile` plus `MobDefinition.merchant_profile`; WR2 no longer has
-  `MerchantInventory`, mob `merchant_profit`, or the
-  `/game/system/update_merchants/` endpoint.
+  merchantprofile` plus the mob definition's `spec.merchant.profile`
+  attachment; WR2 no longer has `MerchantInventory`, mob `merchant_profit`, or
+  the `/game/system/update_merchants/` endpoint. Direct room attachment is an
+  additional WR2 authoring option and is not inferred during WR1 conversion.
 - WR1 crafter/upgrader mob-template flags and item `upgrade_count` do not
   export. WR2 crafting uses `craftmaterial`, `craftingrecipe`, and
   `craftingprofile` manifests, item-definition `spec.salvage`, and an optional
@@ -1693,6 +1694,23 @@ continue to identify it.
 Including `flags`, `details`, or `doors` replaces that complete collection for
 the room. The canonical YAML shown after a save includes every exit direction,
 so copy/edit/save round trips do not depend on hidden form state.
+
+Rooms can expose always-available authored services without a spawned mob:
+
+```yaml
+spec:
+  merchant:
+    profile: merchantprofile.market-stalls
+  crafting:
+    profile: craftingprofile.village-forge
+```
+
+Merchant and crafting profile manifests are emitted before room manifests in a
+world export so these typed references resolve in one import stream. Omitting
+`spec.merchant` or `spec.crafting` preserves the current attachment; setting
+the section, its `profile`, or an empty mapping to null/empty clears it. For an
+instance template, profile references resolve against its effective base
+definition world, matching the profiles inherited by its builder UI.
 
 The external room-manifest shape is intentionally unchanged even though WR2
 stores a canonical logical doorway internally. Each `spec.doors[]` entry is one

@@ -1,6 +1,10 @@
 import _ from "lodash";
 
-import { formatMoney } from "@/core/economy.ts";
+import { formatMoneyUppercaseCurrency } from "@/core/economy.ts";
+import {
+  getRoomMerchantProvider,
+  merchantProviderTarget,
+} from "@/core/merchantProviders";
 
 export interface ItemAction {
   action: string;
@@ -190,6 +194,7 @@ export const normalizeItemActions = (item: any, gameState: any) => {
   const room = gameState.room || {};
   const player = gameState.player || {};
   const roomChars = room.chars || [];
+  const roomMerchantProvider = getRoomMerchantProvider(room);
 
   const inRoom = isTopLevelItem(room.inventory || [], item.key);
   const inInventory = isTopLevelItem(player.inventory || [], item.key);
@@ -202,7 +207,9 @@ export const normalizeItemActions = (item: any, gameState: any) => {
     item.type === "container" ||
     item.type === "corpse";
 
-  const hasMerchant = roomChars.some((char) => char && char.is_merchant);
+  const hasMerchant = Boolean(roomMerchantProvider) || roomChars.some(
+    (char) => char && char.is_merchant,
+  );
   if (inRoom) {
     if (item.is_pickable !== false) actions.get = true;
     if (isContainer) actions.get_from = true;
@@ -232,6 +239,10 @@ export const normalizeItemActions = (item: any, gameState: any) => {
 
     if (item.value && hasMerchant) {
       actions.sell = true;
+      const merchantTarget = merchantProviderTarget(roomMerchantProvider);
+      if (merchantTarget && !item.sell_command) {
+        item.sell_command = `sell ${item.key} to ${merchantTarget}`;
+      }
     }
   } else if (inEquipment) {
     actions.remove = true;
@@ -302,16 +313,26 @@ export const buildItemActionChoices = (
     if (!hasAction(item, action.action)) continue;
 
     const actionData = { ...action };
-    if (action.action === "buy" || action.action === "buyback") {
-      const buyPrice = action.action === "buyback"
+    if (
+      action.action === "buy"
+      || action.action === "buyback"
+      || action.action === "sell"
+    ) {
+      const actionPrice = action.action === "buyback"
         ? item.buyback_price || item.price || item.value
-        : item.buy_price || item.price || item.value;
-      if (buyPrice && typeof buyPrice === "object" && "amount" in buyPrice) {
+        : action.action === "sell"
+          ? item.sell_price
+          : item.buy_price || item.price || item.value;
+      if (
+        actionPrice
+        && typeof actionPrice === "object"
+        && "amount" in actionPrice
+      ) {
         const verb = action.action === "buyback"
           ? "BUY BACK FOR"
-          : "BUY FOR";
-        actionData.label = `${verb} ${formatMoney(
-          buyPrice,
+          : action.action === "sell" ? "SELL FOR" : "BUY FOR";
+        actionData.label = `${verb} ${formatMoneyUppercaseCurrency(
+          actionPrice,
           gameState.world?.economy,
         )}`;
       }

@@ -1,5 +1,5 @@
 <template>
-  <div class="crafting-manifest-details">
+  <div class="manifest-resource-details">
     <div v-if="isLoading" class="resource-state color-text-60" aria-live="polite">
       Loading {{ resourceLabel }}...
     </div>
@@ -13,16 +13,19 @@
       This {{ resourceLabel }} is unavailable.
     </div>
 
-    <template v-else-if="isInherited">
+    <template v-else-if="isReadOnly">
       <section class="readonly-header mb-4">
         <slot name="header" :resource="resource" />
         <slot name="summary" :resource="resource" />
 
-        <div class="inherited-notice">
-          Crafting definitions in instances are inherited from the parent world.
+        <div v-if="isInherited" class="readonly-notice">
+          {{ listLabel }} in instances are inherited from the parent world.
           <router-link :to="{ name: listRouteName, params: { world_id: inheritedWorld?.id } }">
             Open {{ inheritedWorld?.name }} {{ listLabel }}
           </router-link>
+        </div>
+        <div v-else class="readonly-notice">
+          You can view this {{ resourceLabel }}, but your builder role cannot edit it.
         </div>
 
         <button class="btn-small readonly-copy" :disabled="!loadedYaml" @click="copyYaml">
@@ -71,13 +74,14 @@ import { useRouter } from "vue-router";
 import { useStore } from "vuex";
 import ManifestYamlEditor from "@/components/builder/world/ManifestYamlEditor.vue";
 import {
-  applyCraftingManifest,
-  craftingApiErrorMessage,
+  applyWorldManifest,
+  manifestApiErrorMessage,
   type BuilderEntityId,
   type BuilderWorldId,
-  type CraftingManifestApplyResponse,
-  type CraftingManifestKind,
-} from "@/services/crafting";
+  type ManifestApplyResponse,
+  type ManifestResourceKind,
+  type ManifestResourceResponseField,
+} from "@/services/manifests";
 
 const props = defineProps<{
   worldId: BuilderWorldId;
@@ -85,8 +89,8 @@ const props = defineProps<{
   resourceLabel: string;
   resourceTitle: string;
   listLabel: string;
-  expectedKind: CraftingManifestKind;
-  responseField: "craft_material" | "crafting_recipe" | "crafting_profile";
+  expectedKind: ManifestResourceKind;
+  responseField: ManifestResourceResponseField;
   listRouteName: string;
   detailRouteName: string;
   detailIdParam: string;
@@ -106,6 +110,10 @@ const manifestText = ref("");
 let requestNumber = 0;
 
 const isInherited = computed(() => Boolean(props.inheritedWorld?.id));
+const builderRank = computed(() => Number(
+  store.state.builder.world?.builder_info?.builder_rank || 0,
+));
+const isReadOnly = computed(() => isInherited.value || builderRank.value <= 2);
 
 const setLoadedState = (payload: any) => {
   resource.value = payload;
@@ -129,7 +137,7 @@ const fetchResource = async () => {
     resource.value = null;
     loadedYaml.value = "";
     manifestText.value = "";
-    loadError.value = craftingApiErrorMessage(
+    loadError.value = manifestApiErrorMessage(
       error,
       `Could not load ${props.resourceLabel}.`,
     );
@@ -159,9 +167,10 @@ const copyDeleteYaml = () => copyText(
   `Unable to copy ${props.resourceLabel} delete YAML to clipboard.`,
 );
 
-const responseResource = (response: CraftingManifestApplyResponse) => (
-  response[props.responseField] || null
-);
+const responseResource = (response: ManifestApplyResponse) => {
+  const payload = response[props.responseField];
+  return payload && typeof payload === "object" ? payload : null;
+};
 
 const syncRoute = async (payload: any) => {
   if (!payload?.id || String(props.resourceId) === String(payload.id)) return;
@@ -179,9 +188,13 @@ const submitManifest = async () => {
   submitError.value = "";
 
   try {
-    const response = await applyCraftingManifest(props.worldId, manifestText.value);
+    const response = await applyWorldManifest(
+      props.worldId,
+      manifestText.value,
+      props.expectedKind,
+    );
     if (response.kind !== props.expectedKind) {
-      throw new Error("Unexpected crafting manifest response kind.");
+      throw new Error("Unexpected manifest response kind.");
     }
 
     if (response.operation === "deleted") {
@@ -198,17 +211,21 @@ const submitManifest = async () => {
 
     const appliedResource = responseResource(response);
     if (!appliedResource) {
-      throw new Error("Crafting manifest response did not include the updated definition.");
+      throw new Error(`Manifest response did not include the updated ${props.resourceLabel}.`);
     }
 
     setLoadedState(appliedResource);
     await syncRoute(appliedResource);
     store.commit("ui/notification_set", `${props.resourceTitle} ${response.operation}.`);
   } catch (error: unknown) {
-    const fallback = error instanceof Error && error.message.startsWith("Crafting manifest")
+    const isInternalManifestError = error instanceof Error && (
+      error.message === "Unexpected manifest response kind."
+      || error.message.startsWith("Manifest response did not include")
+    );
+    const fallback = isInternalManifestError
       ? error.message
       : `Could not apply ${props.resourceLabel} manifest.`;
-    submitError.value = craftingApiErrorMessage(error, fallback);
+    submitError.value = manifestApiErrorMessage(error, fallback);
     store.commit("ui/notification_set_error", submitError.value);
   } finally {
     isSubmitting.value = false;
@@ -225,7 +242,7 @@ watch(() => props.resourceId, (nextValue, previousValue) => {
 <style lang="scss" scoped>
 @import "@/styles/colors.scss";
 
-.crafting-manifest-details {
+.manifest-resource-details {
   box-sizing: border-box;
   min-width: 0;
   width: 100%;
@@ -254,7 +271,7 @@ watch(() => props.resourceId, (nextValue, previousValue) => {
   min-width: 0;
 }
 
-.inherited-notice {
+.readonly-notice {
   color: $color-text-hex-60;
   line-height: 1.4;
   margin-top: 0.75rem;

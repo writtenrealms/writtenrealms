@@ -2,6 +2,7 @@ from rest_framework.reverse import reverse
 
 from builders.currencies import create_currency
 from builders.models import (
+    CraftMaterial,
     Currency,
     ItemBundle,
     ItemDefinition,
@@ -16,6 +17,7 @@ from spawns.models import MerchantBuybackEntry, MerchantRuntime, MerchantStockEn
 from spawns.wallet import balance_map, mutate_balances
 from tests.base import WorldTestCase
 from tests.utils import apply_basic_stat_system
+from worlds.models import WorldConfig
 
 
 class MerchantTestCase(WorldTestCase):
@@ -207,6 +209,61 @@ spec:
         self.assertEqual(response.status_code, 400, response.data)
         self.assertIn("must be an integer", str(response.data))
 
+    def test_expected_kind_rejects_wrong_manifest_before_apply(self):
+        manifest = """
+kind: craftmaterial
+metadata:
+  slug: misplaced-material
+  name: Misplaced Material
+spec:
+  description: This belongs in the crafting editor.
+"""
+
+        response = self.client.post(
+            reverse("builder-world-manifest-apply", args=[self.world.pk]),
+            {"manifest": manifest, "expected_kind": "merchantprofile"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("Expected kind merchantprofile", str(response.data))
+        self.assertFalse(
+            CraftMaterial.objects.filter(
+                world=self.world,
+                slug="misplaced-material",
+            ).exists()
+        )
+
+    def test_expected_kind_rejects_multiple_documents_before_apply(self):
+        manifest = """
+kind: merchantprofile
+metadata:
+  slug: first-shop
+spec:
+  settlement_currency: obol
+---
+kind: merchantprofile
+metadata:
+  slug: second-shop
+spec:
+  settlement_currency: obol
+"""
+
+        response = self.client.post(
+            reverse("builder-world-manifest-apply", args=[self.world.pk]),
+            {"manifest": manifest, "expected_kind": "merchantprofile"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("exactly one merchantprofile", str(response.data))
+        self.assertFalse(
+            MerchantProfile.objects.filter(
+                world=self.world,
+                slug__in=["first-shop", "second-shop"],
+            ).exists()
+        )
+
 
 class TestMerchantProfileBuilderEndpoints(MerchantTestCase):
     def setUp(self):
@@ -265,6 +322,140 @@ class TestMerchantProfileBuilderEndpoints(MerchantTestCase):
         self.assertEqual(resp.data["stock_count"], 1)
         self.assertIn("kind: merchantprofile", resp.data["yaml"])
         self.assertEqual(resp.data["manifest"]["kind"], "merchantprofile")
+        self.assertIn("operation: delete", resp.data["delete_yaml"])
+        self.assertEqual(resp.data["delete_manifest"]["operation"], "delete")
+
+    def test_detail_delete_yaml_deletes_merchant_profile(self):
+        profile = MerchantProfile.objects.create(
+            world=self.world,
+            slug="temporary-shop",
+            name="Temporary Shop",
+            settlement_currency=self.currency,
+        )
+        detail_resp = self.client.get(
+            reverse("builder-merchant-profile-detail", args=[self.world.pk, profile.pk])
+        )
+
+        self.assertEqual(detail_resp.status_code, 200, detail_resp.data)
+        delete_resp = self.client.post(
+            reverse("builder-world-manifest-apply", args=[self.world.pk]),
+            {"manifest": detail_resp.data["delete_yaml"]},
+            format="json",
+        )
+
+        self.assertEqual(delete_resp.status_code, 200, delete_resp.data)
+        self.assertEqual(delete_resp.data["kind"], "merchantprofile")
+        self.assertEqual(delete_resp.data["operation"], "deleted")
+        self.assertFalse(MerchantProfile.objects.filter(pk=profile.pk).exists())
+
+    def test_manifest_update_returns_complete_editor_payload(self):
+        sword = self._item_definition("editor-sword", "an editor sword")
+        profile = MerchantProfile.objects.create(
+            world=self.world,
+            slug="editor-shop",
+            name="Editor Shop",
+            settlement_currency=self.currency,
+        )
+        MerchantStockSlot.objects.create(
+            profile=profile,
+            key="swords",
+            item_definition=sword,
+            count=1,
+        )
+        manifest = """
+kind: merchantprofile
+metadata:
+  slug: editor-shop
+  name: Updated Editor Shop
+spec:
+  notes: Updated through the inline editor.
+  settlement_currency: obol
+  pricing:
+    sell_markup: 1.25
+    buy_multiplier: 0.3
+  restock:
+    interval_seconds: 7200
+  funds:
+    mode: finite
+    purchase_budget: 250
+  buyback:
+    enabled: true
+    max_items: 2
+  stock:
+    - key: swords
+      item_definition: itemdefinition.editor-sword
+      count: 2
+"""
+
+        response = self.client.post(
+            reverse("builder-world-manifest-apply", args=[self.world.pk]),
+            {"manifest": manifest, "expected_kind": "merchantprofile"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        payload = response.data["merchant_profile"]
+        self.assertEqual(payload["name"], "Updated Editor Shop")
+        self.assertEqual(payload["funds_mode"], MerchantProfile.FUNDS_MODE_FINITE)
+        self.assertEqual(payload["purchase_budget"], 250)
+        self.assertTrue(payload["buyback_enabled"])
+        self.assertEqual(payload["buyback_max_items"], 2)
+        self.assertEqual(payload["stock"][0]["count"], 2)
+        self.assertIn("Updated through the inline editor", payload["yaml"])
+        self.assertIn("operation: delete", payload["delete_yaml"])
+
+    def test_instance_reads_inherited_profiles_but_rejects_manifest_writes(self):
+        profile = MerchantProfile.objects.create(
+            world=self.world,
+            slug="inherited-shop",
+            name="Inherited Shop",
+            settlement_currency=self.currency,
+        )
+        instance_world = self.world.__class__.objects.new_world(
+            name="Merchant Instance",
+            author=self.user,
+            config=WorldConfig.objects.create(),
+            instance_of=self.world,
+        )
+
+        list_resp = self.client.get(
+            reverse("builder-merchant-profile-list", args=[instance_world.pk])
+        )
+        self.assertEqual(list_resp.status_code, 200, list_resp.data)
+        self.assertEqual(
+            [row["slug"] for row in list_resp.data["results"]],
+            ["inherited-shop"],
+        )
+        detail_resp = self.client.get(
+            reverse(
+                "builder-merchant-profile-detail",
+                args=[instance_world.pk, profile.pk],
+            )
+        )
+        self.assertEqual(detail_resp.status_code, 200, detail_resp.data)
+        self.assertEqual(detail_resp.data["slug"], "inherited-shop")
+
+        manifest = """
+kind: merchantprofile
+metadata:
+  slug: hidden-instance-shop
+spec:
+  settlement_currency: obol
+"""
+        write_resp = self.client.post(
+            reverse("builder-world-manifest-apply", args=[instance_world.pk]),
+            {"manifest": manifest, "expected_kind": "merchantprofile"},
+            format="json",
+        )
+
+        self.assertEqual(write_resp.status_code, 400, write_resp.data)
+        self.assertIn("inherited from the base world", str(write_resp.data))
+        self.assertFalse(
+            MerchantProfile.objects.filter(
+                world=instance_world,
+                slug="hidden-instance-shop",
+            ).exists()
+        )
 
 
 class TestMerchantRuntime(MerchantTestCase):

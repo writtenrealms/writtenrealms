@@ -1609,7 +1609,12 @@ class MerchantRuntime(AdventBaseModel):
                               related_name='merchant_runtimes')
     mob = models.OneToOneField('spawns.Mob',
                                on_delete=models.CASCADE,
-                               related_name='merchant_runtime')
+                               related_name='merchant_runtime',
+                               **optional)
+    room = models.ForeignKey('worlds.Room',
+                             on_delete=models.CASCADE,
+                             related_name='merchant_runtimes',
+                             **optional)
     profile = models.ForeignKey('builders.MerchantProfile',
                                 on_delete=models.CASCADE,
                                 related_name='merchant_runtimes')
@@ -1633,6 +1638,16 @@ class MerchantRuntime(AdventBaseModel):
             models.Index(fields=['next_restock_ts']),
         ]
         constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(mob__isnull=False, room__isnull=True)
+                    | models.Q(mob__isnull=True, room__isnull=False)
+                ),
+                name='spawns_merchant_exactly_one_host'),
+            models.UniqueConstraint(
+                fields=['world', 'room'],
+                condition=models.Q(room__isnull=False),
+                name='spawns_merchant_runtime_world_room'),
             models.CheckConstraint(
                 condition=(
                     models.Q(remaining_purchase_budget__isnull=True)

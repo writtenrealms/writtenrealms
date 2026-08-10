@@ -109,8 +109,8 @@
       </div>
     </div>
 
-    <div class="room-actions mt-2" v-if="isLastMessage && room.actions.length">
-      <button class='btn-small mr-2' v-for="(action, index) in room.actions" :key="index"
+    <div class="room-actions mt-2" v-if="isLastMessage && roomActions.length">
+      <button class='btn-small mr-2' v-for="(action, index) in roomActions" :key="index"
         @click="onClickRoomAction(action)">{{ action.toUpperCase() }}</button>
     </div>
   </div>
@@ -124,6 +124,11 @@ import { stackedInventory, getTargetInGroup } from "@/core/utils";
 import LookRoomChar from "@/components/game/console/LookRoomChar.vue";
 import { formatMoney } from "@/core/economy.ts";
 import { parseLinks } from "@/core/utils";
+import {
+  getRoomMerchantProvider,
+  merchantProviderTarget,
+  roomActionsForMerchantProvider,
+} from "@/core/merchantProviders";
 
 const store = useStore();
 
@@ -148,6 +153,8 @@ interface Room {
 
 const props = defineProps<{ message: any }>();
 const room = ref<Room>(props.message.data.room);
+const roomMerchantProvider = computed(() => getRoomMerchantProvider(room.value));
+const roomActions = computed(() => roomActionsForMerchantProvider(room.value));
 const penaltyDisplay = computed(() => {
   const penaltyText = String(props.message?.data?.penalty_text || "").trim();
   if (penaltyText) return penaltyText;
@@ -263,7 +270,22 @@ const onClickDetail = (word) => {
 }
 
 const onClickRoomAction = (action) => {
-  store.dispatch("game/cmd", action);
+  const normalizedAction = String(action || "").trim();
+  const directMerchantAction = normalizedAction.toLowerCase();
+  if (
+    roomMerchantProvider.value?.type === "room"
+    && ["list", "offer"].includes(directMerchantAction)
+  ) {
+    const merchantTarget = merchantProviderTarget(roomMerchantProvider.value);
+    store.dispatch(
+      "game/cmd",
+      merchantTarget
+        ? `${directMerchantAction} ${merchantTarget}`
+        : directMerchantAction,
+    );
+    return;
+  }
+  store.dispatch("game/cmd", normalizedAction);
 }
 
 const onInspectCallout = (callout) => {

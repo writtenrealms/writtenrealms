@@ -58,6 +58,10 @@ spec:
   is_landmark: true
   initial_state:
     gate_alarm_raised: false
+  merchant:
+    profile: merchantprofile.north-gate-market
+  crafting:
+    profile: craftingprofile.north-gate-forge
   exits:
     north: room@43
     east: null
@@ -172,6 +176,8 @@ room rather than using a database id or a possibly duplicated zone name.
 | `spec.color` | Optional builder-map display color. |
 | `spec.is_landmark` | Whether the room is marked as a landmark. |
 | `spec.initial_state` | State defaults copied into this room for each new runtime world. |
+| `spec.merchant.profile` | Merchant Profile exposed directly by this room. |
+| `spec.crafting.profile` | Crafting Profile exposed directly by this room. |
 | `spec.exits` | Direction-to-room mappings. |
 | `spec.flags` | Complete set of room behavior flags. |
 | `spec.details` | Complete set of inspectable room details. |
@@ -186,6 +192,36 @@ it for resettable values such as `gate_alarm_raised: false`. At runtime,
 parallel instance runs that use this room never share the value. Edit live
 state with `/state`; edit the manifest when future runs should start
 differently.
+
+## Room Services
+
+Room Config can attach one Merchant Profile directly to the room. This is the
+recommended shape for a market, counter, or other shop that should always be
+available without a mob or Spawn Plan:
+
+```yaml
+spec:
+  merchant:
+    profile: merchantprofile.north-gate-market
+```
+
+The room automatically exposes its List and Offer actions. The room is the shop
+provider, not a command issuer, and live stock remains in a runtime ledger
+isolated to each running copy of the world. A decorative mob can be placed
+separately. To make NPC presence or death control availability, leave the room
+attachment empty and attach the Merchant Profile to that mob definition
+instead.
+
+Crafting uses the parallel room-provider shape:
+
+```yaml
+spec:
+  crafting:
+    profile: craftingprofile.north-gate-forge
+```
+
+Omitting `merchant` or `crafting` from a patch preserves the current
+attachment. Set the section to `null` or use an empty mapping to clear it.
 
 ## Exits
 

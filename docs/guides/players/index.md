@@ -8,6 +8,7 @@ Realms Core.
 - [Combat](combat.md)
 - [Duels](duels.md)
 - [Currencies](currencies.md)
+- [Merchants](merchants.md)
 - [Scripted World Interactions](scripted-interactions.md)
 - [Crafting](crafting-player-guide.md)
 - [Socials](socials.md)
