@@ -133,9 +133,7 @@ class TestScriptCommandRunner(WorldTestCase):
 
     def test_transactional_command_requires_an_enclosing_transaction(self):
         destination = self.room.create_at("east")
-        destination_ref = (
-            f"room@{destination.x},{destination.y},{destination.z}"
-        )
+        destination_ref = f"room@{destination.relative_id}"
 
         with patch(
             "spawns.script_commands.connection.in_atomic_block",
@@ -166,6 +164,33 @@ class TestScriptCommandRunner(WorldTestCase):
         self.assertEqual(result.mode, TRIGGER_STEP_MODE_TRANSACTIONAL)
         self.player.refresh_from_db()
         self.assertEqual(self.player.room_id, destination.id)
+
+    def test_transactional_transfer_rejects_noncanonical_room_aliases(self):
+        destination = self.room.create_at("east")
+        selectors = (
+            str(destination.relative_id),
+            f"room.{destination.id}",
+            f"room@{destination.x},{destination.y},{destination.z}",
+        )
+
+        for selector in selectors:
+            with self.subTest(selector=selector):
+                with self.assertRaises(ScriptCommandError) as raised:
+                    with transaction.atomic():
+                        ScriptCommandRunner().execute(
+                            issuer=self.room,
+                            subject=self.player,
+                            command=f"/transfer self {selector}",
+                            render_actor=self.player,
+                            runtime_world=self.spawn_world,
+                        )
+
+                self.assertEqual(
+                    raised.exception.code,
+                    "invalid_room_reference",
+                )
+                self.player.refresh_from_db()
+                self.assertEqual(self.player.room_id, self.room.id)
 
     def test_scripted_command_output_skips_trigger_and_quest_subscribers(self):
         result = ScriptCommandRunner().execute(

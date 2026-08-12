@@ -6,6 +6,10 @@ from builders.instance_templates import create_instance_template
 from builders.models import ItemDefinition, MobDefinition
 from config import constants as adv_consts
 from core.condition_dsl import ConditionContext, evaluate_condition
+from core.death_routing import (
+    DeathRoutingValidationError,
+    compile_death_routing_policy,
+)
 from quests.entity_refs import resolve_room_ref_id
 from tests.base import WorldTestCase
 from worlds.models import Room, World, WorldConfig
@@ -55,6 +59,9 @@ class TestRoomManifestReferences(WorldTestCase):
         self.assertIsNone(parse_room_reference("17"))
         self.assertIsNone(parse_room_reference("room-name"))
         self.assertIsNone(parse_room_reference(True))
+        self.assertIsNone(parse_room_reference("room@²"))
+        self.assertIsNone(parse_room_reference(f"room@{'9' * 5000}"))
+        self.assertIsNone(parse_room_reference(f"room.{'9' * 5000}"))
 
     def test_base_world_parser_accepts_only_positive_portable_references(self):
         self.assertEqual(
@@ -337,17 +344,151 @@ class TestRoomManifestReferences(WorldTestCase):
 
         self.assertEqual(resolved, [self.room, self.room, self.room])
 
-    def test_quest_wrapper_resolves_canonical_and_legacy_bare_database_ids(self):
+    def test_quest_wrapper_resolves_only_canonical_room_refs(self):
         canonical_ref = format_room_manifest_ref(self.room)
 
         self.assertEqual(
             resolve_room_ref_id(world=self.world, value=canonical_ref),
             self.room.id,
         )
+        for legacy_value in (
+            self.room.id,
+            str(self.room.id),
+            f"room.{self.room.id}",
+            legacy_room_coordinate_ref(self.room),
+        ):
+            with self.subTest(legacy_value=legacy_value):
+                self.assertIsNone(
+                    resolve_room_ref_id(
+                        world=self.world,
+                        value=legacy_value,
+                    )
+                )
+
+    def test_import_normalizer_preserves_typed_aliases_and_rejects_bare_collision(self):
+        other_world = World.objects.new_world(
+            name="Sequence Padding",
+            author=self.user,
+            config=WorldConfig.objects.create(),
+        )
+        self.assertIsNotNone(other_world.config.starting_room_id)
+        database_room = self.room.create_at("east")
+        relative_room = self.create_imported_room(
+            relative_id=database_room.id,
+            x=200,
+            name="Colliding Relative Room",
+        )
+        self.assertNotEqual(database_room, relative_room)
+
+        explicit_alias = {
+            "kind": "trigger",
+            "spec": {
+                "conditions": {
+                    "eq": ["actor.room_id", f"room.{database_room.id}"],
+                },
+            },
+        }
+        normalized = (
+            builder_world_export.normalize_manifest_room_references_for_import(
+                world=self.world,
+                manifest=explicit_alias,
+            )
+        )
         self.assertEqual(
-            resolve_room_ref_id(world=self.world, value=str(self.room.id)),
+            normalized["spec"]["conditions"]["eq"][1],
+            format_room_manifest_ref(database_room),
+        )
+        coordinate_alias = {
+            "kind": "trigger",
+            "spec": {
+                "conditions": {
+                    "eq": [
+                        "event.destination_room.ref",
+                        legacy_room_coordinate_ref(database_room),
+                    ],
+                },
+            },
+        }
+        normalized_coordinate = (
+            builder_world_export.normalize_manifest_room_references_for_import(
+                world=self.world,
+                manifest=coordinate_alias,
+            )
+        )
+        self.assertEqual(
+            normalized_coordinate["spec"]["conditions"]["eq"][1],
+            format_room_manifest_ref(database_room),
+        )
+        self.assertEqual(
+            resolve_room_ref_id(
+                world=self.world,
+                value=f"room@{database_room.id}",
+            ),
+            relative_room.id,
+        )
+
+        bare_numeric = {
+            "kind": "trigger",
+            "spec": {
+                "conditions": {
+                    "eq": ["actor.room_id", database_room.id],
+                },
+            },
+        }
+        with self.assertRaisesRegex(serializers.ValidationError, "Bare numeric"):
+            builder_world_export.normalize_manifest_room_references_for_import(
+                world=self.world,
+                manifest=bare_numeric,
+            )
+
+    def test_legacy_export_repair_rejects_unbounded_or_unicode_numeric_ids(self):
+        for invalid_value in ("²", "9" * 5000):
+            with self.subTest(invalid_value=invalid_value[:32]):
+                with self.assertRaisesRegex(
+                    serializers.ValidationError,
+                    "positive 64-bit integers",
+                ):
+                    builder_world_export._canonicalize_room_ref(
+                        invalid_value,
+                        world=self.world,
+                        allow_bare_database_id=True,
+                    )
+
+    def test_death_routing_requires_canonical_room_destination(self):
+        compilation = compile_death_routing_policy(
+            world=self.world,
+            policy={
+                "routes": [{
+                    "when": {"always": True},
+                    "destination": format_room_manifest_ref(self.room),
+                }],
+            },
+        )
+        self.assertEqual(
+            compilation.routes[0].destination_room_id,
             self.room.id,
         )
+
+        for noncanonical in (
+            self.room.id,
+            str(self.room.id),
+            f"room.{self.room.id}",
+            legacy_room_coordinate_ref(self.room),
+        ):
+            with self.subTest(noncanonical=noncanonical):
+                with self.assertRaisesRegex(
+                    DeathRoutingValidationError,
+                    "canonical 'room@<relative_id>'",
+                ):
+                    compile_death_routing_policy(
+                        world=self.world,
+                        policy={
+                            "routes": [{
+                                "when": {"always": True},
+                                "destination": noncanonical,
+                            }],
+                        },
+                    )
 
     def test_spawn_room_resolution_accepts_canonical_reference(self):
         canonical_ref = format_room_manifest_ref(self.room)

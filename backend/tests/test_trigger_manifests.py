@@ -700,6 +700,82 @@ spec:
             {"eq": ["state.world.weather", "rainy"]},
         )
 
+    def test_apply_trigger_manifest_accepts_canonical_movement_room_refs(self):
+        room_ref = f"room@{self.room.relative_id}"
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  conditions:
+    all:
+      - eq: [event.origin_room.ref, {room_ref}]
+      - eq: [event.destination_room.ref, {room_ref}]
+      - eq: [event.target.ref, {room_ref}]
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.trigger.refresh_from_db()
+        self.assertEqual(
+            json.loads(self.trigger.conditions),
+            {
+                "all": [
+                    {"eq": ["event.origin_room.ref", room_ref]},
+                    {"eq": ["event.destination_room.ref", room_ref]},
+                    {"eq": ["event.target.ref", room_ref]},
+                ],
+            },
+        )
+
+    def test_apply_trigger_manifest_rejects_bare_movement_room_ids(self):
+        for path in (
+            "event.origin_room.id",
+            "event.destination_room.id",
+        ):
+            with self.subTest(path=path):
+                manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  conditions:
+    eq: [{path}, {self.room.id}]
+"""
+                response = self.client.post(
+                    self.apply_ep,
+                    {"manifest": manifest},
+                    format="json",
+                )
+
+                self.assertEqual(response.status_code, 400, response.data)
+                self.assertIn("Bare numeric room references", str(response.data))
+
+    def test_apply_trigger_manifest_rejects_bare_numeric_movement_room_ref(self):
+        manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  conditions:
+    eq: [event.destination_room.ref, {self.room.id}]
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400, resp.data)
+        self.assertIn("Bare numeric room references", str(resp.data))
+
     def test_apply_trigger_manifest_supports_multiline_script(self):
         manifest = f"""
 kind: trigger
@@ -796,6 +872,112 @@ spec:
         trigger_payload = resp.data["trigger"]
         self.assertEqual(trigger_payload["manifest"]["spec"]["steps"], self.trigger.steps)
         self.assertEqual(trigger_payload["manifest"]["spec"]["on_step_error"], "cancel")
+
+    def test_trigger_step_transfer_normalizes_typed_aliases_and_rejects_bare_numeric(self):
+        destination = self.room.create_at("east")
+        canonical_ref = f"room@{destination.relative_id}"
+        aliases = (
+            f"room.{destination.id}",
+            f"room@{destination.x},{destination.y},{destination.z}",
+        )
+
+        for alias in aliases:
+            with self.subTest(alias=alias):
+                manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: command
+          subject: trigger_room
+          command: /transfer {{{{ actor_key }}}} {alias}
+"""
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": manifest},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 200, resp.data)
+                self.trigger.refresh_from_db()
+                self.assertEqual(
+                    self.trigger.steps[0]["actions"][0]["command"],
+                    f"/transfer {{{{ actor_key }}}} {canonical_ref}",
+                )
+
+        bare_manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: command
+          subject: trigger_room
+          command: /transfer {{{{ actor_key }}}} {destination.id}
+"""
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": bare_manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400, resp.data)
+        self.assertIn("bare numeric destinations", str(resp.data))
+        with self.assertRaisesRegex(
+            serializers.ValidationError,
+            "canonical 'room@<relative_id>'",
+        ):
+            builder_manifests.parse_trigger_manifest(
+                world=self.world,
+                manifest=yaml.safe_load(bare_manifest),
+            )
+
+        for malformed_command in (
+            f"/transfer {canonical_ref}",
+            f"/transfer self extra {canonical_ref}",
+        ):
+            malformed = yaml.safe_load(bare_manifest)
+            malformed["spec"]["steps"][0]["actions"][0]["command"] = (
+                malformed_command
+            )
+            with self.subTest(malformed_command=malformed_command):
+                with self.assertRaisesRegex(
+                    serializers.ValidationError,
+                    "/transfer <target>",
+                ):
+                    builder_manifests.parse_trigger_manifest(
+                        world=self.world,
+                        manifest=malformed,
+                    )
+
+    def test_trigger_export_repairs_legacy_bare_transfer_destination(self):
+        destination = self.room.create_at("east")
+        self.trigger.script = ""
+        self.trigger.steps = [{
+            "after_seconds": 0,
+            "actions": [{
+                "type": "command",
+                "subject": "trigger_room",
+                "command": f"/transfer {{{{ actor_key }}}} {destination.relative_id}",
+            }],
+        }]
+        self.trigger.save(update_fields=["script", "steps"])
+
+        payload = builder_manifests.serialize_trigger_manifest(self.trigger)
+
+        self.assertEqual(
+            payload["manifest"]["spec"]["steps"][0]["actions"][0]["command"],
+            f"/transfer {{{{ actor_key }}}} room@{destination.relative_id}",
+        )
 
     def test_apply_trigger_manifest_preserves_interleaved_currency_action_order(self):
         obol = create_currency(

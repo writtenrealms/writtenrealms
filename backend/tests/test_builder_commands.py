@@ -2070,7 +2070,7 @@ class TestBuilderTransfer(BuilderCommandTestCase):
 
     @staticmethod
     def _room_ref(room):
-        return f"room@{room.x},{room.y},{room.z}"
+        return f"room@{room.relative_id}"
 
     def test_room_enter_event_fires_for_transfer_but_not_same_room_transfer(self):
         destination = self.room.create_at("east")
@@ -2158,12 +2158,11 @@ class TestBuilderTransfer(BuilderCommandTestCase):
             destination.id,
         )
 
-    def test_transfer_supports_portable_absolute_typed_and_direction_rooms(self):
+    def test_transfer_supports_canonical_bare_relative_and_direction_rooms(self):
         destination = self.room.create_at("east")
         selectors = (
             self._room_ref(destination),
             str(destination.relative_id),
-            f"room.{destination.id}",
             "east",
         )
 
@@ -2183,6 +2182,46 @@ class TestBuilderTransfer(BuilderCommandTestCase):
                 self.assertIsNotNone(
                     self._message_by_type(messages, "cmd./transfer.success")
                 )
+
+    def test_transfer_rejects_missing_room_selector(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/transfer self")
+
+        error = self._message_by_type(messages, "cmd./transfer.error")
+        self.assertIsNotNone(error)
+        self.assertEqual(error["data"]["code"], "invalid_args")
+        self.assertIn("room@relative_id", error.get("text", ""))
+
+    def test_trigger_step_transfer_requires_canonical_absolute_room_ref(self):
+        destination = self.room.create_at("east")
+        handler = get_registered_handlers()["/transfer"]
+        validation_kwargs = {
+            "subject_type": "player",
+            "subject_key": self.player.key,
+            "render_actor_key": self.player.key,
+        }
+
+        for selector in (self._room_ref(destination), "north", "n", "here"):
+            with self.subTest(accepted_selector=selector):
+                self.assertIsNone(
+                    handler.validate_trigger_step_command(
+                        command=f"/transfer self {selector}",
+                        **validation_kwargs,
+                    )
+                )
+
+        for selector in (
+            str(destination.relative_id),
+            f"room.{destination.id}",
+            f"room@{destination.x},{destination.y},{destination.z}",
+        ):
+            with self.subTest(rejected_selector=selector):
+                rejection = handler.validate_trigger_step_command(
+                    command=f"/transfer self {selector}",
+                    **validation_kwargs,
+                )
+                self.assertIsNotNone(rejection)
+                self.assertEqual(rejection[1], "invalid_room_reference")
 
     def test_slashless_transfer_alias_moves_player(self):
         destination = self.room.create_at("east")
@@ -2844,7 +2883,7 @@ class TestBuilderTransfer(BuilderCommandTestCase):
         self.assertEqual(second_guard.room_id, self.room.id)
         self.assertEqual(remote_player.room_id, remote_room.id)
 
-    def test_bare_numeric_room_selector_prefers_legacy_relative_id(self):
+    def test_transfer_bare_selector_uses_relative_id_when_database_id_collides(self):
         filler_world = World.objects.create(name="Room ID filler")
         for index in range(3):
             Room.objects.create(
@@ -2871,13 +2910,66 @@ class TestBuilderTransfer(BuilderCommandTestCase):
         self.player.refresh_from_db()
         self.assertEqual(self.player.room_id, legacy_room.id)
 
-        with capture_game_messages():
+        with capture_game_messages() as database_ref_messages:
             dispatch_text_command(
                 self.player.id,
                 f"/transfer self room.{absolute_room.id}",
             )
         self.player.refresh_from_db()
-        self.assertEqual(self.player.room_id, absolute_room.id)
+        self.assertEqual(self.player.room_id, legacy_room.id)
+        database_ref_error = self._message_by_type(
+            database_ref_messages,
+            "cmd./transfer.error",
+        )
+        self.assertEqual(
+            database_ref_error["data"]["code"],
+            "invalid_room_reference",
+        )
+
+    def test_transfer_rejects_database_and_coordinate_room_aliases(self):
+        destination = self.room.create_at("east")
+        selectors = (
+            f"room.{destination.id}",
+            f"room@{destination.x},{destination.y},{destination.z}",
+        )
+
+        for selector in selectors:
+            with self.subTest(selector=selector):
+                with capture_game_messages() as messages:
+                    dispatch_text_command(
+                        self.player.id,
+                        f"/transfer self {selector}",
+                    )
+
+                self.player.refresh_from_db()
+                self.assertEqual(self.player.room_id, self.room.id)
+                error = self._message_by_type(messages, "cmd./transfer.error")
+                self.assertEqual(
+                    error["data"]["code"],
+                    "invalid_room_reference",
+                )
+
+    def test_transfer_rejects_malformed_and_out_of_range_numeric_selectors(self):
+        selectors = (
+            "²",
+            str((1 << 63)),
+            "9" * 5000,
+            f"room@{'9' * 5000}",
+        )
+        for selector in selectors:
+            with self.subTest(selector=selector[:32]):
+                with capture_game_messages() as messages:
+                    dispatch_text_command(
+                        self.player.id,
+                        f"/transfer self {selector}",
+                    )
+
+                error = self._message_by_type(messages, "cmd./transfer.error")
+                self.assertIsNotNone(error)
+                self.assertIn(
+                    error["data"]["code"],
+                    {"invalid_room_id", "invalid_room_reference"},
+                )
 
     def test_transfer_enforces_instance_authored_room_boundary(self):
         instance_config = WorldConfig.objects.create()
@@ -3004,7 +3096,7 @@ class TestBuilderJump(BuilderCommandTestCase):
         with capture_game_messages() as moved_messages:
             dispatch_text_command(
                 self.player.id,
-                f"/jump {target_room.id}",
+                f"/jump {target_room.relative_id}",
             )
 
         self.player.refresh_from_db()
@@ -3022,7 +3114,7 @@ class TestBuilderJump(BuilderCommandTestCase):
         with capture_game_messages() as same_room_messages:
             dispatch_text_command(
                 self.player.id,
-                f"/jump {target_room.id}",
+                f"/jump {target_room.relative_id}",
             )
 
         same_room_echoes = [
@@ -3035,7 +3127,7 @@ class TestBuilderJump(BuilderCommandTestCase):
         ]
         self.assertEqual(same_room_echoes, [])
 
-    def test_jump_moves_player_to_target_room(self):
+    def test_jump_moves_player_to_bare_relative_id(self):
         target_room = self.room.create_at("east")
         mob = Mob.objects.create(
             world=self.spawn_world,
@@ -3055,7 +3147,10 @@ class TestBuilderJump(BuilderCommandTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, f"/jump {target_room.id}")
+            dispatch_text_command(
+                self.player.id,
+                f"/jump {target_room.relative_id}",
+            )
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.room_id, target_room.id)
@@ -3144,13 +3239,34 @@ class TestBuilderJump(BuilderCommandTestCase):
         self.assertIsNotNone(self._message_by_type(jump_messages, "cmd./jump.success"))
         self.assertIsNone(self._message_by_type(jump_messages, "cmd.move.error"))
 
-    def test_jump_rejects_invalid_room_id(self):
-        with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "/jump nope")
+    def test_jump_rejects_missing_or_nonpositive_bare_relative_id(self):
+        with capture_game_messages() as missing_messages:
+            dispatch_text_command(self.player.id, "/jump")
 
-        message = self._message_by_type(messages, "cmd./jump.error")
-        self.assertIsNotNone(message)
-        self.assertIn("must be a number", message.get("text", "").lower())
+        missing = self._message_by_type(missing_messages, "cmd./jump.error")
+        self.assertIsNotNone(missing)
+        self.assertEqual(missing["data"]["code"], "invalid_args")
+        self.assertIn("relative_id", missing.get("text", ""))
+
+        with capture_game_messages() as zero_messages:
+            dispatch_text_command(self.player.id, "/jump 0")
+
+        zero = self._message_by_type(zero_messages, "cmd./jump.error")
+        self.assertEqual(zero["data"]["code"], "invalid_room_id")
+        self.assertIn("positive number", zero.get("text", "").lower())
+
+        for selector in ("nope", "-1"):
+            with self.subTest(selector=selector):
+                with capture_game_messages() as messages:
+                    dispatch_text_command(self.player.id, f"/jump {selector}")
+
+                message = self._message_by_type(messages, "cmd./jump.error")
+                self.assertIsNotNone(message)
+                self.assertEqual(
+                    message["data"]["code"],
+                    "invalid_room_reference",
+                )
+                self.assertIn("must use", message.get("text", "").lower())
 
     def test_jump_rejects_unknown_room_id(self):
         with capture_game_messages() as messages:
@@ -3158,7 +3274,8 @@ class TestBuilderJump(BuilderCommandTestCase):
 
         message = self._message_by_type(messages, "cmd./jump.error")
         self.assertIsNotNone(message)
-        self.assertIn("invalid room id", message.get("text", "").lower())
+        self.assertEqual(message["data"]["code"], "invalid_room")
+        self.assertIn("relative id", message.get("text", "").lower())
 
     def test_jump_rejects_unknown_room_manifest_ref(self):
         with capture_game_messages() as messages:
@@ -3167,9 +3284,28 @@ class TestBuilderJump(BuilderCommandTestCase):
         message = self._message_by_type(messages, "cmd./jump.error")
         self.assertIsNotNone(message)
         self.assertEqual(message["data"]["code"], "invalid_room")
-        self.assertIn("invalid room id or reference", message.get("text", "").lower())
+        self.assertIn("canonical reference", message.get("text", "").lower())
 
-    def test_jump_distinguishes_room_id_from_relative_room_ref_collision(self):
+    def test_jump_rejects_malformed_and_out_of_range_numeric_selectors(self):
+        selectors = (
+            "²",
+            str((1 << 63)),
+            "9" * 5000,
+            f"room@{'9' * 5000}",
+        )
+        for selector in selectors:
+            with self.subTest(selector=selector[:32]):
+                with capture_game_messages() as messages:
+                    dispatch_text_command(self.player.id, f"/jump {selector}")
+
+                error = self._message_by_type(messages, "cmd./jump.error")
+                self.assertIsNotNone(error)
+                self.assertIn(
+                    error["data"]["code"],
+                    {"invalid_room_id", "invalid_room_reference"},
+                )
+
+    def test_jump_selector_namespaces_are_strict_when_ids_collide(self):
         filler_world = World.objects.create(name="Jump ID filler")
         for index in range(3):
             Room.objects.create(
@@ -3192,7 +3328,24 @@ class TestBuilderJump(BuilderCommandTestCase):
             dispatch_text_command(self.player.id, f"/jump {target_room.id}")
 
         self.player.refresh_from_db()
-        self.assertEqual(self.player.room_id, target_room.id)
+        self.assertEqual(self.player.room_id, relative_target.id)
+
+        with capture_game_messages() as database_ref_messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/jump room.{target_room.id}",
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, relative_target.id)
+        database_ref_error = self._message_by_type(
+            database_ref_messages,
+            "cmd./jump.error",
+        )
+        self.assertEqual(
+            database_ref_error["data"]["code"],
+            "invalid_room_reference",
+        )
 
         with capture_game_messages():
             dispatch_text_command(
@@ -3202,6 +3355,62 @@ class TestBuilderJump(BuilderCommandTestCase):
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.room_id, relative_target.id)
+
+    def test_jump_bare_relative_id_does_not_fall_back_to_database_id(self):
+        filler_world = World.objects.create(name="Jump DB namespace filler")
+        for index in range(3):
+            Room.objects.create(
+                world=filler_world,
+                name=f"Filler {index}",
+                x=index,
+                y=0,
+                z=0,
+            )
+        database_target = self.room.create_at("east")
+        self.assertFalse(
+            self.world.rooms.filter(relative_id=database_target.id).exists()
+        )
+
+        with capture_game_messages() as bare_messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/jump {database_target.id}",
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.room.id)
+        bare_error = self._message_by_type(bare_messages, "cmd./jump.error")
+        self.assertEqual(bare_error["data"]["code"], "invalid_room")
+
+        with capture_game_messages() as database_ref_messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/jump room.{database_target.id}",
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.room.id)
+        database_ref_error = self._message_by_type(
+            database_ref_messages,
+            "cmd./jump.error",
+        )
+        self.assertEqual(
+            database_ref_error["data"]["code"],
+            "invalid_room_reference",
+        )
+
+    def test_jump_rejects_coordinate_room_alias(self):
+        destination = self.room.create_at("east")
+        coordinate_ref = (
+            f"room@{destination.x},{destination.y},{destination.z}"
+        )
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/jump {coordinate_ref}")
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.room.id)
+        error = self._message_by_type(messages, "cmd./jump.error")
+        self.assertEqual(error["data"]["code"], "invalid_room_reference")
 
     def test_jump_sends_origin_and_destination_notifications(self):
         target_room = self.room.create_at("east")

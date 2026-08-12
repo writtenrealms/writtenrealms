@@ -399,6 +399,7 @@ class Room(BaseModel):
     """
     key: str
     id: Optional[int] = None
+    manifest_ref: Optional[str] = None
     name: str
     description: Optional[str] = None
     color: Optional[str] = None

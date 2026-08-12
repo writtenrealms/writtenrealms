@@ -652,9 +652,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
                             "subject": "trigger_actor",
                             "command": (
                                 f"/transfer self "
-                                f"room@{destination.x},"
-                                f"{destination.y},"
-                                f"{destination.z}"
+                                f"room@{destination.relative_id}"
                             ),
                         },
                         {
@@ -2912,9 +2910,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
         )
         charon_definition.spawn(self.room, self.spawn_world)
         destination = self.room.create_at("east")
-        destination_ref = (
-            f"room@{destination.x},{destination.y},{destination.z}"
-        )
+        destination_ref = f"room@{destination.relative_id}"
         trigger = self._create_trigger(
             match="cross acheron",
             conditions="",
@@ -3032,9 +3028,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
         )
         destination_observer.in_game = True
         destination_observer.save(update_fields=["in_game"])
-        destination_ref = (
-            f"room@{destination.x},{destination.y},{destination.z}"
-        )
+        destination_ref = f"room@{destination.relative_id}"
         trigger = self._create_trigger(
             match="board immediately",
             conditions="",
@@ -3139,7 +3133,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
                             "subject": "trigger_room",
                             "command": (
                                 "/transfer {{ actor_key }} "
-                                "room@999999,999999,999999"
+                                "room@999999"
                             ),
                         },
                     ],
@@ -3179,9 +3173,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
 
     def test_trigger_step_transfer_rejects_non_trigger_actor_target(self):
         destination = self.room.create_at("east")
-        destination_ref = (
-            f"room@{destination.x},{destination.y},{destination.z}"
-        )
+        destination_ref = f"room@{destination.relative_id}"
         other = self.create_player(
             "Other Traveler",
             user=self.create_user("other-trigger-transfer@example.com"),
@@ -3220,9 +3212,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
 
     def test_trigger_step_transfer_fails_fast_for_active_player_combat(self):
         destination = self.room.create_at("east")
-        destination_ref = (
-            f"room@{destination.x},{destination.y},{destination.z}"
-        )
+        destination_ref = f"room@{destination.relative_id}"
         trigger = self._create_trigger(
             match="leave duel",
             conditions="",
@@ -3260,9 +3250,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
 
     def test_trigger_step_transfer_fires_destination_mob_reaction(self):
         destination = self.room.create_at("east")
-        destination_ref = (
-            f"room@{destination.x},{destination.y},{destination.z}"
-        )
+        destination_ref = f"room@{destination.relative_id}"
         watcher_definition = MobDefinition.objects.create(
             world=self.world,
             slug="step-transfer-watcher",
@@ -3317,9 +3305,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
         self.world.config.combat_resolution_interval = 1.5
         self.world.config.save(update_fields=["combat_resolution_interval"])
         destination = self.room.create_at("east")
-        destination_ref = (
-            f"room@{destination.x},{destination.y},{destination.z}"
-        )
+        destination_ref = f"room@{destination.relative_id}"
         hostile = Mob.objects.create(
             world=self.spawn_world,
             room=destination,
@@ -3807,9 +3793,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
         )
         destination_observer.in_game = True
         destination_observer.save(update_fields=["in_game"])
-        destination_ref = (
-            f"room@{destination.x},{destination.y},{destination.z}"
-        )
+        destination_ref = f"room@{destination.relative_id}"
         self._create_trigger(
             match="pay two tolls",
             conditions="",

@@ -92,7 +92,7 @@ from spawns.state_payloads import (
 from spawns.text_output import render_event_text
 from spawns.wallet import WalletError, set_balance
 from worlds.instances import ForcedInstanceExitError, force_exit_instance
-from worlds.models import Room, World, Zone
+from worlds.models import BIGINT_MAX, Room, World, Zone
 from worlds.room_refs import (
     direct_base_world_for_room_reference,
     parse_room_reference,
@@ -627,21 +627,32 @@ def _collect_scope_player_keys(
     return [f"player.{player_id}" for player_id in qs.values_list("id", flat=True)]
 
 
-def _parse_room_selector(room_selector: str) -> int:
-    token = room_selector.strip().lower()
-    if token.startswith("room."):
-        token = token.split(".", 1)[1]
-    try:
-        return int(token)
-    except (TypeError, ValueError):
-        raise ActionError("Room ID must be a number.", code="invalid_room_id")
+def _parse_bare_room_relative_id(room_selector: str) -> int:
+    token = room_selector.strip()
+    if not token.isascii() or not token.isdecimal():
+        raise ActionError(
+            "A bare room relative ID must be a positive number.",
+            code="invalid_room_id",
+        )
+    significant_digits = token.lstrip("0") or "0"
+    if len(significant_digits) > len(str(BIGINT_MAX)):
+        relative_id = None
+    else:
+        try:
+            relative_id = int(significant_digits)
+        except ValueError:
+            relative_id = None
+    if relative_id is None or not 0 < relative_id <= BIGINT_MAX:
+        raise ActionError(
+            "A bare room relative ID must be a positive number within the "
+            "64-bit range.",
+            code="invalid_room_id",
+        )
+    return relative_id
 
 
-def _resolve_room_in_world(room_world, room_selector_id: int):
-    room = room_world.rooms.filter(pk=room_selector_id).first()
-    if room:
-        return room
-    return room_world.rooms.filter(relative_id=room_selector_id).first()
+def _resolve_room_by_relative_id(room_world, relative_id: int):
+    return room_world.rooms.filter(relative_id=relative_id).first()
 
 
 def _room_reference_payload(room: Room | None) -> dict[str, object] | None:
@@ -3130,35 +3141,43 @@ class TransferAction:
         normalized = str(selector or "").strip().lower()
         if not normalized:
             raise ActionError(
-                "Usage: /transfer <target> <room@relative_id|room_id|room@x,y,z|direction|here>",
+                "Usage: /transfer <target> "
+                "<room@relative_id|relative_id|direction|here>",
                 code="invalid_args",
             )
 
-        destination = None
+        direction = _normalize_jump_direction(normalized)
         if normalized == "here":
             destination = issuer_room
-
-        direction = _normalize_jump_direction(normalized)
-        if destination is None and direction:
+        elif direction:
             destination = getattr(issuer_room, direction, None)
             if not destination:
                 raise ActionError(
                     f"There is no exit {direction}.",
                     code="no_exit",
                 )
-        if destination is None and normalized.isdigit():
-            # Bare WR1 room ids were world-local ids. Prefer that legacy
-            # meaning when a database id and relative id happen to collide.
-            destination = issuer_room.world.rooms.filter(
-                relative_id=int(normalized),
-            ).first()
-
-        if destination is None:
+        elif normalized.isdigit():
+            relative_id = _parse_bare_room_relative_id(normalized)
+            destination = _resolve_room_by_relative_id(
+                issuer_room.world,
+                relative_id,
+            )
+        else:
+            room_reference = parse_room_reference(normalized)
+            if (
+                room_reference is None
+                or room_reference.kind != "relative_id"
+            ):
+                raise ActionError(
+                    "Room destinations must use room@<relative_id>, a bare "
+                    "positive relative ID, a direction, or here.",
+                    code="invalid_room_reference",
+                )
             destination = resolve_room_reference(issuer_room.world, normalized)
 
         if destination is None:
             raise ActionError(
-                "Invalid room reference.",
+                "Invalid room relative ID or canonical reference.",
                 code="invalid_room",
             )
         if destination.world_id != self._runtime_authored_world_id(runtime_world):
@@ -3737,18 +3756,28 @@ class JumpAction:
         normalized_selector = (room_selector or "").strip()
         if not normalized_selector:
             raise ActionError(
-                "Usage: /jump <room_id|room_ref|direction>",
+                "Usage: /jump <relative_id|room@relative_id|direction>",
                 code="invalid_args",
             )
         jump_direction = _normalize_jump_direction(normalized_selector)
-        room_reference = (
-            None if jump_direction else parse_room_reference(normalized_selector)
-        )
-        room_selector_id = (
-            None
-            if jump_direction or room_reference is not None
-            else _parse_room_selector(normalized_selector)
-        )
+        room_reference = None
+        bare_relative_id = None
+        if not jump_direction:
+            if normalized_selector.isdigit():
+                bare_relative_id = _parse_bare_room_relative_id(
+                    normalized_selector,
+                )
+            else:
+                room_reference = parse_room_reference(normalized_selector)
+                if (
+                    room_reference is None
+                    or room_reference.kind != "relative_id"
+                ):
+                    raise ActionError(
+                        "Room destinations must use room@<relative_id>, a bare "
+                        "positive relative ID, or a direction.",
+                        code="invalid_room_reference",
+                    )
         door_cancellation_events: list[GameEvent] = []
 
         with transaction.atomic():
@@ -3773,27 +3802,16 @@ class JumpAction:
                     room_world,
                     normalized_selector,
                 )
-                # ``room.<id>`` historically fell back to a relative room ID
-                # when no world-local database ID matched. Preserve that
-                # compatibility while canonical ``room@<id>`` refs resolve
-                # directly by relative ID.
-                if (
-                    target_room is None
-                    and room_reference.kind == "database_id"
-                ):
-                    target_room = room_world.rooms.filter(
-                        relative_id=room_reference.database_id,
-                    ).first()
             else:
-                target_room = _resolve_room_in_world(
+                target_room = _resolve_room_by_relative_id(
                     room_world,
-                    room_selector_id,
+                    bare_relative_id,
                 )
             if not target_room:
                 if jump_direction:
                     raise ActionError("You cannot jump that way.", code="no_exit")
                 raise ActionError(
-                    "Invalid room ID or reference.",
+                    "Invalid room relative ID or canonical reference.",
                     code="invalid_room",
                 )
 

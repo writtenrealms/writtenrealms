@@ -27,6 +27,7 @@ from quests.models import (
 from builders.models import Currency, ItemDefinition
 from core.economy import economy_world
 from worlds.models import World
+from worlds.room_refs import parse_room_reference
 
 
 MANIFEST_API_VERSION = "v1alpha1"
@@ -241,22 +242,31 @@ def _validate_entity_ref(world: World, value: Any, expected_type: str, field_nam
 
 
 def _room_ref_error(field_name: str) -> str:
-    return (
-        f"{field_name} must be a canonical 'room@<relative_id>' ref, "
-        "a legacy integer/database key, or a legacy 'room@x,y,z' coordinate ref."
-    )
+    return f"{field_name} must use canonical 'room@<relative_id>' syntax."
 
 
-def _validate_room_ref(world: World, value: Any, field_name: str) -> None:
+def _validate_room_ref(
+    world: World,
+    value: Any,
+    field_name: str,
+    *,
+    collected_refs: dict[int, str] | None = None,
+) -> None:
     if value in (None, ""):
         return
     if isinstance(value, bool):
         raise serializers.ValidationError(_room_ref_error(field_name))
 
+    parsed = parse_room_reference(value)
+    if parsed is None or parsed.kind != "relative_id":
+        raise serializers.ValidationError(_room_ref_error(field_name))
+
+    if collected_refs is not None:
+        collected_refs.setdefault(parsed.relative_id, field_name)
+        return
+
     resolved_id = resolve_room_ref_id(world=world, value=value)
     if resolved_id is None:
-        raise serializers.ValidationError(_room_ref_error(field_name))
-    if not world.rooms.filter(pk=resolved_id).exists():
         raise serializers.ValidationError(f"{field_name} references an unknown room.")
 
 
@@ -313,6 +323,11 @@ def _condition_uses_room_ref(
     if path in {
         "actor.room_id",
         "actor.room.id",
+        "event.destination_room.id",
+        "event.destination_room.ref",
+        "event.origin_room.id",
+        "event.origin_room.ref",
+        "event.target.ref",
         "player.room_id",
         "player.room.id",
     }:
@@ -415,6 +430,7 @@ def _validate_condition_room_refs(
     field_name: str,
     *,
     event_target_is_room: bool = False,
+    collected_refs: dict[int, str] | None = None,
 ) -> None:
     if condition in (None, {}, []):
         return
@@ -425,6 +441,7 @@ def _validate_condition_room_refs(
                 item,
                 f"{field_name}[{index}]",
                 event_target_is_room=event_target_is_room,
+                collected_refs=collected_refs,
             )
         return
     if not isinstance(condition, dict):
@@ -437,6 +454,7 @@ def _validate_condition_room_refs(
             child_conditions,
             f"{field_name}.all",
             event_target_is_room=event_target_is_room or _condition_list_targets_room(child_conditions),
+            collected_refs=collected_refs,
         )
     if "any" in condition:
         _validate_condition_room_refs(
@@ -444,6 +462,7 @@ def _validate_condition_room_refs(
             condition.get("any"),
             f"{field_name}.any",
             event_target_is_room=event_target_is_room,
+            collected_refs=collected_refs,
         )
     if "not" in condition:
         _validate_condition_room_refs(
@@ -451,6 +470,7 @@ def _validate_condition_room_refs(
             condition.get("not"),
             f"{field_name}.not",
             event_target_is_room=event_target_is_room,
+            collected_refs=collected_refs,
         )
 
     for operator in ("eq", "ne", "gte", "lte", "in"):
@@ -484,10 +504,50 @@ def _validate_condition_room_refs(
 
         if operator == "in" and isinstance(right_value, (list, tuple, set)):
             for index, candidate in enumerate(right_value):
-                _validate_room_ref(world, candidate, f"{field_name}.{operator}[1][{index}]")
+                _validate_room_ref(
+                    world,
+                    candidate,
+                    f"{field_name}.{operator}[1][{index}]",
+                    collected_refs=collected_refs,
+                )
             continue
 
-        _validate_room_ref(world, right_value, f"{field_name}.{operator}[1]")
+        _validate_room_ref(
+            world,
+            right_value,
+            f"{field_name}.{operator}[1]",
+            collected_refs=collected_refs,
+        )
+
+
+def validate_condition_room_refs(
+    *,
+    world: World,
+    condition: Any,
+    field_name: str = "conditions",
+) -> None:
+    """Validate stable room operands before authored conditions are stored."""
+
+    collected_refs: dict[int, str] = {}
+    _validate_condition_room_refs(
+        world,
+        condition,
+        field_name,
+        collected_refs=collected_refs,
+    )
+    if not collected_refs:
+        return
+    existing_refs = set(
+        world.rooms.filter(relative_id__in=collected_refs).values_list(
+            "relative_id",
+            flat=True,
+        )
+    )
+    for relative_id, ref_field_name in collected_refs.items():
+        if relative_id not in existing_refs:
+            raise serializers.ValidationError(
+                f"{ref_field_name} references an unknown room."
+            )
 
 
 def _validate_effect_entity_refs(world: World, effects: list[dict[str, Any]] | None, field_name: str) -> None:

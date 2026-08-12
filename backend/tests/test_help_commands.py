@@ -107,7 +107,7 @@ class TestHelpCommands(WorldTestCase):
         self.assertIn("scan <direction>", message.get("text", ""))
         self.assertIn("/load <item|mob> <definition_id|slug> [cmd]", message.get("text", ""))
         self.assertIn(
-            "/transfer <target> <room@relative_id|room_id|room@x,y,z|direction|here>",
+            "/transfer <target> <room@relative_id|relative_id|direction|here>",
             message.get("text", ""),
         )
         self.assertIn("/repop", message.get("text", ""))

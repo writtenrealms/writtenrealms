@@ -65,6 +65,7 @@ from spawns.serializers import (
     world_economy_payload,
 )
 from worlds.models import Door, Room, World
+from worlds.room_refs import format_room_manifest_ref
 
 
 _CORE_FACTION_UNSET = object()
@@ -957,6 +958,7 @@ def serialize_room(
     return RoomSchema(
         id=room.id,
         key=room_key_lookup.get(room.id, room_payload_key_for(room)),
+        manifest_ref=format_room_manifest_ref(room),
         name=room.name,
         description=room.description or "",
         color=room.color,

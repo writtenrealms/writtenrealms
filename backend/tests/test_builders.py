@@ -1570,7 +1570,7 @@ class WorldFactionTests(BuilderTestCase):
                     'when': {
                         'eq': ['player.core_faction', faction.code],
                     },
-                    'destination': f'room.{self.room.pk}',
+                    'destination': f'room@{self.room.relative_id}',
                 }],
             },
         )

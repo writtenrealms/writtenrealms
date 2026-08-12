@@ -125,6 +125,8 @@ world-relative id. Moving the room does not change this URL. Hovering a room
 link in the world, zone, and room breadcrumb navigation therefore exposes the
 relative id a builder should use, while the room screen presents `room@42` as
 the primary manifest identity and keeps its copy action in Technical details.
+While playing in a world, builders also see that same identity after each room
+name, for example `[ room@42 ]`.
 
 For staff troubleshooting, a room can also be opened by database id:
 
@@ -134,8 +136,10 @@ For staff troubleshooting, a room can also be opened by database id:
 
 That path is a lookup alias, not a second canonical identity. After resolving
 the room inside the selected world, the builder replaces it with
-`/build/worlds/23/rooms/42`. The room screen keeps the database id in its
-less-prominent technical details alongside the relative id.
+`/build/worlds/23/rooms/42`. Staff can see the database id in the room screen's
+less-prominent technical details when diagnosing an installation-specific
+problem. Ordinary builder labels, searches, and room pickers use `room@42`
+instead.
 
 Do not interpret a bare room URL segment as either kind of id depending on
 what happens to exist. `/rooms/42` always means relative id 42, and
@@ -150,8 +154,8 @@ installation-local world database id and `5` is the zone's world-relative id.
 The zone's Rooms, Paths, Spawns, and Config routes retain that same relative-id
 segment. Staff can use `/build/worlds/23/zones/db/38` to look up database zone
 38; the builder immediately replaces that alias with the canonical relative-id
-route. The zone screen exposes the database id only in its collapsed technical
-details.
+route. The zone screen exposes the database id only to staff in its collapsed
+technical details.
 
 As with rooms, `/zones/5` never falls back to database zone 5. Keeping the
 relative and database namespaces explicit prevents a valid number in one
@@ -323,8 +327,11 @@ spec:
 ```
 
 The explicit world scope disambiguates identical local refs in different
-worlds. Family export gathers these links from the authored foreign keys;
-family import restores them after all rooms have been applied. Individual room
+worlds. The base-room Instance Link picker uses the same idea in its labels,
+for example `Hades Entrance (hades/room@1)`, because multiple templates may
+each contain a local `room@1`. Family export gathers these links from the
+authored foreign keys; family import restores them after all rooms have been
+applied. Individual room
 documents intentionally omit `transfer_to`, `enters_instance`, and
 cross-world `exits_to`.
 

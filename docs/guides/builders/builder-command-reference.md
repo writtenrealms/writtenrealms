@@ -701,25 +701,27 @@ Use `&&` to chain nested commands on one line:
 Format:
 
 ```text
-/jump <room_id|room_ref|direction>
+/jump <relative_id|room@relative_id|direction>
 ```
 
 Moves the builder player to another room in the current world. The room can be
-selected by absolute room id, stable `room@<relative_id>` ref, legacy
-`room.<id>` style key, or a connected direction from the current room. Room
-refs resolve only within the current authored world. A jump that changes rooms
-runs the destination's room-scoped `event: enter` triggers with
+selected by a bare world-relative id, stable `room@<relative_id>` ref, or a
+connected direction from the current room. A bare positive number is shorthand
+for the same world-relative identity as `room@<relative_id>`. Database
+`room.<id>` keys and legacy `room@x,y,z` coordinates are import aliases, not
+gameplay command inputs. All room refs resolve only within the current authored
+world. A jump that changes rooms runs the destination's room-scoped
+`event: enter` triggers with
 `event.source: jump`. A directional jump supplies `event.direction`; an
-id/ref/key jump leaves it empty. Jumps bypass normal movement policies and do
+relative-id/ref jump leaves it empty. Jumps bypass normal movement policies and do
 not run the movement-only `after_move_enter` compatibility hook. Jumping to the
 current room emits no arrival.
 
 Examples:
 
 ```text
-/jump 50201
+/jump 17
 /jump room@17
-/jump room.50201
 /jump north
 /jump n
 ```
@@ -731,7 +733,7 @@ This command is direct-builder-only.
 Format:
 
 ```text
-/transfer <target> <room@relative_id|room_id|room@x,y,z|direction|here>
+/transfer <target> <room@relative_id|relative_id|direction|here>
 ```
 
 Instantly moves a player or mob without using ordinary movement. Transfer does
@@ -761,18 +763,23 @@ Destination behavior:
 
 - `room@<relative_id>` is the portable, move-stable form and should be used in
   Trigger YAML
-- `room@x,y,z` is a legacy coordinate selector
-- a bare numeric selector is the WR1-compatible, world-relative room id
-- `room.<id>` selects an explicit WR2 room database id for interactive testing
+- a bare positive numeric selector is interactive shorthand for the same
+  world-relative room id
 - a direction such as `north` or `n` uses the executing actor or subject's room
   exit
 - `here` means that actor or subject's current room
+
+Database `room.<id>` keys and legacy `room@x,y,z` coordinates are import aliases,
+not gameplay command inputs. Persisted Trigger-step `command` actions must use
+canonical `room@<relative_id>` for an absolute destination; bare numeric
+shorthand is accepted only for direct interactive use. Directions and `here`
+remain valid in Trigger steps.
 
 Examples:
 
 ```text
 /transfer player.123 room@42
-/transfer aria 50201
+/transfer aria 17
 /transfer guard north
 /cmd room -- /transfer {{ actor_key }} room@42
 ```

@@ -8,9 +8,9 @@
       </div>
     </h2>
     <div class="path-meta color-text-60 mb-4">
-      <span>Database ID {{ path.id }}</span>
-      <span>Relative ID {{ path.relative_id }}</span>
       <span>Manifest Ref <code>{{ path.manifest_ref }}</code></span>
+      <span>Relative ID {{ path.relative_id }}</span>
+      <span v-if="store.state.auth.user.is_staff">Database ID {{ path.id }}</span>
       <button class="btn-thin" :disabled="!path.manifest_ref" @click="copyManifestRef">
         COPY REF
       </button>

@@ -18,9 +18,9 @@ const [
   readSource("../src/views/builder/zone/PathDetails.vue"),
 ]);
 
-test("world-map room selection retains an explicit database fallback", () => {
+test("world-map room selection has no implicit database fallback", () => {
   assert.match(builderStoreSource, /builderRoomDetailEndpoint/);
-  assert.match(builderStoreSource, /room_database_id:\s*room\.id/);
+  assert.doesNotMatch(builderStoreSource, /room_database_id:\s*room\.id/);
   assert.doesNotMatch(
     builderStoreSource,
     /by-relative-id\/\$\{room_relative_id\}/,

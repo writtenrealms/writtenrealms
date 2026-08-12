@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from django.db.models import Q
 
-from worlds.models import Room, World
+from worlds.models import BIGINT_MAX, Room, World
 
 
 RoomReferenceKind = Literal["relative_id", "coordinates", "database_id"]
@@ -37,14 +37,14 @@ class ParsedBaseWorldRoomReference:
     relative_id: int
 
 
-_RELATIVE_ROOM_REF_RE = re.compile(r"^room@(\d+)$", re.IGNORECASE)
+_RELATIVE_ROOM_REF_RE = re.compile(r"^room@([0-9]+)$", re.IGNORECASE)
 _COORDINATE_ROOM_REF_RE = re.compile(
-    r"^room@\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*,\s*([+-]?\d+)$",
+    r"^room@\s*([+-]?[0-9]+)\s*,\s*([+-]?[0-9]+)\s*,\s*([+-]?[0-9]+)$",
     re.IGNORECASE,
 )
-_DATABASE_ROOM_REF_RE = re.compile(r"^room\.(\d+)$", re.IGNORECASE)
+_DATABASE_ROOM_REF_RE = re.compile(r"^room\.([0-9]+)$", re.IGNORECASE)
 _BASE_WORLD_ROOM_REF_RE = re.compile(
-    r"^world@base/room@(\d+)$",
+    r"^world@base/room@([0-9]+)$",
     re.IGNORECASE,
 )
 _ROOM_REF_IN_TEXT_RE = re.compile(
@@ -82,6 +82,26 @@ _ACTIVE_ROOM_OBJECT_CACHES: ContextVar[
     "active_room_reference_object_caches",
     default=None,
 )
+_INTEGER_MIN = -(1 << 31)
+_INTEGER_MAX = (1 << 31) - 1
+
+
+def _bounded_int(value: str, *, minimum: int, maximum: int) -> int | None:
+    """Parse an ASCII integer without exceeding Python or database bounds."""
+
+    text = str(value or "").strip()
+    signless = text.lstrip("+-")
+    if not signless or not signless.isascii() or not signless.isdecimal():
+        return None
+    significant_digits = signless.lstrip("0") or "0"
+    max_digits = max(len(str(abs(minimum))), len(str(abs(maximum))))
+    if len(significant_digits) > max_digits:
+        return None
+    try:
+        parsed = int(text)
+    except ValueError:
+        return None
+    return parsed if minimum <= parsed <= maximum else None
 
 
 def parse_room_reference(value: Any) -> ParsedRoomReference | None:
@@ -95,21 +115,45 @@ def parse_room_reference(value: Any) -> ParsedRoomReference | None:
 
     coordinate_match = _COORDINATE_ROOM_REF_RE.fullmatch(text)
     if coordinate_match:
-        x, y, z = (int(part) for part in coordinate_match.groups())
+        coordinates = tuple(
+            _bounded_int(
+                part,
+                minimum=_INTEGER_MIN,
+                maximum=_INTEGER_MAX,
+            )
+            for part in coordinate_match.groups()
+        )
+        if any(part is None for part in coordinates):
+            return None
+        x, y, z = coordinates
         return ParsedRoomReference(kind="coordinates", x=x, y=y, z=z)
 
     relative_match = _RELATIVE_ROOM_REF_RE.fullmatch(text)
     if relative_match:
+        relative_id = _bounded_int(
+            relative_match.group(1),
+            minimum=1,
+            maximum=BIGINT_MAX,
+        )
+        if relative_id is None:
+            return None
         return ParsedRoomReference(
             kind="relative_id",
-            relative_id=int(relative_match.group(1)),
+            relative_id=relative_id,
         )
 
     database_match = _DATABASE_ROOM_REF_RE.fullmatch(text)
     if database_match:
+        database_id = _bounded_int(
+            database_match.group(1),
+            minimum=1,
+            maximum=BIGINT_MAX,
+        )
+        if database_id is None:
+            return None
         return ParsedRoomReference(
             kind="database_id",
-            database_id=int(database_match.group(1)),
+            database_id=database_id,
         )
 
     return None
@@ -125,8 +169,12 @@ def parse_base_world_room_reference(
     match = _BASE_WORLD_ROOM_REF_RE.fullmatch(value.strip())
     if match is None:
         return None
-    relative_id = int(match.group(1))
-    if relative_id <= 0:
+    relative_id = _bounded_int(
+        match.group(1),
+        minimum=1,
+        maximum=BIGINT_MAX,
+    )
+    if relative_id is None:
         return None
     return ParsedBaseWorldRoomReference(relative_id=relative_id)
 

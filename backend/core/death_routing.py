@@ -672,14 +672,18 @@ def compile_death_routing_policy_value(
 
 def _resolve_destination_for_world(world, value: Any, field_name: str) -> int:
     from worlds.models import Room
-    from worlds.room_refs import resolve_room_reference
+    from worlds.room_refs import parse_room_reference, resolve_room_reference
 
     room = None
     if isinstance(value, Room):
         room = value
-    elif isinstance(value, int) and not isinstance(value, bool):
-        room = Room.objects.filter(world=world, pk=value).only("id", "world_id").first()
     else:
+        parsed = parse_room_reference(value)
+        if parsed is None or parsed.kind != "relative_id":
+            raise DeathRoutingValidationError(
+                f"{field_name} must use canonical "
+                "'room@<relative_id>' syntax."
+            )
         room = resolve_room_reference(world, value)
     if room is None or room.world_id != world.id:
         raise DeathRoutingValidationError(

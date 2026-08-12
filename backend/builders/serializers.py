@@ -1729,6 +1729,31 @@ class RoomBuilderSerializer(serializers.ModelSerializer):
                 "A room already exists at those coordinates.")
 
 
+class InstanceRoomBuilderSerializer(serializers.ModelSerializer):
+    """Lean cross-instance room option with an unambiguous authored scope."""
+
+    manifest_ref = serializers.SerializerMethodField()
+    instance_scope = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Room
+        fields = [
+            'id',
+            'key',
+            'relative_id',
+            'manifest_ref',
+            'name',
+            'instance_scope',
+        ]
+        read_only_fields = fields
+
+    def get_manifest_ref(self, room):
+        return format_room_manifest_ref(room)
+
+    def get_instance_scope(self, room):
+        return room.world.instance_slug or room.world.name
+
+
 class LegacyRoomBuilderSerializer(RoomBuilderSerializer):
     map = serializers.SerializerMethodField()
 

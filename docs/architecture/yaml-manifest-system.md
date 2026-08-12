@@ -1272,6 +1272,23 @@ Rooms separate immutable authored identity from mutable map position:
   resolves them in the selected authored world and canonical export emits the
   stable relative ref. A database key is not portable to another installation.
 
+The identity boundary is deliberate:
+
+- builders use `room@<relative_id>` when a room reference is stored, copied,
+  displayed, or placed in generic authored data
+- an interactive command argument whose grammar already requires a room may
+  accept the bare relative id as shorthand, so `/jump 42` means `room@42`
+- a bare number in a manifest, Trigger, quest, condition, or other persisted
+  mixed-value field is not canonical room syntax; use the typed ref
+- database primary keys remain the relational identity used by foreign keys,
+  locks, actions, and internal events after a room ref is resolved at ingress
+
+No builder-facing resolver may try a number as a database id and then as a
+relative id, or the reverse. Both namespaces can contain the same positive
+number and identify different rooms. Interactive bare shorthand is therefore
+always world-scoped relative identity, while legacy database and coordinate
+forms are confined to import normalization and explicit staff diagnostics.
+
 The stable-room rollout first assigns room relative ids, then runs a one-time,
 idempotent authored-data canonicalization migration. It rewrites resolvable
 legacy database and coordinate aliases inside semantic JSON and command-text
@@ -1290,6 +1307,12 @@ supported command destinations—use the same resolver. Syntactically recognized
 literal aliases in semantic scripts and command text are canonicalized when
 they resolve; computed or dynamic strings cannot be rewritten reliably and
 must resolve at runtime.
+
+Gameplay payloads use `room.<relative_id>` as a world-local public map key.
+Some relational serializers and legacy import data also contain dotted
+database-local keys. The identical punctuation does not make either form an
+authored reference: builder displays, copy actions, commands stored in YAML,
+and conditions use the explicit `room@<relative_id>` manifest ref.
 
 `world@base/room@<relative_id>` is a deliberately narrow qualified command
 token, not a general manifest foreign key. It is accepted only as the
@@ -1323,10 +1346,10 @@ The troubleshooting route
 `/build/worlds/<world_pk>/rooms/db/<database_pk>` resolves the database row
 within the selected world and immediately replaces the browser location with
 the canonical relative-id route. The ordinary room screen gives the portable
-`room@<relative_id>` identity primary emphasis and exposes both the relative
-id and database id in less-prominent technical details. Database ids remain
-useful for relational storage, logs, and staff diagnostics; builders should
-not need them for normal navigation or authoring.
+`room@<relative_id>` identity primary emphasis. Database ids remain available
+to staff through explicit diagnostics, relational API payloads, logs, and
+admin tools; ordinary builder labels, selectors, searches, notifications, and
+copy actions do not present them as authored identity.
 
 This is an intentional pre-launch breaking cutover. A bare
 `/rooms/<number>` segment always means a relative id, while
@@ -1335,6 +1358,24 @@ fall back from one namespace to the other: the same integer can validly name
 different rooms, so a heuristic fallback could silently open or mutate the
 wrong resource. Former `/rooms/<database_pk>` development bookmarks are not
 retained as ambiguous aliases.
+
+### Interactive Command Room Selectors
+
+Direct room-destination commands follow the same no-fallback rule while
+retaining concise input:
+
+- `room@42` is the canonical selector and the form to persist in Trigger or
+  quest command text
+- bare `42` is interactive shorthand for world-relative `room@42`
+- directions and command-specific values such as `here` keep their existing
+  meanings
+- `world@base/room@42` remains restricted to `/exitinstance`
+
+Database-key and coordinate spellings are legacy import aliases, not examples
+for new builder commands. Command parsing resolves a selector once, within the
+issuer's authored world, and passes the resulting database id into the strict
+Action/runtime layer. It never changes the internal identity used by row locks,
+foreign keys, or structural events.
 
 ### Builder Zone URLs And Operational Identity
 
@@ -2162,9 +2203,11 @@ normalize to an ordered `type: interrupt` component with `target`, `apply`, and
 
 No, but its role should be narrow and explicit in WR2:
 
-- `key` is still useful as a typed local reference format across runtime and
-  API payloads (`room.10`, `zone.3`, `trigger.42`), but room keys are
-  database-local and are not canonical authored manifest refs.
+- `key` is still useful as a typed local reference format in relational API
+  payloads (`zone.3`, `trigger.42`), but it is not canonical authored identity.
+  Room keys require particular care: gameplay emits `room.<relative_id>` while
+  legacy relational payloads can still contain `room.<database_id>`. Builders
+  must copy `manifest_ref`, never infer a room ref from a dotted key.
 - `id` is simpler for update targeting.
 - For WR2 manifests, treat `id` as the primary update identifier and `key` as an interoperability/reference-friendly alias.
 - Room manifests are the deliberate exception: `metadata.ref:

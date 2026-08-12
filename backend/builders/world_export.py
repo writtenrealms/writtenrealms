@@ -60,6 +60,7 @@ from quests import entity_refs as quest_entity_refs
 from quests import manifests as quest_manifests
 from quests.models import QuestArcTemplate, QuestTemplate
 from worlds.models import (
+    BIGINT_MAX,
     Door,
     Room,
     RoomDetail,
@@ -1274,16 +1275,21 @@ def _build_room_ref_cache(
     return cache
 
 
-def _room_ref_cache_key(value: Any) -> tuple[Any, ...] | None:
+def _room_ref_cache_key(
+    value: Any,
+    *,
+    allow_bare_database_id: bool = False,
+) -> tuple[Any, ...] | None:
     if isinstance(value, bool):
         return None
-    if isinstance(value, int):
-        return ("database_id", value)
+    is_bare_numeric, bare_database_id = _parse_bare_database_id(value)
+    if is_bare_numeric:
+        if allow_bare_database_id and bare_database_id is not None:
+            return ("database_id", bare_database_id)
+        return None
     text = str(value or "").strip()
     if not text:
         return None
-    if text.isdigit():
-        return ("database_id", int(text))
     parsed = parse_room_reference(text)
     if parsed is None:
         return None
@@ -1294,18 +1300,58 @@ def _room_ref_cache_key(value: Any) -> tuple[Any, ...] | None:
     return ("coordinates", parsed.x, parsed.y, parsed.z)
 
 
+def _parse_bare_database_id(value: Any) -> tuple[bool, int | None]:
+    """Recognize legacy bare IDs without unbounded or Unicode integer parsing."""
+
+    if isinstance(value, bool):
+        return False, None
+    if isinstance(value, int):
+        return True, value if 0 < value <= BIGINT_MAX else None
+    text = str(value or "").strip()
+    if not text.isdigit():
+        return False, None
+    if not text.isascii() or not text.isdecimal():
+        return True, None
+    significant_digits = text.lstrip("0") or "0"
+    if len(significant_digits) > len(str(BIGINT_MAX)):
+        return True, None
+    try:
+        parsed = int(significant_digits)
+    except ValueError:
+        return True, None
+    return True, parsed if 0 < parsed <= BIGINT_MAX else None
+
+
 def _canonicalize_room_ref(
     value: Any,
     *,
     world: World,
     room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+    allow_bare_database_id: bool = False,
 ) -> Any:
     if value in (None, "", [], {}):
         return value
     if quest_entity_refs.is_dynamic_reference(value):
         return value
 
-    cache_key = _room_ref_cache_key(value)
+    is_bare_numeric, bare_database_id = _parse_bare_database_id(value)
+    if is_bare_numeric:
+        if not allow_bare_database_id:
+            raise serializers.ValidationError(
+                "Bare numeric room references are ambiguous; use "
+                "'room@<relative_id>'."
+            )
+        if bare_database_id is None:
+            raise serializers.ValidationError(
+                "Legacy bare database room references must be supported "
+                "positive 64-bit integers."
+            )
+        value = f"room.{bare_database_id}"
+
+    cache_key = _room_ref_cache_key(
+        value,
+        allow_bare_database_id=allow_bare_database_id,
+    )
     if room_ref_cache is not None and cache_key is not None:
         canonical = room_ref_cache.get(cache_key)
         if canonical is not None:
@@ -1314,15 +1360,10 @@ def _canonicalize_room_ref(
             f"Room reference '{value}' does not resolve in this world."
         )
 
-    room_id = quest_entity_refs.resolve_room_ref_id(world=world, value=value)
-    if room_id is None:
-        if cache_key is not None:
-            raise serializers.ValidationError(
-                f"Room reference '{value}' does not resolve in this world."
-            )
+    parsed = parse_room_reference(value)
+    if parsed is None:
         return value
-
-    room = Room.objects.filter(world=world, pk=room_id).first()
+    room = resolve_room_reference(world, value)
     if room is None:
         raise serializers.ValidationError(
             f"Room reference '{value}' does not resolve in this world."
@@ -1338,6 +1379,7 @@ def _canonicalize_condition_refs(
     entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
     room_ref_cache: dict[tuple[Any, ...], str] | None = None,
     canonicalize_entities: bool = True,
+    allow_bare_room_database_ids: bool = False,
 ) -> Any:
     if condition in (None, {}, []):
         return condition
@@ -1350,6 +1392,7 @@ def _canonicalize_condition_refs(
                 entity_ref_cache=entity_ref_cache,
                 room_ref_cache=room_ref_cache,
                 canonicalize_entities=canonicalize_entities,
+                allow_bare_room_database_ids=allow_bare_room_database_ids,
             )
             for item in condition
         ]
@@ -1378,6 +1421,7 @@ def _canonicalize_condition_refs(
                     entity_ref_cache=entity_ref_cache,
                     room_ref_cache=room_ref_cache,
                     canonicalize_entities=canonicalize_entities,
+                    allow_bare_room_database_ids=allow_bare_room_database_ids,
                 )
             canonical["mob_present"] = canonical_spec
         else:
@@ -1400,6 +1444,7 @@ def _canonicalize_condition_refs(
                     entity_ref_cache=entity_ref_cache,
                     room_ref_cache=room_ref_cache,
                     canonicalize_entities=canonicalize_entities,
+                    allow_bare_room_database_ids=allow_bare_room_database_ids,
                 ),
             }
 
@@ -1425,6 +1470,7 @@ def _canonicalize_condition_refs(
             entity_ref_cache=entity_ref_cache,
             room_ref_cache=room_ref_cache,
             canonicalize_entities=canonicalize_entities,
+            allow_bare_room_database_ids=allow_bare_room_database_ids,
         )
     if "any" in canonical:
         canonical["any"] = _canonicalize_condition_refs(
@@ -1434,6 +1480,7 @@ def _canonicalize_condition_refs(
             entity_ref_cache=entity_ref_cache,
             room_ref_cache=room_ref_cache,
             canonicalize_entities=canonicalize_entities,
+            allow_bare_room_database_ids=allow_bare_room_database_ids,
         )
     if "not" in canonical:
         canonical["not"] = _canonicalize_condition_refs(
@@ -1443,6 +1490,7 @@ def _canonicalize_condition_refs(
             entity_ref_cache=entity_ref_cache,
             room_ref_cache=room_ref_cache,
             canonicalize_entities=canonicalize_entities,
+            allow_bare_room_database_ids=allow_bare_room_database_ids,
         )
 
     for operator in ("eq", "ne", "gte", "lte", "in"):
@@ -1484,6 +1532,7 @@ def _canonicalize_condition_refs(
                             candidate,
                             world=world,
                             room_ref_cache=room_ref_cache,
+                            allow_bare_database_id=allow_bare_room_database_ids,
                         )
                         for candidate in right_value
                     ],
@@ -1495,6 +1544,7 @@ def _canonicalize_condition_refs(
                         right_value,
                         world=world,
                         room_ref_cache=room_ref_cache,
+                        allow_bare_database_id=allow_bare_room_database_ids,
                     ),
                 ]
             continue
@@ -1543,6 +1593,7 @@ def _canonicalize_nested_conditions(
     room_ref_cache: dict[tuple[Any, ...], str] | None = None,
     base_room_ref_cache: dict[tuple[Any, ...], str] | None = None,
     canonicalize_entities: bool = True,
+    allow_bare_room_database_ids: bool = False,
 ) -> Any:
     """Canonicalize semantic refs embedded in authored JSON structures."""
 
@@ -1555,6 +1606,7 @@ def _canonicalize_nested_conditions(
                 room_ref_cache=room_ref_cache,
                 base_room_ref_cache=base_room_ref_cache,
                 canonicalize_entities=canonicalize_entities,
+                allow_bare_room_database_ids=allow_bare_room_database_ids,
             )
             for item in value
         ]
@@ -1570,6 +1622,7 @@ def _canonicalize_nested_conditions(
             entity_ref_cache=entity_ref_cache,
             room_ref_cache=room_ref_cache,
             canonicalize_entities=canonicalize_entities,
+            allow_bare_room_database_ids=allow_bare_room_database_ids,
         )
     canonical: dict[str, Any] = {}
     for key, child in value.items():
@@ -1581,6 +1634,7 @@ def _canonicalize_nested_conditions(
                     entity_ref_cache=entity_ref_cache,
                     room_ref_cache=room_ref_cache,
                     canonicalize_entities=canonicalize_entities,
+                    allow_bare_room_database_ids=allow_bare_room_database_ids,
                 )
             elif isinstance(child, str):
                 canonical[key] = _canonicalize_semantic_command_value(
@@ -1605,13 +1659,25 @@ def _canonicalize_nested_conditions(
                 base_room_ref_cache=base_room_ref_cache,
             )
         elif (
-            key in {"room", "room_ref", "room_id", "destination", "to_room"}
-            and _room_ref_cache_key(child) is not None
+            key in {
+                "death_room",
+                "destination",
+                "room",
+                "room_id",
+                "room_ref",
+                "starting_room",
+                "to_room",
+            }
+            and _room_ref_cache_key(
+                child,
+                allow_bare_database_id=allow_bare_room_database_ids,
+            ) is not None
         ):
             canonical[key] = _canonicalize_room_ref(
                 child,
                 world=world,
                 room_ref_cache=room_ref_cache,
+                allow_bare_database_id=allow_bare_room_database_ids,
             )
         else:
             canonical[key] = _canonicalize_nested_conditions(
@@ -1621,6 +1687,7 @@ def _canonicalize_nested_conditions(
                 room_ref_cache=room_ref_cache,
                 base_room_ref_cache=base_room_ref_cache,
                 canonicalize_entities=canonicalize_entities,
+                allow_bare_room_database_ids=allow_bare_room_database_ids,
             )
     return canonical
 
@@ -1686,6 +1753,7 @@ def canonicalize_manifest_for_export(
             entity_ref_cache=entity_ref_cache,
             room_ref_cache=room_ref_cache,
             base_room_ref_cache=base_room_ref_cache,
+            allow_bare_room_database_ids=True,
         )
     if include_api_version:
         canonical["apiVersion"] = CANONICAL_MANIFEST_API_VERSION
@@ -1699,6 +1767,7 @@ def _canonicalize_trigger_steps(
     entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
     room_ref_cache: dict[tuple[Any, ...], str] | None = None,
     base_room_ref_cache: dict[tuple[Any, ...], str] | None = None,
+    allow_bare_room_database_ids: bool = False,
 ) -> list[dict[str, Any]]:
     if not isinstance(steps, list):
         return []
@@ -1739,6 +1808,7 @@ def _canonicalize_trigger_steps(
                     world=world,
                     entity_ref_cache=entity_ref_cache,
                     room_ref_cache=room_ref_cache,
+                    allow_bare_room_database_ids=allow_bare_room_database_ids,
                 )
             if isinstance(action.get("command"), str):
                 try:
@@ -1751,6 +1821,29 @@ def _canonicalize_trigger_steps(
                     )
                 except RoomReferenceError as exc:
                     raise serializers.ValidationError(str(exc)) from exc
+                command_tokens = action["command"].split()
+                is_bare_transfer_destination = (
+                    command_tokens
+                    and command_tokens[0].lower() in {"/transfer", "transfer"}
+                    and command_tokens[-1].isascii()
+                    and command_tokens[-1].isdecimal()
+                )
+                if is_bare_transfer_destination:
+                    if not allow_bare_room_database_ids:
+                        raise serializers.ValidationError(
+                            "Typed Trigger-step /transfer destinations must use "
+                            "'room@<relative_id>'; bare numeric destinations are "
+                            "ambiguous."
+                        )
+                    canonical_destination = _canonicalize_room_ref(
+                        f"room@{command_tokens[-1]}",
+                        world=world,
+                        room_ref_cache=room_ref_cache,
+                    )
+                    command_prefix = action["command"].rsplit(None, 1)[0]
+                    action["command"] = (
+                        f"{command_prefix} {canonical_destination}"
+                    )
             subject = action.get("subject")
             if (
                 isinstance(subject, dict)
@@ -1768,6 +1861,7 @@ def _canonicalize_trigger_steps(
                         world=world,
                         entity_ref_cache=entity_ref_cache,
                         room_ref_cache=room_ref_cache,
+                        allow_bare_room_database_ids=allow_bare_room_database_ids,
                     )
     return canonical_steps
 
@@ -1779,6 +1873,7 @@ def _canonicalize_quest_node(
     entity_ref_cache: dict[tuple[str, str, Any], str] | None = None,
     room_ref_cache: dict[tuple[Any, ...], str] | None = None,
     canonicalize_entities: bool = True,
+    allow_bare_room_database_ids: bool = False,
 ) -> Any:
     if isinstance(node, list):
         return [
@@ -1788,6 +1883,7 @@ def _canonicalize_quest_node(
                 entity_ref_cache=entity_ref_cache,
                 room_ref_cache=room_ref_cache,
                 canonicalize_entities=canonicalize_entities,
+                allow_bare_room_database_ids=allow_bare_room_database_ids,
             )
             for item in node
         ]
@@ -1802,6 +1898,7 @@ def _canonicalize_quest_node(
             entity_ref_cache=entity_ref_cache,
             room_ref_cache=room_ref_cache,
             canonicalize_entities=canonicalize_entities,
+            allow_bare_room_database_ids=allow_bare_room_database_ids,
         )
 
     canonical = {}
@@ -1830,6 +1927,7 @@ def _canonicalize_quest_node(
                 value,
                 world=world,
                 room_ref_cache=room_ref_cache,
+                allow_bare_database_id=allow_bare_room_database_ids,
             )
             continue
         if canonicalize_entities and key in {"mob_definition", "mob_definition_id"}:
@@ -1865,6 +1963,7 @@ def _canonicalize_quest_node(
             entity_ref_cache=entity_ref_cache,
             room_ref_cache=room_ref_cache,
             canonicalize_entities=canonicalize_entities,
+            allow_bare_room_database_ids=allow_bare_room_database_ids,
         )
     return canonical
 
@@ -1894,6 +1993,7 @@ def _serialize_quest_manifest(
         world=world,
         entity_ref_cache=entity_ref_cache,
         room_ref_cache=room_ref_cache,
+        allow_bare_room_database_ids=True,
     )
     spec = quest_manifests.QuestSpec.model_validate(spec).model_dump()
     return {
@@ -1990,6 +2090,7 @@ def _serialize_trigger_manifest(
             world=world,
             entity_ref_cache=entity_ref_cache,
             room_ref_cache=room_ref_cache,
+            allow_bare_room_database_ids=True,
         )
     script = trigger.script or ""
     if script:
@@ -2020,6 +2121,7 @@ def _serialize_trigger_manifest(
                 entity_ref_cache=entity_ref_cache,
                 room_ref_cache=room_ref_cache,
                 base_room_ref_cache=base_room_ref_cache,
+                allow_bare_room_database_ids=True,
             ),
             "on_step_error": trigger.on_step_error or "cancel",
             "conditions": conditions,
@@ -3689,6 +3791,11 @@ def _resolve_spawn_plan_room(*, world: World, value: Any, field_name: str) -> Ro
     text = str(value or "").strip()
     if not text:
         raise serializers.ValidationError(f"{field_name} is required.")
+    if text.isascii() and text.isdecimal():
+        raise serializers.ValidationError(
+            f"{field_name} uses an ambiguous bare numeric room reference; "
+            "use 'room@<relative_id>'."
+        )
     room = resolve_room_reference(world, text)
     if room is None and parse_room_reference(text) is None:
         room = Room.objects.filter(world=world, name=text).order_by("id").first()
@@ -5223,26 +5330,53 @@ def delete_social_manifest(*, world: World, manifest: dict[str, Any]) -> Social:
     return builder_manifests.delete_social_manifest(parsed)
 
 
-def _normalize_faction_manifest_for_import(*, world: World, manifest: dict[str, Any]) -> dict[str, Any]:
-    normalized = copy.deepcopy(manifest)
+def _normalize_faction_manifest_for_import(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+    room_references_normalized: bool = False,
+) -> dict[str, Any]:
+    normalized = (
+        copy.deepcopy(manifest)
+        if room_references_normalized
+        else normalize_manifest_room_references_for_import(
+            world=world,
+            manifest=manifest,
+        )
+    )
     spec = normalized.get("spec") or {}
     if not isinstance(spec, dict):
         return normalized
     for field_name in ("starting_room", "death_room"):
         room_ref = str(spec.get(field_name) or "").strip()
-        if not room_ref.startswith(_ROOM_REF_PREFIX):
+        if not room_ref:
             continue
+        parsed = parse_room_reference(room_ref)
+        if parsed is None or parsed.kind != "relative_id":
+            raise serializers.ValidationError(
+                f"spec.{field_name} must use canonical "
+                "'room@<relative_id>' syntax."
+            )
         room = _get_or_create_room(world=world, room_ref=room_ref)
         spec[field_name] = f"room.{room.id}"
     normalized["spec"] = spec
     return normalized
 
 
-def apply_faction_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Faction, bool]:
+def apply_faction_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+    room_references_normalized: bool = False,
+) -> tuple[Faction, bool]:
     if parse_document_kind(manifest) != builder_manifests.FACTION_MANIFEST_KIND:
         raise serializers.ValidationError("Unsupported manifest kind. Expected 'faction'.")
 
-    normalized = _normalize_faction_manifest_for_import(world=world, manifest=manifest)
+    normalized = _normalize_faction_manifest_for_import(
+        world=world,
+        manifest=manifest,
+        room_references_normalized=room_references_normalized,
+    )
     parsed = builder_manifests.parse_faction_manifest(
         world=world,
         manifest=normalized,
@@ -5508,12 +5642,24 @@ def delete_spawn_plan_manifest(*, world: World, manifest: dict[str, Any]) -> Spa
     return spawn_plan
 
 
-def apply_world_manifest(*, world: World, manifest: dict[str, Any]) -> None:
+def apply_world_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+    room_references_normalized: bool = False,
+) -> None:
     if parse_document_kind(manifest) != WORLD_MANIFEST_KIND:
         raise serializers.ValidationError("Unsupported manifest kind. Expected 'world'.")
 
     with transaction.atomic():
-        normalized = copy.deepcopy(manifest)
+        normalized = (
+            copy.deepcopy(manifest)
+            if room_references_normalized
+            else normalize_manifest_room_references_for_import(
+                world=world,
+                manifest=manifest,
+            )
+        )
         spec = _manifest_spec(normalized)
         for field_name in ("starting_room", "death_room"):
             if field_name not in spec:
@@ -5521,22 +5667,16 @@ def apply_world_manifest(*, world: World, manifest: dict[str, Any]) -> None:
             room_ref = str(spec.get(field_name) or "").strip()
             if not room_ref:
                 continue
-            if room_ref.startswith(_ROOM_REF_PREFIX):
-                room = _get_or_create_room(world=world, room_ref=room_ref)
-                spec[field_name] = f"room.{room.id}"
-
-        death_routing = spec.get("death_routing")
-        if isinstance(death_routing, dict):
-            routes = death_routing.get("routes")
-            if isinstance(routes, list):
-                for route in routes:
-                    if not isinstance(route, dict) or "destination" not in route:
-                        continue
-                    room_ref = str(route.get("destination") or "").strip()
-                    if not room_ref.startswith(_ROOM_REF_PREFIX):
-                        continue
-                    room = _get_or_create_room(world=world, room_ref=room_ref)
-                    route["destination"] = f"room.{room.id}"
+            parsed = parse_room_reference(room_ref)
+            if parsed is None or parsed.kind != "relative_id":
+                raise serializers.ValidationError(
+                    f"spec.{field_name} must use canonical "
+                    "'room@<relative_id>' syntax."
+                )
+            room = _get_or_create_room(world=world, room_ref=room_ref)
+            # WorldConfig still stores a database FK; this conversion is an
+            # internal parser adapter after authored identity was validated.
+            spec[field_name] = f"room.{room.id}"
 
         parsed = builder_manifests.parse_world_config_manifest(
             world=world,

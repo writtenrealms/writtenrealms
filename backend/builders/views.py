@@ -99,7 +99,7 @@ from spawns.models import Player
 from spawns import serializers as spawn_serializers
 from users.models import User
 from worlds.models import (
-    World, WorldConfig, Room, Zone, RoomFlag, RoomDetail, Door)
+    BIGINT_MAX, World, WorldConfig, Room, Zone, RoomFlag, RoomDetail, Door)
 from worlds.room_refs import format_room_manifest_ref
 from worlds.services import WorldSmith
 from worlds import tasks as world_tasks
@@ -683,6 +683,35 @@ world_config = WorldConfigViewSet.as_view({
 
 # Zone
 
+
+def apply_relative_identity_query(qs, query, *, ref_prefix):
+    """Filter a builder list by its typed or bare world-relative identity."""
+
+    normalized = str(query or '').strip()
+    if not normalized:
+        return qs
+
+    relative_id = normalized
+    if '@' in normalized:
+        prefix, relative_id = normalized.split('@', 1)
+        if prefix.lower() != ref_prefix.lower():
+            return qs.none()
+
+    if relative_id.isascii() and relative_id.isdecimal():
+        significant_digits = relative_id.lstrip('0') or '0'
+        if len(significant_digits) > len(str(BIGINT_MAX)):
+            return qs.none()
+        parsed_relative_id = int(significant_digits)
+        if not 0 < parsed_relative_id <= BIGINT_MAX:
+            return qs.none()
+        return qs.filter(relative_id=parsed_relative_id)
+
+    if '@' in normalized:
+        return qs.none()
+
+    return qs.filter(name__icontains=normalized)
+
+
 class ZoneBuilderViewSet(WorldCreationMixin,
                          BaseWorldBuilderViewSet):
     serializer_class = builder_serializers.ZoneBuilderSerializer
@@ -716,12 +745,8 @@ class ZoneBuilderViewSet(WorldCreationMixin,
             qs = qs.filter(id__in=zone_ids)
 
         query = self.request.query_params.get('query')
-        if query:
-            try:
-                query = int(query)
-                qs = qs.filter(pk=query)
-            except ValueError:
-                qs = qs.filter(name__icontains=query)
+        if query is not None:
+            qs = apply_relative_identity_query(qs, query, ref_prefix='zone')
         return qs.order_by(order_by)
 
     def get_object(self):
@@ -775,12 +800,8 @@ class ZoneBuilderViewSet(WorldCreationMixin,
             qs = qs.filter(zone_id__in=zone_ids)
 
         query = self.request.query_params.get('query')
-        if query:
-            try:
-                query = int(query)
-                qs = qs.filter(pk=query)
-            except ValueError:
-                qs = qs.filter(name__icontains=query)
+        if query is not None:
+            qs = apply_relative_identity_query(qs, query, ref_prefix='room')
         sorting = self.request.query_params.get('sort_by')
         if sorting is not None:
             qs = qs.order_by(sorting)
@@ -999,6 +1020,7 @@ def apply_zone_filter(qs, request):
             qs = qs.filter(zone_id=zone)
     return qs
 
+
 class RoomBuilderListViewSet(WorldCreationMixin,
                              BaseWorldBuilderViewSet):
     serializer_class = builder_serializers.MapRoomSerializer
@@ -1008,14 +1030,8 @@ class RoomBuilderListViewSet(WorldCreationMixin,
         qs = apply_zone_filter(qs, self.request)
 
         query = self.request.query_params.get('query')
-        if query == '':
-            qs = qs.all()
-        elif query:
-            try:
-                query = int(query)
-                qs = qs.filter(pk=query)
-            except ValueError:
-                qs = qs.filter(name__icontains=query)
+        if query is not None:
+            qs = apply_relative_identity_query(qs, query, ref_prefix='room')
 
         return qs.order_by('-created_ts')
 
@@ -1232,24 +1248,22 @@ class RoomBuilderDetailViewSet(RoomBuilderListViewSet):
 
 class InstanceRoomListViewSet(WorldCreationMixin,
                                 BaseWorldBuilderViewSet):
-        serializer_class = builder_serializers.RoomBuilderSerializer
+        serializer_class = builder_serializers.InstanceRoomBuilderSerializer
 
         def get_queryset(self):
             qs = Room.objects.filter(
                 world__instance_of=self.world
             ).exclude(
                 world__lifecycle=api_consts.WORLD_STATE_ARCHIVED
-            )
+            ).select_related('world')
 
             query = self.request.query_params.get('query')
-            if query == '':
-                qs = qs.all()
-            elif query:
-                try:
-                    query = int(query)
-                    qs = qs.filter(pk=query)
-                except ValueError:
-                    qs = qs.filter(name__icontains=query)
+            if query is not None:
+                qs = apply_relative_identity_query(
+                    qs,
+                    query,
+                    ref_prefix='room',
+                )
 
             return qs.order_by('-created_ts')
 
@@ -2224,7 +2238,11 @@ class WorldManifestApplyView(BaseWorldBuilderView):
 
     def _apply_world_manifest(self, manifest):
         self._assert_can_edit_world_config()
-        builder_world_export.apply_world_manifest(world=self.world, manifest=manifest)
+        builder_world_export.apply_world_manifest(
+            world=self.world,
+            manifest=manifest,
+            room_references_normalized=True,
+        )
         return Response(
             {
                 "kind": builder_world_export.WORLD_MANIFEST_KIND,
@@ -2718,6 +2736,7 @@ class WorldManifestApplyView(BaseWorldBuilderView):
         faction, is_create = builder_world_export.apply_faction_manifest(
             world=self.world,
             manifest=manifest,
+            room_references_normalized=True,
         )
         return Response(
             {
@@ -3640,6 +3659,16 @@ class RoomConfig(BaseWorldBuilderView):
 
     def _response_payload(self, room):
         profile_world = definition_world(room.world)
+        transfer_to = (
+            ReferenceField().to_representation(room.transfer_to)
+            if room.transfer_to
+            else None
+        )
+        if transfer_to is not None:
+            transfer_to['instance_scope'] = (
+                room.transfer_to.world.instance_slug
+                or room.transfer_to.world.name
+            )
         return {
             'has_instances': room.world.instances.exists(),
             'can_edit': self._can_edit(room),
@@ -3656,8 +3685,7 @@ class RoomConfig(BaseWorldBuilderView):
             'trainer_profile_world': ReferenceField().to_representation(
                 profile_world,
             ),
-            'transfer_to': ReferenceField().to_representation(
-                room.transfer_to) if room.transfer_to else None,
+            'transfer_to': transfer_to,
             'transfer_to_world': ReferenceField().to_representation(
                 room.transfer_to.world) if room.transfer_to else None,
         }

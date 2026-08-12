@@ -638,7 +638,14 @@ def _path_uses_room_ref(
     event_data: dict[str, Any] | None = None,
 ) -> bool:
     normalized = str(path or "").strip()
-    if normalized in {"player.room_id", "player.room.id", "actor.room_id", "actor.room.id"}:
+    if normalized in {
+        "actor.room_id",
+        "actor.room.id",
+        "event.destination_room.id",
+        "event.origin_room.id",
+        "player.room_id",
+        "player.room.id",
+    }:
         return True
     if (
         normalized == "event.target.id"

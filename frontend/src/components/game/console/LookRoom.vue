@@ -27,7 +27,10 @@
 
     <div>
       <span class='room-name'>{{ room.name }}</span>
-      <span class='room-id ml-2 color-text-50' v-if="player.is_builder">[ {{ room.id }} ]</span>
+      <span
+        class='room-id ml-2 color-text-50'
+        v-if="player.is_builder && room.manifest_ref"
+      >[ {{ room.manifest_ref }} ]</span>
     </div>
 
     <!-- Description -->
@@ -142,6 +145,7 @@ interface Char {
 
 interface Room {
   id: number;
+  manifest_ref?: string;
   name: string;
   description: string;
   chars: Char[];

@@ -26,6 +26,7 @@ from spawns.state_payloads import (
 from quests.services.interactions import room_mob_quest_indicator_map
 from quests.services.room_items import find_quest_room_item_target
 from spawns.text_output import render_event_text
+from worlds.room_refs import format_room_manifest_ref
 
 
 _LOOK_DIRECTION_ALIASES = {
@@ -575,7 +576,11 @@ class WhoAction:
         if bool(getattr(actor.user, "is_staff", False)):
             player_data["link_id"] = player.user.link_id
         if actor.is_builder:
-            player_data["room_id"] = player.room_id
+            player_data["room_manifest_ref"] = (
+                format_room_manifest_ref(player.room)
+                if player.room is not None
+                else None
+            )
         return player_data
 
 

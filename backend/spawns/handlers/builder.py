@@ -11,6 +11,7 @@ from spawns.actions.builder import (
     ExitInstanceAction,
     GrantItemAction,
     InvisibleAction,
+    JUMP_DIRECTIONS,
     JumpAction,
     LoadDefinitionAction,
     PurgeAction,
@@ -45,7 +46,7 @@ from spawns.handlers.registry import register_handler
 from spawns.state_payloads import build_state_sync, get_player_with_related
 from spawns.text_output import render_event_text
 from worlds.instances import reset_instance
-from worlds.room_refs import parse_base_world_room_reference
+from worlds.room_refs import parse_base_world_room_reference, parse_room_reference
 
 SCOPED_ECHO_ALIASES = {
     "/wecho": "world",
@@ -73,6 +74,19 @@ STATE_COMMAND_USAGE = (
     "for character state use /state <show|get|set|clear|add> character <target> [key] [value]"
 )
 STATE_COMMAND_SCOPES = {"world", "zone", "room", "character"}
+
+
+def _is_trigger_step_transfer_destination(value: str) -> bool:
+    normalized = str(value or "").strip().lower()
+    if normalized == "here" or normalized in JUMP_DIRECTIONS:
+        return True
+    parsed = parse_room_reference(normalized)
+    return bool(
+        parsed is not None
+        and parsed.kind == "relative_id"
+        and parsed.relative_id is not None
+        and parsed.relative_id > 0
+    )
 
 
 def _split_delimited_args(args: list[str]) -> tuple[str, str] | tuple[None, None]:
@@ -1760,7 +1774,10 @@ class TransferHandler(CommandHandler):
     trigger_step_mode = TRIGGER_STEP_MODE_TRANSACTIONAL
     help = {
         "name": "Transfer",
-        "format": "/transfer <target> <room@relative_id|room_id|room@x,y,z|direction|here>",
+        "format": (
+            "/transfer <target> "
+            "<room@relative_id|relative_id|direction|here>"
+        ),
         "description": (
             "Instantly move a player or mob to a room in the current runtime world. "
             "Player keys and active player names resolve across that runtime; mob targets "
@@ -1768,6 +1785,11 @@ class TransferHandler(CommandHandler):
         ),
         "details": [
             "Use room@relative_id in portable trigger YAML.",
+            (
+                "Direct builders may abbreviate room@17 as the bare relative ID 17; "
+                "Trigger-step command actions must use room@17."
+            ),
+            "Database and coordinate room aliases are not gameplay command inputs.",
             "Put custom feedback before /transfer in an earlier same-line && segment.",
             "Room and mob issuers are available only to trusted trigger scripts.",
             (
@@ -1778,7 +1800,7 @@ class TransferHandler(CommandHandler):
         ],
         "examples": [
             "/transfer player.123 room@17",
-            "/transfer aria 50201",
+            "/transfer aria 17",
             "/transfer guard north",
         ],
     }
@@ -1803,7 +1825,8 @@ class TransferHandler(CommandHandler):
             or tokens[0].lower() not in {"/transfer", "transfer"}
         ):
             return (
-                "Usage: /transfer <trigger actor> <room@relative_id|room@x,y,z|direction|here>.",
+                "Usage: /transfer <trigger actor> "
+                "<room@relative_id|direction|here>.",
                 "invalid_args",
             )
 
@@ -1823,6 +1846,12 @@ class TransferHandler(CommandHandler):
             return (
                 "Trigger-step /transfer commands may target only the Trigger actor.",
                 "unsupported_transfer_target",
+            )
+        if not _is_trigger_step_transfer_destination(tokens[2]):
+            return (
+                "Trigger-step /transfer destinations must use room@<relative_id>, "
+                "a direction, or here.",
+                "invalid_room_reference",
             )
         return None
 
@@ -1863,10 +1892,31 @@ class TransferHandler(CommandHandler):
             ctx.publish(
                 {
                     "type": "cmd./transfer.error",
-                    "text": "Usage: /transfer <target> <room@relative_id|room_id|room@x,y,z|direction|here>",
+                    "text": (
+                        "Usage: /transfer <target> "
+                        "<room@relative_id|relative_id|direction|here>"
+                    ),
                     "data": {
                         "error": "Missing target or destination room.",
                         "code": "invalid_args",
+                    },
+                }
+            )
+            return
+        if (
+            ctx.trigger_step
+            and not _is_trigger_step_transfer_destination(room_selector)
+        ):
+            ctx.publish(
+                {
+                    "type": "cmd./transfer.error",
+                    "text": (
+                        "Trigger-step /transfer destinations must use "
+                        "room@<relative_id>, a direction, or here."
+                    ),
+                    "data": {
+                        "error": "Non-canonical Trigger-step room destination.",
+                        "code": "invalid_room_reference",
                     },
                 }
             )
@@ -1924,15 +1974,24 @@ class JumpHandler(CommandHandler):
     builder_only = True
     help = {
         "name": "Jump",
-        "format": "/jump <room_id|room_ref|direction>",
-        "description": (
-            "Instantly move yourself to another room by room ID, room ref, "
-            "or adjacent direction."
+        "format": (
+            "/jump <relative_id|room@relative_id|direction>"
         ),
+        "description": (
+            "Instantly move yourself to another room by world-relative ID, "
+            "typed room ref, or adjacent direction."
+        ),
+        "details": [
+            "Use room@relative_id as the canonical, portable room reference.",
+            (
+                "A bare positive number is shorthand for the same world-relative "
+                "room ID."
+            ),
+            "Database and coordinate room aliases are not gameplay command inputs.",
+        ],
         "examples": [
-            "/jump 50201",
+            "/jump 17",
             "/jump room@17",
-            "/jump room.50201",
             "/jump east",
             "/jump e",
         ],
@@ -1950,9 +2009,14 @@ class JumpHandler(CommandHandler):
                 ctx.publish(
                     {
                         "type": "cmd./jump.error",
-                        "text": "Usage: /jump <room_id|room_ref|direction>",
+                        "text": (
+                            "Usage: /jump "
+                            "<relative_id|room@relative_id|direction>"
+                        ),
                         "data": {
-                            "error": "Missing room ID, room ref, or direction.",
+                            "error": (
+                                "Missing room relative ID, room ref, or direction."
+                            ),
                             "code": "invalid_args",
                         },
                     }

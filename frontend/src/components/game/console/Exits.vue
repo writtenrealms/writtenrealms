@@ -5,9 +5,9 @@
       <div v-for="(room_data, direction) in message.data" :key="direction">
         {{ direction }} - {{ room_data.name }}
         <span
-          v-if="player.is_builder"
+          v-if="player.is_builder && room_data.manifest_ref"
           class="color-text-50 ml-4"
-        >[ {{ room_data.id }} ]</span>
+        >[ {{ room_data.manifest_ref }} ]</span>
       </div>
     </template>
     <div v-else>None.</div>

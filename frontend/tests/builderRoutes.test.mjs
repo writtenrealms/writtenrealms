@@ -40,9 +40,13 @@ test("portable zone refs can supply the relative route identity", () => {
   assert.equal(builderRoutes.zoneRelativeIdFromRef("zone.38"), null);
 });
 
-test("zone database identity uses only the explicit lookup route", () => {
+test("zone database identity requires the explicit diagnostic helper", () => {
+  assert.throws(
+    () => builderRoutes.builderZoneIndexRoute(23, { id: 38 }),
+    /relative ID or manifest ref/,
+  );
   assert.deepEqual(
-    builderRoutes.builderZoneIndexRoute(23, { id: 38 }),
+    builderRoutes.builderZoneDatabaseLookupRoute(23, 38),
     {
       name: "builder_zone_database_lookup",
       params: {
@@ -99,7 +103,7 @@ test("map room lookup never sends an undefined relative ID", () => {
   );
   assert.equal(
     builderRoutes.builderRoomDetailEndpoint(23, { id: 183 }),
-    "/builder/worlds/23/rooms/183/",
+    null,
   );
   assert.equal(builderRoutes.builderRoomDetailEndpoint(23, {}), null);
 });
@@ -115,9 +119,13 @@ test("the database room redirect is not treated as a selected-room context", () 
   );
 });
 
-test("database identity uses only the explicit lookup route", () => {
+test("room database identity requires the explicit diagnostic helper", () => {
+  assert.throws(
+    () => builderRoutes.builderRoomIndexRoute(23, { id: 183 }),
+    /relative ID or manifest ref/,
+  );
   assert.deepEqual(
-    builderRoutes.builderRoomIndexRoute(23, { id: 183 }),
+    builderRoutes.builderRoomDatabaseLookupRoute(23, 183),
     {
       name: "builder_room_database_lookup",
       params: {

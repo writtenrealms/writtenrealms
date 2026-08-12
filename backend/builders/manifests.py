@@ -2654,12 +2654,76 @@ def _coerce_conditions_payload(raw_conditions: Any, *, world: World) -> str:
         raw_conditions = _deserialize_conditions_payload(raw_conditions)
     if isinstance(raw_conditions, (dict, list)):
         normalized = _normalize_trigger_condition_refs(raw_conditions, world=world)
+        # Import normalization has already converted explicit legacy room
+        # aliases. Validate that persisted operands now use stable room refs.
+        from quests.manifests import validate_condition_room_refs
+
+        validate_condition_room_refs(
+            world=world,
+            condition=normalized,
+            field_name="spec.conditions",
+        )
         builder_serializers.validate_conditions(None, normalized)
         return json.dumps(normalized)
     conditions = _coerce_text(raw_conditions)
     if conditions:
         builder_serializers.validate_conditions(None, conditions)
     return conditions
+
+
+_TRIGGER_STEP_RELATIVE_ROOM_DESTINATIONS = frozenset({
+    "here",
+    "n",
+    "north",
+    "e",
+    "east",
+    "s",
+    "south",
+    "w",
+    "west",
+    "u",
+    "up",
+    "d",
+    "down",
+})
+_TRIGGER_STEP_TRANSFER_RE = re.compile(
+    r"^\s*/?transfer\s+"
+    r"(?:\{\{\s*actor_key\s*\}\}|\S+)\s+"
+    r"(?P<destination>\S+)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _validate_trigger_step_transfer_destinations(
+    steps: list[dict[str, Any]],
+) -> None:
+    for step_index, step in enumerate(steps):
+        for action_index, action in enumerate(step.get("actions") or []):
+            if action.get("type") != "command":
+                continue
+            command = str(action.get("command") or "")
+            tokens = command.split()
+            if not tokens or tokens[0].lower() not in {"/transfer", "transfer"}:
+                continue
+            command_match = _TRIGGER_STEP_TRANSFER_RE.fullmatch(command)
+            if command_match is None:
+                raise serializers.ValidationError(
+                    "spec.steps"
+                    f"[{step_index}].actions[{action_index}].command must use "
+                    "'/transfer <target> <room@relative_id|direction|here>'."
+                )
+            destination = command_match.group("destination").strip().lower()
+            if destination in _TRIGGER_STEP_RELATIVE_ROOM_DESTINATIONS:
+                continue
+            parsed = parse_room_reference(destination)
+            if parsed is not None and parsed.kind == "relative_id":
+                continue
+            raise serializers.ValidationError(
+                "spec.steps"
+                f"[{step_index}].actions[{action_index}].command /transfer "
+                "destinations must use canonical 'room@<relative_id>' "
+                "syntax, a direction, or here."
+            )
 
 
 def serialize_trigger_manifest(trigger: Trigger) -> dict[str, Any]:
@@ -3641,6 +3705,7 @@ def parse_trigger_manifest(
                 _normalize_trigger_condition_refs(value, world=world)
             ),
         )
+        _validate_trigger_step_transfer_destinations(steps)
         on_step_error = normalize_trigger_step_error_policy(
             spec.get(
                 "on_step_error",

@@ -1069,7 +1069,12 @@ Always use the stable `room@<relative_id>` destination form in Trigger YAML.
 It survives both room moves and export/import. Resolvable legacy
 `room@x,y,z` and `room.<database_pk>` tokens in semantic script and command
 fields are rewritten during normalization; computed or dynamic strings cannot
-be rewritten ahead of time and must resolve at runtime. The Trigger room,
+be rewritten ahead of time and must resolve at runtime. Typed-step `/transfer`
+commands reject bare numeric destinations. Legacy `spec.script` remains
+free-form compatibility text, so its bare numeric tokens are not globally
+rewritten: a generic text pass cannot safely distinguish a destination from an
+unrelated numeric argument. Update those destinations to `room@N` explicitly.
+The Trigger room,
 execution subject, target, and destination must remain in the same live runtime world;
 transfer cannot cross instance runs.
 

@@ -219,7 +219,7 @@ Supported discovery source shapes:
 | `type`         | Required fields                     | Behavior                                                                                                                      |
 | -------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `auto_start`   | none                                | Starts automatically on `cmd.state.sync.success`, `cmd.look.success`, or `cmd.move.success`.                                  |
-| `room_prompt`  | `room` or `room_id`, plus `callout`     | Shows as an opportunity when the player is in that room. Use canonical `room@<relative_id>`; legacy integer ids, `room.<database_pk>`, and `room@x,y,z` are import aliases. The room view shows the authored callout line with `[ ! ]` and the player can use `inspect` to see the quest pitch. |
+| `room_prompt`  | `room` or `room_id`, plus `callout`     | Shows as an opportunity when the player is in that room. Use canonical `room@<relative_id>`. Explicit `room.<database_pk>` and `room@x,y,z` values are import-only aliases that normalize immediately; bare integers are rejected. The room view shows the authored callout line with `[ ! ]` and the player can use `inspect` to see the quest pitch. |
 | `npc_dialogue` | `mob_definition` or `mob_definition_id` | Shows through NPC dialogue and room UI markers. Mob refs can be ids, `mobdefinition.<id>`, `mobdefinition.<slug>`, or bare slugs. |
 
 Quest item and mob references use WR2 definitions. Do not author new quest

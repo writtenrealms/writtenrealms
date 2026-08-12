@@ -5,7 +5,7 @@ from typing import Any
 from builders.models import ItemDefinition, MobDefinition
 from quests.models import QuestTemplate
 from worlds.models import World
-from worlds.room_refs import resolve_room_reference_id
+from worlds.room_refs import parse_room_reference, resolve_room_reference_id
 
 
 _ENTITY_TYPE_ALIASES = {
@@ -95,12 +95,11 @@ def resolve_room_ref_id(
     if is_dynamic_reference(value):
         return None
 
-    text = str(value).strip()
-    if not text:
+    parsed = parse_room_reference(value)
+    if parsed is None or parsed.kind != "relative_id":
         return None
-    # Bare numeric values retain the legacy database-id meaning in quest
-    # payloads. New manifest references should always use room@<relative_id>.
-    if text.isdigit():
-        text = f"room.{text}"
 
-    return resolve_room_reference_id(world, text)
+    # Persisted authored payloads use stable room identity. Explicit database
+    # and coordinate aliases are handled by the manifest import normalizer,
+    # before those payloads reach this shared resolver.
+    return resolve_room_reference_id(world, f"room@{parsed.relative_id}")

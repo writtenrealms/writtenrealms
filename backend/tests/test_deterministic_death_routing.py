@@ -56,7 +56,7 @@ class TestDeterministicDeathRoutingRuntime(WorldTestCase):
     def _route(self, when, destination):
         return {
             "when": when,
-            "destination": f"room.{destination.id}",
+            "destination": f"room@{destination.relative_id}",
         }
 
     def _state_route(self, key, value, destination):

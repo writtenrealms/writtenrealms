@@ -349,7 +349,6 @@ const actions = {
       world_id: state.world.id,
       room_relative_id: room.relative_id,
       room_manifest_ref: room.manifest_ref || room.ref,
-      room_database_id: room.id,
       cancelToken: source.token
     });
 
@@ -370,19 +369,17 @@ const actions = {
     world_id,
     room_relative_id,
     room_manifest_ref,
-    room_database_id,
     cancelToken,
     commit_room = true,
     throw_on_error = false,
   }) => {
     try {
       const endpoint = builderRoomDetailEndpoint(world_id, {
-        id: room_database_id,
         relative_id: room_relative_id,
         manifest_ref: room_manifest_ref,
       });
       if (!endpoint) {
-        throw new Error("Room lookup requires a relative ID or database ID.");
+        throw new Error("Room lookup requires a relative ID or manifest ref.");
       }
 
       const config: AxiosRequestConfig = {

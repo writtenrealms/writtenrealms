@@ -46,8 +46,11 @@ This plan remains directional, but several pieces are now implemented:
 - `/transfer <target> <room>` supports direct builder players plus script-gated
   mob and room issuers. Player targets stay inside one live runtime world, mob
   targets are local to the issuer room, and portable scripts can use
-  move-stable `room@<relative_id>` destinations. Legacy coordinate and
-  database-key selectors remain import compatibility aliases.
+  move-stable `room@<relative_id>` destinations. Direct interactive commands
+  may abbreviate that to the bare relative id. Database-key and coordinate
+  spellings are importer inputs only: canonicalized authored commands execute
+  with `room@<relative_id>`, and gameplay command parsing never falls between
+  identity namespaces.
 - `/exitinstance <player> world@base/room@<relative_id>` supports direct
   builder players plus trusted mob and room issuers. It resolves the
   destination in the target's active run's direct base world and returns the

@@ -54,14 +54,19 @@ export const builderZoneIndexRoute = (
     };
   }
 
-  return {
+  throw new Error("A canonical builder zone route requires a relative ID or manifest ref.");
+};
+
+export const builderZoneDatabaseLookupRoute = (
+  worldId: number | string | string[],
+  databaseId: number | string,
+): RouteLocationRaw => ({
     name: "builder_zone_database_lookup",
     params: {
       world_id: worldId,
-      zone_database_id: zone.id,
+      zone_database_id: databaseId,
     },
-  };
-};
+});
 
 export const roomRelativeId = (room: RoomIdentity | null | undefined): string | null => {
   const directValue = room?.relative_id;
@@ -97,10 +102,6 @@ export const builderRoomDetailEndpoint = (
     return `/builder/worlds/${worldId}/rooms/by-relative-id/${relativeId}/`;
   }
 
-  if (room?.id !== undefined && room.id !== null && String(room.id).trim()) {
-    return `/builder/worlds/${worldId}/rooms/${room.id}/`;
-  }
-
   return null;
 };
 
@@ -119,11 +120,16 @@ export const builderRoomIndexRoute = (
     };
   }
 
-  return {
+  throw new Error("A canonical builder room route requires a relative ID or manifest ref.");
+};
+
+export const builderRoomDatabaseLookupRoute = (
+  worldId: number | string | string[],
+  databaseId: number | string,
+): RouteLocationRaw => ({
     name: "builder_room_database_lookup",
     params: {
       world_id: worldId,
-      room_database_id: room.id,
+      room_database_id: databaseId,
     },
-  };
-};
+});

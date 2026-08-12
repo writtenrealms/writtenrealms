@@ -70,7 +70,7 @@
           <dt>Relative ID</dt>
           <dd>{{ room.relative_id }}</dd>
         </div>
-        <div>
+        <div v-if="store.state.auth.user.is_staff">
           <dt>Database ID</dt>
           <dd>{{ room.id }}</dd>
         </div>
@@ -180,12 +180,11 @@ const editInfo = () => {
 };
 
 const deleteRoom = async () => {
-  const room_id = store.state.builder.room.id;
   const room_ref = manifestRef.value;
   const c = confirm(`Are you sure you want to delete ${room_ref}?`);
   if (!c) return;
   await store.dispatch("builder/room_delete");
-  store.commit("ui/notification_set", `Deleted ${room_ref} (database ID ${room_id})`);
+  store.commit("ui/notification_set", `Deleted ${room_ref}.`);
 };
 
 const copyManifestRef = async () => {

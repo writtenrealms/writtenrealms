@@ -38,6 +38,7 @@ from spawns.trigger_matcher import (
     phrase_term_match,
 )
 from worlds.models import Room, World, Zone
+from worlds.room_refs import format_room_manifest_ref
 
 
 TRIGGER_GATED_TEXT = "More time is needed."
@@ -454,16 +455,19 @@ def _movement_event_data(
             "id": target_room.id,
             "key": target_room.key,
             "name": target_room.name or "",
+            "ref": format_room_manifest_ref(target_room),
         },
         "origin_room": {
             "id": origin_room.id,
             "key": origin_room.key,
             "name": origin_room.name or "",
+            "ref": format_room_manifest_ref(origin_room),
         },
         "destination_room": {
             "id": destination_room.id,
             "key": destination_room.key,
             "name": destination_room.name or "",
+            "ref": format_room_manifest_ref(destination_room),
         },
     }
 

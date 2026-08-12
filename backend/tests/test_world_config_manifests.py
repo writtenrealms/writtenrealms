@@ -220,7 +220,7 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
                                     "ember",
                                 ],
                             },
-                            "destination": f"room.{destination.id}",
+                            "destination": f"room@{destination.relative_id}",
                         },
                     ],
                 },
@@ -865,6 +865,7 @@ spec:
                 *(room.id for room in choice_rooms),
             },
         )
+
         self.assertFalse(
             snapshot.references.filter(core_faction__isnull=False).exists()
         )
@@ -929,6 +930,26 @@ spec:
             exported["routes"][0]["destination"],
             f"room@{first_death.relative_id}",
         )
+
+    def test_death_routing_manifest_rejects_bare_numeric_destination(self):
+        manifest = f"""
+kind: world
+spec:
+  death_routing:
+    routes:
+      - when:
+          always: true
+        destination: {self.room.id}
+"""
+
+        response = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("canonical 'room@<relative_id>'", str(response.data))
 
     def test_death_routing_manifest_compiles_core_faction_ids_without_expansion(self):
         destination = self.room.create_at("east")

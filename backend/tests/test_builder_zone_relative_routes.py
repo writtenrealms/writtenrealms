@@ -24,6 +24,59 @@ class TestBuilderZoneRelativeRoutes(WorldTestCase):
             f'zone@{self.zone.relative_id}',
         )
 
+    def test_zone_list_accepts_relative_identity_search(self):
+        response = self.client.get(
+            reverse('builder-zone-list', args=[self.world.pk]),
+            {'query': f'zone@{self.zone.relative_id}'},
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(
+            [zone['manifest_ref'] for zone in response.data['results']],
+            [f'zone@{self.zone.relative_id}'],
+        )
+
+    def test_zone_list_bare_number_ignores_colliding_database_id(self):
+        filler_world = World.objects.new_world(
+            name='Zone search ID filler',
+            author=self.user,
+        )
+        for index in range(3):
+            Zone.objects.create(
+                world=filler_world,
+                name=f'Filler Zone {index}',
+            )
+        database_collision = Zone.objects.create(
+            world=self.world,
+            name='Database Collision',
+        )
+        relative_id = database_collision.pk
+        target = Zone.objects.create(
+            world=self.world,
+            relative_id=relative_id,
+            name='Relative Winner',
+        )
+
+        response = self.client.get(
+            reverse('builder-zone-list', args=[self.world.pk]),
+            {'query': str(relative_id)},
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(
+            [zone['id'] for zone in response.data['results']],
+            [target.pk],
+        )
+
+    def test_zone_list_rejects_room_reference(self):
+        response = self.client.get(
+            reverse('builder-zone-list', args=[self.world.pk]),
+            {'query': f'room@{self.zone.relative_id}'},
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['results'], [])
+
     def test_relative_lookup_is_scoped_to_route_world(self):
         other_world = World.objects.new_world(
             name='Another World',

@@ -63,6 +63,75 @@ class TestSharedConditionDsl(WorldTestCase):
             )
         )
 
+    def test_movement_room_refs_compare_without_runtime_queries(self):
+        from spawns.triggers import _movement_event_data
+
+        destination = self.room.create_at("east")
+        with self.assertNumQueries(0):
+            event_data = _movement_event_data(
+                event="before_move_enter",
+                direction="east",
+                origin_room=self.room,
+                destination_room=destination,
+                target_room=destination,
+            )
+            matches = evaluate_condition(
+                {
+                    "all": [
+                        {
+                            "eq": [
+                                "event.origin_room.ref",
+                                f"room@{self.room.relative_id}",
+                            ],
+                        },
+                        {
+                            "eq": [
+                                "event.destination_room.ref",
+                                f"room@{destination.relative_id}",
+                            ],
+                        },
+                        {
+                            "eq": [
+                                "event.target.ref",
+                                f"room@{destination.relative_id}",
+                            ],
+                        },
+                    ],
+                },
+                context=ConditionContext(event_data=event_data),
+            )
+
+        self.assertTrue(matches)
+        self.assertEqual(event_data["origin_room"]["id"], self.room.id)
+        self.assertEqual(
+            event_data["destination_room"]["id"],
+            destination.id,
+        )
+        self.assertEqual(event_data["target"]["id"], destination.id)
+
+    def test_authored_room_condition_validation_batches_existence_lookup(self):
+        from quests.manifests import validate_condition_room_refs
+
+        destinations = [self.room.create_at("east")]
+        destinations.append(destinations[0].create_at("east"))
+        condition = {
+            "all": [
+                {
+                    "eq": [
+                        "event.destination_room.ref",
+                        f"room@{room.relative_id}",
+                    ],
+                }
+                for room in destinations
+            ],
+        }
+
+        with self.assertNumQueries(1):
+            validate_condition_room_refs(
+                world=self.world,
+                condition=condition,
+            )
+
     def test_player_core_faction_lazily_resolves_plain_player_hyphenated_code(self):
         faction = Faction.objects.create(
             world=self.world,

@@ -247,10 +247,20 @@ Movement policies and room-arrival event triggers receive extra event paths:
 | `event.source` | Arrival source for room `enter`: `move`, `flee`, `transfer`, `death`, `jump`, `character_reset`, `instance_enter`, `instance_leave`, or `instance_reset`. |
 | `event.direction` | Normalized attempted or completed direction, when the source is directional. |
 | `event.origin_room.id` | Prior/origin room id. |
+| `event.origin_room.ref` | Stable prior/origin room ref, such as `room@42`. |
 | `event.origin_room.key` | Prior/origin room key. |
 | `event.destination_room.id` | Intended or committed destination room id. |
+| `event.destination_room.ref` | Stable intended or committed destination room ref. |
 | `event.destination_room.key` | Intended or committed destination room key. |
 | `event.target.id` | The room this trigger is attached to. |
+| `event.target.ref` | Stable ref for the room this trigger is attached to. |
+
+Use the `.ref` paths with canonical `room@<relative_id>` operands in new
+conditions. The `.id` paths expose runtime database primary keys for existing
+runtime integrations; those numbers are not portable authored room identity.
+Bare numeric room operands are rejected. Explicit `room.<database_pk>` and
+`room@x,y,z` aliases are accepted only at manifest import and are immediately
+normalized to `room@<relative_id>` before the condition is stored.
 
 For room-scoped `enter`, `before_move_enter`, and `after_move_enter`, `room.*`
 and `state.room.*` refer to the destination room. For `before_move_exit` and

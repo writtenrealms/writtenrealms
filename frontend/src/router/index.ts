@@ -109,7 +109,7 @@ const routes = [
       { path: 'instances', name: 'builder_world_instance_list', component: () => import('@/views/builder/world/Instances.vue') },
 
       // Zone Views
-      { path: 'zones/db/:zone_database_id(\\d+)', name: 'builder_zone_database_lookup', component: () => import('@/views/builder/ZoneDatabaseRedirect.vue') },
+      { path: 'zones/db/:zone_database_id(\\d+)', name: 'builder_zone_database_lookup', component: () => import('@/views/builder/ZoneDatabaseRedirect.vue'), beforeEnter: ifStaff },
       { path: 'zones/:zone_relative_id(\\d+)', name: 'builder_zone_index', component: () => import('@/views/builder/zone/Zone.vue') },
       { path: 'zones/:zone_relative_id(\\d+)/rooms', name: 'builder_zone_room_list', component: () => import('@/views/builder/zone/RoomList.vue') },
       { path: 'zones/:zone_relative_id(\\d+)/paths', name: 'builder_zone_path_list', component: () => import('@/views/builder/zone/PathList.vue') },
@@ -119,7 +119,7 @@ const routes = [
       { path: 'zones/:zone_relative_id(\\d+)/config', name: 'builder_zone_config', component: () => import('@/views/builder/zone/Config.vue') },
 
       // Room Views
-      { path: 'rooms/db/:room_database_id(\\d+)', name: 'builder_room_database_lookup', component: () => import('@/views/builder/room/RoomDatabaseRedirect.vue') },
+      { path: 'rooms/db/:room_database_id(\\d+)', name: 'builder_room_database_lookup', component: () => import('@/views/builder/room/RoomDatabaseRedirect.vue'), beforeEnter: ifStaff },
       { path: 'rooms/:room_relative_id(\\d+)', name: 'builder_room_index', component: () => import('@/views/builder/room/Room.vue') },
       { path: 'rooms/:room_relative_id(\\d+)/edit', name: 'builder_room_edit', component: () => import('@/views/builder/room/RoomEdit.vue') },
       { path: 'rooms/:room_relative_id(\\d+)/triggers', name: 'builder_room_trigger_list', component: () => import('@/views/builder/room/RoomTriggerList.vue') },

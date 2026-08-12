@@ -37,6 +37,26 @@ class TestLookCommandText(WorldTestCase):
         self.assertIn(self.room.name, message["text"])
         self.assertIn("A test room.", message["text"])
 
+    def test_look_room_payload_includes_stable_manifest_ref(self):
+        room = self.use_imported_room(relative_id=42, x=42)
+        self.player.is_builder = True
+        self.player.save(update_fields=["is_builder"])
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="look",
+                player_id=self.player.id,
+                payload={},
+            )
+
+        message = self._message_by_type(messages, "cmd.look.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["target"]["id"], room.id)
+        self.assertEqual(
+            message["data"]["target"]["manifest_ref"],
+            "room@42",
+        )
+
     def test_look_capitalizes_generated_mob_room_description(self):
         mob = self.create_mob("a rat", keywords="rat")
 
@@ -427,7 +447,7 @@ class TestWhoCommand(WorldTestCase):
         player_names = [player["name"] for player in message["data"]["players"]]
         self.assertEqual(player_names, ["Joe", "Human"])
 
-    def test_builder_who_sees_invisible_players_and_room_ids(self):
+    def test_builder_who_sees_invisible_players_and_room_refs(self):
         self.player.is_builder = True
         self.player.save(update_fields=["is_builder"])
         self._set_online(self.player)
@@ -448,7 +468,11 @@ class TestWhoCommand(WorldTestCase):
         }
         self.assertIn("Invisible", players_by_name)
         self.assertTrue(players_by_name["Invisible"]["is_invisible"])
-        self.assertEqual(players_by_name["Invisible"]["room_id"], invisible.room_id)
+        self.assertEqual(
+            players_by_name["Invisible"]["room_manifest_ref"],
+            f"room@{invisible.room.relative_id}",
+        )
+        self.assertNotIn("room_id", players_by_name["Invisible"])
         self.assertTrue(players_by_name["Joe"]["is_immortal"])
         self.assertIn("~ Joe", message["text"])
         self.assertIn("Invisible  (1) [invisible]", message["text"])

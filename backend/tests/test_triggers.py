@@ -624,7 +624,7 @@ class TestCommandFallbackTriggers(WorldTestCase):
             script=(
                 "/cmd room -- /send {{ actor_key }} -- The floor shifts. && "
                 f"/cmd room -- /transfer {{{{ actor_key }}}} "
-                f"room@{destination.x},{destination.y},{destination.z}"
+                f"room@{destination.relative_id}"
             ),
         )
 

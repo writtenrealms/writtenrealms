@@ -306,6 +306,36 @@ spec:
             },
         )
 
+    def test_spawn_plan_rejects_quoted_numeric_room_target(self):
+        Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="123",
+            x=123,
+            y=0,
+            z=0,
+        )
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: numeric-room-target
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: practice-dummy
+      source: mobdefinition.{self.mob_definition.slug}
+      target: "123"
+"""
+
+        response = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("ambiguous bare numeric", str(response.data))
+
     def test_apply_spawn_plan_manifest_rejects_conflicting_legacy_targets(self):
         manifest = f"""
 kind: spawnplan

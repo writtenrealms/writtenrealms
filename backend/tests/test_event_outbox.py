@@ -304,10 +304,8 @@ class TestGameEventOutbox(WorldTestCase):
         self.player.save(update_fields=["in_game"])
         other_room = self.room.create_at("east")
         room_refs = {
-            self.room.id: f"room@{self.room.x},{self.room.y},{self.room.z}",
-            other_room.id: (
-                f"room@{other_room.x},{other_room.y},{other_room.z}"
-            ),
+            self.room.id: f"room@{self.room.relative_id}",
+            other_room.id: f"room@{other_room.relative_id}",
         }
         for index, (room, destination) in enumerate(
             (

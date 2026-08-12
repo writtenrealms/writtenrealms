@@ -84,7 +84,9 @@ death_room: room@2
 world export/import. The import path also accepts legacy coordinate refs such
 as `room@2,0,0` and database refs such as `room.123`; both are import-only
 aliases and canonical YAML rewrites them to the stable form. Database refs are
-not portable across installations.
+not portable across installations. Bare numeric values are ambiguous and are
+rejected rather than interpreted as database room ids. This applies to
+`starting_room`, `death_room`, and every `death_routing.routes[].destination`.
 
 ## Field Reference
 

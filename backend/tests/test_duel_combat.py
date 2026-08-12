@@ -225,11 +225,7 @@ class DuelCombatTests(WorldTestCase):
         }
         other_participant.save(update_fields=["pending_ability"])
 
-        destination_ref = (
-            f"room@{self.escape_room.x},"
-            f"{self.escape_room.y},"
-            f"{self.escape_room.z}"
-        )
+        destination_ref = f"room@{self.escape_room.relative_id}"
         with capture_game_messages() as messages:
             dispatch_command(
                 command_type="text",

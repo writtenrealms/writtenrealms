@@ -79,6 +79,12 @@ The public dotted key and manifest `@` reference carry the same immutable
 world-relative id. The syntax differs because runtime entity keys and authored
 manifest references are separate contracts.
 
+The public key is not command or manifest input. Builder displays and copy
+actions expose `room@<relative_id>`; interactive room-destination commands may
+accept the bare relative id as shorthand. This avoids confusing a gameplay
+`room.<relative_id>` key with legacy database-local dotted keys at import and
+diagnostic boundaries.
+
 For state payloads, these fields must always agree:
 
 - `data.actor.room.key`

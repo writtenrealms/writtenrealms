@@ -30,7 +30,7 @@
           v-for="result in search_results"
           :key="result.id"
           @click="selectSearchResult(result)"
-        >{{ result.name }} ({{result.id}})</div>
+        >{{ referenceLabel(result) }}</div>
       </div>
     </div>
   </div>
@@ -79,15 +79,32 @@ watch(() => props.modelValue, (newValue) => {
 });
 
 const inputField = computed(() => {
-  if (validated_id.value) return validated_id.value;
+  if (validated_data.value) return referenceIdentity(validated_data.value);
   return user_input.value || '';
 });
 
 const readOnlyValue = computed(() => {
-  return validated_data.value ? `${validated_data.value.name} (${validated_data.value.id})` : '';
+  return validated_data.value ? referenceLabel(validated_data.value) : '';
 });
 
 const model_type = computed(() => props.schema.references);
+
+const referenceIdentity = (data) => {
+  if (model_type.value !== "room") return data.id;
+  if (data.manifest_ref) return data.manifest_ref;
+  if (data.relative_id !== undefined && data.relative_id !== null) {
+    return `room@${data.relative_id}`;
+  }
+  return "Room ref unavailable";
+};
+
+const referenceLabel = (data) => {
+  const identity = referenceIdentity(data);
+  if (model_type.value === "room" && data.instance_scope) {
+    return `${data.name} (${data.instance_scope}/${identity})`;
+  }
+  return `${data.name} (${identity})`;
+};
 
 const onBlur = () => {
   if (search_results.value.length === 1 &&

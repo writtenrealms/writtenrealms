@@ -65,7 +65,9 @@ class TestQuestManifests(AuthenticatedBuilderWorldTestCase):
                     },
                 ],
                 "visible_if": {
-                    "eq": ["actor.room_id", legacy_ref],
+                    # Export repair remains able to canonicalize older stored
+                    # bare database IDs; new manifest import rejects them.
+                    "eq": ["actor.room_id", self.room.id],
                 },
             },
             graph={

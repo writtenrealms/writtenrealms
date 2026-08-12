@@ -706,14 +706,6 @@ const receiveMessage = async ({
     commit("last_viewed_room_message_set", message_data);
     commit("player_target_set", null);
 
-    if (message_data.data.room.id === "10129") {
-      // Hardcode for Cave "loading... indicator when completing"
-      commit(
-        "ui/notification_set",
-        { text: "Loading...", expires: false },
-        { root: true });
-    }
-
     // Update focus display
     if (state.player.focus) {
       const focus = state.player.focus.toLowerCase();

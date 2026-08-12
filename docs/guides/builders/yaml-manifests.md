@@ -104,8 +104,9 @@ Prefer stable references from copied canonical YAML:
 
 Database IDs such as `room.123` may be accepted as import aliases in some
 contexts, but they are installation-specific and should not be used in
-portable source files. Keep an entity's stable reference unchanged when
-editing it.
+portable source files. Bare room numbers are ambiguous and rejected in
+persisted authored data; write `room@123` when `123` is the room's relative
+id. Keep an entity's stable reference unchanged when editing it.
 
 ## Scope And Permissions
 
