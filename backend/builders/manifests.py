@@ -46,15 +46,21 @@ from builders.models import (
     MerchantStockSlot,
     MobDefinition,
     Social,
+    TrainerProfile,
+    TrainerProfileAbility,
     Trigger,
 )
 from config import constants as adv_consts
 from core.abilities import (
     AbilityValidationError,
+    normalize_ability_availability,
     normalize_ability_definition,
     normalize_ability_progression,
 )
-from core.condition_dsl import validate_condition_payload
+from core.condition_dsl import (
+    validate_candidate_condition_payload,
+    validate_condition_payload,
+)
 from core.death_routing import (
     DEATH_ROUTING_SOURCE_BASE_WORLD,
     DEATH_ROUTING_SOURCE_LOCAL,
@@ -155,6 +161,7 @@ MERCHANT_PROFILE_MANIFEST_KIND = "merchantprofile"
 CRAFT_MATERIAL_MANIFEST_KIND = "craftmaterial"
 CRAFTING_RECIPE_MANIFEST_KIND = "craftingrecipe"
 CRAFTING_PROFILE_MANIFEST_KIND = "craftingprofile"
+TRAINER_PROFILE_MANIFEST_KIND = "trainerprofile"
 FACTION_MANIFEST_KIND = "faction"
 MOB_DEFINITION_MANIFEST_KIND = "mobdefinition"
 ABILITY_MANIFEST_KIND = "ability"
@@ -201,6 +208,11 @@ _CRAFTING_PROFILE_MANIFEST_KIND_ALIASES = {
     CRAFTING_PROFILE_MANIFEST_KIND,
     "crafting-profile",
     "crafting_profile",
+}
+_TRAINER_PROFILE_MANIFEST_KIND_ALIASES = {
+    TRAINER_PROFILE_MANIFEST_KIND,
+    "trainer-profile",
+    "trainer_profile",
 }
 _FACTION_MANIFEST_KIND_ALIASES = {
     FACTION_MANIFEST_KIND,
@@ -566,6 +578,24 @@ class ParsedCraftingProfileDeleteManifest:
 
 
 @dataclass
+class ParsedTrainerProfileManifest:
+    world: World
+    profile: TrainerProfile | None
+    profile_id: int | None
+    slug: str
+    name: str
+    fields: dict[str, Any]
+    abilities: list[AbilityDefinition] | None
+
+
+@dataclass
+class ParsedTrainerProfileDeleteManifest:
+    world: World
+    profile: TrainerProfile
+    profile_id: int
+
+
+@dataclass
 class ParsedFactionManifest:
     world: World
     faction: Faction | None
@@ -755,6 +785,8 @@ def parse_manifest_kind(manifest: dict[str, Any]) -> str:
         return CRAFTING_RECIPE_MANIFEST_KIND
     if manifest_kind in _CRAFTING_PROFILE_MANIFEST_KIND_ALIASES:
         return CRAFTING_PROFILE_MANIFEST_KIND
+    if manifest_kind in _TRAINER_PROFILE_MANIFEST_KIND_ALIASES:
+        return TRAINER_PROFILE_MANIFEST_KIND
     if manifest_kind in _FACTION_MANIFEST_KIND_ALIASES:
         return FACTION_MANIFEST_KIND
     if manifest_kind in _MOB_DEFINITION_MANIFEST_KIND_ALIASES:
@@ -771,7 +803,7 @@ def parse_manifest_kind(manifest: dict[str, Any]) -> str:
         return QUEST_ARC_MANIFEST_KIND
     raise serializers.ValidationError(
         f"Unsupported manifest kind '{manifest_kind}'. "
-        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_MANIFEST_KIND}, {ITEM_DEFINITION_MANIFEST_KIND}, {ITEM_BUNDLE_MANIFEST_KIND}, {MERCHANT_PROFILE_MANIFEST_KIND}, {CRAFT_MATERIAL_MANIFEST_KIND}, {CRAFTING_RECIPE_MANIFEST_KIND}, {CRAFTING_PROFILE_MANIFEST_KIND}, {FACTION_MANIFEST_KIND}, {MOB_DEFINITION_MANIFEST_KIND}, {ABILITY_MANIFEST_KIND}, {ABILITIES_MANIFEST_KIND}, {SOCIAL_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
+        f"Supported kinds: {TRIGGER_MANIFEST_KIND}, {WORLD_MANIFEST_KIND}, {ITEM_DEFINITION_MANIFEST_KIND}, {ITEM_BUNDLE_MANIFEST_KIND}, {MERCHANT_PROFILE_MANIFEST_KIND}, {CRAFT_MATERIAL_MANIFEST_KIND}, {CRAFTING_RECIPE_MANIFEST_KIND}, {CRAFTING_PROFILE_MANIFEST_KIND}, {TRAINER_PROFILE_MANIFEST_KIND}, {FACTION_MANIFEST_KIND}, {MOB_DEFINITION_MANIFEST_KIND}, {ABILITY_MANIFEST_KIND}, {ABILITIES_MANIFEST_KIND}, {SOCIAL_MANIFEST_KIND}, {QUEST_MANIFEST_KIND}, {QUEST_ARC_MANIFEST_KIND}."
     )
 
 
@@ -1623,8 +1655,14 @@ def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[st
             "profile": f"{CRAFTING_PROFILE_MANIFEST_KIND}.{mob_definition.crafting_profile.slug}",
             "availability": mob_definition.crafting_availability or "present",
         }
-    if mob_definition.trainer:
-        spec["trainer"] = mob_definition.trainer or {}
+    if mob_definition.trainer_profile_id:
+        spec["trainer"] = {
+            "profile": (
+                f"{TRAINER_PROFILE_MANIFEST_KIND}."
+                f"{mob_definition.trainer_profile.slug}"
+            ),
+            "availability": mob_definition.trainer_availability or "present",
+        }
     spec["attributes"] = mob_definition.attributes or {}
     spec["randomization"] = mob_definition.randomization or {}
     if mob_definition.initial_state:
@@ -1711,7 +1749,26 @@ def serialize_mob_definition_payload(
         "factions": faction_assignments_to_manifest_spec(mob_definition),
         "combat_abilities": mob_definition.combat_abilities or [],
         "attackable": bool(mob_definition.attackable),
-        "trainer": mob_definition.trainer or {},
+        "trainer": (
+            {
+                "profile": (
+                    f"{TRAINER_PROFILE_MANIFEST_KIND}."
+                    f"{mob_definition.trainer_profile.slug}"
+                ),
+                "availability": mob_definition.trainer_availability or "present",
+            }
+            if mob_definition.trainer_profile_id else {}
+        ),
+        "trainer_profile": (
+            {
+                "id": mob_definition.trainer_profile_id,
+                "key": mob_definition.trainer_profile.key,
+                "slug": mob_definition.trainer_profile.slug,
+                "name": mob_definition.trainer_profile.name,
+            }
+            if mob_definition.trainer_profile_id else None
+        ),
+        "trainer_availability": mob_definition.trainer_availability or "present",
         "merchant_profile": (
             {
                 "id": mob_definition.merchant_profile_id,
@@ -2092,7 +2149,95 @@ def serialize_crafting_profile_payload(profile: CraftingProfile) -> dict[str, An
     }
 
 
+def _trainer_profile_ability_entries(
+    profile: TrainerProfile,
+) -> list[TrainerProfileAbility]:
+    prefetched = getattr(profile, "_prefetched_objects_cache", {})
+    entries = prefetched.get("ability_entries")
+    if entries is None:
+        entries = list(profile.ability_entries.select_related("ability").all())
+    else:
+        entries = list(entries)
+    entries.sort(key=lambda entry: (int(entry.order), entry.id))
+    return entries
+
+
+def trainer_profile_to_manifest(profile: TrainerProfile) -> dict[str, Any]:
+    return {
+        "kind": TRAINER_PROFILE_MANIFEST_KIND,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, profile.world_id),
+            "id": profile.id,
+            "key": profile.key,
+            "slug": profile.slug,
+            "name": profile.name or "",
+        },
+        "spec": {
+            "notes": profile.notes or "",
+            "learning": (
+                profile.learning if profile.learning is not None else {}
+            ),
+            "abilities": [
+                f"{ABILITY_MANIFEST_KIND}.{entry.ability.slug}"
+                for entry in _trainer_profile_ability_entries(profile)
+            ],
+        },
+    }
+
+
+def trainer_profile_delete_manifest(profile: TrainerProfile) -> dict[str, Any]:
+    return {
+        "kind": TRAINER_PROFILE_MANIFEST_KIND,
+        "operation": TRIGGER_MANIFEST_OPERATION_DELETE,
+        "metadata": {
+            "world": _entity_key(_WORLD_KEY_PREFIX, profile.world_id),
+            "id": profile.id,
+            "key": profile.key,
+            "slug": profile.slug,
+            "name": profile.name or "",
+        },
+    }
+
+
+def serialize_trainer_profile_payload(profile: TrainerProfile) -> dict[str, Any]:
+    manifest = trainer_profile_to_manifest(profile)
+    delete_manifest = trainer_profile_delete_manifest(profile)
+    entries = _trainer_profile_ability_entries(profile)
+    return {
+        "id": profile.id,
+        "key": profile.key,
+        "slug": profile.slug,
+        "name": profile.name or "",
+        "notes": profile.notes or "",
+        "learning": (
+            profile.learning if profile.learning is not None else {}
+        ),
+        "ability_count": len(entries),
+        "abilities": [
+            {
+                "id": entry.ability_id,
+                "key": _entity_key(ABILITY_MANIFEST_KIND, entry.ability_id),
+                "slug": entry.ability.slug,
+                "name": entry.ability.name,
+                "order": int(entry.order),
+            }
+            for entry in entries
+        ],
+        "manifest": manifest,
+        "yaml": manifest_to_yaml(manifest),
+        "delete_manifest": delete_manifest,
+        "delete_yaml": manifest_to_yaml(delete_manifest),
+    }
+
+
 def ability_to_manifest(ability: AbilityDefinition) -> dict[str, Any]:
+    try:
+        availability = normalize_ability_availability(ability.availability)
+    except AbilityValidationError:
+        # Keep directly-corrupted legacy rows visible and patchable in Builder
+        # YAML. Runtime audience checks still fail closed until the row is
+        # repaired through the canonical manifest path.
+        availability = ability.availability
     return {
         "kind": ABILITY_MANIFEST_KIND,
         "metadata": {
@@ -2112,7 +2257,7 @@ def ability_to_manifest(ability: AbilityDefinition) -> dict[str, Any]:
                 ability.consumes_primary_action_while_casting
             ),
             "target": ability.target or {},
-            "availability": ability.availability or {},
+            "availability": availability,
             "requirements": ability.requirements or {},
             "cost": ability.cost or {},
             "cast_time": ability.cast_time or {},
@@ -2164,7 +2309,7 @@ def serialize_ability_payload(
             ability.consumes_primary_action_while_casting
         ),
         "target": ability.target or {},
-        "availability": ability.availability or {},
+        "availability": manifest["spec"]["availability"],
         "requirements": ability.requirements or {},
         "cost": ability.cost or {},
         "cast_time": ability.cast_time or {},
@@ -4141,6 +4286,17 @@ def resolve_crafting_profile_ref(*, world: World, value: Any, field_name: str) -
     )
 
 
+def resolve_trainer_profile_ref(*, world: World, value: Any, field_name: str) -> TrainerProfile:
+    return _resolve_world_slug_reference(
+        world=world,
+        value=value,
+        field_name=field_name,
+        model=TrainerProfile,
+        prefixes={TRAINER_PROFILE_MANIFEST_KIND, "trainer_profile"},
+        label="a trainer profile",
+    )
+
+
 def _resolve_crafting_metadata(
     *,
     world: World,
@@ -4367,6 +4523,80 @@ def _coerce_trainer_ability_slug(*, world: World, entry: Any, index: int) -> str
     )
 
 
+def _trainer_ability_reference_key(
+    value: Any,
+    *,
+    field_name: str,
+) -> tuple[str, int | str]:
+    if isinstance(value, bool):
+        raise serializers.ValidationError(
+            f"{field_name} must reference an ability."
+        )
+    if isinstance(value, int):
+        return "id", value
+
+    text = str(value or "").strip()
+    if not text:
+        raise serializers.ValidationError(f"{field_name} is required.")
+    if text.isdigit():
+        return "id", int(text)
+
+    prefix, separator, raw_value = text.partition(".")
+    if separator:
+        if prefix != ABILITY_MANIFEST_KIND:
+            raise serializers.ValidationError(
+                f"{field_name} must reference an ability."
+            )
+        text = raw_value.strip()
+        if text.isdigit():
+            return "id", int(text)
+    return "slug", _slug_or_error(text, field_name)
+
+
+def _resolve_trainer_profile_abilities(
+    *,
+    world: World,
+    raw_abilities: list[Any],
+) -> list[AbilityDefinition]:
+    references = [
+        _trainer_ability_reference_key(
+            value,
+            field_name=f"spec.abilities[{index}]",
+        )
+        for index, value in enumerate(raw_abilities)
+    ]
+    ids = {value for kind, value in references if kind == "id"}
+    slugs = {value for kind, value in references if kind == "slug"}
+    abilities = AbilityDefinition.objects.filter(world=world).filter(
+        Q(pk__in=ids) | Q(slug__in=slugs)
+    )
+    abilities_by_id = {ability.id: ability for ability in abilities}
+    abilities_by_slug = {
+        ability.slug: ability
+        for ability in abilities_by_id.values()
+    }
+
+    resolved: list[AbilityDefinition] = []
+    seen_ability_ids: set[int] = set()
+    for index, (kind, value) in enumerate(references):
+        ability = (
+            abilities_by_id.get(value)
+            if kind == "id"
+            else abilities_by_slug.get(value)
+        )
+        if ability is None:
+            raise serializers.ValidationError(
+                f"spec.abilities[{index}] references an unknown ability."
+            )
+        if ability.id in seen_ability_ids:
+            raise serializers.ValidationError(
+                f"spec.abilities[{index}] duplicates another ability."
+            )
+        seen_ability_ids.add(ability.id)
+        resolved.append(ability)
+    return resolved
+
+
 def _normalize_existing_trainer(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
@@ -4386,29 +4616,87 @@ def _normalize_existing_trainer(value: Any) -> dict[str, Any]:
     }
 
 
+def _is_exclusive_generated_trainer_profile(
+    profile: TrainerProfile | None,
+    mob_definition: MobDefinition | None,
+) -> bool:
+    if profile is None or mob_definition is None or not mob_definition.id:
+        return False
+    if profile.legacy_source_mob_id != mob_definition.id:
+        return False
+    if profile.rooms.exists():
+        return False
+    return not profile.mob_definitions.exclude(pk=mob_definition.pk).exists()
+
+
 def _coerce_trainer_config(
     *,
     world: World,
     spec_patch: dict[str, Any],
     existing: MobDefinition | None,
-) -> dict[str, Any]:
+) -> tuple[TrainerProfile | None, str, dict[str, Any]]:
     existing_trainer = _normalize_existing_trainer(
         existing.trainer if existing else {}
     )
+    existing_profile = existing.trainer_profile if existing else None
+    existing_availability = (
+        existing.trainer_availability if existing else "present"
+    ) or "present"
     if "trainer" not in spec_patch:
-        return existing_trainer
+        return existing_profile, existing_availability, existing_trainer
 
     raw_trainer = spec_patch.get("trainer")
     if raw_trainer in (None, ""):
-        return {}
+        return None, "present", {}
     if not isinstance(raw_trainer, dict):
         raise serializers.ValidationError("spec.trainer must be a mapping.")
 
-    unknown_fields = sorted(set(raw_trainer.keys()) - {"abilities", "availability"})
+    unknown_fields = sorted(
+        set(raw_trainer.keys()) - {"profile", "abilities", "availability"}
+    )
     if unknown_fields:
         raise serializers.ValidationError(
             f"Unsupported spec.trainer field(s): {', '.join(unknown_fields)}."
         )
+
+    profile_supplied = "profile" in raw_trainer
+    has_profile = raw_trainer.get("profile") not in (None, "")
+    has_abilities = "abilities" in raw_trainer
+    if has_profile and has_abilities:
+        raise serializers.ValidationError(
+            "spec.trainer must define either profile or legacy abilities, not both."
+        )
+
+    availability = str(
+        raw_trainer.get("availability", existing_availability)
+    ).strip().lower() or "present"
+    if availability not in {"present", "alive_and_present"}:
+        raise serializers.ValidationError(
+            "spec.trainer.availability must be one of: present, alive_and_present."
+        )
+
+    if not raw_trainer:
+        return None, "present", {}
+
+    if profile_supplied:
+        if not has_profile:
+            return None, availability, {}
+        profile = resolve_trainer_profile_ref(
+            world=world,
+            value=raw_trainer.get("profile"),
+            field_name="spec.trainer.profile",
+        )
+        return profile, availability, {}
+
+    if not has_abilities:
+        if existing_profile is not None:
+            return existing_profile, availability, {}
+        if existing_trainer.get("abilities"):
+            return None, availability, {
+                "abilities": list(existing_trainer["abilities"]),
+                "availability": availability,
+            }
+        return None, availability, {}
 
     if "abilities" in raw_trainer:
         raw_abilities = raw_trainer.get("abilities")
@@ -4418,6 +4706,10 @@ def _coerce_trainer_config(
             raw_abilities = [raw_abilities]
         elif not isinstance(raw_abilities, list):
             raise serializers.ValidationError("spec.trainer.abilities must be a list.")
+        if len(raw_abilities) > 100:
+            raise serializers.ValidationError(
+                "spec.trainer.abilities cannot contain more than 100 abilities."
+            )
 
         abilities = []
         for index, entry in enumerate(raw_abilities):
@@ -4428,23 +4720,15 @@ def _coerce_trainer_config(
             )
             if slug not in abilities:
                 abilities.append(slug)
-    else:
-        abilities = list(existing_trainer.get("abilities") or [])
-
-    availability = str(
-        raw_trainer.get(
-            "availability",
-            existing_trainer.get("availability", "present"),
-        )
-    ).strip().lower() or "present"
-    if availability not in {"present", "alive_and_present"}:
-        raise serializers.ValidationError(
-            "spec.trainer.availability must be one of: present, alive_and_present."
-        )
 
     if not abilities:
-        return {}
-    return {
+        return None, "present", {}
+    reusable_profile = (
+        existing_profile
+        if _is_exclusive_generated_trainer_profile(existing_profile, existing)
+        else None
+    )
+    return reusable_profile, availability, {
         "abilities": abilities,
         "availability": availability,
     }
@@ -4671,7 +4955,7 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         )
     except ValueError as exc:
         raise serializers.ValidationError(str(exc))
-    trainer = _coerce_trainer_config(
+    trainer_profile, trainer_availability, trainer = _coerce_trainer_config(
         world=world,
         spec_patch=spec_patch,
         existing=existing,
@@ -4742,6 +5026,8 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         "merchant_availability": merchant_availability,
         "crafting_profile": crafting_profile,
         "crafting_availability": crafting_availability,
+        "trainer_profile": trainer_profile,
+        "trainer_availability": trainer_availability,
         "trainer": trainer,
     }
 
@@ -6593,6 +6879,183 @@ def parse_crafting_profile_delete_manifest(
     )
 
 
+def parse_trainer_profile_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedTrainerProfileManifest:
+    if parse_manifest_kind(manifest) != TRAINER_PROFILE_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            "Unsupported manifest kind. Expected 'trainerprofile'."
+        )
+    if parse_manifest_operation(manifest) != TRIGGER_MANIFEST_OPERATION_APPLY:
+        raise serializers.ValidationError(
+            "Trainer profile manifests only support operation 'apply' in this parser."
+        )
+    metadata = _crafting_manifest_metadata(world=world, manifest=manifest)
+    profile, profile_id = _resolve_crafting_metadata(
+        world=world,
+        metadata=metadata,
+        model=TrainerProfile,
+        prefixes={TRAINER_PROFILE_MANIFEST_KIND, "trainer_profile"},
+        label="trainer profile",
+    )
+    spec = manifest.get("spec") or {}
+    if not isinstance(spec, dict):
+        raise serializers.ValidationError("spec must be a mapping.")
+    unknown_fields = sorted(set(spec.keys()) - {"notes", "learning", "abilities"})
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported spec field(s): {', '.join(unknown_fields)}."
+        )
+    if profile is None and not spec:
+        raise serializers.ValidationError("spec is required when creating a trainer profile.")
+
+    slug_source = metadata.get("slug")
+    if slug_source is None:
+        slug_source = profile.slug if profile else metadata.get("name")
+    slug = _slug_or_error(str(slug_source or ""), "metadata.slug")
+    if TrainerProfile.objects.filter(world=world, slug=slug).exclude(pk=profile_id).exists():
+        raise serializers.ValidationError(
+            "metadata.slug is already used by another trainer profile."
+        )
+    default_name = profile.name if profile else slug.replace("-", " ").title()
+    name = _coerce_text(metadata.get("name", default_name))
+    if not name.strip():
+        raise serializers.ValidationError("metadata.name cannot be empty.")
+
+    abilities = None
+    if "abilities" in spec or profile is None:
+        raw_abilities = spec.get("abilities", [])
+        if raw_abilities in (None, ""):
+            raw_abilities = []
+        if not isinstance(raw_abilities, list):
+            raise serializers.ValidationError("spec.abilities must be a list.")
+        if len(raw_abilities) > 100:
+            raise serializers.ValidationError(
+                "spec.abilities cannot contain more than 100 abilities."
+            )
+        abilities = _resolve_trainer_profile_abilities(
+            world=world,
+            raw_abilities=raw_abilities,
+        )
+
+    learning = None
+    if "learning" in spec or profile is None:
+        raw_learning = spec.get("learning", {})
+        if raw_learning in (None, ""):
+            raw_learning = {}
+        if not isinstance(raw_learning, dict):
+            raise serializers.ValidationError("spec.learning must be a mapping.")
+        unknown_learning_fields = sorted(
+            set(raw_learning.keys()) - {"conditions", "max_known"}
+        )
+        if unknown_learning_fields:
+            raise serializers.ValidationError(
+                "Unsupported spec.learning field(s): "
+                f"{', '.join(unknown_learning_fields)}."
+            )
+        if raw_learning:
+            if "max_known" not in raw_learning:
+                raise serializers.ValidationError(
+                    "spec.learning.max_known is required when learning is configured."
+                )
+            raw_max_known = raw_learning.get("max_known")
+            if isinstance(raw_max_known, str):
+                normalized_max_known = raw_max_known.strip().lower()
+                if normalized_max_known != "uncapped":
+                    raise serializers.ValidationError(
+                        "spec.learning.max_known must be a positive integer or 'uncapped'."
+                    )
+                max_known = "uncapped"
+            elif (
+                isinstance(raw_max_known, bool)
+                or not isinstance(raw_max_known, int)
+                or raw_max_known < 1
+            ):
+                raise serializers.ValidationError(
+                    "spec.learning.max_known must be a positive integer or 'uncapped'."
+                )
+            else:
+                max_known = raw_max_known
+
+            conditions = raw_learning.get("conditions", {})
+            if conditions in (None, ""):
+                conditions = {}
+            if not isinstance(conditions, (bool, dict, list)):
+                raise serializers.ValidationError(
+                    "spec.learning.conditions must be a structured condition."
+                )
+            try:
+                validate_candidate_condition_payload(
+                    conditions,
+                    field_name="spec.learning.conditions",
+                )
+            except ValueError as exc:
+                raise serializers.ValidationError(str(exc)) from exc
+            learning = {
+                "conditions": conditions,
+                "max_known": max_known,
+            }
+        else:
+            learning = {}
+
+    fields = {}
+    if profile is None or "slug" in metadata:
+        fields["slug"] = slug
+    if profile is None or "name" in metadata:
+        fields["name"] = name
+    if profile is None or "notes" in spec:
+        fields["notes"] = _coerce_text(
+            spec.get("notes", profile.notes if profile else "")
+        )
+    if learning is not None:
+        fields["learning"] = learning
+
+    return ParsedTrainerProfileManifest(
+        world=world,
+        profile=profile,
+        profile_id=profile_id,
+        slug=slug,
+        name=name,
+        fields=fields,
+        abilities=abilities,
+    )
+
+
+def parse_trainer_profile_delete_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+) -> ParsedTrainerProfileDeleteManifest:
+    if parse_manifest_kind(manifest) != TRAINER_PROFILE_MANIFEST_KIND:
+        raise serializers.ValidationError(
+            "Unsupported manifest kind. Expected 'trainerprofile'."
+        )
+    if parse_manifest_operation(manifest) != TRIGGER_MANIFEST_OPERATION_DELETE:
+        raise serializers.ValidationError("Delete parser requires operation: delete.")
+    metadata = _crafting_manifest_metadata(world=world, manifest=manifest)
+    profile, profile_id = _resolve_crafting_metadata(
+        world=world,
+        metadata=metadata,
+        model=TrainerProfile,
+        prefixes={TRAINER_PROFILE_MANIFEST_KIND, "trainer_profile"},
+        label="trainer profile",
+        require_existing_slug=True,
+    )
+    if profile is None or profile_id is None:
+        raise serializers.ValidationError(
+            "metadata.id, metadata.key, or metadata.slug is required for operation: delete."
+        )
+    if manifest.get("spec") not in (None, {}):
+        raise serializers.ValidationError("spec is not allowed for operation: delete.")
+    return ParsedTrainerProfileDeleteManifest(
+        world=world,
+        profile=profile,
+        profile_id=profile_id,
+    )
+
+
 def _parse_ability_reference(value: Any, field_name: str) -> int:
     if isinstance(value, bool):
         raise serializers.ValidationError(
@@ -6698,6 +7161,28 @@ def parse_ability_manifest(
     base_spec: dict[str, Any] = {}
     if ability is not None:
         base_spec = ability_to_manifest(ability)["spec"]
+        try:
+            normalize_ability_availability(ability.availability)
+        except AbilityValidationError:
+            availability_patch = spec_patch.get("availability")
+            if (
+                not isinstance(availability_patch, dict)
+                or "actors" not in availability_patch
+            ):
+                raise serializers.ValidationError(
+                    "Stored spec.availability is invalid; include an explicit "
+                    "spec.availability.actors list to repair it."
+                )
+            raw_availability = (
+                ability.availability
+                if isinstance(ability.availability, dict)
+                else {}
+            )
+            base_spec["availability"] = {
+                key: raw_availability[key]
+                for key in ("actors", "classes", "min_level")
+                if key in raw_availability
+            }
     merged_spec = _deep_merge(base_spec, spec_patch)
 
     slug_source = metadata.get("slug")
@@ -7451,6 +7936,74 @@ def apply_mob_definition_manifest(parsed: ParsedMobDefinitionManifest) -> MobDef
                 sync_spawned=False,
             )
 
+        # Import-only compatibility for the pre-profile trainer shape. The
+        # normalized FK is the only persisted runtime/export source of truth.
+        legacy_trainer = _normalize_existing_trainer(mob_definition.trainer)
+        if legacy_trainer:
+            trainer_profile = mob_definition.trainer_profile
+            if not _is_exclusive_generated_trainer_profile(
+                trainer_profile,
+                mob_definition,
+            ):
+                base_generated_slug = f"legacy-mob-{mob_definition.id}"
+                generated_slug = base_generated_slug
+                suffix = 2
+                while TrainerProfile.objects.filter(
+                    world=parsed.world,
+                    slug=generated_slug,
+                ).exists():
+                    generated_slug = f"{base_generated_slug}-{suffix}"
+                    suffix += 1
+                trainer_profile = TrainerProfile.objects.create(
+                    world=parsed.world,
+                    slug=generated_slug,
+                    name=f"{mob_definition.name} Training",
+                    legacy_source_mob_id=mob_definition.id,
+                    notes=(
+                        "Generated from the legacy inline trainer manifest "
+                        f"for mobdefinition.{mob_definition.slug}."
+                    ),
+                )
+            ability_by_slug = {
+                ability.slug: ability
+                for ability in AbilityDefinition.objects.filter(
+                    world=parsed.world,
+                    slug__in=legacy_trainer["abilities"],
+                )
+            }
+            TrainerProfileAbility.objects.filter(profile=trainer_profile).delete()
+            TrainerProfileAbility.objects.bulk_create([
+                TrainerProfileAbility(
+                    profile=trainer_profile,
+                    ability=ability_by_slug[slug],
+                    order=index,
+                )
+                for index, slug in enumerate(legacy_trainer["abilities"])
+            ])
+            mob_definition.trainer_profile = trainer_profile
+            mob_definition.trainer_availability = legacy_trainer["availability"]
+            mob_definition.trainer = {}
+            mob_definition.save(
+                update_fields=[
+                    "trainer_profile",
+                    "trainer_availability",
+                    "trainer",
+                    "modified_ts",
+                ],
+                sync_spawned=False,
+            )
+            (
+                TrainerProfile.objects.filter(
+                    world=parsed.world,
+                    legacy_source_mob_id=mob_definition.id,
+                    rooms__isnull=True,
+                    mob_definitions__isnull=True,
+                )
+                .exclude(pk=trainer_profile.pk)
+                .delete()
+            )
+            sync_spawned = True
+
         _apply_faction_assignments(
             member=mob_definition,
             factions=parsed.factions,
@@ -7693,6 +8246,40 @@ def apply_crafting_profile_manifest(parsed: ParsedCraftingProfileManifest) -> Cr
             CraftingProfileRecipe.objects.bulk_create([
                 CraftingProfileRecipe(profile=profile, recipe=recipe, order=index)
                 for index, recipe in enumerate(parsed.recipes)
+            ])
+        return profile
+
+
+def apply_trainer_profile_manifest(parsed: ParsedTrainerProfileManifest) -> TrainerProfile:
+    with transaction.atomic():
+        if parsed.profile_id is None:
+            profile = TrainerProfile.objects.create(world=parsed.world, **parsed.fields)
+        else:
+            try:
+                profile = TrainerProfile.objects.select_for_update().get(
+                    world=parsed.world,
+                    pk=parsed.profile_id,
+                )
+            except TrainerProfile.DoesNotExist as exc:
+                raise serializers.ValidationError(
+                    "The trainer profile was deleted before this update could be applied."
+                ) from exc
+            for field_name, value in parsed.fields.items():
+                setattr(profile, field_name, value)
+            update_fields = list(parsed.fields.keys())
+            if profile.legacy_source_mob_id is not None:
+                profile.legacy_source_mob_id = None
+                update_fields.append("legacy_source_mob_id")
+            if update_fields or parsed.abilities is not None:
+                profile.save(
+                    update_fields=[*update_fields, "modified_ts"]
+                )
+
+        if parsed.abilities is not None:
+            TrainerProfileAbility.objects.filter(profile=profile).delete()
+            TrainerProfileAbility.objects.bulk_create([
+                TrainerProfileAbility(profile=profile, ability=ability, order=index)
+                for index, ability in enumerate(parsed.abilities)
             ])
         return profile
 

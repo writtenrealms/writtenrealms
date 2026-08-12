@@ -467,8 +467,9 @@ definition authored in one world can be copied into another world through
 
 ## Ability Trainers
 
-A mob definition can teach abilities by adding a `trainer` block. Trainer
-abilities are stored by ability slug so exported worlds remain portable.
+A mob definition can provide a reusable Trainer Profile when training should
+depend on a spawned NPC being present. Define the abilities and
+`kind: trainerprofile` document first, then attach the profile:
 
 ```yaml
 kind: mobdefinition
@@ -479,16 +480,31 @@ spec:
   type: humanoid
   keywords: trainer arms
   trainer:
+    profile: trainerprofile.arms-training
     availability: present
-    abilities:
-      - power-strike
-      - shield-slam
 ```
 
-Once any trainer in the world offers an ability, `learn <ability>` and
-`unlearn <ability>` require an eligible spawned trainer in the player's current
-room. Use `availability: alive_and_present` when a pending-deletion or defeated
-trainer should not teach.
+Use `availability: alive_and_present` when a pending-deletion or defeated
+trainer should not teach. Once an attached Trainer Profile offers an ability,
+`learn <ability>` and `unlearn <ability>` require an eligible provider in the
+player's current room.
+
+Mob `availability` controls whether that spawned copy is a provider. A
+Trainer Profile's separate `spec.learning.conditions` and `max_known` policy
+controls which players may learn and how many catalog abilities they may know.
+Every mob using the same profile shares that profile quota; spawning more
+copies does not grant more choices. Learning conditions and quotas never block
+unlearning through a present provider.
+
+When a drill hall, shrine, library, or similar location should always provide
+training, attach the Trainer Profile directly to that room instead. The room
+does not need a mob or Spawn Plan, and a separate mob can remain purely
+decorative. See [Ability Trainers](ability-builder-guide.md#ability-trainers)
+for the profile and room manifests.
+
+Omitting `trainer` in a partial mob manifest preserves the attachment. Set it
+to `null` or `{}` to clear it. Legacy inline `trainer.abilities` is accepted on
+import, but canonical YAML uses `trainer.profile`.
 
 ## Combat Ability Loadouts
 

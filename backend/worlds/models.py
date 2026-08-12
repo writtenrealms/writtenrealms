@@ -1636,6 +1636,11 @@ class Room(AdventWorldBaseModel):
         on_delete=models.SET_NULL,
         related_name='rooms',
         **optional)
+    trainer_profile = models.ForeignKey(
+        'builders.TrainerProfile',
+        on_delete=models.SET_NULL,
+        related_name='rooms',
+        **optional)
 
     name = models.TextField()
     description = models.TextField(**optional)

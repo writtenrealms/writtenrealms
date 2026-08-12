@@ -9,9 +9,10 @@ from django.db.models import Case, IntegerField, Q, Value, When
 from django.db.utils import NotSupportedError
 from django.utils import timezone
 
-from builders.models import AbilityDefinition, MobDefinition
+from builders.models import AbilityDefinition
 from config import constants as adv_consts
 from core.abilities import (
+    ability_allows_actor,
     definition_world,
     max_known_abilities_for_world,
     starting_ability_slugs_for_actor,
@@ -51,10 +52,29 @@ from spawns.ability_prepare_state import (
     active_prepared_ability_slugs,
     ability_prepare_state_event,
 )
+from spawns.ability_intents import (
+    ABILITY_INTENT_STATUS_CHANNELING,
+    ABILITY_INTENT_STATUS_QUEUED,
+    ability_intent_is_committed,
+)
 from spawns.events import GameEvent
 from spawns.models import CombatEncounter, CombatParticipant, Mob, Player
 from spawns.state_payloads import serialize_char_from_mob, serialize_char_from_player
 from spawns.triggers import evaluate_movement_policies
+from spawns.trainers import (
+    TRAINER_CATALOG_LIMIT,
+    TrainingProvider,
+    ability_has_attached_trainer,
+    discover_training_providers,
+    learning_status_after_delta,
+    learning_status_payloads,
+    learning_statuses_for_providers,
+    provider_for_ability_change,
+    providers_for_ability_change,
+    providers_by_ability_id,
+    taught_abilities_for_providers,
+    with_attached_trainer_flag,
+)
 from worlds.models import Room
 
 
@@ -83,14 +103,33 @@ def _definition_world_id(world) -> int:
     return source_world.id
 
 
-def _ability_queryset_for_world(world):
-    return AbilityDefinition.objects.filter(
+def _ability_queryset_for_world(world, *, include_inactive: bool = False):
+    queryset = AbilityDefinition.objects.filter(
         world_id=_definition_world_id(world),
-        is_active=True,
+    )
+    if not include_inactive:
+        queryset = queryset.filter(is_active=True)
+    return queryset
+
+
+def _with_ability_actor_audience(queryset, actor_type: str):
+    """Filter canonical and legacy ability rows before applying result caps."""
+
+    if transaction.get_connection().vendor != "postgresql":
+        return queryset
+    return queryset.filter(
+        Q(availability__actors__contains=[actor_type])
+        | ~Q(availability__has_key="actors")
     )
 
 
-def resolve_ability_for_command(world, command: str) -> AbilityDefinition | None:
+def resolve_ability_for_command(
+    world,
+    command: str,
+    *,
+    include_inactive: bool = False,
+    actor_type: str | None = "player",
+) -> AbilityDefinition | None:
     normalized = str(command or "").strip().lower()
     if not normalized:
         return None
@@ -98,9 +137,14 @@ def resolve_ability_for_command(world, command: str) -> AbilityDefinition | None
         # Preserve exact-slug precedence while resolving slug and authored verb
         # in one indexed/JSON query. Unknown text commands (including socials)
         # must not scan the ability catalog several times first.
-        ability = (
-            _ability_queryset_for_world(world)
-            .filter(
+        queryset = _ability_queryset_for_world(
+            world,
+            include_inactive=include_inactive,
+        )
+        if actor_type is not None:
+            queryset = _with_ability_actor_audience(queryset, actor_type)
+        matches = list(
+            queryset.filter(
                 Q(slug=normalized)
                 | Q(command_verbs__contains=[normalized])
             )
@@ -112,18 +156,22 @@ def resolve_ability_for_command(world, command: str) -> AbilityDefinition | None
                 )
             )
             .order_by("command_match_order", "id")
-            .first()
+            [:8]
         )
     except NotSupportedError:
-        ability = None
-    if ability:
-        return ability
+        matches = []
+    for ability in matches:
+        if actor_type is None or ability_allows_actor(ability, actor_type):
+            return ability
 
     # Non-Postgres development databases may not support JSON containment.
     # Keep a fallback so local smoke tests still work.
     if transaction.get_connection().vendor == "postgresql":
         return None
-    abilities = list(_ability_queryset_for_world(world).only(
+    abilities = list(_ability_queryset_for_world(
+        world,
+        include_inactive=include_inactive,
+    ).only(
         "id",
         "slug",
         "name",
@@ -141,6 +189,12 @@ def resolve_ability_for_command(world, command: str) -> AbilityDefinition | None
         "components",
         "is_active",
     ))
+    if actor_type is not None:
+        abilities = [
+            ability
+            for ability in abilities
+            if ability_allows_actor(ability, actor_type)
+        ]
     for ability in abilities:
         if ability.slug == normalized:
             return ability
@@ -150,16 +204,42 @@ def resolve_ability_for_command(world, command: str) -> AbilityDefinition | None
     return None
 
 
-def resolve_ability_for_selector(world, selector: str | None) -> AbilityDefinition | None:
+def resolve_ability_for_selector(
+    world,
+    selector: str | None,
+    *,
+    include_inactive: bool = False,
+    actor_type: str | None = "player",
+) -> AbilityDefinition | None:
     text = str(selector or "").strip().lower()
     if not text:
         return None
 
-    ability = resolve_ability_for_command(world, text)
+    ability = resolve_ability_for_command(
+        world,
+        text,
+        include_inactive=include_inactive,
+        actor_type=actor_type,
+    )
     if ability:
         return ability
 
-    candidates = list(_ability_queryset_for_world(world))
+    candidate_queryset = _ability_queryset_for_world(
+        world,
+        include_inactive=include_inactive,
+    )
+    if actor_type is not None:
+        candidate_queryset = _with_ability_actor_audience(
+            candidate_queryset,
+            actor_type,
+        )
+    candidates = list(candidate_queryset)
+    if actor_type is not None:
+        candidates = [
+            candidate
+            for candidate in candidates
+            if ability_allows_actor(candidate, actor_type)
+        ]
     exact_name = [candidate for candidate in candidates if (candidate.name or "").strip().lower() == text]
     if exact_name:
         return exact_name[0]
@@ -176,6 +256,61 @@ def resolve_ability_for_selector(world, selector: str | None) -> AbilityDefiniti
     if len(name_matches) == 1:
         return name_matches[0]
     return None
+
+
+def _resolve_local_training_ability_for_selector(
+    player: Player,
+    selector: str | None,
+) -> AbilityDefinition | None:
+    """Resolve an exact selector against the curricula present in the room."""
+
+    text = str(selector or "").strip().lower()
+    if not text:
+        return None
+    providers, _providers_truncated = discover_training_providers(player)
+    taught, _taught_truncated = taught_abilities_for_providers(
+        providers,
+        actor_type="player",
+    )
+    abilities = [ability for ability, _provider in taught]
+    match_groups = (
+        [ability for ability in abilities if ability.slug == text],
+        [
+            ability
+            for ability in abilities
+            if text
+            in {
+                str(verb or "").strip().lower()
+                for verb in (ability.command_verbs or [])
+            }
+        ],
+        [
+            ability
+            for ability in abilities
+            if str(ability.name or "").strip().lower() == text
+        ],
+    )
+    for matches in match_groups:
+        unique_matches = list({ability.id: ability for ability in matches}.values())
+        if len(unique_matches) == 1:
+            return unique_matches[0]
+        if unique_matches:
+            return None
+    return None
+
+
+def resolve_ability_for_learning(
+    player: Player,
+    selector: str | None,
+) -> AbilityDefinition | None:
+    """Resolve learning selectors without letting remote aliases mask local curricula."""
+
+    ability = resolve_ability_for_selector(player.world, selector)
+    if ability is None or not ability_has_trainers(player.world, ability):
+        return ability
+    if providers_for_ability_change(player, ability):
+        return ability
+    return _resolve_local_training_ability_for_selector(player, selector) or ability
 
 
 def known_ability_slugs(player: Player) -> list[str]:
@@ -271,7 +406,8 @@ def resolve_ability_for_hotkey(player: Player, hotkey: str | int | None) -> Abil
         return None
     if slug not in known_ability_slugs(player):
         return None
-    return _ability_queryset_for_world(player.world).filter(slug=slug).first()
+    ability = _ability_queryset_for_world(player.world).filter(slug=slug).first()
+    return ability if ability_allows_actor(ability, "player") else None
 
 
 def player_knows_ability(player: Player, ability: AbilityDefinition) -> bool:
@@ -286,6 +422,7 @@ def grant_starting_abilities(player: Player) -> bool:
     abilities = {
         ability.slug: ability
         for ability in _ability_queryset_for_world(player.world).filter(slug__in=slugs)
+        if ability_allows_actor(ability, "player")
     }
     if not abilities:
         return False
@@ -604,125 +741,106 @@ def execute_character_effect_component(
     return events
 
 
-def _trainer_config(definition: MobDefinition | None) -> dict[str, Any]:
-    if not definition or not isinstance(definition.trainer, dict):
-        return {}
-    abilities = []
-    for raw_slug in definition.trainer.get("abilities") or []:
-        slug = str(raw_slug or "").strip().lower()
-        if slug and slug not in abilities:
-            abilities.append(slug)
-    if not abilities:
-        return {}
-    availability = str(definition.trainer.get("availability") or "present").strip().lower()
-    if availability not in {"present", "alive_and_present"}:
-        availability = "present"
-    return {
-        "abilities": abilities,
-        "availability": availability,
-    }
-
-
-def _trainer_teaches_ability(definition: MobDefinition | None, ability: AbilityDefinition) -> bool:
-    return ability.slug in set(_trainer_config(definition).get("abilities") or [])
-
-
-def _trainer_is_available(mob: Mob, config: dict[str, Any]) -> bool:
-    if not config.get("abilities"):
-        return False
-    if mob.is_pending_deletion:
-        return False
-    if config.get("availability") == "alive_and_present":
-        try:
-            return int(mob.health or 0) > 0
-        except (TypeError, ValueError):
-            return False
-    return True
-
-
 def ability_has_trainers(world, ability: AbilityDefinition) -> bool:
-    for definition in MobDefinition.objects.filter(
-        world_id=_definition_world_id(world),
-    ).only("id", "trainer"):
-        if _trainer_teaches_ability(definition, ability):
-            return True
-    return False
+    return ability_has_attached_trainer(world, ability)
 
 
-def _trainer_ability_slugs_for_world(world) -> set[str]:
-    slugs: set[str] = set()
-    for definition in MobDefinition.objects.filter(
-        world_id=_definition_world_id(world),
-    ).only("id", "trainer"):
-        slugs.update(_trainer_config(definition).get("abilities") or [])
-    return slugs
-
-
-def _mob_can_train_ability(mob: Mob, ability: AbilityDefinition) -> bool:
-    config = _trainer_config(mob.definition)
-    if ability.slug not in set(config.get("abilities") or []):
-        return False
-    return _trainer_is_available(mob, config)
-
-
-def _available_trainers_in_room(player: Player) -> list[Mob]:
-    if not player.room_id:
-        return []
-    trainers: list[Mob] = []
-    for mob in Mob.objects.filter(
-        world_id=player.world_id,
-        room_id=player.room_id,
-        is_pending_deletion=False,
-        definition__world_id=_definition_world_id(player.world),
-    ).select_related("definition").order_by("id"):
-        config = _trainer_config(mob.definition)
-        if _trainer_is_available(mob, config):
-            trainers.append(mob)
-    return trainers
-
-
-def trainable_abilities_for_player(player: Player) -> tuple[list[Mob], list[tuple[AbilityDefinition, Mob | None]]]:
-    trainers = _available_trainers_in_room(player)
-    taught_slugs: list[str] = []
-    trainer_by_slug: dict[str, Mob] = {}
-    for trainer in trainers:
-        for slug in _trainer_config(trainer.definition).get("abilities") or []:
-            if slug in trainer_by_slug:
-                continue
-            taught_slugs.append(slug)
-            trainer_by_slug[slug] = trainer
-
-    trainer_gated_slugs = _trainer_ability_slugs_for_world(player.world)
+def _trainable_ability_catalog(
+    player: Player,
+) -> tuple[
+    list[TrainingProvider],
+    list[tuple[AbilityDefinition, TrainingProvider | None]],
+    bool,
+    dict[int, dict[str, Any]],
+]:
+    providers, providers_truncated = discover_training_providers(player)
     known = set(known_ability_slugs(player))
+    learning_statuses = learning_statuses_for_providers(
+        player,
+        providers,
+        known_slugs=known,
+    )
+    taught, taught_truncated = taught_abilities_for_providers(
+        providers,
+        actor_type="player",
+        eligible_profile_ids={
+            profile_id
+            for profile_id, status in learning_statuses.items()
+            if status["eligible"]
+        },
+    )
     max_known = max_known_abilities_for_world(player.world)
     if max_known is not None and len(known) >= max_known:
-        return trainers, []
+        return providers, [], providers_truncated, learning_statuses
 
-    abilities = list(_ability_queryset_for_world(player.world).order_by("id"))
-    abilities_by_slug = {ability.slug: ability for ability in abilities}
+    trainable: list[tuple[AbilityDefinition, TrainingProvider | None]] = []
 
-    trainable: list[tuple[AbilityDefinition, Mob | None]] = []
-
-    def add_if_trainable(ability: AbilityDefinition | None, trainer: Mob | None) -> None:
+    def add_if_trainable(
+        ability: AbilityDefinition | None,
+        provider: TrainingProvider | None,
+    ) -> bool:
         if not ability or ability.slug in known:
-            return
+            return False
         available, _reason = ability_is_available_to_player(player, ability)
         if not available:
-            return
-        trainable.append((ability, trainer))
+            return False
+        if len(trainable) >= TRAINER_CATALOG_LIMIT:
+            return True
+        trainable.append((ability, provider))
+        return False
 
-    for slug in taught_slugs:
-        add_if_trainable(abilities_by_slug.get(slug), trainer_by_slug[slug])
+    for ability, provider in taught:
+        add_if_trainable(ability, provider)
 
-    for ability in abilities:
-        if ability.slug in trainer_gated_slugs:
-            continue
-        add_if_trainable(ability, None)
-    return trainers, trainable
+    open_queryset = (
+        with_attached_trainer_flag(
+            _with_ability_actor_audience(
+                _ability_queryset_for_world(player.world),
+                "player",
+            ).exclude(slug__in=known),
+            world=player.world,
+        )
+        .filter(has_attached_trainer=False)
+        .order_by("id")
+    )
+    if transaction.get_connection().vendor == "postgresql":
+        open_candidates = list(open_queryset[:TRAINER_CATALOG_LIMIT + 1])
+    else:
+        open_candidates = [
+            ability
+            for ability in open_queryset
+            if ability_allows_actor(ability, "player")
+        ][:TRAINER_CATALOG_LIMIT + 1]
+    open_truncated = len(open_candidates) > TRAINER_CATALOG_LIMIT
+    open_eligible_overflow = False
+    for ability in open_candidates:
+        open_eligible_overflow = (
+            add_if_trainable(ability, None) or open_eligible_overflow
+        )
+    truncated = (
+        providers_truncated
+        or taught_truncated
+        or open_truncated
+        or open_eligible_overflow
+    )
+    return providers, trainable, truncated, learning_statuses
 
 
-def _trainer_payload(trainer: Mob) -> dict[str, Any]:
-    return {"id": trainer.id, "name": trainer.name}
+def trainable_abilities_for_player(
+    player: Player,
+) -> tuple[
+    list[TrainingProvider],
+    list[tuple[AbilityDefinition, TrainingProvider | None]],
+]:
+    providers, trainable, _truncated, _learning = _trainable_ability_catalog(player)
+    return providers, trainable
+
+
+def _trainer_payload(
+    trainer: TrainingProvider,
+    learning: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return trainer.payload(learning=learning)
 
 
 def _learn_command_selector(ability: AbilityDefinition) -> str:
@@ -737,16 +855,23 @@ def _learn_command(ability: AbilityDefinition) -> str:
     return f"learn {_learn_command_selector(ability)}"
 
 
-def _trainable_ability_payload(ability: AbilityDefinition, trainer: Mob | None) -> dict[str, Any]:
+def _trainable_ability_payload(
+    ability: AbilityDefinition,
+    trainer: TrainingProvider | None,
+    learning: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "slug": ability.slug,
         "name": ability.name,
         "learn_command": _learn_command(ability),
-        "trainer": _trainer_payload(trainer) if trainer else None,
+        "trainer": _trainer_payload(trainer, learning) if trainer else None,
+        "learning": learning if trainer else None,
     }
 
 
-def _trainable_ability_list_text(trainable: list[tuple[AbilityDefinition, Mob | None]]) -> str:
+def _trainable_ability_list_text(
+    trainable: list[tuple[AbilityDefinition, TrainingProvider | None]],
+) -> str:
     labels = [
         f"{ability.name} [ {_learn_command(ability)} ]"
         for ability, _trainer in trainable
@@ -756,18 +881,91 @@ def _trainable_ability_list_text(trainable: list[tuple[AbilityDefinition, Mob | 
     return "You can learn here: " + ", ".join(labels) + "."
 
 
-def trainer_for_ability_change(player: Player, ability: AbilityDefinition) -> Mob | None:
-    if not player.room_id:
+def _unlearn_command(ability: AbilityDefinition) -> str:
+    return f"unlearn {_learn_command_selector(ability)}"
+
+
+def _unlearnable_ability_payload(
+    ability: AbilityDefinition,
+    trainer: TrainingProvider | None,
+    learning: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "slug": ability.slug,
+        "name": ability.name,
+        "unlearn_command": _unlearn_command(ability),
+        "trainer": _trainer_payload(trainer, learning) if trainer else None,
+        "learning": learning if trainer else None,
+    }
+
+
+def _unlearnable_ability_catalog(
+    player: Player,
+) -> tuple[
+    list[TrainingProvider],
+    list[tuple[AbilityDefinition, TrainingProvider | None]],
+    bool,
+    dict[int, dict[str, Any]],
+]:
+    known = known_ability_slugs(player)
+    bounded_known = known[:TRAINER_CATALOG_LIMIT + 1]
+    providers, providers_truncated = discover_training_providers(player)
+    learning_statuses = learning_statuses_for_providers(
+        player,
+        providers,
+        known_slugs=known,
+    )
+    abilities = list(
+        with_attached_trainer_flag(
+            _ability_queryset_for_world(
+                player.world,
+                include_inactive=True,
+            ).filter(slug__in=bounded_known),
+            world=player.world,
+        )
+    )
+    ability_by_slug = {ability.slug: ability for ability in abilities}
+    provider_by_ability_id = providers_by_ability_id(
+        providers,
+        [ability.id for ability in abilities[:TRAINER_CATALOG_LIMIT]],
+    )
+    result: list[tuple[AbilityDefinition, TrainingProvider | None]] = []
+    for slug in bounded_known[:TRAINER_CATALOG_LIMIT]:
+        ability = ability_by_slug.get(slug)
+        if ability is None:
+            continue
+        provider = provider_by_ability_id.get(ability.id)
+        if ability.has_attached_trainer and provider is None:
+            continue
+        result.append((ability, provider))
+    return (
+        providers,
+        result,
+        providers_truncated or len(known) > TRAINER_CATALOG_LIMIT,
+        learning_statuses,
+    )
+
+
+def _unlearnable_ability_list_text(
+    unlearnable: list[tuple[AbilityDefinition, TrainingProvider | None]],
+) -> str:
+    labels = [
+        f"{ability.name} [ {_unlearn_command(ability)} ]"
+        for ability, _trainer in unlearnable
+    ]
+    if not labels:
+        return "There is nothing you can unlearn here right now."
+    return "You can unlearn here: " + ", ".join(labels) + "."
+
+
+def trainer_for_ability_change(player: Player, ability: AbilityDefinition):
+    """Compatibility wrapper; gameplay uses the typed provider below."""
+    provider = provider_for_ability_change(player, ability)
+    if provider is None:
         return None
-    for mob in Mob.objects.filter(
-        world_id=player.world_id,
-        room_id=player.room_id,
-        is_pending_deletion=False,
-        definition__world_id=_definition_world_id(player.world),
-    ).select_related("definition").order_by("id"):
-        if _mob_can_train_ability(mob, ability):
-            return mob
-    return None
+    if provider.type == "mob":
+        return Mob.objects.filter(pk=provider.id).first()
+    return provider
 
 
 def require_trainer_for_ability_change(
@@ -775,10 +973,10 @@ def require_trainer_for_ability_change(
     ability: AbilityDefinition,
     *,
     verb: str,
-) -> Mob | None:
+) -> TrainingProvider | None:
     if not ability_has_trainers(player.world, ability):
         return None
-    trainer = trainer_for_ability_change(player, ability)
+    trainer = provider_for_ability_change(player, ability)
     if trainer:
         return trainer
     raise ActionError(
@@ -788,7 +986,76 @@ def require_trainer_for_ability_change(
     )
 
 
+def require_learning_provider(
+    player: Player,
+    ability: AbilityDefinition,
+    *,
+    known_slugs: list[str],
+) -> tuple[TrainingProvider | None, dict[str, Any] | None]:
+    if not ability_has_trainers(player.world, ability):
+        return None, None
+    providers = providers_for_ability_change(player, ability)
+    if not providers:
+        raise ActionError(
+            f"You need a trainer to learn {ability.name}.",
+            code="ability_trainer_required",
+            data={"ability": ability.slug},
+        )
+    statuses = learning_statuses_for_providers(
+        player,
+        providers,
+        known_slugs=known_slugs,
+    )
+    for provider in providers:
+        status = statuses[provider.profile_id]
+        if status["eligible"]:
+            return provider, status
+
+    limited_provider = next(
+        (
+            provider
+            for provider in providers
+            if statuses[provider.profile_id]["status"] == "limit_reached"
+        ),
+        None,
+    )
+    if limited_provider is not None:
+        status = statuses[limited_provider.profile_id]
+        max_known = status["max_known"]
+        raise ActionError(
+            f"You can only learn {max_known} abilities from "
+            f"{limited_provider.profile_name}. Unlearn one first.",
+            code="trainer_learning_limit",
+            data={
+                "ability": ability.slug,
+                "trainer": _trainer_payload(limited_provider, status),
+                "learning": status,
+            },
+        )
+
+    denied_provider = providers[0]
+    status = statuses[denied_provider.profile_id]
+    if status.get("reason") == "invalid_policy":
+        denial_text = (
+            f"{denied_provider.profile_name} is not configured for learning."
+        )
+    else:
+        denial_text = f"{denied_provider.profile_name} cannot teach your class."
+    raise ActionError(
+        denial_text,
+        code="trainer_learning_denied",
+        data={
+            "ability": ability.slug,
+            "trainer": _trainer_payload(denied_provider, status),
+            "learning": status,
+        },
+    )
+
+
 def ability_is_available_to_player(player: Player, ability: AbilityDefinition) -> tuple[bool, str]:
+    if not ability_allows_actor(ability, "player"):
+        return False, f"{ability.name} is not available to players."
+
     availability = ability.availability or {}
     min_level = int(availability.get("min_level") or 1)
     if int(player.level or 1) < min_level:
@@ -1048,22 +1315,31 @@ def _pending_payload(
     }
     cast_rounds = ability_cast_rounds(ability)
     if cast_rounds > 0:
-        payload["status"] = "queued"
+        payload["status"] = ABILITY_INTENT_STATUS_QUEUED
         payload["cast_rounds_remaining"] = cast_rounds
     return payload
 
 
 def _pending_ability_is_casting(pending: Any) -> bool:
-    return isinstance(pending, dict) and pending.get("status") == "casting"
+    return ability_intent_is_committed(pending)
 
 
 def _raise_if_ability_casting(pending: Any) -> None:
     if not _pending_ability_is_casting(pending):
         return
     ability_slug = str((pending or {}).get("ability") or "").strip().lower()
-    data = {"ability": ability_slug} if ability_slug else {}
+    status = str((pending or {}).get("status") or "").strip().lower()
+    data = {
+        **({"ability": ability_slug} if ability_slug else {}),
+        "status": status,
+    }
+    message = (
+        "You are already channeling an ability."
+        if status == ABILITY_INTENT_STATUS_CHANNELING
+        else "You are already charging an ability."
+    )
     raise ActionError(
-        "You are already charging an ability.",
+        message,
         code="ability_cast_in_progress",
         data=data,
     )
@@ -1135,10 +1411,22 @@ def ability_uses_room_opener(ability: AbilityDefinition) -> bool:
 class LearnAbilityAction:
     def execute(self, player_id: int, selector: str | None) -> ActionResult:
         with transaction.atomic():
-            player = Player.objects.select_for_update().select_related("world").get(pk=player_id)
+            player = Player.objects.select_for_update(of=("self",)).select_related(
+                "world",
+                "world__context",
+                "world__context__instance_of",
+                "world__instance_of",
+            ).get(pk=player_id)
             if not str(selector or "").strip():
-                trainers, trainable = trainable_abilities_for_player(player)
-                if not trainers and not trainable:
+                trainers, trainable, truncated, learning_statuses = (
+                    _trainable_ability_catalog(player)
+                )
+                max_known = max_known_abilities_for_world(player.world)
+                at_cap = (
+                    max_known is not None
+                    and len(known_ability_slugs(player)) >= max_known
+                )
+                if not trainers and not trainable and not at_cap:
                     raise ActionError(
                         "There is no-one around to teach you right now.",
                         code="ability_trainer_unavailable",
@@ -1149,17 +1437,37 @@ class LearnAbilityAction:
                         recipients=[player.key],
                         data={
                             "abilities": [
-                                _trainable_ability_payload(ability, trainer)
+                                _trainable_ability_payload(
+                                    ability,
+                                    trainer,
+                                    (
+                                        learning_statuses[trainer.profile_id]
+                                        if trainer else None
+                                    ),
+                                )
                                 for ability, trainer in trainable
                             ],
-                            "trainers": [_trainer_payload(trainer) for trainer in trainers],
+                            "trainers": [
+                                _trainer_payload(
+                                    trainer,
+                                    learning_statuses[trainer.profile_id],
+                                )
+                                for trainer in trainers
+                            ],
+                            "learning": learning_status_payloads(
+                                trainers,
+                                learning_statuses,
+                            ),
                             "actor": ability_state_payload(player),
+                            "max_known": max_known,
+                            "limit": TRAINER_CATALOG_LIMIT,
+                            "truncated": truncated,
                         },
                         text=_trainable_ability_list_text(trainable),
                     )
                 ])
 
-            ability = resolve_ability_for_selector(player.world, selector)
+            ability = resolve_ability_for_learning(player, selector)
             if not ability:
                 raise ActionError("Learn what ability?", code="ability_missing")
 
@@ -1169,14 +1477,15 @@ class LearnAbilityAction:
 
             known = known_ability_slugs(player)
             trainer = None
+            trainer_learning = None
             assigned_hotkey = None
             if ability.slug in known:
                 text = f"You already know {ability.name}."
             else:
-                trainer = require_trainer_for_ability_change(
+                trainer, trainer_learning = require_learning_provider(
                     player,
                     ability,
-                    verb="learn",
+                    known_slugs=known,
                 )
                 max_known = max_known_abilities_for_world(player.world)
                 if max_known is not None and len(known) >= max_known:
@@ -1195,6 +1504,11 @@ class LearnAbilityAction:
                 else:
                     text = f"You learn {ability.name}."
                 player.save(update_fields=update_fields)
+                if trainer_learning is not None:
+                    trainer_learning = learning_status_after_delta(
+                        trainer_learning,
+                        1,
+                    )
 
         return ActionResult(events=[
             GameEvent(
@@ -1205,11 +1519,13 @@ class LearnAbilityAction:
                         "slug": ability.slug,
                         "name": ability.name,
                         "hotkey": assigned_hotkey,
+                        "learning": trainer_learning,
                     },
                     "trainer": (
-                        {"id": trainer.id, "name": trainer.name}
+                        _trainer_payload(trainer, trainer_learning)
                         if trainer else None
                     ),
+                    "learning": trainer_learning,
                     "actor": ability_state_payload(player),
                 },
                 text=text,
@@ -1235,7 +1551,12 @@ class UnlearnAbilityAction:
                 code="combat_in_progress",
             )
         with transaction.atomic():
-            player = Player.objects.select_for_update().select_related("world").get(pk=player_id)
+            player = Player.objects.select_for_update(of=("self",)).select_related(
+                "world",
+                "world__context",
+                "world__context__instance_of",
+                "world__instance_of",
+            ).get(pk=player_id)
             # Recheck after taking the player lock without ever updating a
             # CombatParticipant while holding that lock. PvP resolution uses
             # the inverse canonical order (participant, then player).
@@ -1244,12 +1565,58 @@ class UnlearnAbilityAction:
                     "You cannot unlearn abilities during duel combat.",
                     code="combat_in_progress",
                 )
-            ability = resolve_ability_for_selector(player.world, selector)
+            if not str(selector or "").strip():
+                trainers, unlearnable, truncated, learning_statuses = (
+                    _unlearnable_ability_catalog(player)
+                )
+                max_known = max_known_abilities_for_world(player.world)
+                return ActionResult(events=[
+                    GameEvent(
+                        type="cmd.ability.unlearn.list",
+                        recipients=[player.key],
+                        data={
+                            "abilities": [
+                                _unlearnable_ability_payload(
+                                    ability,
+                                    trainer,
+                                    (
+                                        learning_statuses[trainer.profile_id]
+                                        if trainer else None
+                                    ),
+                                )
+                                for ability, trainer in unlearnable
+                            ],
+                            "trainers": [
+                                _trainer_payload(
+                                    trainer,
+                                    learning_statuses[trainer.profile_id],
+                                )
+                                for trainer in trainers
+                            ],
+                            "learning": learning_status_payloads(
+                                trainers,
+                                learning_statuses,
+                            ),
+                            "actor": ability_state_payload(player),
+                            "max_known": max_known,
+                            "limit": TRAINER_CATALOG_LIMIT,
+                            "truncated": truncated,
+                        },
+                        text=_unlearnable_ability_list_text(unlearnable),
+                    )
+                ])
+            ability = resolve_ability_for_selector(
+                player.world,
+                selector,
+                include_inactive=True,
+                actor_type=None,
+            )
             if not ability:
                 raise ActionError("Unlearn what ability?", code="ability_missing")
 
             known = known_ability_slugs(player)
             trainer = None
+            trainer_learning = None
             if ability.slug not in known:
                 text = f"You do not know {ability.name}."
             else:
@@ -1258,6 +1625,12 @@ class UnlearnAbilityAction:
                     ability,
                     verb="unlearn",
                 )
+                if trainer is not None:
+                    trainer_learning = learning_statuses_for_providers(
+                        player,
+                        [trainer],
+                        known_slugs=known,
+                    )[trainer.profile_id]
                 known.remove(ability.slug)
                 player.known_abilities = known
                 hotkey_removed = _remove_ability_hotkey(player, ability)
@@ -1265,6 +1638,11 @@ class UnlearnAbilityAction:
                 if hotkey_removed:
                     update_fields.append("ability_hotkeys")
                 player.save(update_fields=update_fields)
+                if trainer_learning is not None:
+                    trainer_learning = learning_status_after_delta(
+                        trainer_learning,
+                        -1,
+                    )
                 pending_encounters = CombatEncounter.objects.filter(
                     player=player,
                     status=CombatEncounter.STATUS_ACTIVE,
@@ -1279,11 +1657,16 @@ class UnlearnAbilityAction:
                 type="cmd.ability.unlearn.success",
                 recipients=[player.key],
                 data={
-                    "ability": {"slug": ability.slug, "name": ability.name},
+                    "ability": {
+                        "slug": ability.slug,
+                        "name": ability.name,
+                        "learning": trainer_learning,
+                    },
                     "trainer": (
-                        {"id": trainer.id, "name": trainer.name}
+                        _trainer_payload(trainer, trainer_learning)
                         if trainer else None
                     ),
+                    "learning": trainer_learning,
                     "actor": ability_state_payload(player),
                 },
                 text=text,

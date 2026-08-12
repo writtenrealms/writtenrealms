@@ -2,7 +2,14 @@ from copy import deepcopy
 import math
 from unittest.mock import patch
 
-from builders.models import AbilityDefinition, ItemDefinition, MobDefinition, Trigger
+from builders.models import (
+    AbilityDefinition,
+    ItemDefinition,
+    MobDefinition,
+    TrainerProfile,
+    TrainerProfileAbility,
+    Trigger,
+)
 from config import constants as adv_consts
 from core.combat_formulas import CombatAttackResult, normalize_combat_system, resolve_attack
 from core.computations import compute_stats
@@ -13,7 +20,14 @@ from spawns.actions.combat import (
     CombatStepResult,
     _with_ability_prepare_transition,
 )
+from spawns.actions.abilities import (
+    AbilityAction,
+    SetAbilityHotkeyAction,
+    resolve_ability_for_hotkey,
+)
+from spawns.actions.base import ActionError
 from spawns.actions.movement_costs import movement_cost
+from spawns.ability_intents import interruptible_ability_intent
 from spawns.events import GameEvent
 from spawns.models import ActiveEffect, CombatEncounter, Item, Mob, Player
 from spawns.tasks import resolve_combat_encounter
@@ -124,6 +138,37 @@ class TestCombatAbilities(WorldTestCase):
         mob.create_corpse()
         return mob
 
+    def _trainer_definition(
+        self,
+        *,
+        slug,
+        name,
+        abilities,
+        availability="present",
+    ):
+        profile = TrainerProfile.objects.create(
+            world=self.world,
+            slug=f"{slug}-training",
+            name=f"{name} Training",
+        )
+        TrainerProfileAbility.objects.bulk_create([
+            TrainerProfileAbility(
+                profile=profile,
+                ability=ability,
+                order=index,
+            )
+            for index, ability in enumerate(abilities)
+        ])
+        return MobDefinition.objects.create(
+            world=self.world,
+            slug=slug,
+            name=name,
+            keywords="trainer arms",
+            base_properties={"health_max": 10},
+            trainer_profile=profile,
+            trainer_availability=availability,
+        )
+
     def _charge_ability(self):
         return self._ability(
             slug="charge",
@@ -147,6 +192,61 @@ class TestCombatAbilities(WorldTestCase):
                 }
             ],
         )
+
+    def _kick_ability(self):
+        return self._ability(
+            slug="kick",
+            name="Kick",
+            verbs=["kick"],
+            cast_time={"rounds": 0},
+            cooldown={"rounds": 12},
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 0.25},
+                    "text": {"label": "Kick"},
+                },
+                {
+                    "type": "interrupt",
+                    "target": "ability.target",
+                    "apply": "on_hit",
+                    "text": {"label": "Kick"},
+                },
+            ],
+        )
+
+    def _mob_with_cast_ability(self):
+        ability = self._ability(
+            slug="mob-hex",
+            name="Mob Hex",
+            verbs=["mobhex"],
+            cast_time={"rounds": 1},
+            cooldown={"rounds": 7},
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 2},
+                    "text": {"label": "Mob Hex"},
+                }
+            ],
+        )
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="hexer",
+            name="a hexer",
+            keywords="hexer",
+            base_properties={
+                "level": 1,
+                "health_max": 200,
+                "attack_power": 7,
+                "weapon_damage": 0,
+                "fights_back": True,
+            },
+            combat_abilities=[{"ability": ability.slug, "weight": 1}],
+        )
+        return definition.spawn(self.room, self.spawn_world), ability
 
     def _shout_ability(self):
         return self._ability(
@@ -240,11 +340,32 @@ class TestCombatAbilities(WorldTestCase):
             },
         ]
 
+    def test_casting_and_future_channeling_intents_are_interruptible(self):
+        for status, phase in (("casting", "cast"), ("channeling", "channel")):
+            with self.subTest(status=status):
+                intent = interruptible_ability_intent({
+                    "ability": "long-action",
+                    "status": status,
+                })
+                self.assertIsNotNone(intent)
+                self.assertEqual(intent.slug, "long-action")
+                self.assertEqual(intent.phase, phase)
+
+        for status in ("queued", "", None):
+            with self.subTest(status=status):
+                self.assertIsNone(
+                    interruptible_ability_intent({
+                        "ability": "long-action",
+                        "status": status,
+                    })
+                )
+
     def test_definition_backed_mob_uses_combat_ability_loadout(self):
         self._ability(
             slug="shadow-bolt",
             name="Shadow Bolt",
             verbs=["shadowbolt"],
+            availability={"actors": ["mob"], "classes": [], "min_level": 1},
             cooldown={"rounds": 2},
             components=[
                 {
@@ -302,6 +423,91 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(mob_ability_attacks[0]["data"]["target"]["key"], self.player.key)
         self.assertEqual(mob.ability_cooldowns, {"shadow-bolt": 2})
         self.assertLess(self.player.health, self.stats["health_max"])
+
+    def test_player_only_ability_is_skipped_by_mob_loadout(self):
+        self._ability(
+            slug="player-strike",
+            name="Player Strike",
+            verbs=["playerstrike"],
+            availability={"actors": ["player"], "classes": [], "min_level": 1},
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 2},
+                    "text": {"label": "Player Strike"},
+                }
+            ],
+        )
+        mob_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="misconfigured-mob",
+            name="a misconfigured mob",
+            keywords="misconfigured mob",
+            base_properties={
+                "level": 1,
+                "health_max": 200,
+                "attack_power": 7,
+                "weapon_damage": 0,
+                "fights_back": True,
+            },
+            combat_abilities=[{"ability": "player-strike", "weight": 1}],
+        )
+        mob = mob_definition.spawn(self.room, self.spawn_world)
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            initiative_order=self._player_first_initiative(mob),
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with patch("spawns.actions.combat.random.randint", return_value=1):
+                with capture_game_messages() as messages:
+                    resolve_combat_encounter(encounter.id)
+
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertFalse(
+            any(attack["data"]["attack"] == "player-strike" for attack in attacks)
+        )
+        self.assertTrue(
+            any(attack["data"]["actor"]["key"] == mob.key for attack in attacks)
+        )
+
+    def test_mob_only_stale_known_ability_cannot_be_hotkeyed_or_executed(self):
+        ability = self._ability(
+            slug="mob-curse",
+            name="Mob Curse",
+            verbs=["mobcurse"],
+            target={"type": "self", "default": "self", "allow_out_of_combat": True},
+            availability={"actors": ["mob"], "classes": [], "min_level": 1},
+            components=[{"type": "healing", "profile": "basic_heal"}],
+        )
+        self.player.known_abilities = [ability.slug]
+        self.player.ability_hotkeys = {"1": ability.slug}
+        self.player.save(update_fields=["known_abilities", "ability_hotkeys"])
+
+        self.assertIsNone(resolve_ability_for_hotkey(self.player, 1))
+        with self.assertRaises(ActionError) as hotkey_error:
+            SetAbilityHotkeyAction().execute(self.player.id, 2, ability.slug)
+        self.assertEqual(hotkey_error.exception.code, "ability_missing")
+        with self.assertRaises(ActionError) as execute_error:
+            AbilityAction().execute(
+                self.player.id,
+                ability=ability,
+                command="mobcurse",
+                args=[],
+            )
+        self.assertEqual(execute_error.exception.code, "ability_unavailable")
+
+        from spawns.state_payloads import build_state_sync
+
+        payload = build_state_sync(self.player).model_dump()
+        self.assertNotIn(
+            ability.slug,
+            payload["world"]["abilities"]["definitions"],
+        )
 
     def test_mob_cast_can_consume_charge_round_but_not_resolution_round(self):
         self._ability(
@@ -550,6 +756,183 @@ class TestCombatAbilities(WorldTestCase):
         self.assertNotEqual(self.player.room_id, escape_room.id)
         self.assertEqual(self.player.stamina, starting_stamina)
         self.assertEqual(encounter.pending_flee, {})
+
+    def test_kick_interrupts_active_mob_cast_without_same_round_reselection(self):
+        self._kick_ability()
+        self.player.known_abilities = ["kick"]
+        self.player.save(update_fields=["known_abilities"])
+        mob, mob_ability = self._mob_with_cast_ability()
+        starting_health = mob.health
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            initiative_order=self._player_first_initiative(mob),
+            pending_player_ability={
+                "ability": "kick",
+                "command": "kick",
+                "target": {"type": "mob", "id": mob.id},
+                "queued_round": 0,
+            },
+            pending_mob_ability={
+                "ability": mob_ability.slug,
+                "command": mob_ability.slug,
+                "target": {"type": "player", "id": self.player.id},
+                "queued_round": 0,
+                "status": "casting",
+                "cast_rounds_remaining": 0,
+            },
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with capture_game_messages() as messages:
+                resolve_combat_encounter(encounter.id)
+
+        encounter.refresh_from_db()
+        mob.refresh_from_db()
+        self.player.refresh_from_db()
+        self.assertEqual(
+            starting_health - mob.health,
+            math.ceil(self.stats["attack_power"] * 0.25),
+        )
+        self.assertEqual(encounter.pending_mob_ability, {})
+        self.assertEqual(mob.ability_cooldowns, {})
+        self.assertEqual(self.player.ability_cooldowns, {"kick": 12})
+        mob_hex_attacks = [
+            attack
+            for attack in self._messages_by_type(
+                messages,
+                "notification.combat.attack",
+            )
+            if attack["data"]["attack"] == mob_ability.slug
+        ]
+        self.assertEqual(mob_hex_attacks, [])
+        interrupts = self._messages_by_type(
+            messages,
+            "notification.combat.ability_interrupted",
+        )
+        self.assertEqual(len(interrupts), 1)
+        self.assertEqual(interrupts[0]["data"]["ability"]["slug"], "kick")
+        self.assertEqual(
+            interrupts[0]["data"]["interrupted_ability"],
+            {
+                "slug": mob_ability.slug,
+                "status": "casting",
+                "phase": "cast",
+            },
+        )
+        self.assertEqual(
+            interrupts[0]["data"]["round_id"],
+            f"encounter:{encounter.id}:1",
+        )
+
+    def test_kick_does_not_interrupt_an_ability_that_is_only_queued(self):
+        self._kick_ability()
+        self.player.known_abilities = ["kick"]
+        self.player.save(update_fields=["known_abilities"])
+        mob, mob_ability = self._mob_with_cast_ability()
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            initiative_order=self._player_first_initiative(mob),
+            pending_player_ability={
+                "ability": "kick",
+                "command": "kick",
+                "target": {"type": "mob", "id": mob.id},
+                "queued_round": 0,
+            },
+            pending_mob_ability={
+                "ability": mob_ability.slug,
+                "command": mob_ability.slug,
+                "target": {"type": "player", "id": self.player.id},
+                "queued_round": 0,
+                "status": "queued",
+                "cast_rounds_remaining": 1,
+            },
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with capture_game_messages() as messages:
+                resolve_combat_encounter(encounter.id)
+
+        encounter.refresh_from_db()
+        self.assertEqual(encounter.pending_mob_ability["status"], "casting")
+        self.assertEqual(
+            encounter.pending_mob_ability["cast_rounds_remaining"],
+            0,
+        )
+        self.assertEqual(
+            self._messages_by_type(
+                messages,
+                "notification.combat.ability_interrupted",
+            ),
+            [],
+        )
+
+    def test_kick_on_hit_interrupt_does_not_cancel_cast_when_dodged(self):
+        kick = self._kick_ability()
+        kick.components[0]["overrides"].update({
+            "can_dodge": True,
+            "can_crit": False,
+        })
+        kick.save(update_fields=["components"])
+        self.player.known_abilities = [kick.slug]
+        self.player.save(update_fields=["known_abilities"])
+        mob, mob_ability = self._mob_with_cast_ability()
+        mob.dodge = 100000
+        mob.save(update_fields=["dodge"])
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            initiative_order=self._player_first_initiative(mob),
+            pending_player_ability={
+                "ability": kick.slug,
+                "command": kick.slug,
+                "target": {"type": "mob", "id": mob.id},
+                "queued_round": 0,
+            },
+            pending_mob_ability={
+                "ability": mob_ability.slug,
+                "command": mob_ability.slug,
+                "target": {"type": "player", "id": self.player.id},
+                "queued_round": 0,
+                "status": "casting",
+                "cast_rounds_remaining": 0,
+            },
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with patch("core.combat_formulas.random.random", return_value=0):
+                with capture_game_messages() as messages:
+                    resolve_combat_encounter(encounter.id)
+
+        self.player.refresh_from_db()
+        mob.refresh_from_db()
+        attacks = self._messages_by_type(
+            messages,
+            "notification.combat.attack",
+        )
+        kick_attacks = [
+            attack for attack in attacks if attack["data"]["attack"] == kick.slug
+        ]
+        self.assertEqual(kick_attacks[0]["data"]["outcome"], "dodged")
+        self.assertTrue(
+            any(attack["data"]["attack"] == mob_ability.slug for attack in attacks)
+        )
+        self.assertEqual(
+            self._messages_by_type(
+                messages,
+                "notification.combat.ability_interrupted",
+            ),
+            [],
+        )
+        self.assertEqual(self.player.ability_cooldowns, {kick.slug: 12})
+        self.assertEqual(mob.ability_cooldowns, {mob_ability.slug: 7})
 
     def test_mob_ability_chance_failure_falls_back_to_basic_attack(self):
         self._ability(
@@ -804,22 +1187,16 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(success["data"]["actor"]["ability_hotkeys"], {"1": "power-strike"})
 
     def test_learn_without_selector_requires_present_trainer(self):
-        self._ability(
+        ability = self._ability(
             slug="power-strike",
             name="Power Strike",
             verbs=["strike"],
             components=[{"type": "damage", "profile": "basic_physical"}],
         )
-        MobDefinition.objects.create(
-            world=self.world,
+        self._trainer_definition(
             slug="arms-trainer",
             name="an arms trainer",
-            keywords="trainer arms",
-            base_properties={"health_max": 10},
-            trainer={
-                "abilities": ["power-strike"],
-                "availability": "present",
-            },
+            abilities=[ability],
         )
 
         with capture_game_messages() as messages:
@@ -853,18 +1230,19 @@ class TestCombatAbilities(WorldTestCase):
                     "name": "Field Mend",
                     "learn_command": "learn mend",
                     "trainer": None,
+                    "learning": None,
                 }
             ],
         )
 
     def test_learn_without_selector_lists_trainable_abilities_at_trainer(self):
-        self._ability(
+        power_strike = self._ability(
             slug="power-strike",
             name="Power Strike",
             verbs=["strike"],
             components=[{"type": "damage", "profile": "basic_physical"}],
         )
-        self._ability(
+        locked_strike = self._ability(
             slug="locked-strike",
             name="Locked Strike",
             verbs=["lockedstrike"],
@@ -878,18 +1256,32 @@ class TestCombatAbilities(WorldTestCase):
             target={"type": "self", "default": "self", "allow_out_of_combat": True},
             components=[{"type": "healing", "profile": "basic_heal"}],
         )
-        trainer_definition = MobDefinition.objects.create(
-            world=self.world,
+        trainer_definition = self._trainer_definition(
             slug="arms-trainer",
             name="an arms trainer",
-            keywords="trainer arms",
-            base_properties={"health_max": 10},
-            trainer={
-                "abilities": ["power-strike", "locked-strike"],
-                "availability": "present",
-            },
+            abilities=[power_strike, locked_strike],
         )
         trainer = trainer_definition.spawn(self.room, self.spawn_world)
+        trainer_profile = trainer_definition.trainer_profile
+        trainer_payload = {
+            "type": "mob",
+            "id": trainer.id,
+            "key": trainer.key,
+            "name": "an arms trainer",
+            "profile": {
+                "id": trainer_profile.id,
+                "key": trainer_profile.key,
+                "slug": trainer_profile.slug,
+                "name": trainer_profile.name,
+            },
+            "learning": {
+                "status": "unrestricted",
+                "eligible": True,
+                "max_known": None,
+                "known": 0,
+                "remaining": None,
+            },
+        }
 
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "learn")
@@ -907,38 +1299,34 @@ class TestCombatAbilities(WorldTestCase):
                     "slug": "power-strike",
                     "name": "Power Strike",
                     "learn_command": "learn strike",
-                    "trainer": {"id": trainer.id, "name": "an arms trainer"},
+                    "trainer": trainer_payload,
+                    "learning": trainer_payload["learning"],
                 },
                 {
                     "slug": "field-mend",
                     "name": "Field Mend",
                     "learn_command": "learn mend",
                     "trainer": None,
+                    "learning": None,
                 },
             ],
         )
         self.assertEqual(
             lists[0]["data"]["trainers"],
-            [{"id": trainer.id, "name": "an arms trainer"}],
+            [trainer_payload],
         )
 
     def test_learning_trainer_gated_ability_requires_present_trainer(self):
-        self._ability(
+        ability = self._ability(
             slug="power-strike",
             name="Power Strike",
             verbs=["strike"],
             components=[{"type": "damage", "profile": "basic_physical"}],
         )
-        trainer_definition = MobDefinition.objects.create(
-            world=self.world,
+        trainer_definition = self._trainer_definition(
             slug="arms-trainer",
             name="an arms trainer",
-            keywords="trainer arms",
-            base_properties={"health_max": 10},
-            trainer={
-                "abilities": ["power-strike"],
-                "availability": "present",
-            },
+            abilities=[ability],
         )
 
         with capture_game_messages() as messages:
@@ -959,22 +1347,16 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(success["data"]["trainer"]["name"], "an arms trainer")
 
     def test_unlearning_trainer_gated_ability_requires_present_trainer(self):
-        self._ability(
+        ability = self._ability(
             slug="power-strike",
             name="Power Strike",
             verbs=["strike"],
             components=[{"type": "damage", "profile": "basic_physical"}],
         )
-        trainer_definition = MobDefinition.objects.create(
-            world=self.world,
+        trainer_definition = self._trainer_definition(
             slug="arms-trainer",
             name="an arms trainer",
-            keywords="trainer arms",
-            base_properties={"health_max": 10},
-            trainer={
-                "abilities": ["power-strike"],
-                "availability": "present",
-            },
+            abilities=[ability],
         )
         self.player.known_abilities = ["power-strike"]
         self.player.ability_hotkeys = {"1": "power-strike"}

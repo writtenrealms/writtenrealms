@@ -39,12 +39,12 @@
         </div>
 
         <div
-          v-if="filters?.length && filterDisplay === 'dropdown'"
+          v-if="resolvedFilters.length && filterDisplay === 'dropdown'"
           class="resource-filter-bar"
           :class="{ 'mobile-filter-row': mobileFilterRow }"
         >
           <div
-            v-for="filter_group in filters"
+            v-for="filter_group in resolvedFilters"
             :key="filter_group.attr"
             class="form-group resource-filter-select"
           >
@@ -80,8 +80,8 @@
       </div>
     </div>
 
-    <div v-if="filters?.length && filterDisplay === 'sidebar'" class="resource-filters">
-      <FilterGroup v-for="filter_group in filters" :key="filter_group.attr" :values="filter_group.filter_options"
+    <div v-if="resolvedFilters.length && filterDisplay === 'sidebar'" class="resource-filters">
+      <FilterGroup v-for="filter_group in resolvedFilters" :key="filter_group.attr" :values="filter_group.filter_options"
         :title="filter_group.label" :attr="filter_group.attr"
         :selected-value="selectedFilterValue(filter_group.attr)" @select-filter="onSelectFilter"
         @clear-filter="onClearFilter" />
@@ -133,6 +133,16 @@ const showSearch = ref(false);
 const searchText = ref("");
 const search = ref(null);
 let timeout: ReturnType<typeof setTimeout> | null = null;
+
+const resolvedFilters = computed(() => (props.filters || []).map((filterGroup) => {
+  const responseOptions = paginated_data.value?.filter_options?.[filterGroup.attr];
+  return {
+    ...filterGroup,
+    filter_options: Array.isArray(responseOptions)
+      ? responseOptions
+      : filterGroup.filter_options,
+  };
+}));
 
 const queryValue = (value: unknown): string => {
   const scalarValue = Array.isArray(value) ? value[0] : value;
@@ -551,6 +561,16 @@ onBeforeUnmount(() => {
           flex: 1 1 0;
           width: auto;
         }
+      }
+    }
+  }
+
+  @media ($desktop-site) {
+    &.half-width-filters {
+      .resource-filter-select {
+        flex: 0 1 50%;
+        max-width: 50%;
+        min-width: 0;
       }
     }
   }

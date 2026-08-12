@@ -160,6 +160,12 @@ For faction selection policy, see
 For ability progression, see
 [ability-builder-guide.md](ability-builder-guide.md).
 
+`ability_progression.max_known` is the player's world-wide known-ability cap.
+It remains independent of any Trainer Profile `learning.max_known` quota; a
+learn operation must satisfy both. Trainer Profile limits count only known
+abilities in that profile's catalog, while the world cap counts the entire
+known set.
+
 Starting equipment entries use WR2 item definitions, not legacy item templates.
 Use `itemdefinition.<slug>` or a bare item definition slug. `count` defaults to
 `1`. If `archetype` is present, the item is only granted to players whose

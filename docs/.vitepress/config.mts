@@ -74,6 +74,7 @@ const playerSidebar: DefaultTheme.SidebarItem[] = [
   { text: "Doors and keys", link: "/players/doors-and-keys" },
   { text: "Scripted interactions", link: "/players/scripted-interactions" },
   { text: "Combat", link: "/players/combat" },
+  { text: "Abilities and training", link: "/players/abilities" },
   { text: "Duels", link: "/players/duels" },
   { text: "Currencies", link: "/players/currencies" },
   { text: "Merchants", link: "/players/merchants" },

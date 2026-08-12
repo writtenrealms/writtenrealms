@@ -472,6 +472,61 @@ class CraftingProfileRecipe(AdventBaseModel):
         ordering = ['order', 'id']
 
 
+class TrainerProfile(AdventBaseModel):
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='trainer_profiles')
+    slug = models.SlugField(max_length=120, blank=True)
+    name = models.TextField(default='Unnamed Trainer')
+    notes = models.TextField(**optional)
+    learning = models.JSONField(default=dict, blank=True)
+    legacy_source_mob_id = models.BigIntegerField(
+        db_index=True,
+        **optional)
+    abilities = models.ManyToManyField(
+        'builders.AbilityDefinition',
+        through='builders.TrainerProfileAbility',
+        related_name='trainer_profiles')
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('world', 'slug')]
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = _generate_unique_world_slug(
+                self,
+                fallback_prefix="trainer-profile",
+            )
+        super().save(*args, **kwargs)
+
+
+class TrainerProfileAbility(AdventBaseModel):
+    profile = models.ForeignKey(
+        'builders.TrainerProfile',
+        on_delete=models.CASCADE,
+        related_name='ability_entries')
+    ability = models.ForeignKey(
+        'builders.AbilityDefinition',
+        on_delete=models.RESTRICT,
+        related_name='trainer_profile_entries')
+    order = models.IntegerField(default=0)
+
+    class Meta(AdventBaseModel.Meta):
+        unique_together = [('profile', 'ability')]
+        ordering = ['order', 'id']
+        indexes = [
+            models.Index(
+                fields=['profile', 'order', 'id'],
+                name='builders_tr_profile_order_idx',
+            ),
+            models.Index(
+                fields=['ability', 'profile'],
+                name='builders_tr_ability_prof_idx',
+            ),
+        ]
+
+
 class ItemSalvageYield(AdventBaseModel):
     item_definition = models.ForeignKey(
         'builders.ItemDefinition',
@@ -533,6 +588,16 @@ class MobDefinition(AdventBaseModel):
     crafting_availability = models.TextField(
         default='present',
         blank=True)
+    trainer_profile = models.ForeignKey(
+        'builders.TrainerProfile',
+        on_delete=models.SET_NULL,
+        related_name='mob_definitions',
+        **optional)
+    trainer_availability = models.TextField(
+        default='present',
+        blank=True)
+    # Compatibility source for existing mob manifests. New trainer provider
+    # relationships are represented by trainer_profile and its ordered entries.
     trainer = models.JSONField(default=dict, blank=True)
     faction_assignments = GenericRelation(
         'FactionAssignment',

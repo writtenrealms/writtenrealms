@@ -1,13 +1,20 @@
 # WR2 Condition Builder Guide
 
 This guide explains the shared WR2 condition system used by triggers, quests,
-and ability requirements.
+ability requirements, and Trainer Profile learning policies.
 
 Conditions are small YAML mappings that answer one question: should this thing
 be available right now?
 
 Use conditions when content should depend on the player, room, nearby mobs,
 world state, quest progress, event data, or an ability requirement.
+
+Trainer Profiles place the structured condition under
+`spec.learning.conditions`. These conditions must remain query-free and gate
+learning only; the profile's `max_known` quota and the ability's own
+availability and requirements are checked separately. Profile policies support
+`always`, `all`, `any`, `not`, `eq`, `ne`, `gte`, `lte`, and `in`; presence and
+quest operators are rejected.
 
 ## Basic Shape
 
@@ -311,16 +318,21 @@ authored content.
 
 Abilities have two related gates:
 
-- `availability` is the simple class and level gate.
+- `availability` is the simple actor, class, and level gate.
 - `requirements` uses the shared condition system for everything else.
 
-Use `availability` for class/level access:
+Use `availability` for actor/class/level access:
 
 ```yaml
 availability:
+  actors: [player]
   classes: [warlord]
   min_level: 2
 ```
+
+`availability.actors` is a non-empty list containing `player`, `mob`, or both,
+and defaults to both when omitted. Use `actors: [mob]` for an NPC-only ability
+that must not enter player progression.
 
 Use `requirements` for equipment, state, quest, or other runtime checks:
 

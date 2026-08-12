@@ -47,7 +47,15 @@ class TestStartingLoadout(WorldTestCase):
         )
 
     def test_level_twenty_hoplite_starts_with_abilities_and_full_loadout(self):
-        ability_slugs = ["bash", "charge", "cleave", "wound", "guard", "shout"]
+        ability_slugs = [
+            "bash",
+            "charge",
+            "cleave",
+            "wound",
+            "guard",
+            "shout",
+            "kick",
+        ]
         for slug in ability_slugs:
             self._ability(slug)
 
@@ -106,7 +114,7 @@ class TestStartingLoadout(WorldTestCase):
         self.world.config.max_level = 20
         self.world.config.leveling_curve = leveling_curve
         self.world.config.ability_progression = {
-            "max_known": 6,
+            "max_known": 7,
             "starting_abilities": [
                 {
                     "ability": slug,

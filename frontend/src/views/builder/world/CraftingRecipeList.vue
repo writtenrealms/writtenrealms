@@ -11,13 +11,17 @@
     </p>
   </div>
 
-  <CraftingResourceList
+  <ElementList
     v-else
+    class="half-width-filters"
     title="Crafting Recipes"
     :schema="listSchema"
     :filters="listFilters"
     :endpoint="endpoint"
-    :resolve-route="resolveRoute"
+    :resolve_route="resolveRoute"
+    filter-display="dropdown"
+    mobile-filter-row
+    table-variant="data"
     @add="onClickAdd"
   />
 </template>
@@ -26,7 +30,7 @@
 import { computed } from "vue";
 import { useRouter } from "vue-router";
 import { useStore } from "vuex";
-import CraftingResourceList from "@/components/builder/world/CraftingResourceList.vue";
+import ElementList from "@/components/elementlist/ElementList.vue";
 import { formatRelativeModifiedDate } from "@/core/utils.ts";
 import { craftingRecipeListEndpoint } from "@/services/crafting";
 
@@ -45,27 +49,10 @@ const resolveRoute = (recipe: any) => ({
   },
 });
 
-const formatNumber = (value: unknown) => String(value ?? "");
-const formatRecipeCost = (_value: unknown, recipe: any) => {
-  if (recipe.money?.display) return String(recipe.money.display);
-  if (recipe.money?.amount != null) {
-    return `${recipe.money.amount} ${recipe.money.currency || ""}`.trim();
-  }
-  if (recipe.cost == null) return "None";
-  const currency = typeof recipe.currency === "object"
-    ? recipe.currency?.code || recipe.currency?.name
-    : recipe.currency;
-  return `${recipe.cost} ${currency || ""}`.trim();
-};
-
 const listSchema: any[] = [
   { name: "id", label: "ID", sortable: true },
-  { name: "name", label: "Output", nowrap: true },
+  { name: "name", label: "Output", nowrap: true, mobileHidden: true },
   { name: "slug", label: "Slug", nowrap: true, sortable: true },
-  { name: "group", label: "Group", light: true, sortable: true },
-  { name: "ingredient_count", label: "Inputs", light: true, format: formatNumber },
-  { name: "money", label: "Fee", light: true, nowrap: true, format: formatRecipeCost },
-  { name: "order", label: "Order", light: true, sortable: true, format: formatNumber },
   {
     name: "modified_ts",
     label: "Modified",
@@ -75,11 +62,11 @@ const listSchema: any[] = [
   },
 ];
 
-const listFilters = [
+const listFilters: any[] = [
   {
     label: "Group",
     attr: "group",
-    placeholder: "Group slug",
+    filter_options: [],
   },
 ];
 

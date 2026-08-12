@@ -10,6 +10,8 @@ from builders.models import (
     Faction,
     ItemDefinition,
     MobDefinition,
+    TrainerProfile,
+    TrainerProfileAbility,
 )
 from config import constants as adv_consts
 from spawns.serializers import LoadDefinitionSerializer
@@ -402,7 +404,7 @@ spec:
         self.assertIn("aggression", str(resp.data).lower())
 
     def test_apply_mob_definition_manifest_can_create_ability_trainer(self):
-        AbilityDefinition.objects.create(
+        ability = AbilityDefinition.objects.create(
             world=self.world,
             slug="power-strike",
             name="Power Strike",
@@ -432,23 +434,23 @@ spec:
 
         self.assertEqual(resp.status_code, 201, resp.data)
         definition = MobDefinition.objects.get(world=self.world, slug="arms-trainer")
+        self.assertEqual(definition.trainer, {})
+        self.assertIsNotNone(definition.trainer_profile)
+        self.assertEqual(definition.trainer_availability, "alive_and_present")
         self.assertEqual(
-            definition.trainer,
-            {
-                "abilities": ["power-strike"],
-                "availability": "alive_and_present",
-            },
+            list(definition.trainer_profile.abilities.values_list("slug", flat=True)),
+            ["power-strike"],
         )
         self.assertEqual(
             resp.data["mob_definition"]["trainer"],
             {
-                "abilities": ["power-strike"],
+                "profile": f"trainerprofile.{definition.trainer_profile.slug}",
                 "availability": "alive_and_present",
             },
         )
 
     def test_world_export_includes_mob_definition_documents(self):
-        AbilityDefinition.objects.create(
+        ability = AbilityDefinition.objects.create(
             world=self.world,
             slug="power-strike",
             name="Power Strike",
@@ -460,16 +462,23 @@ spec:
             cooldown={"rounds": 0},
             components=[{"type": "damage", "profile": "basic_physical"}],
         )
+        profile = TrainerProfile.objects.create(
+            world=self.world,
+            slug="bandit-training",
+            name="Bandit Training",
+        )
+        TrainerProfileAbility.objects.create(
+            profile=profile,
+            ability=ability,
+            order=0,
+        )
         MobDefinition.objects.create(
             world=self.world,
             slug="bandit",
             name="a bandit",
             mob_type=adv_consts.MOB_TYPE_HUMANOID,
             base_properties={"attack_power": 7},
-            trainer={
-                "abilities": ["power-strike"],
-                "availability": "present",
-            },
+            trainer_profile=profile,
             randomization={
                 "attributes": [
                     {"key": "brawn", "min": 10, "max": 20, "mode": "uniform"},
@@ -482,12 +491,21 @@ spec:
         docs = [doc for doc in yaml.safe_load_all(resp.data["yaml"]) if doc]
         kinds = [doc["kind"] for doc in docs]
         self.assertIn("mobdefinition", kinds)
+        self.assertIn("trainerprofile", kinds)
         self.assertEqual(resp.data["summary"]["mob_definitions"], 1)
+        self.assertEqual(resp.data["summary"]["trainer_profiles"], 1)
 
         mob_doc = next(doc for doc in docs if doc["kind"] == "mobdefinition")
         self.assertEqual(mob_doc["metadata"]["slug"], "bandit")
         self.assertEqual(mob_doc["spec"]["attack_power"], 7)
-        self.assertEqual(mob_doc["spec"]["trainer"]["abilities"], ["power-strike"])
+        profile_doc = next(doc for doc in docs if doc["kind"] == "trainerprofile")
+        self.assertEqual(profile_doc["spec"]["abilities"], ["ability.power-strike"])
+        self.assertEqual(
+            mob_doc["spec"]["trainer"]["profile"],
+            f"trainerprofile.{profile_doc['metadata']['slug']}",
+        )
+        self.assertLess(kinds.index("ability"), kinds.index("trainerprofile"))
+        self.assertLess(kinds.index("trainerprofile"), kinds.index("mobdefinition"))
 
 
 class TestMobDefinitionBuilderEndpoints(WorldTestCase):

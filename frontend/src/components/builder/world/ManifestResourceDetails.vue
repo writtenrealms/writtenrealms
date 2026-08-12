@@ -19,9 +19,10 @@
         <slot name="summary" :resource="resource" />
 
         <div v-if="isInherited" class="readonly-notice">
-          {{ listLabel }} in instances are inherited from the parent world.
-          <router-link :to="{ name: listRouteName, params: { world_id: inheritedWorld?.id } }">
-            Open {{ inheritedWorld?.name }} {{ listLabel }}
+          {{ listLabel }} in this instance are inherited from
+          {{ inheritedWorld?.name || "the parent world" }}.
+          <router-link :to="{ name: listRouteName, params: { world_id: worldId } }">
+            Back to {{ listLabel }}
           </router-link>
         </div>
         <div v-else class="readonly-notice">

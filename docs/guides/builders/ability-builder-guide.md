@@ -4,14 +4,15 @@
 
 This guide describes the WR2 ability authoring model. Ability manifests are
 wired into the runtime for player commands, encounter-round queueing, direct
-damage, healing, cast times, stun, damage-over-time, heal-over-time, and
-out-of-combat self-targeted abilities. Mob definitions can also reference active
-ability definitions from combat loadouts. Encounter-scoped effects support resource
-change ticks, damage absorption barriers, and `after_damage` procs for bounded
-buff behavior such as energy return on landed attacks. Effects can also carry a
-validated `action_rule`; the implemented `flee` rule supports roots that stop a
-character from escaping. Character-scoped effects support outgoing damage and
-stat modifiers for buffs that can survive into combat after out-of-combat use.
+damage, healing, cast times, interrupts, stun, damage-over-time, heal-over-time,
+and out-of-combat self-targeted abilities. Mob definitions can also reference
+active ability definitions from combat loadouts. Encounter-scoped effects
+support resource change ticks, damage absorption barriers, and `after_damage`
+procs for bounded buff behavior such as energy return on landed attacks.
+Effects can also carry a validated `action_rule`; the implemented `flee` rule
+supports roots that stop a character from escaping. Character-scoped effects
+support outgoing damage and stat modifiers for buffs that can survive into
+combat after out-of-combat use.
 
 Ability `requirements` use the shared WR2 condition DSL. For condition
 operators and paths, read
@@ -30,6 +31,7 @@ An ability is an authored command that resolves one or more components:
 - damage absorption barriers
 - resource-changing damage procs
 - flee-preventing roots
+- interrupts of committed casts
 
 In combat, an ability is queued for the next encounter round. By default, it
 consumes the actor's primary action while casting and when it resolves,
@@ -41,6 +43,10 @@ encounter rounds charging before its components resolve. For `rounds: 1`, the
 sequence is: prepare the ability, spend the next encounter round charging, then
 resolve the damage or healing on the following encounter round. Charging rounds
 consume the primary action when `consumes_primary_action_while_casting` is true.
+
+A hostile ability with `cast_time.rounds: 0` has no windup, but it is not a
+reaction or a free action. It is still queued and resolves only when its actor's
+initiative-bound turn arrives.
 
 If no ability is queued, the actor uses the normal auto-attack.
 
@@ -160,6 +166,46 @@ spec:
 Bundled `kind: abilities` manifests are also supported for import convenience,
 but one ability per manifest should be the default authoring style.
 
+## Actor Audience
+
+`spec.availability.actors` controls which kinds of actors may acquire and use
+an ability. It must be a non-empty list containing `player`, `mob`, or both.
+Omitting it preserves the backward-compatible default of both audiences, and
+canonical export includes the normalized list. Availability accepts only
+`actors`, `classes`, and `min_level`, so misspelled gates are rejected:
+
+```yaml
+availability:
+  actors: [player, mob]
+```
+
+Mark an NPC combat technique as mob-only when it should remain active for mob
+loadouts but never enter player progression:
+
+```yaml
+kind: ability
+metadata:
+  slug: mob-burning-curse
+  name: Burning Curse
+spec:
+  availability:
+    actors: [mob]
+  target:
+    type: hostile
+    default: current_target
+  components:
+    - type: damage
+      profile: basic_ability
+```
+
+`actors: [mob]` excludes the ability from player training, starting grants,
+help discovery, hotkeys, and player command execution while leaving it
+available to mob combat loadouts. Use `actors: [player]` for a technique that
+mobs must not select. Actor audience is independent of `classes` and
+`min_level`; those fields continue to narrow player access when `player` is in
+the audience. Do not use `is_active: false` for this purpose, because an
+inactive ability is unavailable to both players and mobs.
+
 ## Ability Help
 
 Players can type `help <ability>` for abilities they already know or can learn
@@ -177,9 +223,10 @@ help:
 
 When `spec.help.text` is absent, the runtime generates a plain text line from
 the ability definition. Generated help includes cast rounds, cooldown rounds,
-damage or healing components, stun/dot/hot effects, flee-preventing action rules,
-state updates, and costs. Cost resources use the world's configured player-facing
-labels, while damage wording comes from the combat profile damage type.
+damage or healing components, interrupts, stun/dot/hot effects,
+flee-preventing action rules, state updates, and costs. Cost resources use the
+world's configured player-facing labels, while damage wording comes from the
+combat profile damage type.
 
 ## Targeting And Openers
 
@@ -335,6 +382,71 @@ Once the ability is actively charging, it cannot be replaced by another ability.
 
 Out-of-combat self-targeted abilities currently resolve immediately; cast times
 are combat-round behavior.
+
+## Interrupts
+
+Use an `interrupt` component to cancel a hostile target's committed cast. This
+Hoplite ability deals one-quarter physical damage and interrupts only when that
+damage lands:
+
+```yaml
+kind: ability
+metadata:
+  slug: kick
+  name: Kick
+spec:
+  command:
+    verbs: [kick]
+  target:
+    type: hostile
+    default: current_target
+  availability:
+    classes: [hoplite]
+    min_level: 1
+  cast_time:
+    rounds: 0
+  cooldown:
+    rounds: 12
+  components:
+    - type: damage
+      profile: basic_physical
+      overrides:
+        multiplier: 0.25
+      text:
+        label: Kick
+    - type: interrupt
+      target: ability.target
+      apply: on_hit
+      text:
+        label: Kick
+```
+
+The normalized `interrupt` component supports only these fields:
+
+- `target` must be `ability.target`.
+- `apply` accepts `on_resolve` or `on_hit`.
+- `text` supplies the player-facing component label.
+
+An ability containing an interrupt component must use
+`spec.target.type: hostile`.
+
+Components resolve in authored order. An `apply: on_hit` interrupt must come
+after an output component that recorded a landed outcome for the same ability.
+If no earlier output landed, the interrupt does nothing. Use `on_resolve` when
+the interrupt should not depend on an earlier hit.
+
+The interruptible committed statuses are `casting` and `channeling`. A merely
+`queued` intent is still replaceable by its owner and is immune to interrupts.
+The runtime currently produces `casting`; it recognizes `channeling` so the
+component has a stable contract when channels are implemented, but builders
+cannot author or execute channel abilities yet.
+
+Interrupting clears the victim's committed ability before it resolves. The
+victim pays none of that ability's cost, starts none of its cooldown, and falls
+back to a basic attack on its turn when one is legal. The interrupt does not
+bypass encounter order: Kick is a zero-windup ability, so it is still queued
+and must resolve before the target's turn to stop a cast that would otherwise
+complete first.
 
 ## Primary Action Consumption
 
@@ -1083,11 +1195,112 @@ restores the same list context.
 
 ## Ability Trainers
 
-Mob definitions can act as trainers by listing the abilities they teach. If at
-least one trainer in the world teaches an ability, players can only learn or
-unlearn that ability while an eligible trainer mob is present in their current
-room. Abilities with no trainer remain learnable and unlearnable through the
-existing commands.
+Trainer Profiles are reusable catalogs of abilities that players can learn and
+unlearn. Define the abilities first, then create the profile:
+
+World Config links to **Trainer Profiles**. The list opens each profile's
+details and canonical Trainer Profile YAML editor. The details summarize its
+selection limit and show authored eligibility conditions. In Room Config, use
+the **ABILITY TRAINING** service card and its **Trainer Profile** selector;
+**OPEN PROFILE** opens the selected YAML, **CLEAR** removes the selection, and
+**SAVE** applies the room attachment. Attaching or detaching a Trainer Profile
+requires builder rank 3 because the first or last attachment changes where that
+profile's abilities can be learned throughout the definition world. Other room
+editors can inspect the selected profile but the training control is read-only.
+
+```yaml
+kind: trainerprofile
+metadata:
+  slug: arms-training
+  name: Arms Training
+spec:
+  notes: Techniques taught in the city drill hall.
+  abilities:
+    - power-strike
+    - shield-slam
+    - brace
+  learning:
+    conditions:
+      in:
+        - actor.archetype
+        - [warlord, tidecaller]
+    max_known: 2
+```
+
+A Trainer Profile can contain at most 100 ability entries. This keeps
+provider discovery and the Learn/Unlearn lists bounded under concurrent play.
+
+`spec.learning` is an optional, profile-scoped learning policy. Its
+`conditions` field uses the [shared condition DSL](condition-builder-guide.md)
+and decides who may learn through that profile. `max_known` is either a
+positive integer or `uncapped`. In the example, an eligible Warlord or
+Tidecaller can choose any two of the three listed techniques; the policy does
+not reserve two fixed entries.
+
+The profile counts the player's currently known abilities that occur anywhere
+in its complete `abilities` list. Starting abilities, quest or item grants,
+builder grants, inactive abilities, and entries whose current requirements no
+longer pass all count. This prevents another acquisition path from bypassing
+the quota. Unlearning a counted ability frees a slot immediately. Reducing a
+profile limit never removes known abilities; a player already over the new
+limit simply cannot learn another through that profile until below it.
+
+The profile limit and the world's `ability_progression.max_known` are
+independent and both must have capacity. Use `max_known: uncapped` when the
+profile needs only a condition. A profile with no `learning` policy retains
+the legacy unrestricted behavior; existing profiles migrate with this empty
+policy. On a partial update, omitting `learning` preserves the current policy,
+while `learning: {}` clears it back to unrestricted. A non-empty `learning`
+mapping requires `max_known`; omitting `conditions` makes the policy apply to
+every player, while an explicit `conditions: false` deliberately denies
+learning to everyone.
+
+Manifest validation rejects malformed policies and condition operators. The
+runtime also fails closed for malformed policy data written outside the
+manifest path, reporting the profile as denied instead of accidentally
+bypassing its gate.
+
+The policy governs learning only. A local provider that contains the ability
+still permits unlearning even when the player's class has changed, its
+condition now fails, or its quota is full. This ensures a player can free a
+slot instead of becoming trapped by a progression change.
+
+The Trainer Profile is the quota boundary. Reusing one profile on several
+rooms or mobs shares one allowance; visiting another provider does not reset
+it. Distinct profiles have independent allowances even if their catalogs
+overlap, and a known overlapping ability counts in every profile containing
+it. Reuse the same profile whenever several providers must share one quota.
+When multiple local profiles offer the requested ability, provider order is
+room first and then mob id, skipping profiles whose condition fails or whose
+quota is full until the first eligible provider with capacity is found.
+
+A draft Trainer Profile has no gameplay effect until it is attached to a room
+or mob definition. Once an attached profile offers an ability anywhere in the
+definition world, players can only learn or unlearn that ability through an
+eligible local provider. Abilities absent from every attached Trainer Profile
+remain learnable and unlearnable through the ordinary commands anywhere their
+other requirements are met.
+
+Attach a profile directly to a room when training should always be available
+there without a mob or Spawn Plan:
+
+```yaml
+kind: room
+metadata:
+  ref: room@42
+  name: City Drill Hall
+spec:
+  trainer:
+    profile: trainerprofile.arms-training
+```
+
+The room automatically exposes **Learn** and **Unlearn** actions. Bare `learn`
+lists abilities the player can learn there; bare `unlearn` lists known
+abilities the player can unlearn there. A direct room provider is always
+available while the player is in that room.
+
+Attach the same kind of profile to a mob definition only when the spawned NPC's
+presence should control training:
 
 ```yaml
 kind: mobdefinition
@@ -1098,18 +1311,28 @@ spec:
   type: humanoid
   keywords: trainer arms
   trainer:
+    profile: trainerprofile.arms-training
     availability: alive_and_present
-    abilities:
-      - power-strike
-      - shield-slam
 ```
 
 Use `availability: present` when the spawned trainer only needs to be in the
 room. Use `availability: alive_and_present` when a pending-deletion or defeated
-trainer should not teach.
+trainer should not teach. Room attachments do not accept `availability`.
 
-Use `availability` for class and level gates. Use `requirements` for the
-shared condition DSL:
+For an ordinary training location, attach the profile to either the room or the
+mob, not both. When both teach the same ability, the room is considered first;
+if its policy denies learning or has no remaining slot, provider selection
+continues through mobs in stable id order. Unlearning continues to use the
+first local provider containing the ability because learning policy does not
+restrict removal.
+
+Omitting `trainer` from a partial room or mob manifest preserves the existing
+attachment. Set `trainer: null` or `trainer: {}` to clear it. Older mob
+manifests with inline `trainer.abilities` remain accepted as import input, but
+canonical exports use a reusable Trainer Profile and a profile reference.
+
+Use each ability's `spec.availability` for actor, class, and level gates. Use its
+`requirements` for the shared condition DSL:
 
 ```yaml
 requirements:
@@ -1121,6 +1344,17 @@ requirements:
         - state.character.oath_sworn
         - true
 ```
+
+A profile policy is an additional gate; it does not override an ability's own
+availability or requirements. For example, a cross-class profile must list the
+allowed classes in `learning.conditions` *and* each offered ability must permit
+those classes in `spec.availability`.
+
+Each room and each mob definition accepts one Trainer Profile. To put a
+six-ability native curriculum and a separate two-choice cross-training
+curriculum at one location, attach one profile to the room and the other to a
+spawned mob, or use two separate provider locations. Do not merge the catalogs
+unless they are also intended to share one profile quota.
 
 ## Queueing Behavior
 

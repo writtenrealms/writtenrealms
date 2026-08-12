@@ -17,7 +17,10 @@ export interface RoomConfigPayload {
   transfer_to_world?: BuilderReference | null;
   merchant_profile?: BuilderReference | null;
   merchant_profile_world?: BuilderReference | null;
+  trainer_profile?: BuilderReference | null;
+  trainer_profile_world?: BuilderReference | null;
   can_edit?: boolean;
+  can_edit_training?: boolean;
 }
 
 export const roomConfigEndpoint = (
@@ -43,6 +46,18 @@ export const updateRoomMerchantProfile = async (
   const response = await axios.patch<RoomConfigPayload>(
     roomConfigEndpoint(worldId, roomId),
     { merchant_profile: merchantProfileId },
+  );
+  return response.data;
+};
+
+export const updateRoomTrainerProfile = async (
+  worldId: BuilderWorldId,
+  roomId: BuilderEntityId,
+  trainerProfileId: number | null,
+): Promise<RoomConfigPayload> => {
+  const response = await axios.patch<RoomConfigPayload>(
+    roomConfigEndpoint(worldId, roomId),
+    { trainer_profile: trainerProfileId },
   );
   return response.data;
 };

@@ -8,12 +8,14 @@ export type ManifestResourceKind =
   | "craftmaterial"
   | "craftingrecipe"
   | "craftingprofile"
-  | "merchantprofile";
+  | "merchantprofile"
+  | "trainerprofile";
 export type ManifestResourceResponseField =
   | "craft_material"
   | "crafting_recipe"
   | "crafting_profile"
-  | "merchant_profile";
+  | "merchant_profile"
+  | "trainer_profile";
 
 export interface ManifestBackedDetail {
   manifest: ManifestDocument;

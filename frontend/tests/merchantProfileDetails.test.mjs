@@ -37,8 +37,9 @@ test("merchant summaries stay current with manifest apply responses", () => {
 test("shared manifest details use resource-generic copy and mutation behavior", () => {
   assert.match(
     sharedDetailsSource,
-    /\{\{ listLabel \}\} in instances are inherited from the parent world\./,
+    /\{\{ listLabel \}\} in this instance are inherited from/,
   );
+  assert.match(sharedDetailsSource, /params: \{ world_id: worldId \}/);
   assert.match(
     sharedDetailsSource,
     /applyWorldManifest\(\s*props\.worldId,\s*manifestText\.value,\s*props\.expectedKind,/,

@@ -167,6 +167,7 @@ class Char(BaseModel):
     is_linkless: bool = False
     is_elite: bool = False
     is_merchant: bool = False
+    is_trainer: bool = False
     attackable: bool = True
 
     char_type: Literal["player", "mob"] = "mob"
@@ -346,6 +347,22 @@ class MerchantProvider(BaseModel):
     name: str
 
 
+class TrainingProfileReference(BaseModel):
+    id: int
+    key: str
+    slug: str
+    name: str
+
+
+class TrainingProvider(BaseModel):
+    """One ability-training presence available from the current room."""
+    type: Literal["mob", "room"]
+    id: int
+    key: str
+    name: str
+    profile: TrainingProfileReference
+
+
 class MapRoom(BaseModel):
     """
     Simplified room data for the minimap.
@@ -391,6 +408,7 @@ class Room(BaseModel):
     chars: List[Char] = Field(default_factory=list)
     actions: List[str] = Field(default_factory=list)
     merchant_provider: Optional[MerchantProvider] = None
+    training_provider: Optional[TrainingProvider] = None
 
     # Coordinates
     x: int = 0

@@ -189,7 +189,7 @@ CORS_ALLOW_HEADERS = default_headers + (
 
 AWS_ACCESS_KEY = os.environ.get('WR_AWS_ACCESS_KEY') #None
 AWS_SECRET_KEY = os.environ.get('WR_AWS_SECRET_KEY') # None
-SITE_BASE = os.environ.get('WR_SITE_BASE', 'http://localhost:5173')
+SITE_BASE = os.environ.get('WR_SITE_BASE', 'http://localhost:5200')
 SEND_EMAIL = False
 # Whether, if SEND_EMAIL is False, to print the message that we would have
 # wanted to mail if mail was enabled. Good to have a flag so we can turn it

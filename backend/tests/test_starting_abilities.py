@@ -89,3 +89,25 @@ class TestStartingAbilities(WorldTestCase):
 
         self.assertEqual(player.known_abilities, ["bash"])
         self.assertEqual(player.ability_hotkeys, {"1": "bash"})
+
+    def test_mob_only_starting_ability_is_not_granted(self):
+        self._ability(
+            "mob-curse",
+            "Mob Curse",
+            availability={
+                "actors": ["mob"],
+                "classes": [],
+                "min_level": 1,
+            },
+        )
+        self.world.config.ability_progression = {
+            "max_known": 8,
+            "starting_abilities": ["mob-curse"],
+        }
+        self.world.config.save(update_fields=["ability_progression"])
+
+        player = self.create_player("No Mob Curse")
+        player.initialize(include_starting_equipment=False)
+
+        self.assertEqual(player.known_abilities, [])
+        self.assertEqual(player.ability_hotkeys, {})

@@ -67,6 +67,7 @@ rolled back. Error messages identify the failing document number and kind.
 | `craftmaterial` | Crafting materials | [Crafting](crafting-builder-guide.md#materials) |
 | `craftingrecipe` | Crafting recipes | [Crafting](crafting-builder-guide.md#recipes) |
 | `craftingprofile` | Crafting providers and capabilities | [Crafting](crafting-builder-guide.md#profiles-and-providers) |
+| `trainerprofile` | Reusable ability-training catalogs and profile-scoped choice limits | [Ability Trainers](ability-builder-guide.md#ability-trainers) |
 | `faction` | Core and reputation factions | [Factions](faction-builder-guide.md) |
 | `mobdefinition` | Mob definitions | [Mobs](mob-definition-builder-guide.md) |
 | `spawnplan` | Mob and item population plans | [Spawn Plans](spawn-plan-builder-guide.md) |

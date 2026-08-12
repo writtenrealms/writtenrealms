@@ -28,6 +28,7 @@ class AbilityValidationError(ValueError):
 SUPPORTED_ABILITY_VERSION = 1
 DEFAULT_MAX_KNOWN_ABILITIES = 8
 UNCAPPED_MAX_KNOWN_ABILITIES = "uncapped"
+ABILITY_ACTOR_TYPES = ("player", "mob")
 
 TARGET_TYPES = ("hostile", "self", "ally")
 TARGET_DEFAULTS = ("current_target", "self")
@@ -35,9 +36,10 @@ TARGET_RANGES = ("current_room", "adjacent_room", "current_or_adjacent_room")
 COST_RESOURCES = ("health", "energy", "stamina")
 COST_CALCS = ("fixed", "percent_max", "percent_base")
 COOLDOWN_TRIGGERS = ("on_resolve", "on_hit")
-COMPONENT_TYPES = ("damage", "healing", "effect", "state")
+COMPONENT_TYPES = ("damage", "healing", "effect", "state", "interrupt")
 EFFECT_TYPES = ("stun", "dot", "hot")
 EFFECT_APPLY_POLICIES = ("on_resolve", "on_hit")
+INTERRUPT_TARGETS = ("ability.target",)
 EFFECT_CATEGORIES = ("buff", "debuff", "neutral")
 EFFECT_SCOPES = ("encounter", "character")
 EFFECT_TARGETS = (
@@ -416,11 +418,18 @@ def _normalize_target(value: Any) -> dict[str, Any]:
     }
 
 
-def _normalize_availability(value: Any) -> dict[str, Any]:
+def normalize_ability_availability(value: Any) -> dict[str, Any]:
     if value in (None, ""):
         value = {}
     if not isinstance(value, dict):
         raise AbilityValidationError("spec.availability must be a mapping.")
+    unknown_fields = sorted(set(value.keys()) - {"actors", "classes", "min_level"})
+    if unknown_fields:
+        raise AbilityValidationError(
+            "spec.availability has unsupported field(s): "
+            + ", ".join(unknown_fields)
+            + "."
+        )
 
     classes = value.get("classes", [])
     if isinstance(classes, str):
@@ -431,6 +440,19 @@ def _normalize_availability(value: Any) -> dict[str, Any]:
         _coerce_slug(item, field_name="spec.availability.classes[]", allow_hyphen=True)
         for item in classes
     ]
+    actors = value.get("actors", list(ABILITY_ACTOR_TYPES))
+    if not isinstance(actors, list):
+        raise AbilityValidationError("spec.availability.actors must be a list.")
+    if not actors:
+        raise AbilityValidationError("spec.availability.actors must be a non-empty list.")
+    normalized_actors = [
+        _coerce_choice(
+            item,
+            choices=ABILITY_ACTOR_TYPES,
+            field_name="spec.availability.actors[]",
+        )
+        for item in actors
+    ]
     min_level = _coerce_positive_int(
         value.get("min_level", 1),
         field_name="spec.availability.min_level",
@@ -439,7 +461,34 @@ def _normalize_availability(value: Any) -> dict[str, Any]:
     return {
         "classes": list(dict.fromkeys(normalized_classes)),
         "min_level": min_level,
+        "actors": list(dict.fromkeys(normalized_actors)),
     }
+
+
+def ability_allows_actor(ability_or_availability: Any, actor_type: str) -> bool:
+    """Return whether an ability audience includes ``actor_type`` without I/O.
+
+    ``ability_or_availability`` may be an ability-like object exposing an
+    ``availability`` attribute or the availability mapping itself. Legacy
+    availability mappings that omit ``actors`` retain the default player-and-
+    mob audience. Malformed stored availability fails closed.
+    """
+
+    normalized_actor = str(actor_type or "").strip().lower()
+    if normalized_actor not in ABILITY_ACTOR_TYPES:
+        return False
+    if ability_or_availability is None:
+        return False
+    availability = getattr(
+        ability_or_availability,
+        "availability",
+        ability_or_availability,
+    )
+    try:
+        normalized = normalize_ability_availability(availability)
+    except AbilityValidationError:
+        return False
+    return normalized_actor in normalized["actors"]
 
 
 def _normalize_requirements(value: Any) -> dict[str, Any]:
@@ -541,6 +590,35 @@ def _normalize_text(value: Any, *, default_label: str) -> dict[str, str]:
         raise AbilityValidationError("component.text must be a mapping.")
     label = _coerce_text(value.get("label", default_label)).strip() or default_label
     return {"label": label}
+
+
+def _normalize_interrupt_component(
+    value: dict[str, Any],
+    *,
+    field_name: str,
+    default_label: str,
+) -> dict[str, Any]:
+    unknown_fields = sorted(
+        set(value.keys()) - {"type", "target", "apply", "text"}
+    )
+    if unknown_fields:
+        raise AbilityValidationError(
+            f"{field_name} has unsupported field(s): {', '.join(unknown_fields)}."
+        )
+    return {
+        "type": "interrupt",
+        "target": _coerce_choice(
+            value.get("target", "ability.target"),
+            choices=INTERRUPT_TARGETS,
+            field_name=f"{field_name}.target",
+        ),
+        "apply": _coerce_choice(
+            value.get("apply", "on_resolve"),
+            choices=EFFECT_APPLY_POLICIES,
+            field_name=f"{field_name}.apply",
+        ),
+        "text": _normalize_text(value.get("text"), default_label=default_label),
+    }
 
 
 def _normalize_ability_help(value: Any) -> dict[str, str]:
@@ -1222,6 +1300,12 @@ def _normalize_component(value: Any, *, field_name: str, default_label: str) -> 
             field_name=field_name,
             default_label=default_label,
         )
+    if component_type == "interrupt":
+        return _normalize_interrupt_component(
+            value,
+            field_name=field_name,
+            default_label=default_label,
+        )
     return _normalize_effect_component(
         value,
         field_name=field_name,
@@ -1256,6 +1340,22 @@ def normalize_ability_definition(
         raise AbilityValidationError("spec.components must be a non-empty list.")
 
     label = name.strip() or slug.replace("-", " ").title()
+    target = _normalize_target(value.get("target"))
+    normalized_components = [
+        _normalize_component(
+            component,
+            field_name=f"spec.components[{index}]",
+            default_label=label,
+        )
+        for index, component in enumerate(components)
+    ]
+    if (
+        target["type"] != "hostile"
+        and any(component["type"] == "interrupt" for component in normalized_components)
+    ):
+        raise AbilityValidationError(
+            "spec.components interrupt entries require spec.target.type to be hostile."
+        )
     return {
         "version": version,
         "command": _normalize_command(value.get("command"), slug=slug),
@@ -1267,21 +1367,14 @@ def normalize_ability_definition(
             value.get("consumes_primary_action_while_casting", True),
             field_name="spec.consumes_primary_action_while_casting",
         ),
-        "target": _normalize_target(value.get("target")),
-        "availability": _normalize_availability(value.get("availability")),
+        "target": target,
+        "availability": normalize_ability_availability(value.get("availability")),
         "requirements": _normalize_requirements(value.get("requirements")),
         "cost": _normalize_cost(value.get("cost")),
         "cast_time": _normalize_cast_time(value.get("cast_time")),
         "cooldown": _normalize_cooldown(value.get("cooldown")),
         "help": _normalize_ability_help(value.get("help")),
-        "components": [
-            _normalize_component(
-                component,
-                field_name=f"spec.components[{index}]",
-                default_label=label,
-            )
-            for index, component in enumerate(components)
-        ],
+        "components": normalized_components,
         "is_active": _coerce_bool(
             value.get("is_active", True),
             field_name="spec.is_active",

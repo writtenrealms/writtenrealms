@@ -713,6 +713,39 @@ spec:
         self.assertEqual(profile_detail.data["recipe_count"], 1)
         self.assertIn("craftingrecipe.t2-hoplite-head", profile_detail.data["yaml"])
 
+    def test_recipe_list_exposes_group_filter_options(self):
+        self.create_materials()
+        self.create_recipe()
+        CraftingRecipe.objects.create(
+            world=self.world,
+            slug="mystic-helm",
+            group="mystic",
+            output_item_definition=self.output,
+        )
+
+        response = self.client.get(
+            reverse("builder-crafting-recipe-list", args=[self.world.pk])
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(
+            response.data["filter_options"]["group"],
+            [
+                {"key": "hoplite", "name": "Hoplite"},
+                {"key": "mystic", "name": "Mystic"},
+            ],
+        )
+
+        filtered_response = self.client.get(
+            reverse("builder-crafting-recipe-list", args=[self.world.pk]),
+            {"group": "mystic"},
+        )
+        self.assertEqual(filtered_response.status_code, 200, filtered_response.data)
+        self.assertEqual(
+            [recipe["slug"] for recipe in filtered_response.data["results"]],
+            ["mystic-helm"],
+        )
+
     def test_recipe_detail_canonicalizes_room_refs_in_conditions(self):
         legacy_ref = f"room.{self.room.id}"
         canonical_ref = f"room@{self.room.relative_id}"

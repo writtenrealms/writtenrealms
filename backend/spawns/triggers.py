@@ -1379,6 +1379,13 @@ def get_room_action_labels_for_actor(actor: Player | Mob | None, room: Room | No
             if action_label not in normalized_labels:
                 labels.append(action_label)
 
+    if isinstance(actor, Player) and room.trainer_profile_id:
+        normalized_labels = {label.casefold() for label in labels}
+        for action_label in ("learn", "unlearn"):
+            if action_label not in normalized_labels:
+                labels.append(action_label)
+                normalized_labels.add(action_label)
+
     # Room.transfer_to is the authored base-room -> instance-room link.
     if isinstance(actor, Player) and room.transfer_to_id and "enter" not in labels:
         labels.append("enter")

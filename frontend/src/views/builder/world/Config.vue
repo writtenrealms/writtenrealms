@@ -145,6 +145,15 @@ const configLinks = computed(() => [
     },
   },
   {
+    title: "Trainer Profiles",
+    description: "Ability collections exposed by training rooms and trainer NPCs.",
+    rootOnly: true,
+    to: {
+      name: "builder_trainer_profile_list",
+      params: { world_id: route.params.world_id },
+    },
+  },
+  {
     title: "Craft Materials",
     description: "Salvaged resources tracked per player and spent by recipes.",
     rootOnly: true,

@@ -36,7 +36,7 @@ A text-based multiplayer game engine with real-time websocket communication, bui
    ```
 
 4. **Access the application**
-   - Frontend: http://localhost:5173
+   - Frontend: http://localhost:5200
    - API: http://localhost:8000/api/v1/
    - Database: localhost:5432
 

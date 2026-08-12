@@ -45,7 +45,7 @@ cp .env.example .env
 docker compose up -d --build
 
 # Access:
-# - Frontend: http://localhost:5173
+# - Frontend: http://localhost:5200
 # - Django API: http://localhost:8000/api/v1/
 # - FastAPI: http://localhost:8001
 # - Database: localhost:5432
@@ -271,7 +271,7 @@ Optional:
 
 ## Service Ports
 
-- Frontend: 5173
+- Frontend: 5200
 - Django (backend): 8000
 - FastAPI: 8001
 - PostgreSQL: 5432

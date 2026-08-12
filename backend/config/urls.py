@@ -211,6 +211,8 @@ api_v1_urls = [
     path('builder/worlds/<world_pk>/craftingrecipes/<pk>/', builder_views.crafting_recipe_detail, name='builder-crafting-recipe-detail'),
     path('builder/worlds/<world_pk>/craftingprofiles/', builder_views.crafting_profile_list, name='builder-crafting-profile-list'),
     path('builder/worlds/<world_pk>/craftingprofiles/<pk>/', builder_views.crafting_profile_detail, name='builder-crafting-profile-detail'),
+    path('builder/worlds/<world_pk>/trainerprofiles/', builder_views.trainer_profile_list, name='builder-trainer-profile-list'),
+    path('builder/worlds/<world_pk>/trainerprofiles/<pk>/', builder_views.trainer_profile_detail, name='builder-trainer-profile-detail'),
 
     # Quests
     path('builder/worlds/<world_pk>/questtemplates/', quest_views.quest_template_list, name='builder-quest-template-list'),

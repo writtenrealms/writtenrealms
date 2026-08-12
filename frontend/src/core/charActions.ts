@@ -53,6 +53,8 @@ export const buildCharActions = (char, player, world) => {
     group: false,
     list: false,
     offer: false,
+    learn: false,
+    unlearn: false,
     kill: false,
   } as Record<string, any>;
 
@@ -60,7 +62,14 @@ export const buildCharActions = (char, player, world) => {
   if (Array.isArray(sourceActions)) {
     for (const action of sourceActions) {
       if (!action) continue;
-      actions[action] = true;
+      if (typeof action === "string") {
+        actions[action] = true;
+        continue;
+      }
+      if (typeof action === "object") {
+        const actionCode = String(action.action || action.code || "").trim();
+        if (actionCode) actions[actionCode] = action;
+      }
     }
   } else if (sourceActions && typeof sourceActions === "object") {
     for (const [action, value] of Object.entries(sourceActions)) {
@@ -71,6 +80,10 @@ export const buildCharActions = (char, player, world) => {
   if (char && char.is_merchant) {
     actions.list = true;
     actions.offer = true;
+  }
+  if (char && char.is_trainer) {
+    if (!actions.learn) actions.learn = true;
+    if (!actions.unlearn) actions.unlearn = true;
   }
   if (shouldShowTalkAction(player, char, world)) actions.talk = true;
 

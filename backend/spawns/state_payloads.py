@@ -15,7 +15,7 @@ from django.utils import timezone
 
 from builders.models import AbilityDefinition, CraftMaterial, ItemSalvageYield
 from config import constants as adv_consts
-from core.abilities import definition_world
+from core.abilities import ability_allows_actor, definition_world
 from core.combat_formulas import get_world_combat_system, rating_display_percent
 from core.equipment_system import get_world_equipment_payload
 from core.economy import money_payload
@@ -54,6 +54,7 @@ from spawns.schemas import (
     QuestIndicator,
     Room as RoomSchema,
     StateSyncData,
+    TrainingProvider as TrainingProviderSchema,
     WhoListEntry,
     Zone as ZoneSchema,
 )
@@ -152,6 +153,8 @@ def _serialize_ability_definitions(world: World) -> dict[str, dict]:
         world=source_world,
         is_active=True,
     ).order_by("slug", "id"):
+        if not ability_allows_actor(ability, "player"):
+            continue
         order.append(ability.slug)
         definitions[ability.slug] = {
             "id": ability.id,
@@ -254,6 +257,7 @@ def get_player_with_related(player_id: int) -> Player:
             "world__instance_of__default_currency",
             "room",
             "room__merchant_profile",
+            "room__trainer_profile",
             "user",
             "config",
             "equipment",
@@ -589,6 +593,22 @@ def serialize_char_from_mob(
         )
     )
     actions = get_char_action_labels_for_actor(viewer, mob)
+    is_trainer = bool(
+        not mob.is_pending_deletion
+        and
+        mob.definition
+        and mob.definition.trainer_profile_id
+        and (
+            mob.definition.trainer_availability != "alive_and_present"
+            or int(mob.health or 0) > 0
+        )
+    )
+    if isinstance(viewer, Player) and is_trainer:
+        normalized_actions = {action.casefold() for action in actions}
+        for action in ("learn", "unlearn"):
+            if action not in normalized_actions:
+                actions.append(action)
+                normalized_actions.add(action)
     quest_indicator = (quest_indicator_map or {}).get(mob.id, {})
     return Char(
         id=mob.id,
@@ -618,6 +638,7 @@ def serialize_char_from_mob(
         is_elite=getattr(mob, "is_elite", False),
         is_invisible=getattr(mob, "is_invisible", False),
         is_merchant=bool(mob.definition and mob.definition.merchant_profile_id),
+        is_trainer=is_trainer,
         attackable=getattr(mob, "attackable", True),
         equipment=serialize_equipment(mob.equipment, viewer=viewer) if include_equipment else None,
         actions=actions,
@@ -872,7 +893,7 @@ def serialize_room(
         )
 
     room_players = room.players.filter(in_game=True).select_related("user", "equipment")
-    room_mobs_qs = room.mobs.select_related("definition")
+    room_mobs_qs = room.mobs.select_related("definition").order_by("id")
     if runtime_world is not None:
         room_players = room_players.filter(world=runtime_world)
         room_mobs_qs = room_mobs_qs.filter(world=runtime_world)
@@ -908,7 +929,24 @@ def serialize_room(
             key=room.key,
             name=(room_profile.name if room_profile else "") or room.name,
         )
-
+    training_provider = None
+    room_trainer_profile = room._state.fields_cache.get("trainer_profile")
+    if room.trainer_profile_id:
+        training_provider = TrainingProviderSchema(
+            type="room",
+            id=room.id,
+            key=room.key,
+            name=(room_trainer_profile.name if room_trainer_profile else "") or room.name,
+            profile={
+                "id": room.trainer_profile_id,
+                "key": (
+                    room_trainer_profile.key
+                    if room_trainer_profile else f"trainerprofile.{room.trainer_profile_id}"
+                ),
+                "slug": room_trainer_profile.slug if room_trainer_profile else "",
+                "name": room_trainer_profile.name if room_trainer_profile else "",
+            },
+        )
     def _exit_key(room_id: Optional[int]) -> Optional[str]:
         if not room_id:
             return None
@@ -926,6 +964,7 @@ def serialize_room(
         chars=chars,
         actions=actions,
         merchant_provider=merchant_provider,
+        training_provider=training_provider,
         x=room.x,
         y=room.y,
         z=room.z,

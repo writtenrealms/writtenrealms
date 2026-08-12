@@ -24,6 +24,7 @@ Implemented manifest kinds currently include the current WR2 authoring path:
 - `craftmaterial`
 - `craftingrecipe`
 - `craftingprofile`
+- `trainerprofile`
 - `faction`
 - `mobdefinition`
 - `spawnplan`
@@ -155,9 +156,18 @@ Current required mappings:
   `spec.rewards.currencies.gold`. Split the whitespace-delimited WR1 `traits`
   field into a WR2 trait list. Legacy random-drop generation, elite/editor
   flags, carried or equipped template inventory, merchant behavior, crafting,
-  upgrading, and skill teaching require explicit current WR2 definitions or
-  profiles; omit and report them instead of leaving rejected legacy keys in a
-  mob-definition document.
+  and upgrading require explicit current WR2 definitions or profiles; omit and
+  report them instead of leaving rejected legacy keys in a mob-definition
+  document.
+- Convert WR1 mob skill teaching only when every legacy skill can be resolved
+  deliberately to an exported WR2 ability slug. Emit a `kind: trainerprofile`
+  catalog and attach it to the converted mob with `spec.trainer.profile`;
+  otherwise omit the unsupported entries and report them for author review.
+  Do not infer a profile `spec.learning` quota from WR1 teaching data; omit the
+  policy to retain unrestricted legacy teaching unless the converter has an
+  explicit, deterministic authored source for both its condition and limit.
+  Direct room attachment is an additional WR2 authoring option and is not
+  inferred from a WR1 trainer mob or its loader destination.
 - WR1 `MobTemplate.hit_msg_first` and `MobTemplate.hit_msg_third` export to
   `kind: mobdefinition` fields `spec.hit_msg_first` and
   `spec.hit_msg_third`. Preserve non-empty multiword phrases as authored. Emit
@@ -515,6 +525,10 @@ builder-facing [YAML Manifest Guide](../guides/builders/yaml-manifests.md) for
 the supported-kind catalog and examples rather than duplicating them inline.
 
 - Submitting YAML currently supports one or more YAML documents in sequence.
+- Dependency order matters for hand-authored streams. Apply `ability`
+  documents before a `trainerprofile`, then apply rooms and mob definitions
+  that reference that profile. Canonical world export emits them in that order
+  so its output can be imported directly.
 - A `kind: worldbundle` is accepted only as the first document of a complete
   base-family stream. It is a scope/link wrapper around the supported content
   kinds below, not a standalone per-world content document.
@@ -530,6 +544,7 @@ the supported-kind catalog and examples rather than duplicating them inline.
   - `kind: craftmaterial`
   - `kind: craftingrecipe`
   - `kind: craftingprofile`
+  - `kind: trainerprofile`
   - `kind: faction`
   - `kind: mobdefinition`
   - `kind: spawnplan`
@@ -587,6 +602,11 @@ Merchant authoring details, including fixed stock, item-bundle stock, buyback,
 finite funds, and killable versus non-killable shopkeepers, live in:
 
 - [docs/guides/builders/merchant-builder-guide.md](../guides/builders/merchant-builder-guide.md)
+
+Ability and Trainer Profile authoring, including direct room providers and
+optional presence-controlled trainer mobs, lives in:
+
+- [docs/guides/builders/ability-builder-guide.md](../guides/builders/ability-builder-guide.md)
 
 Mob definition authoring details, including plain mobs, fixed stat mobs, and
 randomized stat mobs, live in:
@@ -1642,6 +1662,137 @@ link. The explicit family/document/link limits bound the family-wide work
 admitted by this path. No bundle scan, serialization, or link fan-out is added
 to movement, combat, ticks, or other concurrent gameplay paths.
 
+## Ability Manifest Shape
+
+Ability `spec.availability` supports an explicit actor audience alongside its
+player class and level gates:
+
+```yaml
+availability:
+  actors: [player, mob]
+  classes: [hoplite]
+  min_level: 1
+```
+
+`actors` must be a non-empty list containing `player`, `mob`, or both. It
+defaults to both when omitted, and canonical export includes the normalized
+list. `availability` rejects keys other than `actors`, `classes`, and
+`min_level`, preventing a misspelling such as `actor` from silently opening the
+ability to both audiences. Use `actors: [mob]` for an active NPC-only ability:
+mobs may still select it from their combat loadouts, while player learning,
+starting grants, help discovery, hotkeys, and command execution exclude it.
+This is an explicit contract, not a `mob-` slug convention. Actor audience
+combines with class, level, requirements, and trainer policy rather than
+replacing them.
+
+Ability manifests store ordered, normalized combat components. An interrupt is
+its own component rather than a flag on damage. For example, this Hoplite Kick
+deals one-quarter physical damage and interrupts only when that output lands:
+
+```yaml
+kind: ability
+metadata:
+  slug: kick
+  name: Kick
+spec:
+  command:
+    verbs: [kick]
+  target:
+    type: hostile
+    default: current_target
+  availability:
+    actors: [player, mob]
+    classes: [hoplite]
+    min_level: 1
+  cast_time:
+    rounds: 0
+  cooldown:
+    rounds: 12
+  components:
+    - type: damage
+      profile: basic_physical
+      overrides:
+        multiplier: 0.25
+      text:
+        label: Kick
+    - type: interrupt
+      target: ability.target
+      apply: on_hit
+      text:
+        label: Kick
+```
+
+After normalization, an `interrupt` entry has only `type`, `target`, `apply`,
+and `text`. `target` currently accepts only `ability.target`. `apply` accepts
+`on_resolve` or `on_hit`, and `text` is the ordinary normalized component-text
+mapping. An ability containing the component must set `spec.target.type` to
+`hostile`. Components resolve in authored order, so `on_hit` fires only when
+an earlier output component in the same resolution recorded a landed outcome.
+
+The runtime interrupts only committed intent states: implemented `casting` and
+reserved future `channeling`. A replaceable `queued` intent is immune. Clearing
+a committed intent leaves its resource cost unpaid and its cooldown unstarted;
+when that actor's initiative turn arrives, it falls back to a legal basic attack
+instead of selecting another special ability during the same turn.
+
+Interrupt resolution reads and mutates the target's pending intent from the
+participant state already locked for the encounter step. It does not scan the
+target's encounters, ability catalog, or world documents per component. A
+hostile ability with `cast_time.rounds: 0`, including Kick, has zero windup but
+is still queued and resolves on its actor's stored initiative turn. Channel
+authoring and execution remain future work even though `channeling` is already
+a recognized committed status. In player duels, hostile cast narration exposes
+the casting contestant and ability to the opponent so an interruptible cast is
+visible before it resolves.
+
+## Trainer Profile Manifest Shape
+
+A Trainer Profile is an ordered, reusable ability catalog. Its optional
+`learning` policy can restrict who may learn from the profile and how many of
+its entries that player may currently know:
+
+```yaml
+kind: trainerprofile
+metadata:
+  slug: hoplite-cross-training
+  name: Hoplite Cross-Training
+spec:
+  notes: Choose any two Hoplite techniques.
+  abilities:
+    - ability.bash
+    - ability.charge
+    - ability.guard
+  learning:
+    conditions:
+      in:
+        - actor.archetype
+        - [warlord, tidecaller, mystic, moonstalker]
+    max_known: 2
+```
+
+`learning.conditions` uses the existing condition DSL and must be a
+structured, query-free condition. `learning.max_known` is required when the
+`learning` mapping is non-empty and accepts a positive integer or `uncapped`.
+Omitting `conditions` applies the limit to every player; `conditions: false`
+denies everyone. On create, omitting `learning` gives the profile its legacy
+unrestricted behavior. On update, omitting it preserves the stored policy;
+`learning: {}` clears the policy. Malformed policies are rejected before
+apply.
+
+The limit counts the intersection of the player's complete known-ability set
+with the profile's complete `abilities` list, independent of how each ability
+was acquired or whether it is currently active or eligible. It does not
+replace the world-wide known-ability cap or an ability's availability and
+requirements. Reusing the same profile on multiple providers shares one quota;
+distinct profiles are independent quota boundaries even when their catalogs
+overlap. Policy conditions and caps gate learning only, so a local provider can
+still unlearn a profile member and free a slot.
+
+Canonical export includes the normalized `learning` mapping when a policy is
+present and emits `learning: {}` for an unrestricted profile. Trainer Profile
+manifests must still precede room and mob documents that reference them in
+hand-authored streams.
+
 ## Room Manifest Shape
 
 The selected room's **Rooms > Edit** screen exposes this complete shape:
@@ -1703,14 +1854,22 @@ spec:
     profile: merchantprofile.market-stalls
   crafting:
     profile: craftingprofile.village-forge
+  trainer:
+    profile: trainerprofile.village-training
 ```
 
-Merchant and crafting profile manifests are emitted before room manifests in a
-world export so these typed references resolve in one import stream. Omitting
-`spec.merchant` or `spec.crafting` preserves the current attachment; setting
-the section, its `profile`, or an empty mapping to null/empty clears it. For an
-instance template, profile references resolve against its effective base
-definition world, matching the profiles inherited by its builder UI.
+Merchant, crafting, and trainer profile manifests are emitted before room
+manifests in a world export so these typed references resolve in one import
+stream. Omitting `spec.merchant`, `spec.crafting`, or `spec.trainer` preserves
+the current attachment; setting the section, its `profile`, or an empty mapping
+to null/empty clears it. For an instance template, profile references resolve
+against its effective base definition world, matching the profiles inherited
+by its builder UI.
+
+A room accepts one Trainer Profile. If one location needs separate native and
+cross-training quota boundaries, attach one profile to the room and the other
+to a mob definition present there, or use separate rooms. Reusing a profile in
+several rooms does not multiply its learning allowance.
 
 The external room-manifest shape is intentionally unchanged even though WR2
 stores a canonical logical doorway internally. Each `spec.doors[]` entry is one
@@ -1901,8 +2060,9 @@ and the current placeholder `kill <mob>` combat flow now honors it:
 - `-1`: manual round-by-round resolution, advanced by explicit `kill <mob>`
   commands
 
-Broader encounter scheduling, queued abilities, and non-basic combat actions are
-still future work.
+Queued abilities and non-basic combat actions use this encounter scheduler; see
+[combat-abilities-model.md](combat-abilities-model.md) for their round and
+initiative contract.
 
 `default_roam_chance` is the percent chance that a mob with a zone or path
 roaming target moves on each WR2 heartbeat. The default is `10`, matching the
@@ -1965,7 +2125,9 @@ availability, component behavior, and primary-action consumption are expressed
 by `target`, `components`, `consumes_primary_action_on_resolve`, and
 `consumes_primary_action_while_casting`. The optional WR1 authored-world
 conversion utility must omit any legacy ability action classification and emit
-those canonical fields directly.
+those canonical fields directly. Supported legacy interrupt behavior must
+normalize to an ordered `type: interrupt` component with `target`, `apply`, and
+`text`; it must not become a damage flag or introduce a legacy timing field.
 
 ## `apiVersion`
 

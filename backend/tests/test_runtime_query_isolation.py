@@ -1,6 +1,11 @@
 from types import SimpleNamespace
 
-from builders.models import MobDefinition
+from builders.models import (
+    AbilityDefinition,
+    MobDefinition,
+    TrainerProfile,
+    TrainerProfileAbility,
+)
 from quests.services.discovery import _source_matches_player
 from quests.services.effects import _resolve_effect_mob
 from tests.utils import dispatch_text_command  # Initializes the handler registry.
@@ -18,16 +23,28 @@ class RuntimeWorldQueryIsolationTests(WorldTestCase):
         self.parallel_world = self.world.create_spawn_world(
             instance_ref="parallel-copy",
         )
+        self.ability = AbilityDefinition.objects.create(
+            world=self.world,
+            slug="arena-strike",
+            name="Arena Strike",
+        )
+        profile = TrainerProfile.objects.create(
+            world=self.world,
+            slug="arena-training",
+            name="Arena Training",
+        )
+        TrainerProfileAbility.objects.create(
+            profile=profile,
+            ability=self.ability,
+            order=0,
+        )
         self.mob_definition = MobDefinition.objects.create(
             world=self.world,
             slug="arena-guide",
             name="an arena guide",
             keywords="guide arena",
             base_properties={"health_max": 10},
-            trainer={
-                "abilities": ["arena-strike"],
-                "availability": "present",
-            },
+            trainer_profile=profile,
         )
         self.foreign_mob = self.mob_definition.spawn(
             self.room,
@@ -103,10 +120,8 @@ class RuntimeWorldQueryIsolationTests(WorldTestCase):
         )
 
     def test_ability_trainer_lookup_ignores_parallel_runtime(self):
-        ability = SimpleNamespace(slug="arena-strike")
-
         self.assertIsNone(
-            trainer_for_ability_change(self.player, ability)
+            trainer_for_ability_change(self.player, self.ability)
         )
 
         own_trainer = self.mob_definition.spawn(
@@ -114,7 +129,7 @@ class RuntimeWorldQueryIsolationTests(WorldTestCase):
             self.spawn_world,
         )
         self.assertEqual(
-            trainer_for_ability_change(self.player, ability),
+            trainer_for_ability_change(self.player, self.ability),
             own_trainer,
         )
 

@@ -6,13 +6,13 @@
       <div
         class="action primary"
         v-if="actionsData.primaryAction"
-        @click="doAction(char, actionsData.primaryAction.action)"
+        @click="doAction(char, actionsData.primaryAction)"
       >{{ actionsData.primaryAction.label }}</div>
       <div
         class="action"
         v-for="(action, index) in actionsData.actions"
         :key="index"
-        @click="doAction(char, action.action)"
+        @click="doAction(char, action)"
       >{{ action.label}}</div>
     </div>
   </div>
@@ -35,9 +35,10 @@ const actionsMap = computed(() =>
   buildCharActions(char.value, store.state.game.player, store.state.game.world)
 );
 
-const doAction = (char: any, action: string) => {
-  const rawAction = String(action || "").trim();
-  if (rawAction.includes(" ")) {
+const doAction = (char: any, action: any) => {
+  const actionCode = String(action?.action || action || "").trim();
+  const rawAction = String(action?.command || actionCode).trim();
+  if (action?.exact || rawAction.includes(" ")) {
     store.dispatch("game/cmd", rawAction);
     store.commit("game/lookup_clear");
     store.commit("ui/modal/close");
@@ -54,27 +55,51 @@ const actionsData = computed(() => {
     return {};
   }
 
-  let actions: any[] = [],
-    ACTIONS_COUNT = 3,
-    actionsPriority = [
+  const actions: any[] = [];
+  const hasTrainingActions = Boolean(
+    actionsMap.value.learn || actionsMap.value.unlearn
+  );
+  const hasMerchantActions = Boolean(
+    actionsMap.value.list || actionsMap.value.offer
+  );
+  // Keep ordinary lookups compact, while ensuring a mob that provides both
+  // services does not hide either API behind the three-action limit.
+  const ACTIONS_COUNT = hasTrainingActions && hasMerchantActions ? 5 : 3;
+  const actionsPriority = [
       // higher the better
+      { action: "learn", label: "LEARN", exact: true },
+      { action: "unlearn", label: "UNLEARN", exact: true },
+      { action: "list", label: "LIST", exact: false },
+      { action: "offer", label: "OFFER", exact: false },
       { action: "talk", label: "TALK" },
       { action: "follow", label: "FOLLOW" },
       { action: "unfollow", label: "UNFOLLOW" },
       { action: "group", label: "GROUP" },
-      { action: "list", label: "LIST" },
-      { action: "offer", label: "OFFER" },
     ];
   const knownActionSet = new Set(actionsPriority.map(action => action.action));
 
   if (store.state.game.world && store.state.game.world.allow_combat) {
-    actionsPriority.push({ action: "kill", label: "KILL" });
+    actionsPriority.push({ action: "kill", label: "KILL", exact: false });
     knownActionSet.add("kill");
   }
 
   for (let action of actionsPriority) {
     if (actionsMap.value[action.action]) {
-      actions.push(action);
+      const authored = actionsMap.value[action.action];
+      actions.push({
+        ...action,
+        label: typeof authored === "object" && authored?.label
+          ? String(authored.label)
+          : action.label,
+        command: typeof authored === "string"
+          ? authored
+          : typeof authored === "object" && authored?.command
+            ? String(authored.command)
+            : action.action,
+        exact: typeof authored === "object" && typeof authored?.exact === "boolean"
+          ? authored.exact
+          : action.exact,
+      });
     }
     if (actions.length >= ACTIONS_COUNT) {
       break;
@@ -86,7 +111,15 @@ const actionsData = computed(() => {
     if (!value) continue;
     actions.push({
       action: actionCode,
-      label: actionCode.toUpperCase(),
+      label: typeof value === "object" && value?.label
+        ? String(value.label)
+        : actionCode.toUpperCase(),
+      command: typeof value === "string"
+        ? value
+        : typeof value === "object" && value?.command
+          ? String(value.command)
+          : actionCode,
+      exact: typeof value === "object" && value?.exact === true,
     });
     if (actions.length >= ACTIONS_COUNT) {
       break;

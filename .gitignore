@@ -42,3 +42,4 @@ backend/celerybeat-schedule*
 
 # Local-only workspace notes and setup manifests
 docs/local/
+docs/phalanx/

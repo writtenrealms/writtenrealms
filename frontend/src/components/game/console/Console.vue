@@ -32,6 +32,7 @@ import { computed, onMounted, onUnmounted, onUpdated, ref } from 'vue';
 import { useStore } from 'vuex';
 import _ from "lodash";
 import BuilderStats from "@/components/game/console/BuilderStats.vue";
+import AbilityTrainingList from "@/components/game/console/AbilityTrainingList.vue";
 import Chat from '@/components/game/console/Chat.vue';
 import CombatMessage from '@/components/game/console/CombatMessage.vue';
 import Compare from '@/components/game/console/Compare.vue';
@@ -81,6 +82,8 @@ const consoleMessage = (message) => {
     "cmd.factions.success": Factions,
     "cmd.help.success": Help,
     "cmd.inventory.success": Inventory,
+    "cmd.ability.learn.list": AbilityTrainingList,
+    "cmd.ability.unlearn.list": AbilityTrainingList,
     "cmd.list.success": List,
     "cmd.shop.success": List,
     "cmd.offer.success": OfferInventory,
@@ -94,6 +97,11 @@ const consoleMessage = (message) => {
   };
 
   if (type_mapping[type]) return type_mapping[type];
+
+  if (
+    type === "cmd.ability.learn.error"
+    && ["trainer_learning_limit", "trainer_learning_denied"].includes(message.data?.code)
+  ) return AbilityTrainingList;
 
   if (type === "cmd.buyback.success" && Array.isArray(message.data?.buyback)) {
     return OfferInventory;

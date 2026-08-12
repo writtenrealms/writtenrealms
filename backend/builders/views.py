@@ -84,6 +84,8 @@ from builders.models import (
     RoomAction,
     Trigger,
     Social,
+    TrainerProfile,
+    TrainerProfileAbility,
     Path,
     PathRoom,
     FactionAssignment,
@@ -218,6 +220,14 @@ def _assert_can_edit_room(*, view, room):
         raise drf_exceptions.PermissionDenied(
             "You do not have permission to alter this room."
         )
+
+
+def _assert_can_edit_room_training(*, view):
+    if view._builder_rank >= 3:
+        return
+    raise drf_exceptions.PermissionDenied(
+        "You do not have permission to alter room training."
+    )
 
 
 class WorldCreationMixin:
@@ -1139,10 +1149,13 @@ class RoomBuilderDetailViewSet(RoomBuilderListViewSet):
         return room
 
     def destroy(self, request, pk, *args, **kwargs):
-        try:
-            room = Room.objects.get(pk=pk)
-        except Room.DoesNotExist:
-            raise NotFound
+        room = generics.get_object_or_404(
+            Room.objects.select_related("world__config").filter(
+                world=self.world,
+            ),
+            pk=pk,
+        )
+        _assert_can_edit_room(view=self, room=room)
 
         world = room.world
         config = world.config
@@ -1154,7 +1167,13 @@ class RoomBuilderDetailViewSet(RoomBuilderListViewSet):
                 ),
                 shared=False,
             )
-            room = Room.objects.select_for_update().get(pk=pk)
+            room = Room.objects.select_for_update().get(
+                pk=pk,
+                world=self.world,
+            )
+            _assert_can_edit_room(view=self, room=room)
+            if room.trainer_profile_id:
+                _assert_can_edit_room_training(view=self)
             config = WorldConfig.objects.select_for_update().get(pk=config.pk)
             world_rooms = room.world.rooms.all()
 
@@ -1956,6 +1975,18 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             "You do not have permission to alter merchant profiles."
         )
 
+    def _assert_can_edit_trainer_profiles(self):
+        if self.world.instance_of_id:
+            raise serializers.ValidationError(
+                "Trainer profiles are inherited from the base world and "
+                "cannot be altered on an instance world."
+            )
+        if self._builder_rank >= 3:
+            return
+        raise drf_exceptions.PermissionDenied(
+            "You do not have permission to alter trainer profiles."
+        )
+
     def _assert_can_edit_mob_definitions(self):
         if self._builder_rank >= 3:
             return
@@ -2001,6 +2032,9 @@ class WorldManifestApplyView(BaseWorldBuilderView):
     def _assert_can_edit_room_manifest(self, manifest):
         if self._builder_rank >= 3:
             return
+        spec = manifest.get("spec") or {}
+        if isinstance(spec, dict) and "trainer" in spec:
+            _assert_can_edit_room_training(view=self)
         metadata = builder_world_export._manifest_metadata(manifest)
         room_ref = str(metadata.get("ref") or "").strip()
         if not room_ref:
@@ -2580,6 +2614,54 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
         )
 
+    def _apply_trainer_profile_manifest(self, manifest):
+        self._assert_can_edit_trainer_profiles()
+        operation = builder_manifests.parse_manifest_operation(manifest)
+        if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
+            parsed = builder_manifests.parse_trainer_profile_delete_manifest(
+                world=self.world,
+                manifest=manifest,
+            )
+            profile = parsed.profile
+            payload = {
+                "id": profile.id,
+                "key": profile.key,
+                "slug": profile.slug,
+                "name": profile.name,
+            }
+            with transaction.atomic():
+                # Legacy JSON is compatibility input only. Clear it on every
+                # attached mob so deleting the normalized profile cannot be
+                # reversed by a later unrelated mob manifest update.
+                profile.mob_definitions.update(
+                    trainer={},
+                    modified_ts=timezone.now(),
+                )
+                profile.delete()
+            return Response(
+                {
+                    "kind": builder_manifests.TRAINER_PROFILE_MANIFEST_KIND,
+                    "operation": "deleted",
+                    "trainer_profile": payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        profile, is_create = builder_world_export.apply_trainer_profile_manifest(
+            world=self.world,
+            manifest=manifest,
+        )
+        return Response(
+            {
+                "kind": builder_manifests.TRAINER_PROFILE_MANIFEST_KIND,
+                "operation": "created" if is_create else "updated",
+                "trainer_profile": builder_manifests.serialize_trainer_profile_payload(
+                    profile
+                ),
+            },
+            status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
+        )
+
     def _apply_faction_manifest(self, manifest):
         self._assert_can_edit_world_config()
         operation = builder_manifests.parse_manifest_operation(manifest)
@@ -2661,7 +2743,12 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                 "slug": ability.slug,
                 "name": ability.name,
             }
-            ability.delete()
+            try:
+                ability.delete()
+            except RestrictedError as exc:
+                raise serializers.ValidationError(
+                    "Cannot delete an ability referenced by a trainer profile."
+                ) from exc
             return Response(
                 {
                     "kind": builder_manifests.ABILITY_MANIFEST_KIND,
@@ -3034,6 +3121,8 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             return self._apply_crafting_recipe_manifest(manifest)
         if manifest_kind == builder_manifests.CRAFTING_PROFILE_MANIFEST_KIND:
             return self._apply_crafting_profile_manifest(manifest)
+        if manifest_kind == builder_manifests.TRAINER_PROFILE_MANIFEST_KIND:
+            return self._apply_trainer_profile_manifest(manifest)
         if manifest_kind == builder_manifests.FACTION_MANIFEST_KIND:
             return self._apply_faction_manifest(manifest)
         if manifest_kind == builder_manifests.MOB_DEFINITION_MANIFEST_KIND:
@@ -3554,10 +3643,17 @@ class RoomConfig(BaseWorldBuilderView):
         return {
             'has_instances': room.world.instances.exists(),
             'can_edit': self._can_edit(room),
+            'can_edit_training': self._builder_rank >= 3,
             'merchant_profile': self._merchant_profile_reference(
                 room.merchant_profile,
             ),
             'merchant_profile_world': ReferenceField().to_representation(
+                profile_world,
+            ),
+            'trainer_profile': self._merchant_profile_reference(
+                room.trainer_profile,
+            ),
+            'trainer_profile_world': ReferenceField().to_representation(
                 profile_world,
             ),
             'transfer_to': ReferenceField().to_representation(
@@ -3570,6 +3666,7 @@ class RoomConfig(BaseWorldBuilderView):
         room = generics.get_object_or_404(
             Room.objects.filter(world=self.world).select_related(
                 'merchant_profile',
+                'trainer_profile',
                 'transfer_to__world',
                 'world__instance_of',
             ),
@@ -3584,12 +3681,15 @@ class RoomConfig(BaseWorldBuilderView):
                     world=self.world,
                 ).select_related(
                     'merchant_profile',
+                    'trainer_profile',
                     'transfer_to__world',
                     'world__instance_of',
                 ),
                 id=pk,
             )
             _assert_can_edit_room(view=self, room=room)
+            if 'trainer_profile' in request.data:
+                _assert_can_edit_room_training(view=self)
 
             update_fields = []
             merchant_changed = False
@@ -3612,6 +3712,19 @@ class RoomConfig(BaseWorldBuilderView):
                 )
                 room.merchant_profile = merchant_profile
                 update_fields.append('merchant_profile')
+
+            if 'trainer_profile' in request.data:
+                raw_profile = request.data['trainer_profile']
+                if raw_profile in (None, ''):
+                    trainer_profile = None
+                else:
+                    trainer_profile = builder_manifests.resolve_trainer_profile_ref(
+                        world=definition_world(room.world),
+                        value=raw_profile,
+                        field_name='trainer_profile',
+                    )
+                room.trainer_profile = trainer_profile
+                update_fields.append('trainer_profile')
 
             if update_fields:
                 room.save(update_fields=[*dict.fromkeys(update_fields), 'modified_ts'])
@@ -3896,7 +4009,11 @@ class MobDefinitionViewSet(BaseWorldBuilderViewSet):
         if context.instance_of:
             context = context.instance_of
 
-        qs = MobDefinition.objects.filter(world=context).order_by('-modified_ts')
+        qs = MobDefinition.objects.filter(world=context).select_related(
+            'merchant_profile',
+            'crafting_profile',
+            'trainer_profile',
+        ).order_by('-modified_ts')
 
         mob_type = self.request.query_params.get('type')
         if mob_type in adv_consts.MOB_TYPES:
@@ -4057,6 +4174,24 @@ class CraftingRecipeViewSet(BaseWorldBuilderViewSet):
     serializer_class = builder_serializers.CraftingRecipeSerializer
     http_method_names = ['get', 'head', 'options']
 
+    def _group_filter_options(self):
+        context = self.world.instance_of or self.world
+        groups = (
+            CraftingRecipe.objects
+            .filter(world=context)
+            .exclude(group='')
+            .values_list('group', flat=True)
+            .distinct()
+            .order_by('group')
+        )
+        return [
+            {
+                'key': group,
+                'name': group.replace('-', ' ').replace('_', ' ').title(),
+            }
+            for group in groups
+        ]
+
     def get_queryset(self):
         context = self.world.instance_of or self.world
         qs = (
@@ -4078,6 +4213,14 @@ class CraftingRecipeViewSet(BaseWorldBuilderViewSet):
             qs,
             field_name='output_item_definition__name',
         )
+
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        if isinstance(response.data, dict):
+            response.data['filter_options'] = {
+                'group': self._group_filter_options(),
+            }
+        return response
 
     def retrieve(self, request, *args, **kwargs):
         recipe = self.get_object()
@@ -4120,6 +4263,36 @@ class CraftingProfileViewSet(BaseWorldBuilderViewSet):
 
 crafting_profile_list = CraftingProfileViewSet.as_view({'get': 'list'})
 crafting_profile_detail = CraftingProfileViewSet.as_view({'get': 'retrieve'})
+
+
+class TrainerProfileViewSet(BaseWorldBuilderViewSet):
+    serializer_class = builder_serializers.TrainerProfileSerializer
+    http_method_names = ['get', 'head', 'options']
+
+    def get_queryset(self):
+        context = self.world.instance_of or self.world
+        return self.search_queryset(
+            TrainerProfile.objects
+            .filter(world=context)
+            .prefetch_related(
+                Prefetch(
+                    'ability_entries',
+                    queryset=TrainerProfileAbility.objects.select_related('ability'),
+                ),
+            )
+            .order_by('name', 'id')
+        )
+
+    def retrieve(self, request, *args, **kwargs):
+        profile = self.get_object()
+        payload = builder_manifests.serialize_trainer_profile_payload(profile)
+        payload['modified_ts'] = profile.modified_ts
+        payload['model_type'] = profile.model_type
+        return Response(payload)
+
+
+trainer_profile_list = TrainerProfileViewSet.as_view({'get': 'list'})
+trainer_profile_detail = TrainerProfileViewSet.as_view({'get': 'retrieve'})
 
 
 class MobDefinitionReactionViewSet(BaseWorldBuilderViewSet):

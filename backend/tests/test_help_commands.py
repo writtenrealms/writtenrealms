@@ -241,6 +241,28 @@ class TestHelpCommands(WorldTestCase):
         self.assertEqual(message["data"]["ability"]["help_source"], "authored")
         self.assertNotIn("command", message["data"])
 
+    def test_help_hides_mob_only_ability_even_when_stale_known(self):
+        self._ability(
+            slug="mob-curse",
+            name="Mob Curse",
+            verbs=["mobcurse"],
+            availability={
+                "actors": ["mob"],
+                "classes": [],
+                "min_level": 1,
+            },
+        )
+        self.player.known_abilities = ["mob-curse"]
+        self.player.save(update_fields=["known_abilities"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "help mob curse")
+
+        self.assertIsNone(self._message_by_type(messages, "cmd.help.success"))
+        error = self._message_by_type(messages, "cmd.help.error")
+        self.assertIsNotNone(error)
+        self.assertEqual(error["text"], "Unknown command: mob curse")
+
     def test_help_known_ability_generates_plain_text_from_definition(self):
         self._ability(
             slug="bash",
@@ -270,6 +292,42 @@ class TestHelpCommands(WorldTestCase):
         self.assertEqual(
             message.get("text"),
             "Bash - 1 round cast, 6 round cooldown, stuns the target for 2 rounds if it lands.",
+        )
+        self.assertEqual(message["data"]["ability"]["help_source"], "generated")
+
+    def test_help_known_ability_describes_on_hit_interrupt_in_component_order(self):
+        self._ability(
+            slug="kick",
+            name="Kick",
+            verbs=["kick"],
+            cooldown={"rounds": 12},
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 0.25},
+                    "text": {"label": "Kick"},
+                },
+                {
+                    "type": "interrupt",
+                    "target": "ability.target",
+                    "apply": "on_hit",
+                    "text": {"label": "Kick"},
+                },
+            ],
+        )
+        self.player.known_abilities = ["kick"]
+        self.player.save(update_fields=["known_abilities"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "help kick")
+
+        message = self._message_by_type(messages, "cmd.help.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(
+            message.get("text"),
+            "Kick - 12 round cooldown, inflicts 0.25x physical damage on the "
+            "target, interrupts the target's active cast or channel if it lands.",
         )
         self.assertEqual(message["data"]["ability"]["help_source"], "generated")
 

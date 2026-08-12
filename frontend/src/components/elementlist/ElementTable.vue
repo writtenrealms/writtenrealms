@@ -7,6 +7,7 @@
             <th
               v-for="field in schema"
               :key="field.name"
+              :class="{ 'mobile-hidden-column': field.mobileHidden }"
               :aria-sort="getAriaSort(field)"
             >
               <button
@@ -29,7 +30,12 @@
 
         <tbody>
           <tr v-for="element in elements" :key="element.id">
-            <td v-for="field in schema" :key="field.name" :nowrap="isNowrap(field)">
+            <td
+              v-for="field in schema"
+              :key="field.name"
+              :class="{ 'mobile-hidden-column': field.mobileHidden }"
+              :nowrap="isNowrap(field)"
+            >
               <a :href="element.link" class="link-full-cell">
                 {{ getFieldValue(element, field.name) || "&nbsp;" }}
               </a>
@@ -123,6 +129,7 @@ const getFieldValue = (element: ElementListSchema, name: string) => {
 
 <style lang="scss" scoped>
 @import "@/styles/colors.scss";
+@import "@/styles/layout.scss";
 
 .element-table-wrapper,
 .table-responsive {
@@ -209,6 +216,12 @@ tbody {
         }
       }
     }
+  }
+}
+
+@media ($mobile-site) {
+  .mobile-hidden-column {
+    display: none;
   }
 }
 </style>

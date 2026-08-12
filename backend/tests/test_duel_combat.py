@@ -881,6 +881,179 @@ class DuelCombatTests(WorldTestCase):
             2,
         )
 
+    def test_kick_interrupts_duel_cast_and_hostile_cast_is_visible(self):
+        kick = self._grant_ability(
+            slug="kick",
+            name="Kick",
+            target={
+                "type": "hostile",
+                "default": "current_target",
+                "allow_out_of_combat": False,
+            },
+            cooldown={"rounds": 12},
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 0.25},
+                    "text": {"label": "Kick"},
+                },
+                {
+                    "type": "interrupt",
+                    "target": "ability.target",
+                    "apply": "on_hit",
+                    "text": {"label": "Kick"},
+                },
+            ],
+        )
+        slow_cast = AbilityDefinition.objects.create(
+            world=self.world,
+            slug="slow-cast",
+            name="Slow Cast",
+            command_verbs=["slowcast"],
+            consumes_primary_action_on_resolve=True,
+            consumes_primary_action_while_casting=True,
+            target={
+                "type": "hostile",
+                "default": "current_target",
+                "allow_out_of_combat": False,
+            },
+            availability={"classes": [], "min_level": 1},
+            requirements={},
+            cost={"resource": "energy", "amount": 5, "calc": "fixed"},
+            cast_time={"rounds": 1},
+            cooldown={"rounds": 7},
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 2},
+                    "text": {"label": "Slow Cast"},
+                }
+            ],
+        )
+        self.opponent.known_abilities = [
+            *self.opponent.known_abilities,
+            slow_cast.slug,
+        ]
+        self.opponent.save(update_fields=["known_abilities"])
+
+        KillAction().execute(self.player.id, "Rival")
+        encounter = CombatEncounter.objects.get(
+            duel_match=self.match,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        participants = {
+            participant.player_id: participant
+            for participant in CombatParticipant.objects.filter(
+                encounter=encounter,
+            )
+        }
+        kicker = participants[self.player.id]
+        caster = participants[self.opponent.id]
+        encounter.initiative_order = [
+            {
+                "type": "player",
+                "id": self.opponent.id,
+                "key": self.opponent.key,
+                "side": f"team.{caster.team}",
+            },
+            {
+                "type": "player",
+                "id": self.player.id,
+                "key": self.player.key,
+                "side": f"team.{kicker.team}",
+            },
+        ]
+        encounter.save(update_fields=["initiative_order"])
+        caster.pending_ability = {
+            "ability": slow_cast.slug,
+            "command": slow_cast.slug,
+            "target": {"type": "player", "id": self.player.id},
+            "queued_round": encounter.round_number,
+            "status": "queued",
+            "cast_rounds_remaining": 1,
+        }
+        caster.save(update_fields=["pending_ability"])
+        opponent_energy_before = self.opponent.energy
+
+        charge_result = resolve_combat_encounter_step(
+            encounter.id,
+            auto_advance=False,
+        )
+
+        caster.refresh_from_db()
+        self.assertEqual(caster.pending_ability["status"], "casting")
+        self.assertEqual(caster.pending_ability["cast_rounds_remaining"], 0)
+        hostile_cast_events = [
+            event
+            for event in charge_result.events
+            if event.type == "notification.combat.ability_casting"
+            and event.recipients == [self.player.key]
+            and event.data.get("actor", {}).get("key") == self.opponent.key
+        ]
+        self.assertEqual(len(hostile_cast_events), 1)
+
+        encounter.refresh_from_db()
+        encounter.initiative_order = [
+            {
+                "type": "player",
+                "id": self.player.id,
+                "key": self.player.key,
+                "side": f"team.{kicker.team}",
+            },
+            {
+                "type": "player",
+                "id": self.opponent.id,
+                "key": self.opponent.key,
+                "side": f"team.{caster.team}",
+            },
+        ]
+        encounter.save(update_fields=["initiative_order"])
+        kicker.refresh_from_db()
+        kicker.pending_ability = {
+            "ability": kick.slug,
+            "command": kick.slug,
+            "target": {"type": "player", "id": self.opponent.id},
+            "queued_round": encounter.round_number,
+        }
+        kicker.save(update_fields=["pending_ability"])
+
+        interrupt_result = resolve_combat_encounter_step(
+            encounter.id,
+            auto_advance=False,
+        )
+
+        caster.refresh_from_db()
+        self.player.refresh_from_db()
+        self.opponent.refresh_from_db()
+        self.assertEqual(caster.pending_ability, {})
+        self.assertEqual(self.player.ability_cooldowns.get(kick.slug), 12)
+        self.assertNotIn(slow_cast.slug, self.opponent.ability_cooldowns)
+        self.assertEqual(self.opponent.energy, opponent_energy_before)
+        interrupted_events = [
+            event
+            for event in interrupt_result.events
+            if event.type == "notification.combat.ability_interrupted"
+        ]
+        self.assertEqual(
+            {event.recipients[0] for event in interrupted_events},
+            {self.player.key, self.opponent.key},
+        )
+        self.assertTrue(
+            all(
+                event.data["interrupted_ability"]["slug"] == slow_cast.slug
+                for event in interrupted_events
+            )
+        )
+        self.assertFalse(
+            any(
+                event.type == "notification.combat.attack"
+                and event.data.get("attack") == slow_cast.slug
+                for event in interrupt_result.events
+            )
+        )
+
     def test_charge_moves_to_adjacent_opponent_and_opens_duel_combat(self):
         ability = self._grant_ability(
             slug="charge",

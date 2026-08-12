@@ -6,6 +6,7 @@ Realms Core.
 - [Map](map.md)
 - [Doors and Keys](doors-and-keys.md)
 - [Combat](combat.md)
+- [Abilities and Training](abilities.md)
 - [Duels](duels.md)
 - [Currencies](currencies.md)
 - [Merchants](merchants.md)

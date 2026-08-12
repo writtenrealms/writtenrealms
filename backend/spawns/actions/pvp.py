@@ -1955,6 +1955,7 @@ def resolve_pvp_encounter_step(
                     room=context.encounter.room,
                     round_id=round_id,
                     player_health_max=stats.player_health_max,
+                    target_pending_ability=opponent_participant.pending_ability,
                 )
             )
             events.extend(ability_events)
@@ -1965,6 +1966,11 @@ def resolve_pvp_encounter_step(
             participant.save(
                 update_fields=["pending_ability", "modified_ts"]
             )
+            if ability_result.target_interrupted:
+                opponent_participant.pending_ability = {}
+                opponent_participant.save(
+                    update_fields=["pending_ability", "modified_ts"]
+                )
             cooldown_excludes[actor.id] = ability_result.cooldown_exclude
             if int(target.health or 0) <= 0:
                 return _resolve_defeat(

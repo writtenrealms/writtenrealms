@@ -79,6 +79,7 @@ from builders.models import (
     ItemDefinition,
     MobDefinition,
     MerchantProfile,
+    TrainerProfile,
     SpawnEntry,
     FACTION_TYPE_CORE,
     FACTION_TYPE_REPUTATION,
@@ -2192,6 +2193,8 @@ class MobDefinitionSerializer(serializers.ModelSerializer):
     type = serializers.CharField(source='mob_type', read_only=True)
     attributes = serializers.JSONField(read_only=True)
     randomized = serializers.SerializerMethodField()
+    trainer = serializers.SerializerMethodField()
+    trainer_profile = serializers.SerializerMethodField()
 
     class Meta:
         model = MobDefinition
@@ -2201,12 +2204,31 @@ class MobDefinitionSerializer(serializers.ModelSerializer):
             'type', 'assists', 'base_properties', 'attributes',
             'randomization', 'randomized', 'initial_state', 'traits', 'loot',
             'combat_abilities',
-            'trainer',
+            'trainer', 'trainer_profile', 'trainer_availability',
         ]
 
     def get_randomized(self, mob_definition):
         randomization = mob_definition.randomization or {}
         return bool(randomization.get('attributes'))
+
+    def get_trainer(self, mob_definition):
+        if not mob_definition.trainer_profile_id:
+            return {}
+        return {
+            'profile': f'trainerprofile.{mob_definition.trainer_profile.slug}',
+            'availability': mob_definition.trainer_availability or 'present',
+        }
+
+    def get_trainer_profile(self, mob_definition):
+        profile = mob_definition.trainer_profile
+        if profile is None:
+            return None
+        return {
+            'id': profile.id,
+            'key': profile.key,
+            'slug': profile.slug,
+            'name': profile.name,
+        }
 
 
 class MerchantProfileSerializer(serializers.ModelSerializer):
@@ -2290,6 +2312,20 @@ class CraftingProfileSerializer(serializers.ModelSerializer):
 
     def get_recipe_count(self, profile):
         return profile.recipe_entries.count()
+
+
+class TrainerProfileSerializer(serializers.ModelSerializer):
+    ability_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TrainerProfile
+        fields = [
+            'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
+            'notes', 'learning', 'ability_count',
+        ]
+
+    def get_ability_count(self, profile):
+        return profile.ability_entries.count()
 
 
 def validate_reaction(self, validated_data):

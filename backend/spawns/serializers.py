@@ -745,6 +745,7 @@ class AnimateMobSerializer(serializers.ModelSerializer):
     keywords = serializers.SerializerMethodField()
     factions = serializers.SerializerMethodField()
     is_merchant = serializers.SerializerMethodField()
+    is_trainer = serializers.SerializerMethodField()
     currency_rewards = serializers.SerializerMethodField()
     reactions = serializers.SerializerMethodField()
     roams = serializers.SerializerMethodField()
@@ -757,7 +758,7 @@ class AnimateMobSerializer(serializers.ModelSerializer):
             'group_id',
             'room_description', 'keywords',
             'factions',
-            'is_merchant', 'currency_rewards',
+            'is_merchant', 'is_trainer', 'currency_rewards',
             'reactions',
             'roams',
         ]
@@ -792,6 +793,17 @@ class AnimateMobSerializer(serializers.ModelSerializer):
 
     def get_is_merchant(self, mob):
         return bool(mob.definition and mob.definition.merchant_profile_id)
+
+    def get_is_trainer(self, mob):
+        return bool(
+            not mob.is_pending_deletion
+            and mob.definition
+            and mob.definition.trainer_profile_id
+            and (
+                mob.definition.trainer_availability != 'alive_and_present'
+                or int(mob.health or 0) > 0
+            )
+        )
 
     def get_room_description(self, mob):
         if mob.room_description:

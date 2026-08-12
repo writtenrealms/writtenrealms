@@ -85,7 +85,7 @@ This project runs entirely via Docker Compose. The VM environment snapshot alrea
 
 ### Starting services
 
-Start all services: `sudo docker compose up -d`. This brings up 9 containers: `backend` (Django on :8000), `fastapi` (:8001), `frontend` (Vue/Vite on :5173), `db` (PostgreSQL :5432), `redis` (:6379), `redis-celery` (:6380), `rabbitmq` (:5672), `celery-worker`, and `celery-beat`. The backend entrypoint automatically runs `migrate` and `createcachetable` on startup.
+Start all services: `sudo docker compose up -d`. This brings up 9 containers: `backend` (Django on :8000), `fastapi` (:8001), `frontend` (Vue/Vite exposed on :5200), `db` (PostgreSQL :5432), `redis` (:6379), `redis-celery` (:6380), `rabbitmq` (:5672), `celery-worker`, and `celery-beat`. The backend entrypoint automatically runs `migrate` and `createcachetable` on startup.
 
 For fast iteration with bind-mounted source code (no rebuild needed after edits): `COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml sudo docker compose up -d`.
 

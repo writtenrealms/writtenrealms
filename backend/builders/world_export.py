@@ -36,6 +36,8 @@ from builders.models import (
     SpawnEntry,
     SpawnPlan,
     Social,
+    TrainerProfile,
+    TrainerProfileAbility,
     Trigger,
 )
 from builders.loot_tables import normalize_loot_table
@@ -105,6 +107,7 @@ _MERCHANT_PROFILE_KIND_ALIASES = {"merchantprofile", "merchant-profile", "mercha
 _CRAFT_MATERIAL_KIND_ALIASES = {"craftmaterial", "craft-material", "craft_material"}
 _CRAFTING_RECIPE_KIND_ALIASES = {"craftingrecipe", "crafting-recipe", "crafting_recipe"}
 _CRAFTING_PROFILE_KIND_ALIASES = {"craftingprofile", "crafting-profile", "crafting_profile"}
+_TRAINER_PROFILE_KIND_ALIASES = {"trainerprofile", "trainer-profile", "trainer_profile"}
 _FACTION_KIND_ALIASES = {"faction"}
 _MOB_DEFINITION_KIND_ALIASES = {"mobdefinition", "mob-definition", "mob_definition"}
 _SPAWN_PLAN_KIND_ALIASES = {"spawnplan", "spawn-plan", "spawn_plan"}
@@ -129,6 +132,7 @@ _ITEM_DEFINITION_REF_PREFIX = "itemdefinition."
 _ITEM_BUNDLE_REF_PREFIX = "itembundle."
 _MERCHANT_PROFILE_REF_PREFIX = "merchantprofile."
 _CRAFTING_PROFILE_REF_PREFIX = "craftingprofile."
+_TRAINER_PROFILE_REF_PREFIX = "trainerprofile."
 _MOB_DEFINITION_REF_PREFIX = "mobdefinition."
 
 _ZONE_SORT_KEY = lambda zone: ((zone.name or "").lower(), zone.id)
@@ -193,6 +197,8 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
         return builder_manifests.CRAFTING_RECIPE_MANIFEST_KIND
     if raw_kind in _CRAFTING_PROFILE_KIND_ALIASES:
         return builder_manifests.CRAFTING_PROFILE_MANIFEST_KIND
+    if raw_kind in _TRAINER_PROFILE_KIND_ALIASES:
+        return builder_manifests.TRAINER_PROFILE_MANIFEST_KIND
     if raw_kind in _FACTION_KIND_ALIASES:
         return builder_manifests.FACTION_MANIFEST_KIND
     if raw_kind in _MOB_DEFINITION_KIND_ALIASES:
@@ -214,7 +220,7 @@ def parse_document_kind(manifest: dict[str, Any]) -> str:
     raise serializers.ValidationError(
         "Unsupported manifest kind. Supported kinds: "
         "worldbundle, world, currency, zone, room, path, itemdefinition, "
-        "itembundle, merchantprofile, faction, mobdefinition, spawnplan, "
+        "itembundle, merchantprofile, trainerprofile, faction, mobdefinition, spawnplan, "
         "social, questarc, quest, trigger, ability, abilities."
     )
 
@@ -631,6 +637,17 @@ def _serialize_room_manifest(room: Room) -> dict[str, Any]:
                 }
                 if room.crafting_profile_id else {}
             ),
+            **(
+                {
+                    "trainer": {
+                        "profile": (
+                            f"{_TRAINER_PROFILE_REF_PREFIX}"
+                            f"{room.trainer_profile.slug}"
+                        ),
+                    },
+                }
+                if room.trainer_profile_id else {}
+            ),
         },
     }
 
@@ -732,6 +749,12 @@ def _serialize_crafting_recipe_manifest(recipe: CraftingRecipe) -> dict[str, Any
 def _serialize_crafting_profile_manifest(profile: CraftingProfile) -> dict[str, Any]:
     return _portable_authored_manifest(
         builder_manifests.crafting_profile_to_manifest(profile)
+    )
+
+
+def _serialize_trainer_profile_manifest(profile: TrainerProfile) -> dict[str, Any]:
+    return _portable_authored_manifest(
+        builder_manifests.trainer_profile_to_manifest(profile)
     )
 
 
@@ -2036,6 +2059,7 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
         world.mob_definitions.select_related(
             "merchant_profile",
             "crafting_profile",
+            "trainer_profile",
         ).prefetch_related(
             "currency_rewards__currency",
             Prefetch(
@@ -2107,6 +2131,7 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             "down",
             "merchant_profile",
             "crafting_profile",
+            "trainer_profile",
         ).order_by("z", "y", "x", "id")
     )
     room_ref_cache = _build_room_ref_cache(world, rooms=rooms)
@@ -2201,6 +2226,19 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             ).order_by("slug", "id")
         ],
         *[
+            _serialize_ability_manifest(ability)
+            for ability in world.ability_definitions.all().order_by("slug", "id")
+        ],
+        *[
+            _serialize_trainer_profile_manifest(profile)
+            for profile in world.trainer_profiles.prefetch_related(
+                Prefetch(
+                    "ability_entries",
+                    queryset=TrainerProfileAbility.objects.select_related("ability"),
+                ),
+            ).order_by("slug", "id")
+        ],
+        *[
             _serialize_faction_manifest(faction)
             for faction in world.world_factions.prefetch_related("ranks").select_related(
                 "starting_room",
@@ -2218,10 +2256,6 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
         *[
             _serialize_path_manifest(path)
             for path in paths
-        ],
-        *[
-            _serialize_ability_manifest(ability)
-            for ability in world.ability_definitions.all().order_by("slug", "id")
         ],
         *[
             _serialize_mob_definition_manifest(mob_definition)
@@ -2306,6 +2340,7 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
         "craft_materials": 0,
         "crafting_recipes": 0,
         "crafting_profiles": 0,
+        "trainer_profiles": 0,
         "zones": 0,
         "rooms": 0,
         "paths": 0,
@@ -2331,6 +2366,8 @@ def _summarize_documents(documents: list[dict[str, Any]]) -> dict[str, int]:
             counts["crafting_recipes"] += 1
         elif kind == builder_manifests.CRAFTING_PROFILE_MANIFEST_KIND:
             counts["crafting_profiles"] += 1
+        elif kind == builder_manifests.TRAINER_PROFILE_MANIFEST_KIND:
+            counts["trainer_profiles"] += 1
         elif kind == ZONE_MANIFEST_KIND:
             counts["zones"] += 1
         elif kind == ROOM_MANIFEST_KIND:
@@ -3446,6 +3483,7 @@ def _find_placeholder_room(
     if (
         room.merchant_profile_id
         or room.crafting_profile_id
+        or room.trainer_profile_id
         or room.enters_instance_id
         or room.transfer_to_id
         or room.exits_to_id
@@ -4732,6 +4770,28 @@ def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room
                 field_name="spec.crafting.profile",
             )
 
+    trainer_profile = None
+    update_trainer = "trainer" in spec
+    if update_trainer:
+        trainer = spec.get("trainer")
+        if trainer in (None, ""):
+            trainer = {}
+        if not isinstance(trainer, dict):
+            raise serializers.ValidationError("spec.trainer must be a mapping.")
+        unknown_trainer_fields = sorted(set(trainer.keys()) - {"profile"})
+        if unknown_trainer_fields:
+            raise serializers.ValidationError(
+                "Unsupported spec.trainer field(s): "
+                f"{', '.join(unknown_trainer_fields)}."
+            )
+        profile_ref = trainer.get("profile")
+        if profile_ref not in (None, ""):
+            trainer_profile = builder_manifests.resolve_trainer_profile_ref(
+                world=profile_world,
+                value=profile_ref,
+                field_name="spec.trainer.profile",
+            )
+
     with transaction.atomic():
         zone_ref = str(spec.get("zone") or "").strip() if "zone" in spec else (
             _zone_ref(existing.zone) if existing and existing.zone else ""
@@ -4799,6 +4859,8 @@ def apply_room_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Room
             room.merchant_profile = merchant_profile
         if update_crafting:
             room.crafting_profile = crafting_profile
+        if update_trainer:
+            room.trainer_profile = trainer_profile
         room.save()
 
         if merchant_changed:
@@ -5121,6 +5183,17 @@ def apply_crafting_profile_manifest(*, world: World, manifest: dict[str, Any]) -
     )
     created = parsed.profile is None
     return builder_manifests.apply_crafting_profile_manifest(parsed), created
+
+
+def apply_trainer_profile_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[TrainerProfile, bool]:
+    if parse_document_kind(manifest) != builder_manifests.TRAINER_PROFILE_MANIFEST_KIND:
+        raise serializers.ValidationError("Unsupported manifest kind. Expected 'trainerprofile'.")
+    parsed = builder_manifests.parse_trainer_profile_manifest(
+        world=world,
+        manifest=manifest,
+    )
+    created = parsed.profile is None
+    return builder_manifests.apply_trainer_profile_manifest(parsed), created
 
 
 def apply_social_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Social, bool]:

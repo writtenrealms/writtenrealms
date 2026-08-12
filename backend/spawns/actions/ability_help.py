@@ -119,6 +119,11 @@ def _state_component_phrase(component: dict[str, Any]) -> str:
     return f"updates {scope} state"
 
 
+def _interrupt_component_phrase(component: dict[str, Any]) -> str:
+    landed_text = " if it lands" if component.get("apply") == "on_hit" else ""
+    return f"interrupts the target's active cast or channel{landed_text}"
+
+
 def _cost_sentence(ability: AbilityDefinition) -> str:
     cost = ability.cost or {}
     resource = str(cost.get("resource") or "").strip().lower()
@@ -167,6 +172,8 @@ def generated_ability_help_text(ability: AbilityDefinition) -> str:
             phrases.append(_effect_component_phrase(ability, component))
         elif component_type == "state":
             phrases.append(_state_component_phrase(component))
+        elif component_type == "interrupt":
+            phrases.append(_interrupt_component_phrase(component))
 
     if not phrases:
         phrases.append("uses the ability")

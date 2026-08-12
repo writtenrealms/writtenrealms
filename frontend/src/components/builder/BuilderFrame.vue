@@ -522,6 +522,8 @@ const isWorldConfigRoute = computed(() => {
     'builder_item_bundle_details',
     'builder_merchant_profile_list',
     'builder_merchant_profile_details',
+    'builder_trainer_profile_list',
+    'builder_trainer_profile_details',
     'builder_world_craft_material_list',
     'builder_world_craft_material_details',
     'builder_world_crafting_recipe_list',

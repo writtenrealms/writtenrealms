@@ -69,7 +69,7 @@ Token flow:
 ## Email Content
 
 - Login link format: `${SITE_BASE}/login-link/<token>`
-- `SITE_BASE` should default to the frontend dev URL (WR2 uses `http://localhost:5173`) and be overrideable via env (WR2 uses `WR_SITE_BASE`).
+- `SITE_BASE` should default to the frontend dev URL (WR2 uses `http://localhost:5200`) and be overrideable via env (WR2 uses `WR_SITE_BASE`).
 
 ## Frontend Expectations (WR1)
 

@@ -27,6 +27,12 @@ const MESSAGE_LIMIT = 200;
 const TRIGGER_ITEMS_CHANGED_MESSAGE = "notification.trigger.items_changed";
 const TRIGGER_MOBS_CHANGED_MESSAGE = "notification.trigger.mobs_changed";
 const ABILITY_PREPARATIONS_UPDATE_MESSAGE = "player.ability_preparations.update";
+const ABILITY_PLAYER_STATE_MESSAGES = new Set([
+  "cmd.ability.learn.success",
+  "cmd.ability.unlearn.success",
+  "cmd.ability.hotkey.success",
+  "player.abilities.update",
+]);
 const COMMAND_REQUEST_QUEUED_MESSAGE = "cmd.request.queued";
 const COMMAND_REQUEST_COMPLETED_MESSAGE = "cmd.request.completed";
 const TRIGGER_ACCEPTED_MESSAGE = "cmd.trigger.accepted";
@@ -639,6 +645,17 @@ const receiveMessage = async ({
     commit("prepared_abilities_set", message_data.data?.abilities);
   }
 
+  if (ABILITY_PLAYER_STATE_MESSAGES.has(message_data.type)) {
+    const abilityActor = message_data.data?.actor;
+    if (
+      abilityActor
+      && state.player
+      && abilityActor.key === state.player.key
+    ) {
+      commit("player_set", abilityActor);
+    }
+  }
+
   // Disconection
   if (message_data.type === "system.disconnect.success") {
     if (rootState.auth.user.is_temporary) {
@@ -794,6 +811,7 @@ const receiveMessage = async ({
 
   // Anything that has an actor who is the connected player
   if (
+    !ABILITY_PLAYER_STATE_MESSAGES.has(message_data.type) &&
     message_data.type !== TRIGGER_ITEMS_CHANGED_MESSAGE &&
     message_data.type !== TRIGGER_MOBS_CHANGED_MESSAGE &&
     message_data.data["actor"] &&

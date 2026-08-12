@@ -62,6 +62,8 @@ spec:
     profile: merchantprofile.north-gate-market
   crafting:
     profile: craftingprofile.north-gate-forge
+  trainer:
+    profile: trainerprofile.north-gate-training
   exits:
     north: room@43
     east: null
@@ -178,6 +180,7 @@ room rather than using a database id or a possibly duplicated zone name.
 | `spec.initial_state` | State defaults copied into this room for each new runtime world. |
 | `spec.merchant.profile` | Merchant Profile exposed directly by this room. |
 | `spec.crafting.profile` | Crafting Profile exposed directly by this room. |
+| `spec.trainer.profile` | Trainer Profile exposed directly by this room. |
 | `spec.exits` | Direction-to-room mappings. |
 | `spec.flags` | Complete set of room behavior flags. |
 | `spec.details` | Complete set of inspectable room details. |
@@ -220,7 +223,39 @@ spec:
     profile: craftingprofile.north-gate-forge
 ```
 
-Omitting `merchant` or `crafting` from a patch preserves the current
+Ability training uses a Trainer Profile containing existing ability slugs:
+
+```yaml
+spec:
+  trainer:
+    profile: trainerprofile.north-gate-training
+```
+
+Room Config exposes this attachment in the **ABILITY TRAINING** service card.
+Choose a **Trainer Profile**, use **OPEN PROFILE** to inspect its YAML, or use
+**CLEAR** and **SAVE** to remove the attachment. Trainer attachments require
+builder rank 3 because attaching the first provider, or removing the last one,
+changes world-wide learning and unlearning availability. Lower-rank room
+editors can inspect the attachment but cannot change it.
+
+The room automatically exposes Learn and Unlearn actions and remains an
+available provider without a mob or Spawn Plan. Trainer `availability` belongs
+only on mob-definition attachments and is rejected on a room. A decorative NPC
+may still be placed here without a Trainer Profile.
+
+Only profiles attached to at least one room or mob definition gate their
+abilities. An unattached profile is a safe draft and does not change where
+players can learn or unlearn anything.
+
+The profile may use `spec.learning.conditions` and `max_known` to let eligible
+players choose up to a fixed number from its catalog. The allowance follows the
+profile, so attaching it to another room does not grant another set of slots.
+A room accepts one Trainer Profile; use a mob provider or a different room when
+native and cross-training catalogs need separate quotas. See
+[Ability Trainers](ability-builder-guide.md#ability-trainers) for the full
+policy shape and counting rules.
+
+Omitting `merchant`, `crafting`, or `trainer` from a patch preserves the current
 attachment. Set the section to `null` or use an empty mapping to clear it.
 
 ## Exits

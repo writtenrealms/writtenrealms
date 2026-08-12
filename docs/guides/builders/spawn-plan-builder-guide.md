@@ -54,7 +54,7 @@ Each entry needs either `source` or `source_pool`.
 Use a single source when the entry should always spawn the same authored thing:
 
 ```yaml
-source: mobdefinition.tidecaller-trainer
+source: mobdefinition.city-guard
 ```
 
 Supported source refs:
@@ -62,6 +62,10 @@ Supported source refs:
 - `mobdefinition.<slug>`
 - `itemdefinition.<slug>`
 - `itembundle.<slug>`
+
+A room-backed Trainer Profile does not need a spawn-plan entry. Use a spawned
+mob provider only when that NPC's presence should control whether training is
+available; otherwise any mob placed in the training room can remain decorative.
 
 When the spawn plan is authored on an instance template, these refs resolve
 against the base world's definitions and bundles. The plan's targets still

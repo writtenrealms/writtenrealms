@@ -70,10 +70,72 @@
         </p>
       </article>
 
+      <article class="service-card mt-4">
+        <div class="service-heading">
+          <div>
+            <h4>ABILITY TRAINING</h4>
+            <p class="color-text-60">
+              Attach a Trainer Profile to make its abilities learnable directly in this room.
+            </p>
+          </div>
+          <span class="service-availability">Always available</span>
+        </div>
+
+        <div v-if="canEditTraining" class="form-group trainer-profile-field">
+          <label for="field-trainer_profile">Trainer Profile</label>
+          <ReferenceField
+            :schema="trainerProfileSchema"
+            :model-value="trainerProfile"
+            :endpoint="trainerProfileEndpoint"
+            @update="onUpdateTrainerProfile"
+          />
+        </div>
+        <div v-else class="selected-profile">
+          <span class="selected-profile-label">Trainer Profile</span>
+          <span v-if="trainerProfile">{{ trainerProfile.name }} ({{ trainerProfile.slug }})</span>
+          <span v-else class="color-text-60">None attached</span>
+        </div>
+
+        <p v-if="trainerProfileIsInherited" class="color-text-60 inherited-profile-note">
+          Inherited from {{ trainerProfileWorld?.name }}.
+        </p>
+
+        <div class="service-actions">
+          <router-link
+            v-if="trainerProfileLink"
+            class="profile-link"
+            :to="trainerProfileLink"
+          >OPEN PROFILE</router-link>
+          <button
+            v-if="canEditTraining"
+            class="btn-thin"
+            :disabled="!trainerProfile || isSavingTrainer"
+            @click="onClearTrainerProfile"
+          >CLEAR</button>
+          <button
+            v-if="canEditTraining"
+            class="btn-medium"
+            :disabled="!trainerProfileDirty || isSavingTrainer"
+            @click="onSaveTrainerProfile"
+          >{{ isSavingTrainer ? "SAVING..." : "SAVE" }}</button>
+        </div>
+
+        <p v-if="!canEditTraining" class="color-text-60 service-readonly-note">
+          Trainer attachments affect world-wide ability availability and require a
+          senior builder. This room's training service is read-only for you.
+        </p>
+      </article>
+
       <p class="service-note color-text-60">
         A room shop does not require a mob. For a shop that should close when an NPC
         leaves or dies, leave this blank, attach the profile to a Mob Definition, and
         place that mob through
+        <router-link :to="roomSpawnsLink">Spawns</router-link>.
+      </p>
+      <p class="service-note color-text-60">
+        Room training does not require a mob. For training that should only be
+        available while an NPC is present, leave this blank, attach the profile to
+        a Mob Definition, and place that mob through
         <router-link :to="roomSpawnsLink">Spawns</router-link>.
       </p>
     </section>
@@ -114,9 +176,11 @@ import ReferenceField from "@/components/forms/ReferenceField.vue";
 import { builderRoomIndexRoute } from "@/core/builderRoutes";
 import { manifestApiErrorMessage } from "@/services/manifests";
 import { merchantProfileListEndpoint } from "@/services/merchants";
+import { trainerProfileListEndpoint } from "@/services/trainers";
 import {
   fetchRoomConfig,
   updateRoomMerchantProfile,
+  updateRoomTrainerProfile,
   type BuilderReference,
   type RoomConfigPayload,
 } from "@/services/roomConfig";
@@ -137,8 +201,13 @@ const transfer_to_world = ref<any>(null);
 const merchantProfile = ref<BuilderReference | null>(null);
 const merchantProfileWorld = ref<BuilderReference | null>(null);
 const savedMerchantProfileId = ref<number | null>(null);
+const trainerProfile = ref<BuilderReference | null>(null);
+const trainerProfileWorld = ref<BuilderReference | null>(null);
+const savedTrainerProfileId = ref<number | null>(null);
 const configCanEdit = ref<boolean | null>(null);
+const configCanEditTraining = ref<boolean | null>(null);
 const isSavingMerchant = ref(false);
+const isSavingTrainer = ref(false);
 const has_instances = ref(false);
 const loaded = ref(false);
 
@@ -147,7 +216,12 @@ const roomId = computed(() => store.state.builder.room.id);
 const canEdit = computed(() => (
   configCanEdit.value ?? store.state.builder.room?.has_assignment === true
 ));
+const canEditTraining = computed(() => (
+  configCanEditTraining.value
+  ?? Number(store.state.builder.world?.builder_info?.builder_rank || 0) > 2
+));
 const merchantProfileEndpoint = computed(() => merchantProfileListEndpoint(worldId.value));
+const trainerProfileEndpoint = computed(() => trainerProfileListEndpoint(worldId.value));
 const profileIsInherited = computed(() => Boolean(
   merchantProfileWorld.value?.id
   && String(merchantProfileWorld.value.id) !== worldId.value
@@ -164,6 +238,23 @@ const merchantProfileLink = computed(() => {
 });
 const merchantProfileDirty = computed(() => (
   (merchantProfile.value?.id ?? null) !== savedMerchantProfileId.value
+));
+const trainerProfileIsInherited = computed(() => Boolean(
+  trainerProfileWorld.value?.id
+  && String(trainerProfileWorld.value.id) !== worldId.value
+));
+const trainerProfileLink = computed(() => {
+  if (!trainerProfile.value?.id) return null;
+  return {
+    name: "builder_trainer_profile_details",
+    params: {
+      world_id: route.params.world_id,
+      trainer_profile_id: trainerProfile.value.id,
+    },
+  };
+});
+const trainerProfileDirty = computed(() => (
+  (trainerProfile.value?.id ?? null) !== savedTrainerProfileId.value
 ));
 const roomSpawnsLink = computed(() => ({
   name: "builder_room_spawn_plan_list",
@@ -186,8 +277,18 @@ const applyRoomConfig = (config: RoomConfigPayload) => {
   if ("merchant_profile_world" in config) {
     merchantProfileWorld.value = config.merchant_profile_world || null;
   }
+  if ("trainer_profile" in config) {
+    trainerProfile.value = config.trainer_profile || null;
+    savedTrainerProfileId.value = config.trainer_profile?.id ?? null;
+  }
+  if ("trainer_profile_world" in config) {
+    trainerProfileWorld.value = config.trainer_profile_world || null;
+  }
   if (typeof config.can_edit === "boolean") {
     configCanEdit.value = config.can_edit;
+  }
+  if (typeof config.can_edit_training === "boolean") {
+    configCanEditTraining.value = config.can_edit_training;
   }
 };
 
@@ -261,6 +362,43 @@ const onSaveMerchantProfile = async () => {
     );
   } finally {
     isSavingMerchant.value = false;
+  }
+};
+
+const trainerProfileSchema = {
+  attr: "trainer_profile",
+  label: "Trainer Profile",
+  references: "trainerprofile",
+  widget: "reference",
+};
+
+const onUpdateTrainerProfile = (value: BuilderReference | null) => {
+  trainerProfile.value = value;
+};
+
+const onClearTrainerProfile = () => {
+  trainerProfile.value = null;
+};
+
+const onSaveTrainerProfile = async () => {
+  if (!canEditTraining.value || !trainerProfileDirty.value) return;
+  isSavingTrainer.value = true;
+  try {
+    const profileId = trainerProfile.value?.id ?? null;
+    const config = await updateRoomTrainerProfile(
+      worldId.value,
+      roomId.value,
+      profileId,
+    );
+    applyRoomConfig(config);
+    store.commit("ui/notification_set", "Room training saved.");
+  } catch (error: unknown) {
+    store.commit(
+      "ui/notification_set_error",
+      manifestApiErrorMessage(error, "Could not save the room training profile."),
+    );
+  } finally {
+    isSavingTrainer.value = false;
   }
 };
 
@@ -341,12 +479,14 @@ div.form-group.transfer_to > .reference-field > .reference-input > input {
 }
 
 .merchant-profile-field,
+.trainer-profile-field,
 .selected-profile {
   margin-top: 1rem;
   max-width: 32rem;
 }
 
 .merchant-profile-field > label,
+.trainer-profile-field > label,
 .selected-profile-label {
   display: block;
   font-size: 0.8rem;
@@ -355,7 +495,9 @@ div.form-group.transfer_to > .reference-field > .reference-input > input {
 }
 
 .merchant-profile-field :deep(.reference-field),
-.merchant-profile-field :deep(input) {
+.merchant-profile-field :deep(input),
+.trainer-profile-field :deep(.reference-field),
+.trainer-profile-field :deep(input) {
   box-sizing: border-box;
   width: 100%;
 }

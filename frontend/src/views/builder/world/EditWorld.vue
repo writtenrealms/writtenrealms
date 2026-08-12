@@ -133,6 +133,7 @@ const payloadKeyByKind: Record<string, string> = {
   itembundle: "item_bundle",
   itemdefinition: "item_definition",
   merchantprofile: "merchant_profile",
+  trainerprofile: "trainer_profile",
   mobdefinition: "mob_definition",
   path: "path",
   quest: "quest",
@@ -154,6 +155,7 @@ const kindLabels: Record<string, string> = {
   itembundle: "Item bundle",
   itemdefinition: "Item",
   merchantprofile: "Merchant profile",
+  trainerprofile: "Trainer profile",
   mobdefinition: "Mob",
   path: "Path",
   quest: "Quest template",
@@ -295,6 +297,15 @@ const routeForEntity = (
       name: "builder_merchant_profile_details",
       params: { world_id: worldId, merchant_profile_id: id },
     };
+  }
+  if (kind === "trainerprofile" && id) {
+    return {
+      name: "builder_trainer_profile_details",
+      params: { world_id: worldId, trainer_profile_id: id },
+    };
+  }
+  if (kind === "trainerprofile") {
+    return { name: "builder_trainer_profile_list", params: { world_id: worldId } };
   }
   if (kind === "craftmaterial" && id) {
     return {
@@ -552,6 +563,18 @@ spec:
     max_items: 0
     expires: on_restock
   stock: []
+`;
+
+const newTrainerProfileYaml = `kind: trainerprofile
+metadata:
+  slug: new-trainer-profile
+  name: New Trainer Profile
+spec:
+  notes: ''
+  learning:
+    conditions: {}
+    max_known: uncapped
+  abilities: []
 `;
 
 const newCraftMaterialYaml = `apiVersion: v1alpha1
@@ -935,6 +958,9 @@ onMounted(async () => {
   } else if (route.query.prefill === "new-merchant-profile") {
     clearApplyResult();
     manifestText.value = newMerchantProfileYaml();
+  } else if (route.query.prefill === "new-trainer-profile") {
+    clearApplyResult();
+    manifestText.value = newTrainerProfileYaml;
   } else if (route.query.prefill === "craft-material") {
     await loadCraftMaterialYaml();
   } else if (route.query.prefill === "new-craft-material") {

@@ -55,9 +55,9 @@ class LearnAbilityHandler(CommandHandler):
     text_commands = ("learn",)
     help = {
         "name": "Learn Ability",
-        "format": "learn <ability>",
-        "description": "Add an available ability to your known ability list.",
-        "examples": ["learn power strike"],
+        "format": "learn [ability]",
+        "description": "List training here, or add an available ability to your known ability list.",
+        "examples": ["learn", "learn power strike"],
     }
 
     def handle(self, ctx: CommandContext) -> None:
@@ -124,9 +124,9 @@ class UnlearnAbilityHandler(CommandHandler):
     text_commands = ("unlearn",)
     help = {
         "name": "Unlearn Ability",
-        "format": "unlearn <ability>",
-        "description": "Remove an ability from your known ability list.",
-        "examples": ["unlearn power strike"],
+        "format": "unlearn [ability]",
+        "description": "List retraining here, or remove an ability from your known ability list.",
+        "examples": ["unlearn", "unlearn power strike"],
     }
 
     def handle(self, ctx: CommandContext) -> None:

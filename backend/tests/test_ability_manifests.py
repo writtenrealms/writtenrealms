@@ -3,6 +3,7 @@ import yaml
 from rest_framework.reverse import reverse
 
 from builders.models import AbilityDefinition, MobDefinition, WorldBuilder
+from core.abilities import ability_allows_actor
 from spawns.actions.effects import (
     build_character_effect,
     preventing_action_effect,
@@ -117,6 +118,327 @@ spec:
             },
         )
         self.assertEqual(ability.components[0]["overrides"]["multiplier"], 1.5)
+        self.assertEqual(
+            ability.availability,
+            {
+                "classes": [],
+                "min_level": 1,
+                "actors": ["player", "mob"],
+            },
+        )
+
+    def test_apply_ability_manifest_normalizes_actor_audience(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: mob-roar
+  name: Mob Roar
+spec:
+  command:
+    verbs: [roar]
+  availability:
+    actors: [MOB, mob]
+  components:
+    - type: damage
+      profile: basic_physical
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        ability = AbilityDefinition.objects.get(world=self.world, slug="mob-roar")
+        expected = {"classes": [], "min_level": 1, "actors": ["mob"]}
+        self.assertEqual(ability.availability, expected)
+        self.assertEqual(
+            resp.data["ability"]["manifest"]["spec"]["availability"],
+            expected,
+        )
+        self.assertTrue(ability_allows_actor(ability, "mob"))
+        self.assertFalse(ability_allows_actor(ability, "player"))
+
+    def test_apply_ability_manifest_rejects_invalid_actor_audience(self):
+        invalid_values = (
+            ("actors: []", "non-empty list"),
+            ("actors: mob", "must be a list"),
+            ("actors: [player, npc]", "must be one of: player, mob"),
+            ("actor: [mob]", "unsupported field(s): actor"),
+        )
+        for index, (availability_yaml, expected_error) in enumerate(invalid_values):
+            with self.subTest(availability=availability_yaml):
+                manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: invalid-audience-{index}
+  name: Invalid Audience
+spec:
+  command:
+    verbs: [invalid_audience_{index}]
+  availability:
+    {availability_yaml}
+  components:
+    - type: damage
+      profile: basic_physical
+"""
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": manifest},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 400)
+                self.assertIn(expected_error, str(resp.data))
+
+    def test_actor_audience_exports_canonically_and_round_trips(self):
+        ability = self._create_ability(
+            slug="legacy-roar",
+            name="Legacy Roar",
+            availability={"classes": [], "min_level": 1},
+        )
+        self.assertTrue(ability_allows_actor(ability, "player"))
+        self.assertTrue(ability_allows_actor(ability, "mob"))
+        self.assertFalse(ability_allows_actor(ability, "npc"))
+
+        export_resp = self.client.get(self.export_ep)
+
+        self.assertEqual(export_resp.status_code, 200)
+        documents = [
+            document
+            for document in yaml.safe_load_all(export_resp.data["yaml"])
+            if document is not None
+        ]
+        exported = next(
+            document
+            for document in documents
+            if document.get("kind") == "ability"
+            and document.get("metadata", {}).get("slug") == "legacy-roar"
+        )
+        self.assertEqual(
+            exported["spec"]["availability"]["actors"],
+            ["player", "mob"],
+        )
+
+        round_trip_resp = self.client.post(
+            self.apply_ep,
+            {"manifest": yaml.safe_dump(exported, sort_keys=False)},
+            format="json",
+        )
+
+        self.assertEqual(round_trip_resp.status_code, 200, round_trip_resp.data)
+        ability.refresh_from_db()
+        self.assertEqual(
+            ability.availability,
+            {"classes": [], "min_level": 1, "actors": ["player", "mob"]},
+        )
+
+        list_resp = self.client.get(self.list_ep)
+        self.assertEqual(list_resp.status_code, 200)
+        listed = next(
+            item for item in list_resp.data["results"] if item["id"] == ability.id
+        )
+        self.assertEqual(listed["availability"]["actors"], ["player", "mob"])
+
+    def test_builder_payload_keeps_malformed_audience_repairable(self):
+        ability = self._create_ability(
+            slug="broken-audience",
+            name="Broken Audience",
+            availability={
+                "actor": ["mob"],
+                "classes": [],
+                "min_level": 1,
+            },
+        )
+
+        list_resp = self.client.get(self.list_ep)
+
+        self.assertEqual(list_resp.status_code, 200)
+        listed = next(
+            item for item in list_resp.data["results"] if item["id"] == ability.id
+        )
+        self.assertEqual(listed["availability"]["actor"], ["mob"])
+
+        unrelated_manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  id: {ability.id}
+  name: Still Broken
+spec: {{}}
+"""
+        unrelated_resp = self.client.post(
+            self.apply_ep,
+            {"manifest": unrelated_manifest},
+            format="json",
+        )
+        self.assertEqual(unrelated_resp.status_code, 400)
+        self.assertIn(
+            "include an explicit spec.availability.actors list",
+            str(unrelated_resp.data),
+        )
+
+        incomplete_repair_manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  id: {ability.id}
+spec:
+  availability:
+    classes: [hoplite]
+"""
+        incomplete_repair_resp = self.client.post(
+            self.apply_ep,
+            {"manifest": incomplete_repair_manifest},
+            format="json",
+        )
+        self.assertEqual(incomplete_repair_resp.status_code, 400)
+        self.assertIn(
+            "include an explicit spec.availability.actors list",
+            str(incomplete_repair_resp.data),
+        )
+
+        repair_manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  id: {ability.id}
+spec:
+  availability:
+    actors: [mob]
+"""
+        repair_resp = self.client.post(
+            self.apply_ep,
+            {"manifest": repair_manifest},
+            format="json",
+        )
+
+        self.assertEqual(repair_resp.status_code, 200, repair_resp.data)
+        ability.refresh_from_db()
+        self.assertEqual(
+            ability.availability,
+            {"actors": ["mob"], "classes": [], "min_level": 1},
+        )
+
+    def test_apply_ability_manifest_accepts_and_round_trips_interrupt_component(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: kick
+  name: Kick
+spec:
+  command:
+    verbs: [kick]
+  target:
+    type: hostile
+    default: current_target
+  cooldown:
+    rounds: 12
+  components:
+    - type: damage
+      profile: basic_physical
+      overrides:
+        multiplier: 0.25
+    - type: interrupt
+      target: ability.target
+      apply: on_hit
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        expected_interrupt = {
+            "type": "interrupt",
+            "target": "ability.target",
+            "apply": "on_hit",
+            "text": {"label": "Kick"},
+        }
+        ability = AbilityDefinition.objects.get(world=self.world, slug="kick")
+        self.assertEqual(ability.components[1], expected_interrupt)
+        self.assertEqual(
+            resp.data["ability"]["manifest"]["spec"]["components"][1],
+            expected_interrupt,
+        )
+
+        export_resp = self.client.get(self.export_ep)
+
+        self.assertEqual(export_resp.status_code, 200)
+        documents = [
+            document
+            for document in yaml.safe_load_all(export_resp.data["yaml"])
+            if document is not None
+        ]
+        exported_kick = next(
+            document
+            for document in documents
+            if (
+                document.get("kind") == "ability"
+                and document.get("metadata", {}).get("slug") == "kick"
+            )
+        )
+        self.assertEqual(
+            exported_kick["spec"]["components"][1],
+            expected_interrupt,
+        )
+
+    def test_apply_ability_manifest_rejects_invalid_interrupt_apply(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: kick
+  name: Kick
+spec:
+  command:
+    verbs: [kick]
+  components:
+    - type: interrupt
+      target: ability.target
+      apply: always
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("components[0].apply", str(resp.data))
+
+    def test_apply_ability_manifest_rejects_invalid_interrupt_target(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: kick
+  name: Kick
+spec:
+  command:
+    verbs: [kick]
+  components:
+    - type: interrupt
+      target: self
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("components[0].target", str(resp.data))
+
+    def test_apply_ability_manifest_rejects_interrupt_on_non_hostile_ability(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: rally
+  name: Rally
+spec:
+  command:
+    verbs: [rally]
+  target:
+    type: self
+    default: self
+  components:
+    - type: interrupt
+      target: ability.target
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("require spec.target.type to be hostile", str(resp.data))
 
     def test_apply_abilities_manifest_can_create_bundle(self):
         manifest = f"""

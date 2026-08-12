@@ -1,5 +1,9 @@
 # Combat
 
+Combat abilities can be granted at character creation or learned during play.
+See [Abilities and Training](abilities.md) for `learn`, `unlearn`, requirements,
+and training rooms or NPCs.
+
 ## Encounter Order
 
 When combat starts, the encounter rolls a combat order and keeps that order for
@@ -65,6 +69,29 @@ Your active round-based effects appear beside your current posture in the
 status panel. This includes both character effects, such as buffs that can span
 encounters, and encounter-scoped effects such as stun. The display updates as
 rounds advance and removes an effect when its remaining duration is consumed.
+
+## Casts And Interrupts
+
+A zero-windup hostile ability is still a queued combat action. It resolves when
+your turn arrives in the stored encounter order; "instant" does not mean that
+it jumps ahead of initiative.
+
+Once a windup begins, its ability is committed and is shown as casting. An
+interrupt can cancel that committed cast, but it cannot cancel an ability that
+is only queued and can still be replaced by its owner. The interrupted ability
+spends no resource and starts no cooldown. When the interrupted combatant's
+turn arrives, they use their basic attack instead if one is legal.
+
+For example, a Hoplite's **Kick** is a zero-windup attack with a 12-round
+cooldown. It deals 0.25x physical damage and interrupts the target when the hit
+lands. Because encounter order still applies, Kick must resolve before the
+enemy completes its cast.
+
+In a duel, hostile cast narration identifies the opposing contestant and the
+ability being prepared, so both players can see the committed cast and its
+interruption in the combat log. Channel execution is not available yet, though
+the interrupt contract already recognizes committed channeling state for that
+future behavior.
 
 ## Recovery
 

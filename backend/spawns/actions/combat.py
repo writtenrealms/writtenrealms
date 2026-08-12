@@ -25,7 +25,7 @@ from core.combat_formulas import (
     resolve_attack,
 )
 from core.computations import compute_stats
-from core.abilities import definition_world
+from core.abilities import ability_allows_actor, definition_world
 from core.condition_dsl import ConditionContext, evaluate_condition, resolve_path
 from core.death_routing import (
     DEATH_ROUTING_SOURCE_BASE_WORLD,
@@ -60,6 +60,12 @@ from spawns.actions.targeting import resolve_room_mob_target
 from spawns.ability_prepare_state import (
     ability_prepare_state_event,
     ability_prepare_state_events_for_players,
+)
+from spawns.ability_intents import (
+    ABILITY_INTENT_STATUS_CASTING,
+    ABILITY_INTENT_STATUS_QUEUED,
+    InterruptibleAbilityIntent,
+    interruptible_ability_intent,
 )
 from spawns.events import (
     GameEvent,
@@ -346,6 +352,7 @@ class PlayerTurnOutcome:
     events: list[GameEvent]
     cooldown_exclude: str | None = None
     target_defeated: bool = False
+    target_interrupted: bool = False
 
 
 @dataclass(frozen=True)
@@ -354,6 +361,7 @@ class MobTurnOutcome:
     player_defeated: bool = False
     actor_key: str | None = None
     cooldown_exclude: str | None = None
+    target_interrupted: bool = False
 
 
 @dataclass(frozen=True)
@@ -2943,6 +2951,7 @@ def _handle_mob_defeated(
 class AbilityRoundResult:
     consumed_primary: bool
     cooldown_exclude: str | None = None
+    target_interrupted: bool = False
 
 
 def _ability_definition_for_player(player: Player, slug: str) -> AbilityDefinition | None:
@@ -3024,6 +3033,42 @@ def _ability_casting_event(
     )
 
 
+def _hostile_player_ability_casting_event(
+    *,
+    actor: Player,
+    target: Player,
+    ability: AbilityDefinition,
+    round_id: str,
+    rounds_remaining: int,
+) -> GameEvent:
+    actor_name = _combat_name(actor)
+    if rounds_remaining > 0:
+        text = f"{safe_capitalize(actor_name)} continues charging {ability.name}."
+    else:
+        text = f"{safe_capitalize(actor_name)} charges {ability.name}."
+    return GameEvent(
+        type="notification.combat.ability_casting",
+        recipients=[target.key],
+        data={
+            "ability": {
+                "slug": ability.slug,
+                "name": ability.name,
+                "consumes_primary_action_on_resolve": (
+                    _ability_consumes_primary_action_on_resolve(ability)
+                ),
+                "consumes_primary_action_while_casting": (
+                    _ability_consumes_primary_action_while_casting(ability)
+                ),
+            },
+            "actor": serialize_char_from_player(actor).model_dump(),
+            "target": serialize_char_from_player(target).model_dump(),
+            "round_id": round_id,
+            "rounds_remaining": rounds_remaining,
+        },
+        text=text,
+    )
+
+
 def _mob_ability_casting_event(
     *,
     player: Player,
@@ -3057,6 +3102,65 @@ def _mob_ability_casting_event(
         },
         text=text,
     )
+
+
+def _combat_interrupt_events(
+    *,
+    actor: Player | Mob,
+    target: Player | Mob,
+    ability: AbilityDefinition,
+    interrupted: InterruptibleAbilityIntent,
+    round_id: str,
+) -> list[GameEvent]:
+    actor_payload = _combat_state_payload(
+        _combat_actor_payload(actor),
+        target_payload=_combat_actor_payload(target),
+    )
+    target_payload = _combat_state_payload(
+        _combat_actor_payload(target),
+        target_payload=_combat_actor_payload(actor),
+    )
+    data = {
+        "ability": {
+            "slug": ability.slug,
+            "name": ability.name,
+        },
+        "actor": actor_payload,
+        "target": target_payload,
+        "interrupted_ability": {
+            "slug": interrupted.slug,
+            "status": interrupted.status,
+            "phase": interrupted.phase,
+        },
+        "round_id": round_id,
+    }
+    actor_name = _combat_name(actor)
+    target_name = _combat_name(target)
+    events: list[GameEvent] = []
+    if isinstance(actor, Player):
+        events.append(
+            GameEvent(
+                type="notification.combat.ability_interrupted",
+                recipients=[actor.key],
+                data=data,
+                text=f"You interrupt {_possessive(target_name)} {interrupted.phase}.",
+            )
+        )
+    if isinstance(target, Player) and not (
+        isinstance(actor, Player) and actor.pk == target.pk
+    ):
+        events.append(
+            GameEvent(
+                type="notification.combat.ability_interrupted",
+                recipients=[target.key],
+                data=data,
+                text=(
+                    f"{safe_capitalize(actor_name)} interrupts your "
+                    f"{interrupted.phase}."
+                ),
+            )
+        )
+    return events
 
 
 def _combat_actor_type(actor: Player | Mob) -> str:
@@ -3269,11 +3373,12 @@ def _pay_mob_ability_cost(mob: Mob, ability: AbilityDefinition) -> str | None:
 
 def _ability_definition_for_mob(mob: Mob, slug: str) -> AbilityDefinition | None:
     source_world = definition_world(mob.world)
-    return AbilityDefinition.objects.filter(
+    ability = AbilityDefinition.objects.filter(
         world=source_world,
         slug=slug,
         is_active=True,
     ).first()
+    return ability if ability_allows_actor(ability, "mob") else None
 
 
 def _pending_ability_payload(
@@ -3295,7 +3400,7 @@ def _pending_ability_payload(
     }
     cast_rounds = ability_cast_rounds(ability)
     if cast_rounds > 0:
-        payload["status"] = "queued"
+        payload["status"] = ABILITY_INTENT_STATUS_QUEUED
         payload["cast_rounds_remaining"] = cast_rounds
     return payload
 
@@ -3372,6 +3477,7 @@ def _choose_mob_ability(
             slug__in=slugs,
             is_active=True,
         )
+        if ability_allows_actor(ability, "mob")
     }
 
     weighted: list[tuple[AbilityDefinition, int]] = []
@@ -5038,6 +5144,7 @@ def _execute_pending_player_ability(
     room: Room,
     round_id: str,
     player_health_max: int,
+    target_pending_ability: dict | None = None,
 ) -> tuple[list[GameEvent], AbilityRoundResult]:
     pending = encounter.pending_player_ability or {}
     if not pending:
@@ -5115,17 +5222,33 @@ def _execute_pending_player_ability(
         next_remaining = cast_rounds_remaining - 1
         encounter.pending_player_ability = {
             **pending,
-            "status": "casting",
+            "status": ABILITY_INTENT_STATUS_CASTING,
             "cast_rounds_remaining": next_remaining,
         }
-        return [
+        casting_events = [
             _ability_casting_event(
                 player=player,
                 ability=ability,
                 round_id=round_id,
                 rounds_remaining=next_remaining,
             )
-        ], AbilityRoundResult(
+        ]
+        if (
+            isinstance(target_mob, Player)
+            and target_mob.pk != player.pk
+            and pending_target_type == "player"
+            and pending_target_id == target_mob.id
+        ):
+            casting_events.append(
+                _hostile_player_ability_casting_event(
+                    actor=player,
+                    target=target_mob,
+                    ability=ability,
+                    round_id=round_id,
+                    rounds_remaining=next_remaining,
+                )
+            )
+        return casting_events, AbilityRoundResult(
             consumed_primary=_ability_consumes_primary_action_while_casting(ability)
         )
 
@@ -5139,6 +5262,7 @@ def _execute_pending_player_ability(
     events: list[GameEvent] = []
     hit_landed = False
     health_changed = False
+    target_interrupted = False
     for component in ability.components or []:
         component_type = component.get("type")
         if component_type in {"damage", "healing"}:
@@ -5170,6 +5294,35 @@ def _execute_pending_player_ability(
             )
             if state_event:
                 events.append(state_event)
+            continue
+
+        if component_type == "interrupt":
+            if component.get("apply") == "on_hit" and not hit_landed:
+                continue
+            target_pending = (
+                encounter.pending_mob_ability
+                if isinstance(target_mob, Mob)
+                else target_pending_ability
+            )
+            interrupted = interruptible_ability_intent(target_pending)
+            if interrupted is None:
+                continue
+            if isinstance(target_mob, Mob):
+                encounter.pending_mob_ability = {}
+            elif target_pending_ability is not None:
+                target_pending_ability.clear()
+            else:
+                continue
+            target_interrupted = True
+            events.extend(
+                _combat_interrupt_events(
+                    actor=player,
+                    target=target_mob,
+                    ability=ability,
+                    interrupted=interrupted,
+                    round_id=round_id,
+                )
+            )
             continue
 
         if component_type != "effect":
@@ -5287,6 +5440,7 @@ def _execute_pending_player_ability(
     return events, AbilityRoundResult(
         consumed_primary=_ability_consumes_primary_action_on_resolve(ability),
         cooldown_exclude=ability.slug if cooldown_started else None,
+        target_interrupted=target_interrupted,
     )
 
 
@@ -5325,7 +5479,7 @@ def _execute_pending_mob_ability(
         next_remaining = cast_rounds_remaining - 1
         encounter.pending_mob_ability = {
             **pending,
-            "status": "casting",
+            "status": ABILITY_INTENT_STATUS_CASTING,
             "cast_rounds_remaining": next_remaining,
         }
         return [
@@ -5347,6 +5501,7 @@ def _execute_pending_mob_ability(
     events: list[GameEvent] = []
     hit_landed = False
     health_changed = False
+    target_interrupted = False
     for component in ability.components or []:
         component_type = component.get("type")
         if component_type in {"damage", "healing"}:
@@ -5383,6 +5538,27 @@ def _execute_pending_mob_ability(
             )
             if state_event:
                 events.append(state_event)
+            continue
+
+        if component_type == "interrupt":
+            if component.get("apply") == "on_hit" and not hit_landed:
+                continue
+            interrupted = interruptible_ability_intent(
+                encounter.pending_player_ability
+            )
+            if interrupted is None:
+                continue
+            encounter.pending_player_ability = {}
+            target_interrupted = True
+            events.extend(
+                _combat_interrupt_events(
+                    actor=target_mob,
+                    target=player,
+                    ability=ability,
+                    interrupted=interrupted,
+                    round_id=round_id,
+                )
+            )
             continue
 
         if component_type != "effect":
@@ -5478,6 +5654,7 @@ def _execute_pending_mob_ability(
     return events, AbilityRoundResult(
         consumed_primary=_ability_consumes_primary_action_on_resolve(ability),
         cooldown_exclude=ability.slug if cooldown_started else None,
+        target_interrupted=target_interrupted,
     )
 
 
@@ -5590,13 +5767,22 @@ def _apply_player_primary_turn(
             events=events,
             cooldown_exclude=cooldown_exclude,
             target_defeated=True,
+            target_interrupted=ability_result.target_interrupted,
         )
 
     if ability_result.consumed_primary:
-        return PlayerTurnOutcome(events=events, cooldown_exclude=cooldown_exclude)
+        return PlayerTurnOutcome(
+            events=events,
+            cooldown_exclude=cooldown_exclude,
+            target_interrupted=ability_result.target_interrupted,
+        )
 
     if not allow_basic_attack:
-        return PlayerTurnOutcome(events=events, cooldown_exclude=cooldown_exclude)
+        return PlayerTurnOutcome(
+            events=events,
+            cooldown_exclude=cooldown_exclude,
+            target_interrupted=ability_result.target_interrupted,
+        )
 
     for strike in resolve_attack_routine(actor=player, target=target_mob, world=player.world):
         strike_target = _combat_strike_target(
@@ -5643,6 +5829,7 @@ def _apply_player_primary_turn(
         events=events,
         cooldown_exclude=cooldown_exclude,
         target_defeated=target_mob.health <= 0,
+        target_interrupted=ability_result.target_interrupted,
     )
 
 
@@ -5654,6 +5841,7 @@ def _apply_mob_primary_turn(
     room: Room,
     round_id: str,
     config,
+    suppress_ability_selection: bool = False,
 ) -> MobTurnOutcome:
     events: list[GameEvent] = []
     if not target_mob.fights_back:
@@ -5681,7 +5869,7 @@ def _apply_mob_primary_turn(
         encounter.pending_mob_ability = {}
         return MobTurnOutcome(events=events)
 
-    if not encounter.pending_mob_ability:
+    if not suppress_ability_selection and not encounter.pending_mob_ability:
         ability = _choose_mob_ability(
             mob=target_mob,
             player=player,
@@ -5730,10 +5918,15 @@ def _apply_mob_primary_turn(
             player_defeated=True,
             actor_key=updated_player.key,
             cooldown_exclude=cooldown_exclude,
+            target_interrupted=ability_result.target_interrupted,
         )
 
     if ability_result.consumed_primary:
-        return MobTurnOutcome(events=events, cooldown_exclude=cooldown_exclude)
+        return MobTurnOutcome(
+            events=events,
+            cooldown_exclude=cooldown_exclude,
+            target_interrupted=ability_result.target_interrupted,
+        )
 
     for strike in resolve_attack_routine(actor=target_mob, target=player, world=player.world):
         strike_target = _combat_strike_target(
@@ -5778,9 +5971,14 @@ def _apply_mob_primary_turn(
             player_defeated=True,
             actor_key=updated_player.key,
             cooldown_exclude=cooldown_exclude,
+            target_interrupted=ability_result.target_interrupted,
         )
 
-    return MobTurnOutcome(events=events, cooldown_exclude=cooldown_exclude)
+    return MobTurnOutcome(
+        events=events,
+        cooldown_exclude=cooldown_exclude,
+        target_interrupted=ability_result.target_interrupted,
+    )
 
 
 def _apply_encounter_round(
@@ -5880,6 +6078,7 @@ def _apply_encounter_round(
     )
     events.extend(flee_preparation_events)
     player_had_pending_ability = bool(encounter.pending_player_ability)
+    mob_ability_interrupted = False
 
     for actor_ref in _primary_turn_order(
         encounter,
@@ -5902,6 +6101,9 @@ def _apply_encounter_round(
             )
             events.extend(player_turn.events)
             cooldown_exclude = player_turn.cooldown_exclude or cooldown_exclude
+            mob_ability_interrupted = (
+                player_turn.target_interrupted or mob_ability_interrupted
+            )
             if player_turn.target_defeated:
                 return _handle_mob_defeated(
                     encounter=encounter,
@@ -5920,6 +6122,7 @@ def _apply_encounter_round(
                 room=room,
                 round_id=round_id,
                 config=config,
+                suppress_ability_selection=mob_ability_interrupted,
             )
             events.extend(mob_turn.events)
             mob_cooldown_exclude = mob_turn.cooldown_exclude or mob_cooldown_exclude

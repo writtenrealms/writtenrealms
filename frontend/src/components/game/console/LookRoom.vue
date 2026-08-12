@@ -129,6 +129,7 @@ import {
   merchantProviderTarget,
   roomActionsForMerchantProvider,
 } from "@/core/merchantProviders";
+import { roomActionsForTrainingProvider } from "@/core/trainingProviders";
 
 const store = useStore();
 
@@ -154,7 +155,10 @@ interface Room {
 const props = defineProps<{ message: any }>();
 const room = ref<Room>(props.message.data.room);
 const roomMerchantProvider = computed(() => getRoomMerchantProvider(room.value));
-const roomActions = computed(() => roomActionsForMerchantProvider(room.value));
+const roomActions = computed(() => roomActionsForTrainingProvider(
+  room.value,
+  roomActionsForMerchantProvider(room.value),
+));
 const penaltyDisplay = computed(() => {
   const penaltyText = String(props.message?.data?.penalty_text || "").trim();
   if (penaltyText) return penaltyText;
