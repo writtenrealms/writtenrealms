@@ -110,11 +110,16 @@ class TestHelpCommands(WorldTestCase):
             "/transfer <target> <room@relative_id|relative_id|direction|here>",
             message.get("text", ""),
         )
+        self.assertIn(
+            "/edit [database_id|room.database_id|room@relative_id]",
+            message.get("text", ""),
+        )
         self.assertIn("/repop", message.get("text", ""))
         self.assertNotIn("/resync", message.get("text", ""))
 
         commands = message["data"]["commands"]
         self.assertTrue(any(entry["command"] == "help" for entry in commands))
+        self.assertTrue(any(entry["command"] == "/edit" for entry in commands))
 
     def test_help_specific_command_uses_optional_argument(self):
         with capture_game_messages() as messages:
@@ -126,6 +131,27 @@ class TestHelpCommands(WorldTestCase):
         self.assertIn("drop <item>", message.get("text", ""))
         self.assertEqual(message["data"]["command"]["command"], "drop")
         self.assertNotIn("help", message["data"])
+
+    def test_help_edit_describes_room_identity_and_new_tab_behavior(self):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "help /edit")
+
+        message = self._message_by_type(messages, "cmd.help.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["command"]["command"], "/edit")
+        text = message.get("text", "")
+        self.assertIn("Edit Room", text)
+        self.assertIn(
+            "/edit [database_id|room.database_id|room@relative_id]",
+            text,
+        )
+        self.assertIn("current room", text)
+        self.assertIn("bare positive number", text)
+        self.assertIn("database ID", text)
+        self.assertIn("canonical, portable room", text)
+        self.assertIn("room.database_id", text)
+        self.assertIn("current authored world", text)
+        self.assertIn("new browser tab", text)
 
     def test_help_eq_alias_shows_equipment_topic(self):
         with capture_game_messages() as messages:
@@ -197,6 +223,10 @@ class TestHelpCommands(WorldTestCase):
         message = self._message_by_type(messages, "cmd.help.success")
         self.assertIsNotNone(message)
         self.assertNotIn("/load <item|mob> <definition_id|slug> [cmd]", message.get("text", ""))
+        self.assertNotIn(
+            "/edit [database_id|room.database_id|room@relative_id]",
+            message.get("text", ""),
+        )
         self.assertNotIn("/repop", message.get("text", ""))
         self.assertNotIn("/resync", message.get("text", ""))
 

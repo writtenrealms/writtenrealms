@@ -69,6 +69,7 @@ form even though arbitrary player scripts cannot issue `/transfer`.
 | `/setlevel` | Direct | No | No | No | No | No |
 | `/setclass` | Direct | Script | No | Script | No | No |
 | `/cmd`, `/force`, `/rcmd`, `/zcmd`, `/wcmd` | Direct | Script | Script | Script | Script | Script |
+| `/edit` | Direct | No | No | No | No | No |
 | `/jump` | Direct | No | No | No | No | No |
 | `/repop` | Direct | No | No | Script | No | No |
 | `/reset` | Direct | No | No | No | No | No |
@@ -695,6 +696,53 @@ Use `&&` to chain nested commands on one line:
 ```text
 /cmd room -- /state set room lever_pulled true && /echo -- The lever clicks.
 ```
+
+### `/edit`
+
+Format:
+
+```text
+/edit [database_id|room.database_id|room@relative_id]
+```
+
+Opens the selected room's canonical builder page in a new browser tab. With no
+argument, `/edit` selects the room the builder currently occupies. The opened
+URL always uses the authored world's database id and the room's stable relative
+id:
+
+```text
+/build/worlds/23/rooms/42
+```
+
+The accepted selectors have deliberately distinct namespaces:
+
+- a bare positive number is an installation-local room **database id**
+- `room.<database_id>` is the explicit form of that same database identity
+- `room@<relative_id>` is the room's stable, world-relative identity
+
+Both database-id forms are resolved only inside the builder's current authored
+world and then canonicalized to the relative-id URL. There is no namespace
+fallback: if `/edit 187` cannot find database room 187 in that authored world,
+the command fails even if `room@187` exists. Use `/edit room@187` to select that
+relative ref. This differs intentionally from `/jump`, where a bare positive
+number is a relative id.
+
+Examples, assuming database room 187 has the stable ref `room@42` in authored
+world 23:
+
+```text
+/edit
+/edit 187
+/edit room.187
+/edit room@42
+```
+
+Each applicable form opens `/build/worlds/23/rooms/42` in a new tab. When the
+builder is playing inside an instance run, `/edit` opens the corresponding room
+in the authored instance-template world. It never points the editor at the
+disposable runtime copy.
+
+This command is direct-builder-only.
 
 ### `/jump`
 

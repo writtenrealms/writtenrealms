@@ -188,6 +188,7 @@
             <div class="cmd" @click="cmdHelp('/invisible')">/invisible</div>
             <div class="cmd" @click="cmdHelp('/repop')">/repop</div>
             <div class="cmd" @click="cmdHelp('ping')">/ping</div>
+            <div class="cmd" @click="cmdHelp('/edit')">/edit</div>
             <div class="cmd" @click="cmdHelp('jump')">/jump</div>
             <div class="cmd" @click="cmdHelp('transfer')">/transfer</div>
             <div class="cmd" @click="cmdHelp('find')">/find</div>

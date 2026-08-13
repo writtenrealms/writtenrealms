@@ -8,6 +8,7 @@ from spawns.actions.builder import (
     BuilderStatsAction,
     CmdAction,
     EchoAction,
+    EditRoomAction,
     ExitInstanceAction,
     GrantItemAction,
     InvisibleAction,
@@ -1964,6 +1965,93 @@ class TransferHandler(CommandHandler):
             target_events,
             actor_key=target_key,
             connection_id=target_connection_id,
+        )
+
+
+@register_handler
+class EditRoomHandler(CommandHandler):
+    command_type = "/edit"
+    text_commands = ("/edit",)
+    builder_only = True
+    help = {
+        "name": "Edit Room",
+        "format": (
+            "/edit [database_id|room.database_id|room@relative_id]"
+        ),
+        "description": (
+            "Open a room from the current authored world in the builder, "
+            "using a new browser tab."
+        ),
+        "details": [
+            "With no argument, the current room is opened.",
+            (
+                "For this command, a bare positive number is an "
+                "installation-local room database ID."
+            ),
+            (
+                "Use room@relative_id for the canonical, portable room "
+                "reference; room.database_id is the explicit database form."
+            ),
+            "Every explicit target is restricted to the current authored world.",
+        ],
+        "examples": [
+            "/edit",
+            "/edit 187",
+            "/edit room.187",
+            "/edit room@42",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        if not can_execute_builder_command(ctx, self):
+            ctx.publish(builder_permission_error(self.command_type))
+            return
+
+        args = ctx.payload.get("args", []) or []
+        if len(args) > 1:
+            ctx.publish(
+                {
+                    "type": "cmd./edit.error",
+                    "text": (
+                        "Usage: /edit "
+                        "[database_id|room.database_id|room@relative_id]"
+                    ),
+                    "data": {
+                        "error": "Too many room editor arguments.",
+                        "code": "invalid_args",
+                    },
+                }
+            )
+            return
+
+        room_selector = ctx.payload.get("room_ref")
+        if room_selector is None and args:
+            room_selector = args[0]
+
+        try:
+            result = EditRoomAction().execute(
+                player=ctx.player,
+                current_room=ctx.room,
+                room_selector=room_selector,
+            )
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd./edit.error",
+                    "text": err.message,
+                    "data": {
+                        "error": err.message,
+                        "code": err.code,
+                        **err.data,
+                    },
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.player.key,
+            connection_id=ctx.connection_id,
         )
 
 

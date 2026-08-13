@@ -16,6 +16,13 @@ import {
   initialCommandReceipt,
   transitionCommandReceipt,
 } from "@/core/commandReceipt";
+import {
+  cancelAllEditRoomTabs,
+  cancelEditRoomTab,
+  openResolvedEditRoomTab,
+  prepareEditRoomTab,
+} from "@/core/editRoomCommand";
+import { builderRoomIndexRoute } from "@/core/builderRoutes";
 import _ from "lodash";
 import router from "@/router";
 
@@ -410,6 +417,7 @@ const receiveMessage = async ({
     requestId &&
     message_data.data?.code === "command_delivery_unconfirmed"
   ) {
+    cancelEditRoomTab(requestId);
     clearCommandReceiptTimers(requestId);
     commit("command_receipt_update", {
       request_id: requestId,
@@ -478,6 +486,34 @@ const receiveMessage = async ({
   // to have advanced actions be available only on the latest of a series of
   // messages. For example, actions on items in inventory & eq views
   commit("last_message_set", message_data);
+
+  if (message_data.type === "cmd./edit.success") {
+    try {
+      const route = builderRoomIndexRoute(
+        message_data.data?.world_id,
+        message_data.data?.room,
+      );
+      const href = router.resolve(route).href;
+      const opened = openResolvedEditRoomTab(requestId, href);
+      if (!opened) {
+        commit(
+          "ui/notification_set_error",
+          "Your browser blocked the room editor tab. Allow pop-ups and run /edit again.",
+          { root: true },
+        );
+      }
+    } catch (error) {
+      cancelEditRoomTab(requestId);
+      console.error("Unable to open the resolved room editor route.", error);
+      commit(
+        "ui/notification_set_error",
+        "The room editor route could not be opened.",
+        { root: true },
+      );
+    }
+  } else if (message_data.type === "cmd./edit.error") {
+    cancelEditRoomTab(requestId);
+  }
 
   const isConnectSuccess = message_data.type === "system.connect.success";
   const isStateSync = message_data.type === "cmd.state.sync.success";
@@ -1190,10 +1226,12 @@ const actions = {
 
     const onerror = (error) => {
       console.error('WebSocket Error:', error);
+      cancelAllEditRoomTabs();
       commit("command_receipts_unconfirm_pending");
     };
 
     const onclose = () => {
+      cancelAllEditRoomTabs();
       commit("connected_clear");
       commit("command_receipts_unconfirm_pending");
     };
@@ -1284,6 +1322,9 @@ const actions = {
     }
 
     const requestId = createCommandRequestId();
+    if (state.player?.is_builder) {
+      prepareEditRoomTab(requestId, cmd);
+    }
     const wireMessage = {
       type: "cmd.text",
       text: cmd,
@@ -1313,6 +1354,9 @@ const actions = {
     }
 
     const sent = await dispatch("sendWSMessage", wireMessage);
+    if (!sent) {
+      cancelEditRoomTab(requestId);
+    }
     if (!sent && shouldEcho) {
       clearCommandReceiptTimers(requestId);
       commit("command_receipt_update", {
@@ -2005,6 +2049,7 @@ const mutations = {
 
   reset_state: (state) => {
     clearCommandReceiptTimers();
+    cancelAllEditRoomTabs();
     const new_state = set_initial_state();
     for (const attr in new_state) {
       state[attr] = new_state[attr];

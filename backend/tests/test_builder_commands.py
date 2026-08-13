@@ -35,6 +35,7 @@ from spawns.models import (
     GameEventOutbox,
     Item,
     Mob,
+    Player,
     PlayerCurrencyBalance,
 )
 from spawns.loading import run_spawn_plans_for_world
@@ -242,6 +243,255 @@ class BuilderCommandTestCase(WorldTestCase):
         super().setUp()
         self.player.is_builder = True
         self.player.save(update_fields=["is_builder"])
+
+
+class TestBuilderEdit(BuilderCommandTestCase):
+    def _message_by_type(self, messages, message_type):
+        for msg in messages:
+            if msg["message"].get("type") == message_type:
+                return msg["message"]
+        return None
+
+    def _dispatch(self, command):
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, command)
+        return messages
+
+    def _assert_edit_target(self, message, room):
+        self.assertIsNotNone(message)
+        self.assertEqual(message["data"]["world_id"], room.world_id)
+        self.assertEqual(
+            message["data"]["room"],
+            {
+                "relative_id": str(room.relative_id),
+                "manifest_ref": f"room@{room.relative_id}",
+            },
+        )
+
+    def test_edit_defaults_to_current_room(self):
+        messages = self._dispatch("/edit")
+
+        success = self._message_by_type(messages, "cmd./edit.success")
+        self._assert_edit_target(success, self.room)
+        self.assertIn(
+            f"room@{self.room.relative_id}",
+            success.get("text", ""),
+        )
+
+    def test_edit_bare_number_resolves_database_id_to_canonical_relative_id(self):
+        target = self.create_imported_room(
+            relative_id=10_000_000 + self.room.pk,
+            x=100,
+        )
+        self.assertNotEqual(target.pk, target.relative_id)
+
+        messages = self._dispatch(f"/edit {target.pk}")
+
+        self._assert_edit_target(
+            self._message_by_type(messages, "cmd./edit.success"),
+            target,
+        )
+
+    def test_edit_accepts_canonical_relative_room_reference(self):
+        target = self.room.create_at("east")
+
+        messages = self._dispatch(f"/edit room@{target.relative_id}")
+
+        self._assert_edit_target(
+            self._message_by_type(messages, "cmd./edit.success"),
+            target,
+        )
+
+    def test_edit_accepts_explicit_database_room_reference(self):
+        target = self.room.create_at("east")
+
+        messages = self._dispatch(f"/edit room.{target.pk}")
+
+        self._assert_edit_target(
+            self._message_by_type(messages, "cmd./edit.success"),
+            target,
+        )
+
+    def test_edit_database_and_relative_namespaces_do_not_fall_back(self):
+        filler_world = World.objects.new_world(
+            name="Edit room identity filler",
+            author=self.user,
+        )
+        filler_zone = filler_world.zones.get()
+        for index in range(4):
+            Room.objects.create(
+                world=filler_world,
+                zone=filler_zone,
+                name=f"Filler {index}",
+                x=index + 10,
+                y=0,
+                z=0,
+            )
+
+        database_target = self.room.create_at("east")
+        relative_target = self.create_imported_room(
+            relative_id=database_target.pk,
+            x=self.room.x - 1,
+        )
+        self.assertNotEqual(database_target.pk, database_target.relative_id)
+        self.assertEqual(relative_target.relative_id, database_target.pk)
+
+        bare_messages = self._dispatch(f"/edit {database_target.pk}")
+        self._assert_edit_target(
+            self._message_by_type(bare_messages, "cmd./edit.success"),
+            database_target,
+        )
+
+        relative_messages = self._dispatch(
+            f"/edit room@{database_target.pk}",
+        )
+        self._assert_edit_target(
+            self._message_by_type(relative_messages, "cmd./edit.success"),
+            relative_target,
+        )
+
+    def test_edit_explicit_targets_are_scoped_to_current_authored_world(self):
+        other_world = World.objects.new_world(
+            name="Foreign edit world",
+            author=self.user,
+        )
+        foreign_room = Room.objects.create_with_imported_relative_id(
+            world=other_world,
+            zone=other_world.zones.get(),
+            relative_id=50_000 + self.room.relative_id,
+            name="Foreign edit room",
+            x=10,
+            y=0,
+            z=0,
+        )
+        self.assertFalse(
+            self.world.rooms.filter(
+                relative_id=foreign_room.relative_id,
+            ).exists()
+        )
+
+        selectors = (
+            str(foreign_room.pk),
+            f"room.{foreign_room.pk}",
+            f"room@{foreign_room.relative_id}",
+        )
+        for selector in selectors:
+            with self.subTest(selector=selector):
+                messages = self._dispatch(f"/edit {selector}")
+
+                self.assertIsNone(
+                    self._message_by_type(messages, "cmd./edit.success")
+                )
+                error = self._message_by_type(messages, "cmd./edit.error")
+                self.assertIsNotNone(error)
+                self.assertEqual(error["data"]["code"], "invalid_room")
+                self.assertIn(
+                    "current authored world",
+                    error.get("text", ""),
+                )
+
+    def test_edit_rejects_invalid_room_references(self):
+        selectors = (
+            "not-a-room",
+            "0",
+            "-1",
+            "room.0",
+            "room@0",
+            "room@0,0,0",
+            str(1 << 63),
+            f"room@{'9' * 5000}",
+        )
+        for selector in selectors:
+            with self.subTest(selector=selector[:32]):
+                messages = self._dispatch(f"/edit {selector}")
+
+                error = self._message_by_type(messages, "cmd./edit.error")
+                self.assertIsNotNone(error)
+                self.assertEqual(
+                    error["data"]["code"],
+                    "invalid_room_reference",
+                )
+
+    def test_edit_rejects_multiple_arguments(self):
+        messages = self._dispatch(f"/edit {self.room.pk} extra")
+
+        error = self._message_by_type(messages, "cmd./edit.error")
+        self.assertIsNotNone(error)
+        self.assertEqual(error["data"]["code"], "invalid_args")
+        self.assertIn(
+            "/edit [database_id|room.database_id|room@relative_id]",
+            error.get("text", ""),
+        )
+
+    def test_edit_without_current_room_reports_no_room(self):
+        self.player.room = None
+        self.player.save(update_fields=["room"])
+
+        messages = self._dispatch("/edit")
+
+        error = self._message_by_type(messages, "cmd./edit.error")
+        self.assertIsNotNone(error)
+        self.assertEqual(error["data"]["code"], "no_room")
+
+    def test_edit_does_not_move_player_or_mutate_target_room(self):
+        target = self.room.create_at("east")
+        player_fields = (
+            "world_id",
+            "room_id",
+            "location_sequence",
+            "last_action_ts",
+        )
+        room_fields = ("name", "x", "y", "z", "modified_ts")
+        before_player = Player.objects.filter(pk=self.player.pk).values(
+            *player_fields,
+        ).get()
+        before_room = Room.objects.filter(pk=target.pk).values(
+            *room_fields,
+        ).get()
+        before_viewed_rooms = set(
+            self.player.viewed_rooms.values_list("id", flat=True)
+        )
+
+        messages = self._dispatch(f"/edit {target.pk}")
+
+        self._assert_edit_target(
+            self._message_by_type(messages, "cmd./edit.success"),
+            target,
+        )
+        after_player = Player.objects.filter(pk=self.player.pk).values(
+            *player_fields,
+        ).get()
+        after_room = Room.objects.filter(pk=target.pk).values(
+            *room_fields,
+        ).get()
+        after_viewed_rooms = set(
+            self.player.viewed_rooms.values_list("id", flat=True)
+        )
+        self.assertEqual(after_player, before_player)
+        self.assertEqual(after_room, before_room)
+        self.assertEqual(after_viewed_rooms, before_viewed_rooms)
+
+    def test_edit_in_instance_runtime_targets_authored_template_world(self):
+        instance_template = World.objects.new_world(
+            name="Edit instance template",
+            author=self.user,
+            config=WorldConfig.objects.create(),
+            instance_of=self.world,
+        )
+        instance_room = instance_template.config.starting_room
+        instance_runtime = instance_template.create_spawn_world(
+            instance_ref="edit-instance-run",
+        )
+        self.player.world = instance_runtime
+        self.player.room = instance_room
+        self.player.save(update_fields=["world", "room"])
+
+        messages = self._dispatch("/edit")
+
+        success = self._message_by_type(messages, "cmd./edit.success")
+        self._assert_edit_target(success, instance_room)
+        self.assertEqual(success["data"]["world_id"], instance_template.pk)
+        self.assertNotEqual(success["data"]["world_id"], instance_runtime.pk)
 
 
 class TestBuilderInvisible(BuilderCommandTestCase):

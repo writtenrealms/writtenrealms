@@ -108,10 +108,13 @@ spec:
 ```
 
 Exits, spawn targets, Triggers, quests, and other semantic references continue
-to use `room@42` after the move. Database keys such as `room.187` and legacy
-coordinate refs such as `room@10,4,0` are import-only aliases. They resolve
-inside the selected authored world and canonical YAML rewrites them as stable
-relative refs; database keys are not portable to another installation.
+to use `room@42` after the move. In authored manifests, database keys such as
+`room.187` and legacy coordinate refs such as `room@10,4,0` are import aliases.
+They resolve inside the selected authored world and canonical YAML rewrites
+them as stable relative refs; database keys are not portable to another
+installation. The direct builder `/edit` command also accepts a database key
+for local navigation, as described below, but does not turn it into a portable
+content reference.
 
 The builder uses that same stable identity in its canonical room URL, without
 repeating the `room@` type prefix that is already supplied by the path:
@@ -128,6 +131,35 @@ the primary manifest identity and keeps its copy action in Technical details.
 While playing in a world, builders also see that same identity after each room
 name, for example `[ room@42 ]`.
 
+From the game console, `/edit` opens a room's canonical builder URL in a new
+browser tab. With no argument it uses the room the builder currently occupies:
+
+```text
+/edit
+```
+
+It also accepts three explicit selector forms. For this command only, a bare
+positive number is a room database id, `room.<database_id>` is the explicit
+database form, and `room@<relative_id>` is the stable relative ref:
+
+```text
+/edit 187
+/edit room.187
+/edit room@42
+```
+
+If database room 187 has the ref `room@42` in authored world 23, all three
+explicit examples open `/build/worlds/23/rooms/42`. Database selectors resolve
+only within the current authored world, and selector namespaces never fall
+back to one another. For example, `/edit 187` fails when database room 187 is
+absent even if `room@187` exists. This command-specific rule differs from
+`/jump 187`, where the bare number means relative id 187.
+
+Inside an instance run, `/edit` opens the corresponding authored room in the
+instance-template world rather than a disposable runtime room. The resulting
+URL still uses the template world's database id and the authored room's stable
+relative id.
+
 For staff troubleshooting, a room can also be opened by database id:
 
 ```text
@@ -143,10 +175,11 @@ instead.
 
 Do not interpret a bare room URL segment as either kind of id depending on
 what happens to exist. `/rooms/42` always means relative id 42, and
-`/rooms/db/42` always means database id 42. This is an intentional pre-launch
-breaking cutover from the former `/rooms/<database_id>` route; old development
-bookmarks are not compatibility aliases because an ambiguous fallback could
-open the wrong room.
+`/rooms/db/42` always means database id 42. `/edit 42` treating the number as a
+database id is a command-input rule; after resolution it still opens the
+canonical relative-id URL. This is an intentional pre-launch breaking cutover
+from the former `/rooms/<database_id>` route; old development bookmarks are not
+compatibility aliases because an ambiguous fallback could open the wrong room.
 
 Zones follow the same rule. A zone whose manifest reference is `zone@5` uses
 the canonical builder route `/build/worlds/23/zones/5`, where `23` is the

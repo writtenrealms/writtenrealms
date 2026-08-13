@@ -95,6 +95,7 @@ from worlds.instances import ForcedInstanceExitError, force_exit_instance
 from worlds.models import BIGINT_MAX, Room, World, Zone
 from worlds.room_refs import (
     direct_base_world_for_room_reference,
+    format_room_manifest_ref,
     parse_room_reference,
     resolve_base_world_room_reference,
     resolve_room_reference,
@@ -3743,6 +3744,94 @@ class TransferAction:
                 "target_type": target_ref.target_type,
                 "moved": moved,
             },
+        )
+
+
+class EditRoomAction:
+    """Resolve a builder editor target without changing live game state."""
+
+    def execute(
+        self,
+        *,
+        player: Player,
+        current_room: Room | None,
+        room_selector: str | None = None,
+    ) -> ActionResult:
+        if current_room is None:
+            raise ActionError(
+                "You are nowhere. Cannot open a room editor.",
+                code="no_room",
+            )
+
+        normalized_selector = str(room_selector or "").strip()
+        target_room = current_room
+        if normalized_selector:
+            # `/edit` deliberately treats a bare number as the installation-
+            # local database id requested by the builder. Typed room@N refs
+            # remain the portable relative-id namespace. Never fall back
+            # between those namespaces when ids collide.
+            if (
+                normalized_selector.isascii()
+                and normalized_selector.isdecimal()
+            ):
+                parsed_reference = parse_room_reference(
+                    f"room.{normalized_selector}"
+                )
+            else:
+                parsed_reference = parse_room_reference(normalized_selector)
+
+            if (
+                parsed_reference is None
+                or parsed_reference.kind == "coordinates"
+            ):
+                raise ActionError(
+                    (
+                        "Room editor targets must use a bare positive room "
+                        "database ID, room.<database_id>, or "
+                        "room@<relative_id>."
+                    ),
+                    code="invalid_room_reference",
+                )
+
+            lookup: dict[str, int] = {
+                "world_id": current_room.world_id,
+            }
+            if parsed_reference.kind == "database_id":
+                lookup["pk"] = parsed_reference.database_id
+            else:
+                lookup["relative_id"] = parsed_reference.relative_id
+
+            target_room = (
+                Room.objects.only("id", "world_id", "relative_id")
+                .filter(**lookup)
+                .first()
+            )
+            if target_room is None:
+                raise ActionError(
+                    (
+                        "That room does not exist in the current authored "
+                        "world."
+                    ),
+                    code="invalid_room",
+                )
+
+        manifest_ref = format_room_manifest_ref(target_room)
+        return ActionResult(
+            events=[
+                GameEvent(
+                    type="cmd./edit.success",
+                    recipients=[player.key],
+                    data={
+                        "world_id": target_room.world_id,
+                        "room": {
+                            # Preserve bigint route identities exactly in JSON.
+                            "relative_id": str(target_room.relative_id),
+                            "manifest_ref": manifest_ref,
+                        },
+                    },
+                    text=f"Opening {manifest_ref} in the world editor.",
+                )
+            ]
         )
 
 
